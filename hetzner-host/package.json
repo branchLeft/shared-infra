@@ -1,0 +1,40 @@
+{
+  "name": "@branchleft/hetzner-host",
+  "version": "0.1.0",
+  "private": false,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/branchLeft/shared-infra.git",
+    "directory": "hetzner-host"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "public"
+  },
+  "comment": "@pulumi/hcloud is a peerDependency, pinned exactly rather than caret-ranged: the default provider's version is part of every resource's URN, so a consumer resolving a different version than the one this package's own resources use would put one topology behind two provider instances. A peerDependency turns that mismatch into an install-time error instead of a silently nested second copy.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@pulumi/pulumi": "^3.255.0"
+  },
+  "peerDependencies": {
+    "@pulumi/hcloud": "1.41.0"
+  },
+  "devDependencies": {
+    "@branchleft/tsconfig": "^0.3.1",
+    "@branchleft/vitest-config": "^0.4.0",
+    "@pulumi/hcloud": "1.41.0",
+    "@types/node": "^26",
+    "@vitest/coverage-v8": "^4.1.10",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.10"
+  }
+}

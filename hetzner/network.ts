@@ -1,6 +1,5 @@
+import { NETWORK_CIDR, SUBNET_CIDR } from '@branchleft/hetzner-host';
 import * as hcloud from '@pulumi/hcloud';
-
-import { NETWORK_CIDR, SUBNET_CIDR } from './addressPlan';
 
 /**
  * The private network every platform host attaches to.

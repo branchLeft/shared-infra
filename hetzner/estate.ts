@@ -1,21 +1,23 @@
+import { ESTATE_LOCATION, Host, HOST_IPS } from '@branchleft/hetzner-host';
 import * as pulumi from '@pulumi/pulumi';
-
-import { ESTATE_LOCATION, HOST_IPS } from './addressPlan';
-import { Host } from './host';
 
 /**
  * The hosts this repository owns: the edge, and the monitoring host once it
  * splits off it. The application and database hosts are homed in the Ghost
  * platform repository and are created by a stack there, not by this one.
  *
- * Imports `./host` and `./addressPlan` directly and never `./index`, which
- * constructs the network at module scope — importing it here would put a
- * second network in this stack's state.
+ * `Host` and the address plan come from `@branchleft/hetzner-host` — the same
+ * package `ghost-platform` depends on for its own hosts — never from
+ * `./index`, which constructs the network at module scope; importing it here
+ * would put a second network in this stack's state.
  *
  * The program file sits in the package root while its Pulumi project sits in
- * `estate/`, so that both projects share one `node_modules` and therefore one
- * `@pulumi/hcloud` version. A provider version is part of every resource's
- * URN, and these resources attach to a network another project owns.
+ * `estate/`, so that both projects share one `node_modules`. That resolves
+ * one `@pulumi/hcloud` version for `network.ts`'s own resources, and this
+ * project's `@branchleft/hetzner-host` dependency exact-pins the same
+ * version, so `Host`'s resources resolve it too. A provider version is part
+ * of every resource's URN, and these resources attach to a network another
+ * project owns.
  */
 
 const config = new pulumi.Config();

@@ -4,6 +4,8 @@
 /mail/bin/
 /hetzner/node_modules/
 /hetzner/bin/
+/hetzner-host/node_modules/
+/hetzner-host/dist/
 
 # Pulumi state artifacts. Nothing under here is ever committed: this stack's
 # state lives in the bucket, and a local copy of it is both a source-of-truth
