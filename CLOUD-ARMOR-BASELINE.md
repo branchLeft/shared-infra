@@ -136,6 +136,54 @@ remediation enabled. Concretely:
    stack, not silently carried over — see README.md's "Cloud Armor policy"
    section for why the exemption exists and what ends it.
 
+### Named differences on the replacement edge
+
+Point 3 above cannot be satisfied exactly, and the differences are recorded
+here rather than glossed as "CrowdSec covers OWASP". `hetzner/edge/` is the
+implementation and `hetzner/RUNBOOK-edge.md` the operation; each difference
+below is a decision, not a gap left open.
+
+**The OWASP rule families are split across two evaluation modes.** CrowdSec
+evaluates its virtual-patching rules in band — before the request proceeds,
+refusing it — and the OWASP Core Rule Set out of band, after the request has
+been answered, feeding a scenario that bans an address after repeated
+violations. The replacement edge takes that split rather than forcing CRS in
+band. So a first CRS-class injection attempt reaches the origin with a normal
+response and remediation arrives afterwards as a ban, where this baseline's
+declared behaviour was `deny(403)` on the offending request.
+
+Two things bound how much that gives up. Every rule in this capture is live in
+`preview: true`, the throttle included, so the deployed policy this baseline
+records blocks nothing at all — detect-then-ban is stronger than what is
+serving traffic today and weaker than what `edge.ts` declares. And an in-band
+CRS configuration does exist on the CrowdSec hub, so this is a choice rather
+than a limitation: it carries `default_remediation: ban`, which turns a single
+CRS false positive into a ban of the address that sent it rather than into one 403. On a Ghost authoring surface that is a harsher failure than the one
+`injectionWafPreviewOnly` exists to prevent, and its cost on a two-vCPU edge is
+unmeasured.
+
+**The exemption for an authoring host narrows rather than carries over.** On
+this policy, `injectionWafPreviewOnly` exempts every request to the flagged
+hostname from the three injection rulesets. On the replacement edge the same
+flag exempts the site's authoring paths only, and every other path on that
+hostname is inspected — the reason for the exemption is author-written HTML,
+code and SQL in admin request bodies, and that reason applies to one path
+prefix rather than to a whole site.
+
+**The throttle is evaluated before the WAF, not after.** Here the injection
+rules sit at priorities 1000–1003 and the throttle at 2000. The replacement
+edge reverses that: Cloud Armor evaluated on Google's edge fleet, the
+replacement evaluates on two vCPUs, and a flood reaching the WAF first would
+spend exactly the capacity the throttle exists to protect. The observable
+difference is confined to a client that is both flooding and attacking, which
+is answered 429 rather than 403.
+
+**The TLS floor cannot be checked against this artifact at all**, as point 3
+already says. On the replacement edge it is a `tls` directive in the rendered
+Caddy configuration, asserted by that renderer's unit tests. Checking it
+against the retiring edge means reading `edge.ts`'s constants, not diffing this
+capture.
+
 ## What the capture recorded
 
 ### 1. The appendix A remediation held

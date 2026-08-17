@@ -274,6 +274,34 @@ nvm use && npm test          # from hetzner-host/ (cloudInit.ts, host.ts)
 python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
+## The edge stack
+
+`edge/` is the first per-role service stack: Caddy terminating TLS in front of
+CrowdSec, replacing the GCP load balancer's Cloud Armor policy and rate limit.
+It is not a Pulumi project — nothing in it is a cloud resource. It is a
+renderer, its tests, and the directory those tests produce.
+
+- `edge/render.ts` derives the Caddy configuration and the CrowdSec acquisition
+  files from the hostname registry in the repository root's `sites.ts`. The
+  registry is the only hostname list; a hostname written directly into a Caddy
+  configuration is one the retiring GCP edge does not know about, which is the
+  class of stray record a cutover has to hunt for.
+- `edge/posture.ts` is the one place enforcement changes. Both switches start
+  non-enforcing, and each is flipped by a pull request: the rendered files are
+  committed, so a flip is a diff in the exact configuration the host will run,
+  and a redeploy of an unchanged tree cannot change it.
+- `edge/stack/` is what is copied to `/opt/branchleft/edge`. Its three generated
+  files are written by the test suite, which is also what fails when the
+  committed copy no longer matches the registry:
+
+```bash
+nvm use && npm run render    # from hetzner/, rewrites edge/stack/
+nvm use && npm test          # from hetzner/, fails if it is stale
+```
+
+Deploying it, verifying detect-only, and turning enforcement on:
+[`RUNBOOK-edge.md`](RUNBOOK-edge.md).
+
 ## Firewalls filter the public interface only, and live in `hetzner-host/`
 
 `firewalls.ts`'s `EDGE_RULES`/`INTERNAL_RULES` moved with the rest of the

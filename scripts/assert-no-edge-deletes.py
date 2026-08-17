@@ -17,7 +17,9 @@ resource:
 
 * By logical id (`PROTECTED_NAMES`) -- the singletons. One reserved anycast
   IP, one Cloud Armor policy, one URL map, one certificate map, one SSL
-  policy. Their names are fixed in edge.ts and carry no tenant identity.
+  policy. Their names are fixed in edge.ts and carry no tenant identity. The
+  set is assembled from two subsets that retire on different days, one with
+  the GCP edge and one with the GCP project; the comments on each say which.
 
 * By resource type (`PROTECTED_TYPES`) -- the per-site families. Their logical
   ids are derived from a site's name, so a name list would have to be edited
@@ -52,7 +54,17 @@ import sys
 # hostname on the edge at once, and `edge-ip` does not come back at all --
 # the anycast address is reserved, and a new one means a DNS change at the
 # registrar for every site before anything serves again.
-PROTECTED_NAMES = {
+#
+# Retires when the GCP edge does, and not before: every name here is a live
+# resource for as long as any hostname still resolves to the anycast address.
+# The Hetzner edge that replaces it is not protected by adding names here.
+# Its resources are declared in another Pulumi project with no CI apply path,
+# and they carry `protect: true` plus the provider's own `deleteProtection`
+# instead -- a stronger control than a plan parser, because it also stops a
+# console click and any other holder of the project token. Deleting this set
+# is therefore the last step of retiring the GCP edge, not the first step of
+# building its successor.
+_GCP_EDGE_NAMES = {
     "edge-ip",
     "edge-armor",
     "edge-cert-map",
@@ -65,14 +77,24 @@ PROTECTED_NAMES = {
     "edge-http-redirect",
     "edge-http-proxy",
     "edge-http-rule",
-    # Destroying any of these four locks CI out of the project with no way
-    # back through CI. The pool id is additionally unavailable for 30 days
-    # after deletion.
+}
+
+# Destroying any of these four locks CI out of the project with no way back
+# through CI. The pool id is additionally unavailable for 30 days after
+# deletion.
+#
+# Kept apart from the edge set because the two retire on different days: these
+# survive the edge itself, since the stack still needs a CI identity to apply
+# whatever GCP resources outlive the cutover, and they go when the GCP project
+# goes. Deleting one set must not sweep the other out with it.
+_GCP_DEPLOY_IDENTITY_NAMES = {
     "shared-infra-gha-pool",
     "shared-infra-gha-provider",
     "shared-infra-deployer-sa",
     "shared-infra-gha-can-impersonate-deployer",
 }
+
+PROTECTED_NAMES = _GCP_EDGE_NAMES | _GCP_DEPLOY_IDENTITY_NAMES
 
 # Pulumi type tokens whose every instance is protected, mapped to the
 # constructor `--verify-coverage` expects to still find in the program. The
@@ -379,6 +401,17 @@ def self_test() -> int:
         else:
             failed = True
             print(f"FAIL: {name} returned clean instead of raising")
+
+    # The two subsets exist so that retiring one does not silently take the
+    # other with it. A name that fell out of both, or landed in both, would
+    # make that split meaningless in exactly the way nothing else here notices.
+    overlap = _GCP_EDGE_NAMES & _GCP_DEPLOY_IDENTITY_NAMES
+    union_is_whole = _GCP_EDGE_NAMES | _GCP_DEPLOY_IDENTITY_NAMES == PROTECTED_NAMES
+    if overlap or not union_is_whole:
+        failed = True
+        print(f"FAIL: the protected-name subsets no longer partition PROTECTED_NAMES ({overlap!r})")
+    else:
+        print("PASS: the protected-name subsets partition PROTECTED_NAMES")
 
     failed |= _coverage_self_test() != 0
 

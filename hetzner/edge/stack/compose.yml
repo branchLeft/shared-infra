@@ -1,0 +1,81 @@
+# The edge Compose stack, deployed as `edge` under /opt/branchleft/edge.
+#
+# `${IMAGE}` is written by /usr/local/sbin/branchleft-deploy and is always a
+# digest, never a tag — see hetzner/provision/branchleft_deploy.py. The other
+# image is pinned by digest here because nothing writes it for us.
+name: edge
+
+services:
+  caddy:
+    image: ${IMAGE}
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+      # Loopback only, and the Hetzner firewall does not open this port either.
+      # The probe listener is how the runbook observes the enforcement posture
+      # before any hostname resolves to this host.
+      - '127.0.0.1:8080:8080'
+    environment:
+      # Registered on the CrowdSec side by BOUNCER_KEY_caddy below, so the two
+      # read the same value from /etc/branchleft/edge.env and nothing generates
+      # a key at runtime.
+      CROWDSEC_BOUNCER_KEY: ${CROWDSEC_BOUNCER_KEY:?set CROWDSEC_BOUNCER_KEY in /etc/branchleft/edge.env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # ACME account keys and every issued certificate. Losing this volume means
+      # re-issuing every certificate against Let's Encrypt's rate limits.
+      - caddy-data:/data
+      - caddy-config:/config
+      - caddy-logs:/var/log/caddy
+    depends_on:
+      # `service_started`, not `service_healthy`: the bouncer serves IP decisions
+      # from its own cache and AppSec is configured to fail open, so Caddy must
+      # be able to come up while CrowdSec is still loading its hub items.
+      crowdsec:
+        condition: service_started
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8080/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  crowdsec:
+    image: docker.io/crowdsecurity/crowdsec:v1.7.8@sha256:2f527c9bb8b367120eb08b82890aa912ce96bfa1ada93dda0721700e4b4e0dde
+    restart: unless-stopped
+    environment:
+      BOUNCER_KEY_caddy: ${CROWDSEC_BOUNCER_KEY:?set CROWDSEC_BOUNCER_KEY in /etc/branchleft/edge.env}
+      CUSTOM_HOSTNAME: edge1
+      TZ: Etc/UTC
+      # Signal sharing sends observed client addresses to a third party. That is
+      # a sub-processor and a personal-data decision, not a configuration
+      # default, so it stays off until it has been taken deliberately.
+      DISABLE_ONLINE_API: 'true'
+      COLLECTIONS: >-
+        crowdsecurity/caddy
+        crowdsecurity/appsec-virtual-patching
+        crowdsecurity/appsec-generic-rules
+        crowdsecurity/appsec-crs
+      # Installed in every posture, including detect-only, so that enabling
+      # enforcement is a change to the acquisition file alone and never depends
+      # on the hub being reachable at the moment of the flip.
+      APPSEC_CONFIGS: >-
+        crowdsecurity/appsec-default
+        crowdsecurity/crs
+    volumes:
+      - crowdsec-config:/etc/crowdsec
+      # Mounted inside the volume above: the acquisition files are generated
+      # from the registry and the posture, so the container must not be able to
+      # accumulate its own copy.
+      - ./crowdsec/acquis.d:/etc/crowdsec/acquis.d:ro
+      - crowdsec-data:/var/lib/crowdsec/data
+      - caddy-logs:/var/log/caddy:ro
+
+volumes:
+  caddy-data:
+  caddy-config:
+  caddy-logs:
+  crowdsec-config:
+  crowdsec-data:

@@ -1,6 +1,9 @@
 import * as pulumi from '@pulumi/pulumi';
 import * as gcp from '@pulumi/gcp';
 
+import { region as defaultRegion } from './config';
+import type { EdgeSite, HostRedirect } from './siteTypes';
+
 /**
  * The shared Global External Application Load Balancer that fronts every
  * Cloud Run service branchLeft serves on the public internet.
@@ -53,39 +56,11 @@ import * as gcp from '@pulumi/gcp';
  * stacks in charge of one real resource. If this stack ever has to stand up a
  * project from scratch, enable both APIs by hand first.
  */
-export interface EdgeSite {
-  /** Prefix for this site's Pulumi resource names and GCP resource names. */
-  name: string;
-  /** Every hostname routed to this site. Each gets a certificate-map entry. */
-  hostnames: string[];
-  /**
-   * The *name* of the Cloud Run service to route to — a plain string, not a
-   * resource reference. See "No dependency on any product stack" above.
-   */
-  cloudRunService: string;
-  /** Region the Cloud Run service lives in — the serverless NEG must match. */
-  region: string;
-  /**
-   * Keep the injection WAF rules (sqli/xss/rce) in preview for this site's
-   * hostnames instead of enforcing them. Set it for any site with an
-   * authenticated authoring surface: a Ghost admin API request body carries
-   * author-written HTML, code samples and SQL, which is indistinguishable from
-   * an injection payload at sensitivity 1. A false positive there locks the
-   * owner out of publishing rather than degrading a page.
-   *
-   * `lfi` enforces regardless — its signatures match filesystem paths
-   * (`.env`, `.git/config`, `../`), which no legitimate request here contains.
-   */
-  injectionWafPreviewOnly?: boolean;
-}
-
-/** A host-level redirect, e.g. `www.example.com` → `example.com`. */
-export interface HostRedirect {
-  /** The hostname that should redirect rather than serve content. */
-  from: string;
-  /** The hostname to redirect to. */
-  to: string;
-}
+// The registry's own shape lives in `siteTypes.ts`, which imports nothing, so
+// that the Hetzner Caddy renderer can read `sites.ts` without resolving this
+// program's GCP dependency tree. Re-exported here because this is where every
+// existing consumer looks for it.
+export type { EdgeSite, HostRedirect, PrivateUpstream } from './siteTypes';
 
 /** The DNS records a domain owner must publish before a certificate can issue. */
 export interface DnsAuthorizationRecord {
@@ -279,7 +254,7 @@ export function createEdge(sites: EdgeSite[], hostRedirects: HostRedirect[] = []
     // Must be in the same region as the service it targets.
     const neg = new gcp.compute.RegionNetworkEndpointGroup(`${site.name}-neg`, {
       name: `${site.name}-neg`,
-      region: site.region,
+      region: site.region ?? defaultRegion,
       networkEndpointType: 'SERVERLESS',
       cloudRun: { service: site.cloudRunService },
     });

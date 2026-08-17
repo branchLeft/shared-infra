@@ -5,6 +5,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "render": "vitest run -u",
     "postinstall": "cd ../hetzner-host && npm ci && npm run build"
   },
   "comment": "@pulumi/hcloud is pinned exactly, not caret-ranged, matching mail/package.json: the default provider's version is part of every resource's URN, so a floating range makes a provider bump indistinguishable from a resource change in a preview that is meant to be read as a gate. Still needed directly here: network.ts creates hcloud.Network and hcloud.NetworkSubnet itself.",

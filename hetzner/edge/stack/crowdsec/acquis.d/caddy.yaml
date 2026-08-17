@@ -1,0 +1,7 @@
+# Generated from sites.ts and hetzner/edge/posture.ts.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+source: file
+filenames:
+  - /var/log/caddy/access.log
+labels:
+  type: caddy
