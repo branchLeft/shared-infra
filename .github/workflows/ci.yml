@@ -173,6 +173,20 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # The edge renderer's suite imports the repository root's `sites.ts`,
+      # which is the point of it -- the hostname registry has one copy. Vitest
+      # transforms that file, and to transform it, it loads the tsconfig
+      # nearest to it, which is the root's. That file extends a package, and a
+      # package only resolves from a `node_modules` beside it, so the root's
+      # install has to exist for a file at the root to be readable at all. It
+      # fails as `Tsconfig not found`, which reads like a missing file rather
+      # than a missing install.
+      - name: Install the repository root's dependencies
+        run: npm ci
+        working-directory: .
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Type check
         run: npx tsc --noEmit
 

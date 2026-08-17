@@ -299,6 +299,13 @@ nvm use && npm run render    # from hetzner/, rewrites edge/stack/
 nvm use && npm test          # from hetzner/, fails if it is stale
 ```
 
+Both need the **repository root's** `npm ci` to have been run as well as this
+project's. The suite imports the root's `sites.ts`, Vitest loads the tsconfig
+nearest to that file to transform it, and that tsconfig extends a package that
+only resolves from a `node_modules` beside it. Without the root install the
+failure is `Tsconfig not found`, which reads like a missing file rather than a
+missing install.
+
 Deploying it, verifying detect-only, and turning enforcement on:
 [`RUNBOOK-edge.md`](RUNBOOK-edge.md).
 
