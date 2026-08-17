@@ -301,7 +301,10 @@ jobs:
 
       # The runner is amd64 and so is the edge, so no emulation is involved.
       - name: Build the edge Caddy image
-        run: docker build --tag edge-caddy-ci:${{ github.sha }} hetzner/edge
+        # Static tag, not one built from `github.sha`: a `${{ }}` inside a `run:`
+        # body is substituted before the shell parses the line. The runner is
+        # isolated per job, so there is nothing for a unique tag to disambiguate.
+        run: docker build --tag edge-caddy-ci:validate hetzner/edge
 
       # The Compose file is not rendered, so nothing else would notice a typo in
       # it until a deploy failed on the host.
@@ -327,7 +330,7 @@ jobs:
               --env CROWDSEC_BOUNCER_KEY=validation-only \
               --env ACME_EMAIL=validation@example.invalid \
               --volume "$PWD/$config:/etc/caddy/Caddyfile:ro" \
-              "edge-caddy-ci:${{ github.sha }}" \
+              edge-caddy-ci:validate \
               caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile 2>&1) || true
 
             if ! printf '%s' "$output" | grep -q 'Valid configuration'; then
