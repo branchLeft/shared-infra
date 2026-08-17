@@ -176,6 +176,54 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
+      # network.ts and estate.ts both construct resources at module scope, so
+      # neither is unit-testable here -- `pulumi preview` is what covers them.
+      # host.ts, firewalls.ts, cloudInit.ts and addressPlan.ts moved to
+      # @branchleft/hetzner-host, whose own CI job below runs their suite.
+      # hetznerHost.test.ts is what remains here: it constructs a `Host` from
+      # that package under mocks and proves this project can actually resolve
+      # and use it -- the `file:` dependency's own build has to have worked
+      # for this step to pass, which is exactly the failure mode a version
+      # mismatch or a broken package boundary would produce.
+      - name: Unit tests
+        run: npm test
+
+  hetzner-host-typecheck:
+    name: Type check + test (hetzner-host)
+    runs-on: ubuntu-latest
+    # The published-package half of the split documented in
+    # hetzner/README.md: host.ts, firewalls.ts, cloudInit.ts and
+    # addressPlan.ts live here, in their own package.json, so that
+    # `ghost-platform` can depend on them without duplicating the address
+    # plan. This job type-checks and unit-tests the package on every push and
+    # PR; publishing it to the registry is a separate, tag-triggered workflow
+    # (publish-hetzner-host.yml) that never runs here.
+    defaults:
+      run:
+        working-directory: hetzner-host
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: hetzner-host/.nvmrc
+          cache: npm
+          cache-dependency-path: hetzner-host/package-lock.json
+          registry-url: https://npm.pkg.github.com
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Type check
+        run: npx tsc --noEmit
+
       # cloudInit.ts renders the one document that grants the CI deploy
       # account its sudo rule, from a value that arrives as stack config;
       # host.ts decides from that config whether a host gets public addresses
@@ -283,6 +331,7 @@ jobs:
         mail-typecheck,
         mail-provision-checks,
         hetzner-typecheck,
+        hetzner-host-typecheck,
         hetzner-provision-checks,
         scripts-tests,
         cloud-armor-baseline-parity,

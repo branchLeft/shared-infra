@@ -4,10 +4,13 @@
   "main": "index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "postinstall": "cd ../hetzner-host && npm ci && npm run build"
   },
-  "comment": "@pulumi/hcloud is pinned exactly, not caret-ranged, matching mail/package.json: the default provider's version is part of every resource's URN, so a floating range makes a provider bump indistinguishable from a resource change in a preview that is meant to be read as a gate.",
+  "comment": "@pulumi/hcloud is pinned exactly, not caret-ranged, matching mail/package.json: the default provider's version is part of every resource's URN, so a floating range makes a provider bump indistinguishable from a resource change in a preview that is meant to be read as a gate. Still needed directly here: network.ts creates hcloud.Network and hcloud.NetworkSubnet itself.",
+  "hetznerHostPinComment": "@branchleft/hetzner-host is a file: dependency because it is not published to the registry yet. Once it is, this pin must become an exact registry version (e.g. \"0.1.0\"), matching @pulumi/hcloud's exact-pin discipline above and for the same reason: an unpinned or caret-ranged @branchleft/hetzner-host could resolve a different @pulumi/hcloud transitively. Until then this file: link is the only source, which is why the two directories must always be edited and tested together. A file: dependency does not install or build the linked package's own tree the way a workspace or a registry install would, so `postinstall` below runs `npm ci` in it explicitly -- without that, tsc cannot resolve @pulumi/hcloud from inside it and node cannot find its unbuilt dist/. Both go away once the pin above becomes a real registry version: a published package ships its dist/ already built and its own dependency resolution is npm's normal job again.",
   "dependencies": {
+    "@branchleft/hetzner-host": "file:../hetzner-host",
     "@pulumi/hcloud": "1.41.0",
     "@pulumi/pulumi": "^3.255.0"
   },

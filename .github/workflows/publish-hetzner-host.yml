@@ -1,0 +1,131 @@
+name: Publish hetzner-host
+
+# Builds and publishes hetzner-host/ as @branchleft/hetzner-host to GitHub
+# Packages whenever a matching tag is pushed. Mirrors
+# ghost-platform/publish-tenant-package.yml (npm, not pnpm; a plain `tsc`
+# build, no bundler -- this is a server-side Pulumi component library) and
+# adds the annotated-and-signed tag check from branchLeft/standards'
+# publish.yml, which that workflow does not need: this repo carries no branch
+# or tag ruleset (private, free plan), so this job's own check is the only
+# thing standing between an unsigned tag and a public publish.
+#
+# Deliberately excludes the hetzner-host-typecheck job's own responsibilities:
+# that job (ci.yml) type-checks and unit-tests the package on every push and
+# PR and never publishes; this workflow only runs on a version tag and never
+# runs typecheck/test on its own, so the two can't race or duplicate each
+# other's failure modes.
+#
+# The tag is prefixed `hetzner-host-v`, not a bare `v*.*.*`: this repo has no
+# tags today, but it holds more than one Pulumi project and could grow more
+# than one publishable package, and a bare `v*.*.*` would collide with
+# whatever the next one picks unless every future publishable thing in this
+# repo agrees to share one version stream -- which, unlike branchLeft/standards'
+# four packages, they have no reason to.
+#
+# `workflow_dispatch` is the escape hatch for a tag push that produced no run
+# at all. GitHub honours `[skip ci]` in the head commit's message for tag
+# pushes as well as branch pushes, so a tag cut from a commit whose message
+# happens to carry it would be silently skipped with no failed run to notice.
+on:
+  push:
+    tags:
+      - 'hetzner-host-v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build & Publish to GitHub Packages
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hetzner-host
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: hetzner-host/.nvmrc
+          registry-url: https://npm.pkg.github.com
+          scope: '@branchleft'
+          cache: npm
+          cache-dependency-path: hetzner-host/package-lock.json
+
+      # A lightweight tag on a signed merge commit satisfies "the commit is
+      # signed" without anyone having signed a tag. GitHub validates the
+      # signature of the commit a tag points at, not the tag object, so this
+      # reads the tag object's own verification status from the API -- the
+      # only place the two are distinguishable -- ahead of anything else,
+      # because an unsigned release should fail before it is built against.
+      #
+      # `git verify-tag` needs the signer's public key in the runner's
+      # keyring, which it has no reason to carry; `git cat-file` depends on
+      # the checkout having fetched the tag object rather than the commit
+      # under it. The API has neither problem.
+      - name: Assert the tag is annotated and signed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          type=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" -q '.object.type')
+          if [ "$type" != "tag" ]; then
+            echo "::error::$TAG is a lightweight tag. Cut it with 'git tag -s hetzner-host-vX.Y.Z -m ...'."
+            exit 1
+          fi
+
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" -q '.object.sha')
+          verified=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" -q '.verification.verified')
+          if [ "$verified" != "true" ]; then
+            reason=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" -q '.verification.reason')
+            echo "::error::$TAG's own signature did not verify ($reason)."
+            exit 1
+          fi
+
+      # `npm publish` takes the version from package.json and ignores the tag,
+      # so the two can disagree. A tag behind package.json fails closed on the
+      # duplicate-version check the registry itself enforces, but a tag
+      # *ahead* of it would quietly publish something other than what the tag
+      # names.
+      - name: Refuse a tag that disagrees with package.json
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="$(node -p 'require("./package.json").version')"
+          WANT="${GITHUB_REF_NAME#hetzner-host-v}"
+          if [ "$WANT" != "$PACKAGE_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME names version $WANT, package.json has $PACKAGE_VERSION. Nothing published."
+            exit 1
+          fi
+
+      # The install needs the token as much as the publish does: this
+      # package's devDependencies (@branchleft/tsconfig,
+      # @branchleft/vitest-config) are on the same registry, which answers
+      # 401 to an anonymous read.
+      - name: Install dependencies
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Explicit rather than a `prepublishOnly`/`prepare` hook: this package
+      # is also consumed locally as a `file:` dependency from `hetzner/`
+      # (until this exact workflow's first successful run), and a build
+      # lifecycle hook here would try to fire the moment `hetzner/`'s own
+      # `npm ci` symlinks this directory in -- before this package's own
+      # dependencies are installed, so it fails on every install of
+      # `hetzner/`, not only at publish time. An explicit step run only in
+      # this workflow has no such caller.
+      - name: Build
+        run: npm run build
+
+      - name: Publish
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

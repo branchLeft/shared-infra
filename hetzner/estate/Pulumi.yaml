@@ -4,10 +4,14 @@ runtime: nodejs
 # `main` is mandatory here and its absence is dangerous, not merely untidy.
 #
 # This directory holds a Pulumi project but no npm package: the program lives
-# in the parent directory so that both Hetzner projects resolve one
-# `node_modules`, and therefore one `@pulumi/hcloud` version. A provider
+# in the parent directory so that both Hetzner projects here (this one and
+# branchleft-hetzner-network) resolve one `node_modules`, and therefore one
+# `@pulumi/hcloud` version for the resources each creates directly. A provider
 # version is part of every resource's URN, and these hosts attach to a network
-# the other project owns.
+# the other project owns. `Host` itself now comes from the published
+# `@branchleft/hetzner-host` package (`../../hetzner-host`), which pins the
+# identical exact `@pulumi/hcloud` version rather than sharing this
+# `node_modules` — see `../README.md`, "Two Pulumi projects, one npm package".
 #
 # The consequence is that Pulumi finds `../package.json` when it looks for an
 # entry point. Without the line below it reads that file's `"main": "index.ts"`
