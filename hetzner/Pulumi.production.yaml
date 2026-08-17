@@ -1,0 +1,34 @@
+# This stack declares no configuration of its own — the private network and
+# subnet are fully described in code.
+#
+# `encryptionsalt` and the `hcloud:token` ciphertext are deliberately absent
+# from this committed file, for the same reason as
+# `hetzner/estate/Pulumi.production.yaml`'s: the salt is an offline
+# passphrase verifier and the ciphertext is only as safe as that passphrase,
+# so both stay operator-held. This project has no CI apply path (`CLAUDE.md`),
+# so the operator appends both from their own source before any `pulumi`
+# command that reads state, and never commits the result.
+#
+# The token has no source but the operator's own copy —
+# `pulumi config set --secret hcloud:token` prompts for it. The salt does not:
+# it is recoverable from the state bucket with read access alone, because
+# `pulumi stack export` returns it uninterpreted as
+# `deployment.secrets_providers.state.salt`, the same mechanism
+# `RUNBOOK-existing-stack-migration.md` already relies on for the one other
+# stack with no committed config of its own. Do not use `pulumi stack init`
+# to recover it: against a stack that already exists, `stack init` mints a
+# **new** salt, and a different salt derives a different key from the same
+# passphrase — every piece of ciphertext this stack ever encrypts under it
+# stops decrypting under the old one, silently, until something next reads a
+# secret. `stack init` is only for a stack that does not exist yet.
+#
+#     pulumi stack select production
+#     pulumi stack export --file /tmp/hetzner-network.json
+#     SALT=$(python3 -c "import json,sys; print(json.load(open('/tmp/hetzner-network.json'))['deployment']['secrets_providers']['state']['salt'])")
+#     rm /tmp/hetzner-network.json
+#     printf '\nencryptionsalt: %s\n' "$SALT" >> hetzner/Pulumi.production.yaml
+#     pulumi config set --secret hcloud:token
+#
+# Revert both appended lines (`git checkout -- hetzner/Pulumi.production.yaml`)
+# before staging anything else — this file carries nothing to commit, ever,
+# because the project reads no non-secret config at all.

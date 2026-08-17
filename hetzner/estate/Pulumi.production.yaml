@@ -2,11 +2,19 @@
 #
 # `encryptionsalt` and the `hcloud:token` ciphertext never belong in this
 # file. The salt is an offline verifier for the stack passphrase and the
-# ciphertext is only as safe as that passphrase, so both stay operator-held:
-# `pulumi stack init --secrets-provider passphrase` and `pulumi config set
-# --secret hcloud:token` write them here locally on whichever machine applies
-# the stack, and they are supplied the same way again on any other machine
-# that needs to — never committed. `ownerSshKeyNames` and
+# ciphertext is only as safe as that passphrase, so both stay operator-held
+# and are written into the working copy only, never committed. The token has
+# no source but the operator's own copy (`pulumi config set --secret
+# hcloud:token` prompts for it); the salt does not need one; it is
+# recoverable from the state bucket with read access alone —
+# `pulumi stack export` returns it uninterpreted as
+# `deployment.secrets_providers.state.salt`. **Never run `pulumi stack init`
+# to recover it**: against a stack that already exists, `stack init` mints a
+# **new** salt, which derives a different key from the same passphrase, and
+# every piece of ciphertext this stack has ever encrypted stops decrypting
+# under it, silently, until something next reads a secret.
+# `hetzner/Pulumi.production.yaml`'s own comment carries the full recovery
+# commands; the mechanism is identical here. `ownerSshKeyNames` and
 # `edge1DeployPublicKey` below are the only entries that belong in git:
 # neither is a secret, and the component `require`s both, so committing them
 # is what makes a preview from a fresh checkout fail on a real problem rather

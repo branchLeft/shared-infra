@@ -17,13 +17,13 @@ independent of each other:
 
 > **Partly verified.** The endpoint form, and why path style is the safe
 > setting, are confirmed against the live endpoint — step 1 states what was
-> actually seen. Step 5's two-client check has now run, against the first
-> applies of both stacks in this package: a second clean checkout read the
-> applied state, planned no changes, and hit no lock error, so lock take and
-> release work across clients on this endpoint. True contention — two clients
-> writing at once — remains unexercised, and CI credential sourcing is still
-> unverified because no workflow applies these stacks yet. Correct this file
-> from whatever the next real run observes — do not assume it was right.
+> actually seen. Two things are still unverified because they need a bucket
+> this account does not yet have: locking behaviour under contention, and CI
+> credential sourcing. Neither is closed by `scripts/probe-object-storage.py`,
+> which exercises storage semantics rather than Pulumi; the lock questions are
+> closed by step 5's two-client check, and nothing has run it. Correct this
+> file from whatever the first real run observes — do not assume it was
+> right.
 
 ## Before you start
 
@@ -80,8 +80,8 @@ What this step supplies is the credential to read it with:
 
 ```bash
 export AWS_REGION=hel1              # matches the bucket's location
-read -rs -p 'Object Storage access key: ' AWS_ACCESS_KEY_ID; echo; export AWS_ACCESS_KEY_ID
-read -rs -p 'Object Storage secret:     ' AWS_SECRET_ACCESS_KEY; echo; export AWS_SECRET_ACCESS_KEY
+read -rs "AWS_ACCESS_KEY_ID?Object Storage access key: "; echo; export AWS_ACCESS_KEY_ID
+read -rs "AWS_SECRET_ACCESS_KEY?Object Storage secret:     "; echo; export AWS_SECRET_ACCESS_KEY
 ```
 
 `read -rs` rather than an `export` with the value inline, for the same reason
@@ -91,10 +91,14 @@ that has to be rotated. The values still reach every child process of this
 shell once exported — close the shell when the runbook is done rather than
 leaving it open.
 
-The `read -rs -p '…'` form is bash. In zsh — the macOS default — `-p` means
-"read from a coprocess", so use the prompt-in-variable form instead:
-`read -rs "AWS_ACCESS_KEY_ID?Object Storage access key: "`. The same
-substitution applies to every `read` in this file.
+Every `read` in this file uses the `read -rs "VAR?prompt"` form rather than
+`read -rs -p 'prompt' VAR`, because the latter is bash and this runbook runs
+under zsh — the macOS default. In zsh, `-p` means "read from a coprocess", so
+it does not print the prompt or block for input; the following `printf` then
+runs immediately against whatever `VAR` already held (usually empty), and the
+command it feeds — a temp passphrase file, an exported credential — succeeds
+anyway, silently wrong. Nothing here fails loudly on that mistake except step
+1's 403; do not "simplify" any of these back to `-p`.
 
 Expect every Pulumi command against this backend to log
 `WARN Response has no supported checksum. Not validating response payload.`
@@ -169,7 +173,7 @@ Pulumi at the file, and delete the file in the teardown block at the end —
 ```bash
 umask 077
 install -m 600 /dev/null ~/.pulumi-passphrase-tmp
-read -rs -p 'Stack passphrase: ' PASSPHRASE; echo
+read -rs "PASSPHRASE?Stack passphrase: "; echo
 printf '%s' "$PASSPHRASE" > ~/.pulumi-passphrase-tmp; unset PASSPHRASE
 export PULUMI_CONFIG_PASSPHRASE_FILE=~/.pulumi-passphrase-tmp
 
@@ -185,39 +189,65 @@ environment variable, a process listing or shell history.
 holding it can attempt the passphrase at their own rate, with nothing in the
 loop to notice — and `scripts/assert-no-committed-pulumi-secrets.py` runs on
 every commit and in CI to refuse it outright. There is no CI apply path here
-to append it at deploy time either (`CLAUDE.md`): the salt is supplied by
-hand, from the operator's own password-manager copy, on every machine that
-applies this stack, and is never staged.
+to append it at deploy time either (`CLAUDE.md`): the salt is written into the
+working copy only, on every machine that applies this stack, and is never
+staged.
 
-**A `Pulumi.<stack>.yaml` that is already committed is safe to init against.**
-`stack init` merges rather than replaces: it keeps the existing `config:`
-entries and appends the salt below them, and so does every later
-`config set`. This is how a project's non-secret configuration gets reviewed
-in a pull request before the stack that will use it exists — and it is also
-why the working copy needs a second look before any `git add` runs against
-it: revert the appended `encryptionsalt` and `secure:` lines (`git checkout
--- <file>` restores exactly the committed non-secret entries) before staging
-anything else in the same commit.
+**The command above is for a stack that does not exist yet — never run it
+against one that already does.** `stack init` always mints a fresh salt, and
+a different salt derives a different key from the same passphrase: every
+piece of ciphertext the existing stack has ever encrypted stops decrypting
+under it, silently, until something next reads a secret. Both stacks this
+runbook was written for now exist and are applied, so the workstation-lost
+case is reconstruction, not creation, and takes a different path: the salt
+needs no manual custody at all, because it is recoverable from the state
+bucket with read access alone —
+
+```bash
+pulumi stack select production
+pulumi stack export --file /tmp/<project>.json
+python3 -c "import json; print(json.load(open('/tmp/<project>.json'))['deployment']['secrets_providers']['state']['salt'])"
+rm /tmp/<project>.json
+```
+
+— reads `deployment.secrets_providers.state.salt` from the exported
+checkpoint, the same field `RUNBOOK-existing-stack-migration.md` already
+relies on to recover the salt for the one other stack in this repo with no
+committed config of its own. Append the printed value the same way `mail/`'s
+own top comment and CI's "Restore the stack's encryption salt" step (for the
+unrelated root `branchleft-shared-infra` stack — a different project, same
+pattern) both do it: `printf '\nencryptionsalt: %s\n' "$SALT" >>
+Pulumi.production.yaml`. Only the passphrase itself needs the operator's own
+custody (password manager, per "Before you start" above) — the salt does not.
+
+**A `Pulumi.<stack>.yaml` that is already committed is safe to init against**
+— for genuine first-time creation, not reconstruction. `stack init` merges
+rather than replaces: it keeps the existing `config:` entries and appends the
+salt below them, and so does every later `config set`. This is how a
+project's non-secret configuration gets reviewed in a pull request before the
+stack that will use it exists — and it is also why the working copy needs a
+second look before any `git add` runs against it: revert the appended
+`encryptionsalt` and `secure:` lines (`git checkout -- <file>` restores
+exactly the committed content) before staging anything else in the same
+commit.
 
 Two qualifications, both observed against v3.255.0. Pulumi rewrites the file
 each time, so its own layout wins over any hand formatting. And comments
 survive that rewrite **only while the file carries at least one populated
 config entry** — against a file that is all comments, or one whose only content
 is an empty `config: {}`, the rewrite drops everything and leaves the salt
-alone on the first line. A stack with no non-secret configuration therefore has
-nothing to commit, ever — not "not yet": there is no state this step can reach
-where that file gains committable content.
+alone on the first line. A stack with no non-secret configuration therefore
+has no config _value_ to commit, ever, but it still has a committed file:
+`hetzner/Pulumi.production.yaml` carries the recovery commands above as a
+comment, in the same shape as `mail/Pulumi.production.yaml`, and both revert
+the same way after a local `stack init`/`config set` run — `git checkout --`
+works on it because it is tracked, not untracked.
 
 That is the case for `branchleft-hetzner-network`, whose only config value is
-the secret token: `hetzner/Pulumi.production.yaml` is not in this repository
-and never will be under this model, and this paragraph is its only committed
-record. Reconstructing the stack from the repo needs nothing from git for
-this file — re-run this step against the pinned backend in `hetzner/Pulumi.yaml`
-with the held passphrase, then step 4 with the held token, and both land in a
-local file that stays local. `branchleft-hetzner-estate`'s file is different
-only in degree: it is already committed with its non-secret entries, and this
-step adds the salt locally on top of them, which the paragraph above then
-discards before commit.
+the secret token. `branchleft-hetzner-estate`'s file is different only in
+degree: it is committed with real non-secret entries rather than comments
+alone, and the same two qualifications and the same `git checkout --`
+revert apply to it unchanged.
 
 **One passphrase per stack, not one per project or per bucket.** Several stacks
 share this backend; each is wrapped independently, and losing any one
@@ -283,8 +313,8 @@ markdown block recording what it observed:
 # it was created in, so a production key against a lab bucket is the opaque
 # 403 this file keeps warning about.
 export AWS_REGION=hel1
-read -rs -p 'LAB Object Storage access key: ' AWS_ACCESS_KEY_ID; echo; export AWS_ACCESS_KEY_ID
-read -rs -p 'LAB Object Storage secret:     ' AWS_SECRET_ACCESS_KEY; echo; export AWS_SECRET_ACCESS_KEY
+read -rs "AWS_ACCESS_KEY_ID?LAB Object Storage access key: "; echo; export AWS_ACCESS_KEY_ID
+read -rs "AWS_SECRET_ACCESS_KEY?LAB Object Storage secret:     "; echo; export AWS_SECRET_ACCESS_KEY
 
 python3 scripts/probe-object-storage.py \
   --bucket branchleft-lab-probe \
@@ -322,7 +352,11 @@ project never issued one — see step 1.
 
 ## 7. Wire CI
 
-The applying workflow needs four secrets and no federated identity. There is
+Neither stack this runbook has created has a CI apply path today (`CLAUDE.md`
+— `hetzner/` is type-checked and tested in CI, never applied by it); this
+step is what a future one would need, not a description of anything that
+runs now. The applying workflow needs four secrets and no federated identity.
+There is
 no Workload Identity Federation equivalent here: the Hetzner API authenticates
 a bearer token and nothing else, so the short-lived-credential posture the GCP
 stacks have does not carry over. That trade is accepted deliberately; what it
