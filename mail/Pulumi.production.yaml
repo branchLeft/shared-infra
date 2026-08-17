@@ -1,0 +1,11 @@
+# This stack declares no configuration of its own — the delivery host and its
+# firewall are fully described in code.
+#
+# `encryptionsalt` is deliberately absent from this committed file. It is a
+# passphrase verifier: anyone holding it can test candidate passphrases offline,
+# at their own rate, with no service in the loop and nothing to notice. The
+# stack still needs it to decrypt its own state, and this project has no CI
+# apply path, so the operator appends it from their own copy before any
+# `pulumi` command that reads state, and does not commit the result:
+#
+#     printf '\nencryptionsalt: %s\n' "$SALT" >> mail/Pulumi.production.yaml

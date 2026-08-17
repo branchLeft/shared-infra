@@ -1,0 +1,14 @@
+{
+  "extends": ["@branchleft/tsconfig/strict-1.json", "@branchleft/tsconfig/pulumi.json"],
+  "compilerOptions": {
+    "pretty": true
+  },
+  // `mail` and `hetzner` are separate Pulumi projects with their own
+  // package.json; their dependencies are not installed here, so compiling them
+  // from the root fails on imports this project has no reason to resolve. The
+  // dot-directories are agent worktrees — full checkouts of this repo, which a
+  // recursive glob would otherwise compile once per branch. Neither is covered
+  // by tsc's defaults.
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "mail", "hetzner", ".claude", ".worktrees"]
+}

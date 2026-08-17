@@ -1,0 +1,138 @@
+[
+  {
+    "creationTimestamp": "2026-08-02T18:47:15.100-07:00",
+    "description": "Shared Cloud Armor policy for the branchLeft edge load balancer",
+    "fingerprint": "g82k5Kiik3A=",
+    "id": "8343701122065780172",
+    "kind": "compute#securityPolicy",
+    "labelFingerprint": "sspB3Mrk_qU=",
+    "labels": {
+      "goog-pulumi-provisioned": "true"
+    },
+    "name": "branchleft-edge-armor",
+    "rules": [
+      {
+        "action": "deny(403)",
+        "description": "OWASP preconfigured: sqli-v33-stable (sensitivity 1)",
+        "kind": "compute#securityPolicyRule",
+        "match": {
+          "expr": {
+            "expression": "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})"
+          }
+        },
+        "preview": true,
+        "priority": 1000
+      },
+      {
+        "action": "deny(403)",
+        "description": "OWASP preconfigured: xss-v33-stable (sensitivity 1)",
+        "kind": "compute#securityPolicyRule",
+        "match": {
+          "expr": {
+            "expression": "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': 1})"
+          }
+        },
+        "preview": true,
+        "priority": 1001
+      },
+      {
+        "action": "deny(403)",
+        "description": "OWASP preconfigured: rce-v33-stable (sensitivity 1)",
+        "kind": "compute#securityPolicyRule",
+        "match": {
+          "expr": {
+            "expression": "evaluatePreconfiguredWaf('rce-v33-stable', {'sensitivity': 1})"
+          }
+        },
+        "preview": true,
+        "priority": 1002
+      },
+      {
+        "action": "deny(403)",
+        "description": "OWASP preconfigured: lfi-v33-stable (sensitivity 1)",
+        "kind": "compute#securityPolicyRule",
+        "match": {
+          "expr": {
+            "expression": "evaluatePreconfiguredWaf('lfi-v33-stable', {'sensitivity': 1})"
+          }
+        },
+        "preview": true,
+        "priority": 1003
+      },
+      {
+        "action": "deny(403)",
+        "description": "OWASP preconfigured: sqli-v33-stable (sensitivity 1, preview-only hosts)",
+        "kind": "compute#securityPolicyRule",
+        "match": {
+          "expr": {
+            "expression": "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1}) && (request.headers['host'].lower() == 'blog.branchleft.co.uk')"
+          }
+        },
+        "preview": true,
+        "priority": 1100
+      },
+      {
+        "action": "deny(403)",
+        "description": "OWASP preconfigured: xss-v33-stable (sensitivity 1, preview-only hosts)",
+        "kind": "compute#securityPolicyRule",
+        "match": {
+          "expr": {
+            "expression": "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': 1}) && (request.headers['host'].lower() == 'blog.branchleft.co.uk')"
+          }
+        },
+        "preview": true,
+        "priority": 1101
+      },
+      {
+        "action": "deny(403)",
+        "description": "OWASP preconfigured: rce-v33-stable (sensitivity 1, preview-only hosts)",
+        "kind": "compute#securityPolicyRule",
+        "match": {
+          "expr": {
+            "expression": "evaluatePreconfiguredWaf('rce-v33-stable', {'sensitivity': 1}) && (request.headers['host'].lower() == 'blog.branchleft.co.uk')"
+          }
+        },
+        "preview": true,
+        "priority": 1102
+      },
+      {
+        "action": "throttle",
+        "description": "Per-IP rate limit: 200 requests / 60s",
+        "kind": "compute#securityPolicyRule",
+        "match": {
+          "config": {
+            "srcIpRanges": ["*"]
+          },
+          "versionedExpr": "SRC_IPS_V1"
+        },
+        "preview": true,
+        "priority": 2000,
+        "rateLimitOptions": {
+          "conformAction": "allow",
+          "enforceOnKey": "IP",
+          "enforceOnKeyName": "",
+          "exceedAction": "deny(429)",
+          "rateLimitThreshold": {
+            "count": 200,
+            "intervalSec": 60
+          }
+        }
+      },
+      {
+        "action": "allow",
+        "description": "Default: allow",
+        "kind": "compute#securityPolicyRule",
+        "match": {
+          "config": {
+            "srcIpRanges": ["*"]
+          },
+          "versionedExpr": "SRC_IPS_V1"
+        },
+        "preview": false,
+        "priority": 2147483647
+      }
+    ],
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/branchleft-prod/global/securityPolicies/branchleft-edge-armor",
+    "type": "CLOUD_ARMOR"
+  }
+]

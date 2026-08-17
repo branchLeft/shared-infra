@@ -1,0 +1,61 @@
+{
+  "note": "Divergences between the committed Cloud Armor capture and what edge.ts declares that are known and recorded. The GCP edge is being wound down, so closing them means changing a deployed policy on its way out, which is a deliberate decision rather than routine remediation. Read alongside CLOUD-ARMOR-BASELINE.md's 'Machine-checked parity' section, which explains why they are recorded rather than left as a permanently red check. Each entry matches one priority, one field and one exact observed value: there is no wildcard form, so an entry cannot grow to cover a divergence nobody decided to accept. An entry whose divergence stops happening fails the check until it is deleted, so this list shrinks visibly as remediation lands and never silently re-accepts a fixed problem.",
+  "accepted": [
+    {
+      "priority": 1000,
+      "field": "preview",
+      "observed": true,
+      "reason": "The captured sqli rule carries preview: it records a match rather than acting on it, while edge.ts declares the rule enforcing. See CLOUD-ARMOR-BASELINE.md, 'The capture and the code diverge on eight fields'.",
+      "closedBy": "A deliberate change against the deployed policy, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
+    },
+    {
+      "priority": 1000,
+      "field": "match.expr.expression",
+      "observed": "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})",
+      "reason": "The captured sqli rule predates the preview-only-host carve-out edge.ts now declares, so its match expression is the pre-change one. See CLOUD-ARMOR-BASELINE.md, 'The capture and the code diverge on eight fields'.",
+      "closedBy": "Applying edge.ts's current expression to the deployed rule, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
+    },
+    {
+      "priority": 1001,
+      "field": "preview",
+      "observed": true,
+      "reason": "The captured xss rule carries preview: it records a match rather than acting on it, while edge.ts declares the rule enforcing. See CLOUD-ARMOR-BASELINE.md, 'The capture and the code diverge on eight fields'.",
+      "closedBy": "A deliberate change against the deployed policy, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
+    },
+    {
+      "priority": 1001,
+      "field": "match.expr.expression",
+      "observed": "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': 1})",
+      "reason": "The captured xss rule predates the preview-only-host carve-out edge.ts now declares, so its match expression is the pre-change one. See CLOUD-ARMOR-BASELINE.md, 'The capture and the code diverge on eight fields'.",
+      "closedBy": "Applying edge.ts's current expression to the deployed rule, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
+    },
+    {
+      "priority": 1002,
+      "field": "preview",
+      "observed": true,
+      "reason": "The captured rce rule carries preview: it records a match rather than acting on it, while edge.ts declares the rule enforcing. See CLOUD-ARMOR-BASELINE.md, 'The capture and the code diverge on eight fields'.",
+      "closedBy": "A deliberate change against the deployed policy, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
+    },
+    {
+      "priority": 1002,
+      "field": "match.expr.expression",
+      "observed": "evaluatePreconfiguredWaf('rce-v33-stable', {'sensitivity': 1})",
+      "reason": "The captured rce rule predates the preview-only-host carve-out edge.ts now declares, so its match expression is the pre-change one. See CLOUD-ARMOR-BASELINE.md, 'The capture and the code diverge on eight fields'.",
+      "closedBy": "Applying edge.ts's current expression to the deployed rule, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
+    },
+    {
+      "priority": 1003,
+      "field": "preview",
+      "observed": true,
+      "reason": "The captured lfi rule carries preview: it records a match rather than acting on it, while edge.ts declares the rule enforcing. This rule carries no carve-out, so preview is its only divergence. See CLOUD-ARMOR-BASELINE.md, 'The capture and the code diverge on eight fields'.",
+      "closedBy": "A deliberate change against the deployed policy, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
+    },
+    {
+      "priority": 2000,
+      "field": "preview",
+      "observed": true,
+      "reason": "The captured the per-IP rate-limit rule carries preview: it records a match rather than acting on it, while edge.ts declares the rule enforcing. Its threshold, key and actions all match, so preview is its only divergence. See CLOUD-ARMOR-BASELINE.md, 'The capture and the code diverge on eight fields'.",
+      "closedBy": "A deliberate change against the deployed policy, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
+    }
+  ]
+}

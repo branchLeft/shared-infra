@@ -1,0 +1,22 @@
+name: branchleft-hetzner-network
+runtime: nodejs
+
+# Pinned in the project rather than left to whatever the workstation last
+# logged into. `pulumi login` is global state — it rewrites
+# ~/.pulumi/credentials.json for every project on the machine — so a project
+# that does not name its own backend is one `pulumi login` away from being
+# operated against the wrong state, silently, by anyone who was last working
+# in a GCP-backed checkout. Every other project in this repo predates the
+# split and still relies on the login; this one does not have to.
+#
+# The location below is the bucket's, and it is not the location the servers
+# are in — they are in `nbg1`, this bucket is in `hel1`. Object Storage is
+# ordered per location independently of the servers, so the two are free to
+# differ and here they do. Both the endpoint host and the `region` parameter
+# have to name the bucket's own location; getting them wrong fails as an
+# opaque 403, which reads as a credential problem and sends you to the wrong
+# place entirely. Verify with a plain unauthenticated request before changing
+# it — the bucket answers 403 on its own location and 404 on every other.
+backend:
+  url: 's3://branchleft-pulumi-state?endpoint=hel1.your-objectstorage.com&s3ForcePathStyle=true&region=hel1'
+description: The Hetzner private network every platform host attaches to, plus the reusable host/firewall/cloud-init modules the per-role host stacks import. A separate Pulumi project from branchleft-shared-infra and branchleft-mail — the network is the one resource whose replacement would detach every host at once, so it is never colocated with a stack that applies on a normal delivery cadence.

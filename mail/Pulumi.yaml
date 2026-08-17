@@ -1,0 +1,3 @@
+name: branchleft-mail
+runtime: nodejs
+description: Hetzner-hosted mail delivery host (mx1) and its firewall — the outbound-port-25 component of the self-hosted mail architecture. A separate Pulumi project from branchleft-shared-infra, deliberately — different cloud (Hetzner, not GCP), different credential, and a stack whose only two resources must never be perturbed by an edge-stack change.

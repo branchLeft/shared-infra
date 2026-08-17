@@ -1,0 +1,86 @@
+# The mailgun-shim + its Caddy TLS front, as a project SEPARATE from
+# Stalwart's own (docker-compose.yml / 30-deploy-stalwart.sh) -- distinct
+# compose project name (`mailgun-shim`, see 63-deploy-mailgun-shim.sh),
+# distinct install path (/etc/mailgun-shim, not /opt/stalwart), no shared
+# volumes or networks. Re-running 30-deploy-stalwart.sh never sees this
+# file; re-running 63-deploy-mailgun-shim.sh never touches Stalwart's.
+#
+# Port layout, matching mail/firewall.ts and mail/RUNBOOK-mx1-provision.md's
+# "Mailgun shim" section exactly:
+#   - mailgun-shim listens on 127.0.0.1:8825 only -- host-loopback, never
+#     firewalled or internet-reachable; Stalwart's own admin API already
+#     uses 127.0.0.1:8080, so 8825 avoids that collision deliberately.
+#   - caddy publishes 80 (ACME HTTP-01 challenge response + redirect) and
+#     8443 (the shim's actual TLS endpoint). It never publishes 443 --
+#     Stalwart's own TLS-ALPN-01 ACME owns that port exclusively, and this
+#     file has no way to take it: nothing here maps a container port to
+#     host 443, so even if Caddy's automatic-HTTPS logic ever considered
+#     port 443 internally, there is no published mapping for it to reach
+#     the host network on.
+#
+# Both `image:` lines pin by digest, not tag. Upgrading the shim means
+# replacing its digest here and re-running 63-deploy-mailgun-shim.sh (see the
+# RUNBOOK's shim section); the deploy script refuses to run if an `image:`
+# line's digest ever reads as a placeholder. (The guard is scoped to `image:`
+# lines specifically so explanatory comments can never be mistaken for one.)
+services:
+  mailgun-shim:
+    image: ghcr.io/branchleft/mailgun-shim@sha256:37c60999cd3bad612f5f1d4947ddf88716e138b17ddf9dd29a23964b88b7c21d
+    container_name: mailgun-shim
+    restart: unless-stopped
+    env_file: /etc/mailgun-shim/env
+    volumes:
+      - /var/lib/mailgun-shim:/data
+    ports:
+      - '127.0.0.1:8825:8080'
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+    healthcheck:
+      # The image's own runtime, not curl/wget -- a from-scratch or
+      # distroless-style Node image has no guarantee of shipping either,
+      # but `node` itself is guaranteed to be there.
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          require('node:http').get('http://localhost:8080/healthz',
+          (r) => { process.exitCode = r.statusCode === 200 ? 0 : 1; })
+          .on('error', () => { process.exitCode = 1; });
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # Pinned by digest, resolved against the registry API at the time this
+  # file was written (docker-content-digest for the `caddy:2-alpine`
+  # manifest-list tag, docker.io/library/caddy, corresponding to
+  # 2.11.4-alpine): no floating `:2`/`:2-alpine` tag on a box that
+  # terminates TLS for production mail-adjacent traffic. Re-resolve and
+  # bump deliberately, the same discipline docker-compose.yml's own header
+  # comment describes for Stalwart's tag.
+  caddy:
+    image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    container_name: mailgun-shim-caddy
+    restart: unless-stopped
+    depends_on:
+      - mailgun-shim
+    ports:
+      - '80:80'
+      - '8443:8443'
+    volumes:
+      - /etc/mailgun-shim/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+volumes:
+  caddy-data:
+  caddy-config:

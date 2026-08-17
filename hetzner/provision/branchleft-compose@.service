@@ -1,0 +1,37 @@
+# One instance per Compose stack on the host, named for the directory under
+# /opt/branchleft. Templated rather than one unit per stack so that adding a
+# tenant or a service is a directory plus an `systemctl enable`, with no unit
+# file to write and no chance of two stacks' units drifting apart.
+[Unit]
+Description=branchLeft Compose stack %i
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/branchleft/%i
+
+# No leading dash: the image pin is mandatory. A stack whose pin file is
+# missing must fail to start rather than fall back to whatever `latest`
+# resolves to at that moment.
+EnvironmentFile=/etc/branchleft/%i.image.env
+# Leading dash: stack secrets are optional and are never written by an
+# automated path. Only branchleft-deploy writes the file above.
+EnvironmentFile=-/etc/branchleft/%i.env
+
+ExecStartPre=/usr/bin/docker compose pull --quiet
+# `--wait` is what makes a bad image a failed unit start rather than a
+# running unit in front of a crash-looping container -- it is the signal
+# branchleft-deploy's rollback depends on.
+ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait
+ExecStop=/usr/bin/docker compose down
+
+# A registry pull plus a health-check wait on a cold host exceeds systemd's
+# 90 second default, and a timeout there is indistinguishable from a genuine
+# deploy failure.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

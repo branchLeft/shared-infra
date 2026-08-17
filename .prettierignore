@@ -1,0 +1,11 @@
+# Repo-specific ignores. The shared set lives in
+# node_modules/@branchleft/prettier-config/prettierignore and is passed as a
+# second --ignore-path; this file is named explicitly in the format scripts
+# because passing any --ignore-path replaces Prettier's default rather than
+# adding to it.
+
+# Written by `pulumi config set`, not by hand. Prettier leaves these alone
+# today, but the tool rewrites them wholesale on every config change and a
+# formatter fighting it would produce diff churn in a file that carries KMS
+# ciphertext.
+Pulumi.*.yaml

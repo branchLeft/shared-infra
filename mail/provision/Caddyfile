@@ -1,0 +1,23 @@
+# Caddy's own ACME (HTTP-01, port 80 only) for the shim's TLS -- it must
+# never contend with Stalwart's TLS-ALPN-01 ACME, which owns port 443
+# exclusively. See mail/RUNBOOK-mx1-provision.md's "Mailgun shim" section
+# for the coexistence argument in full; the two directives that make it
+# structural rather than a convention are both below: `https_port 8443`
+# (this site's TLS listener is 8443, not 443) and `disable_tlsalpn_challenge`
+# (this site's ACME issuer can only ever complete via HTTP-01, so it never
+# even attempts a TLS-ALPN-01 handshake on any port). Combined with
+# shim-compose.yml never publishing container port 443 to the host, there
+# is no path by which this stack can bind or answer on 443.
+{
+	https_port 8443
+}
+
+mx1.branchleft.co.uk:8443 {
+	tls {
+		issuer acme {
+			disable_tlsalpn_challenge
+		}
+	}
+
+	reverse_proxy mailgun-shim:8080
+}

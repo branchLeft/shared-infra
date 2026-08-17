@@ -1,0 +1,2 @@
+graphify-out/*	ALL	# generated artifact, not authored documentation
+CLOUD-ARMOR-BASELINE.md	DL006	# a dated capture is the artifact: the live Cloud Armor policy state it records is a point-in-time snapshot, not a standing fact

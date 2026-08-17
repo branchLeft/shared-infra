@@ -1,0 +1,184 @@
+# The hooks every repo runs, whatever it is written in. A repo appends its own
+# below — formatter, linter, test runner, shellcheck — and SYNC-1 only asserts
+# that these survive.
+#
+# The version is pinned rather than floating because a hook set that changes
+# under you rewrites files in a commit nobody reviewed.
+exclude: ^graphify-out/
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      # Stated rather than inherited: the hook's own default has moved before,
+      # and this threshold is meant to be the same number in every repo.
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: check-merge-conflict
+
+  - repo: local
+    hooks:
+      # `pass_filenames: false` because the ignore files only resolve correctly
+      # when prettier runs from the repo root; without them it would walk into
+      # node_modules and sibling worktrees.
+      - id: prettier
+        name: prettier
+        entry: npm run format:check --silent
+        language: system
+        files: \.(ts|js|json|md|ya?ml)$
+        pass_filenames: false
+
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck -x
+        language: system
+        files: \.sh$
+
+      # Two projects, two tsconfigs. One hook over both would report the root
+      # project's result for a change under mail/ and say nothing about it.
+      - id: typecheck
+        name: typecheck (root)
+        entry: npm run typecheck --silent
+        language: system
+        files: \.ts$
+        exclude: ^(mail|hetzner)/
+        pass_filenames: false
+
+      - id: typecheck-mail
+        name: typecheck (mail)
+        entry: sh -c 'cd mail && npm run typecheck --silent'
+        language: system
+        files: ^mail/.*\.ts$
+        pass_filenames: false
+
+      - id: typecheck-hetzner
+        name: typecheck (hetzner)
+        entry: sh -c 'cd hetzner && npm run typecheck --silent'
+        language: system
+        files: ^hetzner/.*\.ts$
+        pass_filenames: false
+
+      # The deploy wrapper is the whole privilege of the CI deploy account, so
+      # its validation and rollback tests gate the commit rather than only the
+      # pull request.
+      - id: hetzner-deploy-tests
+        name: hetzner deploy wrapper unit tests
+        entry: sh -c "python3 -m unittest discover -s hetzner/provision -p 'test_*.py'"
+        language: system
+        files: ^hetzner/provision/.*\.py$
+        pass_filenames: false
+
+      # Two scripts, both guarding something that fails silently. The Object
+      # Storage probe writes to a bucket and publishes an anonymous-read grant
+      # over a prefix of it: its teardown is the only thing that takes that
+      # grant away again, and its bucket guard is the only thing keeping it off
+      # Pulumi state. The project-layout checker catches a Pulumi project that
+      # runs the wrong program and reports success. Both gate the commit rather
+      # than only the pull request.
+      - id: hetzner-scripts-tests
+        name: hetzner scripts unit tests
+        entry: sh -c "python3 -m unittest discover -s hetzner/scripts -p 'test_*.py'"
+        language: system
+        files: ^hetzner/scripts/.*\.py$
+        pass_filenames: false
+
+      # Widened past the checker's own inputs on purpose: what it reads is
+      # every Pulumi.yaml and package.json under hetzner/, plus whether each
+      # project's `main` still resolves to a file — so a renamed or deleted
+      # program file is exactly the change that must re-run it.
+      # The deploy key's validation is the only thing between stack config and
+      # a cloud-config document that also writes a sudoers drop-in, and
+      # `userData` is create-time-only and ignored thereafter — so a
+      # regression here is permanent and invisible to every later diff.
+      - id: hetzner-unit-tests
+        name: hetzner unit tests (vitest)
+        entry: sh -c 'cd hetzner && npm test --silent'
+        language: system
+        files: ^hetzner/[^/]*\.ts$
+        pass_filenames: false
+
+      - id: hetzner-project-layout
+        name: hetzner Pulumi project layout
+        entry: python3 hetzner/scripts/check-hetzner-projects.py
+        language: system
+        files: ^hetzner/.*(Pulumi\.yaml|package\.json|\.ts)$
+        pass_filenames: false
+
+      - id: scripts-tests
+        name: scripts unit tests
+        entry: sh -c "python3 -m unittest discover -s scripts -p 'test_*.py'"
+        language: system
+        files: ^scripts/.*\.py$
+        pass_filenames: false
+
+      # Split the same way the Cloud Armor pair below is, and for the same
+      # reason: the self-test is hermetic and must pass in every state of the
+      # tree, so it runs on every edit to the checker; the real check has a
+      # verdict about this checkout's files and runs when one of them changes.
+      # The matcher is the whole guard here -- an unanchored pattern flags
+      # `insecure:`, an over-anchored one stops flagging anything -- and
+      # either failure is silent without a test that asserts both directions.
+      - id: pulumi-secrets-guard-selftest
+        name: committed-secret guard self-test
+        entry: python3 scripts/assert-no-committed-pulumi-secrets.py --self-test
+        language: system
+        files: ^scripts/assert-no-committed-pulumi-secrets\.py$
+        pass_filenames: false
+
+      - id: no-committed-pulumi-secrets
+        name: 'no encryptionsalt or secure: value in a committed stack config'
+        entry: python3 scripts/assert-no-committed-pulumi-secrets.py
+        language: system
+        files: ^(.*/)?Pulumi\.[^/]+\.yaml$
+
+      - id: edge-delete-guard
+        name: edge delete guard self-test
+        entry: python3 scripts/assert-no-edge-deletes.py --self-test
+        language: system
+        files: ^scripts/assert-no-edge-deletes\.py$
+        pass_filenames: false
+
+      - id: cloud-armor-baseline-normalizer
+        name: Cloud Armor baseline normalizer self-test
+        entry: python3 scripts/normalize-cloud-armor-baseline.py --self-test
+        language: system
+        files: ^scripts/normalize-cloud-armor-baseline\.py$
+        pass_filenames: false
+
+      # Two hooks, deliberately split, because they answer different
+      # questions. The self-test is hermetic -- it runs entirely against
+      # fixtures in the script and a temp directory, and must pass in every
+      # state of the real repo, so it can run on every edit to the checker
+      # (a docstring fix, a new case) without ever depending on what the live
+      # Cloud Armor policy currently is. The real check reads this checkout's
+      # edge.ts, sites.ts, baseline capture and accepted-failures file, and
+      # so has a verdict about the real world; it runs on the one local
+      # moment that changes that verdict, a commit touching
+      # cloud-armor-baseline/. Folding the two together would put the real
+      # world's state inside the always-must-pass hook -- which is how the
+      # earlier version of this checker ended up asserting that the repo was
+      # currently broken, an assertion that would have started failing the
+      # day someone fixed it.
+      #
+      # Neither hook fires on an edge.ts or sites.ts edit. A code change that
+      # legitimately alters the declared policy would then be uncommittable
+      # until the live policy and the capture caught up -- or until someone
+      # accepted the divergence in a hurry, which is the one thing the
+      # accepted-failures file must never become. CI runs the real check on
+      # every push regardless of what changed.
+      - id: cloud-armor-baseline-parity-selftest
+        name: Cloud Armor baseline parity checker self-test
+        entry: python3 scripts/assert-cloud-armor-baseline-parity.py --self-test
+        language: system
+        files: ^scripts/assert-cloud-armor-baseline-parity\.py$
+        pass_filenames: false
+
+      - id: cloud-armor-baseline-parity-check
+        name: Cloud Armor baseline parity check (against edge.ts)
+        entry: python3 scripts/assert-cloud-armor-baseline-parity.py
+        language: system
+        files: ^cloud-armor-baseline/.*\.json$
+        pass_filenames: false

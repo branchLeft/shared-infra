@@ -1,0 +1,19 @@
+{
+  "0": "index.ts",
+  "1": "compilerOptions",
+  "2": "package.json",
+  "3": "A.2: Cloud Armor drift remediation procedure (targeted refresh + up)",
+  "4": "devDependencies",
+  "5": "README.md",
+  "6": "Rationale: CI never applies to shared-infra (single shared LB is blast-radius-wide)",
+  "7": "Pulumi Stack: production (branchleft-shared-infra)",
+  "8": "CLAUDE.md",
+  "9": "Certificate Manager Map",
+  "10": "Cloud Armor Policy",
+  "11": "docs-lint.yml",
+  "12": "Global External Application Load Balancer",
+  "13": "Pulumi Project: branchleft-shared-infra",
+  "14": "Pulumi Stack: production",
+  "15": "Gate 11b: website-infra preview shows zero deletions",
+  "16": "Gate 11c: production is still serving"
+}

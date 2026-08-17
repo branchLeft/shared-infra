@@ -1,0 +1,28 @@
+name: branchleft-hetzner-estate
+runtime: nodejs
+
+# `main` is mandatory here and its absence is dangerous, not merely untidy.
+#
+# This directory holds a Pulumi project but no npm package: the program lives
+# in the parent directory so that both Hetzner projects resolve one
+# `node_modules`, and therefore one `@pulumi/hcloud` version. A provider
+# version is part of every resource's URN, and these hosts attach to a network
+# the other project owns.
+#
+# The consequence is that Pulumi finds `../package.json` when it looks for an
+# entry point. Without the line below it reads that file's `"main": "index.ts"`
+# and resolves it against the *package* root — so this project silently runs
+# `../index.ts`, the network program, and previews a create plan for a second
+# network and subnet. It does not error; it succeeds at the wrong thing.
+main: ../estate.ts
+
+# Pinned for the same reason the network project pins it: `pulumi login` is
+# global state on a workstation, so a project that does not name its own
+# backend can be operated against whichever one was last logged into. The
+# bucket is in `hel1`; the servers this project creates are not, and the two
+# are ordered independently. Both the endpoint host and `region` must name the
+# bucket's location — a mismatch is an opaque 403 that reads as a credential
+# problem.
+backend:
+  url: 's3://branchleft-pulumi-state?endpoint=hel1.your-objectstorage.com&s3ForcePathStyle=true&region=hel1'
+description: The Hetzner hosts this repository owns, created from the shared Host pattern — edge1 today, and the monitoring host when it splits off it. The application and database hosts are homed in ghost-platform and are not created here. Separate from branchleft-hetzner-network because the network is replaced approximately never and replacing it detaches every host at once; separate from the per-role service stacks because those deliver containers over SSH rather than through Pulumi.

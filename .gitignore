@@ -1,0 +1,27 @@
+/node_modules/
+/bin/
+/mail/node_modules/
+/mail/bin/
+/hetzner/node_modules/
+/hetzner/bin/
+
+# Pulumi state artifacts. Nothing under here is ever committed: this stack's
+# state lives in the bucket, and a local copy of it is both a source-of-truth
+# conflict and, since a checkpoint carries decrypted-at-rest resource outputs,
+# a disclosure this repository must not make.
+Pulumi.*.yaml.bak
+/*.checkpoint.json
+/stack-backup-*.json
+/.pulumi/
+
+.DS_Store
+.env
+__pycache__/
+
+# Unguarded intermediates from CLOUD-ARMOR-BASELINE.md's reproduction steps
+# -- a raw `gcloud` read, before the normalizer's redaction guard has run.
+# The documented steps write these to a scratch directory outside the repo;
+# this is the second layer, in case a future capture writes them here
+# instead.
+/cloud-armor-baseline/*.raw.json
+/cloud-armor-baseline/*.list.json

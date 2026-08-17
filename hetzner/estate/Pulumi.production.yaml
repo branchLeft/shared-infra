@@ -1,0 +1,45 @@
+# Stack configuration for this repository's Hetzner hosts.
+#
+# `encryptionsalt` and the `hcloud:token` ciphertext are absent because both
+# are written by `pulumi stack init --secrets-provider passphrase` and
+# `pulumi config set --secret hcloud:token`, and neither can be produced
+# without the passphrase and the token. Commit the file again once they are
+# there: a stack whose salt is not committed cannot be applied from anywhere
+# else, and a stack whose passphrase is lost cannot decrypt its own committed
+# ciphertext ever again.
+#
+# `ownerSshKeyNames` and `edge1DeployPublicKey` are missing on purpose rather
+# than placeheld. The program `require`s both, so a preview fails and names the
+# first one that is unset. A placeholder would be worse than an absence here:
+# `deployPublicKey` reaches the host through cloud-init, and `userData` is in
+# the component's `ignoreChanges`, so the value that lands at creation is the
+# one the host keeps — changing it later through this file is a clean preview,
+# a successful apply, and no effect on the host. RUNBOOK-provision-host.md
+# carries the rotation path that does work.
+#
+# `location` is deliberately not a key here. It is `ESTATE_LOCATION` in
+# addressPlan.ts, because more than one stack in more than one repository
+# creates hosts on this network and a per-stack config value lets the second
+# apply land somewhere the first did not — permanently, and with a clean
+# preview.
+#
+# Two things about editing this file. Pulumi rewrites it in place on every
+# `stack init` and `config set`, so the layout below is the one Pulumi itself
+# produces and an edit that reflows it will be reflowed back. And a comment
+# survives that rewrite only while the file carries at least one populated
+# config entry — emptying the block below silently deletes everything above it.
+config:
+  # Matches the mail host. Ignored by the component after creation, because
+  # Hetzner reuses an image name across point releases and the value the API
+  # reports drifts on a server that was never rebuilt.
+  branchleft-hetzner-estate:image: debian-13
+  # The smallest current shared-x86 type. The scale-out trigger is a memory
+  # alert rather than a judgement made here, and cx33 has not been reliably
+  # orderable. Check `Available:` and never `Recommended:` immediately before
+  # an apply: `Recommended` reads `hel1` across the whole cx line whatever the
+  # stock is, and reading it produces a confident and entirely false shortage.
+  #
+  # One key per host rather than one shared key: a resize is a per-host
+  # decision, and a shared key would make one host's change read as every
+  # host's.
+  branchleft-hetzner-estate:edge1ServerType: cx23

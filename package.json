@@ -1,0 +1,23 @@
+{
+  "name": "branchleft-shared-infra",
+  "private": true,
+  "main": "index.ts",
+  "prettier": "@branchleft/prettier-config",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write . --ignore-path .gitignore --ignore-path .prettierignore --ignore-path node_modules/@branchleft/prettier-config/prettierignore",
+    "format:check": "prettier --check . --ignore-path .gitignore --ignore-path .prettierignore --ignore-path node_modules/@branchleft/prettier-config/prettierignore"
+  },
+  "comment": "@pulumi/gcp is pinned exactly, not caret-ranged. The default provider's version is part of its URN (`pulumi:providers:gcp::default_9_32_1`), and `pulumi state move` carries the moved resources' provider reference with them. Resolving a different patch here would make the migration's zero-diff preview gate fail on a provider change against every resource. Bump it deliberately, after the state move has landed, and read the preview.",
+  "dependencies": {
+    "@pulumi/gcp": "9.32.1",
+    "@pulumi/pulumi": "^3.255.0"
+  },
+  "devDependencies": {
+    "@branchleft/prettier-config": "^0.3.1",
+    "@branchleft/tsconfig": "^0.3.1",
+    "@types/node": "^26",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.0"
+  }
+}

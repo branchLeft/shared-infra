@@ -1,0 +1,3 @@
+name: branchleft-shared-infra
+runtime: nodejs
+description: Shared branchLeft edge infrastructure — global external application load balancer, Cloud Armor policy, Certificate Manager map and per-site backends. Fronts every branchLeft Cloud Run service, across products.

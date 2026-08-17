@@ -1,0 +1,9 @@
+# `encryptionsalt` is deliberately absent from this committed file. It is a
+# passphrase verifier: anyone holding it can test candidate passphrases offline,
+# at their own rate, with no service in the loop and nothing to notice. The
+# stack still needs it to decrypt, so CI appends it from a repository secret
+# immediately before the first `pulumi` command (.github/workflows/ci.yml), and
+# a workstation operator appends it the same way from their own copy.
+config:
+  gcp:project: branchleft-prod
+  branchleft-shared-infra:region: europe-west1
