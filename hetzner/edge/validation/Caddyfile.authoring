@@ -17,12 +17,43 @@
 	}
 }
 
+authoring.invalid {
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	@inspected not path /ghost/api/*
+	route {
+		rate_limit {
+			zone authoring_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		crowdsec
+		appsec @inspected
+		reverse_proxy 10.20.1.100:2368
+	}
+}
+
 :8080 {
 	log {
 		output file /var/log/caddy/probe.log
 		format json
 	}
 	route {
+		rate_limit {
+			zone probe_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		crowdsec
 		appsec
 		respond 204
 	}

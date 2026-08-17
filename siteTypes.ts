@@ -44,12 +44,18 @@ export interface EdgeSite {
    * an injection payload at sensitivity 1. A false positive there locks the
    * owner out of publishing rather than degrading a page.
    *
-   * `lfi` enforces regardless — its signatures match filesystem paths
-   * (`.env`, `.git/config`, `../`), which no legitimate request here contains.
+   * The two edges honour this flag differently, and the difference is not
+   * only one of scope:
    *
-   * On the Hetzner edge the same flag narrows to the authoring paths rather
-   * than exempting the whole hostname; `hetzner/edge/render.ts` carries the
-   * reasoning and `hetzner/RUNBOOK-edge.md` carries the operational effect.
+   * - **GCP.** The three injection rulesets go to preview for the whole
+   *   hostname. `lfi` enforces regardless — its signatures match filesystem
+   *   paths (`.env`, `.git/config`, `../`), which no legitimate request here
+   *   contains.
+   * - **Hetzner.** The exemption is one path prefix rather than a hostname,
+   *   but on that prefix it removes *every* AppSec rule, the `lfi` analogues
+   *   included — the handler is per-request, so a rule family cannot be kept
+   *   back. Narrower in one direction, wider in the other, and recorded as such
+   *   in `CLOUD-ARMOR-BASELINE.md`'s named differences.
    */
   injectionWafPreviewOnly?: boolean;
   /**

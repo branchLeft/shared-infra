@@ -23,6 +23,14 @@
 		format json
 	}
 	route {
+		rate_limit {
+			zone probe_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		crowdsec
 		appsec
 		respond 204
 	}

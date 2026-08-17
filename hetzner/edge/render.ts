@@ -31,10 +31,17 @@ const GENERATED_BANNER = [
 
 /**
  * Paths exempted from AppSec evaluation on a site flagged
- * `injectionWafPreviewOnly`. Ghost serves its admin UI and admin API under
- * `/ghost`, and an admin request body carries author-written HTML, code and SQL.
+ * `injectionWafPreviewOnly`. Ghost's admin API is where author-written HTML,
+ * code samples and SQL arrive in a request body; the admin UI around it is a
+ * static bundle carrying none, so the prefix is the API and not `/ghost`.
+ *
+ * The exemption removes **all** AppSec evaluation on these paths, not only the
+ * injection rulesets — the Caddy handler is per-request, so there is no way to
+ * exempt three rule families and keep a fourth. That is a widening relative to
+ * the policy this replaces and it is disclosed in `CLOUD-ARMOR-BASELINE.md`
+ * rather than left to be discovered.
  */
-const AUTHORING_PATHS = ['/ghost', '/ghost/*'];
+const AUTHORING_API_PATHS = ['/ghost/api/*'];
 
 /** Where Caddy writes the access log CrowdSec parses. */
 const ACCESS_LOG = '/var/log/caddy/access.log';
@@ -66,8 +73,19 @@ const CROWDSEC_APPSEC_URL = 'http://crowdsec:7422';
  */
 const APPSEC_MAX_BODY_BYTES = 65536;
 
-/** Bounds the added latency of an AppSec verdict, in the same units Caddy takes. */
-const APPSEC_MAX_TIMEOUT = '1s';
+/**
+ * Bounds the added latency of an AppSec verdict. The token is `appsec_timeout`;
+ * upstream's README documents `appsec_max_timeout`, which its own Caddyfile
+ * parser rejects. Read the parser, not the table.
+ */
+const APPSEC_TIMEOUT = '1s';
+
+/**
+ * Certificate issuance is pinned rather than left to Caddy's default issuer
+ * list, whose fallback is a second CA that has not been through the supplier
+ * rubric every other component here has.
+ */
+const ACME_DIRECTORY = 'https://acme-v02.api.letsencrypt.org/directory';
 
 /**
  * In-band AppSec configuration: known-exploit shapes, evaluated before the
@@ -96,10 +114,11 @@ const PRIVATE_ADDRESSES: Record<string, string> = { ...HOST_IPS, ...APP_HOST_IPS
 /**
  * The mail host is on the estate's address plan but not behind this edge: it
  * terminates SMTP, has its own firewall, and is not on the private network at
- * all. Naming it as an upstream is a registry mistake worth failing on rather
- * than rendering.
+ * all. `edge1` is this host, so naming it produces a proxy loop that answers
+ * every request with a timeout after exhausting the connection pool. Both are
+ * registry mistakes worth failing on rather than rendering.
  */
-const NOT_AN_UPSTREAM = new Set(['mx1']);
+const NOT_AN_UPSTREAM = new Set(['mx1', 'edge1']);
 
 export function resolvePrivateAddress(host: string, port: number): string {
   if (NOT_AN_UPSTREAM.has(host)) {
@@ -194,7 +213,7 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
 
   const body: string[] = [...logDirective(ACCESS_LOG), ...tlsDirective()];
   if (site.injectionWafPreviewOnly) {
-    body.push(`@inspected not path ${AUTHORING_PATHS.join(' ')}`);
+    body.push(`@inspected not path ${AUTHORING_API_PATHS.join(' ')}`);
   }
   body.push(
     'route {',
@@ -247,18 +266,31 @@ function probeBlock(posture: EdgePosture): Block {
 function globalOptions(): string[] {
   return [
     '{',
+    // No stable ACME account and no expiry notice without one. Read from the
+    // environment rather than committed, for the same reason the bouncer key
+    // is: an address in a public tree is an address in a scraper's list.
+    '\temail {env.ACME_EMAIL}',
+    `\tacme_ca ${ACME_DIRECTORY}`,
+    // HTTP/3 is off because the host firewall opens tcp/443 and no UDP port.
+    // Left on, Caddy advertises `Alt-Svc: h3` on every response and clients
+    // retry QUIC against a port Hetzner drops upstream — which browsers survive
+    // by falling back, after caching the advertisement and stalling first
+    // connections in a way that looks like anything but a firewall rule.
+    '\tservers {',
+    '\t\tprotocols h1 h2',
+    '\t}',
     '\tcrowdsec {',
     `\t\tapi_url ${CROWDSEC_LAPI_URL}`,
     '\t\tapi_key {env.CROWDSEC_BOUNCER_KEY}',
     '\t\tticker_interval 15s',
     `\t\tappsec_url ${CROWDSEC_APPSEC_URL}`,
     `\t\tappsec_max_body_bytes ${APPSEC_MAX_BODY_BYTES}`,
-    `\t\tappsec_max_timeout ${APPSEC_MAX_TIMEOUT}`,
-    // A single-VM edge shares its two vCPUs with the WAF sidecar, so an AppSec
-    // restart or stall must degrade inspection rather than answer 500 for every
-    // site at once. IP decisions are unaffected: the bouncer serves those from
-    // its own cache.
-    '\t\tappsec_fail_open true',
+    `\t\tappsec_timeout ${APPSEC_TIMEOUT}`,
+    // A bare flag: the parser rejects an argument here. Absent, the bouncer
+    // fails *closed*, and the appsec handler is in the route in every posture —
+    // so a CrowdSec restart would answer 500 for every request on every site,
+    // including in the posture that is supposed to be unable to affect one.
+    '\t\tappsec_fail_open',
     '\t}',
     '}',
   ];
@@ -299,7 +331,10 @@ export function renderCaddyfile(
   }
   blocks.push(probeBlock(posture));
 
-  const lines = [...GENERATED_BANNER, '', ...globalOptions()];
+  // No blank line between the banner and the global options block: `caddy fmt`
+  // removes one, and a rendered file that its own formatter would rewrite makes
+  // every future diff ambiguous about whether the config or the layout changed.
+  const lines = [...GENERATED_BANNER, ...globalOptions()];
   for (const block of blocks) {
     lines.push('', ...renderBlock(block));
   }

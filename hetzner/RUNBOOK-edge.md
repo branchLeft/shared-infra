@@ -11,6 +11,12 @@ creation. The CI deploy account cannot run any of this and is not meant to.
 Run every workstation command from the root of a `branchLeft/shared-infra`
 checkout.
 
+Addresses are written out rather than left as `<host-ipv4>` placeholders, unlike
+the sibling `RUNBOOK-provision-host.md`. That runbook is generic — it applies to
+any newly created host — and this one is about one host that already exists, so
+every command here is meant to be runnable as read, with nothing to resolve
+first.
+
 ## What has to be true first
 
 `RUNBOOK-provision-host.md` must have been run against `edge1`. This runbook
@@ -90,35 +96,63 @@ build, before anything is deployed:
 ```bash
 docker run --rm --platform linux/amd64 \
   --env CROWDSEC_BOUNCER_KEY=validation-only \
+  --env ACME_EMAIL=validation@example.invalid \
   --volume "$PWD/hetzner/edge/stack/Caddyfile:/etc/caddy/Caddyfile:ro" \
   ghcr.io/branchleft/edge-caddy@<DIGEST> \
   caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
 ```
 
-Expect `Valid configuration`. The environment variable is a placeholder: this
-parses and adapts the file, it does not contact CrowdSec.
+Expect `Valid configuration`. Both environment variables are placeholders: this
+parses and adapts the file, it does not contact CrowdSec and it issues no
+certificate.
 
-## 3. Create the bouncer key on the host
+CI runs this same check on every push, over the deployed configuration and over
+the ones the posture flips would produce, so a failure here means the local
+checkout differs from what was merged rather than that the configuration is
+broken.
 
-Caddy and CrowdSec must hold the same key, and it is generated once and never
-committed. `/etc/branchleft/edge.env` is the file `branchleft-compose@edge`
-loads for stack secrets, and nothing automated ever writes it — the deploy
-wrapper writes `/etc/branchleft/edge.image.env` and only that.
+## 3. Write the stack's two secrets on the host
+
+`/etc/branchleft/edge.env` is the file `branchleft-compose@edge` loads for stack
+secrets, and nothing automated ever writes it — the deploy wrapper writes
+`/etc/branchleft/edge.image.env` and only that. It needs two values:
+
+- `CROWDSEC_BOUNCER_KEY`, which Caddy and CrowdSec must both hold. Generated
+  once here, registered on the CrowdSec side from the same variable, never
+  committed.
+- `ACME_EMAIL`, the address Let's Encrypt attaches the account to and sends
+  expiry warnings to. The stack refuses to start without it. Use a mailbox
+  someone reads; a certificate-expiry warning delivered nowhere is the failure
+  mode this exists to prevent.
+
+**This command writes the file whole and discards anything already in it.**
+Nothing else belongs there today, but check before running it a second time:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  'test -f /etc/branchleft/edge.env && grep -c . /etc/branchleft/edge.env || echo "absent"'
+```
+
+`absent`, or `2`, means there is nothing to lose. Anything else: edit the file
+in place instead of running the next command.
+
+Substituting a real mailbox for `ACME_EMAIL`:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
   install -d -m 0755 -o root -g root /etc/branchleft &&
   umask 077 &&
-  printf "CROWDSEC_BOUNCER_KEY=%s\n" "$(openssl rand -hex 32)" > /etc/branchleft/edge.env &&
+  { printf "CROWDSEC_BOUNCER_KEY=%s\n" "$(openssl rand -hex 32)";
+    printf "ACME_EMAIL=%s\n" "<ACME_MAILBOX>"; } > /etc/branchleft/edge.env &&
   chmod 0600 /etc/branchleft/edge.env &&
   ls -l /etc/branchleft/edge.env'
 ```
 
-Expect `-rw------- 1 root root`. Do not print the file; nothing below needs its
-value, and the key is registered on the CrowdSec side from the same variable.
+Expect `-rw------- 1 root root`. Do not print the file; nothing below needs the
+key's value.
 
-Re-running this line **rotates** the key. Both containers read it at start, so
-a rotation is followed by step 6's restart and nothing else.
+Re-running this **rotates** the bouncer key. Both containers read it at start,
+so a rotation is followed by step 6's restart and nothing else.
 
 ## 4. Copy the stack directory onto the host
 
@@ -291,9 +325,18 @@ Expect `403`. `/.env` trips an in-band virtual-patching rule, so it is refused
 before the request proceeds — the behaviour the retiring Cloud Armor policy
 declared for its `lfi` ruleset.
 
-**That request also bans the address it came from**, which for a command run on
-the host is the Docker bridge gateway. Clear it, or the host's own container
-traffic stays banned for the decision's lifetime:
+**A block is not where it ends.** In-band blocks feed
+`crowdsecurity/appsec-vpatch`, a leaky bucket at `capacity: 1` counting distinct
+rule names per address, so a **second** distinct in-band rule match from the same
+address inside 60 seconds becomes a ban across every hostname on the edge for
+the profile's duration. Out-of-band matches do the same at `capacity: 5`. The
+Cloud Armor rules being replaced answered 403 and never touched the address.
+This is the difference the parity artifact records, and it is the reason the
+detect-only review in step 9 is about false positives rather than about counts.
+
+Run the check above twice and you will ban yourself. For a command run on the
+host that address is the Docker bridge gateway. Clear it, or the host's own
+container traffic stays banned for the decision's lifetime:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
@@ -361,10 +404,20 @@ case where the stack started cleanly and is behaving wrongly.
   client addresses to a third party, which is a sub-processor and a personal-data
   decision rather than a configuration default. It stays off until that decision
   is taken and the DPIA is updated.
-- **It does not fail closed on the WAF.** `appsec_fail_open` is `true`: a
-  CrowdSec restart or stall degrades inspection rather than answering 500 for
-  every site at once, because both containers share one `cx23`. IP decisions are
-  unaffected — the bouncer serves those from its own cache.
+- **It does not fail closed on the WAF.** The Caddy configuration carries a bare
+  `appsec_fail_open`: a CrowdSec restart or stall degrades inspection rather
+  than answering 500 for every site at once, because both containers share one
+  `cx23`. IP decisions are unaffected — the bouncer serves those from its own
+  cache. Absent, the bouncer's default is fail-**closed**, and the AppSec
+  handler is in the route in every posture, detect-only included.
+- **It does not serve HTTP/3.** The Caddy configuration sets
+  `servers { protocols h1 h2 }` and Compose publishes no UDP port, because the
+  `edge1` firewall opens tcp/22, tcp/80, tcp/443 and ICMP and no UDP at all.
+  Left on, Caddy would advertise `Alt-Svc: h3` on every response and clients
+  would retry QUIC against a dropped port — survivable, but it presents as
+  intermittent slow first connections rather than as a firewall rule. Turning
+  HTTP/3 on means adding the firewall rule first; the rule lives in
+  `@branchleft/hetzner-host`'s `EDGE_RULES`, not in this stack.
 - **It does not open the probe port.** Compose publishes `8080` on `127.0.0.1`
   only and the Hetzner firewall on `edge1` opens 22, 80, 443 and ICMP. Reaching
   the probe requires SSH to the host.
