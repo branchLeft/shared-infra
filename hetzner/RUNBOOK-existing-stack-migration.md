@@ -208,12 +208,16 @@ Three repos hold a `PULUMI_CONFIG_PASSPHRASE` secret, and all three are set:
 | `branchLeft/ghost-platform` | `branchleft-ghost-platform/platform`, `branchleft-ghost-provisioning/blog` and, during provisioning, the tenant's own stack |
 
 **`branchLeft/ghost-tenant-blog` is not a fourth row.** `blog-infra/blog` is a
-tenant stack, but that repo holds no `PULUMI_CONFIG_PASSPHRASE`, at any scope,
-and never has — its stack has been KMS-wrapped since it was created, so
-nothing has needed one yet. If `blog-infra/blog` is migrated rather than
-destroyed, its secret is minted and set by hand as part of that stack's own
-A.2 run, not held in advance like the three above — see "The hazard that
-decision creates" below for the exact sequence.
+tenant stack, and unlike the three repos above, its secret was never set at
+onboarding: its stack has been KMS-wrapped since it was created, so nothing
+has needed a passphrase secret until now. **This is a fact about that
+repo's history, not a promise about its current state — check before relying
+on it:** `gh secret list --repo branchLeft/ghost-tenant-blog`. If
+`PULUMI_CONFIG_PASSPHRASE` is already there, this stack has already been
+through the mint-escrow-set sequence below (`branchLeft/workspace#128` is
+where that re-wrap is tracked) — do not repeat it. If it is not there, that
+sequence is what to run when this stack's turn comes; see "The hazard that
+decision creates" below for the exact steps.
 
 ### One passphrase per repo, not per stack — decided
 
@@ -247,11 +251,15 @@ secrets:
 - The **tenant repo's** own CI reads and applies that same stack, using the
   tenant repo's `PULUMI_CONFIG_PASSPHRASE`.
 
-Two different values cannot both decrypt one checkpoint. `ghost-tenant-blog`
-holds a different value from `ghost-platform` today, so re-wrapping
-`blog-infra/blog` breaks whichever of those two pipelines is not holding the
-passphrase the checkpoint ended up with — and it breaks it silently until
-something needs a secret.
+Two different values cannot both decrypt one checkpoint. Re-wrapping
+`blog-infra/blog` without first making `ghost-tenant-blog`'s own secret match
+whatever value the checkpoint ends up wrapped with breaks whichever of those
+two pipelines is not holding that passphrase — and it breaks it silently
+until something needs a secret. Unlike a stack that has already been
+re-wrapped once, `ghost-tenant-blog` has no prior passphrase secret to
+mismatch against the first time (below) — but a freshly minted one, wrapped
+into the checkpoint and never propagated to that repo's secret, creates the
+exact same mismatch from the other direction.
 
 **The resolution is decided and landed: provisioning mints the tenant's
 passphrase and sets the tenant repo's Actions secret from it**, so one value
@@ -278,12 +286,13 @@ touches an already-onboarded tenant's stack: `provision-tenant.yml` refuses
 outright when the tenant repo already exists (onboarding is create-only), so
 `blog-infra/blog` is structurally never reached by the mint-and-set path —
 that path only runs the one time a tenant is first onboarded.
-`ghost-tenant-blog` holds no `PULUMI_CONFIG_PASSPHRASE`, at any scope, so
-there is no existing value to adopt at step 0 — its stack has been
-KMS-wrapped since it was created and has never needed one. The call made by
-whoever runs A.2 against `blog-infra/blog` is **mint, escrow by hand, and set
-the tenant repo's secret**, in this order, before starting that stack's A.2
-run:
+Unlike the three repos in the table above, `ghost-tenant-blog`'s secret was
+never set at onboarding — its stack has been KMS-wrapped since it was
+created and has never needed one (confirm this is still true before acting
+on it, per the note above the table). Absent that secret, there is no
+existing value to adopt at step 0. The call made by whoever runs A.2 against
+`blog-infra/blog` is **mint, escrow by hand, and set the tenant repo's
+secret**, in this order, before starting that stack's A.2 run:
 
 1. Generate a fresh, high-entropy passphrase for `blog-infra/blog` alone —
    never `ghost-platform`'s. A tenant repo must never hold an offline
