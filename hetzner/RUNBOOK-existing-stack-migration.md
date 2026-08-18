@@ -198,14 +198,22 @@ mode than the key it replaces and it is accepted, for the reason
 `RUNBOOK-new-stack.md` gives: the alternative is a dependency on the cloud
 account this programme exists to leave.
 
-Four repos hold a `PULUMI_CONFIG_PASSPHRASE` secret, and all four are set:
+Three repos hold a `PULUMI_CONFIG_PASSPHRASE` secret, and all three are set:
+`branchLeft/shared-infra`, `branchLeft/website` and `branchLeft/ghost-platform`.
 
-| Repo                           | Stack it applies                                                                                                            |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `branchLeft/shared-infra`      | `branchleft-shared-infra/production` (and `branchleft-mail/production`, which has no CI apply path but shares the repo)     |
-| `branchLeft/website`           | `branchleft-website-infra/production`                                                                                       |
-| `branchLeft/ghost-platform`    | `branchleft-ghost-platform/platform`, `branchleft-ghost-provisioning/blog` and, during provisioning, the tenant's own stack |
-| `branchLeft/ghost-tenant-blog` | `blog-infra/blog`, if it is migrated rather than destroyed                                                                  |
+| Repo                        | Stack it applies                                                                                                            |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `branchLeft/shared-infra`   | `branchleft-shared-infra/production` (and `branchleft-mail/production`, which has no CI apply path but shares the repo)     |
+| `branchLeft/website`        | `branchleft-website-infra/production`                                                                                       |
+| `branchLeft/ghost-platform` | `branchleft-ghost-platform/platform`, `branchleft-ghost-provisioning/blog` and, during provisioning, the tenant's own stack |
+
+**`branchLeft/ghost-tenant-blog` is not a fourth row.** `blog-infra/blog` is a
+tenant stack, but that repo holds no `PULUMI_CONFIG_PASSPHRASE`, at any scope,
+and never has — its stack has been KMS-wrapped since it was created, so
+nothing has needed one yet. If `blog-infra/blog` is migrated rather than
+destroyed, its secret is minted and set by hand as part of that stack's own
+A.2 run, not held in advance like the three above — see "The hazard that
+decision creates" below for the exact sequence.
 
 ### One passphrase per repo, not per stack — decided
 
@@ -269,16 +277,32 @@ re-wrap time, not something the rewrite's code decides.** The rewrite never
 touches an already-onboarded tenant's stack: `provision-tenant.yml` refuses
 outright when the tenant repo already exists (onboarding is create-only), so
 `blog-infra/blog` is structurally never reached by the mint-and-set path —
-that path only runs the one time a tenant is first onboarded. The adopt-vs-
-mint call therefore isn't encoded anywhere; it is made by whoever runs A.2
-against `blog-infra/blog`, at step 0: enter `ghost-tenant-blog`'s existing
-passphrase (adopt) rather than generating a new one (mint), so the value the
-checkpoint ends up wrapped with is the one `ghost-tenant-blog`'s own CI
-already holds. Minting a new one here instead would rotate the value the
-checkpoint is wrapped with while nothing propagates that new value to
-`ghost-tenant-blog`'s own secret, which is the same stranding this whole
-runbook exists to prevent, arrived at from the other direction. **Adopt, not
-mint, when this stack's turn comes.**
+that path only runs the one time a tenant is first onboarded.
+`ghost-tenant-blog` holds no `PULUMI_CONFIG_PASSPHRASE`, at any scope, so
+there is no existing value to adopt at step 0 — its stack has been
+KMS-wrapped since it was created and has never needed one. The call made by
+whoever runs A.2 against `blog-infra/blog` is **mint, escrow by hand, and set
+the tenant repo's secret**, in this order, before starting that stack's A.2
+run:
+
+1. Generate a fresh, high-entropy passphrase for `blog-infra/blog` alone —
+   never `ghost-platform`'s. A tenant repo must never hold an offline
+   verifier for another repo's passphrase (above); reusing `ghost-platform`'s
+   here would hand `ghost-tenant-blog` exactly that.
+2. Store it in the password manager, the same as every other stack's
+   passphrase under this section.
+3. Set it as `branchLeft/ghost-tenant-blog`'s `PULUMI_CONFIG_PASSPHRASE`
+   repository secret.
+
+**Do all three before A.2 step 5 runs against this stack, not after.** Step 5
+is what wraps the checkpoint with the value now sitting in the password
+manager; setting the tenant repo's secret only after that step leaves the
+checkpoint decryptable by a value nothing else holds for however long the
+secret takes to set — the same stranding this whole runbook exists to
+prevent, reached from the other direction. Once the secret is set, use that
+same minted value as this stack's passphrase for the rest of A.2: it now
+lives in the password manager, the tenant repo's CI secret, and (once step 5
+runs) the checkpoint, which is the end state this section wants.
 
 **A minted passphrase still has no human copy, and that gap is accepted for
 now rather than closed.** `ghost-platform` is a public repo, so there is no
@@ -335,13 +359,20 @@ out of the next stack's run — do not hoist step 0 out of the loop.
 #    Entered twice: what you type here becomes the only thing that can ever
 #    decrypt this stack, and nothing downstream compares it to the copy in
 #    the password manager. A typo here is silent and permanent.
+#    `read -rs "VAR?prompt"`, not `read -rs -p 'prompt' VAR` -- the platform
+#    owner's shell is zsh, where `-p` means "read from a coprocess", not
+#    "print a prompt". It fails with `no coprocess`, leaves VAR empty, and
+#    the confirm check below then compares "" to "" and passes.
 umask 077
 install -m 600 /dev/null ~/.pulumi-passphrase-tmp
-read -rs -p 'New passphrase for THIS stack: ' PASSPHRASE; echo
-read -rs -p 'Again, to confirm:            ' CONFIRM; echo
+read -rs "PASSPHRASE?New passphrase for THIS stack: "; echo
+read -rs "CONFIRM?Again, to confirm:            "; echo
 [ "$PASSPHRASE" = "$CONFIRM" ] || { echo 'MISMATCH -- start this stack again'; return 1 2>/dev/null || exit 1; }
 printf '%s' "$PASSPHRASE" > ~/.pulumi-passphrase-tmp; unset PASSPHRASE CONFIRM
+[ -s ~/.pulumi-passphrase-tmp ] || { echo 'EMPTY PASSPHRASE FILE -- do not continue'; return 1 2>/dev/null || exit 1; }
 export PULUMI_CONFIG_PASSPHRASE_FILE=~/.pulumi-passphrase-tmp
+unset PULUMI_CONFIG_PASSPHRASE
+[ -z "${PULUMI_CONFIG_PASSPHRASE:-}" ] || { echo 'PULUMI_CONFIG_PASSPHRASE is set and would override the _FILE -- unset it'; return 1 2>/dev/null || exit 1; }
 
 # 1. The checkout that owns this stack's Pulumi.<stack>.yaml, on a branch --
 #    not on main, and not a worktree checked out for other work. The command
@@ -373,7 +404,8 @@ pulumi stack export --stack <stack> --show-secrets > /dev/null && echo 'decrypt 
 pulumi stack change-secrets-provider passphrase --stack <stack>
 
 # 6. Verify before moving on. All three, in this order.
-git diff --stat Pulumi.<stack>.yaml          # secretsprovider/encryptedkey -> encryptionsalt
+git diff --stat Pulumi.<stack>.yaml          # secretsprovider: gcpkms -> passphrase (also
+                                              # gains an encryptionsalt line -- not committed, see below)
 pulumi stack export --stack <stack> --show-secrets > /dev/null && echo 'decrypt OK'
 pulumi preview --stack <stack>               # expect: no changes
 
@@ -390,8 +422,9 @@ pulumi stack export --stack <stack> --file ~/pulumi-postwrap-<project>-<stack>.j
 #    itself. If this fails, the temp file is still the only working copy:
 #    fix the password manager entry now, before step 8.
 install -m 600 /dev/null ~/.pulumi-passphrase-check
-read -rs -p 'Passphrase AS STORED in the password manager: ' STORED; echo
+read -rs "STORED?Passphrase AS STORED in the password manager: "; echo
 printf '%s' "$STORED" > ~/.pulumi-passphrase-check; unset STORED
+[ -s ~/.pulumi-passphrase-check ] || { echo 'EMPTY PASSPHRASE FILE -- do not continue'; return 1 2>/dev/null || exit 1; }
 PULUMI_CONFIG_PASSPHRASE_FILE=~/.pulumi-passphrase-check \
   pulumi stack export --stack <stack> --show-secrets > /dev/null \
   && echo 'STORED COPY OK' || echo 'STORED COPY FAILED -- do not run step 8'
@@ -459,18 +492,39 @@ nothing else. Two things follow, and both matter more than the wording:
 - **Do not reconcile it.** Running `pulumi up` to make the preview clean rolls
   production back to the bootstrap image. The diff is meant to be there.
 
-Then commit and open a PR **for that stack's repo**:
+`change-secrets-provider` wrote a real `encryptionsalt` value into
+`Pulumi.<stack>.yaml` in step 5 — Pulumi has no other way to leave the file
+usable locally. **That line must never be staged or committed.** Every stack
+in this estate is salt-injected-at-deploy: the salt lives only as a
+repository secret, appended to the working copy at apply time — by CI for a
+stack CI applies, by the operator's own copy for one that has no CI apply
+path (`mail/`, `hetzner/`) — and it is never committed. This repo's own
+`Restore the stack's encryption salt` step in `.github/workflows/ci.yml` is
+the pattern to match. Committing it publishes an offline verifier for the
+stack's passphrase in a public repo, which is exactly what A.0 exists to
+prevent.
+
+Before staging anything, pull the salt back out and turn it into a secret
+instead of a committed line:
+
+```bash
+SALT=$(awk -F': ' '/^encryptionsalt:/ {print $2}' Pulumi.<stack>.yaml)
+sed -i '' '/^encryptionsalt:/d' Pulumi.<stack>.yaml
+```
+
+Set `$SALT` as a repository secret on the repo that applies this stack —
+named consistently with any stack that repo's CI already salts (this repo's
+edge stack uses `PULUMI_SALT_EDGE`) — then `unset SALT`. Only then commit and
+open a PR **for that stack's repo**:
 
 ```bash
 git add Pulumi.<stack>.yaml
 git commit -m 'chore(infra): re-wrap <stack> secrets onto the passphrase provider'
 ```
 
-The `encryptionsalt` line the rewrite leaves behind is not a secret and must be
-committed. It is what makes the committed ciphertext decryptable by anyone
-holding the passphrase, and a stack whose salt is not committed cannot be
-applied from CI. **Do not merge that PR until the repo's
-`PULUMI_CONFIG_PASSPHRASE` secret exists**, or the next CI run fails closed.
+**Do not merge that PR until the repo holds both the
+`PULUMI_CONFIG_PASSPHRASE` secret and the new salt secret**, or the next CI
+run fails closed on whichever one is missing.
 
 ### The window between step 5 and that merge
 
@@ -637,18 +691,22 @@ on anything the source project holds.
 
 ```bash
 export AWS_REGION=hel1
-read -rs -p 'Object Storage access key: ' AWS_ACCESS_KEY_ID; echo; export AWS_ACCESS_KEY_ID
-read -rs -p 'Object Storage secret:     ' AWS_SECRET_ACCESS_KEY; echo; export AWS_SECRET_ACCESS_KEY
+read -rs "AWS_ACCESS_KEY_ID?Object Storage access key: "; echo; export AWS_ACCESS_KEY_ID
+read -rs "AWS_SECRET_ACCESS_KEY?Object Storage secret:     "; echo; export AWS_SECRET_ACCESS_KEY
 # This stack's passphrase, re-supplied from the password manager. A.2 step 8
 # deleted the temp file deliberately, and there is no other copy on this
 # machine -- so this is a fresh entry, not a leftover. Never reuse a file left
 # behind by a crashed Part A run: it holds a *different* stack's passphrase,
 # and every command below would silently address this stack with it.
+# `read -rs "VAR?prompt"`, not `read -rs -p` -- see A.2 step 0 for why.
 umask 077
 install -m 600 /dev/null ~/.pulumi-passphrase-tmp
-read -rs -p 'Passphrase for THIS stack, from the password manager: ' PASSPHRASE; echo
+read -rs "PASSPHRASE?Passphrase for THIS stack, from the password manager: "; echo
 printf '%s' "$PASSPHRASE" > ~/.pulumi-passphrase-tmp; unset PASSPHRASE
+[ -s ~/.pulumi-passphrase-tmp ] || { echo 'EMPTY PASSPHRASE FILE -- do not continue'; return 1 2>/dev/null || exit 1; }
 export PULUMI_CONFIG_PASSPHRASE_FILE=~/.pulumi-passphrase-tmp
+unset PULUMI_CONFIG_PASSPHRASE
+[ -z "${PULUMI_CONFIG_PASSPHRASE:-}" ] || { echo 'PULUMI_CONFIG_PASSPHRASE is set and would override the _FILE -- unset it'; return 1 2>/dev/null || exit 1; }
 
 cd <repo>/<project-dir>
 
