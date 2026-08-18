@@ -1,21 +1,31 @@
 # Stack configuration for this repository's Hetzner hosts.
 #
-# `encryptionsalt` and the `hcloud:token` ciphertext are absent because both
-# are written by `pulumi stack init --secrets-provider passphrase` and
-# `pulumi config set --secret hcloud:token`, and neither can be produced
-# without the passphrase and the token. Commit the file again once they are
-# there: a stack whose salt is not committed cannot be applied from anywhere
-# else, and a stack whose passphrase is lost cannot decrypt its own committed
-# ciphertext ever again.
+# `encryptionsalt` and the `hcloud:token` ciphertext never belong in this
+# file. The salt is an offline verifier for the stack passphrase and the
+# ciphertext is only as safe as that passphrase, so both stay operator-held
+# and are written into the working copy only, never committed. The token has
+# no source but the operator's own copy (`pulumi config set --secret
+# hcloud:token` prompts for it); the salt does not need one; it is
+# recoverable from the state bucket with read access alone —
+# `pulumi stack export` returns it uninterpreted as
+# `deployment.secrets_providers.state.salt`. **Never run `pulumi stack init`
+# to recover it**: against a stack that already exists, `stack init` mints a
+# **new** salt, which derives a different key from the same passphrase, and
+# every piece of ciphertext this stack has ever encrypted stops decrypting
+# under it, silently, until something next reads a secret.
+# `hetzner/Pulumi.production.yaml`'s own comment carries the full recovery
+# commands; the mechanism is identical here. `ownerSshKeyNames` and
+# `edge1DeployPublicKey` below are the only entries that belong in git:
+# neither is a secret, and the component `require`s both, so committing them
+# is what makes a preview from a fresh checkout fail on a real problem rather
+# than on a value nobody copied over.
 #
-# `ownerSshKeyNames` and `edge1DeployPublicKey` are missing on purpose rather
-# than placeheld. The program `require`s both, so a preview fails and names the
-# first one that is unset. A placeholder would be worse than an absence here:
-# `deployPublicKey` reaches the host through cloud-init, and `userData` is in
-# the component's `ignoreChanges`, so the value that lands at creation is the
-# one the host keeps — changing it later through this file is a clean preview,
-# a successful apply, and no effect on the host. RUNBOOK-provision-host.md
-# carries the rotation path that does work.
+# `edge1DeployPublicKey` is documentation more than mechanism: the value
+# reaches the host through cloud-init, and `userData` is in the component's
+# `ignoreChanges`, so the value that landed at creation is the one the host
+# keeps — changing it here is a clean preview, a successful apply, and no
+# effect on the host. RUNBOOK-provision-host.md carries the rotation path
+# that does take effect.
 #
 # `location` is deliberately not a key here. It is `ESTATE_LOCATION` in
 # addressPlan.ts, because more than one stack in more than one repository
@@ -43,3 +53,6 @@ config:
   # decision, and a shared key would make one host's change read as every
   # host's.
   branchleft-hetzner-estate:edge1ServerType: cx23
+  branchleft-hetzner-estate:ownerSshKeyNames:
+    - rob@branchleft.co.uk
+  branchleft-hetzner-estate:edge1DeployPublicKey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPRwF0ZN5JU3j235hE9gBswGUkbEcriGlR5dBa4PEyMY deploy@edge1
