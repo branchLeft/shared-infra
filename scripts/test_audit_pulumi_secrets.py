@@ -857,21 +857,20 @@ class InventoryTests(unittest.TestCase):
 
 
 class ShippedInventoryLiveStateTests(unittest.TestCase):
-    """The two stacks the GCP wind-down has not finished are the whole reason
-    this gate exists. Every other test above proves the mechanism in the
-    abstract; this one proves the shipped inventory, run with every repo
-    reachable, still reports them outstanding today."""
+    """Every other test above proves the audit mechanism in the abstract;
+    this one pins it to the shipped inventory, run with every repo
+    reachable, to prove the sweep it claims is complete actually is."""
 
-    def test_require_migrated_reports_the_two_stacks_still_on_kms_outstanding(self):
+    def test_require_migrated_reports_the_sweep_complete(self):
         inventory = audit.load_inventory(audit.DEFAULT_INVENTORY)
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             # Materialise each reachable repo's config file in the shape its
-            # live checkpoint actually reports (branchLeft/workspace#126),
-            # independent of what the inventory's attestations claim -- a
-            # stack still on gcpkms has to fail this even if an attestation
-            # were wrong, and a migrated one has to pass even though its
-            # file, per PUL-12, carries no evidence of its own.
+            # live checkpoint actually reports, independent of what the
+            # inventory's attestations claim -- every one of these is a
+            # migrated, salt-injected-at-deploy stack, so PUL-12 means its
+            # committed file carries no evidence of its own and only the
+            # attestation can settle it.
             live = {
                 ("shared-infra", "Pulumi.production.yaml"): "config:\n  gcp:project: p\n",
                 ("shared-infra", "mail/Pulumi.production.yaml"): "config:\n  a: b\n",
@@ -880,7 +879,7 @@ class ShippedInventoryLiveStateTests(unittest.TestCase):
                     "ghost-platform",
                     "infra/platform/Pulumi.platform.yaml",
                 ): "config:\n  a: b\n",
-                ("ghost-tenant-blog", "Pulumi.blog.yaml"): f"secretsprovider: {GCPKMS_URL}\n",
+                ("ghost-tenant-blog", "Pulumi.blog.yaml"): "config:\n  gcp:project: p\n",
                 # branchleft-ghost-provisioning/blog has no committed config
                 # anywhere (its config_path is null) -- nothing to write.
             }
@@ -894,29 +893,28 @@ class ShippedInventoryLiveStateTests(unittest.TestCase):
             outstanding = {
                 name for name, finding in by_stack.items() if not audit.satisfies_terminal_state(finding)
             }
-            # The two genuinely GCP-KMS-wrapped stacks (branchLeft/workspace#128)
-            # must always be in this set -- that is the property this gate
-            # exists to guarantee.
-            self.assertIn("branchleft-ghost-provisioning/blog", outstanding, by_stack)
-            self.assertIn("blog-infra/blog", outstanding, by_stack)
-            self.assertEqual(
-                by_stack["blog-infra/blog"]["status"], "pending", "should read gcpkms straight from the file"
-            )
-            # The four stacks that have genuinely reached passphrase are not
-            # in it -- this is the regression the ATTESTATION_AGREES_WITH fix
-            # exists for: without "absent" accepted, all four would show here
-            # as drift despite being correctly migrated.
-            # The two Hetzner stacks are deliberately not in this set: they
-            # are terminal_state never-kms (born on the passphrase provider,
-            # no KMS dependency to migrate away from), which is satisfied by
-            # `needs-attestation` on its own -- demanding an attestation from
-            # them anyway would be exactly the "gate red in its own success
-            # state" failure documented on SATISFIED_BY.
-            self.assertEqual(
-                outstanding,
-                {"branchleft-ghost-provisioning/blog", "blog-infra/blog"},
-                by_stack,
-            )
+            # The two Hetzner stacks reach never-kms via needs-attestation on
+            # its own -- see SATISFIED_BY. Every other stack in the inventory
+            # is now attested-migrated, so nothing should be outstanding.
+            self.assertEqual(outstanding, set(), by_stack)
+
+    def test_a_regression_to_kms_would_still_be_caught(self):
+        # The property the test above cannot exercise: if a migrated stack's
+        # live checkpoint ever regressed to a KMS-wrapped one, the stale
+        # "migrated" attestation must not paper over it. AttestationVersus-
+        # FileTests proves this in the abstract; this pins it to a real
+        # entry from the shipped inventory.
+        inventory = audit.load_inventory(audit.DEFAULT_INVENTORY)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            path = root / "ghost-tenant-blog" / "Pulumi.blog.yaml"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"secretsprovider: {GCPKMS_URL}\n")
+
+            findings = audit.audit_stacks(inventory, root)
+            by_stack = {f["stack"]: f for f in findings}
+            self.assertEqual(by_stack["blog-infra/blog"]["status"], "drift")
+            self.assertFalse(audit.satisfies_terminal_state(by_stack["blog-infra/blog"]))
 
 
 if __name__ == "__main__":

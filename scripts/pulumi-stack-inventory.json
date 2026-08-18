@@ -100,10 +100,14 @@
       "project_path": "infra/provisioning/Pulumi.yaml",
       "config_path": null,
       "state_backend": "shared",
-      "expected_secrets_provider": "gcpkms",
+      "expected_secrets_provider": "passphrase",
       "terminal_state": "migrate",
-      "note": "Config is reconstructed on each CI run from the exported deployment and never committed. Still GCP KMS-wrapped. The re-wrap work is tracked and in progress on branchLeft/workspace#128 -- do not attest this stack from here; let that work land its own attestation once the reconstruction script accepts a passphrase-managed stack.",
-      "attestation": null
+      "note": "Config is reconstructed on each CI run from the exported deployment and never committed. Re-wrapped onto the passphrase provider; branchLeft/workspace#128 tracked the work that got the reconstruction script to accept a passphrase-managed stack.",
+      "attestation": {
+        "state": "migrated",
+        "date": "2026-08-18",
+        "evidence": "pulumi stack change-secrets-provider passphrase completed (\"Migrating old configuration and state to new secrets provider\") and pulumi stack export --show-secrets succeeded afterwards; secrets_providers read back from the gs://branchleft-pulumi-state checkpoint: passphrase, salt prefix v1:v6UAjuKhH, 12 resources. Wrapped by ghost-platform's existing repo-level passphrase; the stored copy was independently re-typed from the password manager and verified against the live checkpoint."
+      }
     },
     {
       "project": "blog-infra",
@@ -112,10 +116,14 @@
       "project_path": "Pulumi.yaml",
       "config_path": "Pulumi.blog.yaml",
       "state_backend": "tenant_blog",
-      "expected_secrets_provider": "gcpkms",
+      "expected_secrets_provider": "passphrase",
       "terminal_state": "migrate-or-destroy",
-      "note": "Densest secrets of the set: two secret config values and roughly 33 encrypted values in state. Lives in its own bucket, so a sweep driven by one `pulumi stack ls` misses it entirely. Still GCP KMS-wrapped; re-wrap tracked on branchLeft/workspace#128 -- do not attest this stack from here. Superseded by a successor stack later in the programme, so its terminal state accepts either a re-wrap or a destroy-and-archive.",
-      "attestation": null
+      "note": "Densest secrets of the set: two secret config values and roughly 33 encrypted values in state. Lives in its own bucket, so a sweep driven by one `pulumi stack ls` misses it entirely. Re-wrapped onto the passphrase provider; branchLeft/workspace#128 tracked the work. Superseded by a successor stack later in the programme, so its terminal state accepts either a re-wrap or a destroy-and-archive.",
+      "attestation": {
+        "state": "migrated",
+        "date": "2026-08-18",
+        "evidence": "Re-wrapped the same way as branchleft-ghost-provisioning/blog; pulumi stack export --show-secrets succeeded afterwards. secrets_providers read back from the gs://branchleft-blog-pulumi-state checkpoint: passphrase, salt prefix v1:rLDLxMTFD, matching the value placed in the PULUMI_SALT_BLOG repository secret, 33 resources. Wrapped by a newly minted 32-character passphrase, escrowed in the platform owner's password manager and set as PULUMI_CONFIG_PASSPHRASE on branchLeft/ghost-tenant-blog before the re-wrap; the stored copy was independently re-typed and verified. Post-merge deploy green: \"Restore the stack's encryption salt\" and the delete-guard both passed, and Apply reported 31 unchanged with no creates, updates, deletes or replaces."
+      }
     },
     {
       "project": "branchleft-hetzner-network",
