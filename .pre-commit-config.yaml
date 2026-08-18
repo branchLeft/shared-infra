@@ -138,10 +138,28 @@ repos:
         pass_filenames: false
 
       - id: no-committed-pulumi-secrets
-        name: 'no encryptionsalt or secure: value in a committed stack config'
+        name: no encryptionsalt in a committed stack config
         entry: python3 scripts/assert-no-committed-pulumi-secrets.py
         language: system
         files: ^(.*/)?Pulumi\.[^/]+\.yaml$
+
+      # The stack inventory is the only enumeration of which stacks still
+      # depend on the KMS key that the GCP wind-down destroys, and of every
+      # place a state backend is selected. Both drift silently, and both are
+      # unrecoverable once the key is gone. `scripts-tests` above already
+      # covers this script's own test_*.py, so this hook runs the audit only.
+      - id: pulumi-secrets-audit
+        name: pulumi stack inventory audit
+        entry: python3 scripts/audit-pulumi-secrets.py
+        language: system
+        # Widened past the audit's own files: both scans fail on a backend
+        # URL or a KMS-minting flag appearing in a file nobody added to the
+        # inventory, and the files that gain one are workflows, IaC and
+        # prose, not the script. Matches SCANNABLE_SUFFIXES in the script
+        # itself -- a narrower pattern here is just a weaker fast path, since
+        # CI runs `--scan-tree`/the full walk regardless of what changed.
+        files: ^(scripts/.*|.*\.ya?ml$|.*\.md$|.*\.sh$|.*\.ts$|.*\.json$)$
+        pass_filenames: false
 
       - id: edge-delete-guard
         name: edge delete guard self-test

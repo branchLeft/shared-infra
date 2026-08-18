@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-"""Refuse a `Pulumi.<stack>.yaml` that carries an `encryptionsalt` or a
-`secure:` value.
+"""Refuse a `Pulumi.<stack>.yaml` that carries an `encryptionsalt`.
 
-An `encryptionsalt` is an offline verifier for the stack passphrase: whoever
-holds it can test candidate passphrases at their own rate, with nothing in the
-loop to notice and no service to rate-limit them. A `secure:` value is the
-wrapped ciphertext itself. Neither belongs in a repository anyone can clone.
+The salt is an offline verifier for the stack passphrase: whoever holds it can
+test candidate passphrases at their own rate, with nothing in the loop to
+notice and no service to rate-limit them. It does not belong in a repository
+anyone can clone.
 
-This has to be a mechanical check rather than a rule people follow, because
-neither is added by hand. Pulumi writes both back into the file itself, during
+A `secure:` ciphertext is deliberately *not* a finding. `branchLeft/standards`
+PUL-12 is explicit that a ciphertext with no salt beside it is not an oracle --
+nothing in such a file lets an attacker derive the key or verify a guess
+offline -- and that rejecting it would ban the safe half of the pattern with
+the unsafe half for no security gain. Widening this matcher past the clause
+would also make this hook and the standards gate disagree, and the one that
+fires first would be the one nobody believes.
+
+This has to be a mechanical check rather than a rule people follow, because the
+salt is not added by hand. Pulumi writes it back into the file itself, during
 an ordinary `pulumi config set` or `pulumi stack init`, and the diff then looks
 like exactly what the command was asked to do.
 
@@ -25,10 +32,18 @@ file from this one.
 
 **What it does not see.** It reads lines, not YAML: a real parser is not
 available here, the same stdlib-only constraint every script in this repo works
-under. A key written inside an inline flow mapping (`config: {secure: x}`) is
-therefore missed. Pulumi has never emitted that shape -- it writes block style
-throughout -- so the gap is between what Pulumi writes and what YAML permits,
-not a case anything here produces.
+under. Three shapes are therefore missed:
+
+- a key inside an inline flow mapping (`config: {encryptionsalt: x}`);
+- a quoted key (`"encryptionsalt": v1:...`), which every YAML parser reads as
+  the same key this one is looking for;
+- a stack config named `Pulumi.<stack>.yml` or `Pulumi.<stack>.json`, both of
+  which Pulumi accepts and `STACK_CONFIG` below does not match.
+
+Pulumi emits none of them -- it writes block style, unquoted keys and `.yaml`
+throughout -- so each gap is between what Pulumi writes and what Pulumi would
+accept, not a case anything here produces. They are listed because an
+undisclosed gap in a security check is indistinguishable from an absent one.
 """
 
 from __future__ import annotations
@@ -41,15 +56,26 @@ import re
 import sys
 import tempfile
 
-# Anchored at the start of a mapping entry, optionally as a list item, so the
-# key has to *be* `encryptionsalt` or `secure` rather than merely end with it.
-# An unanchored `.*secure:` matches `insecure:` -- a real key name, and one
-# whose value is not a secret -- and a guard that cries wolf is a guard people
-# start passing --no-verify to.
-FORBIDDEN_KEY = re.compile(r"^\s*(?:-\s+)?(encryptionsalt|secure)\s*:")
+# Anchored at the start of a mapping entry so the key has to *be*
+# `encryptionsalt` rather than merely end with it, and case-insensitive because
+# the raw bytes are an oracle whatever case wraps the key -- a leftover from a
+# half-done migration is crackable even where Pulumi's own parser would skip
+# the line. A guard that cries wolf is a guard people start passing
+# --no-verify to, so it matches nothing wider than that.
+FORBIDDEN_KEY = re.compile(r"^\s*(?:-\s+)?encryptionsalt\s*:", re.IGNORECASE)
+
+# Written as an escape, never as the literal character, which is invisible in
+# every diff and editor that would have to review it.
+#
+# U+FEFF is not whitespace to Python -- `"\ufeff".isspace()` is False -- so a
+# leading BOM puts a character in front of the anchor above that `^\s*` will
+# never cross, and a BOM-prefixed salt reads as clean while Pulumi, whose
+# parser drops the BOM, decrypts with it exactly as before. Nobody types one:
+# a "UTF-8 with BOM" editor save produces it by accident.
+BOM = "\ufeff"
 
 # A stack config, not a project file: `Pulumi.yaml` declares the project and
-# never holds either key, while `Pulumi.<stack>.yaml` holds both.
+# never holds the salt, while `Pulumi.<stack>.yaml` does.
 STACK_CONFIG = re.compile(r"^Pulumi\.[^/]+\.yaml$")
 
 SKIP_DIRS = {".git", ".worktrees", "node_modules", "graphify-out", "dist", "vendor"}
@@ -67,6 +93,10 @@ def is_commented(line: str) -> bool:
 def offending_lines(text: str) -> list[tuple[int, str]]:
     """Every (1-based line number, line) that commits a secret."""
     found = []
+    # Stripped from the document, not from each line: U+FEFF is only a byte
+    # order mark in the first position, and anywhere else it is a zero-width
+    # no-break space that belongs to whatever value contains it.
+    text = text[len(BOM) :] if text.startswith(BOM) else text
     for number, line in enumerate(text.splitlines(), start=1):
         if is_commented(line):
             continue
@@ -123,18 +153,27 @@ def check(paths: list[pathlib.Path]) -> int:
 # --------------------------------------------------------------------------
 
 SALTED = "config:\n  gcp:project: p\nencryptionsalt: v1:AAA=:v1:BBB:CCC==\n"
-SECURE_VALUE = "config:\n  proj:token:\n    secure: AAAABBBBCCCC\n"
 INDENTED_SALT = "config:\n  a: b\n  encryptionsalt: v1:AAA=\n"
-LIST_SECURE = "config:\n  proj:list:\n    - secure: AAAA\n"
+UPPERCASE_SALT = "config:\n  a: b\nEncryptionSalt: v1:AAA=\n"
+LIST_SALT = "config:\n  proj:list:\n    - encryptionsalt: AAAA\n"
+# The live shape of a stack config in this repo once a PUL-12-compliant stack
+# picks up a `secure:` config value: the ciphertext stays, the salt never
+# lands. Both directions matter, so both are asserted on one fixture.
+SECURE_VALUE = "config:\n  proj:token:\n    secure: AAAABBBBCCCC\n"
+SECURE_VALUE_WITH_SALT = SECURE_VALUE + "encryptionsalt: v1:AAA=\n"
 COMMENTED = (
     "# `encryptionsalt` is deliberately absent from this committed file.\n"
     "#     printf '\\nencryptionsalt: %s\\n' \"$SALT\" >> Pulumi.production.yaml\n"
-    "#    secure: this is prose about the key, not the key\n"
     "config:\n  gcp:project: p\n"
 )
-INSECURE_KEY = "config:\n  proj:insecure: true\n  proj:secure_boot: false\n  proj:not-secure: x\n"
+SALT_SUFFIX_KEY = "config:\n  proj:noencryptionsalt: x\n  proj:encryptionsaltish: y\n"
 CLEAN = "config:\n  gcp:project: branchleft-prod\n  proj:region: europe-west1\n"
 SALT_WITH_HASH = "encryptionsalt: v1:AAA=#notacomment\n"
+# A "UTF-8 with BOM" save of a salted file. The salt has to be on line 1 for
+# these to test anything: that is the only line the BOM can hide behind.
+BOM_SALT = BOM + "encryptionsalt: v1:AAA=\nconfig:\n  a: b\n"
+BOM_COMMENTED = BOM + COMMENTED
+BOM_CLEAN = BOM + CLEAN
 
 
 def _quiet_check(paths: list[pathlib.Path]) -> tuple[int, str]:
@@ -149,13 +188,18 @@ def _quiet_check(paths: list[pathlib.Path]) -> tuple[int, str]:
 def _self_test() -> int:
     cases = [
         ("a committed salt is caught", SALTED, [3]),
-        ("a secure: value is caught", SECURE_VALUE, [3]),
         ("an indented salt is caught", INDENTED_SALT, [3]),
-        ("a secure: value as a list item is caught", LIST_SECURE, [3]),
+        ("a salt in any case is caught", UPPERCASE_SALT, [3]),
+        ("a salt as a list item is caught", LIST_SALT, [3]),
+        ("a secure: value with no salt beside it is allowed", SECURE_VALUE, []),
+        ("a salt beside a secure: value is still caught", SECURE_VALUE_WITH_SALT, [4]),
         ("commented-out mentions are ignored", COMMENTED, []),
-        ("insecure:, secure_boot: and not-secure: are not flagged", INSECURE_KEY, []),
+        ("a key merely containing the word is not flagged", SALT_SUFFIX_KEY, []),
         ("a clean stack config passes", CLEAN, []),
         ("a # inside a value does not make the line a comment", SALT_WITH_HASH, [1]),
+        ("a BOM does not hide a salt on line 1", BOM_SALT, [1]),
+        ("a BOM does not turn a comment into a finding", BOM_COMMENTED, []),
+        ("a BOM on a clean file is not a finding", BOM_CLEAN, []),
     ]
 
     failures = 0
@@ -207,13 +251,27 @@ def _self_test() -> int:
             print(f"FAIL: salted tree -> exit {code}, report {report!r}", file=sys.stderr)
             failures += 1
 
-        (root / "mail" / "Pulumi.production.yaml").write_text(COMMENTED, encoding="utf-8")
+        # The live shape of this repo's committed stack configs: no salt, no
+        # ciphertext, config values only.
+        (root / "mail" / "Pulumi.production.yaml").write_text(CLEAN, encoding="utf-8")
         code, _ = _quiet_check(find_stack_configs(root))
         if code == 0:
-            print("PASS: a clean tree exits 0")
+            print("PASS: a salt-free tree exits 0")
         else:
-            print("FAIL: a clean tree did not exit 0", file=sys.stderr)
+            print("FAIL: a salt-free tree did not exit 0", file=sys.stderr)
             failures += 1
+
+        # The string fixtures above prove the matcher; this proves the read
+        # path hands it a BOM to strip rather than swallowing one silently.
+        bom_file = root / "mail" / "Pulumi.bom.yaml"
+        bom_file.write_bytes(b"\xef\xbb\xbf" + BOM_SALT[len(BOM) :].encode("utf-8"))
+        code, report = _quiet_check([bom_file])
+        if code == 1:
+            print("PASS: a real BOM-prefixed file on disk fails")
+        else:
+            print(f"FAIL: BOM-prefixed file -> exit {code}, report {report!r}", file=sys.stderr)
+            failures += 1
+        bom_file.unlink()
 
         code, _ = _quiet_check([root / "Pulumi.missing.yaml"])
         if code == 1:
