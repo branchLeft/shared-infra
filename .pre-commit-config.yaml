@@ -152,10 +152,13 @@ repos:
         name: pulumi stack inventory audit
         entry: python3 scripts/audit-pulumi-secrets.py
         language: system
-        # Widened past the audit's own files: the reference scan fails on a
-        # backend URL appearing in a file nobody added to the inventory, and
-        # the files that gain one are workflows and prose, not the script.
-        files: ^(scripts/.*|.*Pulumi\.[^/]*\.yaml|\.github/workflows/.*\.ya?ml|[^/]*\.md|.*RUNBOOK.*\.md)$
+        # Widened past the audit's own files: both scans fail on a backend
+        # URL or a KMS-minting flag appearing in a file nobody added to the
+        # inventory, and the files that gain one are workflows, IaC and
+        # prose, not the script. Matches SCANNABLE_SUFFIXES in the script
+        # itself -- a narrower pattern here is just a weaker fast path, since
+        # CI runs `--scan-tree`/the full walk regardless of what changed.
+        files: ^(scripts/.*|.*\.ya?ml$|.*\.md$|.*\.sh$|.*\.ts$|.*\.json$)$
         pass_filenames: false
 
       - id: edge-delete-guard

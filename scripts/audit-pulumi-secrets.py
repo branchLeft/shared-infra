@@ -49,10 +49,14 @@ Two further failure modes it does catch, both of which present as success:
   central, so a new workflow adds a site silently, and the site is only
   discovered when it applies against the state everyone else has left.
 - **A provider-selection site left live.** Separately from where state is
-  read, some workflows pass `--secrets-provider=gcpkms://...` when they
-  *create* a stack. A sweep that re-wraps every existing stack while one of
-  those survives is not finished: the next stack it mints is KMS-wrapped
-  again, in a bucket that did not exist when this inventory was written.
+  read, some workflows select the shared KMS key via `--secrets-provider`
+  when they *create* a stack. A sweep that re-wraps every existing stack
+  while one of those survives is not finished: the next stack it mints is
+  KMS-wrapped again, in a bucket that did not exist when this inventory was
+  written.
+- **A provider-selection site nobody enumerated.** The same shape as the
+  backend-reference gap above: `provider_selection_sites` only verifies sites
+  it already names, so a scan across the tree catches a new one.
 
 Usage:
 
@@ -76,6 +80,11 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_INVENTORY = REPO_ROOT / "scripts" / "pulumi-stack-inventory.json"
 THIS_REPO = "shared-infra"
 
+# Written as an escape, never as the literal character, which is invisible in
+# every diff and editor that would have to review it. Same constant, same
+# reasoning, as assert-no-committed-pulumi-secrets.py next door.
+BOM = "\ufeff"
+
 # Matches a state-backend URL for either GCS bucket, and the pinned Hetzner
 # one. Deliberately not a general URL matcher: the point is to notice the
 # specific strings this estate uses, and a broad pattern would drown the
@@ -86,8 +95,23 @@ BACKEND_REFERENCE = re.compile(
     r"|pulumi login \"?gs://\$"
 )
 
+# A `--secrets-provider` flag naming the KMS scheme -- i.e. *minting* a new
+# KMS-wrapped stack, not merely mentioning the scheme in prose. Deliberately
+# narrower than "gcpkms" alone: this inventory's own notes name the scheme
+# while describing sites that used to pass it and no longer do, and a bare
+# substring match would flag its own documentation on every run.
+PROVIDER_SELECTION = re.compile(r"--secrets-provider[= ]+[\"']?gcpkms://")
+
 # Files worth scanning. A backend is only ever selected from one of these.
 SCANNABLE_SUFFIXES = (".yml", ".yaml", ".md", ".sh", ".ts", ".py", ".json")
+
+# Where a stack is actually minted: CI workflows and the IaC/shell that runs
+# unattended. Deliberately excludes `.md`: a runbook narrating a historical or
+# example `pulumi stack init --secrets-provider=gcpkms://...` -- exactly what
+# the migration and rehearsal runbooks in this repo do -- is not a site that
+# creates a stack on its own, and scanning prose for the shape of the command
+# it warns about would flag the warning as the violation.
+PROVIDER_SELECTION_SUFFIXES = (".yml", ".yaml", ".sh", ".ts")
 
 # Directories that either are not source or are a second copy of it. `vendor`
 # holds a snapshot of another repo, and a snapshot's login steps are that
@@ -123,6 +147,13 @@ def read_top_level_scalars(text: str) -> dict[str, str]:
     """Top-level `key: value` pairs, ignoring comments, blanks and any nested
     or multi-line construct."""
     found: dict[str, str] = {}
+    # Stripped from the document, same reasoning and same fix as
+    # assert-no-committed-pulumi-secrets.py next door: U+FEFF is not
+    # whitespace to Python, so an unstripped BOM pushes line 1 past
+    # `line[0].isspace()` below into looking like an indented (nested) line,
+    # which this reader silently skips -- collapsing a canonical `gcpkms`
+    # config to `absent` on nothing more than an editor's save-encoding.
+    text = text[len(BOM) :] if text.startswith(BOM) else text
     for line in text.splitlines():
         if not line or line[0].isspace() or line.lstrip().startswith("#"):
             continue
@@ -135,7 +166,11 @@ def read_top_level_scalars(text: str) -> dict[str, str]:
         # configured provider as absent.
         if not value or value in (">", "|", ">-", "|-"):
             continue
-        found[key.strip()] = value.strip("'\"")
+        # The key is stripped of quotes too, not just the value: a quoted
+        # key (`"secretsprovider": gcpkms://...`) is legal YAML naming the
+        # same key, and reading it as the literal string `"secretsprovider"`
+        # would also read as absent.
+        found[key.strip().strip("'\"")] = value.strip("'\"")
     return found
 
 
@@ -163,6 +198,15 @@ def classify_secrets_provider(config_text: str) -> tuple[str, str | None]:
     is a question, not a pass.
     """
     scalars = read_top_level_scalars(config_text)
+    # `encryptedkey` is the KMS-wrapped data key itself, checked first and
+    # unconditionally: it is more direct evidence than the `secretsprovider`
+    # string beside it, and the only one of the pair that survives a hand-edit
+    # deleting one line but not the other -- `RUNBOOK-existing-stack-
+    # migration.md` describes the two moving together, which is exactly the
+    # edit that leaves one behind. A stack carrying it is KMS-wrapped whatever
+    # `secretsprovider` claims or omits.
+    if "encryptedkey" in scalars:
+        return "gcpkms", scalars.get("secretsprovider", scalars["encryptedkey"])
     provider = scalars.get("secretsprovider")
     if provider is None:
         if "encryptionsalt" in scalars:
@@ -203,15 +247,28 @@ def resolve_config_path(entry: dict, root: pathlib.Path | None) -> pathlib.Path 
     return root / repo / entry["config_path"]
 
 
-TERMINAL_STATES = {"migrate", "destroy", "migrate-or-destroy"}
+TERMINAL_STATES = {"migrate", "destroy", "migrate-or-destroy", "never-kms"}
 
 # What each terminal state accepts as reaching it. `attested-*` is an operator
 # statement recorded in the inventory rather than a fact read from a file, and
 # is kept as a separate status so a report never presents the two as equal.
+#
+# `never-kms` is for a stack born on the passphrase provider that has no KMS
+# dependency to migrate away from -- listed to be enumerated (a `pulumi stack
+# ls --all` sweep still has to be able to find it and confirm that), not to
+# be swept. Demanding an attestation from it would repeat the exact failure
+# these comments warn against elsewhere: a gate red in its own success state
+# gets routed around by an operator typing "migrated" for a migration that
+# never happened. `needs-attestation` -- no committed evidence either way --
+# is that success state here, so it satisfies this terminal state on its own.
+# `pending` and `drift` still do not: if such a stack's file ever did show
+# `gcpkms`, or an attestation contradicted it, that is a real anomaly this
+# terminal state must not paper over.
 SATISFIED_BY = {
     "migrate": {"migrated", "attested-migrated"},
     "destroy": {"attested-removed"},
     "migrate-or-destroy": {"migrated", "attested-migrated", "attested-removed"},
+    "never-kms": {"needs-attestation", "migrated", "attested-migrated"},
 }
 
 
@@ -361,6 +418,20 @@ def audit_stack(entry: dict, root: pathlib.Path | None) -> dict:
         finding["status"] = "migrated" if detail else "drift"
         if not detail:
             finding["detail"] = "passphrase provider with no encryptionsalt"
+    elif kind == "absent":
+        # Not drift: this is what a *correctly* migrated, salt-injected-at-
+        # deploy stack's own file looks like under PUL-12, indistinguishable
+        # here from a stack that was never created. Either way the file
+        # cannot settle it -- only an attestation can -- so a config file
+        # this shape with no attestation reaches the same status as no
+        # config file at all, rather than failing the default CI run (which
+        # carries no --require-migrated and gates the production deploy) the
+        # moment any stack is added to the inventory ahead of its attestation.
+        finding["status"] = "needs-attestation"
+        finding["detail"] = (
+            "no secretsprovider, encryptedkey or encryptionsalt in the file -- "
+            "record an attestation once this stack reaches its terminal state"
+        )
     else:
         finding["status"] = "drift"
         finding["detail"] = f"unexpected secrets provider: {kind} {detail or ''}".strip()
@@ -440,22 +511,29 @@ def audit_provider_selection_sites(inventory: dict, root: pathlib.Path | None) -
     return findings
 
 
-def scan_backend_references(tree: pathlib.Path) -> set[str]:
-    """Tree-relative paths of every file naming a state backend."""
+def _scan_pattern(
+    tree: pathlib.Path, pattern: re.Pattern[str], suffixes: tuple[str, ...] = SCANNABLE_SUFFIXES
+) -> set[str]:
+    """Tree-relative paths of every scannable file matching `pattern`."""
     hits: set[str] = set()
     for dirpath, dirnames, filenames in os.walk(tree):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for filename in filenames:
-            if not filename.endswith(SCANNABLE_SUFFIXES):
+            if not filename.endswith(suffixes):
                 continue
             path = pathlib.Path(dirpath) / filename
             try:
                 text = path.read_text(errors="replace")
             except OSError:
                 continue
-            if BACKEND_REFERENCE.search(text):
+            if pattern.search(text):
                 hits.add(path.relative_to(tree).as_posix())
     return hits
+
+
+def scan_backend_references(tree: pathlib.Path) -> set[str]:
+    """Tree-relative paths of every file naming a state backend."""
+    return _scan_pattern(tree, BACKEND_REFERENCE)
 
 
 def audit_backend_references(inventory: dict, tree: pathlib.Path) -> dict:
@@ -465,6 +543,43 @@ def audit_backend_references(inventory: dict, tree: pathlib.Path) -> dict:
         "undeclared": sorted(found - declared),
         "stale": sorted(declared - found),
     }
+
+
+def scan_provider_selection_hits(tree: pathlib.Path) -> set[str]:
+    """Tree-relative paths of every file passing a `gcpkms://` scheme to
+    `--secrets-provider` -- i.e. *minting* a KMS-wrapped stack."""
+    return _scan_pattern(tree, PROVIDER_SELECTION, PROVIDER_SELECTION_SUFFIXES)
+
+
+def audit_provider_selection_scan(inventory: dict, root: pathlib.Path | None) -> list[str]:
+    """Every provider-selection hit not already named in
+    `provider_selection_sites` -- the regression assertion
+    `hetzner/RUNBOOK-existing-stack-migration.md` describes: re-wrapping every
+    stack that *exists* is not the whole sweep while something can still
+    *mint* a new KMS-wrapped one in a bucket no earlier enumeration could
+    list. `audit_provider_selection_sites` above verifies the sites this
+    inventory already knows about; this instead looks for one it does not.
+
+    Same reach as the backend-reference scan: this repo's own tree
+    unconditionally (`REPO_ROOT`, via `main`), every sibling repo only with
+    `--root` -- because that is what CI can reach without one, and the two
+    provisioning sites this inventory does know about live in `ghost-platform`,
+    not here.
+    """
+    declared = {(site.get("repo") or THIS_REPO, site["path"]) for site in inventory.get("provider_selection_sites", [])}
+    undeclared: set[str] = set()
+
+    for hit in scan_provider_selection_hits(REPO_ROOT):
+        if (THIS_REPO, hit) not in declared:
+            undeclared.add(hit)
+
+    if root is not None:
+        for repo_dir in sorted(p.name for p in root.iterdir() if p.is_dir() and p.name not in SKIP_DIRS):
+            for hit in scan_provider_selection_hits(root / repo_dir):
+                if (repo_dir, hit) not in declared:
+                    undeclared.add(f"{repo_dir}/{hit}")
+
+    return sorted(undeclared)
 
 
 # --------------------------------------------------------------------------
@@ -496,7 +611,12 @@ def satisfies_terminal_state(finding: dict) -> bool:
     return finding["status"] in SATISFIED_BY.get(finding.get("terminal_state"), set())
 
 
-def render(findings: list[dict], references: dict | None, sites: list[dict]) -> str:
+def render(
+    findings: list[dict],
+    references: dict | None,
+    sites: list[dict],
+    provider_selection_undeclared: list[str] | None = None,
+) -> str:
     width = max(len(f["stack"]) for f in findings)
     status_width = max(len(f["status"]) for f in findings)
     lines = [
@@ -511,6 +631,11 @@ def render(findings: list[dict], references: dict | None, sites: list[dict]) -> 
                 f"provider-selection site {site['status']:<18}  {site['site']}"
                 f"{'  ' + site['detail'] if site['detail'] else ''}"
             )
+
+    if provider_selection_undeclared:
+        lines.append("")
+        for path in provider_selection_undeclared:
+            lines.append(f"undeclared provider-selection site: {path}")
 
     if references is not None:
         lines.append("")
@@ -559,6 +684,7 @@ def exit_code(
     references: dict | None,
     require_migrated: bool,
     sites: list[dict] | None = None,
+    provider_selection_undeclared: list[str] | None = None,
 ) -> int:
     if any(f["status"] not in ACCEPTABLE for f in findings):
         return 1
@@ -570,6 +696,12 @@ def exit_code(
         if any(s["status"] != "retired" for s in sites or []):
             return 1
     if references and (references["undeclared"] or references["stale"]):
+        return 1
+    # Unconditional, like the backend-reference undeclared check above: a new
+    # minting site is exactly as unrecoverable on the next tenant provisioned
+    # as an unmigrated existing stack, so it does not wait for
+    # --require-migrated to fail the run.
+    if provider_selection_undeclared:
         return 1
     return 0
 
@@ -589,7 +721,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--skip-reference-scan",
         action="store_true",
-        help="audit stack providers only",
+        help="audit stack providers and declared sites only -- skip both tree scans",
     )
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args(argv)
@@ -604,6 +736,9 @@ def main(argv: list[str] | None = None) -> int:
     findings = audit_stacks(inventory, root)
     sites = audit_provider_selection_sites(inventory, root)
     references = None if args.skip_reference_scan else audit_backend_references(inventory, REPO_ROOT)
+    provider_selection_undeclared = (
+        [] if args.skip_reference_scan else audit_provider_selection_scan(inventory, root)
+    )
 
     if args.as_json:
         print(
@@ -611,15 +746,16 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "stacks": findings,
                     "provider_selection_sites": sites,
+                    "provider_selection_undeclared": provider_selection_undeclared,
                     "backend_references": references,
                 },
                 indent=2,
             )
         )
     else:
-        print(render(findings, references, sites))
+        print(render(findings, references, sites, provider_selection_undeclared))
 
-    return exit_code(findings, references, args.require_migrated, sites)
+    return exit_code(findings, references, args.require_migrated, sites, provider_selection_undeclared)
 
 
 if __name__ == "__main__":

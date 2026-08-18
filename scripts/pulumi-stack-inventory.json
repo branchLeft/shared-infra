@@ -125,8 +125,8 @@
       "config_path": null,
       "state_backend": "hetzner",
       "expected_secrets_provider": "passphrase",
-      "terminal_state": "migrate",
-      "note": "Born on the passphrase provider and never wrapped by the KMS key, so it is listed to be enumerated rather than swept. Not yet created. `config_path` stays null even once branchLeft/shared-infra#4 lands: that PR commits only non-secret configuration, never `encryptionsalt` (PUL-12 forbids committing it, and `pulumi stack init` has not run) -- so pointing `config_path` at the file today would classify it `absent` with no attestation, which is drift, not `needs-attestation`. Point `config_path` here once an attestation for this stack lands alongside it.",
+      "terminal_state": "never-kms",
+      "note": "Born on the passphrase provider and never wrapped by the KMS key -- terminal_state never-kms, satisfied without an attestation, because demanding one from a stack with no KMS dependency to migrate away from is exactly the 'gate red in its own success state' failure the rest of this script exists to avoid. Not yet created: `config_path` stays null because hetzner/Pulumi.production.yaml does not exist on main yet (lands via branchLeft/shared-infra#4, which commits non-secret configuration only -- not `encryptionsalt`, since `pulumi stack init` has not run). Point `config_path` here once that file is committed.",
       "attestation": null
     },
     {
@@ -134,11 +134,11 @@
       "stack": "production",
       "repo": "shared-infra",
       "project_path": "hetzner/estate/Pulumi.yaml",
-      "config_path": null,
+      "config_path": "hetzner/estate/Pulumi.production.yaml",
       "state_backend": "hetzner",
       "expected_secrets_provider": "passphrase",
-      "terminal_state": "migrate",
-      "note": "Born on the passphrase provider, same as the network stack. hetzner/estate/Pulumi.production.yaml IS committed and holds non-secret configuration reviewed ahead of the stack existing, but carries no `encryptionsalt` -- the stack has not been created. Pointing `config_path` at it today would classify it `absent` with no attestation, which is drift, which reddens the gate in its own success state. Set `config_path` once an attestation for this stack lands alongside it.",
+      "terminal_state": "never-kms",
+      "note": "Born on the passphrase provider, same as the network stack -- never-kms, satisfied without an attestation. Unlike the network stack, hetzner/estate/Pulumi.production.yaml IS already committed on main today: it holds non-secret configuration reviewed ahead of the stack existing, with no `encryptionsalt` because the stack has not been created. `config_path` points at it: the file reads `absent` (no secretsprovider, encryptedkey or encryptionsalt), which reports `needs-attestation` -- not drift -- and never-kms accepts that on its own.",
       "attestation": null
     }
   ],
@@ -282,14 +282,14 @@
       "repo": "ghost-platform",
       "path": ".github/workflows/provision-tenant.yml",
       "retired": true,
-      "note": "Was `pulumi stack select \"$TENANT\" --create --secrets-provider=\"gcpkms://...\"` for the provisioning stack. Retired by branchLeft/ghost-platform#81 to `--secrets-provider=passphrase`, reading ghost-platform's own repo-level PULUMI_CONFIG_PASSPHRASE.",
+      "note": "Was `pulumi stack select \"$TENANT\" --create`, selecting the shared KMS key via its --secrets-provider flag, for the provisioning stack. Retired by branchLeft/ghost-platform#81 to select the passphrase provider instead, reading ghost-platform's own repo-level PULUMI_CONFIG_PASSPHRASE.",
       "must_not_contain": "gcpkms://"
     },
     {
       "repo": "ghost-platform",
       "path": ".github/workflows/provision-tenant.yml",
       "retired": true,
-      "note": "Was `pulumi stack init \"$TENANT\" --secrets-provider=\"gcpkms://...\"` for the tenant's own stack. Retired by branchLeft/ghost-platform#81 to `--secrets-provider=passphrase`, using a passphrase minted fresh per tenant and written to that tenant repo's own PULUMI_CONFIG_PASSPHRASE secret.",
+      "note": "Was `pulumi stack init \"$TENANT\"`, selecting the shared KMS key via its --secrets-provider flag, for the tenant's own stack. Retired by branchLeft/ghost-platform#81 to select the passphrase provider instead, minted fresh per tenant and written to that tenant repo's own PULUMI_CONFIG_PASSPHRASE secret.",
       "must_not_contain": "gcpkms://"
     }
   ]

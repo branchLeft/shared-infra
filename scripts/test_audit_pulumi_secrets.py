@@ -67,6 +67,17 @@ class TopLevelScalarTests(unittest.TestCase):
         parsed = audit.read_top_level_scalars(f"secretsprovider: {GCPKMS_URL}\n")
         self.assertEqual(parsed["secretsprovider"], GCPKMS_URL)
 
+    def test_bom_does_not_hide_the_first_key(self):
+        # An unstripped BOM makes line 1 fail `not line[0].isspace()` below --
+        # the reader reads it as an indented (nested) line and silently skips
+        # it, same failure mode as the sibling script's BOM bug.
+        parsed = audit.read_top_level_scalars(audit.BOM + "secretsprovider: passphrase\n")
+        self.assertEqual(parsed, {"secretsprovider": "passphrase"})
+
+    def test_strips_quotes_from_the_key_too(self):
+        parsed = audit.read_top_level_scalars('"secretsprovider": passphrase\n')
+        self.assertEqual(parsed, {"secretsprovider": "passphrase"})
+
 
 class BackendUrlTests(unittest.TestCase):
     def test_reads_pinned_backend(self):
@@ -110,6 +121,41 @@ class ClassifyTests(unittest.TestCase):
         kind, _ = audit.classify_secrets_provider("secretsprovider: awskms://alias/x\n")
         self.assertEqual(kind, "unknown")
 
+    def test_bom_does_not_hide_a_gcpkms_config(self):
+        # Without stripping the BOM here, line 1 looks indented to
+        # read_top_level_scalars and is silently skipped -- the same class of
+        # bug assert-no-committed-pulumi-secrets.py was fixed for next door,
+        # but in the reader this script's own gate depends on.
+        kind, detail = audit.classify_secrets_provider(
+            audit.BOM + f"secretsprovider: {GCPKMS_URL}\nencryptedkey: CiQAaaa=\n"
+        )
+        self.assertEqual(kind, "gcpkms")
+        self.assertEqual(detail, GCPKMS_URL)
+
+    def test_quoted_key_is_still_read(self):
+        kind, detail = audit.classify_secrets_provider(f'"secretsprovider": {GCPKMS_URL}\n')
+        self.assertEqual((kind, detail), ("gcpkms", GCPKMS_URL))
+
+    def test_single_quoted_key_is_still_read(self):
+        kind, _ = audit.classify_secrets_provider("'encryptionsalt': v1:abc:def\n")
+        self.assertEqual(kind, "passphrase")
+
+    def test_encryptedkey_alone_is_gcpkms_even_with_no_secretsprovider_line(self):
+        # The realistic half-edit: RUNBOOK-existing-stack-migration.md
+        # describes secretsprovider/encryptedkey moving together with
+        # encryptionsalt; deleting one line by hand and not the other leaves
+        # exactly this shape, and encryptedkey -- the wrapped data key
+        # itself -- is the more direct evidence of the two.
+        kind, detail = audit.classify_secrets_provider("encryptedkey: CiQAaaa=\n")
+        self.assertEqual(kind, "gcpkms")
+        self.assertEqual(detail, "CiQAaaa=")
+
+    def test_encryptedkey_wins_over_a_contradictory_secretsprovider(self):
+        kind, _ = audit.classify_secrets_provider(
+            "secretsprovider: passphrase\nencryptedkey: CiQAaaa=\n"
+        )
+        self.assertEqual(kind, "gcpkms")
+
 
 class AuditStackTests(unittest.TestCase):
     def setUp(self):
@@ -148,6 +194,19 @@ class AuditStackTests(unittest.TestCase):
         self._write("website", "infra/Pulumi.s.yaml", "secretsprovider: passphrase\n")
         finding = audit.audit_stack(self._entry(), self.root)
         self.assertEqual(finding["status"], "drift")
+
+    def test_unattested_absent_file_needs_attestation_not_drift(self):
+        # This is the shape of a *correctly* migrated salt-injected-at-deploy
+        # stack per PUL-12 -- indistinguishable by content from one never
+        # created. Reporting it `drift` (as opposed to `needs-attestation`)
+        # would fail the default CI invocation, with no --require-migrated,
+        # the moment a new stack is added to the inventory ahead of its
+        # attestation -- and that invocation gates this repo's production
+        # deploy.
+        self._write("website", "infra/Pulumi.s.yaml", "config:\n  a: b\n")
+        finding = audit.audit_stack(self._entry(), self.root)
+        self.assertEqual(finding["status"], "needs-attestation")
+        self.assertNotIn("attested", finding)
 
     def test_missing_file_is_not_a_pass(self):
         finding = audit.audit_stack(self._entry(), self.root)
@@ -205,6 +264,34 @@ class TerminalStateTests(unittest.TestCase):
         inventory = audit.load_inventory(audit.DEFAULT_INVENTORY)
         for entry in inventory["stacks"]:
             self.assertIn(entry["terminal_state"], audit.TERMINAL_STATES, entry["project"])
+
+    def test_never_kms_is_satisfied_without_an_attestation(self):
+        # A stack born on the passphrase provider has no KMS dependency to
+        # migrate away from. Demanding an attestation from it anyway is the
+        # same "gate red in its own success state" failure documented above,
+        # just relocated: an operator would have to type "migrated" for a
+        # migration that never happened.
+        self.assertTrue(audit.satisfies_terminal_state(_finding("needs-attestation", "never-kms")))
+
+    def test_never_kms_still_fails_on_real_evidence_of_kms(self):
+        # The point of accepting "needs-attestation" above is narrow -- it
+        # must not become a blanket pass. If such a stack's file ever did
+        # read gcpkms, or an attestation contradicted it, never-kms must not
+        # paper over that.
+        self.assertFalse(audit.satisfies_terminal_state(_finding("pending", "never-kms")))
+        self.assertFalse(audit.satisfies_terminal_state(_finding("drift", "never-kms")))
+
+    def test_never_kms_stack_with_no_config_path_is_satisfied_end_to_end(self):
+        entry = {
+            "project": "p",
+            "stack": "s",
+            "repo": "shared-infra",
+            "config_path": None,
+            "terminal_state": "never-kms",
+        }
+        finding = audit.audit_stack(entry, None)
+        self.assertEqual(finding["status"], "needs-attestation")
+        self.assertTrue(audit.satisfies_terminal_state(finding))
 
 
 class AttestationTests(unittest.TestCase):
@@ -352,8 +439,9 @@ class AttestationVersusFileTests(unittest.TestCase):
 
 class ProviderSelectionSiteTests(unittest.TestCase):
     """Re-wrapping every existing stack is only half the sweep: a workflow that
-    passes `--secrets-provider=gcpkms://` when it *creates* a stack mints a new
-    KMS-wrapped one, in a bucket no earlier inventory could list."""
+    selects the shared KMS key via `--secrets-provider` when it *creates* a
+    stack mints a new KMS-wrapped one, in a bucket no earlier inventory could
+    list."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -480,6 +568,22 @@ class ExitCodeTests(unittest.TestCase):
         references = {"undeclared": [], "stale": []}
         self.assertEqual(audit.exit_code(findings, references, True, sites), 0)
 
+    def test_undeclared_provider_selection_site_fails_unconditionally(self):
+        # Unconditional like the backend-reference undeclared check: a new
+        # minting site is not something --require-migrated should be needed
+        # to catch, since it strands the *next* stack provisioned, not one
+        # already in the inventory.
+        findings = [_finding("migrated")]
+        self.assertEqual(
+            audit.exit_code(findings, None, False, provider_selection_undeclared=["w.yml"]), 1
+        )
+
+    def test_no_undeclared_provider_selection_sites_does_not_block(self):
+        findings = [_finding("migrated")]
+        self.assertEqual(
+            audit.exit_code(findings, None, False, provider_selection_undeclared=[]), 0
+        )
+
     def test_drift_always_fails(self):
         self.assertEqual(audit.exit_code([_finding("drift")], None, False), 1)
 
@@ -527,7 +631,10 @@ class MainTests(unittest.TestCase):
     def test_json_output_is_parseable_and_carries_all_three_sections(self):
         _, output = self._run(["--json"])
         parsed = json.loads(output)
-        self.assertEqual({"stacks", "provider_selection_sites", "backend_references"}, set(parsed))
+        self.assertEqual(
+            {"stacks", "provider_selection_sites", "provider_selection_undeclared", "backend_references"},
+            set(parsed),
+        )
 
     def test_unreadable_inventory_exits_two_rather_than_reporting_clean(self):
         code, _ = self._run(["--inventory", "/nonexistent/inventory.json", "--skip-reference-scan"])
@@ -628,6 +735,100 @@ class ReferenceScanTests(unittest.TestCase):
         self.assertEqual(audit.scan_backend_references(self.tree), set())
 
 
+class ProviderSelectionScanTests(unittest.TestCase):
+    """The regression assertion hetzner/RUNBOOK-existing-stack-migration.md
+    describes: not just that every *enumerated* provider-selection site
+    verifies retired, but that no *unenumerated* one has grown one since."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tree = pathlib.Path(self.tmp.name)
+
+    def _write(self, rel, text):
+        path = self.tree / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def test_finds_a_new_minting_site(self):
+        self._write(".github/workflows/w.yml", f'--secrets-provider="{GCPKMS_URL}"\n')
+        self.assertEqual(audit.scan_provider_selection_hits(self.tree), {".github/workflows/w.yml"})
+
+    def test_ignores_a_retired_site(self):
+        self._write(".github/workflows/w.yml", "--secrets-provider=passphrase\n")
+        self.assertEqual(audit.scan_provider_selection_hits(self.tree), set())
+
+    def test_ignores_prose_mentioning_both_words_without_the_flag_shape(self):
+        # Documentation describing the risk, or a historical/example command
+        # in a runbook, is not itself a minting site.
+        self._write("RUNBOOK.md", "the doomed key: gcpkms://... via --secrets-provider\n")
+        self.assertEqual(audit.scan_provider_selection_hits(self.tree), set())
+
+    def test_ignores_markdown_even_with_the_exact_flag_shape(self):
+        # `.md` is deliberately outside PROVIDER_SELECTION_SUFFIXES: a runbook
+        # narrating a historical `pulumi stack init --secrets-provider=
+        # gcpkms://...` -- exactly what this repo's own migration and
+        # rehearsal runbooks do -- does not create a stack on its own.
+        self._write("RUNBOOK.md", f'--secrets-provider="{GCPKMS_URL}"\n')
+        self.assertEqual(audit.scan_provider_selection_hits(self.tree), set())
+
+    def test_finds_the_flag_shape_in_a_shell_script(self):
+        self._write("provision.sh", f'pulumi stack init t --secrets-provider="{GCPKMS_URL}"\n')
+        self.assertEqual(audit.scan_provider_selection_hits(self.tree), {"provision.sh"})
+
+    def test_skips_vendored_and_generated_trees(self):
+        for skipped in ("node_modules", "graphify-out", "vendor"):
+            self._write(f"{skipped}/w.yml", f'--secrets-provider="{GCPKMS_URL}"\n')
+        self.assertEqual(audit.scan_provider_selection_hits(self.tree), set())
+
+
+class ProviderSelectionUndeclaredTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = pathlib.Path(self.tmp.name)
+
+    def _inventory(self, sites):
+        return {"stacks": [{}], "provider_selection_sites": sites}
+
+    def _write_here(self, rel, text):
+        # REPO_ROOT is a fixed path (this checkout), not something a test can
+        # relocate -- so "here" is exercised through audit_provider_selection_
+        # scan's REPO_ROOT-scanning half being proven separately, by the
+        # shipped-inventory regression test below. This class exercises the
+        # --root half, which the test *can* relocate.
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def test_undeclared_site_in_a_sibling_repo_is_reported_only_with_root(self):
+        self._write_here(
+            "ghost-platform/.github/workflows/new.yml", f'--secrets-provider="{GCPKMS_URL}"\n'
+        )
+        inventory = self._inventory([])
+        self.assertEqual(audit.audit_provider_selection_scan(inventory, None), [])
+        self.assertEqual(
+            audit.audit_provider_selection_scan(inventory, self.root),
+            ["ghost-platform/.github/workflows/new.yml"],
+        )
+
+    def test_a_declared_site_in_a_sibling_repo_is_not_reported_undeclared(self):
+        self._write_here(
+            "ghost-platform/.github/workflows/w.yml", f'--secrets-provider="{GCPKMS_URL}"\n'
+        )
+        inventory = self._inventory(
+            [{"repo": "ghost-platform", "path": ".github/workflows/w.yml", "retired": False}]
+        )
+        self.assertEqual(audit.audit_provider_selection_scan(inventory, self.root), [])
+
+    def test_shipped_inventory_has_no_undeclared_provider_selection_sites_in_this_repo(self):
+        # Proves this repo's own tree -- what the default CI invocation with
+        # no --root actually scans -- carries no self-inflicted false
+        # positive from the inventory's own documentation of retired sites.
+        inventory = audit.load_inventory(audit.DEFAULT_INVENTORY)
+        self.assertEqual(audit.audit_provider_selection_scan(inventory, None), [])
+
+
 class InventoryTests(unittest.TestCase):
     def test_rejects_an_empty_inventory(self):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
@@ -705,16 +906,15 @@ class ShippedInventoryLiveStateTests(unittest.TestCase):
             # in it -- this is the regression the ATTESTATION_AGREES_WITH fix
             # exists for: without "absent" accepted, all four would show here
             # as drift despite being correctly migrated.
+            # The two Hetzner stacks are deliberately not in this set: they
+            # are terminal_state never-kms (born on the passphrase provider,
+            # no KMS dependency to migrate away from), which is satisfied by
+            # `needs-attestation` on its own -- demanding an attestation from
+            # them anyway would be exactly the "gate red in its own success
+            # state" failure documented on SATISFIED_BY.
             self.assertEqual(
                 outstanding,
-                {
-                    "branchleft-ghost-provisioning/blog",
-                    "blog-infra/blog",
-                    # Not yet created -- correctly outstanding, not a KMS
-                    # dependency. See the inventory's own note on each.
-                    "branchleft-hetzner-network/production",
-                    "branchleft-hetzner-estate/production",
-                },
+                {"branchleft-ghost-provisioning/blog", "blog-infra/blog"},
                 by_stack,
             )
 

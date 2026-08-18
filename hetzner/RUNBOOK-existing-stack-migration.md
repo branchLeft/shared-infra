@@ -114,11 +114,19 @@ moment to narrow it to the encrypt/decrypt role it actually uses.
 
 ## The stacks
 
-Seven stacks exist across two state backends, and no single command lists
+Six stacks exist today across two state backends, and no single command lists
 them. Plain `pulumi stack ls` lists only the _current project's_ stacks, so it
 shows one; `pulumi stack ls --all` shows every stack in the backend you are
-logged into, which is six; and the seventh lives in a different bucket and
+logged into, which is five; and the sixth lives in a different bucket and
 appears in neither.
+
+`scripts/pulumi-stack-inventory.json` also carries two Hetzner stacks that do
+not exist yet, in a third backend that neither of the commands above will ever
+reach until something is created there — listed ahead of their own creation
+precisely so provisioning them later cannot mint one KMS-wrapped by accident.
+`scripts/audit-pulumi-secrets.py --root <workspace>` is what actually walks
+every stack in the inventory, across every backend and every sibling repo;
+run it before trusting `pulumi stack ls` for anything this runbook depends on.
 
 **That is the finding, and it generalises past this estate.** A sweep that has
 to cover every stack cannot discover its own subject, so the subject has to be
@@ -296,7 +304,7 @@ That placement is the whole point. A passphrase file created once and left in
 place is still pointing at stack 1's passphrase when stack 2 runs, and every
 verification step in A.2 passes anyway — the stack re-wraps cleanly, decrypts
 cleanly and previews clean, because one valid passphrase is as good as
-another to Pulumi. The result is seven stacks sharing one secret, silently,
+another to Pulumi. The result is six stacks sharing one secret, silently,
 which is exactly the property A.0 exists to prevent. **Never carry a
 passphrase file across two stacks.**
 
@@ -525,13 +533,13 @@ costs least. Concretely:
    the sweep can touch them.
 
 Name the blocked ones up front rather than leaving them to be discovered at the
-last stack of the set: a gate found at step 7 of 7 is a gate found after the
+last stack of the set: a gate found at step 6 of 6 is a gate found after the
 irreversible steps.
 
 The order itself does not change because of those gates — both blocked stacks
 were already last, for unrelated reasons. What changes is that reaching them
 is not a matter of working down the list: if either gate is still open when
-you get there, stop at five and come back. **Five of seven re-wrapped is a
+you get there, stop at four and come back. **Four of six re-wrapped is a
 perfectly good resting state**; a tenant stack re-wrapped under the wrong
 passphrase is not.
 
