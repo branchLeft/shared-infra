@@ -97,7 +97,16 @@ repos:
         name: hetzner unit tests (vitest)
         entry: sh -c 'cd hetzner && npm test --silent'
         language: system
-        files: ^hetzner/[^/]*\.ts$
+        # `edge/` is included, and so is the root `sites.ts` it renders from:
+        # the suite asserts the committed edge configuration is what the current
+        # registry and posture produce, so a registry edit that is not
+        # re-rendered has to fail here rather than at the next deploy.
+        #
+        # The rendered output under `edge/stack/` and `edge/validation/` is in
+        # the pattern too. Those files are generated, so a hand edit to one is
+        # the change most likely to be made and least likely to be re-rendered —
+        # and without them here it would commit clean.
+        files: ^(hetzner/([^/]*|edge/.*)\.ts|hetzner/edge/(stack|validation)/.*|sites\.ts|siteTypes\.ts)$
         pass_filenames: false
 
       - id: hetzner-project-layout

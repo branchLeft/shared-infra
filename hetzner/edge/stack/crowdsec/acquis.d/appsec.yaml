@@ -1,0 +1,9 @@
+# Generated from sites.ts and hetzner/edge/posture.ts.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+source: appsec
+name: edge
+listen_addr: 0.0.0.0:7422
+appsec_configs:
+  - crowdsecurity/crs
+labels:
+  type: appsec

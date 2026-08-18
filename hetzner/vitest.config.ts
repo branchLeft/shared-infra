@@ -12,6 +12,10 @@ import { defineConfig } from 'vitest/config';
  * leaving them in the coverage denominator would report a permanent zero for
  * files no unit test can legitimately import.
  *
+ * `edge/` is included: it renders the edge host's Caddy and CrowdSec
+ * configuration and constructs nothing, so unlike the three files above it is
+ * both importable and worth measuring.
+ *
  * `host.ts`, `firewalls.ts`, `cloudInit.ts` and `addressPlan.ts` — the four
  * files that used to be unit-tested here — moved to `@branchleft/hetzner-host`
  * (`../hetzner-host`), whose own suite covers them directly.
@@ -22,7 +26,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig(
   defineStandardTest({
     environment: 'node',
-    coverageInclude: ['*.ts'],
+    coverageInclude: ['*.ts', 'edge/*.ts'],
     coverageExclude: [
       '**/*.test.ts',
       '**/*.d.ts',

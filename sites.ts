@@ -1,14 +1,22 @@
-import { region } from './config';
-import type { EdgeSite, HostRedirect } from './edge';
+import type { EdgeSite, HostRedirect } from './siteTypes';
 
 /**
  * The site registry — everything this load balancer serves.
  *
- * **Hostnames and Cloud Run service names only.** Nothing else about a site
- * belongs in this file: no member counts, no commercial terms, no contact
- * details, no personal data. A site appears here only if whoever it belongs to
- * is content to be served from a hostname anyone can read, and the entry says
- * nothing about them beyond the hostname itself.
+ * **Hostnames and service addressing only.** Nothing else about a site belongs
+ * in this file: no member counts, no commercial terms, no contact details, no
+ * personal data. A site appears here only if whoever it belongs to is content
+ * to be served from a hostname anyone can read, and the entry says nothing
+ * about them beyond the hostname itself.
+ *
+ * ## Two edges read this file
+ *
+ * `edge.ts` derives the GCP load balancer from it, and `hetzner/edge/render.ts`
+ * derives the Caddy and CrowdSec configuration for the replacement edge VM from
+ * the same entries. During the migration both are true at once, which is why a
+ * site carries both a `cloudRunService` and a `privateUpstream`: the first is
+ * where it is served from today, the second is where it will be served from,
+ * and a site gains the second only when its Hetzner backend actually exists.
  *
  * ## Onboarding a site
  *
@@ -64,14 +72,12 @@ export const sites: EdgeSite[] = [
     name: 'website',
     hostnames: ['branchleft.co.uk', 'www.branchleft.co.uk'],
     cloudRunService: 'branchleft-website',
-    region,
   },
 
   {
     name: 'blog',
     hostnames: ['blog.branchleft.co.uk'],
     cloudRunService: 'ghost-tenant-blog',
-    region,
     // Ghost-backed: its admin API carries author-written HTML and code, which
     // trips the injection signatures. Every Ghost tenant added here needs this
     // until there is enough admin-API traffic to prove otherwise.

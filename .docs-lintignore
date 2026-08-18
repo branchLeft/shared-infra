@@ -1,2 +1,3 @@
 graphify-out/*	ALL	# generated artifact, not authored documentation
 CLOUD-ARMOR-BASELINE.md	DL006	# a dated capture is the artifact: the live Cloud Armor policy state it records is a point-in-time snapshot, not a standing fact
+CLOUD-ARMOR-BASELINE.md	DL005	# the superseded configuration is the artifact: this file exists to hold a policy on its way out, so that the edge replacing it can be checked against something concrete rather than against a memory. Deleting the old thing is what the rule asks for and is the one thing this file must not do until the cutover has passed its parity gate

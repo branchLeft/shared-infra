@@ -136,6 +136,98 @@ remediation enabled. Concretely:
    stack, not silently carried over — see README.md's "Cloud Armor policy"
    section for why the exemption exists and what ends it.
 
+### Named differences on the replacement edge
+
+Point 3 above cannot be satisfied exactly, and the differences are recorded
+here rather than glossed as "CrowdSec covers OWASP". `hetzner/edge/` is the
+implementation and `hetzner/RUNBOOK-edge.md` the operation; each difference
+below is a decision, not a gap left open.
+
+**Every match ends in an IP ban, which no rule in this capture does.** This is
+the difference that matters most and it is not the one the split is usually
+described by. Whatever the replacement edge blocks, it also remediates: an
+in-band AppSec block feeds `crowdsecurity/appsec-vpatch`, a leaky bucket at
+`capacity: 1` with `remediation: true`, so a second _distinct_ in-band rule
+match from one address inside its 60-second window becomes a ban for the
+profile's duration. An out-of-band match feeds
+`crowdsecurity/crowdsec-appsec-outofband`, `capacity: 5`, to the same end. The
+rules in this capture answer `deny(403)` on the offending request and have no
+IP-level consequence at all. So a visitor who trips two rules in a minute — one
+`generic-*` false positive on a comment body and one on a subsequent request —
+is refused every hostname on the edge for hours, where here they would have
+been refused one request. Reading "in band" as "equivalent to `deny(403)`" is
+the specific wrong conclusion this paragraph exists to prevent.
+
+**The OWASP rule families are split across two evaluation modes.** CrowdSec
+evaluates its virtual-patching rules in band — before the request proceeds —
+and the OWASP Core Rule Set out of band, after the request has been answered.
+The replacement edge takes that split rather than forcing CRS in band. So a
+first CRS-class injection attempt reaches the origin with a normal response and
+remediation arrives afterwards.
+
+**Why the split, stated on the reasons that actually hold.** An in-band CRS
+configuration exists on the CrowdSec hub, so this is a choice rather than a
+limitation. It is not chosen for two reasons, and a third argument that reads
+persuasively is false and is recorded here so it is not made again:
+
+- **False-positive surface on an authoring surface.** CRS is a large generic
+  ruleset whose injection signatures match author-written HTML, code samples
+  and SQL — which is the whole reason `injectionWafPreviewOnly` exists on this
+  policy. The in-band set that is used instead is `base-config` plus
+  `vpatch-*` (known-CVE exploit shapes, `confidence: 3`, `spoofable: 0`) plus
+  `generic-*`; none of those inspects a request body for injection shapes, so
+  an in-band false positive on a Ghost admin request is implausible where a CRS
+  one is expected. Combined with the ban semantics above, that is the whole
+  argument.
+- **Unmeasured cost.** CRS is large and the edge is a two-vCPU `cx23`. The
+  verification register is explicit that this must be measured rather than
+  assumed, and it cannot be measured before the edge carries traffic.
+- **Not a reason: "in-band CRS bans rather than 403s".** True of
+  `crowdsecurity/crs-inband`, and equally true of `crowdsecurity/appsec-default`,
+  `crowdsecurity/virtual-patching` and `crowdsecurity/generic-rules` — every
+  in-band AppSec configuration on the hub carries `default_remediation: ban`.
+  It distinguishes nothing. **Neither option reproduces `deny(403)` with no IP
+  consequence**, so the choice is not which one achieves parity; it is which
+  false-positive profile is acceptable on the traffic this edge will carry.
+
+One thing bounds how much the split gives up: every rule in this capture is
+live in `preview: true`, the throttle included, so the deployed policy this
+baseline records blocks nothing at all. Detect-then-ban is stronger than what is
+serving traffic today and weaker than what `edge.ts` declares.
+
+**The exemption for an authoring host narrows on three rule families and
+widens on the fourth.** On this policy, `injectionWafPreviewOnly` exempts every
+request to the flagged hostname from the three injection rulesets — and `lfi`
+keeps enforcing across the whole host, `/ghost` included, because nothing
+legitimate requests `.env`.
+
+On the replacement edge the flag exempts one path prefix, `/ghost/api/`, which
+is narrower than a whole hostname; the admin UI bundle and every other path
+stay inspected. But on that prefix it removes **all** AppSec evaluation, the
+`lfi` analogues (`vpatch-env-access`, the `.git` rules) included. Caddy's
+AppSec handler is per-request, so there is no construction that exempts three
+rule families and keeps a fourth.
+
+The residual exposure is a filesystem-probe path that begins `/ghost/api/`,
+which is not where that class of request goes — but it is a widening and it is
+recorded rather than left to be found. Ending it means either a CrowdSec-side
+rule exclusion scoped to the prefix, or evidence from the detect-only period
+that the exemption is not needed at all.
+
+**The throttle is evaluated before the WAF, not after.** Here the injection
+rules sit at priorities 1000–1003 and the throttle at 2000. The replacement
+edge reverses that: Cloud Armor evaluated on Google's edge fleet, the
+replacement evaluates on two vCPUs, and a flood reaching the WAF first would
+spend exactly the capacity the throttle exists to protect. The observable
+difference is confined to a client that is both flooding and attacking, which
+is answered 429 rather than 403.
+
+**The TLS floor cannot be checked against this artifact at all**, as point 3
+already says. On the replacement edge it is a `tls` directive in the rendered
+Caddy configuration, asserted by that renderer's unit tests. Checking it
+against the retiring edge means reading `edge.ts`'s constants, not diffing this
+capture.
+
 ## What the capture recorded
 
 ### 1. The appendix A remediation held

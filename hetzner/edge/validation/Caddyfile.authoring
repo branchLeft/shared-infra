@@ -1,0 +1,60 @@
+# Generated from sites.ts and hetzner/edge/posture.ts.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+{
+	email {env.ACME_EMAIL}
+	acme_ca https://acme-v02.api.letsencrypt.org/directory
+	servers {
+		protocols h1 h2
+	}
+	crowdsec {
+		api_url http://crowdsec:8080
+		api_key {env.CROWDSEC_BOUNCER_KEY}
+		ticker_interval 15s
+		appsec_url http://crowdsec:7422
+		appsec_max_body_bytes 65536
+		appsec_timeout 1s
+		appsec_fail_open
+	}
+}
+
+authoring.invalid {
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	@inspected not path /ghost/api/*
+	route {
+		rate_limit {
+			zone authoring_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		crowdsec
+		appsec @inspected
+		reverse_proxy 10.20.1.100:2368
+	}
+}
+
+:8080 {
+	log {
+		output file /var/log/caddy/probe.log
+		format json
+	}
+	route {
+		rate_limit {
+			zone probe_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		crowdsec
+		appsec
+		respond 204
+	}
+}

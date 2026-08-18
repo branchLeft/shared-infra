@@ -173,6 +173,20 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # The edge renderer's suite imports the repository root's `sites.ts`,
+      # which is the point of it -- the hostname registry has one copy. Vitest
+      # transforms that file, and to transform it, it loads the tsconfig
+      # nearest to it, which is the root's. That file extends a package, and a
+      # package only resolves from a `node_modules` beside it, so the root's
+      # install has to exist for a file at the root to be readable at all. It
+      # fails as `Tsconfig not found`, which reads like a missing file rather
+      # than a missing install.
+      - name: Install the repository root's dependencies
+        run: npm ci
+        working-directory: .
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Type check
         run: npx tsc --noEmit
 
@@ -263,6 +277,74 @@ jobs:
       # its own -- previews a plan for the wrong resources and exits 0.
       - name: Verify the Hetzner Pulumi project layout
         run: python3 hetzner/scripts/check-hetzner-projects.py
+
+  edge-config-validate:
+    name: Validate (edge Caddy config)
+    runs-on: ubuntu-latest
+    # Loads every rendered Caddy configuration through a real Caddy binary
+    # carrying the real modules. The renderer's unit tests are string assertions
+    # over their own output, so they cannot tell a directive Caddy accepts from
+    # one it rejects -- and the first version of this stack shipped two tokens
+    # taken from a module's README that its own Caddyfile parser refuses. This
+    # is the job that catches that class, and it catches it on every posture
+    # flip rather than once.
+    #
+    # Deliberately NOT in `deploy`'s `needs`. That job applies the *GCP* edge,
+    # which shares nothing with this configuration, and gating a Pulumi apply on
+    # a Go build that reaches the module proxy would couple an unrelated
+    # production path to a network dependency. It gates review, not the apply.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The runner is amd64 and so is the edge, so no emulation is involved.
+      - name: Build the edge Caddy image
+        # Static tag, not one built from `github.sha`: a `${{ }}` inside a `run:`
+        # body is substituted before the shell parses the line. The runner is
+        # isolated per job, so there is nothing for a unique tag to disambiguate.
+        run: docker build --tag edge-caddy-ci:validate hetzner/edge
+
+      # The Compose file is not rendered, so nothing else would notice a typo in
+      # it until a deploy failed on the host.
+      - name: Check the Compose file resolves
+        env:
+          IMAGE: ghcr.io/branchleft/edge-caddy@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          CROWDSEC_BOUNCER_KEY: validation-only
+          ACME_EMAIL: validation@example.invalid
+        run: docker compose -f hetzner/edge/stack/compose.yml config -q
+
+      # `stack/` is what runs today; `validation/` is what the posture flips
+      # would produce, loaded here so a directive that only appears under
+      # enforcement fails now instead of during the flip.
+      #
+      # An unformatted file fails too: `caddy fmt` would rewrite it, and a
+      # rendered file its own formatter disagrees with makes every later diff
+      # ambiguous about whether the config or the layout moved.
+      - name: Load every rendered configuration through Caddy
+        run: |
+          status=0
+          for config in hetzner/edge/stack/Caddyfile hetzner/edge/validation/Caddyfile.*; do
+            output=$(docker run --rm \
+              --env CROWDSEC_BOUNCER_KEY=validation-only \
+              --env ACME_EMAIL=validation@example.invalid \
+              --volume "$PWD/$config:/etc/caddy/Caddyfile:ro" \
+              edge-caddy-ci:validate \
+              caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile 2>&1) || true
+
+            if ! printf '%s' "$output" | grep -q 'Valid configuration'; then
+              echo "::error file=${config}::Caddy refused this configuration"
+              printf '%s\n' "$output"
+              status=1
+            elif printf '%s' "$output" | grep -q 'not formatted'; then
+              echo "::error file=${config}::caddy fmt would rewrite this file; the renderer must emit what it emits"
+              status=1
+            else
+              echo "OK: ${config}"
+            fi
+          done
+          exit "$status"
 
   scripts-tests:
     name: Test (scripts)
