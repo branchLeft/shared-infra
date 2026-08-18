@@ -1,0 +1,296 @@
+{
+  "$comment": [
+    "Every Pulumi stack that exists in a branchLeft state backend, with the",
+    "secrets provider and state backend each one uses today.",
+    "",
+    "This file is the enumeration the migration off GCP KMS depends on. It is",
+    "checked in because the alternative — discovering the set from a `pulumi",
+    "stack ls` at execution time — only lists the stacks in whichever backend",
+    "the workstation was last logged into, and there is more than one backend.",
+    "A stack absent from this file is a stack nobody re-wraps, and after the",
+    "KMS key is destroyed its committed ciphertext is undecryptable forever.",
+    "",
+    "`config_path` is repo-relative and may be null: some stacks generate their",
+    "`Pulumi.<stack>.yaml` on a CI runner and never commit it, and PUL-12 means",
+    "even a fully migrated passphrase stack's committed file carries no",
+    "`encryptionsalt` — salt-injected-at-deploy is the mandated end state, not",
+    "a gap. Either way nothing in the committed tree can prove the provider for",
+    "that stack, so its `terminal_state` can only be satisfied by an",
+    "`attestation`: an operator statement recorded here under review in git,",
+    "not something read out of a file.",
+    "",
+    "Procedure: hetzner/RUNBOOK-existing-stack-migration.md",
+    "Audit:     scripts/audit-pulumi-secrets.py"
+  ],
+  "gcp_kms_key": "gcpkms://projects/branchleft-prod/locations/europe-west1/keyRings/pulumi/cryptoKeys/pulumi-secrets",
+  "target_secrets_provider": "passphrase",
+  "state_backends": {
+    "shared": "gs://branchleft-pulumi-state",
+    "tenant_blog": "gs://branchleft-blog-pulumi-state",
+    "hetzner": "s3://branchleft-pulumi-state?endpoint=hel1.your-objectstorage.com&s3ForcePathStyle=true&region=hel1"
+  },
+  "stacks": [
+    {
+      "project": "branchleft-shared-infra",
+      "stack": "production",
+      "repo": "shared-infra",
+      "project_path": "Pulumi.yaml",
+      "config_path": "Pulumi.production.yaml",
+      "state_backend": "shared",
+      "expected_secrets_provider": "passphrase",
+      "terminal_state": "migrate",
+      "note": "Salt-injected-at-deploy: CI appends the passphrase salt from a repository secret immediately before the first `pulumi` command and never commits it, so the committed file reads `absent` by design.",
+      "attestation": {
+        "state": "migrated",
+        "date": "2026-08-17",
+        "evidence": "secrets_providers read directly from the gs://branchleft-pulumi-state checkpoint: passphrase, 32 resources."
+      }
+    },
+    {
+      "project": "branchleft-mail",
+      "stack": "production",
+      "repo": "shared-infra",
+      "project_path": "mail/Pulumi.yaml",
+      "config_path": "mail/Pulumi.production.yaml",
+      "state_backend": "shared",
+      "expected_secrets_provider": "passphrase",
+      "terminal_state": "migrate",
+      "note": "The only stack that outlives the GCP estate. No CI apply path, so an operator appends the passphrase salt from their own copy before any `pulumi` command that reads state and never commits it.",
+      "attestation": {
+        "state": "migrated",
+        "date": "2026-08-17",
+        "evidence": "secrets_providers read directly from the gs://branchleft-pulumi-state checkpoint: passphrase, 4 resources."
+      }
+    },
+    {
+      "project": "branchleft-website-infra",
+      "stack": "production",
+      "repo": "website",
+      "project_path": "infra/Pulumi.yaml",
+      "config_path": "infra/Pulumi.production.yaml",
+      "state_backend": "shared",
+      "expected_secrets_provider": "passphrase",
+      "terminal_state": "migrate",
+      "note": "Salt-injected-at-deploy, same pattern as branchleft-shared-infra. Two `secure:` ciphertexts (SMTP submission credential) stay committed -- PUL-12 permits that; nothing in the file lets an attacker derive the key without the salt beside it.",
+      "attestation": {
+        "state": "migrated",
+        "date": "2026-08-17",
+        "evidence": "secrets_providers read directly from the gs://branchleft-pulumi-state checkpoint: passphrase, 45 resources."
+      }
+    },
+    {
+      "project": "branchleft-ghost-platform",
+      "stack": "platform",
+      "repo": "ghost-platform",
+      "project_path": "infra/platform/Pulumi.yaml",
+      "config_path": "infra/platform/Pulumi.platform.yaml",
+      "state_backend": "shared",
+      "expected_secrets_provider": "passphrase",
+      "terminal_state": "migrate",
+      "attestation": {
+        "state": "migrated",
+        "date": "2026-08-17",
+        "evidence": "secrets_providers read directly from the gs://branchleft-pulumi-state checkpoint: passphrase, 27 resources."
+      }
+    },
+    {
+      "project": "branchleft-ghost-provisioning",
+      "stack": "blog",
+      "repo": "ghost-platform",
+      "project_path": "infra/provisioning/Pulumi.yaml",
+      "config_path": null,
+      "state_backend": "shared",
+      "expected_secrets_provider": "gcpkms",
+      "terminal_state": "migrate",
+      "note": "Config is reconstructed on each CI run from the exported deployment and never committed. Still GCP KMS-wrapped. The re-wrap work is tracked and in progress on branchLeft/workspace#128 -- do not attest this stack from here; let that work land its own attestation once the reconstruction script accepts a passphrase-managed stack.",
+      "attestation": null
+    },
+    {
+      "project": "blog-infra",
+      "stack": "blog",
+      "repo": "ghost-tenant-blog",
+      "project_path": "Pulumi.yaml",
+      "config_path": "Pulumi.blog.yaml",
+      "state_backend": "tenant_blog",
+      "expected_secrets_provider": "gcpkms",
+      "terminal_state": "migrate-or-destroy",
+      "note": "Densest secrets of the set: two secret config values and roughly 33 encrypted values in state. Lives in its own bucket, so a sweep driven by one `pulumi stack ls` misses it entirely. Still GCP KMS-wrapped; re-wrap tracked on branchLeft/workspace#128 -- do not attest this stack from here. Superseded by a successor stack later in the programme, so its terminal state accepts either a re-wrap or a destroy-and-archive.",
+      "attestation": null
+    },
+    {
+      "project": "branchleft-hetzner-network",
+      "stack": "production",
+      "repo": "shared-infra",
+      "project_path": "hetzner/Pulumi.yaml",
+      "config_path": null,
+      "state_backend": "hetzner",
+      "expected_secrets_provider": "passphrase",
+      "terminal_state": "migrate",
+      "note": "Born on the passphrase provider and never wrapped by the KMS key, so it is listed to be enumerated rather than swept. Not yet created. `config_path` stays null even once branchLeft/shared-infra#4 lands: that PR commits only non-secret configuration, never `encryptionsalt` (PUL-12 forbids committing it, and `pulumi stack init` has not run) -- so pointing `config_path` at the file today would classify it `absent` with no attestation, which is drift, not `needs-attestation`. Point `config_path` here once an attestation for this stack lands alongside it.",
+      "attestation": null
+    },
+    {
+      "project": "branchleft-hetzner-estate",
+      "stack": "production",
+      "repo": "shared-infra",
+      "project_path": "hetzner/estate/Pulumi.yaml",
+      "config_path": null,
+      "state_backend": "hetzner",
+      "expected_secrets_provider": "passphrase",
+      "terminal_state": "migrate",
+      "note": "Born on the passphrase provider, same as the network stack. hetzner/estate/Pulumi.production.yaml IS committed and holds non-secret configuration reviewed ahead of the stack existing, but carries no `encryptionsalt` -- the stack has not been created. Pointing `config_path` at it today would classify it `absent` with no attestation, which is drift, which reddens the gate in its own success state. Set `config_path` once an attestation for this stack lands alongside it.",
+      "attestation": null
+    }
+  ],
+  "backend_reference_sites": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "kind": "ci",
+      "backend": "shared",
+      "note": "`pulumi login gs://branchleft-pulumi-state` in the deploy job."
+    },
+    {
+      "path": "README.md",
+      "kind": "doc",
+      "backend": "shared"
+    },
+    {
+      "path": "RUNBOOK-ci-bootstrap.md",
+      "kind": "runbook",
+      "backend": "shared"
+    },
+    {
+      "path": "RUNBOOK-edge-state-move.md",
+      "kind": "runbook",
+      "backend": "shared"
+    },
+    {
+      "path": "mail/RUNBOOK-import-mail-host.md",
+      "kind": "runbook",
+      "backend": "shared"
+    },
+    {
+      "path": "hetzner/Pulumi.yaml",
+      "kind": "pinned",
+      "backend": "hetzner",
+      "note": "The only project in the estate that pins its own backend rather than relying on the ambient login."
+    },
+    {
+      "path": "hetzner/estate/Pulumi.yaml",
+      "kind": "pinned",
+      "backend": "hetzner",
+      "note": "The estate's own project. Pins the same backend as hetzner/Pulumi.yaml deliberately: it resolves a stack reference to the network stack, and a stack reference resolves inside one backend only."
+    },
+    {
+      "path": "hetzner/RUNBOOK-new-stack.md",
+      "kind": "runbook",
+      "backend": "hetzner"
+    },
+    {
+      "path": "hetzner/RUNBOOK-existing-stack-migration.md",
+      "kind": "runbook",
+      "backend": "shared"
+    },
+    {
+      "path": "scripts/pulumi-stack-inventory.json",
+      "kind": "inventory",
+      "backend": "shared"
+    },
+    {
+      "path": "scripts/audit-pulumi-secrets.py",
+      "kind": "tooling",
+      "backend": "shared",
+      "note": "The scanner names the backends it matches on. Enumerated rather than exempted: an exemption would also hide a real login step added to it later."
+    },
+    {
+      "path": "scripts/test_audit_pulumi_secrets.py",
+      "kind": "tooling",
+      "backend": "shared",
+      "note": "Fixtures name the backends."
+    }
+  ],
+  "external_backend_reference_sites": [
+    {
+      "repo": "website",
+      "path": ".github/workflows/ci.yml",
+      "kind": "ci",
+      "backend": "shared",
+      "note": "Two separate `pulumi login` steps — preview job and deploy job. Both must change if the shared bucket is ever retired."
+    },
+    {
+      "repo": "website",
+      "path": "infra/KNOWN_ISSUES.md",
+      "kind": "doc",
+      "backend": "shared"
+    },
+    {
+      "repo": "ghost-platform",
+      "path": ".github/workflows/infra-platform-ci.yml",
+      "kind": "ci",
+      "backend": "shared"
+    },
+    {
+      "repo": "ghost-platform",
+      "path": ".github/workflows/provision-tenant.yml",
+      "kind": "ci",
+      "backend": "shared",
+      "note": "Logs in twice: the shared bucket for the provisioning stack, then the tenant's own bucket templated from a repository variable."
+    },
+    {
+      "repo": "ghost-platform",
+      "path": "infra/platform/RUNBOOK-bootstrap.md",
+      "kind": "runbook",
+      "backend": "shared"
+    },
+    {
+      "repo": "ghost-platform-tenant-template",
+      "path": ".github/workflows/infra-ci.yml",
+      "kind": "ci",
+      "backend": "tenant",
+      "note": "`pulumi login gs://$PULUMI_STATE_BUCKET`, from a repository variable set per tenant at provisioning time. Generated into every tenant repo, so changing it here does not change any repo already generated."
+    },
+    {
+      "repo": "ghost-platform-tenant-template",
+      "path": "README.md",
+      "kind": "doc",
+      "backend": "tenant"
+    },
+    {
+      "repo": "ghost-tenant-blog",
+      "path": ".github/workflows/infra-ci.yml",
+      "kind": "ci",
+      "backend": "tenant",
+      "note": "The generated copy of the template workflow. Already diverged from the template by generation, so it is its own site."
+    },
+    {
+      "repo": "ghost-tenant-blog",
+      "path": "Pulumi.yaml",
+      "kind": "doc",
+      "backend": "tenant",
+      "note": "Comment documents the PULUMI_STATE_BUCKET contract."
+    },
+    {
+      "repo": "ghost-platform-tenant-template",
+      "path": "Pulumi.yaml",
+      "kind": "doc",
+      "backend": "tenant",
+      "note": "Comment documents the PULUMI_STATE_BUCKET contract; generated into every tenant repo."
+    }
+  ],
+  "provider_selection_sites": [
+    {
+      "repo": "ghost-platform",
+      "path": ".github/workflows/provision-tenant.yml",
+      "retired": true,
+      "note": "Was `pulumi stack select \"$TENANT\" --create --secrets-provider=\"gcpkms://...\"` for the provisioning stack. Retired by branchLeft/ghost-platform#81 to `--secrets-provider=passphrase`, reading ghost-platform's own repo-level PULUMI_CONFIG_PASSPHRASE.",
+      "must_not_contain": "gcpkms://"
+    },
+    {
+      "repo": "ghost-platform",
+      "path": ".github/workflows/provision-tenant.yml",
+      "retired": true,
+      "note": "Was `pulumi stack init \"$TENANT\" --secrets-provider=\"gcpkms://...\"` for the tenant's own stack. Retired by branchLeft/ghost-platform#81 to `--secrets-provider=passphrase`, using a passphrase minted fresh per tenant and written to that tenant repo's own PULUMI_CONFIG_PASSPHRASE secret.",
+      "must_not_contain": "gcpkms://"
+    }
+  ]
+}

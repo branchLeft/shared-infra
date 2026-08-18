@@ -369,6 +369,33 @@ jobs:
           python3 scripts/assert-no-committed-pulumi-secrets.py --self-test
           python3 scripts/assert-no-committed-pulumi-secrets.py --scan-tree .
 
+  pulumi-inventory-audit:
+    name: Audit (Pulumi secrets + state backends)
+    runs-on: ubuntu-latest
+    # Credential-free by construction: the audit reads committed files only and
+    # never contacts a backend, so it says nothing about live state and needs
+    # nothing to run. What it defends is an ordering with no undo -- every
+    # stack's secrets are wrapped by one KMS key that the GCP wind-down
+    # destroys, and a stack missed before that point cannot be decrypted or
+    # even torn down afterwards. It also fails on a state-backend reference
+    # this repo gained without anyone adding it to the inventory, because the
+    # backend is selected per workflow rather than anywhere central.
+    #
+    # No --require-migrated here: that flag is the manual precondition run
+    # before the KMS key is destroyed (hetzner/RUNBOOK-existing-stack-migration.md),
+    # not a per-commit gate -- two stacks are still legitimately mid-migration.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Python unit tests
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+
+      - name: Audit
+        run: python3 scripts/audit-pulumi-secrets.py
+
   cloud-armor-baseline-parity:
     name: Audit (Cloud Armor baseline parity)
     runs-on: ubuntu-latest
@@ -416,6 +443,7 @@ jobs:
         hetzner-host-typecheck,
         hetzner-provision-checks,
         scripts-tests,
+        pulumi-inventory-audit,
         cloud-armor-baseline-parity,
       ]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
