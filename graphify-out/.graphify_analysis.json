@@ -270,6 +270,63 @@
       "scripts_assert_cloud_armor_baseline_parity_split_top_level_objects"
     ],
     "4": [
+      "hetzner_provision_branchleft_deploy",
+      "hetzner_provision_branchleft_deploy_compose_file_path",
+      "hetzner_provision_branchleft_deploy_deploy",
+      "hetzner_provision_branchleft_deploy_deployerror",
+      "hetzner_provision_branchleft_deploy_image_env_path",
+      "hetzner_provision_branchleft_deploy_main",
+      "hetzner_provision_branchleft_deploy_rationale_101",
+      "hetzner_provision_branchleft_deploy_rationale_59",
+      "hetzner_provision_branchleft_deploy_read_current_image",
+      "hetzner_provision_branchleft_deploy_validate_image_ref",
+      "hetzner_provision_branchleft_deploy_validate_stack_name",
+      "hetzner_provision_branchleft_deploy_write_image_env",
+      "hetzner_provision_test_branchleft_deploy",
+      "hetzner_provision_test_branchleft_deploy_deploytests",
+      "hetzner_provision_test_branchleft_deploy_deploytests_deploy",
+      "hetzner_provision_test_branchleft_deploy_deploytests_env_path",
+      "hetzner_provision_test_branchleft_deploy_deploytests_setup",
+      "hetzner_provision_test_branchleft_deploy_deploytests_test_a_comment_mentioning_the_variable_does_not_satisfy_the_check",
+      "hetzner_provision_test_branchleft_deploy_deploytests_test_failed_first_ever_deploy_removes_the_file_and_does_not_restart_again",
+      "hetzner_provision_test_branchleft_deploy_deploytests_test_failed_restart_rolls_back_to_previous_image",
+      "hetzner_provision_test_branchleft_deploy_deploytests_test_failed_rollback_is_reported_as_a_host_that_is_down",
+      "hetzner_provision_test_branchleft_deploy_deploytests_test_refuses_a_compose_file_that_ignores_the_pin",
+      "hetzner_provision_test_branchleft_deploy_deploytests_test_refuses_a_stack_with_no_compose_file",
+      "hetzner_provision_test_branchleft_deploy_deploytests_test_successful_deploy_pins_and_restarts_once",
+      "hetzner_provision_test_branchleft_deploy_deploytests_test_validation_runs_before_any_filesystem_change",
+      "hetzner_provision_test_branchleft_deploy_fakerun",
+      "hetzner_provision_test_branchleft_deploy_fakerun_call",
+      "hetzner_provision_test_branchleft_deploy_fakerun_init",
+      "hetzner_provision_test_branchleft_deploy_imagereftests",
+      "hetzner_provision_test_branchleft_deploy_imagereftests_test_accepts_digest_pinned_reference",
+      "hetzner_provision_test_branchleft_deploy_imagereftests_test_accepts_registry_port",
+      "hetzner_provision_test_branchleft_deploy_imagereftests_test_accepts_tag_alongside_digest",
+      "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_a_trailing_newline",
+      "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_an_uppercase_repository_path",
+      "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_injected_argument",
+      "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_short_or_non_hex_digest",
+      "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_tag_only_reference",
+      "hetzner_provision_test_branchleft_deploy_maintests",
+      "hetzner_provision_test_branchleft_deploy_maintests_test_invalid_input_exits_one_without_touching_the_host",
+      "hetzner_provision_test_branchleft_deploy_maintests_test_wrong_argument_count_is_a_usage_error",
+      "hetzner_provision_test_branchleft_deploy_rationale_24",
+      "hetzner_provision_test_branchleft_deploy_readcurrentimagetests",
+      "hetzner_provision_test_branchleft_deploy_readcurrentimagetests_test_an_empty_assignment_is_not_a_pin",
+      "hetzner_provision_test_branchleft_deploy_readcurrentimagetests_test_ignores_unrelated_keys",
+      "hetzner_provision_test_branchleft_deploy_readcurrentimagetests_test_missing_file_reads_as_none",
+      "hetzner_provision_test_branchleft_deploy_stacknametests",
+      "hetzner_provision_test_branchleft_deploy_stacknametests_test_accepts_plain_names",
+      "hetzner_provision_test_branchleft_deploy_stacknametests_test_rejects_a_trailing_newline",
+      "hetzner_provision_test_branchleft_deploy_stacknametests_test_rejects_empty_and_overlong",
+      "hetzner_provision_test_branchleft_deploy_stacknametests_test_rejects_path_traversal",
+      "hetzner_provision_test_branchleft_deploy_stacknametests_test_rejects_shell_and_systemd_metacharacters",
+      "hetzner_provision_test_branchleft_deploy_writeimageenvtests",
+      "hetzner_provision_test_branchleft_deploy_writeimageenvtests_test_leaves_no_temporary_files_behind",
+      "hetzner_provision_test_branchleft_deploy_writeimageenvtests_test_replaces_rather_than_appends",
+      "hetzner_provision_test_branchleft_deploy_writeimageenvtests_test_writes_single_key_with_owner_only_permissions"
+    ],
+    "5": [
       "datetime",
       "hetzner_scripts_probe_object_storage",
       "hetzner_scripts_probe_object_storage_bucket",
@@ -324,7 +381,7 @@
       "hetzner_scripts_probe_object_storage_urllib_transport",
       "hetzner_scripts_probe_object_storage_versioning_status"
     ],
-    "5": [
+    "6": [
       "scripts_test_audit_pulumi_secrets_attestationtests",
       "scripts_test_audit_pulumi_secrets_attestationtests_entry",
       "scripts_test_audit_pulumi_secrets_attestationtests_test_attestation_without_date_is_drift",
@@ -377,7 +434,7 @@
       "scripts_test_audit_pulumi_secrets_referencescantests_test_skips_vendored_and_generated_trees",
       "scripts_test_audit_pulumi_secrets_referencescantests_write"
     ],
-    "6": [
+    "7": [
       "hetzner_scripts_test_check_hetzner_projects",
       "hetzner_scripts_test_check_hetzner_projects_backendtests",
       "hetzner_scripts_test_check_hetzner_projects_backendtests_test_an_inline_flow_backend_names_the_right_fault",
@@ -427,51 +484,6 @@
       "hetzner_scripts_test_check_hetzner_projects_wellformednesstests_test_a_duplicated_key_fails_rather_than_taking_the_last",
       "hetzner_scripts_test_check_hetzner_projects_wellformednesstests_test_a_missing_runtime_fails",
       "hetzner_scripts_test_check_hetzner_projects_wellformednesstests_test_a_non_node_runtime_fails"
-    ],
-    "7": [
-      "hetzner_provision_test_branchleft_deploy",
-      "hetzner_provision_test_branchleft_deploy_deploytests",
-      "hetzner_provision_test_branchleft_deploy_deploytests_deploy",
-      "hetzner_provision_test_branchleft_deploy_deploytests_env_path",
-      "hetzner_provision_test_branchleft_deploy_deploytests_setup",
-      "hetzner_provision_test_branchleft_deploy_deploytests_test_a_comment_mentioning_the_variable_does_not_satisfy_the_check",
-      "hetzner_provision_test_branchleft_deploy_deploytests_test_failed_first_ever_deploy_removes_the_file_and_does_not_restart_again",
-      "hetzner_provision_test_branchleft_deploy_deploytests_test_failed_restart_rolls_back_to_previous_image",
-      "hetzner_provision_test_branchleft_deploy_deploytests_test_failed_rollback_is_reported_as_a_host_that_is_down",
-      "hetzner_provision_test_branchleft_deploy_deploytests_test_refuses_a_compose_file_that_ignores_the_pin",
-      "hetzner_provision_test_branchleft_deploy_deploytests_test_refuses_a_stack_with_no_compose_file",
-      "hetzner_provision_test_branchleft_deploy_deploytests_test_successful_deploy_pins_and_restarts_once",
-      "hetzner_provision_test_branchleft_deploy_deploytests_test_validation_runs_before_any_filesystem_change",
-      "hetzner_provision_test_branchleft_deploy_fakerun",
-      "hetzner_provision_test_branchleft_deploy_fakerun_call",
-      "hetzner_provision_test_branchleft_deploy_fakerun_init",
-      "hetzner_provision_test_branchleft_deploy_imagereftests",
-      "hetzner_provision_test_branchleft_deploy_imagereftests_test_accepts_digest_pinned_reference",
-      "hetzner_provision_test_branchleft_deploy_imagereftests_test_accepts_registry_port",
-      "hetzner_provision_test_branchleft_deploy_imagereftests_test_accepts_tag_alongside_digest",
-      "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_a_trailing_newline",
-      "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_an_uppercase_repository_path",
-      "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_injected_argument",
-      "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_short_or_non_hex_digest",
-      "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_tag_only_reference",
-      "hetzner_provision_test_branchleft_deploy_maintests",
-      "hetzner_provision_test_branchleft_deploy_maintests_test_invalid_input_exits_one_without_touching_the_host",
-      "hetzner_provision_test_branchleft_deploy_maintests_test_wrong_argument_count_is_a_usage_error",
-      "hetzner_provision_test_branchleft_deploy_rationale_24",
-      "hetzner_provision_test_branchleft_deploy_readcurrentimagetests",
-      "hetzner_provision_test_branchleft_deploy_readcurrentimagetests_test_an_empty_assignment_is_not_a_pin",
-      "hetzner_provision_test_branchleft_deploy_readcurrentimagetests_test_ignores_unrelated_keys",
-      "hetzner_provision_test_branchleft_deploy_readcurrentimagetests_test_missing_file_reads_as_none",
-      "hetzner_provision_test_branchleft_deploy_stacknametests",
-      "hetzner_provision_test_branchleft_deploy_stacknametests_test_accepts_plain_names",
-      "hetzner_provision_test_branchleft_deploy_stacknametests_test_rejects_a_trailing_newline",
-      "hetzner_provision_test_branchleft_deploy_stacknametests_test_rejects_empty_and_overlong",
-      "hetzner_provision_test_branchleft_deploy_stacknametests_test_rejects_path_traversal",
-      "hetzner_provision_test_branchleft_deploy_stacknametests_test_rejects_shell_and_systemd_metacharacters",
-      "hetzner_provision_test_branchleft_deploy_writeimageenvtests",
-      "hetzner_provision_test_branchleft_deploy_writeimageenvtests_test_leaves_no_temporary_files_behind",
-      "hetzner_provision_test_branchleft_deploy_writeimageenvtests_test_replaces_rather_than_appends",
-      "hetzner_provision_test_branchleft_deploy_writeimageenvtests_test_writes_single_key_with_owner_only_permissions"
     ],
     "8": [
       "mail_provision_rotate_admin_credential",
@@ -1041,6 +1053,24 @@
       "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_rate_limit_priority"
     ],
     "29": [
+      "scripts_test_audit_pulumi_secrets",
+      "scripts_test_audit_pulumi_secrets_backendurltests",
+      "scripts_test_audit_pulumi_secrets_backendurltests_test_absent_when_not_pinned",
+      "scripts_test_audit_pulumi_secrets_backendurltests_test_reads_pinned_backend",
+      "scripts_test_audit_pulumi_secrets_backendurltests_test_stops_at_the_end_of_the_block",
+      "scripts_test_audit_pulumi_secrets_inventorytests",
+      "scripts_test_audit_pulumi_secrets_inventorytests_test_rejects_an_empty_inventory",
+      "scripts_test_audit_pulumi_secrets_inventorytests_test_rejects_an_unreadable_inventory",
+      "scripts_test_audit_pulumi_secrets_inventorytests_test_shipped_inventory_enumerates_every_backend_reference_in_this_repo",
+      "scripts_test_audit_pulumi_secrets_inventorytests_test_shipped_inventory_is_loadable_and_complete",
+      "scripts_test_audit_pulumi_secrets_load_module",
+      "scripts_test_audit_pulumi_secrets_rationale_22",
+      "scripts_test_audit_pulumi_secrets_rationale_860",
+      "scripts_test_audit_pulumi_secrets_shippedinventorylivestatetests",
+      "scripts_test_audit_pulumi_secrets_shippedinventorylivestatetests_test_a_regression_to_kms_would_still_be_caught",
+      "scripts_test_audit_pulumi_secrets_shippedinventorylivestatetests_test_require_migrated_reports_the_sweep_complete"
+    ],
+    "30": [
       "hetzner_scripts_test_probe_object_storage_faketransport_markers",
       "hetzner_scripts_test_probe_object_storage_rationale_546",
       "hetzner_scripts_test_probe_object_storage_rationale_594",
@@ -1057,7 +1087,7 @@
       "hetzner_scripts_test_probe_object_storage_teardowntests_test_restores_versioning_that_was_already_enabled",
       "hetzner_scripts_test_probe_object_storage_teardowntests_test_unparseable_version_listing_is_reported"
     ],
-    "30": [
+    "31": [
       "logger",
       "mail_provision_check_dnsbl_blocklist_configure_logging",
       "mail_provision_check_dnsbl_blocklist_rationale_467",
@@ -1074,7 +1104,7 @@
       "mail_provision_test_check_dnsbl_blocklist_syslogsocketreachabletests_test_a_live_bound_socket_is_reachable",
       "mail_provision_test_check_dnsbl_blocklist_syslogsocketreachabletests_test_a_path_with_nothing_listening_is_unreachable"
     ],
-    "31": [
+    "32": [
       "mail_package",
       "mail_package_comment",
       "mail_package_dependencies",
@@ -1091,7 +1121,7 @@
       "mail_package_scripts",
       "mail_package_scripts_typecheck"
     ],
-    "32": [
+    "33": [
       "mail_provision_list_and_clear_blocked_ips",
       "mail_provision_list_and_clear_blocked_ips_jmap_call",
       "mail_provision_list_and_clear_blocked_ips_main",
@@ -1108,7 +1138,7 @@
       "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_neither_all_nor_ip_is_refused",
       "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_single_ip_selects_only_its_id"
     ],
-    "33": [
+    "34": [
       "hetzner_scripts_test_probe_object_storage_rationale_188",
       "hetzner_scripts_test_probe_object_storage_rationale_324",
       "hetzner_scripts_test_probe_object_storage_sigv4headertests",
@@ -1124,7 +1154,22 @@
       "hetzner_scripts_test_probe_object_storage_sigv4headertests_test_empty_payload_uses_the_empty_sha256",
       "hetzner_scripts_test_probe_object_storage_sigv4headertests_test_extra_header_value_is_normalised_the_same_way_on_the_wire"
     ],
-    "34": [
+    "35": [
+      "hetzner_provision_test_00_harden_ssh",
+      "hetzner_provision_test_00_harden_ssh_effective_config",
+      "hetzner_provision_test_00_harden_ssh_hardensshtests",
+      "hetzner_provision_test_00_harden_ssh_hardensshtests_run_script",
+      "hetzner_provision_test_00_harden_ssh_hardensshtests_setup",
+      "hetzner_provision_test_00_harden_ssh_hardensshtests_test_effective_prohibit_password_passes",
+      "hetzner_provision_test_00_harden_ssh_hardensshtests_test_effective_without_password_passes",
+      "hetzner_provision_test_00_harden_ssh_hardensshtests_test_genuinely_different_value_fails_and_reports_competing_dropin",
+      "hetzner_provision_test_00_harden_ssh_hardensshtests_test_non_aliased_keyword_mismatch_still_fails",
+      "hetzner_provision_test_00_harden_ssh_hardensshtests_test_our_dropin_cannot_be_written_aborts_before_verifying_anything",
+      "hetzner_provision_test_00_harden_ssh_hardensshtests_test_sshd_config_error_aborts_before_reload",
+      "hetzner_provision_test_00_harden_ssh_hardensshtests_write_fake",
+      "hetzner_provision_test_00_harden_ssh_rationale_45"
+    ],
+    "36": [
       "hetzner_scripts_test_probe_object_storage_bucket",
       "hetzner_scripts_test_probe_object_storage_preflighttests",
       "hetzner_scripts_test_probe_object_storage_preflighttests_test_a_403_naming_the_absent_subresource_is_treated_as_absent",
@@ -1139,7 +1184,7 @@
       "hetzner_scripts_test_probe_object_storage_rationale_479",
       "hetzner_scripts_test_probe_object_storage_rationale_511"
     ],
-    "35": [
+    "37": [
       "scripts_test_audit_pulumi_secrets_exitcodetests",
       "scripts_test_audit_pulumi_secrets_exitcodetests_test_a_completed_sweep_exits_zero",
       "scripts_test_audit_pulumi_secrets_exitcodetests_test_drift_always_fails",
@@ -1154,7 +1199,7 @@
       "scripts_test_audit_pulumi_secrets_exitcodetests_test_unresolved_fails_the_wind_down_precondition",
       "scripts_test_audit_pulumi_secrets_finding"
     ],
-    "36": [
+    "38": [
       "docref_rfc_8737",
       "mail_firewall",
       "mail_firewall_mailfirewall",
@@ -1168,21 +1213,7 @@
       "mail_server_mx1ipv4address",
       "mail_server_mx1ipv6address"
     ],
-    "37": [
-      "hetzner_provision_branchleft_deploy",
-      "hetzner_provision_branchleft_deploy_compose_file_path",
-      "hetzner_provision_branchleft_deploy_deploy",
-      "hetzner_provision_branchleft_deploy_deployerror",
-      "hetzner_provision_branchleft_deploy_image_env_path",
-      "hetzner_provision_branchleft_deploy_main",
-      "hetzner_provision_branchleft_deploy_rationale_101",
-      "hetzner_provision_branchleft_deploy_rationale_59",
-      "hetzner_provision_branchleft_deploy_read_current_image",
-      "hetzner_provision_branchleft_deploy_validate_image_ref",
-      "hetzner_provision_branchleft_deploy_validate_stack_name",
-      "hetzner_provision_branchleft_deploy_write_image_env"
-    ],
-    "38": [
+    "39": [
       "mail_provision_check_dnsbl_blocklist_build_query_name",
       "mail_provision_check_dnsbl_blocklist_dnsblspec",
       "mail_provision_check_dnsbl_blocklist_rationale_168",
@@ -1196,7 +1227,7 @@
       "mail_provision_test_check_dnsbl_blocklist_runcheckstests_test_clean_run_across_the_real_configured_dnsbl_set_produces_no_alerts",
       "mail_provision_test_check_dnsbl_blocklist_runcheckstests_test_queries_sentinel_and_target_per_zone_and_routes_results_correctly"
     ],
-    "39": [
+    "40": [
       "mail_provision_check_dnsbl_blocklist_build_alert",
       "mail_provision_check_dnsbl_blocklist_checkresult",
       "mail_provision_check_dnsbl_blocklist_rationale_221",
@@ -1208,19 +1239,6 @@
       "mail_provision_test_check_dnsbl_blocklist_buildalerttests_test_lookup_failed_always_alerts",
       "mail_provision_test_check_dnsbl_blocklist_buildalerttests_test_repeat_listing_is_marked_still_listed_not_new",
       "mail_provision_test_check_dnsbl_blocklist_buildalerttests_test_state_persists_every_verdict_seen_this_run"
-    ],
-    "40": [
-      "scripts_test_audit_pulumi_secrets",
-      "scripts_test_audit_pulumi_secrets_backendurltests",
-      "scripts_test_audit_pulumi_secrets_backendurltests_test_absent_when_not_pinned",
-      "scripts_test_audit_pulumi_secrets_backendurltests_test_reads_pinned_backend",
-      "scripts_test_audit_pulumi_secrets_backendurltests_test_stops_at_the_end_of_the_block",
-      "scripts_test_audit_pulumi_secrets_load_module",
-      "scripts_test_audit_pulumi_secrets_rationale_22",
-      "scripts_test_audit_pulumi_secrets_rationale_860",
-      "scripts_test_audit_pulumi_secrets_shippedinventorylivestatetests",
-      "scripts_test_audit_pulumi_secrets_shippedinventorylivestatetests_test_a_regression_to_kms_would_still_be_caught",
-      "scripts_test_audit_pulumi_secrets_shippedinventorylivestatetests_test_require_migrated_reports_the_sweep_complete"
     ],
     "41": [
       "scripts_test_audit_pulumi_secrets_classifytests",
@@ -1321,17 +1339,6 @@
       "scripts_test_assert_cloud_armor_baseline_parity_rationale_395"
     ],
     "49": [
-      "branchleft_ghost_platform",
-      "branchleft_ghost_tenant_blog",
-      "branchleft_shared_infra",
-      "branchleft_website",
-      "gcp_kms_pulumi_secrets",
-      "ghost_platform_infra_provisioning_scripts_restore_stack_secrets_config_py",
-      "ghost_platform_provision_tenant_yml",
-      "hetzner_runbook_existing_stack_migration_part_a",
-      "pulumi_passphrase_provider"
-    ],
-    "50": [
       "hetzner_index",
       "hetzner_index_networkid",
       "hetzner_index_networkiprange",
@@ -1342,7 +1349,7 @@
       "hetzner_network_network",
       "hetzner_network_subnet"
     ],
-    "51": [
+    "50": [
       "hetzner_scripts_test_probe_object_storage_protectedbuckettests",
       "hetzner_scripts_test_probe_object_storage_protectedbuckettests_run",
       "hetzner_scripts_test_probe_object_storage_protectedbuckettests_test_refuses_a_tenant_state_bucket_that_does_not_exist_yet",
@@ -1353,7 +1360,7 @@
       "hetzner_scripts_test_probe_object_storage_rationale_405",
       "hetzner_scripts_test_probe_object_storage_rationale_410"
     ],
-    "52": [
+    "51": [
       "mail_provision_check_dnsbl_blocklist",
       "mail_provision_check_dnsbl_blocklist_load_state",
       "mail_provision_check_dnsbl_blocklist_main",
@@ -1364,7 +1371,7 @@
       "mail_provision_check_dnsbl_blocklist_read_name",
       "mail_provision_check_dnsbl_blocklist_save_state"
     ],
-    "53": [
+    "52": [
       "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests",
       "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_content_sensitive_rule_carries_carve_out",
       "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_default_allow_rule",
@@ -1375,7 +1382,7 @@
       "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_six_rules_with_zero_preview_only_hosts",
       "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_throttle_rule_carries_full_rate_limit_parameters"
     ],
-    "54": [
+    "53": [
       "scripts_test_audit_pulumi_secrets_maintests",
       "scripts_test_audit_pulumi_secrets_maintests_run",
       "scripts_test_audit_pulumi_secrets_maintests_test_a_completed_sweep_exits_zero_through_main",
@@ -1386,7 +1393,7 @@
       "scripts_test_audit_pulumi_secrets_maintests_test_without_root_the_unreachable_repos_are_named_not_silently_passed",
       "scripts_test_audit_pulumi_secrets_rationale_603"
     ],
-    "55": [
+    "54": [
       "scripts_test_audit_pulumi_secrets_toplevelscalartests",
       "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_block_openers_are_not_values",
       "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_bom_does_not_hide_the_first_key",
@@ -1397,7 +1404,7 @@
       "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_strips_quotes",
       "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_strips_quotes_from_the_key_too"
     ],
-    "56": [
+    "55": [
       "hetzner_scripts_test_probe_object_storage_publicreadpolicytests",
       "hetzner_scripts_test_probe_object_storage_publicreadpolicytests_test_grants_getobject_on_the_probe_prefix_only",
       "hetzner_scripts_test_probe_object_storage_publicreadpolicytests_test_is_valid_json_with_the_expected_shape",
@@ -1407,7 +1414,7 @@
       "hetzner_scripts_test_probe_object_storage_rationale_366",
       "hetzner_scripts_test_probe_object_storage_rationale_371"
     ],
-    "57": [
+    "56": [
       "mail_provision_provision_mailboxes_plan_sieve_action",
       "mail_provision_provision_mailboxes_rationale_101",
       "mail_provision_test_provision_mailboxes_plansieveactiontests",
@@ -1417,7 +1424,7 @@
       "mail_provision_test_provision_mailboxes_plansieveactiontests_test_matching_content_but_inactive_is_an_activate",
       "mail_provision_test_provision_mailboxes_plansieveactiontests_test_no_existing_script_is_a_create"
     ],
-    "58": [
+    "57": [
       "scripts_test_assert_cloud_armor_baseline_parity_rationale_842",
       "scripts_test_assert_cloud_armor_baseline_parity_rationale_883",
       "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests",
@@ -1426,6 +1433,15 @@
       "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_test_the_committed_accepted_failures_file_is_valid",
       "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_test_the_real_baseline_is_structurally_readable",
       "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_test_the_real_edge_ts_still_yields_every_rule_the_script_expects"
+    ],
+    "58": [
+      "branchleft_ghost_platform",
+      "branchleft_ghost_tenant_blog",
+      "branchleft_shared_infra",
+      "branchleft_website",
+      "gcp_kms_pulumi_secrets",
+      "hetzner_runbook_existing_stack_migration_part_a",
+      "pulumi_passphrase_provider"
     ],
     "59": [
       "hetzner_host_tsconfig",
@@ -1584,47 +1600,45 @@
       "mail_provision_test_provision_mailboxes_rationale_392"
     ],
     "78": [
-      "scripts_test_audit_pulumi_secrets_inventorytests",
-      "scripts_test_audit_pulumi_secrets_inventorytests_test_rejects_an_empty_inventory",
-      "scripts_test_audit_pulumi_secrets_inventorytests_test_rejects_an_unreadable_inventory",
-      "scripts_test_audit_pulumi_secrets_inventorytests_test_shipped_inventory_enumerates_every_backend_reference_in_this_repo",
-      "scripts_test_audit_pulumi_secrets_inventorytests_test_shipped_inventory_is_loadable_and_complete"
-    ],
-    "79": [
       "claude_md",
       "cloud_armor_baseline_md",
       "readme_md",
       "runbook_edge_state_move_md"
     ],
-    "80": [
+    "79": [
       "gs_pulumi_state",
       "hetzner_object_storage",
       "hetzner_pulumi",
       "hetzner_runbook_existing_stack_migration_part_b"
     ],
-    "81": [
+    "80": [
       "hetzner_hetznerhost_test",
       "hetzner_hetznerhost_test_call",
       "hetzner_hetznerhost_test_created",
       "hetzner_hetznerhost_test_newresource"
     ],
-    "82": [
+    "81": [
       "hetzner_scripts_test_probe_object_storage_endtoendtests",
       "hetzner_scripts_test_probe_object_storage_endtoendtests_happy_transport",
       "hetzner_scripts_test_probe_object_storage_endtoendtests_test_a_flawless_run_exits_zero_and_reports_no_teardown_failure",
       "hetzner_scripts_test_probe_object_storage_rationale_685"
     ],
-    "83": [
+    "82": [
       "hetzner_scripts_test_probe_object_storage_rationale_672",
       "hetzner_scripts_test_probe_object_storage_versioningreadtests",
       "hetzner_scripts_test_probe_object_storage_versioningreadtests_test_a_failed_read_is_unknown_not_never_versioned",
       "hetzner_scripts_test_probe_object_storage_versioningreadtests_test_a_successful_read_of_an_unversioned_bucket_is_none"
     ],
-    "84": [
+    "83": [
       "hetzner_scripts_test_probe_object_storage_responsetests",
       "hetzner_scripts_test_probe_object_storage_responsetests_test_describe_includes_the_code_when_there_is_one",
       "hetzner_scripts_test_probe_object_storage_responsetests_test_error_code_is_extracted",
       "hetzner_scripts_test_probe_object_storage_responsetests_test_error_code_of_a_non_xml_body_is_none"
+    ],
+    "84": [
+      "hetzner_provision_00_harden_ssh",
+      "hetzner_provision_00_harden_ssh_normalize_permitrootlogin",
+      "hetzner_provision_00_harden_ssh_sh__entry"
     ],
     "85": [
       "hetzner_provision_10_harden_updates_fail2ban",
@@ -1665,12 +1679,12 @@
       "github_workflows_standards_workflow"
     ],
     "93": [
-      "hetzner_cloud",
-      "mail_pulumi_yaml"
+      "concept_host_hardening",
+      "hetzner_runbook_provision_host"
     ],
     "94": [
-      "hetzner_provision_00_harden_ssh",
-      "hetzner_provision_00_harden_ssh_sh__entry"
+      "hetzner_cloud",
+      "mail_pulumi_yaml"
     ],
     "95": [
       "hetzner_provision_30_install_deploy_tooling",
@@ -1730,40 +1744,40 @@
       "branchleft_github_workflows_graphify_yml"
     ],
     "110": [
-      "github_workflows_ci_yml"
+      "etc_systemd_system_branchleft_compose_at_service"
     ],
     "111": [
-      "github_workflows_graphify_workflow"
+      "github_workflows_ci_yml"
     ],
     "112": [
-      "github_workflows_publish_hetzner_host_yml"
+      "github_workflows_graphify_workflow"
     ],
     "113": [
-      "hetzner_edge_stack_compose"
+      "github_workflows_publish_hetzner_host_yml"
     ],
     "114": [
-      "hetzner_edge_stack_crowdsec_acquis_d_appsec"
+      "hetzner_edge_stack_compose"
     ],
     "115": [
-      "hetzner_edge_stack_crowdsec_acquis_d_caddy"
+      "hetzner_edge_stack_crowdsec_acquis_d_appsec"
     ],
     "116": [
-      "hetzner_estate_pulumi_yaml"
+      "hetzner_edge_stack_crowdsec_acquis_d_caddy"
     ],
     "117": [
-      "hetzner_host_readme_md"
+      "hetzner_estate_pulumi_yaml"
     ],
     "118": [
-      "hetzner_host_vitest_config"
+      "hetzner_host_readme_md"
     ],
     "119": [
-      "hetzner_readme"
+      "hetzner_host_vitest_config"
     ],
     "120": [
-      "hetzner_runbook_edge"
+      "hetzner_readme"
     ],
     "121": [
-      "hetzner_runbook_provision_host"
+      "hetzner_runbook_edge"
     ],
     "122": [
       "hetzner_vitest_config"
@@ -1826,6 +1840,9 @@
       "unbound_local_resolver"
     ],
     "142": [
+      "usr_local_sbin_branchleft_deploy"
+    ],
+    "143": [
       "valueerror"
     ]
   },
@@ -1834,10 +1851,10 @@
     "1": 0.0594679186228482,
     "2": 0.056261343012704176,
     "3": 0.07441016333938294,
-    "4": 0.08853410740203194,
-    "5": 0.06901960784313725,
-    "6": 0.15816326530612246,
-    "7": 0.06976744186046512,
+    "4": 0.05723905723905724,
+    "5": 0.08853410740203194,
+    "6": 0.06901960784313725,
+    "7": 0.15816326530612246,
     "8": 0.12195121951219512,
     "9": 0.08502024291497975,
     "10": 0.10158730158730159,
@@ -1859,18 +1876,18 @@
     "26": 0.11764705882352941,
     "27": 0.175,
     "28": 0.125,
-    "29": 0.14285714285714285,
-    "30": 0.1619047619047619,
-    "31": 0.13333333333333333,
-    "32": 0.21904761904761905,
-    "33": 0.2857142857142857,
-    "34": 0.24358974358974358,
-    "35": 0.28205128205128205,
-    "36": 0.25757575757575757,
-    "37": 0.3181818181818182,
-    "38": 0.2727272727272727,
-    "39": 0.43636363636363634,
-    "40": 0.18181818181818182,
+    "29": 0.125,
+    "30": 0.14285714285714285,
+    "31": 0.1619047619047619,
+    "32": 0.13333333333333333,
+    "33": 0.21904761904761905,
+    "34": 0.2857142857142857,
+    "35": 0.32051282051282054,
+    "36": 0.24358974358974358,
+    "37": 0.28205128205128205,
+    "38": 0.25757575757575757,
+    "39": 0.2727272727272727,
+    "40": 0.43636363636363634,
     "41": 0.18181818181818182,
     "42": 0.18181818181818182,
     "43": 0.2,
@@ -1879,16 +1896,16 @@
     "46": 0.2,
     "47": 0.35555555555555557,
     "48": 0.2222222222222222,
-    "49": 0.2222222222222222,
-    "50": 0.2777777777777778,
+    "49": 0.2777777777777778,
+    "50": 0.3333333333333333,
     "51": 0.3333333333333333,
-    "52": 0.3333333333333333,
-    "53": 0.2222222222222222,
-    "54": 0.3888888888888889,
-    "55": 0.2222222222222222,
-    "56": 0.25,
-    "57": 0.39285714285714285,
-    "58": 0.25,
+    "52": 0.2222222222222222,
+    "53": 0.3888888888888889,
+    "54": 0.2222222222222222,
+    "55": 0.25,
+    "56": 0.39285714285714285,
+    "57": 0.25,
+    "58": 0.2857142857142857,
     "59": 0.2857142857142857,
     "60": 0.2857142857142857,
     "61": 0.42857142857142855,
@@ -1908,13 +1925,13 @@
     "75": 0.4,
     "76": 0.4,
     "77": 0.4,
-    "78": 0.4,
+    "78": 0.5,
     "79": 0.5,
     "80": 0.5,
-    "81": 0.5,
-    "82": 0.6666666666666666,
+    "81": 0.6666666666666666,
+    "82": 0.5,
     "83": 0.5,
-    "84": 0.5,
+    "84": 0.6666666666666666,
     "85": 0.6666666666666666,
     "86": 0.6666666666666666,
     "87": 0.6666666666666666,
@@ -1972,7 +1989,8 @@
     "139": 1.0,
     "140": 1.0,
     "141": 1.0,
-    "142": 1.0
+    "142": 1.0,
+    "143": 1.0
   },
   "gods": [
     {
@@ -2084,7 +2102,7 @@
     }
   ],
   "tokens": {
-    "input": 13279,
-    "output": 1954
+    "input": 2486,
+    "output": 1618
   }
 }
