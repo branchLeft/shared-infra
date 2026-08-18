@@ -50,9 +50,11 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> '
 ```
 
 Expect three `active` lines, no output from the two `test`/`cat` checks, and
-`passwordauthentication no` with `permitrootlogin prohibit-password`. Anything
-else means the run did not complete, and the host should be treated as
-unhardened until it does.
+`passwordauthentication no` with `permitrootlogin` reading either
+`prohibit-password` or `without-password` -- OpenSSH treats them as the same
+setting, and `sshd -T` on some distributions normalises to the deprecated
+spelling. Any other value means the run did not complete, and the host
+should be treated as unhardened until it does.
 
 `00-harden-ssh.sh` already asserts the same values from `sshd -T` and exits
 non-zero if any drop-in outranks its own, so a clean `run-all.sh` has proved
