@@ -11,7 +11,10 @@ set -euo pipefail
 # sibling, including the `50-cloud-init.conf` cloud-init writes whenever
 # `ssh_pwauth` is set, which would restore password authentication while a
 # byte-comparison check on this file kept reporting it up to date.
-DROPIN=/etc/ssh/sshd_config.d/01-branchleft-hardening.conf
+#
+# Overridable so tests can point this at a throwaway path; production always
+# gets the default since nothing sets DROPIN in the environment.
+DROPIN="${DROPIN:-/etc/ssh/sshd_config.d/01-branchleft-hardening.conf}"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
@@ -49,12 +52,34 @@ systemctl reload ssh
 # evaluates to across every drop-in, so a sibling that outranks this one is
 # caught here rather than by an operator wondering why password logins still
 # work.
+#
+# `permitrootlogin` is compared through this normaliser rather than by
+# string equality: `prohibit-password` and `without-password` are the same
+# setting to sshd, and `sshd -T` echoes back whichever spelling it parsed --
+# on Debian 13 that is the deprecated `without-password`, even when our own
+# drop-in (and this script's here-doc) writes `prohibit-password`. A literal
+# compare treats that as a competing drop-in when nothing is actually
+# competing.
+normalize_permitrootlogin() {
+    case "$1" in
+        prohibit-password|without-password) printf 'prohibit-password' ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 effective="$(sshd -T)"
 failed=0
 while read -r keyword expected; do
     [[ -z "$keyword" ]] && continue
     actual="$(printf '%s\n' "$effective" | awk -v k="$keyword" '$1 == k {print $2; exit}')"
-    if [[ "$actual" != "$expected" ]]; then
+    if [[ "$keyword" == "permitrootlogin" ]]; then
+        actual_cmp="$(normalize_permitrootlogin "$actual")"
+        expected_cmp="$(normalize_permitrootlogin "$expected")"
+    else
+        actual_cmp="$actual"
+        expected_cmp="$expected"
+    fi
+    if [[ "$actual_cmp" != "$expected_cmp" ]]; then
         echo "00-harden-ssh: effective $keyword is '${actual:-unset}', expected '$expected'" >&2
         failed=1
     fi
