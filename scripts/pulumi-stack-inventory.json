@@ -102,7 +102,7 @@
       "state_backend": "shared",
       "expected_secrets_provider": "passphrase",
       "terminal_state": "migrate",
-      "note": "Config is reconstructed on each CI run from the exported deployment and never committed. Re-wrapped onto the passphrase provider; branchLeft/workspace#128 tracked the work that got the reconstruction script to accept a passphrase-managed stack.",
+      "note": "Config is reconstructed on each CI run from the exported deployment and never committed. Re-wrapped onto the passphrase provider; branchLeft/workspace#128 tracked the work that got the reconstruction script to accept a passphrase-managed stack. config_path stays null, so unlike every other attested entry here this one has no file for the attestation to ever disagree with -- a rollback to gcpkms would not turn this finding red on its own; re-verify by hand before relying on it.",
       "attestation": {
         "state": "migrated",
         "date": "2026-08-18",
