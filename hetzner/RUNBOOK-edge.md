@@ -197,21 +197,36 @@ before the checks below.
 
 ## 7. Verify the stack is up
 
+An interactive shell has none of the env files `branchleft-compose@edge`
+supplies at start, so a bare `docker compose` command here re-parses
+`compose.yml` and refuses on the missing `ACME_EMAIL` and
+`CROWDSEC_BOUNCER_KEY` before it does anything. The checks below go straight
+at the running containers with `docker ps`/`docker exec` instead, found by
+Compose's own labels rather than by name — `compose.yml` pins no
+`container_name`, so the container Compose v2 would create by default,
+`edge-crowdsec-1`, is not a contract. Reading a container's labels needs
+neither secret.
+
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
-  cd /opt/branchleft/edge && docker compose ps &&
-  docker compose exec -T crowdsec cscli appsec-configs list &&
-  docker compose exec -T crowdsec cscli bouncers list'
+  docker ps --filter label=com.docker.compose.project=edge &&
+  CROWDSEC_CTR=$(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=crowdsec) &&
+  docker exec "$CROWDSEC_CTR" cscli appsec-configs list &&
+  docker exec "$CROWDSEC_CTR" cscli bouncers list'
 ```
 
-Expect both containers `running`, `crowdsecurity/appsec-default` and
-`crowdsecurity/crs` both listed as installed, and one bouncer named `caddy`
-with a recent "last pull".
+Expect two containers listed, both `Up`, and one bouncer named `caddy` with a
+recent "last pull".
 
-Both AppSec configurations are installed in every posture on purpose. Which of
-them is _loaded_ is decided by `crowdsec/acquis.d/appsec.yaml`, so turning
-enforcement on later does not depend on the CrowdSec hub being reachable at
-that moment.
+`appsec-configs list` shows more than the two configurations `compose.yml`
+enables: the hub installs their dependencies too, on first start. On `edge1`,
+2026-08-19, the four enabled were `crowdsecurity/appsec-default`,
+`crowdsecurity/crs`, `crowdsecurity/generic-rules` and
+`crowdsecurity/virtual-patching` — the last two pulled in by the first two,
+not set anywhere in this repo. Seeing four names rather than two is not a
+fault to chase. Which of them is _loaded_ is decided by
+`crowdsec/acquis.d/appsec.yaml`, so turning enforcement on later does not
+depend on the CrowdSec hub being reachable at that moment.
 
 ## 8. Verify detect-only
 
@@ -248,9 +263,9 @@ and was answered normally — which is the whole of what detect-only means.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
-  cd /opt/branchleft/edge &&
-  docker compose exec -T crowdsec cscli alerts list --limit 20 &&
-  docker compose exec -T crowdsec cscli decisions list'
+  CROWDSEC_CTR=$(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=crowdsec) &&
+  docker exec "$CROWDSEC_CTR" cscli alerts list --limit 20 &&
+  docker exec "$CROWDSEC_CTR" cscli decisions list'
 ```
 
 Expect at least one alert naming an AppSec scenario. Decisions may be empty or
@@ -267,9 +282,9 @@ What the review is looking for, on the host:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
-  cd /opt/branchleft/edge &&
-  docker compose exec -T crowdsec cscli alerts list --limit 100 &&
-  docker compose exec -T crowdsec cscli metrics'
+  CROWDSEC_CTR=$(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=crowdsec) &&
+  docker exec "$CROWDSEC_CTR" cscli alerts list --limit 100 &&
+  docker exec "$CROWDSEC_CTR" cscli metrics'
 ```
 
 - Alerts against addresses that are plainly hostile: expected, and the argument
@@ -340,9 +355,9 @@ container traffic stays banned for the decision's lifetime:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
-  cd /opt/branchleft/edge &&
-  docker compose exec -T crowdsec cscli decisions list &&
-  docker compose exec -T crowdsec cscli decisions delete --ip 172.17.0.1'
+  CROWDSEC_CTR=$(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=crowdsec) &&
+  docker exec "$CROWDSEC_CTR" cscli decisions list &&
+  docker exec "$CROWDSEC_CTR" cscli decisions delete --ip 172.17.0.1'
 ```
 
 Read the listed decisions first and delete the address the list actually shows —
