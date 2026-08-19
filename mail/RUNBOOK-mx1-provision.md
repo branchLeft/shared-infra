@@ -218,13 +218,16 @@ If the import has not run at all, 443 lands in the same `pulumi up` that opens
 
 `50-provision-mailboxes.sh` runs `provision_mailboxes.py`, which creates real
 mailbox accounts — `rob@`, `contact@`, `info@`, `sales@`, `complaints@`,
-`abuse@` and `blog@` at `branchleft.co.uk` (`MAILBOXES`) — each with its own
-storage, not an alias, and gives each role address (not `rob@`;
+`abuse@`, `blog@` and `acme@` at `branchleft.co.uk` (`MAILBOXES`) — each with
+its own storage, not an alias, and gives each role address (not `rob@`;
 `ROLE_ADDRESSES`) a per-mailbox Sieve script that copies inbound mail to
 `rob@` without suppressing the original delivery. `blog@` gets a mailbox and
 the same copy-forward as the other role addresses; the credential the blog
 uses to _send_ mail is a separate app password, see "Blog submission
-credential" below.
+credential" below. `acme@` is the mailbox the Hetzner edge's `ACME_EMAIL`
+points at (`hetzner/RUNBOOK-edge.md`) — where Let's Encrypt sends
+certificate-expiry warnings, so it needs the same real storage and copy-
+forward as any other role address, not just an alias.
 
 Any standard IMAP client reads these mailboxes: `<mail-host>` port 993
 (SSL/TLS) for IMAP, port 587 (STARTTLS) for submission, username the full
