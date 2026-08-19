@@ -11,6 +11,11 @@ Nothing automates this today. It is a deliberate ordering rather than an
 omission — the deploy account this installs does not exist until it has run,
 so the first run cannot come from the deploy path it bootstraps.
 
+**A host with no public address needs the estate's egress path to exist first,
+and to have existed before the host was created.** "The estate's egress path"
+below is the whole of that, and it is a precondition for this runbook rather
+than a step inside it.
+
 ## What each script does
 
 | Script                          | Effect                                                                                                                  |
@@ -19,14 +24,129 @@ so the first run cannot come from the deploy path it bootstraps.
 | `10-harden-updates-fail2ban.sh` | Installs and enables `unattended-upgrades` and `fail2ban`, with an SSH jail this repo owns                              |
 | `20-install-docker.sh`          | Installs Docker CE from Docker's apt repo, and reconciles the signing key and apt source on every run                   |
 | `30-install-deploy-tooling.sh`  | Installs `branchleft-compose@.service` and `/usr/local/sbin/branchleft-deploy`, and verifies the sudoers drop-in parses |
+| `nat-gateway.sh`                | **Gateway host only.** Installs the NAT reconciler and the unit that reasserts it at boot, then runs it once            |
 
-`run-all.sh` runs all four in order. Every one of them is idempotent: re-running
-the set is a no-op on a host that is already correct, which is what makes this
-the right response to "I am not sure whether that host is current".
+`run-all.sh` runs the first four in order. Every one of them is idempotent:
+re-running the set is a no-op on a host that is already correct, which is what
+makes this the right response to "I am not sure whether that host is current".
+
+`nat-gateway.sh` is deliberately outside `run-all.sh`. Exactly one host in the
+estate is the gateway, and the script refuses to run anywhere the estate's
+egress could not work from.
+
+## The estate's egress path
+
+A host created with `publicNetworking: false` has no public interface, so its
+only route off the subnet is the private network's own gateway. Nothing is
+routed there until the network stack declares a default route, and nothing
+forwards at the far end until one host has been provisioned as the gateway.
+Both halves are `branchLeft/shared-infra`'s: the route is in
+`hetzner/network.ts`, the forwarding is `provision/nat-gateway.sh`.
+
+**Both have to be live before the private-only host is created**, not merely
+before this runbook is run against it. Cloud-init installs `ca-certificates`,
+`curl` and `gnupg` at first boot, and `20-install-docker.sh` calls `curl` — a
+host that booted without egress is missing all three, and re-running these
+scripts is not on its own enough to repair that.
+
+The gateway is `edge1`, at `10.20.1.10`, which is the address the route names.
+It is the only host in the estate that already terminates public traffic, so
+it is the only one whose forwarding adds no exposure that did not exist.
+
+### 1. Apply the route
+
+`hetzner/` has no CI apply path, so this is run by hand, by the platform
+owner, from a checkout of `main` that already contains the route:
+
+```bash
+cd ~/branchLeft/shared-infra/hetzner
+pulumi stack select production
+pulumi stack export --file /tmp/hetzner-network.json
+SALT=$(python3 -c "import json; print(json.load(open('/tmp/hetzner-network.json'))['deployment']['secrets_providers']['state']['salt'])")
+rm /tmp/hetzner-network.json
+printf '\nencryptionsalt: %s\n' "$SALT" >> Pulumi.production.yaml
+pulumi config set --secret hcloud:token
+pulumi preview --diff
+pulumi up
+git checkout -- Pulumi.production.yaml
+```
+
+Expect exactly one create, `platform-internet-egress`, and no change to the
+network or the subnet. Anything proposing to replace either is a stop — both
+are `protect: true`, and a route is additive to both.
+
+The last line is not optional. `Pulumi.production.yaml` carries nothing this
+repository may commit, and the two lines the recipe appends are a stack
+passphrase verifier and a token ciphertext.
+
+### 2. Make the gateway forward
+
+```bash
+scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision root@<edge1-ipv4>:/root/platform-provision
+ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/nat-gateway.sh'
+```
+
+Idempotent, and the right response to "is that host still the gateway". Re-run
+it after a Docker reinstall: the rules live in netfilter, and the chain they
+are inserted into is one Docker owns.
+
+### 3. Confirm the gateway is forwarding
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> '
+  sysctl -n net.ipv4.ip_forward &&
+  iptables -t nat -S POSTROUTING | grep -- "-s 10.20.1.0/24" &&
+  systemctl is-enabled branchleft-nat.service
+'
+```
+
+Expect `1`, one `MASQUERADE` line naming the subnet and the public interface,
+and `enabled`. A missing `enabled` is the failure that only shows up at the
+next reboot, when the estate silently loses its egress.
+
+### 4. Provision a host that has no public address
+
+Reached through the gateway, over the private network — no firewall rule
+filters private traffic, so nothing had to be opened for this.
+
+```bash
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@<edge1-ipv4>"
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<host-private-ip> '
+  getent hosts deb.debian.org &&
+  curl -fsS -o /dev/null https://download.docker.com/linux/debian/gpg &&
+  echo "egress ok"
+'
+```
+
+`ProxyCommand` rather than `-J`: the identity given with `-i` applies to the
+target connection only, and the jump host needs the same key. Both hosts carry
+the platform owner's key on `root`, so one `-i` in each half of the command is
+all it takes.
+
+Run that check **before** the provisioning set, not after. `egress ok` is the
+proof that step 1 and step 2 both took; without it every failure downstream
+presents as a broken package mirror.
+
+Then the same two commands as "Run the whole set" below, with the jump added:
+
+```bash
+scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision root@<host-private-ip>:/root/platform-provision
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<host-private-ip> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
+```
+
+### What this does not solve
+
+The gateway is a single point of failure for every private host's outbound
+traffic, including the security updates `unattended-upgrades` fetches for the
+life of the host. An `edge1` that is down or wedged is an estate whose private
+hosts stop being patched, and nothing reports that today — the failure is
+silent until someone looks. Monitoring it belongs with the monitoring host.
 
 ## Run the whole set
 
-Substituting the host's own name and public address:
+Substituting the host's own name and public address. A host with no public
+address is provisioned through the gateway instead — step 4 above carries the
+same two commands with the jump added:
 
 ```bash
 scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision root@<host-ipv4>:/root/platform-provision

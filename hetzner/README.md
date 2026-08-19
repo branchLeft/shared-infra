@@ -18,7 +18,8 @@ is.
 | `RUNBOOK-provision-host.md`         | Delivering and running `provision/` against a newly created host                               |
 | `scripts/probe-object-storage.py`   | Writes to a **scratch** bucket to settle Hetzner Object Storage's actual semantics             |
 | `scripts/check-hetzner-projects.py` | Structural checks over the Pulumi projects here — see "Two Pulumi projects" below              |
-| `network.ts`                        | The private network — the only resource this stack creates                                     |
+| `network.ts`                        | The private network, its subnet, and the estate's default route out to the internet            |
+| `egress.ts`                         | Validates the default route's gateway against the constraints the route API enforces           |
 | `estate.ts`, `estate/`              | The estate stack — `edge1` today; see "The estate stack" for what it does not create           |
 | `provision/`                        | Idempotent host base provisioning, the Compose systemd template, and the deploy wrapper        |
 | `../hetzner-host/`                  | The published `@branchleft/hetzner-host` package — `Host`, firewalls, cloud-init, address plan |
@@ -37,8 +38,8 @@ API for creating one.
 
 ## The network
 
-One network and one subnet, both `protect: true` in Pulumi. The **network**
-additionally carries `deleteProtection: true` at the API; the **subnet does
+One network, one subnet and one route, the first two `protect: true` in
+Pulumi. The **network** additionally carries `deleteProtection: true` at the API; the **subnet does
 not**, because `hcloud.NetworkSubnet` exposes no such input — a console click
 or any token in the project can delete it and detach every host, and only this
 program's own `protect` stands in the way. A network cannot be resized
@@ -46,6 +47,15 @@ in place, so any change to its range is a replacement, and replacing it
 detaches every host in the estate in a single operation. It therefore lives in
 its own Pulumi project, applied approximately never, rather than sharing a
 stack with anything on a delivery cadence.
+
+The **route** is the estate's default, `0.0.0.0/0` via `edge1`. It is what
+gives a host created without public networking any outbound path at all: such
+a host's only route off the subnet is the network's own gateway, and Hetzner
+resolves that against this table. It is unprotected on purpose — deleting it
+detaches nothing and loses no state, and moving the gateway to another host
+has to stay an ordinary apply. The forwarding at the far end is not Pulumi's:
+`provision/nat-gateway.sh` installs it, and
+`RUNBOOK-provision-host.md` carries the order the two have to happen in.
 
 Addresses are static and listed in `@branchleft/hetzner-host`'s `addressPlan.ts`
 (`../hetzner-host/addressPlan.ts`). Hetzner's DHCP allocates in creation
