@@ -69,18 +69,37 @@ another file is a step nobody completes in one pass.
 reads from a coprocess instead of prompting, and every command downstream then
 succeeds against an empty value.
 
+Each read is followed by a non-empty check, and **the check gates the command
+that consumes the value rather than trying to abort the block.** That is the
+only construct that works here. This is pasted into an interactive shell, so
+nothing can stop the lines already in the paste buffer from running: `exit`
+would close the terminal, and `return` at an interactive top level sets a
+status and carries on. What can be made safe is each step individually — an
+empty value writes no file and exports no variable, so the next command fails
+for the reason that is true instead of inheriting a bad value.
+
 ```bash
 cd ~/branchLeft/shared-infra/hetzner
 
 export AWS_REGION=hel1
-read -rs "AWS_ACCESS_KEY_ID?Object Storage access key: "; echo; export AWS_ACCESS_KEY_ID
-read -rs "AWS_SECRET_ACCESS_KEY?Object Storage secret:     "; echo; export AWS_SECRET_ACCESS_KEY
+read -rs "AWS_ACCESS_KEY_ID?Object Storage access key: "; echo
+read -rs "AWS_SECRET_ACCESS_KEY?Object Storage secret:     "; echo
+if [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
+    export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+else
+    echo "empty Object Storage credential: nothing exported, run this block again" >&2
+fi
 
 umask 077
-install -m 600 /dev/null ~/.pulumi-passphrase-tmp
 read -rs "PASSPHRASE?Stack passphrase: "; echo
-printf '%s' "$PASSPHRASE" > ~/.pulumi-passphrase-tmp; unset PASSPHRASE
-export PULUMI_CONFIG_PASSPHRASE_FILE=~/.pulumi-passphrase-tmp
+if [ -n "$PASSPHRASE" ]; then
+    install -m 600 /dev/null ~/.pulumi-passphrase-tmp
+    printf '%s' "$PASSPHRASE" > ~/.pulumi-passphrase-tmp
+    export PULUMI_CONFIG_PASSPHRASE_FILE=~/.pulumi-passphrase-tmp
+else
+    echo "empty passphrase: no file written, PULUMI_CONFIG_PASSPHRASE_FILE not set" >&2
+fi
+unset PASSPHRASE
 
 pulumi stack select production
 pulumi stack export --file /tmp/hetzner-network.json
@@ -92,6 +111,18 @@ pulumi preview --diff
 pulumi up
 ```
 
+The passphrase is the check worth having. Pulumi's passphrase provider does
+not distinguish an empty value from an unset one, so a zero-byte file is
+accepted as a valid passphrase and the run then fails unwrapping the stack's
+data key — an error that names the key, not the passphrase, and sends whoever
+debugs it at the stack's secrets rather than at the prompt they fumbled. The
+tenant infrastructure CI guards the same thing for the same stated reason.
+
+An empty Object Storage credential is milder but easier to misread: it is a 403. Not exporting it does mean the AWS SDK falls back to any unrelated
+profile on the workstation, which `RUNBOOK-new-stack.md` §1 warns about — so
+the message says run the block again rather than carry on, and
+`pulumi whoami --verbose` is the way to tell which credential is in play.
+
 A 403 from the first `pulumi` command is the credential block above, not a
 wrong bucket. `Pulumi.yaml`'s own comment is explicit that a location or
 credential mismatch here "reads as a credential problem and sends you to the
@@ -102,15 +133,26 @@ Expect exactly one create, `platform-internet-egress`, and no change to the
 network or the subnet. Anything proposing to replace either is a stop — both
 are `protect: true`, and a route is additive to both.
 
-Then tear the session down, from the same directory:
+Then tear the session down. The `cd` is repeated rather than assumed: a
+`git checkout` of a relative path from the wrong directory fails or silently
+matches nothing, and what it would have reverted is a passphrase verifier and
+a token ciphertext left sitting in the working tree.
 
 ```bash
+cd ~/branchLeft/shared-infra/hetzner
 git checkout -- Pulumi.production.yaml
 rm -f ~/.pulumi-passphrase-tmp
 unset PULUMI_CONFIG_PASSPHRASE_FILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION
+git status --porcelain Pulumi.production.yaml
 ```
 
-None of those three lines is optional. The two lines the recipe appends to
+**The last line must print nothing.** Any output means the file still differs
+from `main`, which means the checkout did not take and the appended salt and
+token ciphertext are still there. `git status` rather than grepping for
+`encryptionsalt`: the committed file's own comments discuss that key at
+length, so a grep matches whether or not a real value was appended.
+
+None of those lines is optional. The two the recipe appends to
 `Pulumi.production.yaml` are a stack passphrase verifier and a token
 ciphertext, and neither may be committed.
 
