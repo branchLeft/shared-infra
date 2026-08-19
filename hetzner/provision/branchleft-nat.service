@@ -1,0 +1,20 @@
+# Reasserts the estate's NAT rules at every boot. They live in the kernel's
+# netfilter tables and nothing else persists them: no iptables-persistent
+# here, deliberately, because saving the live ruleset would also save Docker's
+# and restore a stale copy of it before dockerd is running to own it.
+[Unit]
+Description=branchLeft estate NAT gateway
+# After, without Requires: dockerd sets the FORWARD chain's policy to DROP and
+# rebuilds its own chains at every start, so these rules have to land after it
+# -- but a host where Docker is not installed must still come up as a gateway,
+# which an After on an absent unit allows and a Requires would not.
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/branchleft-nat
+
+[Install]
+WantedBy=multi-user.target

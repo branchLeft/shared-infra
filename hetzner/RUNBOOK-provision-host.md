@@ -11,6 +11,11 @@ Nothing automates this today. It is a deliberate ordering rather than an
 omission — the deploy account this installs does not exist until it has run,
 so the first run cannot come from the deploy path it bootstraps.
 
+**A host with no public address needs the estate's egress path to exist first,
+and to have existed before the host was created.** "The estate's egress path"
+below is the whole of that, and it is a precondition for this runbook rather
+than a step inside it.
+
 ## What each script does
 
 | Script                          | Effect                                                                                                                  |
@@ -19,14 +24,240 @@ so the first run cannot come from the deploy path it bootstraps.
 | `10-harden-updates-fail2ban.sh` | Installs and enables `unattended-upgrades` and `fail2ban`, with an SSH jail this repo owns                              |
 | `20-install-docker.sh`          | Installs Docker CE from Docker's apt repo, and reconciles the signing key and apt source on every run                   |
 | `30-install-deploy-tooling.sh`  | Installs `branchleft-compose@.service` and `/usr/local/sbin/branchleft-deploy`, and verifies the sudoers drop-in parses |
+| `nat-gateway.sh`                | **Gateway host only.** Installs the NAT reconciler and the unit that reasserts it at boot, then runs it once            |
 
-`run-all.sh` runs all four in order. Every one of them is idempotent: re-running
-the set is a no-op on a host that is already correct, which is what makes this
-the right response to "I am not sure whether that host is current".
+`run-all.sh` runs the first four in order. Every one of them is idempotent:
+re-running the set is a no-op on a host that is already correct, which is what
+makes this the right response to "I am not sure whether that host is current".
+
+`nat-gateway.sh` is deliberately outside `run-all.sh`. Exactly one host in the
+estate is the gateway, and the script refuses to run anywhere the estate's
+egress could not work from.
+
+## The estate's egress path
+
+A host created with `publicNetworking: false` has no public interface, so its
+only route off the subnet is the private network's own gateway. Nothing is
+routed there until the network stack declares a default route, and nothing
+forwards at the far end until one host has been provisioned as the gateway.
+Both halves are `branchLeft/shared-infra`'s: the route is in
+`hetzner/network.ts`, the forwarding is `provision/nat-gateway.sh`.
+
+**Both have to be live before the private-only host is created**, not merely
+before this runbook is run against it. Cloud-init installs `ca-certificates`,
+`curl` and `gnupg` at first boot, and `20-install-docker.sh` calls `curl` — a
+host that booted without egress is missing all three, and re-running these
+scripts is not on its own enough to repair that.
+
+The gateway is `edge1`, at `10.20.1.10`, which is the address the route names.
+It is the only host in the estate that already terminates public traffic, so
+it is the only one whose forwarding adds no exposure that did not exist.
+
+### 1. Apply the route
+
+`hetzner/` has no CI apply path, so this is run by hand, by the platform
+owner, from a checkout of `main` that already contains the route.
+
+Four values have to be in the environment before any command that reads
+state: the Object Storage credential for the backend `Pulumi.yaml` pins, and
+the stack passphrase. `RUNBOOK-new-stack.md` §1 and §3 are the authority for
+both, and for why each is supplied the way it is. The shape is repeated here
+rather than cross-referenced alone, because a step whose first command needs
+another file is a step nobody completes in one pass.
+
+`read -rs "VAR?prompt"` and not `read -rs -p`: this runs under zsh, where `-p`
+reads from a coprocess instead of prompting, and every command downstream then
+succeeds against an empty value.
+
+Each read is followed by a non-empty check, and **the check gates the command
+that consumes the value rather than trying to abort the block.** That is the
+only construct that works here. This is pasted into an interactive shell, so
+nothing can stop the lines already in the paste buffer from running: `exit`
+would close the terminal, and `return` at an interactive top level sets a
+status and carries on. What can be made safe is each step individually — an
+empty value writes no file and exports no variable, so the next command fails
+for the reason that is true instead of inheriting a bad value.
+
+```bash
+cd ~/branchLeft/shared-infra/hetzner
+
+export AWS_REGION=hel1
+read -rs "AWS_ACCESS_KEY_ID?Object Storage access key: "; echo
+read -rs "AWS_SECRET_ACCESS_KEY?Object Storage secret:     "; echo
+if [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
+    export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+else
+    echo "empty Object Storage credential: nothing exported, run this block again" >&2
+fi
+
+umask 077
+read -rs "PASSPHRASE?Stack passphrase: "; echo
+if [ -n "$PASSPHRASE" ]; then
+    install -m 600 /dev/null ~/.pulumi-passphrase-tmp
+    printf '%s' "$PASSPHRASE" > ~/.pulumi-passphrase-tmp
+    export PULUMI_CONFIG_PASSPHRASE_FILE=~/.pulumi-passphrase-tmp
+else
+    echo "empty passphrase: no file written, PULUMI_CONFIG_PASSPHRASE_FILE not set" >&2
+fi
+unset PASSPHRASE
+
+pulumi stack select production
+pulumi stack export --file /tmp/hetzner-network.json
+SALT=$(python3 -c "import json; print(json.load(open('/tmp/hetzner-network.json'))['deployment']['secrets_providers']['state']['salt'])")
+rm /tmp/hetzner-network.json
+printf '\nencryptionsalt: %s\n' "$SALT" >> Pulumi.production.yaml
+pulumi config set --secret hcloud:token
+pulumi preview --diff
+pulumi up
+```
+
+The passphrase is the check worth having. Pulumi's passphrase provider does
+not distinguish an empty value from an unset one, so a zero-byte file is
+accepted as a valid passphrase and the run then fails unwrapping the stack's
+data key — an error that names the key, not the passphrase, and sends whoever
+debugs it at the stack's secrets rather than at the prompt they fumbled. The
+tenant infrastructure CI guards the same thing for the same stated reason.
+
+An empty Object Storage credential is milder but easier to misread: it is a 403. Not exporting it does mean the AWS SDK falls back to any unrelated
+profile on the workstation, which `RUNBOOK-new-stack.md` §1 warns about — so
+the message says run the block again rather than carry on, and
+`pulumi whoami --verbose` is the way to tell which credential is in play.
+
+A 403 from the first `pulumi` command is the credential block above, not a
+wrong bucket. `Pulumi.yaml`'s own comment is explicit that a location or
+credential mismatch here "reads as a credential problem and sends you to the
+wrong place entirely" — check `pulumi whoami --verbose` before believing
+anything else about it.
+
+Expect exactly one create, `platform-internet-egress`, and no change to the
+network or the subnet. Anything proposing to replace either is a stop — both
+are `protect: true`, and a route is additive to both.
+
+Then tear the session down. The `cd` is repeated rather than assumed: a
+`git checkout` of a relative path from the wrong directory fails or silently
+matches nothing, and what it would have reverted is a passphrase verifier and
+a token ciphertext left sitting in the working tree.
+
+```bash
+cd ~/branchLeft/shared-infra/hetzner
+git checkout -- Pulumi.production.yaml
+rm -f ~/.pulumi-passphrase-tmp
+unset PULUMI_CONFIG_PASSPHRASE_FILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION
+git status --porcelain Pulumi.production.yaml
+```
+
+**The last line must print nothing.** Any output means the file still differs
+from `main`, which means the checkout did not take and the appended salt and
+token ciphertext are still there. `git status` rather than grepping for
+`encryptionsalt`: the committed file's own comments discuss that key at
+length, so a grep matches whether or not a real value was appended.
+
+None of those lines is optional. The two the recipe appends to
+`Pulumi.production.yaml` are a stack passphrase verifier and a token
+ciphertext, and neither may be committed.
+
+### 2. Make the gateway forward
+
+From the repository root, not from `hetzner/` — the paths below are
+repo-root-relative, and step 1 left the shell one directory down:
+
+```bash
+cd ~/branchLeft/shared-infra
+scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision root@<edge1-ipv4>:/root/platform-provision
+ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/nat-gateway.sh'
+```
+
+Idempotent, and the right response to "is that host still the gateway". Re-run
+it after a Docker reinstall: the rules live in netfilter, and the chain they
+are inserted into is one Docker owns.
+
+### 3. Confirm the gateway is forwarding
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> '
+  set -e
+  test "$(sysctl -n net.ipv4.ip_forward)" = 1
+  iptables -t nat -S POSTROUTING | grep -- "-s 10.20.1.0/24 .*-j MASQUERADE"
+  iptables -t filter -S DOCKER-USER | grep -- "-s 10.20.1.0/24 .*-j ACCEPT"
+  iptables -t filter -S DOCKER-USER | grep -- "-d 10.20.1.0/24 .*ESTABLISHED,RELATED -j ACCEPT"
+  systemctl is-enabled branchleft-nat.service
+  echo "gateway ok"
+'
+```
+
+Expect three rule lines, `enabled`, and `gateway ok`. It exits non-zero on the
+first thing that is missing, and the output stops there — so the last line
+printed is the check that passed, and the one after it is what to fix.
+
+**All three rules are checked, not just the masquerade, and that is the point
+of this block.** The masquerade lives in the `nat` table, which Docker does not
+own, so it survives almost everything. The two rules that carry the actual
+permission are the filter-chain accepts, and they live in `DOCKER-USER` — a
+chain Docker does own, and which `iptables -F`, a `firewall-cmd --reload` or a
+change of firewall backend removes on its own. With those gone, the masquerade
+still present and the `FORWARD` policy still `DROP`, the estate has **zero
+egress** while a masquerade-only check reports success.
+
+`test` rather than reading the `sysctl` output: `sysctl -n` exits 0 whether it
+prints `0` or `1`, so a chained `&&` proves only that the command ran.
+
+On a gateway with no Docker installed the two filter rules are in `FORWARD`
+instead — substitute the chain name. Neither is true of `edge1`, which runs
+the Caddy and CrowdSec stack.
+
+A missing `enabled` is the failure that only shows up at the next reboot, when
+the estate silently loses its egress.
+
+### 4. Provision a host that has no public address
+
+Reached through the gateway, over the private network — no firewall rule
+filters private traffic, so nothing had to be opened for this.
+
+```bash
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@<edge1-ipv4>"
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<host-private-ip> '
+  getent hosts deb.debian.org &&
+  curl -fsS -o /dev/null https://download.docker.com/linux/debian/gpg &&
+  echo "egress ok"
+'
+```
+
+`ProxyCommand` rather than `-J`: the identity given with `-i` applies to the
+target connection only, and the jump host needs the same key. Both hosts carry
+the platform owner's key on `root`, so one `-i` in each half of the command is
+all it takes.
+
+Run that check **before** the provisioning set, not after. `egress ok` is the
+proof that step 1 and step 2 both took; without it every failure downstream
+presents as a broken package mirror.
+
+Then the same two commands as "Run the whole set" below, with the jump added,
+from the repository root:
+
+```bash
+cd ~/branchLeft/shared-infra
+scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision root@<host-private-ip>:/root/platform-provision
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<host-private-ip> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
+```
+
+That `scp -r` copies the whole of `provision/` — `nat-gateway.sh`,
+`branchleft_nat.sh` and the unit file included. They land on the host and must
+never be run there: a second host masquerading the subnet builds a path
+nothing routes to, and `run-all.sh` does not touch any of the three.
+
+### What this does not solve
+
+The gateway is a single point of failure for every private host's outbound
+traffic, including the security updates `unattended-upgrades` fetches for the
+life of the host. An `edge1` that is down or wedged is an estate whose private
+hosts stop being patched, and nothing reports that today — the failure is
+silent until someone looks. Monitoring it belongs with the monitoring host.
 
 ## Run the whole set
 
-Substituting the host's own name and public address:
+Substituting the host's own name and public address. A host with no public
+address is provisioned through the gateway instead — step 4 above carries the
+same two commands with the jump added:
 
 ```bash
 scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision root@<host-ipv4>:/root/platform-provision
