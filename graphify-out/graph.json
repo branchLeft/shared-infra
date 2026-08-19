@@ -310,7 +310,7 @@
       "source_file": "mail/index.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 36,
+      "community": 38,
       "norm_label": "mail/index.ts",
       "id": "mail_index"
     },
@@ -320,7 +320,7 @@
       "source_file": "mail/index.ts",
       "source_location": "L6",
       "_origin": "ast",
-      "community": 36,
+      "community": 38,
       "norm_label": "mx1serverid",
       "id": "mail_index_mx1serverid"
     },
@@ -330,7 +330,7 @@
       "source_file": "mail/index.ts",
       "source_location": "L7",
       "_origin": "ast",
-      "community": 36,
+      "community": 38,
       "norm_label": "mx1publicipv4",
       "id": "mail_index_mx1publicipv4"
     },
@@ -340,7 +340,7 @@
       "source_file": "mail/index.ts",
       "source_location": "L8",
       "_origin": "ast",
-      "community": 36,
+      "community": 38,
       "norm_label": "mx1publicipv6",
       "id": "mail_index_mx1publicipv6"
     },
@@ -350,7 +350,7 @@
       "source_file": "mail/index.ts",
       "source_location": "L9",
       "_origin": "ast",
-      "community": 36,
+      "community": 38,
       "norm_label": "mailfirewallid",
       "id": "mail_index_mailfirewallid"
     },
@@ -358,7 +358,7 @@
       "label": "mail/Pulumi.yaml",
       "file_type": "code",
       "source_file": "mail/Pulumi.yaml",
-      "community": 93,
+      "community": 94,
       "norm_label": "mail/pulumi.yaml",
       "_origin": "semantic",
       "id": "mail_pulumi_yaml"
@@ -367,7 +367,7 @@
       "label": "Hetzner Cloud",
       "file_type": "concept",
       "source_file": "mail/Pulumi.yaml",
-      "community": 93,
+      "community": 94,
       "norm_label": "hetzner cloud",
       "_origin": "semantic",
       "id": "hetzner_cloud"
@@ -620,7 +620,7 @@
       "source_file": "mail/provision/list_and_clear_blocked_ips.py",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": "list_and_clear_blocked_ips.py",
       "id": "mail_provision_list_and_clear_blocked_ips"
     },
@@ -631,7 +631,7 @@
       "source_location": "L32",
       "_callable": true,
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": "select_ids_to_clear()",
       "id": "mail_provision_list_and_clear_blocked_ips_select_ids_to_clear"
     },
@@ -641,7 +641,7 @@
       "source_file": "",
       "source_location": "",
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": "any",
       "id": "mail_provision_list_and_clear_blocked_ips_py_any"
     },
@@ -652,7 +652,7 @@
       "source_location": "L57",
       "_callable": true,
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": "_jmap_call()",
       "id": "mail_provision_list_and_clear_blocked_ips_jmap_call"
     },
@@ -663,7 +663,7 @@
       "source_location": "L73",
       "_callable": true,
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": "main()",
       "id": "mail_provision_list_and_clear_blocked_ips_main"
     },
@@ -673,7 +673,7 @@
       "source_file": "mail/provision/list_and_clear_blocked_ips.py",
       "source_location": "L35",
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": "pure selection logic: which blocked-entry ids to destroy, given the live...",
       "id": "mail_provision_list_and_clear_blocked_ips_rationale_35"
     },
@@ -1306,7 +1306,7 @@
       "source_file": "",
       "source_location": "",
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": "logger",
       "id": "logger"
     },
@@ -2605,7 +2605,7 @@
       "source_file": "mail/package.json",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "mail/package.json",
       "id": "mail_package"
     },
@@ -2615,7 +2615,7 @@
       "source_file": "mail/package.json",
       "source_location": "L2",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "name",
       "id": "mail_package_name"
     },
@@ -2625,7 +2625,7 @@
       "source_file": "mail/package.json",
       "source_location": "L3",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "private",
       "id": "mail_package_private"
     },
@@ -2635,7 +2635,7 @@
       "source_file": "mail/package.json",
       "source_location": "L4",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "main",
       "id": "mail_package_main"
     },
@@ -2645,7 +2645,7 @@
       "source_file": "mail/package.json",
       "source_location": "L5",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "scripts",
       "id": "mail_package_scripts"
     },
@@ -2655,7 +2655,7 @@
       "source_file": "mail/package.json",
       "source_location": "L6",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "typecheck",
       "id": "mail_package_scripts_typecheck"
     },
@@ -2665,7 +2665,7 @@
       "source_file": "mail/package.json",
       "source_location": "L8",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "comment",
       "id": "mail_package_comment"
     },
@@ -2675,7 +2675,7 @@
       "source_file": "mail/package.json",
       "source_location": "L9",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "dependencies",
       "id": "mail_package_dependencies"
     },
@@ -2685,7 +2685,7 @@
       "source_file": "mail/package.json",
       "source_location": "L10",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "@pulumi/hcloud",
       "id": "mail_package_dependencies_pulumi_hcloud"
     },
@@ -2695,7 +2695,7 @@
       "source_file": "mail/package.json",
       "source_location": "L11",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "@pulumi/pulumi",
       "id": "mail_package_dependencies_pulumi_pulumi"
     },
@@ -2705,7 +2705,7 @@
       "source_file": "mail/package.json",
       "source_location": "L11",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "@pulumi/pulumi",
       "id": "mail_package_json_pulumi_pulumi"
     },
@@ -2715,7 +2715,7 @@
       "source_file": "mail/package.json",
       "source_location": "L13",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "devdependencies",
       "id": "mail_package_devdependencies"
     },
@@ -2725,7 +2725,7 @@
       "source_file": "mail/package.json",
       "source_location": "L14",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "@branchleft/tsconfig",
       "id": "mail_package_devdependencies_branchleft_tsconfig"
     },
@@ -2735,7 +2735,7 @@
       "source_file": "mail/package.json",
       "source_location": "L15",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "@types/node",
       "id": "mail_package_devdependencies_types_node"
     },
@@ -2745,7 +2745,7 @@
       "source_file": "mail/package.json",
       "source_location": "L16",
       "_origin": "ast",
-      "community": 31,
+      "community": 32,
       "norm_label": "typescript",
       "id": "mail_package_devdependencies_typescript"
     },
@@ -3062,7 +3062,7 @@
       "label": ".github/workflows/graphify.yml",
       "file_type": "code",
       "source_file": ".github/workflows/graphify.yml",
-      "community": 111,
+      "community": 112,
       "norm_label": ".github/workflows/graphify.yml",
       "_origin": "semantic",
       "id": "github_workflows_graphify_workflow"
@@ -3112,34 +3112,6 @@
       "norm_label": "branchleft/standards/.github/workflows/standards.yml@v0.4.0",
       "_origin": "semantic",
       "id": "branchleft_standards_workflow"
-    },
-    {
-      "label": "hetzner/provision/00-harden-ssh.sh",
-      "file_type": "code",
-      "source_file": "hetzner/provision/00-harden-ssh.sh",
-      "source_location": "L1",
-      "metadata": {
-        "language": "bash",
-        "kind": "file"
-      },
-      "_origin": "ast",
-      "community": 94,
-      "norm_label": "hetzner/provision/00-harden-ssh.sh",
-      "id": "hetzner_provision_00_harden_ssh"
-    },
-    {
-      "label": "00-harden-ssh.sh script",
-      "file_type": "code",
-      "source_file": "hetzner/provision/00-harden-ssh.sh",
-      "source_location": "L1",
-      "metadata": {
-        "language": "bash",
-        "kind": "bash_entrypoint"
-      },
-      "_origin": "ast",
-      "community": 94,
-      "norm_label": "00-harden-ssh.sh script",
-      "id": "hetzner_provision_00_harden_ssh_sh__entry"
     },
     {
       "label": "hetzner/provision/10-harden-updates-fail2ban.sh",
@@ -3259,7 +3231,7 @@
       "source_file": "hetzner/provision/branchleft_deploy.py",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 37,
+      "community": 4,
       "norm_label": "branchleft_deploy.py",
       "id": "hetzner_provision_branchleft_deploy"
     },
@@ -3271,7 +3243,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 4,
       "norm_label": "deployerror",
       "id": "hetzner_provision_branchleft_deploy_deployerror"
     },
@@ -3282,7 +3254,7 @@
       "source_location": "L62",
       "_callable": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 4,
       "norm_label": "validate_stack_name()",
       "id": "hetzner_provision_branchleft_deploy_validate_stack_name"
     },
@@ -3293,7 +3265,7 @@
       "source_location": "L68",
       "_callable": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 4,
       "norm_label": "validate_image_ref()",
       "id": "hetzner_provision_branchleft_deploy_validate_image_ref"
     },
@@ -3304,7 +3276,7 @@
       "source_location": "L76",
       "_callable": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 4,
       "norm_label": "image_env_path()",
       "id": "hetzner_provision_branchleft_deploy_image_env_path"
     },
@@ -3315,7 +3287,7 @@
       "source_location": "L80",
       "_callable": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 4,
       "norm_label": "compose_file_path()",
       "id": "hetzner_provision_branchleft_deploy_compose_file_path"
     },
@@ -3326,7 +3298,7 @@
       "source_location": "L84",
       "_callable": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 4,
       "norm_label": "read_current_image()",
       "id": "hetzner_provision_branchleft_deploy_read_current_image"
     },
@@ -3337,7 +3309,7 @@
       "source_location": "L100",
       "_callable": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 4,
       "norm_label": "write_image_env()",
       "id": "hetzner_provision_branchleft_deploy_write_image_env"
     },
@@ -3348,7 +3320,7 @@
       "source_location": "L123",
       "_callable": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 4,
       "norm_label": "deploy()",
       "id": "hetzner_provision_branchleft_deploy_deploy"
     },
@@ -3359,7 +3331,7 @@
       "source_location": "L192",
       "_callable": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 4,
       "norm_label": "main()",
       "id": "hetzner_provision_branchleft_deploy_main"
     },
@@ -3369,7 +3341,7 @@
       "source_file": "hetzner/provision/branchleft_deploy.py",
       "source_location": "L59",
       "_origin": "ast",
-      "community": 37,
+      "community": 4,
       "norm_label": "raised for anything a caller could have avoided by passing valid input.",
       "id": "hetzner_provision_branchleft_deploy_rationale_59"
     },
@@ -3379,7 +3351,7 @@
       "source_file": "hetzner/provision/branchleft_deploy.py",
       "source_location": "L101",
       "_origin": "ast",
-      "community": 37,
+      "community": 4,
       "norm_label": "replace the file atomically. the temporary file is created in the destination's...",
       "id": "hetzner_provision_branchleft_deploy_rationale_101"
     },
@@ -3417,7 +3389,7 @@
       "source_file": "hetzner/provision/test_branchleft_deploy.py",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": "test_branchleft_deploy.py",
       "id": "hetzner_provision_test_branchleft_deploy"
     },
@@ -3429,7 +3401,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": "fakerun",
       "id": "hetzner_provision_test_branchleft_deploy_fakerun"
     },
@@ -3440,7 +3412,7 @@
       "source_location": "L27",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".__init__()",
       "id": "hetzner_provision_test_branchleft_deploy_fakerun_init"
     },
@@ -3451,7 +3423,7 @@
       "source_location": "L31",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".__call__()",
       "id": "hetzner_provision_test_branchleft_deploy_fakerun_call"
     },
@@ -3463,7 +3435,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": "stacknametests",
       "id": "hetzner_provision_test_branchleft_deploy_stacknametests"
     },
@@ -3474,7 +3446,7 @@
       "source_location": "L38",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_accepts_plain_names()",
       "id": "hetzner_provision_test_branchleft_deploy_stacknametests_test_accepts_plain_names"
     },
@@ -3485,7 +3457,7 @@
       "source_location": "L42",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_rejects_path_traversal()",
       "id": "hetzner_provision_test_branchleft_deploy_stacknametests_test_rejects_path_traversal"
     },
@@ -3496,7 +3468,7 @@
       "source_location": "L47",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_rejects_shell_and_systemd_metacharacters()",
       "id": "hetzner_provision_test_branchleft_deploy_stacknametests_test_rejects_shell_and_systemd_metacharacters"
     },
@@ -3507,7 +3479,7 @@
       "source_location": "L52",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_rejects_a_trailing_newline()",
       "id": "hetzner_provision_test_branchleft_deploy_stacknametests_test_rejects_a_trailing_newline"
     },
@@ -3518,7 +3490,7 @@
       "source_location": "L56",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_rejects_empty_and_overlong()",
       "id": "hetzner_provision_test_branchleft_deploy_stacknametests_test_rejects_empty_and_overlong"
     },
@@ -3530,7 +3502,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": "imagereftests",
       "id": "hetzner_provision_test_branchleft_deploy_imagereftests"
     },
@@ -3541,7 +3513,7 @@
       "source_location": "L64",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_accepts_digest_pinned_reference()",
       "id": "hetzner_provision_test_branchleft_deploy_imagereftests_test_accepts_digest_pinned_reference"
     },
@@ -3552,7 +3524,7 @@
       "source_location": "L67",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_accepts_tag_alongside_digest()",
       "id": "hetzner_provision_test_branchleft_deploy_imagereftests_test_accepts_tag_alongside_digest"
     },
@@ -3563,7 +3535,7 @@
       "source_location": "L71",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_accepts_registry_port()",
       "id": "hetzner_provision_test_branchleft_deploy_imagereftests_test_accepts_registry_port"
     },
@@ -3574,7 +3546,7 @@
       "source_location": "L75",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_rejects_tag_only_reference()",
       "id": "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_tag_only_reference"
     },
@@ -3585,7 +3557,7 @@
       "source_location": "L80",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_rejects_an_uppercase_repository_path()",
       "id": "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_an_uppercase_repository_path"
     },
@@ -3596,7 +3568,7 @@
       "source_location": "L88",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_rejects_short_or_non_hex_digest()",
       "id": "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_short_or_non_hex_digest"
     },
@@ -3607,7 +3579,7 @@
       "source_location": "L93",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_rejects_a_trailing_newline()",
       "id": "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_a_trailing_newline"
     },
@@ -3618,7 +3590,7 @@
       "source_location": "L97",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_rejects_injected_argument()",
       "id": "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_injected_argument"
     },
@@ -3630,7 +3602,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": "writeimageenvtests",
       "id": "hetzner_provision_test_branchleft_deploy_writeimageenvtests"
     },
@@ -3641,7 +3613,7 @@
       "source_location": "L103",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_writes_single_key_with_owner_only_permissions()",
       "id": "hetzner_provision_test_branchleft_deploy_writeimageenvtests_test_writes_single_key_with_owner_only_permissions"
     },
@@ -3652,7 +3624,7 @@
       "source_location": "L112",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_replaces_rather_than_appends()",
       "id": "hetzner_provision_test_branchleft_deploy_writeimageenvtests_test_replaces_rather_than_appends"
     },
@@ -3663,7 +3635,7 @@
       "source_location": "L120",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_leaves_no_temporary_files_behind()",
       "id": "hetzner_provision_test_branchleft_deploy_writeimageenvtests_test_leaves_no_temporary_files_behind"
     },
@@ -3675,7 +3647,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": "readcurrentimagetests",
       "id": "hetzner_provision_test_branchleft_deploy_readcurrentimagetests"
     },
@@ -3686,7 +3658,7 @@
       "source_location": "L128",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_missing_file_reads_as_none()",
       "id": "hetzner_provision_test_branchleft_deploy_readcurrentimagetests_test_missing_file_reads_as_none"
     },
@@ -3697,7 +3669,7 @@
       "source_location": "L134",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_an_empty_assignment_is_not_a_pin()",
       "id": "hetzner_provision_test_branchleft_deploy_readcurrentimagetests_test_an_empty_assignment_is_not_a_pin"
     },
@@ -3708,7 +3680,7 @@
       "source_location": "L141",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_ignores_unrelated_keys()",
       "id": "hetzner_provision_test_branchleft_deploy_readcurrentimagetests_test_ignores_unrelated_keys"
     },
@@ -3720,7 +3692,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": "deploytests",
       "id": "hetzner_provision_test_branchleft_deploy_deploytests"
     },
@@ -3731,7 +3703,7 @@
       "source_location": "L150",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".setup()",
       "id": "hetzner_provision_test_branchleft_deploy_deploytests_setup"
     },
@@ -3742,7 +3714,7 @@
       "source_location": "L162",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".deploy()",
       "id": "hetzner_provision_test_branchleft_deploy_deploytests_deploy"
     },
@@ -3753,7 +3725,7 @@
       "source_location": "L171",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".env_path()",
       "id": "hetzner_provision_test_branchleft_deploy_deploytests_env_path"
     },
@@ -3764,7 +3736,7 @@
       "source_location": "L174",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_successful_deploy_pins_and_restarts_once()",
       "id": "hetzner_provision_test_branchleft_deploy_deploytests_test_successful_deploy_pins_and_restarts_once"
     },
@@ -3775,7 +3747,7 @@
       "source_location": "L180",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_refuses_a_stack_with_no_compose_file()",
       "id": "hetzner_provision_test_branchleft_deploy_deploytests_test_refuses_a_stack_with_no_compose_file"
     },
@@ -3786,7 +3758,7 @@
       "source_location": "L192",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_refuses_a_compose_file_that_ignores_the_pin()",
       "id": "hetzner_provision_test_branchleft_deploy_deploytests_test_refuses_a_compose_file_that_ignores_the_pin"
     },
@@ -3797,7 +3769,7 @@
       "source_location": "L203",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_failed_rollback_is_reported_as_a_host_that_is_down()",
       "id": "hetzner_provision_test_branchleft_deploy_deploytests_test_failed_rollback_is_reported_as_a_host_that_is_down"
     },
@@ -3808,7 +3780,7 @@
       "source_location": "L216",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_failed_restart_rolls_back_to_previous_image()",
       "id": "hetzner_provision_test_branchleft_deploy_deploytests_test_failed_restart_rolls_back_to_previous_image"
     },
@@ -3819,7 +3791,7 @@
       "source_location": "L227",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_failed_first_ever_deploy_removes_the_file_and_does_not_restart_again()",
       "id": "hetzner_provision_test_branchleft_deploy_deploytests_test_failed_first_ever_deploy_removes_the_file_and_does_not_restart_again"
     },
@@ -3830,7 +3802,7 @@
       "source_location": "L237",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_a_comment_mentioning_the_variable_does_not_satisfy_the_check()",
       "id": "hetzner_provision_test_branchleft_deploy_deploytests_test_a_comment_mentioning_the_variable_does_not_satisfy_the_check"
     },
@@ -3841,7 +3813,7 @@
       "source_location": "L250",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_validation_runs_before_any_filesystem_change()",
       "id": "hetzner_provision_test_branchleft_deploy_deploytests_test_validation_runs_before_any_filesystem_change"
     },
@@ -3853,7 +3825,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": "maintests",
       "id": "hetzner_provision_test_branchleft_deploy_maintests"
     },
@@ -3864,7 +3836,7 @@
       "source_location": "L259",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_wrong_argument_count_is_a_usage_error()",
       "id": "hetzner_provision_test_branchleft_deploy_maintests_test_wrong_argument_count_is_a_usage_error"
     },
@@ -3875,7 +3847,7 @@
       "source_location": "L266",
       "_callable": true,
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": ".test_invalid_input_exits_one_without_touching_the_host()",
       "id": "hetzner_provision_test_branchleft_deploy_maintests_test_invalid_input_exits_one_without_touching_the_host"
     },
@@ -3885,7 +3857,7 @@
       "source_file": "hetzner/provision/test_branchleft_deploy.py",
       "source_location": "L24",
       "_origin": "ast",
-      "community": 7,
+      "community": 4,
       "norm_label": "stands in for subprocess.run, recording calls and returning a queue of exit...",
       "id": "hetzner_provision_test_branchleft_deploy_rationale_24"
     },
@@ -3960,15 +3932,6 @@
       "id": "hetzner_tsconfig_exclude"
     },
     {
-      "label": "Runbook \u2014 provisioning a newly created host",
-      "file_type": "document",
-      "source_file": "hetzner/RUNBOOK-provision-host.md",
-      "community": 121,
-      "norm_label": "runbook \u2014 provisioning a newly created host",
-      "_origin": "semantic",
-      "id": "hetzner_runbook_provision_host"
-    },
-    {
       "label": "PathLike",
       "file_type": "code",
       "source_file": "",
@@ -3994,7 +3957,7 @@
       "source_file": "",
       "source_location": "",
       "_origin": "ast",
-      "community": 142,
+      "community": 143,
       "norm_label": "valueerror",
       "id": "valueerror"
     },
@@ -4012,7 +3975,7 @@
       "label": "branchleft-hetzner-network",
       "file_type": "code",
       "source_file": "hetzner/Pulumi.yaml",
-      "community": 80,
+      "community": 79,
       "norm_label": "branchleft-hetzner-network",
       "_origin": "semantic",
       "id": "hetzner_pulumi"
@@ -4021,7 +3984,7 @@
       "label": "Hetzner Object Storage",
       "file_type": "concept",
       "source_file": "hetzner/Pulumi.yaml",
-      "community": 80,
+      "community": 79,
       "norm_label": "hetzner object storage",
       "_origin": "semantic",
       "id": "hetzner_object_storage"
@@ -4032,7 +3995,7 @@
       "source_file": "",
       "source_location": "",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "datetime",
       "id": "datetime"
     },
@@ -4109,7 +4072,7 @@
       "source_location": "L96",
       "_callable": true,
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": ".markers()",
       "id": "hetzner_scripts_test_probe_object_storage_faketransport_markers"
     },
@@ -4120,7 +4083,7 @@
       "source_location": "L100",
       "_callable": true,
       "_origin": "ast",
-      "community": 34,
+      "community": 36,
       "norm_label": "_bucket()",
       "id": "hetzner_scripts_test_probe_object_storage_bucket"
     },
@@ -4267,7 +4230,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 33,
+      "community": 34,
       "norm_label": "sigv4headertests",
       "id": "hetzner_scripts_test_probe_object_storage_sigv4headertests"
     },
@@ -4278,7 +4241,7 @@
       "source_location": "L193",
       "_callable": true,
       "_origin": "ast",
-      "community": 33,
+      "community": 34,
       "norm_label": "._headers()",
       "id": "hetzner_scripts_test_probe_object_storage_sigv4headertests_headers"
     },
@@ -4289,7 +4252,7 @@
       "source_location": "L209",
       "_callable": true,
       "_origin": "ast",
-      "community": 33,
+      "community": 34,
       "norm_label": "._expected_signature()",
       "id": "hetzner_scripts_test_probe_object_storage_sigv4headertests_expected_signature"
     },
@@ -4300,7 +4263,7 @@
       "source_location": "L222",
       "_callable": true,
       "_origin": "ast",
-      "community": 33,
+      "community": 34,
       "norm_label": ".test_canonical_request_for_a_bucket_subresource_get()",
       "id": "hetzner_scripts_test_probe_object_storage_sigv4headertests_test_canonical_request_for_a_bucket_subresource_get"
     },
@@ -4311,7 +4274,7 @@
       "source_location": "L239",
       "_callable": true,
       "_origin": "ast",
-      "community": 33,
+      "community": 34,
       "norm_label": ".test_canonical_request_for_an_object_put_with_a_payload()",
       "id": "hetzner_scripts_test_probe_object_storage_sigv4headertests_test_canonical_request_for_an_object_put_with_a_payload"
     },
@@ -4322,7 +4285,7 @@
       "source_location": "L260",
       "_callable": true,
       "_origin": "ast",
-      "community": 33,
+      "community": 34,
       "norm_label": ".test_canonical_request_with_multiple_query_parameters()",
       "id": "hetzner_scripts_test_probe_object_storage_sigv4headertests_test_canonical_request_with_multiple_query_parameters"
     },
@@ -4333,7 +4296,7 @@
       "source_location": "L277",
       "_callable": true,
       "_origin": "ast",
-      "community": 33,
+      "community": 34,
       "norm_label": ".test_canonical_request_with_an_extra_signed_header()",
       "id": "hetzner_scripts_test_probe_object_storage_sigv4headertests_test_canonical_request_with_an_extra_signed_header"
     },
@@ -4344,7 +4307,7 @@
       "source_location": "L302",
       "_callable": true,
       "_origin": "ast",
-      "community": 33,
+      "community": 34,
       "norm_label": ".test_authorization_carries_the_scope_and_signed_headers()",
       "id": "hetzner_scripts_test_probe_object_storage_sigv4headertests_test_authorization_carries_the_scope_and_signed_headers"
     },
@@ -4355,7 +4318,7 @@
       "source_location": "L308",
       "_callable": true,
       "_origin": "ast",
-      "community": 33,
+      "community": 34,
       "norm_label": ".test_empty_payload_uses_the_empty_sha256()",
       "id": "hetzner_scripts_test_probe_object_storage_sigv4headertests_test_empty_payload_uses_the_empty_sha256"
     },
@@ -4366,7 +4329,7 @@
       "source_location": "L311",
       "_callable": true,
       "_origin": "ast",
-      "community": 33,
+      "community": 34,
       "norm_label": ".test_a_different_payload_changes_the_signature()",
       "id": "hetzner_scripts_test_probe_object_storage_sigv4headertests_test_a_different_payload_changes_the_signature"
     },
@@ -4377,7 +4340,7 @@
       "source_location": "L317",
       "_callable": true,
       "_origin": "ast",
-      "community": 33,
+      "community": 34,
       "norm_label": ".test_a_different_region_changes_the_signature()",
       "id": "hetzner_scripts_test_probe_object_storage_sigv4headertests_test_a_different_region_changes_the_signature"
     },
@@ -4388,7 +4351,7 @@
       "source_location": "L323",
       "_callable": true,
       "_origin": "ast",
-      "community": 33,
+      "community": 34,
       "norm_label": ".test_extra_header_value_is_normalised_the_same_way_on_the_wire()",
       "id": "hetzner_scripts_test_probe_object_storage_sigv4headertests_test_extra_header_value_is_normalised_the_same_way_on_the_wire"
     },
@@ -4445,7 +4408,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 56,
+      "community": 55,
       "norm_label": "publicreadpolicytests",
       "id": "hetzner_scripts_test_probe_object_storage_publicreadpolicytests"
     },
@@ -4456,7 +4419,7 @@
       "source_location": "L360",
       "_callable": true,
       "_origin": "ast",
-      "community": 56,
+      "community": 55,
       "norm_label": ".test_grants_getobject_on_the_probe_prefix_only()",
       "id": "hetzner_scripts_test_probe_object_storage_publicreadpolicytests_test_grants_getobject_on_the_probe_prefix_only"
     },
@@ -4467,7 +4430,7 @@
       "source_location": "L365",
       "_callable": true,
       "_origin": "ast",
-      "community": 56,
+      "community": 55,
       "norm_label": ".test_never_grants_the_whole_bucket()",
       "id": "hetzner_scripts_test_probe_object_storage_publicreadpolicytests_test_never_grants_the_whole_bucket"
     },
@@ -4478,7 +4441,7 @@
       "source_location": "L370",
       "_callable": true,
       "_origin": "ast",
-      "community": 56,
+      "community": 55,
       "norm_label": ".test_never_grants_listbucket()",
       "id": "hetzner_scripts_test_probe_object_storage_publicreadpolicytests_test_never_grants_listbucket"
     },
@@ -4489,7 +4452,7 @@
       "source_location": "L374",
       "_callable": true,
       "_origin": "ast",
-      "community": 56,
+      "community": 55,
       "norm_label": ".test_never_names_the_bucket_resource_itself()",
       "id": "hetzner_scripts_test_probe_object_storage_publicreadpolicytests_test_never_names_the_bucket_resource_itself"
     },
@@ -4500,7 +4463,7 @@
       "source_location": "L377",
       "_callable": true,
       "_origin": "ast",
-      "community": 56,
+      "community": 55,
       "norm_label": ".test_is_valid_json_with_the_expected_shape()",
       "id": "hetzner_scripts_test_probe_object_storage_publicreadpolicytests_test_is_valid_json_with_the_expected_shape"
     },
@@ -4512,7 +4475,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 51,
+      "community": 50,
       "norm_label": "protectedbuckettests",
       "id": "hetzner_scripts_test_probe_object_storage_protectedbuckettests"
     },
@@ -4523,7 +4486,7 @@
       "source_location": "L391",
       "_callable": true,
       "_origin": "ast",
-      "community": 51,
+      "community": 50,
       "norm_label": "._run()",
       "id": "hetzner_scripts_test_probe_object_storage_protectedbuckettests_run"
     },
@@ -4534,7 +4497,7 @@
       "source_location": "L399",
       "_callable": true,
       "_origin": "ast",
-      "community": 51,
+      "community": 50,
       "norm_label": ".test_refuses_the_production_state_bucket()",
       "id": "hetzner_scripts_test_probe_object_storage_protectedbuckettests_test_refuses_the_production_state_bucket"
     },
@@ -4545,7 +4508,7 @@
       "source_location": "L404",
       "_callable": true,
       "_origin": "ast",
-      "community": 51,
+      "community": 50,
       "norm_label": ".test_refuses_the_lab_state_bucket()",
       "id": "hetzner_scripts_test_probe_object_storage_protectedbuckettests_test_refuses_the_lab_state_bucket"
     },
@@ -4556,7 +4519,7 @@
       "source_location": "L409",
       "_callable": true,
       "_origin": "ast",
-      "community": 51,
+      "community": 50,
       "norm_label": ".test_refuses_a_tenant_state_bucket_that_does_not_exist_yet()",
       "id": "hetzner_scripts_test_probe_object_storage_protectedbuckettests_test_refuses_a_tenant_state_bucket_that_does_not_exist_yet"
     },
@@ -4567,7 +4530,7 @@
       "source_location": "L414",
       "_callable": true,
       "_origin": "ast",
-      "community": 51,
+      "community": 50,
       "norm_label": ".test_the_refusal_does_not_depend_on_credentials_being_absent()",
       "id": "hetzner_scripts_test_probe_object_storage_protectedbuckettests_test_the_refusal_does_not_depend_on_credentials_being_absent"
     },
@@ -4602,7 +4565,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 34,
+      "community": 36,
       "norm_label": "preflighttests",
       "id": "hetzner_scripts_test_probe_object_storage_preflighttests"
     },
@@ -4613,7 +4576,7 @@
       "source_location": "L448",
       "_callable": true,
       "_origin": "ast",
-      "community": 34,
+      "community": 36,
       "norm_label": ".test_clean_bucket_passes()",
       "id": "hetzner_scripts_test_probe_object_storage_preflighttests_test_clean_bucket_passes"
     },
@@ -4624,7 +4587,7 @@
       "source_location": "L458",
       "_callable": true,
       "_origin": "ast",
-      "community": 34,
+      "community": 36,
       "norm_label": ".test_existing_bucket_policy_is_refused()",
       "id": "hetzner_scripts_test_probe_object_storage_preflighttests_test_existing_bucket_policy_is_refused"
     },
@@ -4635,7 +4598,7 @@
       "source_location": "L468",
       "_callable": true,
       "_origin": "ast",
-      "community": 34,
+      "community": 36,
       "norm_label": ".test_existing_lifecycle_is_refused()",
       "id": "hetzner_scripts_test_probe_object_storage_preflighttests_test_existing_lifecycle_is_refused"
     },
@@ -4646,7 +4609,7 @@
       "source_location": "L478",
       "_callable": true,
       "_origin": "ast",
-      "community": 34,
+      "community": 36,
       "norm_label": ".test_an_unanswerable_policy_check_refuses_rather_than_assuming_absent()",
       "id": "hetzner_scripts_test_probe_object_storage_preflighttests_test_an_unanswerable_policy_check_refuses_rather_than_assuming_absent"
     },
@@ -4657,7 +4620,7 @@
       "source_location": "L490",
       "_callable": true,
       "_origin": "ast",
-      "community": 34,
+      "community": 36,
       "norm_label": ".test_an_unanswerable_lifecycle_check_refuses()",
       "id": "hetzner_scripts_test_probe_object_storage_preflighttests_test_an_unanswerable_lifecycle_check_refuses"
     },
@@ -4668,7 +4631,7 @@
       "source_location": "L500",
       "_callable": true,
       "_origin": "ast",
-      "community": 34,
+      "community": 36,
       "norm_label": ".test_an_unanswerable_emptiness_check_refuses()",
       "id": "hetzner_scripts_test_probe_object_storage_preflighttests_test_an_unanswerable_emptiness_check_refuses"
     },
@@ -4679,7 +4642,7 @@
       "source_location": "L510",
       "_callable": true,
       "_origin": "ast",
-      "community": 34,
+      "community": 36,
       "norm_label": ".test_a_403_naming_the_absent_subresource_is_treated_as_absent()",
       "id": "hetzner_scripts_test_probe_object_storage_preflighttests_test_a_403_naming_the_absent_subresource_is_treated_as_absent"
     },
@@ -4690,7 +4653,7 @@
       "source_location": "L525",
       "_callable": true,
       "_origin": "ast",
-      "community": 34,
+      "community": 36,
       "norm_label": ".test_non_empty_bucket_is_refused()",
       "id": "hetzner_scripts_test_probe_object_storage_preflighttests_test_non_empty_bucket_is_refused"
     },
@@ -4702,7 +4665,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": "teardowntests",
       "id": "hetzner_scripts_test_probe_object_storage_teardowntests"
     },
@@ -4713,7 +4676,7 @@
       "source_location": "L545",
       "_callable": true,
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": ".test_removes_the_policy_first()",
       "id": "hetzner_scripts_test_probe_object_storage_teardowntests_test_removes_the_policy_first"
     },
@@ -4724,7 +4687,7 @@
       "source_location": "L551",
       "_callable": true,
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": ".test_a_transport_failure_does_not_skip_the_remaining_steps()",
       "id": "hetzner_scripts_test_probe_object_storage_teardowntests_test_a_transport_failure_does_not_skip_the_remaining_steps"
     },
@@ -4735,7 +4698,7 @@
       "source_location": "L561",
       "_callable": true,
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": ".test_a_failed_policy_delete_is_reported()",
       "id": "hetzner_scripts_test_probe_object_storage_teardowntests_test_a_failed_policy_delete_is_reported"
     },
@@ -4746,7 +4709,7 @@
       "source_location": "L568",
       "_callable": true,
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": ".test_a_failed_version_delete_is_reported_not_swallowed()",
       "id": "hetzner_scripts_test_probe_object_storage_teardowntests_test_a_failed_version_delete_is_reported_not_swallowed"
     },
@@ -4757,7 +4720,7 @@
       "source_location": "L580",
       "_callable": true,
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": ".test_deletes_every_listed_version_and_delete_marker()",
       "id": "hetzner_scripts_test_probe_object_storage_teardowntests_test_deletes_every_listed_version_and_delete_marker"
     },
@@ -4768,7 +4731,7 @@
       "source_location": "L593",
       "_callable": true,
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": ".test_restores_versioning_that_was_already_enabled()",
       "id": "hetzner_scripts_test_probe_object_storage_teardowntests_test_restores_versioning_that_was_already_enabled"
     },
@@ -4779,7 +4742,7 @@
       "source_location": "L602",
       "_callable": true,
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": ".test_never_versioned_is_an_advisory_not_a_teardown_failure()",
       "id": "hetzner_scripts_test_probe_object_storage_teardowntests_test_never_versioned_is_an_advisory_not_a_teardown_failure"
     },
@@ -4790,7 +4753,7 @@
       "source_location": "L611",
       "_callable": true,
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": ".test_never_writes_a_versioning_state_it_did_not_read()",
       "id": "hetzner_scripts_test_probe_object_storage_teardowntests_test_never_writes_a_versioning_state_it_did_not_read"
     },
@@ -4801,7 +4764,7 @@
       "source_location": "L620",
       "_callable": true,
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": ".test_unparseable_version_listing_is_reported()",
       "id": "hetzner_scripts_test_probe_object_storage_teardowntests_test_unparseable_version_listing_is_reported"
     },
@@ -4869,7 +4832,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 83,
+      "community": 82,
       "norm_label": "versioningreadtests",
       "id": "hetzner_scripts_test_probe_object_storage_versioningreadtests"
     },
@@ -4880,7 +4843,7 @@
       "source_location": "L671",
       "_callable": true,
       "_origin": "ast",
-      "community": 83,
+      "community": 82,
       "norm_label": ".test_a_failed_read_is_unknown_not_never_versioned()",
       "id": "hetzner_scripts_test_probe_object_storage_versioningreadtests_test_a_failed_read_is_unknown_not_never_versioned"
     },
@@ -4891,7 +4854,7 @@
       "source_location": "L678",
       "_callable": true,
       "_origin": "ast",
-      "community": 83,
+      "community": 82,
       "norm_label": ".test_a_successful_read_of_an_unversioned_bucket_is_none()",
       "id": "hetzner_scripts_test_probe_object_storage_versioningreadtests_test_a_successful_read_of_an_unversioned_bucket_is_none"
     },
@@ -4903,7 +4866,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 82,
+      "community": 81,
       "norm_label": "endtoendtests",
       "id": "hetzner_scripts_test_probe_object_storage_endtoendtests"
     },
@@ -4914,7 +4877,7 @@
       "source_location": "L690",
       "_callable": true,
       "_origin": "ast",
-      "community": 82,
+      "community": 81,
       "norm_label": "._happy_transport()",
       "id": "hetzner_scripts_test_probe_object_storage_endtoendtests_happy_transport"
     },
@@ -4925,7 +4888,7 @@
       "source_location": "L750",
       "_callable": true,
       "_origin": "ast",
-      "community": 82,
+      "community": 81,
       "norm_label": ".test_a_flawless_run_exits_zero_and_reports_no_teardown_failure()",
       "id": "hetzner_scripts_test_probe_object_storage_endtoendtests_test_a_flawless_run_exits_zero_and_reports_no_teardown_failure"
     },
@@ -4937,7 +4900,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 84,
+      "community": 83,
       "norm_label": "responsetests",
       "id": "hetzner_scripts_test_probe_object_storage_responsetests"
     },
@@ -4948,7 +4911,7 @@
       "source_location": "L779",
       "_callable": true,
       "_origin": "ast",
-      "community": 84,
+      "community": 83,
       "norm_label": ".test_error_code_is_extracted()",
       "id": "hetzner_scripts_test_probe_object_storage_responsetests_test_error_code_is_extracted"
     },
@@ -4959,7 +4922,7 @@
       "source_location": "L783",
       "_callable": true,
       "_origin": "ast",
-      "community": 84,
+      "community": 83,
       "norm_label": ".test_error_code_of_a_non_xml_body_is_none()",
       "id": "hetzner_scripts_test_probe_object_storage_responsetests_test_error_code_of_a_non_xml_body_is_none"
     },
@@ -4970,7 +4933,7 @@
       "source_location": "L786",
       "_callable": true,
       "_origin": "ast",
-      "community": 84,
+      "community": 83,
       "norm_label": ".test_describe_includes_the_code_when_there_is_one()",
       "id": "hetzner_scripts_test_probe_object_storage_responsetests_test_describe_includes_the_code_when_there_is_one"
     },
@@ -5142,7 +5105,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L188",
       "_origin": "ast",
-      "community": 33,
+      "community": 34,
       "norm_label": "`sigv4_headers` is driven directly here, for every request shape the script...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_188"
     },
@@ -5152,7 +5115,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L324",
       "_origin": "ast",
-      "community": 33,
+      "community": 34,
       "norm_label": "sigv4 collapses internal whitespace in the signed value. if the outgoing header...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_324"
     },
@@ -5172,7 +5135,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L366",
       "_origin": "ast",
-      "community": 56,
+      "community": 55,
       "norm_label": "a grant over `<bucket>/*` would publish anything else the bucket holds,...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_366"
     },
@@ -5182,7 +5145,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L371",
       "_origin": "ast",
-      "community": 56,
+      "community": 55,
       "norm_label": "the tenant-roster control is the absence of this action.",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_371"
     },
@@ -5192,7 +5155,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L388",
       "_origin": "ast",
-      "community": 51,
+      "community": 50,
       "norm_label": "the guard is what keeps a script that publishes an anonymous-read grant away...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_388"
     },
@@ -5202,7 +5165,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L405",
       "_origin": "ast",
-      "community": 51,
+      "community": 50,
       "norm_label": "named to look like a state bucket, so a deny-list of one would have let it...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_405"
     },
@@ -5212,7 +5175,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L410",
       "_origin": "ast",
-      "community": 51,
+      "community": 50,
       "norm_label": "the provisioning flow mints `<tenant>-pulumi-state` buckets; the suffix guard...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_410"
     },
@@ -5222,7 +5185,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L445",
       "_origin": "ast",
-      "community": 34,
+      "community": 36,
       "norm_label": "`put ?policy` and `put ?lifecycle` replace the whole document, so the script...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_445"
     },
@@ -5232,7 +5195,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L479",
       "_origin": "ast",
-      "community": 34,
+      "community": 36,
       "norm_label": "`put ?policy` replaces the whole document and teardown deletes it. a transient...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_479"
     },
@@ -5242,7 +5205,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L511",
       "_origin": "ast",
-      "community": 34,
+      "community": 36,
       "norm_label": "s3 implementations answer the \"no policy here\" case with a 403 and an...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_511"
     },
@@ -5252,7 +5215,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L546",
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": "the anonymous-read grant is the thing worth removing soonest.",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_546"
     },
@@ -5262,7 +5225,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L594",
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": "a bucket that arrived versioned must not leave suspended.",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_594"
     },
@@ -5272,7 +5235,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L603",
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": "it is a fact about s3 on a run that went perfectly. counting it as a failure...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_603"
     },
@@ -5282,7 +5245,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L612",
       "_origin": "ast",
-      "community": 29,
+      "community": 30,
       "norm_label": "an unreadable original state must not become a confident restore: suspending a...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_612"
     },
@@ -5292,7 +5255,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L672",
       "_origin": "ast",
-      "community": 83,
+      "community": 82,
       "norm_label": "error bodies parse to no `<status>` element, exactly as an unversioned bucket...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_672"
     },
@@ -5302,7 +5265,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L685",
       "_origin": "ast",
-      "community": 82,
+      "community": 81,
       "norm_label": "drives `main` over the documented case -- a fresh, never-versioned scratch...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_685"
     },
@@ -5728,7 +5691,7 @@
       "source_file": "hetzner/scripts/test_check_hetzner_projects.py",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "test_check_hetzner_projects.py",
       "id": "hetzner_scripts_test_check_hetzner_projects"
     },
@@ -5739,7 +5702,7 @@
       "source_location": "L42",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "_load_module()",
       "id": "hetzner_scripts_test_check_hetzner_projects_load_module"
     },
@@ -5750,7 +5713,7 @@
       "source_location": "L53",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "project()",
       "id": "hetzner_scripts_test_check_hetzner_projects_project"
     },
@@ -5762,7 +5725,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "treebuilder",
       "id": "hetzner_scripts_test_check_hetzner_projects_treebuilder"
     },
@@ -5773,7 +5736,7 @@
       "source_location": "L74",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".__init__()",
       "id": "hetzner_scripts_test_check_hetzner_projects_treebuilder_init"
     },
@@ -5783,7 +5746,7 @@
       "source_file": "",
       "source_location": "",
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "path",
       "id": "hetzner_scripts_test_check_hetzner_projects_py_path"
     },
@@ -5794,7 +5757,7 @@
       "source_location": "L77",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".write()",
       "id": "hetzner_scripts_test_check_hetzner_projects_treebuilder_write"
     },
@@ -5805,7 +5768,7 @@
       "source_location": "L83",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".sound()",
       "id": "hetzner_scripts_test_check_hetzner_projects_treebuilder_sound"
     },
@@ -5817,7 +5780,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "soundtreetests",
       "id": "hetzner_scripts_test_check_hetzner_projects_soundtreetests"
     },
@@ -5828,7 +5791,7 @@
       "source_location": "L96",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_reports_nothing_for_the_intended_layout()",
       "id": "hetzner_scripts_test_check_hetzner_projects_soundtreetests_test_reports_nothing_for_the_intended_layout"
     },
@@ -5839,7 +5802,7 @@
       "source_location": "L101",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_a_root_project_needs_no_main()",
       "id": "hetzner_scripts_test_check_hetzner_projects_soundtreetests_test_a_root_project_needs_no_main"
     },
@@ -5850,7 +5813,7 @@
       "source_location": "L110",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_an_empty_tree_is_a_failure_rather_than_a_pass()",
       "id": "hetzner_scripts_test_check_hetzner_projects_soundtreetests_test_an_empty_tree_is_a_failure_rather_than_a_pass"
     },
@@ -5862,7 +5825,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "projectnametests",
       "id": "hetzner_scripts_test_check_hetzner_projects_projectnametests"
     },
@@ -5873,7 +5836,7 @@
       "source_location": "L118",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_two_projects_sharing_a_name_fail()",
       "id": "hetzner_scripts_test_check_hetzner_projects_projectnametests_test_two_projects_sharing_a_name_fail"
     },
@@ -5884,7 +5847,7 @@
       "source_location": "L133",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_a_project_without_a_name_fails()",
       "id": "hetzner_scripts_test_check_hetzner_projects_projectnametests_test_a_project_without_a_name_fails"
     },
@@ -5895,7 +5858,7 @@
       "source_location": "L141",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_an_unnamed_project_is_not_also_reported_as_a_duplicate()",
       "id": "hetzner_scripts_test_check_hetzner_projects_projectnametests_test_an_unnamed_project_is_not_also_reported_as_a_duplicate"
     },
@@ -5907,7 +5870,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "maintests",
       "id": "hetzner_scripts_test_check_hetzner_projects_maintests"
     },
@@ -5918,7 +5881,7 @@
       "source_location": "L153",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_subdirectory_project_without_main_fails()",
       "id": "hetzner_scripts_test_check_hetzner_projects_maintests_test_subdirectory_project_without_main_fails"
     },
@@ -5929,7 +5892,7 @@
       "source_location": "L162",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_main_naming_the_package_entry_point_fails()",
       "id": "hetzner_scripts_test_check_hetzner_projects_maintests_test_main_naming_the_package_entry_point_fails"
     },
@@ -5940,7 +5903,7 @@
       "source_location": "L172",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_the_root_project_may_name_the_entry_point_explicitly()",
       "id": "hetzner_scripts_test_check_hetzner_projects_maintests_test_the_root_project_may_name_the_entry_point_explicitly"
     },
@@ -5951,7 +5914,7 @@
       "source_location": "L178",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_two_projects_over_one_program_fail()",
       "id": "hetzner_scripts_test_check_hetzner_projects_maintests_test_two_projects_over_one_program_fail"
     },
@@ -5962,7 +5925,7 @@
       "source_location": "L186",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_main_pointing_at_a_missing_file_fails()",
       "id": "hetzner_scripts_test_check_hetzner_projects_maintests_test_main_pointing_at_a_missing_file_fails"
     },
@@ -5973,7 +5936,7 @@
       "source_location": "L195",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_main_pointing_at_a_directory_is_not_a_file()",
       "id": "hetzner_scripts_test_check_hetzner_projects_maintests_test_main_pointing_at_a_directory_is_not_a_file"
     },
@@ -5984,7 +5947,7 @@
       "source_location": "L203",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_a_deeper_project_is_checked_too()",
       "id": "hetzner_scripts_test_check_hetzner_projects_maintests_test_a_deeper_project_is_checked_too"
     },
@@ -5995,7 +5958,7 @@
       "source_location": "L211",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_a_package_without_main_defaults_to_index_js()",
       "id": "hetzner_scripts_test_check_hetzner_projects_maintests_test_a_package_without_main_defaults_to_index_js"
     },
@@ -6007,7 +5970,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "wellformednesstests",
       "id": "hetzner_scripts_test_check_hetzner_projects_wellformednesstests"
     },
@@ -6018,7 +5981,7 @@
       "source_location": "L225",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_a_duplicated_key_fails_rather_than_taking_the_last()",
       "id": "hetzner_scripts_test_check_hetzner_projects_wellformednesstests_test_a_duplicated_key_fails_rather_than_taking_the_last"
     },
@@ -6029,7 +5992,7 @@
       "source_location": "L236",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_a_missing_runtime_fails()",
       "id": "hetzner_scripts_test_check_hetzner_projects_wellformednesstests_test_a_missing_runtime_fails"
     },
@@ -6040,7 +6003,7 @@
       "source_location": "L246",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_a_non_node_runtime_fails()",
       "id": "hetzner_scripts_test_check_hetzner_projects_wellformednesstests_test_a_non_node_runtime_fails"
     },
@@ -6052,7 +6015,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "backendtests",
       "id": "hetzner_scripts_test_check_hetzner_projects_backendtests"
     },
@@ -6063,7 +6026,7 @@
       "source_location": "L259",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_an_unpinned_project_fails()",
       "id": "hetzner_scripts_test_check_hetzner_projects_backendtests_test_an_unpinned_project_fails"
     },
@@ -6074,7 +6037,7 @@
       "source_location": "L269",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_two_different_backends_fail()",
       "id": "hetzner_scripts_test_check_hetzner_projects_backendtests_test_two_different_backends_fail"
     },
@@ -6085,7 +6048,7 @@
       "source_location": "L281",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_one_unpinned_project_does_not_also_report_a_backend_mismatch()",
       "id": "hetzner_scripts_test_check_hetzner_projects_backendtests_test_one_unpinned_project_does_not_also_report_a_backend_mismatch"
     },
@@ -6096,7 +6059,7 @@
       "source_location": "L292",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_an_inline_flow_backend_names_the_right_fault()",
       "id": "hetzner_scripts_test_check_hetzner_projects_backendtests_test_an_inline_flow_backend_names_the_right_fault"
     },
@@ -6108,7 +6071,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "packagelayouttests",
       "id": "hetzner_scripts_test_check_hetzner_projects_packagelayouttests"
     },
@@ -6119,7 +6082,7 @@
       "source_location": "L309",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_a_second_package_json_fails()",
       "id": "hetzner_scripts_test_check_hetzner_projects_packagelayouttests_test_a_second_package_json_fails"
     },
@@ -6130,7 +6093,7 @@
       "source_location": "L316",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_a_second_package_suppresses_the_main_check()",
       "id": "hetzner_scripts_test_check_hetzner_projects_packagelayouttests_test_a_second_package_suppresses_the_main_check"
     },
@@ -6141,7 +6104,7 @@
       "source_location": "L328",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_no_package_json_fails()",
       "id": "hetzner_scripts_test_check_hetzner_projects_packagelayouttests_test_no_package_json_fails"
     },
@@ -6152,7 +6115,7 @@
       "source_location": "L335",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_node_modules_is_not_walked()",
       "id": "hetzner_scripts_test_check_hetzner_projects_packagelayouttests_test_node_modules_is_not_walked"
     },
@@ -6163,7 +6126,7 @@
       "source_location": "L344",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_sibling_worktrees_are_not_walked()",
       "id": "hetzner_scripts_test_check_hetzner_projects_packagelayouttests_test_sibling_worktrees_are_not_walked"
     },
@@ -6174,7 +6137,7 @@
       "source_location": "L351",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_a_stray_project_under_dist_is_still_reported()",
       "id": "hetzner_scripts_test_check_hetzner_projects_packagelayouttests_test_a_stray_project_under_dist_is_still_reported"
     },
@@ -6297,7 +6260,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "exitcodetests",
       "id": "hetzner_scripts_test_check_hetzner_projects_exitcodetests"
     },
@@ -6308,7 +6271,7 @@
       "source_location": "L399",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "._run()",
       "id": "hetzner_scripts_test_check_hetzner_projects_exitcodetests_run"
     },
@@ -6319,7 +6282,7 @@
       "source_location": "L405",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_main_returns_one_and_names_the_fault()",
       "id": "hetzner_scripts_test_check_hetzner_projects_exitcodetests_test_main_returns_one_and_names_the_fault"
     },
@@ -6330,7 +6293,7 @@
       "source_location": "L413",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_main_returns_zero_on_the_intended_layout()",
       "id": "hetzner_scripts_test_check_hetzner_projects_exitcodetests_test_main_returns_zero_on_the_intended_layout"
     },
@@ -6342,7 +6305,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "thisrepositorytests",
       "id": "hetzner_scripts_test_check_hetzner_projects_thisrepositorytests"
     },
@@ -6353,7 +6316,7 @@
       "source_location": "L422",
       "_callable": true,
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": ".test_the_real_hetzner_tree_passes()",
       "id": "hetzner_scripts_test_check_hetzner_projects_thisrepositorytests_test_the_real_hetzner_tree_passes"
     },
@@ -6363,7 +6326,7 @@
       "source_file": "hetzner/scripts/test_check_hetzner_projects.py",
       "source_location": "L72",
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "a `hetzner/`-shaped tree in a temporary directory.",
       "id": "hetzner_scripts_test_check_hetzner_projects_rationale_72"
     },
@@ -6373,7 +6336,7 @@
       "source_file": "hetzner/scripts/test_check_hetzner_projects.py",
       "source_location": "L84",
       "_origin": "ast",
-      "community": 6,
+      "community": 7,
       "norm_label": "the layout the repository actually has: one package, one project at its root,...",
       "id": "hetzner_scripts_test_check_hetzner_projects_rationale_84"
     },
@@ -6607,7 +6570,7 @@
       "source_file": "hetzner/scripts/probe-object-storage.py",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "probe-object-storage.py",
       "id": "hetzner_scripts_probe_object_storage"
     },
@@ -6619,7 +6582,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "probeerror",
       "id": "hetzner_scripts_probe_object_storage_probeerror"
     },
@@ -6629,7 +6592,7 @@
       "source_file": "",
       "source_location": "",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "exception",
       "id": "hetzner_scripts_probe_object_storage_py_exception"
     },
@@ -6640,7 +6603,7 @@
       "source_location": "L87",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "_sign()",
       "id": "hetzner_scripts_probe_object_storage_sign"
     },
@@ -6651,7 +6614,7 @@
       "source_location": "L91",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "signing_key()",
       "id": "hetzner_scripts_probe_object_storage_signing_key"
     },
@@ -6662,7 +6625,7 @@
       "source_location": "L98",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "canonical_query()",
       "id": "hetzner_scripts_probe_object_storage_canonical_query"
     },
@@ -6673,7 +6636,7 @@
       "source_location": "L111",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "canonical_uri()",
       "id": "hetzner_scripts_probe_object_storage_canonical_uri"
     },
@@ -6684,7 +6647,7 @@
       "source_location": "L119",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "_canonical_header_value()",
       "id": "hetzner_scripts_probe_object_storage_canonical_header_value"
     },
@@ -6695,7 +6658,7 @@
       "source_location": "L126",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "sigv4_headers()",
       "id": "hetzner_scripts_probe_object_storage_sigv4_headers"
     },
@@ -6707,7 +6670,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "response",
       "id": "hetzner_scripts_probe_object_storage_response"
     },
@@ -6718,7 +6681,7 @@
       "source_location": "L192",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": ".__init__()",
       "id": "hetzner_scripts_probe_object_storage_response_init"
     },
@@ -6729,7 +6692,7 @@
       "source_location": "L198",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": ".ok()",
       "id": "hetzner_scripts_probe_object_storage_response_ok"
     },
@@ -6740,7 +6703,7 @@
       "source_location": "L201",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": ".error_code()",
       "id": "hetzner_scripts_probe_object_storage_response_error_code"
     },
@@ -6751,7 +6714,7 @@
       "source_location": "L209",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": ".describe()",
       "id": "hetzner_scripts_probe_object_storage_response_describe"
     },
@@ -6762,7 +6725,7 @@
       "source_location": "L214",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "_urllib_transport()",
       "id": "hetzner_scripts_probe_object_storage_urllib_transport"
     },
@@ -6774,7 +6737,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "bucket",
       "id": "hetzner_scripts_probe_object_storage_bucket"
     },
@@ -6785,7 +6748,7 @@
       "source_location": "L228",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": ".__init__()",
       "id": "hetzner_scripts_probe_object_storage_bucket_init"
     },
@@ -6796,7 +6759,7 @@
       "source_location": "L244",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": ".request()",
       "id": "hetzner_scripts_probe_object_storage_bucket_request"
     },
@@ -6808,7 +6771,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "result",
       "id": "hetzner_scripts_probe_object_storage_result"
     },
@@ -6819,7 +6782,7 @@
       "source_location": "L286",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": ".__init__()",
       "id": "hetzner_scripts_probe_object_storage_result_init"
     },
@@ -6830,7 +6793,7 @@
       "source_location": "L292",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "_versioning_status()",
       "id": "hetzner_scripts_probe_object_storage_versioning_status"
     },
@@ -6841,7 +6804,7 @@
       "source_location": "L300",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "_lifecycle_noncurrent_days()",
       "id": "hetzner_scripts_probe_object_storage_lifecycle_noncurrent_days"
     },
@@ -6852,7 +6815,7 @@
       "source_location": "L317",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "_count_versions()",
       "id": "hetzner_scripts_probe_object_storage_count_versions"
     },
@@ -6863,7 +6826,7 @@
       "source_location": "L325",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "_count_contents()",
       "id": "hetzner_scripts_probe_object_storage_count_contents"
     },
@@ -6874,7 +6837,7 @@
       "source_location": "L337",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "_is_absent()",
       "id": "hetzner_scripts_probe_object_storage_is_absent"
     },
@@ -6885,7 +6848,7 @@
       "source_location": "L350",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "preflight()",
       "id": "hetzner_scripts_probe_object_storage_preflight"
     },
@@ -6896,7 +6859,7 @@
       "source_location": "L396",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "probe_reachable()",
       "id": "hetzner_scripts_probe_object_storage_probe_reachable"
     },
@@ -6907,7 +6870,7 @@
       "source_location": "L409",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "read_versioning()",
       "id": "hetzner_scripts_probe_object_storage_read_versioning"
     },
@@ -6918,7 +6881,7 @@
       "source_location": "L420",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "set_versioning()",
       "id": "hetzner_scripts_probe_object_storage_set_versioning"
     },
@@ -6929,7 +6892,7 @@
       "source_location": "L428",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "probe_versioning()",
       "id": "hetzner_scripts_probe_object_storage_probe_versioning"
     },
@@ -6940,7 +6903,7 @@
       "source_location": "L440",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "probe_versions_retained()",
       "id": "hetzner_scripts_probe_object_storage_probe_versions_retained"
     },
@@ -6951,7 +6914,7 @@
       "source_location": "L466",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "lifecycle_document()",
       "id": "hetzner_scripts_probe_object_storage_lifecycle_document"
     },
@@ -6962,7 +6925,7 @@
       "source_location": "L479",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "probe_lifecycle()",
       "id": "hetzner_scripts_probe_object_storage_probe_lifecycle"
     },
@@ -6973,7 +6936,7 @@
       "source_location": "L510",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "public_read_policy()",
       "id": "hetzner_scripts_probe_object_storage_public_read_policy"
     },
@@ -6984,7 +6947,7 @@
       "source_location": "L530",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "probe_public_read_not_listable()",
       "id": "hetzner_scripts_probe_object_storage_probe_public_read_not_listable"
     },
@@ -6995,7 +6958,7 @@
       "source_location": "L571",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "teardown()",
       "id": "hetzner_scripts_probe_object_storage_teardown"
     },
@@ -7006,7 +6969,7 @@
       "source_location": "L659",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "render()",
       "id": "hetzner_scripts_probe_object_storage_render"
     },
@@ -7017,7 +6980,7 @@
       "source_location": "L684",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "run_probes()",
       "id": "hetzner_scripts_probe_object_storage_run_probes"
     },
@@ -7028,7 +6991,7 @@
       "source_location": "L695",
       "_callable": true,
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "main()",
       "id": "hetzner_scripts_probe_object_storage_main"
     },
@@ -7038,7 +7001,7 @@
       "source_file": "hetzner/scripts/probe-object-storage.py",
       "source_location": "L78",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "a probe could not be carried out. distinct from a probe that ran and observed...",
       "id": "hetzner_scripts_probe_object_storage_rationale_78"
     },
@@ -7048,7 +7011,7 @@
       "source_file": "hetzner/scripts/probe-object-storage.py",
       "source_location": "L99",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "s3 requires sub-resource query parameters in the signature, sorted, with...",
       "id": "hetzner_scripts_probe_object_storage_rationale_99"
     },
@@ -7058,7 +7021,7 @@
       "source_file": "hetzner/scripts/probe-object-storage.py",
       "source_location": "L112",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "path-style only. `s3forcepathstyle` is mandatory against this endpoint (a...",
       "id": "hetzner_scripts_probe_object_storage_rationale_112"
     },
@@ -7068,7 +7031,7 @@
       "source_file": "hetzner/scripts/probe-object-storage.py",
       "source_location": "L120",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "sigv4 trims and collapses internal whitespace runs in header values. the same...",
       "id": "hetzner_scripts_probe_object_storage_rationale_120"
     },
@@ -7078,7 +7041,7 @@
       "source_file": "hetzner/scripts/probe-object-storage.py",
       "source_location": "L202",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "s3 errors are xml with a `<code>`; a bare status tells you far less than the...",
       "id": "hetzner_scripts_probe_object_storage_rationale_202"
     },
@@ -7088,7 +7051,7 @@
       "source_file": "hetzner/scripts/probe-object-storage.py",
       "source_location": "L301",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "read back `noncurrentversionexpiration/noncurrentdays`. hetzner documents this...",
       "id": "hetzner_scripts_probe_object_storage_rationale_301"
     },
@@ -7098,7 +7061,7 @@
       "source_file": "hetzner/scripts/probe-object-storage.py",
       "source_location": "L338",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "true only when the platform positively said the sub-resource is not there. any...",
       "id": "hetzner_scripts_probe_object_storage_rationale_338"
     },
@@ -7108,7 +7071,7 @@
       "source_file": "hetzner/scripts/probe-object-storage.py",
       "source_location": "L351",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "refusals, not warnings, and it **fails closed**. `put ?policy` and `put...",
       "id": "hetzner_scripts_probe_object_storage_rationale_351"
     },
@@ -7118,7 +7081,7 @@
       "source_file": "hetzner/scripts/probe-object-storage.py",
       "source_location": "L410",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "`none` means never versioned; `versioning_unknown` means the read did not...",
       "id": "hetzner_scripts_probe_object_storage_rationale_410"
     },
@@ -7128,7 +7091,7 @@
       "source_file": "hetzner/scripts/probe-object-storage.py",
       "source_location": "L441",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "enabling versioning and *retaining* a replaced object are different claims;...",
       "id": "hetzner_scripts_probe_object_storage_rationale_441"
     },
@@ -7138,7 +7101,7 @@
       "source_file": "hetzner/scripts/probe-object-storage.py",
       "source_location": "L480",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "applies \u00a78's own policy shape, not a minimal one -- the question is whether the...",
       "id": "hetzner_scripts_probe_object_storage_rationale_480"
     },
@@ -7148,7 +7111,7 @@
       "source_file": "hetzner/scripts/probe-object-storage.py",
       "source_location": "L511",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "getobject on the probe prefix and nothing on the bucket resource. two...",
       "id": "hetzner_scripts_probe_object_storage_rationale_511"
     },
@@ -7158,7 +7121,7 @@
       "source_file": "hetzner/scripts/probe-object-storage.py",
       "source_location": "L572",
       "_origin": "ast",
-      "community": 4,
+      "community": 5,
       "norm_label": "returns (failures, advisories). every step is independent and every step...",
       "id": "hetzner_scripts_probe_object_storage_rationale_572"
     },
@@ -7168,7 +7131,7 @@
       "source_file": "mail/firewall.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 36,
+      "community": 38,
       "norm_label": "firewall.ts",
       "id": "mail_firewall"
     },
@@ -7178,7 +7141,7 @@
       "source_file": "mail/firewall.ts",
       "source_location": "L12",
       "_origin": "ast",
-      "community": 36,
+      "community": 38,
       "norm_label": "mailfirewall",
       "id": "mail_firewall_mailfirewall"
     },
@@ -7188,7 +7151,7 @@
       "source_file": "mail/firewall.ts",
       "source_location": "L66",
       "_origin": "ast",
-      "community": 36,
+      "community": 38,
       "norm_label": "rfc-8737",
       "id": "docref_rfc_8737"
     },
@@ -7226,7 +7189,7 @@
       "source_file": "mail/provision/check_dnsbl_blocklist.py",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 52,
+      "community": 51,
       "norm_label": "check_dnsbl_blocklist.py",
       "id": "mail_provision_check_dnsbl_blocklist"
     },
@@ -7250,7 +7213,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 39,
       "norm_label": "dnsblspec",
       "id": "mail_provision_check_dnsbl_blocklist_dnsblspec"
     },
@@ -7274,7 +7237,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 40,
       "norm_label": "checkresult",
       "id": "mail_provision_check_dnsbl_blocklist_checkresult"
     },
@@ -7296,7 +7259,7 @@
       "source_location": "L167",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 39,
       "norm_label": "build_query_name()",
       "id": "mail_provision_check_dnsbl_blocklist_build_query_name"
     },
@@ -7329,7 +7292,7 @@
       "source_location": "L218",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 40,
       "norm_label": "build_alert()",
       "id": "mail_provision_check_dnsbl_blocklist_build_alert"
     },
@@ -7340,7 +7303,7 @@
       "source_location": "L249",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 39,
       "norm_label": "run_checks()",
       "id": "mail_provision_check_dnsbl_blocklist_run_checks"
     },
@@ -7352,7 +7315,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 52,
+      "community": 51,
       "norm_label": "_malformedresponse",
       "id": "mail_provision_check_dnsbl_blocklist_malformedresponse"
     },
@@ -7362,7 +7325,7 @@
       "source_file": "",
       "source_location": "",
       "_origin": "ast",
-      "community": 52,
+      "community": 51,
       "norm_label": "exception",
       "id": "mail_provision_check_dnsbl_blocklist_py_exception"
     },
@@ -7384,7 +7347,7 @@
       "source_location": "L304",
       "_callable": true,
       "_origin": "ast",
-      "community": 52,
+      "community": 51,
       "norm_label": "_read_name()",
       "id": "mail_provision_check_dnsbl_blocklist_read_name"
     },
@@ -7439,7 +7402,7 @@
       "source_location": "L443",
       "_callable": true,
       "_origin": "ast",
-      "community": 52,
+      "community": 51,
       "norm_label": "_load_state()",
       "id": "mail_provision_check_dnsbl_blocklist_load_state"
     },
@@ -7450,7 +7413,7 @@
       "source_location": "L458",
       "_callable": true,
       "_origin": "ast",
-      "community": 52,
+      "community": 51,
       "norm_label": "_save_state()",
       "id": "mail_provision_check_dnsbl_blocklist_save_state"
     },
@@ -7461,7 +7424,7 @@
       "source_location": "L466",
       "_callable": true,
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": "_syslog_socket_reachable()",
       "id": "mail_provision_check_dnsbl_blocklist_syslog_socket_reachable"
     },
@@ -7472,7 +7435,7 @@
       "source_location": "L485",
       "_callable": true,
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": "_configure_logging()",
       "id": "mail_provision_check_dnsbl_blocklist_configure_logging"
     },
@@ -7483,7 +7446,7 @@
       "source_location": "L502",
       "_callable": true,
       "_origin": "ast",
-      "community": 52,
+      "community": 51,
       "norm_label": "_print_status()",
       "id": "mail_provision_check_dnsbl_blocklist_print_status"
     },
@@ -7505,7 +7468,7 @@
       "source_location": "L528",
       "_callable": true,
       "_origin": "ast",
-      "community": 52,
+      "community": 51,
       "norm_label": "main()",
       "id": "mail_provision_check_dnsbl_blocklist_main"
     },
@@ -7535,7 +7498,7 @@
       "source_file": "mail/provision/check_dnsbl_blocklist.py",
       "source_location": "L168",
       "_origin": "ast",
-      "community": 38,
+      "community": 39,
       "norm_label": "pure: the full hostname queried for a dnsbl lookup.",
       "id": "mail_provision_check_dnsbl_blocklist_rationale_168"
     },
@@ -7565,7 +7528,7 @@
       "source_file": "mail/provision/check_dnsbl_blocklist.py",
       "source_location": "L221",
       "_origin": "ast",
-      "community": 39,
+      "community": 40,
       "norm_label": "pure: given the last-known verdict per dnsbl key (from the persisted state...",
       "id": "mail_provision_check_dnsbl_blocklist_rationale_221"
     },
@@ -7575,7 +7538,7 @@
       "source_file": "mail/provision/check_dnsbl_blocklist.py",
       "source_location": "L255",
       "_origin": "ast",
-      "community": 38,
+      "community": 39,
       "norm_label": "orchestration, but still no real i/o of its own -- `resolver` is injected so...",
       "id": "mail_provision_check_dnsbl_blocklist_rationale_255"
     },
@@ -7595,7 +7558,7 @@
       "source_file": "mail/provision/check_dnsbl_blocklist.py",
       "source_location": "L305",
       "_origin": "ast",
-      "community": 52,
+      "community": 51,
       "norm_label": "pure: decode the name at `offset`, following compression pointers, and return...",
       "id": "mail_provision_check_dnsbl_blocklist_rationale_305"
     },
@@ -7645,7 +7608,7 @@
       "source_file": "mail/provision/check_dnsbl_blocklist.py",
       "source_location": "L467",
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": "sysloghandler's own constructor doesn't reliably fail when `address` isn't a...",
       "id": "mail_provision_check_dnsbl_blocklist_rationale_467"
     },
@@ -7987,7 +7950,7 @@
       "source_location": "L100",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": "plan_sieve_action()",
       "id": "mail_provision_provision_mailboxes_plan_sieve_action"
     },
@@ -8225,7 +8188,7 @@
       "source_file": "mail/provision/provision_mailboxes.py",
       "source_location": "L101",
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": "pure diff for one role account's forwarding script. `existing` is none if no...",
       "id": "mail_provision_provision_mailboxes_rationale_101"
     },
@@ -8312,7 +8275,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 39,
       "norm_label": "buildquerynametests",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildquerynametests"
     },
@@ -8323,7 +8286,7 @@
       "source_location": "L72",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 39,
       "norm_label": ".test_builds_expected_hostname()",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildquerynametests_test_builds_expected_hostname"
     },
@@ -8491,7 +8454,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 40,
       "norm_label": "buildalerttests",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildalerttests"
     },
@@ -8502,7 +8465,7 @@
       "source_location": "L139",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 40,
       "norm_label": ".test_all_clean_produces_no_alerts()",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildalerttests_test_all_clean_produces_no_alerts"
     },
@@ -8513,7 +8476,7 @@
       "source_location": "L145",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 40,
       "norm_label": ".test_first_time_listing_is_marked_new()",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildalerttests_test_first_time_listing_is_marked_new"
     },
@@ -8524,7 +8487,7 @@
       "source_location": "L152",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 40,
       "norm_label": ".test_repeat_listing_is_marked_still_listed_not_new()",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildalerttests_test_repeat_listing_is_marked_still_listed_not_new"
     },
@@ -8535,7 +8498,7 @@
       "source_location": "L159",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 40,
       "norm_label": ".test_delisting_transition_is_not_re_alerted_as_new_next_time()",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildalerttests_test_delisting_transition_is_not_re_alerted_as_new_next_time"
     },
@@ -8546,7 +8509,7 @@
       "source_location": "L168",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 40,
       "norm_label": ".test_inconclusive_results_always_alert_even_though_not_listed()",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildalerttests_test_inconclusive_results_always_alert_even_though_not_listed"
     },
@@ -8557,7 +8520,7 @@
       "source_location": "L174",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 40,
       "norm_label": ".test_lookup_failed_always_alerts()",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildalerttests_test_lookup_failed_always_alerts"
     },
@@ -8568,7 +8531,7 @@
       "source_location": "L180",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 40,
       "norm_label": ".test_state_persists_every_verdict_seen_this_run()",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildalerttests_test_state_persists_every_verdict_seen_this_run"
     },
@@ -8580,7 +8543,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 39,
       "norm_label": "runcheckstests",
       "id": "mail_provision_test_check_dnsbl_blocklist_runcheckstests"
     },
@@ -8591,7 +8554,7 @@
       "source_location": "L197",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 39,
       "norm_label": ".test_queries_sentinel_and_target_per_zone_and_routes_results_correctly()",
       "id": "mail_provision_test_check_dnsbl_blocklist_runcheckstests_test_queries_sentinel_and_target_per_zone_and_routes_results_correctly"
     },
@@ -8602,7 +8565,7 @@
       "source_location": "L223",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 39,
       "norm_label": ".test_clean_run_across_the_real_configured_dnsbl_set_produces_no_alerts()",
       "id": "mail_provision_test_check_dnsbl_blocklist_runcheckstests_test_clean_run_across_the_real_configured_dnsbl_set_produces_no_alerts"
     },
@@ -8613,7 +8576,7 @@
       "source_location": "L235",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 39,
       "norm_label": ".test_a_zone_with_no_delegation_never_reports_false_clean()",
       "id": "mail_provision_test_check_dnsbl_blocklist_runcheckstests_test_a_zone_with_no_delegation_never_reports_false_clean"
     },
@@ -9116,7 +9079,7 @@
       "source_location": "L531",
       "_callable": true,
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": "_live_unix_dgram_socket()",
       "id": "mail_provision_test_check_dnsbl_blocklist_live_unix_dgram_socket"
     },
@@ -9128,7 +9091,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": "syslogsocketreachabletests",
       "id": "mail_provision_test_check_dnsbl_blocklist_syslogsocketreachabletests"
     },
@@ -9139,7 +9102,7 @@
       "source_location": "L546",
       "_callable": true,
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": ".test_a_path_with_nothing_listening_is_unreachable()",
       "id": "mail_provision_test_check_dnsbl_blocklist_syslogsocketreachabletests_test_a_path_with_nothing_listening_is_unreachable"
     },
@@ -9150,7 +9113,7 @@
       "source_location": "L549",
       "_callable": true,
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": ".test_a_live_bound_socket_is_reachable()",
       "id": "mail_provision_test_check_dnsbl_blocklist_syslogsocketreachabletests_test_a_live_bound_socket_is_reachable"
     },
@@ -9162,7 +9125,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": "configureloggingregressiontests",
       "id": "mail_provision_test_check_dnsbl_blocklist_configureloggingregressiontests"
     },
@@ -9173,7 +9136,7 @@
       "source_location": "L564",
       "_callable": true,
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": ".setup()",
       "id": "mail_provision_test_check_dnsbl_blocklist_configureloggingregressiontests_setup"
     },
@@ -9184,7 +9147,7 @@
       "source_location": "L569",
       "_callable": true,
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": ".teardown()",
       "id": "mail_provision_test_check_dnsbl_blocklist_configureloggingregressiontests_teardown"
     },
@@ -9195,7 +9158,7 @@
       "source_location": "L574",
       "_callable": true,
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": ".test_falls_back_to_a_stream_handler_when_nothing_is_listening()",
       "id": "mail_provision_test_check_dnsbl_blocklist_configureloggingregressiontests_test_falls_back_to_a_stream_handler_when_nothing_is_listening"
     },
@@ -9206,7 +9169,7 @@
       "source_location": "L588",
       "_callable": true,
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": ".test_uses_the_syslog_handler_when_a_socket_is_actually_listening()",
       "id": "mail_provision_test_check_dnsbl_blocklist_configureloggingregressiontests_test_uses_the_syslog_handler_when_a_socket_is_actually_listening"
     },
@@ -9216,7 +9179,7 @@
       "source_file": "mail/provision/test_check_dnsbl_blocklist.py",
       "source_location": "L193",
       "_origin": "ast",
-      "community": 38,
+      "community": 39,
       "norm_label": "exercises the wiring end-to-end against a fake resolver -- catches the class of...",
       "id": "mail_provision_test_check_dnsbl_blocklist_rationale_193"
     },
@@ -9266,7 +9229,7 @@
       "source_file": "mail/provision/test_check_dnsbl_blocklist.py",
       "source_location": "L532",
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": "a real, bound unix datagram socket -- the shape /dev/log actually is on a linux...",
       "id": "mail_provision_test_check_dnsbl_blocklist_rationale_532"
     },
@@ -9276,7 +9239,7 @@
       "source_file": "mail/provision/test_check_dnsbl_blocklist.py",
       "source_location": "L555",
       "_origin": "ast",
-      "community": 30,
+      "community": 31,
       "norm_label": "regression coverage for a real bug found and fixed during this script's own...",
       "id": "mail_provision_test_check_dnsbl_blocklist_rationale_555"
     },
@@ -9286,7 +9249,7 @@
       "source_file": "mail/provision/test_list_and_clear_blocked_ips.py",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": "test_list_and_clear_blocked_ips.py",
       "id": "mail_provision_test_list_and_clear_blocked_ips"
     },
@@ -9298,7 +9261,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": "selectidstocleartests",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests"
     },
@@ -9309,7 +9272,7 @@
       "source_location": "L22",
       "_callable": true,
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": ".test_all_selects_every_id()",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_all_selects_every_id"
     },
@@ -9320,7 +9283,7 @@
       "source_location": "L25",
       "_callable": true,
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": ".test_single_ip_selects_only_its_id()",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_single_ip_selects_only_its_id"
     },
@@ -9331,7 +9294,7 @@
       "source_location": "L28",
       "_callable": true,
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": ".test_multiple_ips_select_their_ids_only()",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_multiple_ips_select_their_ids_only"
     },
@@ -9342,7 +9305,7 @@
       "source_location": "L36",
       "_callable": true,
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": ".test_neither_all_nor_ip_is_refused()",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_neither_all_nor_ip_is_refused"
     },
@@ -9353,7 +9316,7 @@
       "source_location": "L40",
       "_callable": true,
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": ".test_all_and_ip_together_is_refused()",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_all_and_ip_together_is_refused"
     },
@@ -9364,7 +9327,7 @@
       "source_location": "L44",
       "_callable": true,
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": ".test_ip_not_currently_blocked_is_refused_not_silently_ignored()",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_ip_not_currently_blocked_is_refused_not_silently_ignored"
     },
@@ -9375,7 +9338,7 @@
       "source_location": "L48",
       "_callable": true,
       "_origin": "ast",
-      "community": 32,
+      "community": 33,
       "norm_label": ".test_all_on_empty_blocked_list_selects_nothing()",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_all_on_empty_blocked_list_selects_nothing"
     },
@@ -9610,7 +9573,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": "plansieveactiontests",
       "id": "mail_provision_test_provision_mailboxes_plansieveactiontests"
     },
@@ -9621,7 +9584,7 @@
       "source_location": "L139",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": ".test_no_existing_script_is_a_create()",
       "id": "mail_provision_test_provision_mailboxes_plansieveactiontests_test_no_existing_script_is_a_create"
     },
@@ -9632,7 +9595,7 @@
       "source_location": "L142",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": ".test_matching_content_already_active_is_a_no_op()",
       "id": "mail_provision_test_provision_mailboxes_plansieveactiontests_test_matching_content_already_active_is_a_no_op"
     },
@@ -9643,7 +9606,7 @@
       "source_location": "L147",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": ".test_matching_content_but_inactive_is_an_activate()",
       "id": "mail_provision_test_provision_mailboxes_plansieveactiontests_test_matching_content_but_inactive_is_an_activate"
     },
@@ -9654,7 +9617,7 @@
       "source_location": "L155",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": ".test_drifted_content_is_an_update_even_if_active()",
       "id": "mail_provision_test_provision_mailboxes_plansieveactiontests_test_drifted_content_is_an_update_even_if_active"
     },
@@ -9665,7 +9628,7 @@
       "source_location": "L166",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": ".test_drifted_content_and_inactive_is_still_an_update_not_an_activate()",
       "id": "mail_provision_test_provision_mailboxes_plansieveactiontests_test_drifted_content_and_inactive_is_still_an_update_not_an_activate"
     },
@@ -9918,7 +9881,7 @@
       "source_file": "mail/server.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 36,
+      "community": 38,
       "norm_label": "server.ts",
       "id": "mail_server"
     },
@@ -9928,7 +9891,7 @@
       "source_file": "mail/server.ts",
       "source_location": "L10",
       "_origin": "ast",
-      "community": 36,
+      "community": 38,
       "norm_label": "mx1",
       "id": "mail_server_mx1"
     },
@@ -9938,7 +9901,7 @@
       "source_file": "mail/server.ts",
       "source_location": "L66",
       "_origin": "ast",
-      "community": 36,
+      "community": 38,
       "norm_label": "mx1ipv4address",
       "id": "mail_server_mx1ipv4address"
     },
@@ -9948,7 +9911,7 @@
       "source_file": "mail/server.ts",
       "source_location": "L67",
       "_origin": "ast",
-      "community": 36,
+      "community": 38,
       "norm_label": "mx1ipv6address",
       "id": "mail_server_mx1ipv6address"
     },
@@ -11042,7 +11005,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 53,
+      "community": 52,
       "norm_label": "expectedrulestests",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests"
     },
@@ -11053,7 +11016,7 @@
       "source_location": "L310",
       "_callable": true,
       "_origin": "ast",
-      "community": 53,
+      "community": 52,
       "norm_label": ".test_nine_rules_with_one_preview_only_host()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_nine_rules_with_one_preview_only_host"
     },
@@ -11064,7 +11027,7 @@
       "source_location": "L318",
       "_callable": true,
       "_origin": "ast",
-      "community": 53,
+      "community": 52,
       "norm_label": ".test_six_rules_with_zero_preview_only_hosts()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_six_rules_with_zero_preview_only_hosts"
     },
@@ -11075,7 +11038,7 @@
       "source_location": "L323",
       "_callable": true,
       "_origin": "ast",
-      "community": 53,
+      "community": 52,
       "norm_label": ".test_content_sensitive_rule_carries_carve_out()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_content_sensitive_rule_carries_carve_out"
     },
@@ -11086,7 +11049,7 @@
       "source_location": "L332",
       "_callable": true,
       "_origin": "ast",
-      "community": 53,
+      "community": 52,
       "norm_label": ".test_lfi_never_carries_a_carve_out()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_lfi_never_carries_a_carve_out"
     },
@@ -11097,7 +11060,7 @@
       "source_location": "L340",
       "_callable": true,
       "_origin": "ast",
-      "community": 53,
+      "community": 52,
       "norm_label": ".test_preview_only_copy_rule()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_preview_only_copy_rule"
     },
@@ -11108,7 +11071,7 @@
       "source_location": "L351",
       "_callable": true,
       "_origin": "ast",
-      "community": 53,
+      "community": 52,
       "norm_label": ".test_no_carve_out_or_copies_with_zero_preview_only_hosts()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_no_carve_out_or_copies_with_zero_preview_only_hosts"
     },
@@ -11119,7 +11082,7 @@
       "source_location": "L357",
       "_callable": true,
       "_origin": "ast",
-      "community": 53,
+      "community": 52,
       "norm_label": ".test_throttle_rule_carries_full_rate_limit_parameters()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_throttle_rule_carries_full_rate_limit_parameters"
     },
@@ -11130,7 +11093,7 @@
       "source_location": "L375",
       "_callable": true,
       "_origin": "ast",
-      "community": 53,
+      "community": 52,
       "norm_label": ".test_default_allow_rule()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_default_allow_rule"
     },
@@ -11673,7 +11636,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 58,
+      "community": 57,
       "norm_label": "realrepofilestests",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests"
     },
@@ -11684,7 +11647,7 @@
       "source_location": "L855",
       "_callable": true,
       "_origin": "ast",
-      "community": 58,
+      "community": 57,
       "norm_label": ".setup()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_setup"
     },
@@ -11695,7 +11658,7 @@
       "source_location": "L868",
       "_callable": true,
       "_origin": "ast",
-      "community": 58,
+      "community": 57,
       "norm_label": ".test_the_real_edge_ts_still_yields_every_rule_the_script_expects()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_test_the_real_edge_ts_still_yields_every_rule_the_script_expects"
     },
@@ -11706,7 +11669,7 @@
       "source_location": "L873",
       "_callable": true,
       "_origin": "ast",
-      "community": 58,
+      "community": 57,
       "norm_label": ".test_the_real_baseline_is_structurally_readable()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_test_the_real_baseline_is_structurally_readable"
     },
@@ -11717,7 +11680,7 @@
       "source_location": "L878",
       "_callable": true,
       "_origin": "ast",
-      "community": 58,
+      "community": 57,
       "norm_label": ".test_the_committed_accepted_failures_file_is_valid()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_test_the_committed_accepted_failures_file_is_valid"
     },
@@ -11728,7 +11691,7 @@
       "source_location": "L882",
       "_callable": true,
       "_origin": "ast",
-      "community": 58,
+      "community": 57,
       "norm_label": ".test_the_committed_acceptances_can_be_applied_to_the_real_problems()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_test_the_committed_acceptances_can_be_applied_to_the_real_problems"
     },
@@ -11968,7 +11931,7 @@
       "source_file": "scripts/test_assert_cloud_armor_baseline_parity.py",
       "source_location": "L842",
       "_origin": "ast",
-      "community": 58,
+      "community": 57,
       "norm_label": "assertions about this checkout's actual files that hold whatever state the live...",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_rationale_842"
     },
@@ -11978,7 +11941,7 @@
       "source_file": "scripts/test_assert_cloud_armor_baseline_parity.py",
       "source_location": "L883",
       "_origin": "ast",
-      "community": 58,
+      "community": 57,
       "norm_label": "whether any entry is currently stale is the real check's verdict to report, not...",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_rationale_883"
     },
@@ -11986,7 +11949,7 @@
       "label": "CLAUDE.md",
       "file_type": "document",
       "source_file": "CLAUDE.md",
-      "community": 79,
+      "community": 78,
       "norm_label": "claude.md",
       "_origin": "semantic",
       "id": "claude_md"
@@ -11995,7 +11958,7 @@
       "label": "README.md",
       "file_type": "document",
       "source_file": "README.md",
-      "community": 79,
+      "community": 78,
       "norm_label": "readme.md",
       "_origin": "semantic",
       "id": "readme_md"
@@ -12004,7 +11967,7 @@
       "label": "RUNBOOK-edge-state-move.md",
       "file_type": "document",
       "source_file": "RUNBOOK-edge-state-move.md",
-      "community": 79,
+      "community": 78,
       "norm_label": "runbook-edge-state-move.md",
       "_origin": "semantic",
       "id": "runbook_edge_state_move_md"
@@ -13006,7 +12969,7 @@
       "source_file": "hetzner-host/vitest.config.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 118,
+      "community": 119,
       "norm_label": "hetzner-host/vitest.config.ts",
       "id": "hetzner_host_vitest_config"
     },
@@ -13116,7 +13079,7 @@
       "source_file": "hetzner/hetznerHost.test.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 81,
+      "community": 80,
       "norm_label": "hetznerhost.test.ts",
       "id": "hetzner_hetznerhost_test"
     },
@@ -13128,7 +13091,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 81,
+      "community": 80,
       "norm_label": "created",
       "id": "hetzner_hetznerhost_test_created"
     },
@@ -13139,7 +13102,7 @@
       "source_location": "L32",
       "_callable": true,
       "_origin": "ast",
-      "community": 81,
+      "community": 80,
       "norm_label": "newresource()",
       "id": "hetzner_hetznerhost_test_newresource"
     },
@@ -13150,7 +13113,7 @@
       "source_location": "L36",
       "_callable": true,
       "_origin": "ast",
-      "community": 81,
+      "community": 80,
       "norm_label": "call()",
       "id": "hetzner_hetznerhost_test_call"
     },
@@ -13160,7 +13123,7 @@
       "source_file": "hetzner/index.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 50,
+      "community": 49,
       "norm_label": "hetzner/index.ts",
       "id": "hetzner_index"
     },
@@ -13170,7 +13133,7 @@
       "source_file": "hetzner/index.ts",
       "source_location": "L10",
       "_origin": "ast",
-      "community": 50,
+      "community": 49,
       "norm_label": "networkid",
       "id": "hetzner_index_networkid"
     },
@@ -13180,7 +13143,7 @@
       "source_file": "hetzner/index.ts",
       "source_location": "L11",
       "_origin": "ast",
-      "community": 50,
+      "community": 49,
       "norm_label": "networkname",
       "id": "hetzner_index_networkname"
     },
@@ -13190,7 +13153,7 @@
       "source_file": "hetzner/index.ts",
       "source_location": "L12",
       "_origin": "ast",
-      "community": 50,
+      "community": 49,
       "norm_label": "networkiprange",
       "id": "hetzner_index_networkiprange"
     },
@@ -13200,7 +13163,7 @@
       "source_file": "hetzner/index.ts",
       "source_location": "L13",
       "_origin": "ast",
-      "community": 50,
+      "community": 49,
       "norm_label": "subnetiprange",
       "id": "hetzner_index_subnetiprange"
     },
@@ -13210,7 +13173,7 @@
       "source_file": "hetzner/index.ts",
       "source_location": "L14",
       "_origin": "ast",
-      "community": 50,
+      "community": 49,
       "norm_label": "subnetgateway",
       "id": "hetzner_index_subnetgateway"
     },
@@ -13220,7 +13183,7 @@
       "source_file": "hetzner/network.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 50,
+      "community": 49,
       "norm_label": "network.ts",
       "id": "hetzner_network"
     },
@@ -13230,7 +13193,7 @@
       "source_file": "hetzner/network.ts",
       "source_location": "L18",
       "_origin": "ast",
-      "community": 50,
+      "community": 49,
       "norm_label": "network",
       "id": "hetzner_network_network"
     },
@@ -13240,7 +13203,7 @@
       "source_file": "hetzner/network.ts",
       "source_location": "L44",
       "_origin": "ast",
-      "community": 50,
+      "community": 49,
       "norm_label": "subnet",
       "id": "hetzner_network_subnet"
     },
@@ -13407,7 +13370,7 @@
       "label": "Publish Hetzner Host Workflow",
       "file_type": "code",
       "source_file": ".github/workflows/publish-hetzner-host.yml",
-      "community": 112,
+      "community": 113,
       "norm_label": "publish hetzner host workflow",
       "_origin": "semantic",
       "id": "github_workflows_publish_hetzner_host_yml"
@@ -13416,7 +13379,7 @@
       "label": "Hetzner Estate Pulumi Project",
       "file_type": "code",
       "source_file": "hetzner/estate/Pulumi.yaml",
-      "community": 116,
+      "community": 117,
       "norm_label": "hetzner estate pulumi project",
       "_origin": "semantic",
       "id": "hetzner_estate_pulumi_yaml"
@@ -13425,7 +13388,7 @@
       "label": "@branchleft/hetzner-host Documentation",
       "file_type": "document",
       "source_file": "hetzner-host/README.md",
-      "community": 117,
+      "community": 118,
       "norm_label": "@branchleft/hetzner-host documentation",
       "_origin": "semantic",
       "id": "hetzner_host_readme_md"
@@ -14488,7 +14451,7 @@
       "label": "Cloud Armor Baseline Documentation",
       "file_type": "document",
       "source_file": "CLOUD-ARMOR-BASELINE.md",
-      "community": 79,
+      "community": 78,
       "norm_label": "cloud armor baseline documentation",
       "_origin": "semantic",
       "id": "cloud_armor_baseline_md"
@@ -14497,7 +14460,7 @@
       "label": "Hetzner Foundations README",
       "file_type": "document",
       "source_file": "hetzner/README.md",
-      "community": 119,
+      "community": 120,
       "norm_label": "hetzner foundations readme",
       "_origin": "semantic",
       "id": "hetzner_readme"
@@ -14506,7 +14469,7 @@
       "label": "Edge Stack Runbook",
       "file_type": "document",
       "source_file": "hetzner/RUNBOOK-edge.md",
-      "community": 120,
+      "community": 121,
       "norm_label": "edge stack runbook",
       "_origin": "semantic",
       "id": "hetzner_runbook_edge"
@@ -14515,7 +14478,7 @@
       "label": "Edge Compose Stack",
       "file_type": "code",
       "source_file": "hetzner/edge/stack/compose.yml",
-      "community": 113,
+      "community": 114,
       "norm_label": "edge compose stack",
       "_origin": "semantic",
       "id": "hetzner_edge_stack_compose"
@@ -14551,7 +14514,7 @@
       "label": "CrowdSec AppSec Config",
       "file_type": "code",
       "source_file": "hetzner/edge/stack/crowdsec/acquis.d/appsec.yaml",
-      "community": 114,
+      "community": 115,
       "norm_label": "crowdsec appsec config",
       "_origin": "semantic",
       "id": "hetzner_edge_stack_crowdsec_acquis_d_appsec"
@@ -14560,7 +14523,7 @@
       "label": "CrowdSec Caddy Config",
       "file_type": "code",
       "source_file": "hetzner/edge/stack/crowdsec/acquis.d/caddy.yaml",
-      "community": 115,
+      "community": 116,
       "norm_label": "crowdsec caddy config",
       "_origin": "semantic",
       "id": "hetzner_edge_stack_crowdsec_acquis_d_caddy"
@@ -15083,7 +15046,7 @@
       "label": ".github/workflows/ci.yml",
       "file_type": "code",
       "source_file": ".github/workflows/ci.yml",
-      "community": 110,
+      "community": 111,
       "norm_label": ".github/workflows/ci.yml",
       "_origin": "semantic",
       "id": "github_workflows_ci_yml"
@@ -15094,7 +15057,7 @@
       "source_file": "scripts/test_audit_pulumi_secrets.py",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 40,
+      "community": 29,
       "norm_label": "test_audit_pulumi_secrets.py",
       "id": "scripts_test_audit_pulumi_secrets"
     },
@@ -15105,7 +15068,7 @@
       "source_location": "L21",
       "_callable": true,
       "_origin": "ast",
-      "community": 40,
+      "community": 29,
       "norm_label": "_load_module()",
       "id": "scripts_test_audit_pulumi_secrets_load_module"
     },
@@ -15117,7 +15080,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 55,
+      "community": 54,
       "norm_label": "toplevelscalartests",
       "id": "scripts_test_audit_pulumi_secrets_toplevelscalartests"
     },
@@ -15128,7 +15091,7 @@
       "source_location": "L41",
       "_callable": true,
       "_origin": "ast",
-      "community": 55,
+      "community": 54,
       "norm_label": ".test_reads_plain_pairs()",
       "id": "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_reads_plain_pairs"
     },
@@ -15139,7 +15102,7 @@
       "source_location": "L45",
       "_callable": true,
       "_origin": "ast",
-      "community": 55,
+      "community": 54,
       "norm_label": ".test_ignores_comments_and_blank_lines()",
       "id": "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_ignores_comments_and_blank_lines"
     },
@@ -15150,7 +15113,7 @@
       "source_location": "L49",
       "_callable": true,
       "_origin": "ast",
-      "community": 55,
+      "community": 54,
       "norm_label": ".test_ignores_nested_keys()",
       "id": "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_ignores_nested_keys"
     },
@@ -15161,7 +15124,7 @@
       "source_location": "L56",
       "_callable": true,
       "_origin": "ast",
-      "community": 55,
+      "community": 54,
       "norm_label": ".test_block_openers_are_not_values()",
       "id": "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_block_openers_are_not_values"
     },
@@ -15172,7 +15135,7 @@
       "source_location": "L62",
       "_callable": true,
       "_origin": "ast",
-      "community": 55,
+      "community": 54,
       "norm_label": ".test_strips_quotes()",
       "id": "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_strips_quotes"
     },
@@ -15183,7 +15146,7 @@
       "source_location": "L66",
       "_callable": true,
       "_origin": "ast",
-      "community": 55,
+      "community": 54,
       "norm_label": ".test_keeps_url_scheme_colons_intact()",
       "id": "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_keeps_url_scheme_colons_intact"
     },
@@ -15194,7 +15157,7 @@
       "source_location": "L70",
       "_callable": true,
       "_origin": "ast",
-      "community": 55,
+      "community": 54,
       "norm_label": ".test_bom_does_not_hide_the_first_key()",
       "id": "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_bom_does_not_hide_the_first_key"
     },
@@ -15205,7 +15168,7 @@
       "source_location": "L77",
       "_callable": true,
       "_origin": "ast",
-      "community": 55,
+      "community": 54,
       "norm_label": ".test_strips_quotes_from_the_key_too()",
       "id": "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_strips_quotes_from_the_key_too"
     },
@@ -15217,7 +15180,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 40,
+      "community": 29,
       "norm_label": "backendurltests",
       "id": "scripts_test_audit_pulumi_secrets_backendurltests"
     },
@@ -15228,7 +15191,7 @@
       "source_location": "L83",
       "_callable": true,
       "_origin": "ast",
-      "community": 40,
+      "community": 29,
       "norm_label": ".test_reads_pinned_backend()",
       "id": "scripts_test_audit_pulumi_secrets_backendurltests_test_reads_pinned_backend"
     },
@@ -15239,7 +15202,7 @@
       "source_location": "L87",
       "_callable": true,
       "_origin": "ast",
-      "community": 40,
+      "community": 29,
       "norm_label": ".test_absent_when_not_pinned()",
       "id": "scripts_test_audit_pulumi_secrets_backendurltests_test_absent_when_not_pinned"
     },
@@ -15250,7 +15213,7 @@
       "source_location": "L90",
       "_callable": true,
       "_origin": "ast",
-      "community": 40,
+      "community": 29,
       "norm_label": ".test_stops_at_the_end_of_the_block()",
       "id": "scripts_test_audit_pulumi_secrets_backendurltests_test_stops_at_the_end_of_the_block"
     },
@@ -15384,7 +15347,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": "auditstacktests",
       "id": "scripts_test_audit_pulumi_secrets_auditstacktests"
     },
@@ -15395,7 +15358,7 @@
       "source_location": "L161",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".setup()",
       "id": "scripts_test_audit_pulumi_secrets_auditstacktests_setup"
     },
@@ -15406,7 +15369,7 @@
       "source_location": "L166",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": "._write()",
       "id": "scripts_test_audit_pulumi_secrets_auditstacktests_write"
     },
@@ -15417,7 +15380,7 @@
       "source_location": "L172",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": "._entry()",
       "id": "scripts_test_audit_pulumi_secrets_auditstacktests_entry"
     },
@@ -15428,7 +15391,7 @@
       "source_location": "L183",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_pending_when_still_on_kms()",
       "id": "scripts_test_audit_pulumi_secrets_auditstacktests_test_pending_when_still_on_kms"
     },
@@ -15439,7 +15402,7 @@
       "source_location": "L187",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_migrated_when_salt_present()",
       "id": "scripts_test_audit_pulumi_secrets_auditstacktests_test_migrated_when_salt_present"
     },
@@ -15450,7 +15413,7 @@
       "source_location": "L191",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_passphrase_without_salt_is_drift()",
       "id": "scripts_test_audit_pulumi_secrets_auditstacktests_test_passphrase_without_salt_is_drift"
     },
@@ -15461,7 +15424,7 @@
       "source_location": "L198",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_unattested_absent_file_needs_attestation_not_drift()",
       "id": "scripts_test_audit_pulumi_secrets_auditstacktests_test_unattested_absent_file_needs_attestation_not_drift"
     },
@@ -15472,7 +15435,7 @@
       "source_location": "L211",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_missing_file_is_not_a_pass()",
       "id": "scripts_test_audit_pulumi_secrets_auditstacktests_test_missing_file_is_not_a_pass"
     },
@@ -15483,7 +15446,7 @@
       "source_location": "L215",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_no_committed_config_needs_an_attestation()",
       "id": "scripts_test_audit_pulumi_secrets_auditstacktests_test_no_committed_config_needs_an_attestation"
     },
@@ -15494,7 +15457,7 @@
       "source_location": "L222",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_unreachable_repo_is_unresolved_rather_than_skipped()",
       "id": "scripts_test_audit_pulumi_secrets_auditstacktests_test_unreachable_repo_is_unresolved_rather_than_skipped"
     },
@@ -15505,7 +15468,7 @@
       "source_location": "L227",
       "_callable": true,
       "_origin": "ast",
-      "community": 35,
+      "community": 37,
       "norm_label": "_finding()",
       "id": "scripts_test_audit_pulumi_secrets_finding"
     },
@@ -15628,7 +15591,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": "attestationtests",
       "id": "scripts_test_audit_pulumi_secrets_attestationtests"
     },
@@ -15639,7 +15602,7 @@
       "source_location": "L298",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": "._entry()",
       "id": "scripts_test_audit_pulumi_secrets_attestationtests_entry"
     },
@@ -15650,7 +15613,7 @@
       "source_location": "L307",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_complete_attestation_is_accepted()",
       "id": "scripts_test_audit_pulumi_secrets_attestationtests_test_complete_attestation_is_accepted"
     },
@@ -15661,7 +15624,7 @@
       "source_location": "L314",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_attestation_without_evidence_is_drift()",
       "id": "scripts_test_audit_pulumi_secrets_attestationtests_test_attestation_without_evidence_is_drift"
     },
@@ -15672,7 +15635,7 @@
       "source_location": "L320",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_attestation_without_date_is_drift()",
       "id": "scripts_test_audit_pulumi_secrets_attestationtests_test_attestation_without_date_is_drift"
     },
@@ -15683,7 +15646,7 @@
       "source_location": "L324",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_unknown_attested_state_is_drift()",
       "id": "scripts_test_audit_pulumi_secrets_attestationtests_test_unknown_attested_state_is_drift"
     },
@@ -15694,7 +15657,7 @@
       "source_location": "L330",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_missing_attestation_reports_that_nothing_can_check_it()",
       "id": "scripts_test_audit_pulumi_secrets_attestationtests_test_missing_attestation_reports_that_nothing_can_check_it"
     },
@@ -15705,7 +15668,7 @@
       "source_location": "L334",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_non_iso_date_is_drift()",
       "id": "scripts_test_audit_pulumi_secrets_attestationtests_test_non_iso_date_is_drift"
     },
@@ -15717,7 +15680,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": "attestationversusfiletests",
       "id": "scripts_test_audit_pulumi_secrets_attestationversusfiletests"
     },
@@ -15728,7 +15691,7 @@
       "source_location": "L352",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".setup()",
       "id": "scripts_test_audit_pulumi_secrets_attestationversusfiletests_setup"
     },
@@ -15739,7 +15702,7 @@
       "source_location": "L358",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": "._entry()",
       "id": "scripts_test_audit_pulumi_secrets_attestationversusfiletests_entry"
     },
@@ -15750,7 +15713,7 @@
       "source_location": "L370",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": "._write()",
       "id": "scripts_test_audit_pulumi_secrets_attestationversusfiletests_write"
     },
@@ -15761,7 +15724,7 @@
       "source_location": "L373",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_attestation_cannot_override_a_file_that_still_says_kms()",
       "id": "scripts_test_audit_pulumi_secrets_attestationversusfiletests_test_attestation_cannot_override_a_file_that_still_says_kms"
     },
@@ -15772,7 +15735,7 @@
       "source_location": "L381",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_attestation_agreeing_with_the_file_is_accepted()",
       "id": "scripts_test_audit_pulumi_secrets_attestationversusfiletests_test_attestation_agreeing_with_the_file_is_accepted"
     },
@@ -15783,7 +15746,7 @@
       "source_location": "L387",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_attestation_agrees_with_a_salt_injected_at_deploy()",
       "id": "scripts_test_audit_pulumi_secrets_attestationversusfiletests_test_attestation_agrees_with_a_salt_injected_at_deploy"
     },
@@ -15794,7 +15757,7 @@
       "source_location": "L402",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_attestation_cannot_override_a_rollback_to_kms_even_with_no_salt_committed()",
       "id": "scripts_test_audit_pulumi_secrets_attestationversusfiletests_test_attestation_cannot_override_a_rollback_to_kms_even_with_no_salt_committed"
     },
@@ -15805,7 +15768,7 @@
       "source_location": "L413",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_removal_attestation_requires_the_file_to_be_gone_too()",
       "id": "scripts_test_audit_pulumi_secrets_attestationversusfiletests_test_removal_attestation_requires_the_file_to_be_gone_too"
     },
@@ -15816,7 +15779,7 @@
       "source_location": "L424",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_removal_attestation_is_accepted_once_the_file_is_gone()",
       "id": "scripts_test_audit_pulumi_secrets_attestationversusfiletests_test_removal_attestation_is_accepted_once_the_file_is_gone"
     },
@@ -15827,7 +15790,7 @@
       "source_location": "L431",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_migration_attestation_over_a_vanished_file_is_drift()",
       "id": "scripts_test_audit_pulumi_secrets_attestationversusfiletests_test_migration_attestation_over_a_vanished_file_is_drift"
     },
@@ -15838,7 +15801,7 @@
       "source_location": "L434",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_attestation_does_not_substitute_for_an_unreachable_repo()",
       "id": "scripts_test_audit_pulumi_secrets_attestationversusfiletests_test_attestation_does_not_substitute_for_an_unreachable_repo"
     },
@@ -15972,7 +15935,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 35,
+      "community": 37,
       "norm_label": "exitcodetests",
       "id": "scripts_test_audit_pulumi_secrets_exitcodetests"
     },
@@ -15983,7 +15946,7 @@
       "source_location": "L545",
       "_callable": true,
       "_origin": "ast",
-      "community": 35,
+      "community": 37,
       "norm_label": ".test_pending_alone_passes()",
       "id": "scripts_test_audit_pulumi_secrets_exitcodetests_test_pending_alone_passes"
     },
@@ -15994,7 +15957,7 @@
       "source_location": "L549",
       "_callable": true,
       "_origin": "ast",
-      "community": 35,
+      "community": 37,
       "norm_label": ".test_pending_fails_the_wind_down_precondition()",
       "id": "scripts_test_audit_pulumi_secrets_exitcodetests_test_pending_fails_the_wind_down_precondition"
     },
@@ -16005,7 +15968,7 @@
       "source_location": "L552",
       "_callable": true,
       "_origin": "ast",
-      "community": 35,
+      "community": 37,
       "norm_label": ".test_unresolved_fails_the_wind_down_precondition()",
       "id": "scripts_test_audit_pulumi_secrets_exitcodetests_test_unresolved_fails_the_wind_down_precondition"
     },
@@ -16016,7 +15979,7 @@
       "source_location": "L556",
       "_callable": true,
       "_origin": "ast",
-      "community": 35,
+      "community": 37,
       "norm_label": ".test_needs_attestation_fails_the_wind_down_precondition()",
       "id": "scripts_test_audit_pulumi_secrets_exitcodetests_test_needs_attestation_fails_the_wind_down_precondition"
     },
@@ -16027,7 +15990,7 @@
       "source_location": "L559",
       "_callable": true,
       "_origin": "ast",
-      "community": 35,
+      "community": 37,
       "norm_label": ".test_a_completed_sweep_exits_zero()",
       "id": "scripts_test_audit_pulumi_secrets_exitcodetests_test_a_completed_sweep_exits_zero"
     },
@@ -16038,7 +16001,7 @@
       "source_location": "L571",
       "_callable": true,
       "_origin": "ast",
-      "community": 35,
+      "community": 37,
       "norm_label": ".test_undeclared_provider_selection_site_fails_unconditionally()",
       "id": "scripts_test_audit_pulumi_secrets_exitcodetests_test_undeclared_provider_selection_site_fails_unconditionally"
     },
@@ -16049,7 +16012,7 @@
       "source_location": "L581",
       "_callable": true,
       "_origin": "ast",
-      "community": 35,
+      "community": 37,
       "norm_label": ".test_no_undeclared_provider_selection_sites_does_not_block()",
       "id": "scripts_test_audit_pulumi_secrets_exitcodetests_test_no_undeclared_provider_selection_sites_does_not_block"
     },
@@ -16060,7 +16023,7 @@
       "source_location": "L587",
       "_callable": true,
       "_origin": "ast",
-      "community": 35,
+      "community": 37,
       "norm_label": ".test_drift_always_fails()",
       "id": "scripts_test_audit_pulumi_secrets_exitcodetests_test_drift_always_fails"
     },
@@ -16071,7 +16034,7 @@
       "source_location": "L590",
       "_callable": true,
       "_origin": "ast",
-      "community": 35,
+      "community": 37,
       "norm_label": ".test_missing_always_fails()",
       "id": "scripts_test_audit_pulumi_secrets_exitcodetests_test_missing_always_fails"
     },
@@ -16082,7 +16045,7 @@
       "source_location": "L593",
       "_callable": true,
       "_origin": "ast",
-      "community": 35,
+      "community": 37,
       "norm_label": ".test_undeclared_reference_fails()",
       "id": "scripts_test_audit_pulumi_secrets_exitcodetests_test_undeclared_reference_fails"
     },
@@ -16093,7 +16056,7 @@
       "source_location": "L597",
       "_callable": true,
       "_origin": "ast",
-      "community": 35,
+      "community": 37,
       "norm_label": ".test_stale_reference_fails()",
       "id": "scripts_test_audit_pulumi_secrets_exitcodetests_test_stale_reference_fails"
     },
@@ -16105,7 +16068,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 54,
+      "community": 53,
       "norm_label": "maintests",
       "id": "scripts_test_audit_pulumi_secrets_maintests"
     },
@@ -16116,7 +16079,7 @@
       "source_location": "L607",
       "_callable": true,
       "_origin": "ast",
-      "community": 54,
+      "community": 53,
       "norm_label": "._run()",
       "id": "scripts_test_audit_pulumi_secrets_maintests_run"
     },
@@ -16127,7 +16090,7 @@
       "source_location": "L613",
       "_callable": true,
       "_origin": "ast",
-      "community": 54,
+      "community": 53,
       "norm_label": ".test_ci_invocation_passes_and_reports_every_stack()",
       "id": "scripts_test_audit_pulumi_secrets_maintests_test_ci_invocation_passes_and_reports_every_stack"
     },
@@ -16138,7 +16101,7 @@
       "source_location": "L622",
       "_callable": true,
       "_origin": "ast",
-      "community": 54,
+      "community": 53,
       "norm_label": ".test_without_root_the_unreachable_repos_are_named_not_silently_passed()",
       "id": "scripts_test_audit_pulumi_secrets_maintests_test_without_root_the_unreachable_repos_are_named_not_silently_passed"
     },
@@ -16149,7 +16112,7 @@
       "source_location": "L626",
       "_callable": true,
       "_origin": "ast",
-      "community": 54,
+      "community": 53,
       "norm_label": ".test_require_migrated_fails_today_and_says_what_is_outstanding()",
       "id": "scripts_test_audit_pulumi_secrets_maintests_test_require_migrated_fails_today_and_says_what_is_outstanding"
     },
@@ -16160,7 +16123,7 @@
       "source_location": "L631",
       "_callable": true,
       "_origin": "ast",
-      "community": 54,
+      "community": 53,
       "norm_label": ".test_json_output_is_parseable_and_carries_all_three_sections()",
       "id": "scripts_test_audit_pulumi_secrets_maintests_test_json_output_is_parseable_and_carries_all_three_sections"
     },
@@ -16171,7 +16134,7 @@
       "source_location": "L639",
       "_callable": true,
       "_origin": "ast",
-      "community": 54,
+      "community": 53,
       "norm_label": ".test_unreadable_inventory_exits_two_rather_than_reporting_clean()",
       "id": "scripts_test_audit_pulumi_secrets_maintests_test_unreadable_inventory_exits_two_rather_than_reporting_clean"
     },
@@ -16182,7 +16145,7 @@
       "source_location": "L643",
       "_callable": true,
       "_origin": "ast",
-      "community": 54,
+      "community": 53,
       "norm_label": ".test_a_completed_sweep_exits_zero_through_main()",
       "id": "scripts_test_audit_pulumi_secrets_maintests_test_a_completed_sweep_exits_zero_through_main"
     },
@@ -16194,7 +16157,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": "referencescantests",
       "id": "scripts_test_audit_pulumi_secrets_referencescantests"
     },
@@ -16205,7 +16168,7 @@
       "source_location": "L698",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".setup()",
       "id": "scripts_test_audit_pulumi_secrets_referencescantests_setup"
     },
@@ -16216,7 +16179,7 @@
       "source_location": "L703",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": "._write()",
       "id": "scripts_test_audit_pulumi_secrets_referencescantests_write"
     },
@@ -16227,7 +16190,7 @@
       "source_location": "L708",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_finds_a_login_step()",
       "id": "scripts_test_audit_pulumi_secrets_referencescantests_test_finds_a_login_step"
     },
@@ -16238,7 +16201,7 @@
       "source_location": "L714",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_finds_a_per_tenant_bucket()",
       "id": "scripts_test_audit_pulumi_secrets_referencescantests_test_finds_a_per_tenant_bucket"
     },
@@ -16249,7 +16212,7 @@
       "source_location": "L718",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_finds_a_templated_bucket_name()",
       "id": "scripts_test_audit_pulumi_secrets_referencescantests_test_finds_a_templated_bucket_name"
     },
@@ -16260,7 +16223,7 @@
       "source_location": "L724",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_ignores_the_media_bucket()",
       "id": "scripts_test_audit_pulumi_secrets_referencescantests_test_ignores_the_media_bucket"
     },
@@ -16271,7 +16234,7 @@
       "source_location": "L728",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_skips_vendored_and_generated_trees()",
       "id": "scripts_test_audit_pulumi_secrets_referencescantests_test_skips_vendored_and_generated_trees"
     },
@@ -16282,7 +16245,7 @@
       "source_location": "L733",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_ignores_unscannable_suffixes()",
       "id": "scripts_test_audit_pulumi_secrets_referencescantests_test_ignores_unscannable_suffixes"
     },
@@ -16294,7 +16257,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": "providerselectionscantests",
       "id": "scripts_test_audit_pulumi_secrets_providerselectionscantests"
     },
@@ -16305,7 +16268,7 @@
       "source_location": "L743",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".setup()",
       "id": "scripts_test_audit_pulumi_secrets_providerselectionscantests_setup"
     },
@@ -16316,7 +16279,7 @@
       "source_location": "L748",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": "._write()",
       "id": "scripts_test_audit_pulumi_secrets_providerselectionscantests_write"
     },
@@ -16327,7 +16290,7 @@
       "source_location": "L753",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_finds_a_new_minting_site()",
       "id": "scripts_test_audit_pulumi_secrets_providerselectionscantests_test_finds_a_new_minting_site"
     },
@@ -16338,7 +16301,7 @@
       "source_location": "L757",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_ignores_a_retired_site()",
       "id": "scripts_test_audit_pulumi_secrets_providerselectionscantests_test_ignores_a_retired_site"
     },
@@ -16349,7 +16312,7 @@
       "source_location": "L761",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_ignores_prose_mentioning_both_words_without_the_flag_shape()",
       "id": "scripts_test_audit_pulumi_secrets_providerselectionscantests_test_ignores_prose_mentioning_both_words_without_the_flag_shape"
     },
@@ -16360,7 +16323,7 @@
       "source_location": "L767",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_ignores_markdown_even_with_the_exact_flag_shape()",
       "id": "scripts_test_audit_pulumi_secrets_providerselectionscantests_test_ignores_markdown_even_with_the_exact_flag_shape"
     },
@@ -16371,7 +16334,7 @@
       "source_location": "L775",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_finds_the_flag_shape_in_a_shell_script()",
       "id": "scripts_test_audit_pulumi_secrets_providerselectionscantests_test_finds_the_flag_shape_in_a_shell_script"
     },
@@ -16382,7 +16345,7 @@
       "source_location": "L779",
       "_callable": true,
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": ".test_skips_vendored_and_generated_trees()",
       "id": "scripts_test_audit_pulumi_secrets_providerselectionscantests_test_skips_vendored_and_generated_trees"
     },
@@ -16472,7 +16435,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 78,
+      "community": 29,
       "norm_label": "inventorytests",
       "id": "scripts_test_audit_pulumi_secrets_inventorytests"
     },
@@ -16483,7 +16446,7 @@
       "source_location": "L833",
       "_callable": true,
       "_origin": "ast",
-      "community": 78,
+      "community": 29,
       "norm_label": ".test_rejects_an_empty_inventory()",
       "id": "scripts_test_audit_pulumi_secrets_inventorytests_test_rejects_an_empty_inventory"
     },
@@ -16494,7 +16457,7 @@
       "source_location": "L840",
       "_callable": true,
       "_origin": "ast",
-      "community": 78,
+      "community": 29,
       "norm_label": ".test_rejects_an_unreadable_inventory()",
       "id": "scripts_test_audit_pulumi_secrets_inventorytests_test_rejects_an_unreadable_inventory"
     },
@@ -16505,7 +16468,7 @@
       "source_location": "L844",
       "_callable": true,
       "_origin": "ast",
-      "community": 78,
+      "community": 29,
       "norm_label": ".test_shipped_inventory_is_loadable_and_complete()",
       "id": "scripts_test_audit_pulumi_secrets_inventorytests_test_shipped_inventory_is_loadable_and_complete"
     },
@@ -16516,7 +16479,7 @@
       "source_location": "L851",
       "_callable": true,
       "_origin": "ast",
-      "community": 78,
+      "community": 29,
       "norm_label": ".test_shipped_inventory_enumerates_every_backend_reference_in_this_repo()",
       "id": "scripts_test_audit_pulumi_secrets_inventorytests_test_shipped_inventory_enumerates_every_backend_reference_in_this_repo"
     },
@@ -16528,7 +16491,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 40,
+      "community": 29,
       "norm_label": "shippedinventorylivestatetests",
       "id": "scripts_test_audit_pulumi_secrets_shippedinventorylivestatetests"
     },
@@ -16539,7 +16502,7 @@
       "source_location": "L864",
       "_callable": true,
       "_origin": "ast",
-      "community": 40,
+      "community": 29,
       "norm_label": ".test_require_migrated_reports_the_sweep_complete()",
       "id": "scripts_test_audit_pulumi_secrets_shippedinventorylivestatetests_test_require_migrated_reports_the_sweep_complete"
     },
@@ -16550,7 +16513,7 @@
       "source_location": "L901",
       "_callable": true,
       "_origin": "ast",
-      "community": 40,
+      "community": 29,
       "norm_label": ".test_a_regression_to_kms_would_still_be_caught()",
       "id": "scripts_test_audit_pulumi_secrets_shippedinventorylivestatetests_test_a_regression_to_kms_would_still_be_caught"
     },
@@ -16560,7 +16523,7 @@
       "source_file": "scripts/test_audit_pulumi_secrets.py",
       "source_location": "L22",
       "_origin": "ast",
-      "community": 40,
+      "community": 29,
       "norm_label": "import the script by path: its filename has hyphens, so it is not a legal...",
       "id": "scripts_test_audit_pulumi_secrets_rationale_22"
     },
@@ -16580,7 +16543,7 @@
       "source_file": "scripts/test_audit_pulumi_secrets.py",
       "source_location": "L342",
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": "a committed file is a fact; an attestation is somebody's word. where both exist...",
       "id": "scripts_test_audit_pulumi_secrets_rationale_342"
     },
@@ -16600,7 +16563,7 @@
       "source_file": "scripts/test_audit_pulumi_secrets.py",
       "source_location": "L603",
       "_origin": "ast",
-      "community": 54,
+      "community": 53,
       "norm_label": "drives the real entry point. the findings above all call the internals...",
       "id": "scripts_test_audit_pulumi_secrets_rationale_603"
     },
@@ -16610,7 +16573,7 @@
       "source_file": "scripts/test_audit_pulumi_secrets.py",
       "source_location": "L739",
       "_origin": "ast",
-      "community": 5,
+      "community": 6,
       "norm_label": "the regression assertion hetzner/runbook-existing-stack-migration.md describes:...",
       "id": "scripts_test_audit_pulumi_secrets_rationale_739"
     },
@@ -16620,7 +16583,7 @@
       "source_file": "scripts/test_audit_pulumi_secrets.py",
       "source_location": "L860",
       "_origin": "ast",
-      "community": 40,
+      "community": 29,
       "norm_label": "every other test above proves the audit mechanism in the abstract; this one...",
       "id": "scripts_test_audit_pulumi_secrets_rationale_860"
     },
@@ -16633,9 +16596,10 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "hetzner_runbook_existing_stack_migration_part_a",
-      "community": 49,
-      "norm_label": "migration part a: secrets re-wrap"
+      "community": 58,
+      "norm_label": "migration part a: secrets re-wrap",
+      "_origin": "semantic",
+      "id": "hetzner_runbook_existing_stack_migration_part_a"
     },
     {
       "label": "Migration Part B: State Move",
@@ -16646,9 +16610,10 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "hetzner_runbook_existing_stack_migration_part_b",
-      "community": 80,
-      "norm_label": "migration part b: state move"
+      "community": 79,
+      "norm_label": "migration part b: state move",
+      "_origin": "semantic",
+      "id": "hetzner_runbook_existing_stack_migration_part_b"
     },
     {
       "label": "GCP KMS: pulumi-secrets",
@@ -16659,9 +16624,10 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "gcp_kms_pulumi_secrets",
-      "community": 49,
-      "norm_label": "gcp kms: pulumi-secrets"
+      "community": 58,
+      "norm_label": "gcp kms: pulumi-secrets",
+      "_origin": "semantic",
+      "id": "gcp_kms_pulumi_secrets"
     },
     {
       "label": "Pulumi Passphrase Provider",
@@ -16672,9 +16638,10 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "pulumi_passphrase_provider",
-      "community": 49,
-      "norm_label": "pulumi passphrase provider"
+      "community": 58,
+      "norm_label": "pulumi passphrase provider",
+      "_origin": "semantic",
+      "id": "pulumi_passphrase_provider"
     },
     {
       "label": "Google Cloud Storage: gs:// state",
@@ -16685,9 +16652,10 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "gs_pulumi_state",
-      "community": 80,
-      "norm_label": "google cloud storage: gs:// state"
+      "community": 79,
+      "norm_label": "google cloud storage: gs:// state",
+      "_origin": "semantic",
+      "id": "gs_pulumi_state"
     },
     {
       "label": "branchLeft/shared-infra",
@@ -16698,9 +16666,10 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "branchleft_shared_infra",
-      "community": 49,
-      "norm_label": "branchleft/shared-infra"
+      "community": 58,
+      "norm_label": "branchleft/shared-infra",
+      "_origin": "semantic",
+      "id": "branchleft_shared_infra"
     },
     {
       "label": "branchLeft/website",
@@ -16711,9 +16680,10 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "branchleft_website",
-      "community": 49,
-      "norm_label": "branchleft/website"
+      "community": 58,
+      "norm_label": "branchleft/website",
+      "_origin": "semantic",
+      "id": "branchleft_website"
     },
     {
       "label": "branchLeft/ghost-platform",
@@ -16724,9 +16694,10 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "branchleft_ghost_platform",
-      "community": 49,
-      "norm_label": "branchleft/ghost-platform"
+      "community": 58,
+      "norm_label": "branchleft/ghost-platform",
+      "_origin": "semantic",
+      "id": "branchleft_ghost_platform"
     },
     {
       "label": "branchLeft/ghost-tenant-blog",
@@ -16737,35 +16708,226 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "branchleft_ghost_tenant_blog",
-      "community": 49,
-      "norm_label": "branchleft/ghost-tenant-blog"
+      "community": 58,
+      "norm_label": "branchleft/ghost-tenant-blog",
+      "_origin": "semantic",
+      "id": "branchleft_ghost_tenant_blog"
     },
     {
-      "label": "provision-tenant.yml",
+      "label": "hetzner/provision/00-harden-ssh.sh",
       "file_type": "code",
-      "source_file": "ghost-platform/.github/workflows/provision-tenant.yml",
-      "source_location": null,
-      "source_url": null,
-      "captured_at": null,
-      "author": null,
-      "contributor": null,
-      "id": "ghost_platform_provision_tenant_yml",
-      "community": 49,
-      "norm_label": "provision-tenant.yml"
+      "source_file": "hetzner/provision/00-harden-ssh.sh",
+      "source_location": "L1",
+      "metadata": {
+        "language": "bash",
+        "kind": "file"
+      },
+      "_origin": "ast",
+      "id": "hetzner_provision_00_harden_ssh",
+      "community": 84,
+      "norm_label": "hetzner/provision/00-harden-ssh.sh"
     },
     {
-      "label": "restore-stack-secrets-config.py",
+      "label": "00-harden-ssh.sh script",
       "file_type": "code",
-      "source_file": "ghost-platform/infra/provisioning/scripts/restore-stack-secrets-config.py",
-      "source_location": null,
-      "source_url": null,
-      "captured_at": null,
-      "author": null,
-      "contributor": null,
-      "id": "ghost_platform_infra_provisioning_scripts_restore_stack_secrets_config_py",
-      "community": 49,
-      "norm_label": "restore-stack-secrets-config.py"
+      "source_file": "hetzner/provision/00-harden-ssh.sh",
+      "source_location": "L1",
+      "metadata": {
+        "language": "bash",
+        "kind": "bash_entrypoint"
+      },
+      "_origin": "ast",
+      "id": "hetzner_provision_00_harden_ssh_sh__entry",
+      "community": 84,
+      "norm_label": "00-harden-ssh.sh script"
+    },
+    {
+      "label": "normalize_permitrootlogin()",
+      "file_type": "code",
+      "source_file": "hetzner/provision/00-harden-ssh.sh",
+      "source_location": "L63",
+      "metadata": {
+        "language": "bash",
+        "kind": "bash_function"
+      },
+      "_origin": "ast",
+      "id": "hetzner_provision_00_harden_ssh_normalize_permitrootlogin",
+      "community": 84,
+      "norm_label": "normalize_permitrootlogin()"
+    },
+    {
+      "label": "test_00_harden_ssh.py",
+      "file_type": "code",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "hetzner_provision_test_00_harden_ssh",
+      "community": 35,
+      "norm_label": "test_00_harden_ssh.py"
+    },
+    {
+      "label": "effective_config()",
+      "file_type": "code",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L44",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "hetzner_provision_test_00_harden_ssh_effective_config",
+      "community": 35,
+      "norm_label": "effective_config()"
+    },
+    {
+      "label": "HardenSshTests",
+      "file_type": "code",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L57",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast",
+      "id": "hetzner_provision_test_00_harden_ssh_hardensshtests",
+      "community": 35,
+      "norm_label": "hardensshtests"
+    },
+    {
+      "label": ".setUp()",
+      "file_type": "code",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L58",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "hetzner_provision_test_00_harden_ssh_hardensshtests_setup",
+      "community": 35,
+      "norm_label": ".setup()"
+    },
+    {
+      "label": "._write_fake()",
+      "file_type": "code",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L73",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "hetzner_provision_test_00_harden_ssh_hardensshtests_write_fake",
+      "community": 35,
+      "norm_label": "._write_fake()"
+    },
+    {
+      "label": ".run_script()",
+      "file_type": "code",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L79",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "hetzner_provision_test_00_harden_ssh_hardensshtests_run_script",
+      "community": 35,
+      "norm_label": ".run_script()"
+    },
+    {
+      "label": ".test_effective_without_password_passes()",
+      "file_type": "code",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L93",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_effective_without_password_passes",
+      "community": 35,
+      "norm_label": ".test_effective_without_password_passes()"
+    },
+    {
+      "label": ".test_effective_prohibit_password_passes()",
+      "file_type": "code",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L99",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_effective_prohibit_password_passes",
+      "community": 35,
+      "norm_label": ".test_effective_prohibit_password_passes()"
+    },
+    {
+      "label": ".test_genuinely_different_value_fails_and_reports_competing_dropin()",
+      "file_type": "code",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L105",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_genuinely_different_value_fails_and_reports_competing_dropin",
+      "community": 35,
+      "norm_label": ".test_genuinely_different_value_fails_and_reports_competing_dropin()"
+    },
+    {
+      "label": ".test_non_aliased_keyword_mismatch_still_fails()",
+      "file_type": "code",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L114",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_non_aliased_keyword_mismatch_still_fails",
+      "community": 35,
+      "norm_label": ".test_non_aliased_keyword_mismatch_still_fails()"
+    },
+    {
+      "label": ".test_our_dropin_cannot_be_written_aborts_before_verifying_anything()",
+      "file_type": "code",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L128",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_our_dropin_cannot_be_written_aborts_before_verifying_anything",
+      "community": 35,
+      "norm_label": ".test_our_dropin_cannot_be_written_aborts_before_verifying_anything()"
+    },
+    {
+      "label": ".test_sshd_config_error_aborts_before_reload()",
+      "file_type": "code",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L140",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_sshd_config_error_aborts_before_reload",
+      "community": 35,
+      "norm_label": ".test_sshd_config_error_aborts_before_reload()"
+    },
+    {
+      "label": "The sshd -T lines this script inspects, for a host where only our drop-in has\u2026",
+      "file_type": "rationale",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L45",
+      "_origin": "ast",
+      "id": "hetzner_provision_test_00_harden_ssh_rationale_45",
+      "community": 35,
+      "norm_label": "the sshd -t lines this script inspects, for a host where only our drop-in has..."
+    },
+    {
+      "label": "Runbook \u2014 provisioning a newly created host",
+      "file_type": "document",
+      "source_file": "hetzner/RUNBOOK-provision-host.md",
+      "id": "hetzner_runbook_provision_host",
+      "community": 93,
+      "norm_label": "runbook \u2014 provisioning a newly created host"
+    },
+    {
+      "label": "branchleft-deploy",
+      "file_type": "code",
+      "source_file": "/usr/local/sbin/branchleft-deploy",
+      "id": "usr_local_sbin_branchleft_deploy",
+      "community": 142,
+      "norm_label": "branchleft-deploy"
+    },
+    {
+      "label": "branchleft-compose@.service",
+      "file_type": "code",
+      "source_file": "branchleft-compose@.service",
+      "id": "etc_systemd_system_branchleft_compose_at_service",
+      "community": 110,
+      "norm_label": "branchleft-compose@.service"
+    },
+    {
+      "label": "Host Hardening and Provisioning",
+      "file_type": "concept",
+      "source_file": "hetzner/RUNBOOK-provision-host.md",
+      "id": "concept_host_hardening",
+      "community": 93,
+      "norm_label": "host hardening and provisioning"
     }
   ],
   "links": [
@@ -21450,17 +21612,6 @@
       "target": "branchleft_standards_workflow"
     },
     {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "hetzner/provision/00-harden-ssh.sh",
-      "source_location": "L1",
-      "weight": 1.0,
-      "_origin": "ast",
-      "confidence_score": 1.0,
-      "source": "hetzner_provision_00_harden_ssh",
-      "target": "hetzner_provision_00_harden_ssh_sh__entry"
-    },
-    {
       "relation": "defines",
       "confidence": "EXTRACTED",
       "source_file": "hetzner/provision/10-harden-updates-fail2ban.sh",
@@ -22790,6 +22941,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "hetzner/RUNBOOK-existing-stack-migration.md",
+      "_origin": "semantic",
       "source": "hetzner_runbook_existing_stack_migration_part_b",
       "target": "hetzner_object_storage"
     },
@@ -46908,6 +47060,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "hetzner/RUNBOOK-existing-stack-migration.md",
+      "_origin": "semantic",
       "source": "hetzner_runbook_existing_stack_migration_part_a",
       "target": "branchleft_ghost_platform"
     },
@@ -46916,6 +47069,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "hetzner/RUNBOOK-existing-stack-migration.md",
+      "_origin": "semantic",
       "source": "hetzner_runbook_existing_stack_migration_part_a",
       "target": "branchleft_ghost_tenant_blog"
     },
@@ -46924,6 +47078,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "hetzner/RUNBOOK-existing-stack-migration.md",
+      "_origin": "semantic",
       "source": "hetzner_runbook_existing_stack_migration_part_a",
       "target": "branchleft_shared_infra"
     },
@@ -46932,6 +47087,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "hetzner/RUNBOOK-existing-stack-migration.md",
+      "_origin": "semantic",
       "source": "hetzner_runbook_existing_stack_migration_part_a",
       "target": "branchleft_website"
     },
@@ -46940,6 +47096,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "hetzner/RUNBOOK-existing-stack-migration.md",
+      "_origin": "semantic",
       "source": "hetzner_runbook_existing_stack_migration_part_a",
       "target": "gcp_kms_pulumi_secrets"
     },
@@ -46948,14 +47105,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "hetzner/RUNBOOK-existing-stack-migration.md",
-      "source": "hetzner_runbook_existing_stack_migration_part_a",
-      "target": "ghost_platform_infra_provisioning_scripts_restore_stack_secrets_config_py"
-    },
-    {
-      "relation": "references",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "source_file": "hetzner/RUNBOOK-existing-stack-migration.md",
+      "_origin": "semantic",
       "source": "hetzner_runbook_existing_stack_migration_part_a",
       "target": "pulumi_passphrase_provider"
     },
@@ -46964,16 +47114,327 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "hetzner/RUNBOOK-existing-stack-migration.md",
+      "_origin": "semantic",
       "source": "hetzner_runbook_existing_stack_migration_part_b",
       "target": "gs_pulumi_state"
     },
     {
+      "relation": "defines",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/00-harden-ssh.sh",
+      "source_location": "L63",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_00_harden_ssh",
+      "target": "hetzner_provision_00_harden_ssh_normalize_permitrootlogin",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/00-harden-ssh.sh",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_00_harden_ssh",
+      "target": "hetzner_provision_00_harden_ssh_sh__entry",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L44",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh",
+      "target": "hetzner_provision_test_00_harden_ssh_effective_config",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L57",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests",
+      "confidence_score": 1.0
+    },
+    {
       "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L100",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_effective_prohibit_password_passes",
+      "target": "hetzner_provision_test_00_harden_ssh_effective_config",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L94",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_effective_without_password_passes",
+      "target": "hetzner_provision_test_00_harden_ssh_effective_config",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L106",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_genuinely_different_value_fails_and_reports_competing_dropin",
+      "target": "hetzner_provision_test_00_harden_ssh_effective_config",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L117",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_non_aliased_keyword_mismatch_still_fails",
+      "target": "hetzner_provision_test_00_harden_ssh_effective_config",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L135",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_our_dropin_cannot_be_written_aborts_before_verifying_anything",
+      "target": "hetzner_provision_test_00_harden_ssh_effective_config",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L142",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_sshd_config_error_aborts_before_reload",
+      "target": "hetzner_provision_test_00_harden_ssh_effective_config",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L45",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_rationale_45",
+      "target": "hetzner_provision_test_00_harden_ssh_effective_config",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L79",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_run_script",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L58",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_setup",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L99",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_effective_prohibit_password_passes",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L93",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_effective_without_password_passes",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L105",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_genuinely_different_value_fails_and_reports_competing_dropin",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L114",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_non_aliased_keyword_mismatch_still_fails",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L128",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_our_dropin_cannot_be_written_aborts_before_verifying_anything",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L140",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_sshd_config_error_aborts_before_reload",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L73",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_write_fake",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L64",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests_setup",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_write_fake",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L100",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_effective_prohibit_password_passes",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_run_script",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L94",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_effective_without_password_passes",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_run_script",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L106",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_genuinely_different_value_fails_and_reports_competing_dropin",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_run_script",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L120",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_non_aliased_keyword_mismatch_still_fails",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_run_script",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L134",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_our_dropin_cannot_be_written_aborts_before_verifying_anything",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_run_script",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/provision/test_00_harden_ssh.py",
+      "source_location": "L141",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_provision_test_00_harden_ssh_hardensshtests_test_sshd_config_error_aborts_before_reload",
+      "target": "hetzner_provision_test_00_harden_ssh_hardensshtests_run_script",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "conceptually_related_to",
       "confidence": "INFERRED",
       "confidence_score": 0.9,
-      "source_file": "hetzner/RUNBOOK-existing-stack-migration.md",
-      "source": "ghost_platform_provision_tenant_yml",
-      "target": "branchleft_ghost_tenant_blog"
+      "source_file": "hetzner/RUNBOOK-provision-host.md",
+      "source": "hetzner_runbook_provision_host",
+      "target": "concept_host_hardening"
     }
   ],
   "hyperedges": [
@@ -47021,5 +47482,5 @@
       "source_file": "hetzner/RUNBOOK-new-stack.md"
     }
   ],
-  "built_at_commit": "8ae94c46bb0d2160b4b4566f6a38ec26b72568af"
+  "built_at_commit": "7bf36ac5b33ab544783df38864aeff84838cd404"
 }
