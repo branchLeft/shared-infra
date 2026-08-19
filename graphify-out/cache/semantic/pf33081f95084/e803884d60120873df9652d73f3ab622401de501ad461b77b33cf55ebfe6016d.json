@@ -1,0 +1,1 @@
+{"nodes": [{"id": "stalwart_mail_server", "label": "Stalwart Mail Server", "file_type": "concept", "source_file": "mail/RUNBOOK-mx1-provision.md"}, {"id": "mailgun_shim", "label": "Mailgun Shim", "file_type": "concept", "source_file": "mail/RUNBOOK-mx1-provision.md"}], "edges": [], "hyperedges": []}
