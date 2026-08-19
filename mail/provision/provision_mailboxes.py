@@ -54,11 +54,12 @@ MAIL_DOMAIN = os.environ.get("MAIL_DOMAIN", "branchleft.co.uk")
 # abuse@ -- required as a receivable contact address for Microsoft SNDS
 # ownership verification and RFC 2142 abuse-reporting convention -- and for
 # blog@ -- the account the blog's submission-only SMTP credential
-# authenticates into and sends as, see provision_website_submission_credential.py).
-MAILBOXES = ("rob", "contact", "info", "sales", "complaints", "abuse", "blog")
+# authenticates into and sends as, see provision_website_submission_credential.py
+# -- and for acme@ -- the Hetzner edge's ACME_EMAIL, see hetzner/RUNBOOK-edge.md).
+MAILBOXES = ("rob", "contact", "info", "sales", "complaints", "abuse", "blog", "acme")
 
 # The ones that get a copy-forward to rob@ -- rob@ itself gets no script.
-ROLE_ADDRESSES = ("contact", "info", "sales", "complaints", "abuse", "blog")
+ROLE_ADDRESSES = ("contact", "info", "sales", "complaints", "abuse", "blog", "acme")
 
 FORWARD_TARGET = f"rob@{MAIL_DOMAIN}"
 SIEVE_SCRIPT_NAME = "forward-copy-to-rob"

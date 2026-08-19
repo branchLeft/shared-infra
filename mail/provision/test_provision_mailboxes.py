@@ -35,9 +35,9 @@ class MailboxesAndRoleAddressesTests(unittest.TestCase):
         for role in ROLE_ADDRESSES:
             self.assertIn(role, MAILBOXES)
 
-    def test_exactly_seven_mailboxes_six_role_addresses(self):
-        self.assertEqual(len(MAILBOXES), 7)
-        self.assertEqual(len(ROLE_ADDRESSES), 6)
+    def test_exactly_eight_mailboxes_seven_role_addresses(self):
+        self.assertEqual(len(MAILBOXES), 8)
+        self.assertEqual(len(ROLE_ADDRESSES), 7)
 
     def test_forward_target_is_rob_at_the_mail_domain(self):
         self.assertEqual(FORWARD_TARGET, "rob@branchleft.co.uk")
@@ -117,7 +117,7 @@ class MissingMailboxesTests(unittest.TestCase):
 
         result = missing_mailboxes(MAILBOXES, existing)
 
-        self.assertEqual(result, ["contact", "info", "complaints", "abuse", "blog"])
+        self.assertEqual(result, ["contact", "info", "complaints", "abuse", "blog", "acme"])
 
     def test_unrelated_existing_accounts_are_ignored(self):
         # e.g. the Stalwart admin bootstrap account, or some other domain's
@@ -130,7 +130,7 @@ class MissingMailboxesTests(unittest.TestCase):
 
         result = missing_mailboxes(MAILBOXES, existing)
 
-        self.assertEqual(result, ["contact", "info", "sales", "complaints", "abuse", "blog"])
+        self.assertEqual(result, ["contact", "info", "sales", "complaints", "abuse", "blog", "acme"])
 
 
 class PlanSieveActionTests(unittest.TestCase):
