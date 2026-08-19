@@ -43,6 +43,7 @@ printf '%s\\n' "$args" >> "$FAKE_IPTABLES_LOG"
 case "$args" in
     *"-S DOCKER-USER"*) exit "${FAKE_IPTABLES_DOCKER_USER_EXIT:-1}" ;;
     *" -C "*) exit "${FAKE_IPTABLES_CHECK_EXIT:-1}" ;;
+    *" -I "*) exit "${FAKE_IPTABLES_INSERT_EXIT:-0}" ;;
 esac
 exit 0
 """
@@ -92,6 +93,7 @@ class NatGatewayTests(unittest.TestCase):
         rule_present=False,
         subnet=None,
         drop_iptables=False,
+        insert_exit="0",
     ):
         if drop_iptables:
             os.remove(os.path.join(self.bin_dir, "iptables"))
@@ -104,6 +106,7 @@ class NatGatewayTests(unittest.TestCase):
                 "FAKE_IPTABLES_LOG": self.iptables_log,
                 "FAKE_IPTABLES_DOCKER_USER_EXIT": "0" if docker_user else "1",
                 "FAKE_IPTABLES_CHECK_EXIT": "0" if rule_present else "1",
+                "FAKE_IPTABLES_INSERT_EXIT": insert_exit,
                 "BRANCHLEFT_NAT_SYSCTL_CONF": self.sysctl_conf,
             }
         )
@@ -192,6 +195,33 @@ class NatGatewayTests(unittest.TestCase):
         self.assertIn("holds no public address", result.stderr)
         self.assertEqual(self.inserted(), [])
         self.assertFalse(os.path.exists(self.sysctl_conf))
+
+    def test_refuses_a_public_host_whose_default_route_leaves_the_private_nic(self):
+        # The discriminating case for the guard's scoping. This host *does*
+        # hold a public address, so a check of the weaker form -- "is there a
+        # public address anywhere on this host" -- would pass it and rebuild
+        # the routing loop. Publicness has to be a property of the interface
+        # the default route actually leaves through.
+        result = self.run_script(
+            route="default via 10.20.1.1 dev enp7s0 proto dhcp metric 100",
+            addresses="\n".join(
+                [
+                    "2: eth0    inet 203.0.113.10/32 brd 203.0.113.10 scope global dynamic eth0",
+                    "3: enp7s0    inet 10.20.1.10/32 brd 10.20.1.10 scope global dynamic enp7s0",
+                ]
+            ),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("holds no public address", result.stderr)
+        self.assertEqual(self.inserted(), [])
+
+    def test_fails_when_a_rule_cannot_be_inserted(self):
+        # `set -e` is what carries this, so a host that half-applied its rules
+        # has to exit non-zero rather than print its closing summary and let
+        # the unit go active with no egress behind it.
+        result = self.run_script(insert_exit="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("forwarding 10.20.1.0/24", result.stdout)
 
     def test_refuses_a_host_with_no_default_route(self):
         result = self.run_script(route="")

@@ -6,6 +6,13 @@
 # (Caddy and CrowdSec on the edge, MySQL on the database host, the Prometheus
 # stack on the monitoring host) runs after this and lives with the stack that
 # owns that role.
+#
+# nat-gateway.sh is the one script in this directory that is neither base nor
+# role-specific, and it is not called below. Exactly one host in the estate is
+# the gateway, and a second one masquerading the subnet builds a path nothing
+# routes to -- which no guard in either script catches. The closing notice is
+# there because a rebuilt gateway otherwise comes back fully provisioned, with
+# no forwarding and no warning that any is missing.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,3 +26,8 @@ do
     echo "=== running $script ==="
     "$SCRIPT_DIR/$script"
 done
+
+echo "=== base provisioning complete ==="
+echo "note: this set does not configure the estate's NAT gateway. If this host"
+echo "      is the gateway, nat-gateway.sh has to be run as well; on every"
+echo "      other host it must not be. RUNBOOK-provision-host.md says which."

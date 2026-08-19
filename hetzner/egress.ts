@@ -54,10 +54,21 @@ function parseIpv4(address: string): number {
   }, 0);
 }
 
+/**
+ * The prefix is matched before it is converted, not after. `Number` accepts
+ * an empty string as `0`, leading whitespace, exponents and hex — so
+ * `10.20.0.0/` reads as `/0`, whose mask is zero and whose range check then
+ * accepts every address on the internet. A digits-only match is what keeps
+ * the strictness this module exists for from having a hole under it.
+ */
 function parseCidr(cidr: string): { base: number; mask: number } {
-  const [address, prefix] = cidr.split('/');
+  const parts = cidr.split('/');
+  if (parts.length !== 2) {
+    throw new Error(`"${cidr}" is not an IPv4 CIDR`);
+  }
+  const [address, prefix] = parts as [string, string];
   const bits = Number(prefix);
-  if (!Number.isInteger(bits) || bits < 0 || bits > 32) {
+  if (!/^(0|[1-9][0-9]?)$/.test(prefix) || bits > 32) {
     throw new Error(`"${cidr}" is not an IPv4 CIDR`);
   }
   // `<<` on 32 bits is signed in JavaScript, and `1 << 32` is `1` rather than

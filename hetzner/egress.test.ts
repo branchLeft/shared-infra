@@ -65,6 +65,23 @@ describe('internetEgressRoute', () => {
     }
   });
 
+  it('refuses every prefix `Number` would silently accept', () => {
+    // Each of these converts to an integer in 0..32 and would pass a
+    // `Number.isInteger` check. The first is the dangerous one: an empty
+    // prefix reads as /0, whose mask is zero, and every address on the
+    // internet is then inside the range.
+    for (const cidr of ['10.20.0.0/', '10.20.0.0/ 8', '10.20.0.0/1e1', '10.20.0.0/0x10']) {
+      expect(() => internetEgressRoute('10.20.1.10', cidr)).toThrow('is not an IPv4 CIDR');
+    }
+    expect(() => internetEgressRoute('203.0.113.10', '10.20.0.0/')).toThrow('is not an IPv4 CIDR');
+  });
+
+  it('refuses a range carrying more than one prefix', () => {
+    expect(() => internetEgressRoute('10.20.1.10', '10.20.0.0/16/16')).toThrow(
+      'is not an IPv4 CIDR'
+    );
+  });
+
   it('refuses anything that is not a dotted-quad IPv4 address', () => {
     for (const value of ['', '10.20.1', '10.20.1.10.1', '10.20.1.256', '10.20.1.x', '10.20.1.-1']) {
       expect(() => internetEgressRoute(value)).toThrow('is not a dotted-quad IPv4 address');

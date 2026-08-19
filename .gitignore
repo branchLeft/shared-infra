@@ -4,6 +4,8 @@
 /mail/bin/
 /hetzner/node_modules/
 /hetzner/bin/
+# Written by `vitest run --coverage`, which nothing in CI commits.
+/hetzner/coverage/
 /hetzner-host/node_modules/
 /hetzner-host/dist/
 

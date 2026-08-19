@@ -56,10 +56,32 @@ it is the only one whose forwarding adds no exposure that did not exist.
 ### 1. Apply the route
 
 `hetzner/` has no CI apply path, so this is run by hand, by the platform
-owner, from a checkout of `main` that already contains the route:
+owner, from a checkout of `main` that already contains the route.
+
+Four values have to be in the environment before any command that reads
+state: the Object Storage credential for the backend `Pulumi.yaml` pins, and
+the stack passphrase. `RUNBOOK-new-stack.md` §1 and §3 are the authority for
+both, and for why each is supplied the way it is. The shape is repeated here
+rather than cross-referenced alone, because a step whose first command needs
+another file is a step nobody completes in one pass.
+
+`read -rs "VAR?prompt"` and not `read -rs -p`: this runs under zsh, where `-p`
+reads from a coprocess instead of prompting, and every command downstream then
+succeeds against an empty value.
 
 ```bash
 cd ~/branchLeft/shared-infra/hetzner
+
+export AWS_REGION=hel1
+read -rs "AWS_ACCESS_KEY_ID?Object Storage access key: "; echo; export AWS_ACCESS_KEY_ID
+read -rs "AWS_SECRET_ACCESS_KEY?Object Storage secret:     "; echo; export AWS_SECRET_ACCESS_KEY
+
+umask 077
+install -m 600 /dev/null ~/.pulumi-passphrase-tmp
+read -rs "PASSPHRASE?Stack passphrase: "; echo
+printf '%s' "$PASSPHRASE" > ~/.pulumi-passphrase-tmp; unset PASSPHRASE
+export PULUMI_CONFIG_PASSPHRASE_FILE=~/.pulumi-passphrase-tmp
+
 pulumi stack select production
 pulumi stack export --file /tmp/hetzner-network.json
 SALT=$(python3 -c "import json; print(json.load(open('/tmp/hetzner-network.json'))['deployment']['secrets_providers']['state']['salt'])")
@@ -68,20 +90,37 @@ printf '\nencryptionsalt: %s\n' "$SALT" >> Pulumi.production.yaml
 pulumi config set --secret hcloud:token
 pulumi preview --diff
 pulumi up
-git checkout -- Pulumi.production.yaml
 ```
+
+A 403 from the first `pulumi` command is the credential block above, not a
+wrong bucket. `Pulumi.yaml`'s own comment is explicit that a location or
+credential mismatch here "reads as a credential problem and sends you to the
+wrong place entirely" — check `pulumi whoami --verbose` before believing
+anything else about it.
 
 Expect exactly one create, `platform-internet-egress`, and no change to the
 network or the subnet. Anything proposing to replace either is a stop — both
 are `protect: true`, and a route is additive to both.
 
-The last line is not optional. `Pulumi.production.yaml` carries nothing this
-repository may commit, and the two lines the recipe appends are a stack
-passphrase verifier and a token ciphertext.
+Then tear the session down, from the same directory:
+
+```bash
+git checkout -- Pulumi.production.yaml
+rm -f ~/.pulumi-passphrase-tmp
+unset PULUMI_CONFIG_PASSPHRASE_FILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION
+```
+
+None of those three lines is optional. The two lines the recipe appends to
+`Pulumi.production.yaml` are a stack passphrase verifier and a token
+ciphertext, and neither may be committed.
 
 ### 2. Make the gateway forward
 
+From the repository root, not from `hetzner/` — the paths below are
+repo-root-relative, and step 1 left the shell one directory down:
+
 ```bash
+cd ~/branchLeft/shared-infra
 scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision root@<edge1-ipv4>:/root/platform-provision
 ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/nat-gateway.sh'
 ```
@@ -94,15 +133,38 @@ are inserted into is one Docker owns.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> '
-  sysctl -n net.ipv4.ip_forward &&
-  iptables -t nat -S POSTROUTING | grep -- "-s 10.20.1.0/24" &&
+  set -e
+  test "$(sysctl -n net.ipv4.ip_forward)" = 1
+  iptables -t nat -S POSTROUTING | grep -- "-s 10.20.1.0/24 .*-j MASQUERADE"
+  iptables -t filter -S DOCKER-USER | grep -- "-s 10.20.1.0/24 .*-j ACCEPT"
+  iptables -t filter -S DOCKER-USER | grep -- "-d 10.20.1.0/24 .*ESTABLISHED,RELATED -j ACCEPT"
   systemctl is-enabled branchleft-nat.service
+  echo "gateway ok"
 '
 ```
 
-Expect `1`, one `MASQUERADE` line naming the subnet and the public interface,
-and `enabled`. A missing `enabled` is the failure that only shows up at the
-next reboot, when the estate silently loses its egress.
+Expect three rule lines, `enabled`, and `gateway ok`. It exits non-zero on the
+first thing that is missing, and the output stops there — so the last line
+printed is the check that passed, and the one after it is what to fix.
+
+**All three rules are checked, not just the masquerade, and that is the point
+of this block.** The masquerade lives in the `nat` table, which Docker does not
+own, so it survives almost everything. The two rules that carry the actual
+permission are the filter-chain accepts, and they live in `DOCKER-USER` — a
+chain Docker does own, and which `iptables -F`, a `firewall-cmd --reload` or a
+change of firewall backend removes on its own. With those gone, the masquerade
+still present and the `FORWARD` policy still `DROP`, the estate has **zero
+egress** while a masquerade-only check reports success.
+
+`test` rather than reading the `sysctl` output: `sysctl -n` exits 0 whether it
+prints `0` or `1`, so a chained `&&` proves only that the command ran.
+
+On a gateway with no Docker installed the two filter rules are in `FORWARD`
+instead — substitute the chain name. Neither is true of `edge1`, which runs
+the Caddy and CrowdSec stack.
+
+A missing `enabled` is the failure that only shows up at the next reboot, when
+the estate silently loses its egress.
 
 ### 4. Provision a host that has no public address
 
@@ -127,12 +189,19 @@ Run that check **before** the provisioning set, not after. `egress ok` is the
 proof that step 1 and step 2 both took; without it every failure downstream
 presents as a broken package mirror.
 
-Then the same two commands as "Run the whole set" below, with the jump added:
+Then the same two commands as "Run the whole set" below, with the jump added,
+from the repository root:
 
 ```bash
+cd ~/branchLeft/shared-infra
 scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision root@<host-private-ip>:/root/platform-provision
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<host-private-ip> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
 ```
+
+That `scp -r` copies the whole of `provision/` — `nat-gateway.sh`,
+`branchleft_nat.sh` and the unit file included. They land on the host and must
+never be run there: a second host masquerading the subnet builds a path
+nothing routes to, and `run-all.sh` does not touch any of the three.
 
 ### What this does not solve
 
