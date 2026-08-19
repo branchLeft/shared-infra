@@ -15,6 +15,11 @@ Two independent migrations, deliberately written as two parts:
 deadline, and Part A's deadline is the one that cannot be missed. Part A
 leaves every stack fully working on the `gs://` backend it is on today.
 
+**Part C is not a third migration.** It moves nothing. It is the check that
+the passphrases Part A minted still open the archives Part A produced, run
+immediately before the GCP wind-down destroys the KMS key version — the point
+after which a wrong passphrase is unrecoverable.
+
 ---
 
 ## The gate, stated once
@@ -816,6 +821,175 @@ workstation's ambient login irrelevant. Until every project pins it,
 Finally, the repository variables that pointed at the old backend have to be
 removed once no workflow logs into it any more. A variable outliving its
 backend is a loaded gun for the next person who adds a workflow.
+
+---
+
+# Part C — prove an escrowed passphrase still opens its archive
+
+Parts A and B leave every stack passphrase-wrapped, and A.2 step 6b's
+post-re-wrap export of each one is archived offsite. Those archives are the
+only copies that survive the destruction of the GCP KMS key version, and every
+one of them is opened by a passphrase rather than by the key. The whole risk
+has therefore moved from the key to the escrow: a passphrase that was
+mis-transcribed, truncated on paste, or filed under the wrong entry looks
+identical in a password manager to one that works, and the difference only
+shows up after the key is gone, when there is nothing left to fall back to.
+
+**"It is in the password manager" and "it opens the archive" are different
+claims.** Part C checks the second one.
+
+It is a **precondition of the wind-down, not a follow-up to it**, and it is
+checked immediately before the key version is destroyed rather than weeks
+earlier — an escrow entry can be edited, and the only run that means anything
+is the most recent one.
+
+- **Every archive PASSes** — that is the evidence the wind-down's "each
+  archive's passphrase proven, from escrow, to still open it" precondition
+  asks for. Record the run and its date with the other precondition results.
+- **Anything other than a PASS** — **the key version is not destroyed.** A
+  `FAIL`, an `ARCHIVE` and an `INCONCLUSIVE` block it equally: none of them is
+  the evidence the precondition wants, and the distinction between them is
+  about what to fix, not about whether to proceed.
+
+## C.1 What the tool proves, and what it does not
+
+[`scripts/verify-archive-passphrase.py`](../scripts/verify-archive-passphrase.py)
+takes one or more archives and a passphrase, and reports whether that
+passphrase actually opens them.
+
+It does not re-implement Pulumi's decryption. It drives the real `pulumi`
+binary against a throwaway `file://` backend inside a temporary directory,
+seeds a scratch stack with the archive's own salt, and imports the archive
+into it. Two stages, both of which must pass:
+
+1. `pulumi stack init` over the archive's salt. A passphrase salt carries a
+   known plaintext encrypted under the key it derives, so Pulumi validates the
+   passphrase against the salt alone.
+2. `pulumi stack import` of the archive. Deserialising a deployment decrypts
+   every encrypted value in it, so this is the stage that proves the archive's
+   own secrets open — not merely that the passphrase matches its salt.
+
+`pulumi stack export --show-secrets` is deliberately not used. It is the
+decryption proof A.2 step 4 uses against a live stack, but its output is every
+secret the stack holds in plaintext, and an import forces the same decryption
+while emitting nothing.
+
+Three properties worth knowing before relying on it:
+
+- **It prints nothing that was decrypted.** Pulumi's own output is captured
+  and classified, never echoed — with the _correct_ passphrase over a corrupt
+  archive, Pulumi reports a JSON parse error that quotes a character of the
+  decrypted plaintext.
+- **It cannot reach live state.** `pulumi login` is never run, because it
+  rewrites `~/.pulumi/credentials.json` for every project on the machine. The
+  backend is passed per invocation and pinned to the temporary directory, the
+  run refuses to continue unless `pulumi whoami` agrees that is where it
+  landed, and the directory is removed on every exit path.
+- **It reads the archive and changes nothing.** Nothing is written outside the
+  temporary directory, and no bucket, cloud API or network call is involved.
+
+Exit codes, deliberately distinct so that "the passphrase does not work" can
+never be read as "the check did not run":
+
+| Code | Outcome        | Means                                                                                                          |
+| ---- | -------------- | -------------------------------------------------------------------------------------------------------------- |
+| `0`  | `PASS`         | every archive given opened with the supplied passphrase                                                        |
+| `1`  | `FAIL`         | Pulumi reported an incorrect passphrase, or values that do not authenticate under it. **Blocks the wind-down** |
+| `2`  | usage          | the invocation or the environment is wrong — no passphrase, an empty one, no `pulumi` binary. Nothing ran      |
+| `3`  | `ARCHIVE`      | an archive is unusable as evidence: unreadable, not a stack export, not passphrase-wrapped, or unwrapped       |
+| `4`  | `INCONCLUSIVE` | no verdict was reached — an archive with nothing encrypted in it, or a Pulumi failure of neither kind          |
+
+With several archives the worst outcome wins, in the order
+`FAIL` > `ARCHIVE` > `INCONCLUSIVE` > `PASS`.
+
+A pre-re-wrap archive reports `ARCHIVE`, naming its provider. That is correct
+rather than a defect: those exports are KMS-wrapped, no passphrase opens one,
+and they are not a fallback for this precondition — see "What this runbook
+deliberately does not cover" below.
+
+## C.2 Four passphrases, six archives
+
+A.0 decided one passphrase per repository rather than one per stack, so two
+repositories cover two archives each:
+
+| Passphrase held by             | Archives it must open                                                      |
+| ------------------------------ | -------------------------------------------------------------------------- |
+| `branchLeft/shared-infra`      | `branchleft-shared-infra/production`, `branchleft-mail/production`         |
+| `branchLeft/website`           | `branchleft-website-infra/production`                                      |
+| `branchLeft/ghost-platform`    | `branchleft-ghost-platform/platform`, `branchleft-ghost-provisioning/blog` |
+| `branchLeft/ghost-tenant-blog` | `blog-infra/blog`                                                          |
+
+**Give one repository's archives to a single invocation**, and run the tool
+four times in all. Passing all six at once would need one passphrase to open
+all of them, which is exactly the state A.0 exists to prevent; passing them in
+pairs proves the pairing as well as the passphrase.
+
+The object keys are not derivable from the stack names — one of them is
+shortened — so take them from the wind-down programme's archive record rather
+than constructing them. That record also holds the storage endpoint and the
+container name, which are deliberately not committed to this public repository.
+
+## C.3 Running it, once per passphrase
+
+The archives live in OVHcloud Object Storage and are fetched with an
+S3-compatible client. Fill `<endpoint-url>`, `<container>`, `<prefix>` and each
+`<object-key>` from the archive record named above.
+
+```bash
+# 0. Credentials and workspace. `read -rs "VAR?prompt"`, not
+#    `read -rs -p 'prompt' VAR` -- the platform owner's shell is zsh, where
+#    `-p` means "read from a coprocess", not "print a prompt". It fails with
+#    `no coprocess` and leaves the variable empty, which is a failure this
+#    procedure must not carry forward silently. Same reasoning as A.2 step 0.
+umask 077
+workdir=$(mktemp -d)
+read -rs "AWS_ACCESS_KEY_ID?Object Storage access key: "; echo; export AWS_ACCESS_KEY_ID
+read -rs "AWS_SECRET_ACCESS_KEY?Object Storage secret:     "; echo; export AWS_SECRET_ACCESS_KEY
+[ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo 'EMPTY CREDENTIAL -- do not continue'; return 1 2>/dev/null || exit 1; }
+
+# 1. Confirm the archive set is where it is expected to be, before fetching.
+aws s3 --endpoint-url <endpoint-url> ls s3://<container>/<prefix>
+
+# 2. Fetch this repository's archives. Pre-created 0600: an archive is
+#    encrypted, but its salt and every ciphertext it holds are still not
+#    world-readable material.
+install -m 600 /dev/null "$workdir/<object-key>"
+aws s3 --endpoint-url <endpoint-url> \
+  cp s3://<container>/<prefix><object-key> "$workdir/<object-key>"
+
+# 3. Supply the passphrase AS STORED in the password manager -- re-typed, not
+#    pasted from anywhere this procedure produced. Verifying against a copy
+#    this machine already had would prove only that the copy matches itself,
+#    which is the same trap A.2 step 7 exists for.
+install -m 600 /dev/null "$workdir/passphrase"
+read -rs "STORED?Escrowed passphrase for THIS repository: "; echo
+printf '%s' "$STORED" > "$workdir/passphrase"; unset STORED
+[ -s "$workdir/passphrase" ] || { echo 'EMPTY PASSPHRASE -- do not continue'; return 1 2>/dev/null || exit 1; }
+
+# 4. Verify. Both of this repository's archives in one invocation.
+#    PULUMI_CONFIG_PASSPHRASE outranks the file form, so the tool strips it
+#    from the environment it hands Pulumi and asserts it is gone -- but unset
+#    it here too, so the shell this runs in cannot be the reason it passed.
+unset PULUMI_CONFIG_PASSPHRASE
+python3 scripts/verify-archive-passphrase.py \
+  --passphrase-file "$workdir/passphrase" \
+  "$workdir/<object-key>" "$workdir/<second-object-key>"
+echo "exit: $?"
+
+# 5. Tear down. The archives are plain files holding this estate's state; do
+#    not leave them on a workstation.
+rm -rf "$workdir"
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+```
+
+Then close the shell and open a new one for the next repository's passphrase,
+for the same reason A.2 does: a passphrase file left in place is still the
+previous repository's, and every check against the next set would address it
+with the wrong secret.
+
+**Record all four runs together**, each with its exit code and the archives it
+covered. Four separate PASSes are the precondition; three PASSes and one run
+nobody kept the result of is not.
 
 ---
 
