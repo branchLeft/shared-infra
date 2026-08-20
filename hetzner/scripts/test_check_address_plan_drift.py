@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import sys
 import tempfile
 import unittest
 
@@ -27,6 +28,10 @@ def _load_module():
     path = pathlib.Path(__file__).resolve().parent / "check-address-plan-drift.py"
     spec = importlib.util.spec_from_file_location("check_address_plan_drift", path)
     module = importlib.util.module_from_spec(spec)
+    # dataclasses resolves its owning module through sys.modules at class
+    # creation time, so the module has to be registered there before exec --
+    # a module built by spec_from_file_location alone never is.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -239,11 +244,24 @@ class MalformedAddressPlanTests(unittest.TestCase):
             self.assertEqual(len(failures), 1)
             self.assertIn("cannot read", failures[0])
 
+    def test_a_plan_with_no_network_cidr_constant_fails_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            TreeBuilder(root).sound()
+            (root / "hetzner-host" / "addressPlan.ts").write_text(
+                "export const SUBNET_CIDR = '10.20.1.0/24';\n"
+                "export const HOST_IPS = { edge1: '10.20.1.10' } as const;\n"
+            )
+            failures = capd.check(root)
+            self.assertEqual(len(failures), 1)
+            self.assertIn("NETWORK_CIDR", failures[0])
+
     def test_a_plan_with_no_subnet_cidr_constant_fails_loudly(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             TreeBuilder(root).sound()
             (root / "hetzner-host" / "addressPlan.ts").write_text(
+                "export const NETWORK_CIDR = '10.20.0.0/16';\n"
                 "export const HOST_IPS = { edge1: '10.20.1.10' } as const;\n"
             )
             failures = capd.check(root)
@@ -255,6 +273,7 @@ class MalformedAddressPlanTests(unittest.TestCase):
             root = pathlib.Path(tmp)
             TreeBuilder(root).sound()
             (root / "hetzner-host" / "addressPlan.ts").write_text(
+                "export const NETWORK_CIDR = '10.20.0.0/16';\n"
                 "export const SUBNET_CIDR = '10.20.1.0/24';\n"
             )
             failures = capd.check(root)
@@ -266,6 +285,7 @@ class MalformedAddressPlanTests(unittest.TestCase):
             root = pathlib.Path(tmp)
             TreeBuilder(root).sound()
             (root / "hetzner-host" / "addressPlan.ts").write_text(
+                "export const NETWORK_CIDR = '10.20.0.0/16';\n"
                 "export const SUBNET_CIDR = '10.20.1.0/24';\n"
                 "export const HOST_IPS = {\n  db1: '10.20.1.20',\n} as const;\n"
             )
@@ -280,7 +300,7 @@ class MalformedAddressPlanTests(unittest.TestCase):
             (root / "hetzner-host" / "addressPlan.ts").write_text("")
             failures = capd.check(root)
             self.assertEqual(len(failures), 1)
-            self.assertIn("SUBNET_CIDR", failures[0])
+            self.assertIn("NETWORK_CIDR", failures[0])
 
     def test_a_host_ips_block_does_not_borrow_edge1_from_app_host_ips(self):
         # A regex that searched the whole file for the first `edge1:` rather
@@ -290,6 +310,7 @@ class MalformedAddressPlanTests(unittest.TestCase):
             root = pathlib.Path(tmp)
             TreeBuilder(root).sound()
             (root / "hetzner-host" / "addressPlan.ts").write_text(
+                "export const NETWORK_CIDR = '10.20.0.0/16';\n"
                 "export const SUBNET_CIDR = '10.20.1.0/24';\n"
                 "export const HOST_IPS = {\n  db1: '10.20.1.20',\n} as const;\n"
                 "export const APP_HOST_IPS = {\n  edge1: '10.20.1.100',\n} as const;\n"
@@ -298,19 +319,112 @@ class MalformedAddressPlanTests(unittest.TestCase):
             self.assertEqual(len(failures), 1)
             self.assertIn("names no `edge1`", failures[0])
 
+    def test_a_value_that_exists_only_inside_a_comment_is_not_the_export(self):
+        # This module's house style narrates reasoning in prose at length,
+        # including earlier decisions -- a stale value ahead of the real
+        # `export const` in a comment is a realistic accident, not a
+        # contrived one, and reading it as canonical points an operator at
+        # the wrong file entirely.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            tree = TreeBuilder(root).sound()
+            decoy = (
+                "// deprecated: export const SUBNET_CIDR = '10.20.2.0/24'; -- do not use\n"
+                "/* an old plan once used SUBNET_CIDR = '10.20.3.0/24' here */\n"
+            ) + address_plan()
+            tree.write("hetzner-host/addressPlan.ts", decoy)
+            plan = capd.read_address_plan(root / "hetzner-host" / "addressPlan.ts")
+            self.assertEqual(plan.subnet_cidr, SUBNET_CIDR)
+            self.assertEqual(capd.check(root), [])
+
+
+class FalsePositiveExemptionTests(unittest.TestCase):
+    """A literal that shares the shape of `SUBNET_CIDR` or `HOST_IPS.edge1`
+    is not automatically a stale copy of either -- these are the legitimate
+    mentions a gate that matched on shape alone would wrongly flag."""
+
+    def test_the_default_route_and_the_docker_bridge_default_are_not_flagged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            text = tree.root.joinpath("hetzner/RUNBOOK-provision-host.md").read_text()
+            text += (
+                "\nA default route (`0.0.0.0/0`) is required, alongside the "
+                "docker bridge default `172.17.0.0/16`.\n"
+            )
+            tree.write("hetzner/RUNBOOK-provision-host.md", text)
+            self.assertEqual(capd.check(tree.root), [])
+
+    def test_mentioning_the_estate_s_own_network_cidr_is_not_flagged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            text = tree.root.joinpath("hetzner/RUNBOOK-provision-host.md").read_text()
+            text += "\nThe whole estate sits inside `10.20.0.0/16`.\n"
+            tree.write("hetzner/RUNBOOK-provision-host.md", text)
+            self.assertEqual(capd.check(tree.root), [])
+
+    def test_mentioning_another_hosts_real_address_is_not_flagged(self):
+        # db1's address is a bare IPv4 literal in the shape the edge1 check
+        # scans for, and it is genuinely correct -- it just isn't edge1's.
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            text = tree.root.joinpath("hetzner/RUNBOOK-provision-host.md").read_text()
+            text += "\n`db1` is reachable at `10.20.1.20`.\n"
+            tree.write("hetzner/RUNBOOK-provision-host.md", text)
+            self.assertEqual(capd.check(tree.root), [])
+
+    def test_a_genuinely_stale_value_inside_network_cidr_still_fails(self):
+        # The exemption above must not swallow the real failure this gate
+        # exists for: a stale subnet is inside NETWORK_CIDR too, and matches
+        # no *current* plan value, which is exactly what makes it stale.
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound(plan_subnet="10.20.2.0/24")
+            failures = capd.check(tree.root)
+            self.assertTrue(any("branchleft_nat.sh" in f for f in failures), failures)
+
 
 class ParsingTests(unittest.TestCase):
-    def test_read_address_plan_returns_both_values(self):
+    def test_read_address_plan_returns_the_plans_values(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "addressPlan.ts"
             path.write_text(address_plan())
-            self.assertEqual(capd.read_address_plan(path), (SUBNET_CIDR, EDGE1))
+            plan = capd.read_address_plan(path)
+            self.assertEqual(plan.subnet_cidr, SUBNET_CIDR)
+            self.assertEqual(plan.edge1, EDGE1)
+            self.assertEqual(plan.network_cidr, "10.20.0.0/16")
+            self.assertEqual(plan.host_ips["db1"], "10.20.1.20")
+            self.assertEqual(plan.app_host_ips["app1"], "10.20.1.100")
+
+    def test_app_host_ips_is_optional(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "addressPlan.ts"
+            path.write_text(
+                "export const NETWORK_CIDR = '10.20.0.0/16';\n"
+                "export const SUBNET_CIDR = '10.20.1.0/24';\n"
+                "export const HOST_IPS = {\n  edge1: '10.20.1.10',\n} as const;\n"
+            )
+            plan = capd.read_address_plan(path)
+            self.assertEqual(plan.app_host_ips, {})
 
     def test_a_bare_ipv4_regex_does_not_match_inside_a_cidr(self):
         self.assertEqual(capd._BARE_IPV4_RE.findall("10.20.1.0/24"), [])
 
     def test_a_cidr_regex_does_not_match_a_bare_address(self):
         self.assertEqual(capd._CIDR_RE.findall("10.20.1.10"), [])
+
+    def test_strip_comments_removes_block_and_line_comments(self):
+        text = (
+            "kept1\n"
+            "// dropped line comment\n"
+            "kept2 /* dropped inline block */ kept3\n"
+            "/* dropped\nmultiline\nblock */\n"
+            "kept4\n"
+        )
+        stripped = capd._strip_comments(text)
+        self.assertIn("kept1", stripped)
+        self.assertIn("kept2", stripped)
+        self.assertIn("kept3", stripped)
+        self.assertIn("kept4", stripped)
+        self.assertNotIn("dropped", stripped)
 
 
 class ThisRepositoryTests(unittest.TestCase):
