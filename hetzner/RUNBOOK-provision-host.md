@@ -163,18 +163,20 @@ repo-root-relative, and step 1 left the shell one directory down:
 
 ```bash
 cd ~/branchLeft/shared-infra
-scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@<edge1-ipv4>:/root/platform-provision/
+scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@<edge1-ipv4>:/root/platform-provision
 ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/nat-gateway.sh'
 ```
-
-The trailing `/.` on the source and the trailing `/` on the destination matter:
-`scp -r` copies a source directory *inside* an existing destination, so without
-them a re-run nests a second copy under the first instead of refreshing it in
-place.
 
 Idempotent, and the right response to "is that host still the gateway". Re-run
 it after a Docker reinstall: the rules live in netfilter, and the chain they
 are inserted into is one Docker owns.
+
+The trailing `/.` on the `scp` source is load-bearing: without it, `scp -r`
+copies the directory *inside* the destination once the destination already
+exists, nesting a stale copy under a fresh one on any re-run. The destination
+itself must carry **no** trailing slash — `scp` in SFTP mode fails outright on
+a destination with one if the destination does not yet exist, which is
+exactly the first-provision case.
 
 ### 3. Confirm the gateway is forwarding
 
@@ -246,7 +248,7 @@ from the repository root:
 
 ```bash
 cd ~/branchLeft/shared-infra
-scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@<host-private-ip>:/root/platform-provision/
+scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@<host-private-ip>:/root/platform-provision
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<host-private-ip> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
 ```
 
@@ -270,7 +272,7 @@ address is provisioned through the gateway instead — step 4 above carries the
 same two commands with the jump added:
 
 ```bash
-scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@<host-ipv4>:/root/platform-provision/
+scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@<host-ipv4>:/root/platform-provision
 ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
 ```
 

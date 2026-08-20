@@ -361,5 +361,39 @@ class RunbookGatewayCheckTests(unittest.TestCase):
         )
 
 
+def _extract_scp_commands():
+    """Pull every provisioning `scp` line out of RUNBOOK-provision-host.md."""
+    with open(RUNBOOK, encoding="utf-8") as handle:
+        lines = handle.readlines()
+    return [line.strip() for line in lines if line.strip().startswith("scp ")]
+
+
+class RunbookScpCommandTests(unittest.TestCase):
+    """RUNBOOK-provision-host.md's `scp` commands copy hetzner/provision/
+    onto a host that may already carry a copy from an earlier run, and scp's
+    own semantics make the exact command shape the whole difference between
+    refreshing that copy in place and nesting a stale one under it. A test
+    process cannot exercise real scp/SFTP semantics without a real sshd, so
+    this asserts the command shape itself rather than the copy behaviour.
+    """
+
+    def test_every_scp_site_copies_provision_dot_to_a_slash_free_destination(self):
+        commands = _extract_scp_commands()
+        self.assertEqual(len(commands), 3, commands)
+        for command in commands:
+            tokens = command.split()
+            source = next(t for t in tokens if t.startswith("hetzner/provision"))
+            destination = tokens[-1]
+            self.assertTrue(
+                source.endswith("provision/."),
+                f"source must copy the directory's contents, not itself: {command}",
+            )
+            self.assertFalse(
+                destination.endswith("/"),
+                "a destination trailing slash makes scp fail outright in "
+                f"SFTP mode when the destination does not yet exist: {command}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
