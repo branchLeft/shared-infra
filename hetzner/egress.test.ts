@@ -1,7 +1,21 @@
 import { HOST_IPS, NETWORK_CIDR } from '@branchleft/hetzner-host';
-import { describe, expect, it } from 'vitest';
+import * as pulumi from '@pulumi/pulumi';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { INTERNET_DESTINATION, internetEgressRoute } from './egress';
+
+/**
+ * `protect` is a plain boolean the SDK resolves synchronously at
+ * construction — inherited from `parent` when a resource's own options leave
+ * it unset — and stored as a same-named private field. TypeScript's `private`
+ * is compile-time only, so a cast through `unknown` reads the value Pulumi
+ * actually resolved rather than the option literally passed in source, which
+ * is the only way to catch a future edit that drops the explicit override and
+ * lets inheritance take over again silently.
+ */
+function resolvedProtect(resource: pulumi.Resource): boolean | undefined {
+  return (resource as unknown as { readonly __protect?: boolean }).__protect;
+}
 
 /**
  * The route these arguments describe is the estate's only default route. A
@@ -94,5 +108,41 @@ describe('internetEgressRoute', () => {
     // disagree about which host the estate routes through.
     expect(() => internetEgressRoute('010.20.1.10')).toThrow('is not a dotted-quad IPv4 address');
     expect(() => internetEgressRoute('10.20.01.10')).toThrow('is not a dotted-quad IPv4 address');
+  });
+});
+
+/**
+ * `network.ts` builds its resources at module scope, so the mock provider has
+ * to be live before that module is ever loaded. A dynamic import inside
+ * `beforeAll`, after `setMocks`, is what gives that ordering — a static
+ * import at the top of this file would run before any hook does.
+ */
+describe('platform-internet-egress route, as Pulumi actually resolves it', () => {
+  let network: typeof import('./network');
+
+  beforeAll(async () => {
+    pulumi.runtime.setMocks(
+      {
+        newResource(args: pulumi.runtime.MockResourceArgs) {
+          return { id: `${args.name}-id`, state: args.inputs };
+        },
+        call() {
+          return {};
+        },
+      },
+      'egress-protect-test',
+      'test',
+      false
+    );
+    network = await import('./network');
+  });
+
+  it('confirms the parent network and subnet are protected, so the case below is a real inheritance check', () => {
+    expect(resolvedProtect(network.network)).toBe(true);
+    expect(resolvedProtect(network.subnet)).toBe(true);
+  });
+
+  it('does not inherit protect:true from the network it is parented to', () => {
+    expect(resolvedProtect(network.egressRoute)).toBe(false);
   });
 });

@@ -74,6 +74,12 @@ export const subnet = new hcloud.NetworkSubnet(
  * this route detaches nothing and loses no state — it costs the estate its
  * egress until it is reapplied, which is recoverable, and moving the gateway
  * to another host has to stay an ordinary apply.
+ *
+ * `protect: false` has to be given explicitly, not left absent: a `parent`
+ * option makes Pulumi inherit `protect` from the parent whenever a child
+ * leaves its own unset, and `network` above carries `protect: true`. An
+ * absent value here would silently pick that up instead of the `false` this
+ * resource is meant to have.
  */
 export const egressRoute = new hcloud.NetworkRoute(
   'platform-internet-egress',
@@ -83,6 +89,7 @@ export const egressRoute = new hcloud.NetworkRoute(
   },
   {
     parent: network,
+    protect: false,
     // Hetzner serialises actions against a network and rejects a second one
     // while the first holds it. Pulumi sees the subnet and this route as
     // independent children of the network and would otherwise issue both at
