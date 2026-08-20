@@ -441,6 +441,121 @@ class RunbookRestartCheckTests(unittest.TestCase):
         self.assertEqual(len(patterns), 6)
 
 
+def _extract_restart_check_script():
+    """Pull the exact remote command body out of the restart-and-reverify
+    block in §3, the same way _extract_gateway_check_patterns does for the
+    boot-time block -- so the test below runs the operator's paste, not a
+    paraphrase of it."""
+    with open(RUNBOOK, encoding="utf-8") as handle:
+        text = handle.read()
+    section = text.split("### 3. Confirm the gateway is forwarding", 1)[1]
+    section = section.split("### 4.", 1)[0]
+    blocks = section.split("```bash")[1:]
+    if len(blocks) != 2:
+        raise AssertionError(
+            f"expected 2 bash blocks in section 3, found {len(blocks)}"
+        )
+    restart_block = blocks[1].split("```", 1)[0]
+    body = restart_block.split("root@<edge1-ipv4> '", 1)[1]
+    return body.rsplit("'", 1)[0]
+
+
+FAKE_SYSTEMCTL_RESTART_CHECK = """#!/usr/bin/env bash
+case "$*" in
+    "show -p ActiveEnterTimestamp --value branchleft-nat.service")
+        if [[ -f "$FAKE_SYSTEMCTL_CALLED" ]]; then
+            printf '%s
+' "$FAKE_SYSTEMCTL_TS_AFTER"
+        else
+            : > "$FAKE_SYSTEMCTL_CALLED"
+            printf '%s
+' "$FAKE_SYSTEMCTL_TS_BEFORE"
+        fi
+        exit 0
+        ;;
+    "restart docker.service") exit 0 ;;
+esac
+exit 0
+"""
+
+FAKE_IPTABLES_SHOW = """#!/usr/bin/env bash
+case "$*" in
+    "-t nat -S POSTROUTING") printf '%s' "$NAT_POSTROUTING_SHOW"; exit 0 ;;
+    "-t filter -S DOCKER-USER") printf '%s' "$DOCKER_USER_SHOW"; exit 0 ;;
+esac
+exit 1
+"""
+
+
+class RunbookRestartCheckExecutionTests(unittest.TestCase):
+    """Runs the pasted restart-and-reverify block for real, against fakes,
+    rather than only checking it names the right commands. A block that
+    merely mentions `systemctl restart docker.service` would still print
+    success on a host where nothing re-ran the reconciler: Docker never
+    flushes DOCKER-USER on its own, and the masquerade rule lives in the
+    nat table Docker never touches, so the three rule checks alone pass
+    whether or not PartOf=docker.service actually fired. Both scenarios are
+    exercised here by controlling only what the fake `systemctl show`
+    reports for branchleft-nat.service's activation timestamp.
+    """
+
+    def setUp(self):
+        self.script = _extract_restart_check_script()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        bin_dir = os.path.join(self.tmp.name, "bin")
+        os.makedirs(bin_dir)
+        self._write_fake(os.path.join(bin_dir, "systemctl"), FAKE_SYSTEMCTL_RESTART_CHECK)
+        self._write_fake(os.path.join(bin_dir, "iptables"), FAKE_IPTABLES_SHOW)
+        self.bin_dir = bin_dir
+        self.called_marker = os.path.join(self.tmp.name, "systemctl-called")
+
+    @staticmethod
+    def _write_fake(path, content):
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        os.chmod(path, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    def run_block(self, ts_before, ts_after):
+        env = dict(os.environ)
+        env.update(
+            {
+                "PATH": f"{self.bin_dir}:/usr/bin:/bin",
+                "FAKE_SYSTEMCTL_CALLED": self.called_marker,
+                "FAKE_SYSTEMCTL_TS_BEFORE": ts_before,
+                "FAKE_SYSTEMCTL_TS_AFTER": ts_after,
+                "NAT_POSTROUTING_SHOW": NAT_POSTROUTING_SNAPSHOT,
+                "DOCKER_USER_SHOW": DOCKER_USER_SNAPSHOT,
+            }
+        )
+        return subprocess.run(
+            ["bash", "-c", self.script],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_passes_when_the_reconciler_actually_restarted(self):
+        result = self.run_block(
+            "Thu 2026-08-20 09:00:00 UTC", "Thu 2026-08-20 13:47:00 UTC"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("gateway survives a docker restart", result.stdout)
+
+    def test_fails_when_the_reconciler_never_restarted(self):
+        # The scenario the review round demonstrated: PartOf=docker.service
+        # missing or broken, docker restarts, and DOCKER-USER and the
+        # masquerade rule survive on their own -- so the three rule checks
+        # would still pass. Only the unchanged timestamp catches it, and it
+        # has to abort before those checks get a chance to print success.
+        same_timestamp = "Thu 2026-08-20 09:00:00 UTC"
+        result = self.run_block(same_timestamp, same_timestamp)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("gateway survives a docker restart", result.stdout)
+
+
 def _extract_scp_commands():
     """Pull every provisioning `scp` line out of RUNBOOK-provision-host.md."""
     with open(RUNBOOK, encoding="utf-8") as handle:
