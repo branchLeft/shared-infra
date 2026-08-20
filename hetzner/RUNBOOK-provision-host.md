@@ -220,6 +220,30 @@ the Caddy and CrowdSec stack.
 A missing `enabled` is the failure that only shows up at the next reboot, when
 the estate silently loses its egress.
 
+The three rule checks above only prove the rules are present now, not that
+they survive the one event most likely to disturb them: `docker.service`
+restarting, which is what an unattended `docker-ce` upgrade does on its own.
+Prove that separately, once, after provisioning:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> '
+  set -e
+  systemctl restart docker.service
+  iptables -t nat -S POSTROUTING | grep -- "-s 10.20.1.0/24 .*-j MASQUERADE"
+  iptables -t filter -S DOCKER-USER | grep -- "-s 10.20.1.0/24 .*-j ACCEPT"
+  iptables -t filter -S DOCKER-USER | grep -E -- "-d 10.20.1.0/24 .*ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j ACCEPT"
+  echo "gateway survives a docker restart"
+'
+```
+
+Same three checks, same exit-on-first-miss shape, run immediately after the
+restart rather than at boot -- this exercises the `PartOf=docker.service`
+propagation the unit carries, not the `After=` ordering the first check
+above already proves. A command that hangs instead of returning means the
+restart wedged rather than completed; `systemctl status
+branchleft-nat.service docker.service` on the host is the first thing to
+read.
+
 ### 4. Provision a host that has no public address
 
 Reached through the gateway, over the private network — no firewall rule

@@ -10,6 +10,14 @@ Description=branchLeft estate NAT gateway
 # which an After on an absent unit allows and a Requires would not.
 After=network-online.target docker.service
 Wants=network-online.target
+# PartOf, not Requires or BindsTo: a later `systemctl restart docker.service`
+# -- what an unattended docker-ce upgrade does -- propagates here as a
+# restart too, rerunning the reconciler against whatever chains dockerd just
+# rebuilt. Requires/BindsTo would do the same but also pull docker.service in
+# as a start dependency, which is exactly what the After above stays clear of
+# for the Docker-less host. PartOf only propagates stop/restart, never start,
+# so boot ordering is unaffected.
+PartOf=docker.service
 
 [Service]
 Type=oneshot

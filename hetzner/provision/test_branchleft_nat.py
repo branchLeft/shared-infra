@@ -27,6 +27,7 @@ import tempfile
 import unittest
 
 SCRIPT = os.path.join(os.path.dirname(__file__), "branchleft_nat.sh")
+UNIT = os.path.join(os.path.dirname(__file__), "branchleft-nat.service")
 RUNBOOK = os.path.join(
     os.path.dirname(__file__), "..", "RUNBOOK-provision-host.md"
 )
@@ -56,6 +57,13 @@ FAKE_SYSCTL = """#!/usr/bin/env bash
 exit 0
 """
 
+FAKE_SYSTEMCTL = """#!/usr/bin/env bash
+case "$*" in
+    "is-active --quiet docker.service") exit "${FAKE_SYSTEMCTL_DOCKER_ACTIVE_EXIT:-1}" ;;
+esac
+exit 0
+"""
+
 # `ip -4 route show default` on a host whose default route leaves through the
 # public interface, and `ip -4 -o addr show scope global` on the same host.
 PUBLIC_DEFAULT_ROUTE = "default via 172.31.1.1 dev eth0 proto dhcp src 203.0.113.10 metric 100"
@@ -77,6 +85,7 @@ class NatGatewayTests(unittest.TestCase):
         self._write_fake(os.path.join(bin_dir, "ip"), FAKE_IP)
         self._write_fake(os.path.join(bin_dir, "iptables"), FAKE_IPTABLES)
         self._write_fake(os.path.join(bin_dir, "sysctl"), FAKE_SYSCTL)
+        self._write_fake(os.path.join(bin_dir, "systemctl"), FAKE_SYSTEMCTL)
         self.bin_dir = bin_dir
 
         self.sysctl_conf = os.path.join(self.tmp.name, "99-branchleft-nat.conf")
@@ -94,6 +103,7 @@ class NatGatewayTests(unittest.TestCase):
         route=PUBLIC_DEFAULT_ROUTE,
         addresses=EDGE_ADDRESSES,
         docker_user=True,
+        docker_active=False,
         rule_present=False,
         subnet=None,
         drop_iptables=False,
@@ -111,6 +121,7 @@ class NatGatewayTests(unittest.TestCase):
                 "FAKE_IPTABLES_DOCKER_USER_EXIT": "0" if docker_user else "1",
                 "FAKE_IPTABLES_CHECK_EXIT": "0" if rule_present else "1",
                 "FAKE_IPTABLES_INSERT_EXIT": insert_exit,
+                "FAKE_SYSTEMCTL_DOCKER_ACTIVE_EXIT": "0" if docker_active else "1",
                 "BRANCHLEFT_NAT_SYSCTL_CONF": self.sysctl_conf,
             }
         )
@@ -162,12 +173,34 @@ class NatGatewayTests(unittest.TestCase):
         self.assertIn("--ctstate ESTABLISHED,RELATED", inbound[0])
 
     def test_uses_the_forward_chain_when_docker_is_not_installed(self):
-        result = self.run_script(docker_user=False)
+        result = self.run_script(docker_user=False, docker_active=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         filtered = [call for call in self.inserted() if call.startswith("-t filter")]
         self.assertEqual(len(filtered), 2)
         self.assertTrue(all("-I FORWARD 1" in call for call in filtered))
         self.assertIn("filtered in FORWARD", result.stdout)
+
+    def test_uses_docker_user_when_docker_runs_the_iptables_backend(self):
+        # The iptables backend is what dockerd has always done: it creates
+        # DOCKER-USER at startup, so the daemon being active and the chain
+        # existing are the same fact seen twice. Confirms the new active-
+        # daemon check does not second-guess a state that is already correct.
+        result = self.run_script(docker_user=True, docker_active=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        filtered = [call for call in self.inserted() if call.startswith("-t filter")]
+        self.assertTrue(all("-I DOCKER-USER 1" in call for call in filtered))
+
+    def test_refuses_when_docker_is_active_but_docker_user_is_absent(self):
+        # This is what Docker's nftables firewall backend looks like from
+        # here: the daemon is up, but it never created DOCKER-USER, because
+        # under nftables it is not iptables it enforces through at all.
+        # Falling back to FORWARD would write a rule Docker's own chains
+        # never consult and report success while doing it.
+        result = self.run_script(docker_user=False, docker_active=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no DOCKER-USER chain", result.stderr)
+        self.assertIn("not a safe substitute", result.stderr)
+        self.assertEqual(self.inserted(), [])
 
     def test_adds_nothing_when_the_rules_are_already_present(self):
         result = self.run_script(rule_present=True)
@@ -268,6 +301,30 @@ class NatGatewayTests(unittest.TestCase):
         self.assertTrue(all("ens3" in call for call in self.inserted()))
 
 
+class UnitFileTests(unittest.TestCase):
+    """branchleft-nat.service is installed verbatim by nat-gateway.sh, so its
+    content -- not merely its presence -- is what a later `docker.service`
+    restart depends on to reassert the estate's NAT rules."""
+
+    def setUp(self):
+        with open(UNIT, encoding="utf-8") as handle:
+            self.lines = [line.strip() for line in handle]
+
+    def test_carries_partof_docker_so_a_restart_of_docker_propagates(self):
+        self.assertIn("PartOf=docker.service", self.lines)
+
+    def test_does_not_upgrade_to_requires_or_bindsto_docker(self):
+        # Either would pull docker.service in as a start dependency, which
+        # the existing After (without Requires) deliberately avoids so a
+        # Docker-less host still comes up as a gateway.
+        joined = "\n".join(self.lines)
+        self.assertNotIn("Requires=docker.service", joined)
+        self.assertNotIn("BindsTo=docker.service", joined)
+
+    def test_keeps_the_after_ordering_a_docker_less_host_relies_on(self):
+        self.assertIn("After=network-online.target docker.service", self.lines)
+
+
 def _extract_gateway_check_patterns():
     """Pull the three `grep` invocations out of RUNBOOK-provision-host.md's
     "Confirm the gateway is forwarding" block, so the test below runs the
@@ -359,6 +416,29 @@ class RunbookGatewayCheckTests(unittest.TestCase):
         self.assertNotEqual(
             self._grep(self.return_flag, self.return_pattern, broken), 0
         )
+
+
+class RunbookRestartCheckTests(unittest.TestCase):
+    """The acceptance bar for the durability fix is a restart proven to
+    leave egress working, not merely the three rules proven present once.
+    This asserts the operator step that proves it is actually in §3, rather
+    than only in this repo's memory of having written it."""
+
+    def setUp(self):
+        with open(RUNBOOK, encoding="utf-8") as handle:
+            text = handle.read()
+        section = text.split("### 3. Confirm the gateway is forwarding", 1)[1]
+        self.section = section.split("### 4.", 1)[0]
+
+    def test_restarts_docker_before_reverifying(self):
+        self.assertIn("systemctl restart docker.service", self.section)
+
+    def test_reverifies_all_three_rules_after_the_restart(self):
+        patterns = re.findall(r'grep( -E)? -- "([^"]+)"', self.section)
+        # Three in the boot-time block, the same three again after the
+        # restart -- a partial re-check would leave exactly the gap the
+        # issue names: the masquerade rule surviving while the accepts do not.
+        self.assertEqual(len(patterns), 6)
 
 
 def _extract_scp_commands():

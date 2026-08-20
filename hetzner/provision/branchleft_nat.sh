@@ -100,6 +100,15 @@ sysctl -q -w net.ipv4.ip_forward=1
 forward_chain=FORWARD
 if iptables -t filter -S DOCKER-USER >/dev/null 2>&1; then
     forward_chain=DOCKER-USER
+elif systemctl is-active --quiet docker.service; then
+    # dockerd creates DOCKER-USER unconditionally at startup under the
+    # iptables backend, so its absence with the daemon already running means
+    # iptables is not what dockerd enforces through -- its nftables firewall
+    # backend (opt-in today, a stated future default) manages its own tables
+    # instead, and a rule written into FORWARD is one Docker's own DROP
+    # policy never consults.
+    echo "branchleft-nat: docker.service is active but iptables carries no DOCKER-USER chain -- Docker is not enforcing through iptables here (its nftables firewall backend, most likely), and FORWARD is not a safe substitute" >&2
+    exit 1
 fi
 
 ensure_rule() {
