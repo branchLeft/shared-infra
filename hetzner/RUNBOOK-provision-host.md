@@ -163,9 +163,14 @@ repo-root-relative, and step 1 left the shell one directory down:
 
 ```bash
 cd ~/branchLeft/shared-infra
-scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision root@<edge1-ipv4>:/root/platform-provision
+scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@<edge1-ipv4>:/root/platform-provision/
 ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/nat-gateway.sh'
 ```
+
+The trailing `/.` on the source and the trailing `/` on the destination matter:
+`scp -r` copies a source directory *inside* an existing destination, so without
+them a re-run nests a second copy under the first instead of refreshing it in
+place.
 
 Idempotent, and the right response to "is that host still the gateway". Re-run
 it after a Docker reinstall: the rules live in netfilter, and the chain they
@@ -179,7 +184,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> '
   test "$(sysctl -n net.ipv4.ip_forward)" = 1
   iptables -t nat -S POSTROUTING | grep -- "-s 10.20.1.0/24 .*-j MASQUERADE"
   iptables -t filter -S DOCKER-USER | grep -- "-s 10.20.1.0/24 .*-j ACCEPT"
-  iptables -t filter -S DOCKER-USER | grep -- "-d 10.20.1.0/24 .*ESTABLISHED,RELATED -j ACCEPT"
+  iptables -t filter -S DOCKER-USER | grep -E -- "-d 10.20.1.0/24 .*ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j ACCEPT"
   systemctl is-enabled branchleft-nat.service
   echo "gateway ok"
 '
@@ -200,6 +205,11 @@ egress** while a masquerade-only check reports success.
 
 `test` rather than reading the `sysctl` output: `sysctl -n` exits 0 whether it
 prints `0` or `1`, so a chained `&&` proves only that the command ran.
+
+The return-path rule matches either `ctstate` ordering: `iptables -S` renders
+the bitmask `branchleft_nat.sh` sets as `RELATED,ESTABLISHED`, not the order
+the script passed it in, and nothing here should depend on which order a given
+`iptables` build chooses.
 
 On a gateway with no Docker installed the two filter rules are in `FORWARD`
 instead — substitute the chain name. Neither is true of `edge1`, which runs
@@ -236,7 +246,7 @@ from the repository root:
 
 ```bash
 cd ~/branchLeft/shared-infra
-scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision root@<host-private-ip>:/root/platform-provision
+scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@<host-private-ip>:/root/platform-provision/
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<host-private-ip> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
 ```
 
@@ -260,7 +270,7 @@ address is provisioned through the gateway instead — step 4 above carries the
 same two commands with the jump added:
 
 ```bash
-scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision root@<host-ipv4>:/root/platform-provision
+scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@<host-ipv4>:/root/platform-provision/
 ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
 ```
 
