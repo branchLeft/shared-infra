@@ -118,7 +118,7 @@ describe('internetEgressRoute', () => {
  * import at the top of this file would run before any hook does.
  */
 describe('platform-internet-egress route, as Pulumi actually resolves it', () => {
-  let network: typeof import('./network');
+  let network: typeof import('./network.js');
 
   beforeAll(async () => {
     pulumi.runtime.setMocks(
@@ -134,7 +134,7 @@ describe('platform-internet-egress route, as Pulumi actually resolves it', () =>
       'test',
       false
     );
-    network = await import('./network');
+    network = await import('./network.js');
   });
 
   it('confirms the parent network and subnet are protected, so the case below is a real inheritance check', () => {
