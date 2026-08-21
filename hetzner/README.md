@@ -1,8 +1,8 @@
 # Hetzner foundations
 
 The private network every platform host attaches to, and the estate that
-network builds. Nothing here has been applied — both stacks are written and
-reviewable before any resource exists. The VM-create pattern itself —
+network builds. Both stacks are applied and live, in the estate hcloud
+project. The VM-create pattern itself —
 `Host`, its firewall rule sets, its cloud-init and the shared address plan —
 is no longer part of this directory: it is the published package
 `@branchleft/hetzner-host`, in the sibling `hetzner-host/` directory. See
@@ -12,29 +12,73 @@ one.
 This file covers what is in this directory and why it is shaped the way it
 is.
 
-| File                                | What it is                                                                                     |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `RUNBOOK-new-stack.md`              | Object Storage state backend + passphrase secrets provider, for new stacks                     |
-| `RUNBOOK-provision-host.md`         | Delivering and running `provision/` against a newly created host                               |
-| `scripts/probe-object-storage.py`   | Writes to a **scratch** bucket to settle Hetzner Object Storage's actual semantics             |
-| `scripts/check-hetzner-projects.py` | Structural checks over the Pulumi projects here — see "Two Pulumi projects" below              |
-| `network.ts`                        | The private network, its subnet, and the estate's default route out to the internet            |
-| `egress.ts`                         | Validates the default route's gateway against the constraints the route API enforces           |
-| `estate.ts`, `estate/`              | The estate stack — `edge1` today; see "The estate stack" for what it does not create           |
-| `provision/`                        | Idempotent host base provisioning, the Compose systemd template, and the deploy wrapper        |
-| `../hetzner-host/`                  | The published `@branchleft/hetzner-host` package — `Host`, firewalls, cloud-init, address plan |
+| File                                  | What it is                                                                                     |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `RUNBOOK-new-stack.md`                | Object Storage state backend + passphrase secrets provider, for new stacks                     |
+| `RUNBOOK-provision-host.md`           | Delivering and running `provision/` against a newly created host                               |
+| `RUNBOOK-estate-project-move.md`      | Rebuilding both stacks in the estate hcloud project, once                                      |
+| `scripts/probe-object-storage.py`     | Writes to a **scratch** bucket to settle Hetzner Object Storage's actual semantics             |
+| `scripts/check-hetzner-projects.py`   | Structural checks over the Pulumi projects here — see "Two Pulumi projects" below              |
+| `scripts/check-address-plan-drift.py` | Gates the address plan against the shell-side and runbook literals that copy it                |
+| `projectGuard.ts`                     | Refuses either stack if `hcloud:token` addresses the mail project — see below                  |
+| `network.ts`                          | The private network, its subnet, and the estate's default route out to the internet            |
+| `egress.ts`                           | Validates the default route's gateway against the constraints the route API enforces           |
+| `estate.ts`, `estate/`                | The estate stack — `edge1` today; see "The estate stack" for what it does not create           |
+| `provision/`                          | Idempotent host base provisioning, the Compose systemd template, and the deploy wrapper        |
+| `../hetzner-host/`                    | The published `@branchleft/hetzner-host` package — `Host`, firewalls, cloud-init, address plan |
 
-## Two projects, and why the boundary matters
+## Three projects, and why the boundary matters
 
 hcloud has no fine-grained IAM. An API token has full power over everything in
 its project — there is no read-only scope, no per-resource grant, no
 conditions. **The project boundary is the entire isolation mechanism**, which
-is why production and lab are separate projects rather than separate label
-sets, and why networks not spanning projects is a feature here rather than a
-limitation.
+is why these are separate projects rather than separate label sets, and why
+networks not spanning projects is a feature here rather than a limitation.
+
+| Project | Holds                                                               | Token used by                                              |
+| ------- | ------------------------------------------------------------------- | ---------------------------------------------------------- |
+| mail    | `mx1` alone                                                         | `mail/`'s stack                                            |
+| estate  | The `platform` network, `edge1`, and later `db1`, `app1..N`, `mon1` | `hetzner/`'s two stacks, and `ghost-platform`'s host stack |
+| lab     | Spikes and scratch tenants; no production data ever                 | Local work only — never a repository secret                |
+
+The estate and the mail host were one project until 2026-08-21. They were
+split because the estate's token count is about to multiply — a token per
+applying pipeline, across more than one repository — and every one of those
+tokens would otherwise have had full power over `mx1`. mx1's sending
+reputation is the asset here that is rebuildable in months rather than in an
+afternoon, so it is the one that gets the boundary drawn around it. The
+reasoning, the alternatives and the costs accepted are in
+`ghost-platform-docs` doc 14 §3.4.
+
+**What the split costs, recorded so it is not rediscovered as a surprise:**
+Ghost's bulk-mail hop to the shim stays on the public internet permanently —
+`10.20.1.40` is left unallocated in `addressPlan.ts` for that reason — and a
+Prometheus scrape of `mx1` from `edge1` crosses the public internet too, so it
+needs TLS and authentication or a source-IP allowance on mx1's firewall rather
+than a private scrape.
+
+**The boundary is not total, and one thing deliberately crosses it:** Pulumi
+state. Both estate stacks and the mail stack keep their state in the one
+Object Storage bucket, addressed by an S3 credential that is a separate
+credential from any Cloud API token. Splitting the bucket too is tracked
+separately; it is not something this split did.
+
+`projectGuard.ts` is what keeps an estate stack out of the mail project. It
+lists the servers the token can see, on every preview, and refuses the program
+if `mx1` is among them. It cannot read a project identity — hcloud exposes no
+project API at all, and nothing in a token says which project minted it — so
+the check is a sentinel, not an identity assertion: it rules out the mail
+project rather than confirming the estate one. That is enough here, because
+that is the one direction where the mistake is
+silent: the estate's state is empty before its first apply, so a mail-project
+token plans a clean create of the whole estate inside the mail project and
+every create succeeds. The reverse mistake needs no guard — the mail stack's
+state names `mx1` by id, so an estate token makes the provider miss that id
+and plan a replacement, which nobody confirms by accident.
 
 The lab project does not exist yet. Projects are console-only; there is no
-API for creating one.
+API for creating one — which is also why creating the estate project is a
+platform-owner step and not something a stack can do for itself.
 
 ## The network
 

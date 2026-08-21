@@ -10,7 +10,10 @@
 # command that reads state, and never commits the result.
 #
 # The token has no source but the operator's own copy —
-# `pulumi config set --secret hcloud:token` prompts for it. The salt does not:
+# `pulumi config set --secret hcloud:token` prompts for it. It must be the
+# **estate** project's token, never the mail project's; `projectGuard.ts`
+# refuses the program rather than trusting that, and `README.md` explains why
+# that one direction is the one worth checking. The salt does not:
 # it is recoverable from the state bucket with read access alone, because
 # `pulumi stack export` returns it uninterpreted as
 # `deployment.secrets_providers.state.salt`, the same mechanism
