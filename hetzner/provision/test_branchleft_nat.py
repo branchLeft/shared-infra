@@ -20,12 +20,16 @@ missing-iptables case testable on a machine that has iptables.
 """
 
 import os
+import re
 import stat
 import subprocess
 import tempfile
 import unittest
 
 SCRIPT = os.path.join(os.path.dirname(__file__), "branchleft_nat.sh")
+RUNBOOK = os.path.join(
+    os.path.dirname(__file__), "..", "RUNBOOK-provision-host.md"
+)
 
 FAKE_IP = """#!/usr/bin/env bash
 for arg in "$@"; do
@@ -262,6 +266,133 @@ class NatGatewayTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(all("ens3" in call for call in self.inserted()))
+
+
+def _extract_gateway_check_patterns():
+    """Pull the three `grep` invocations out of RUNBOOK-provision-host.md's
+    "Confirm the gateway is forwarding" block, so the test below runs the
+    exact command an operator pastes rather than a paraphrase of it."""
+    with open(RUNBOOK, encoding="utf-8") as handle:
+        text = handle.read()
+    section = text.split("### 3. Confirm the gateway is forwarding", 1)[1]
+    block = section.split("```bash", 1)[1].split("```", 1)[0]
+    matches = re.findall(r'grep( -E)? -- "([^"]+)"', block)
+    if len(matches) != 3:
+        raise AssertionError(
+            "expected 3 grep patterns in the runbook's gateway-check block, "
+            f"found {len(matches)}"
+        )
+    return [(flag == " -E", pattern) for flag, pattern in matches]
+
+
+# The two DOCKER-USER lines are copied verbatim from a real `iptables -S`
+# capture taken against edge1 in its known-correct state. The POSTROUTING
+# line is not itself a capture, but it is not a free guess either: iptables
+# renders an insert's flags back in the order they were given, with no
+# reordering possible for a rule that carries only one flag of each kind --
+# which is exactly what `branchleft_nat.sh` passes for the masquerade rule.
+NAT_POSTROUTING_SNAPSHOT = "-A POSTROUTING -s 10.20.1.0/24 -o eth0 -j MASQUERADE\n"
+DOCKER_USER_SNAPSHOT = (
+    "-A DOCKER-USER -d 10.20.1.0/24 -i eth0 -m conntrack "
+    "--ctstate RELATED,ESTABLISHED -j ACCEPT\n"
+    "-A DOCKER-USER -s 10.20.1.0/24 -o eth0 -j ACCEPT\n"
+)
+
+
+class RunbookGatewayCheckTests(unittest.TestCase):
+    """§3 of RUNBOOK-provision-host.md is pasted into an operator's shell
+    verbatim, so these run the same `grep` invocations against a real
+    `iptables -S` capture. The fake `iptables` above echoes back whatever
+    arguments it is given, so it cannot catch a pattern that only fails
+    against genuine kernel output -- which is what happened to the
+    conntrack-state check this class covers.
+    """
+
+    def setUp(self):
+        patterns = _extract_gateway_check_patterns()
+        self.masquerade_flag, self.masquerade_pattern = patterns[0]
+        self.outbound_flag, self.outbound_pattern = patterns[1]
+        self.return_flag, self.return_pattern = patterns[2]
+
+    @staticmethod
+    def _grep(extended, pattern, text):
+        args = ["grep"]
+        if extended:
+            args.append("-E")
+        args += ["--", pattern]
+        result = subprocess.run(
+            args, input=text, capture_output=True, text=True, check=False
+        )
+        return result.returncode
+
+    def test_masquerade_pattern_matches_a_real_postrouting_capture(self):
+        self.assertEqual(
+            self._grep(
+                self.masquerade_flag, self.masquerade_pattern, NAT_POSTROUTING_SNAPSHOT
+            ),
+            0,
+        )
+
+    def test_outbound_accept_pattern_matches_a_real_docker_user_capture(self):
+        self.assertEqual(
+            self._grep(self.outbound_flag, self.outbound_pattern, DOCKER_USER_SNAPSHOT),
+            0,
+        )
+
+    def test_return_accept_pattern_matches_the_order_iptables_actually_renders(self):
+        # This is the regression: `iptables -S` renders the ctstate bitmask
+        # `branchleft_nat.sh` sets as `RELATED,ESTABLISHED`, not the order
+        # the script passed it in, and the old pattern only accepted the
+        # order the script passed.
+        self.assertEqual(
+            self._grep(self.return_flag, self.return_pattern, DOCKER_USER_SNAPSHOT), 0
+        )
+
+    def test_return_accept_pattern_also_matches_the_order_the_script_passes(self):
+        alternate = DOCKER_USER_SNAPSHOT.replace(
+            "RELATED,ESTABLISHED", "ESTABLISHED,RELATED"
+        )
+        self.assertEqual(self._grep(self.return_flag, self.return_pattern, alternate), 0)
+
+    def test_return_accept_pattern_does_not_match_a_missing_rule(self):
+        broken = "-A DOCKER-USER -s 10.20.1.0/24 -o eth0 -j ACCEPT\n"
+        self.assertNotEqual(
+            self._grep(self.return_flag, self.return_pattern, broken), 0
+        )
+
+
+def _extract_scp_commands():
+    """Pull every provisioning `scp` line out of RUNBOOK-provision-host.md."""
+    with open(RUNBOOK, encoding="utf-8") as handle:
+        lines = handle.readlines()
+    return [line.strip() for line in lines if line.strip().startswith("scp ")]
+
+
+class RunbookScpCommandTests(unittest.TestCase):
+    """RUNBOOK-provision-host.md's `scp` commands copy hetzner/provision/
+    onto a host that may already carry a copy from an earlier run, and scp's
+    own semantics make the exact command shape the whole difference between
+    refreshing that copy in place and nesting a stale one under it. A test
+    process cannot exercise real scp/SFTP semantics without a real sshd, so
+    this asserts the command shape itself rather than the copy behaviour.
+    """
+
+    def test_every_scp_site_copies_provision_dot_to_a_slash_free_destination(self):
+        commands = _extract_scp_commands()
+        self.assertEqual(len(commands), 3, commands)
+        for command in commands:
+            tokens = command.split()
+            source = next(t for t in tokens if t.startswith("hetzner/provision"))
+            destination = tokens[-1]
+            self.assertTrue(
+                source.endswith("provision/."),
+                f"source must copy the directory's contents, not itself: {command}",
+            )
+            self.assertFalse(
+                destination.endswith("/"),
+                "a destination trailing slash makes scp fail outright in "
+                f"SFTP mode when the destination does not yet exist: {command}",
+            )
 
 
 if __name__ == "__main__":
