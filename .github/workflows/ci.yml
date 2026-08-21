@@ -281,6 +281,16 @@ jobs:
       - name: Verify the Hetzner Pulumi project layout
         run: python3 hetzner/scripts/check-hetzner-projects.py
 
+      # Same reasoning, different failure: addressPlan.ts is the source of
+      # truth for the estate's subnet and edge1's address, but the NAT
+      # script and the provisioning runbook each carry a copy as a literal,
+      # because neither has a repository checkout to import it from. A
+      # widened plan that leaves either copy behind previews clean, applies
+      # clean, and masquerades the wrong range -- every check that exists
+      # otherwise reports the resulting host healthy.
+      - name: Verify the address plan against its shell-side literals
+        run: python3 hetzner/scripts/check-address-plan-drift.py
+
   edge-config-validate:
     name: Validate (edge Caddy config)
     runs-on: ubuntu-latest
