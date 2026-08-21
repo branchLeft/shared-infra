@@ -10,7 +10,10 @@ import { defineConfig } from 'vitest/config';
  * of them *constructs resources* at module scope, which is what a Pulumi
  * program is. They are covered by `pulumi preview`, not by Vitest, and
  * leaving them in the coverage denominator would report a permanent zero for
- * files no unit test can legitimately import.
+ * files this suite does not exercise as behaviour. `egress.test.ts` does
+ * import `network.ts` under mocks, but only to pin one resolved resource
+ * option — that single assertion is not the program-level coverage this
+ * exclusion is about.
  *
  * `edge/` is included: it renders the edge host's Caddy and CrowdSec
  * configuration and constructs nothing, so unlike the three files above it is

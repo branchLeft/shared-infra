@@ -190,8 +190,11 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
-      # network.ts and estate.ts both construct resources at module scope, so
-      # neither is unit-testable here -- `pulumi preview` is what covers them.
+      # estate.ts constructs resources at module scope, so it is not
+      # unit-testable here -- `pulumi preview` is what covers it. network.ts
+      # does the same, but egress.test.ts imports it under mocks to pin one
+      # resolved resource option; that single assertion is not the
+      # program-level coverage `pulumi preview` is still relied on for.
       # host.ts, firewalls.ts, cloudInit.ts and addressPlan.ts moved to
       # @branchleft/hetzner-host, whose own CI job below runs their suite.
       # hetznerHost.test.ts is what remains here: it constructs a `Host` from
