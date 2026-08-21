@@ -61,12 +61,11 @@ You need:
 
 ## 1. Create the stack
 
-> **Superseded twice since this ran.** The stack's secrets were re-wrapped
-> onto the passphrase provider (Part A of
-> `hetzner/RUNBOOK-existing-stack-migration.md`), and its state moved off
-> `gs://branchleft-pulumi-state` to the Hetzner Object Storage backend now
-> pinned in `mail/Pulumi.yaml` (Part B). The commands below record the
-> original bootstrap; do not run them against the live stack.
+> **Do not run the commands below against the live stack.** They are the
+> original bootstrap record only. The live stack uses the passphrase secrets
+> provider (Part A of `hetzner/RUNBOOK-existing-stack-migration.md`) and the
+> Hetzner Object Storage backend pinned in `mail/Pulumi.yaml` (Part B) — not
+> the GCS bucket or the KMS key ring named here.
 
 This is a brand-new Pulumi project (`branchleft-mail`), so it has no stack
 yet. Initialize one against the same state bucket and KMS key ring the root
@@ -103,19 +102,17 @@ Option A is the one to use if you want the token available every time you
 never appears in this repo, in a commit, or in a PR — only its ciphertext
 (Option A) or your own shell environment (Option B).
 
-**Superseded: the CI apply path this paragraph deferred now exists.** The
-"future decision" the original text named was taken in doc 14 §3.5 (a
-recorded reversal — Hetzner's API is a plain bearer token with no OIDC
-equivalent, and the trade is accepted with per-project, per-pipeline token
-scoping as the compensating control). The token is now the
-`HCLOUD_TOKEN_MAIL` repository secret, scoped to the mail hcloud project
-alone and exposed only to the `mail-plan`/`mail-apply` jobs in
-`.github/workflows/ci.yml`, which preview, gate on
-`scripts/assert-no-hetzner-deletes.py`, pause for a human to read the plan,
-and apply on merge to `main`. **Steady-state applies happen on merge; this
-runbook is the first-time import procedure only.** Option A/B above remains
+**The token also lives in CI, as the `HCLOUD_TOKEN_MAIL` repository secret.**
+Doc 14 §3.5 decided that this stack applies from CI on merge to `main` —
+Hetzner's API is a plain bearer token with no OIDC equivalent, and that trade
+is accepted with per-project, per-pipeline token scoping as the compensating
+control. The secret is scoped to the mail hcloud project alone and exposed
+only to the `mail-plan`/`mail-apply` jobs in `.github/workflows/ci.yml`,
+which preview, gate on `scripts/assert-no-hetzner-deletes.py`, pause for a
+human to read the plan, and apply. **Steady-state applies happen on merge;
+this runbook is the first-time import procedure only.** Option A/B above is
 how an operator supplies the token for a hand-gated stack operation — the
-value still never appears in this repo, a commit, or a PR.
+value never appears in this repo, a commit, or a PR.
 
 ## 3. Import mx1 first
 

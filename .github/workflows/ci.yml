@@ -468,6 +468,15 @@ jobs:
   # required-reviewer rule — runs only after a human has read it. The apply job
   # re-runs preview and the delete guard itself, so the approved window can
   # never smuggle a plan past the gate.
+  #
+  # Two things the machinery cannot enforce, on the approver:
+  #   - Approve each queued apply individually, with its own plan summary open.
+  #     The pending-deployments screen offers a multi-select approve, and using
+  #     it signs off plans nobody read.
+  #   - The environment rule itself lives in repo settings. Each apply job's
+  #     first step verifies via the API that a required-reviewer rule is live
+  #     and fails the apply if not, so an unconfigured gate is a red run, not a
+  #     silent unattended apply.
   # ---------------------------------------------------------------------------
 
   deploy-plan:
@@ -643,6 +652,21 @@ jobs:
       PULUMI_SALT_EDGE: ${{ secrets.PULUMI_SALT_EDGE }}
 
     steps:
+      # If the job is running and no required-reviewer rule exists, nothing
+      # paused it — the environment key is silently inert without one. Fail
+      # here, before any credential is touched, rather than apply unattended.
+      # Needs no checkout; the token's read access covers the endpoint.
+      - name: Refuse to apply through an ungated environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reviewers=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          if [ "${reviewers:-0}" -eq 0 ]; then
+            echo "::error::the production environment has no required-reviewer rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -856,6 +880,21 @@ jobs:
       AWS_REGION: hel1
 
     steps:
+      # If the job is running and no required-reviewer rule exists, nothing
+      # paused it — the environment key is silently inert without one. Fail
+      # here, before any credential is touched, rather than apply unattended.
+      - name: Refuse to apply through an ungated environment
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reviewers=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          if [ "${reviewers:-0}" -eq 0 ]; then
+            echo "::error::the production environment has no required-reviewer rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
