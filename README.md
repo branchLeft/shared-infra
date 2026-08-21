@@ -122,7 +122,7 @@ gcloud compute ssl-policies describe branchleft-edge-tls \
   --format='value(profile,minTlsVersion,enabledFeatures)'
 ```
 
-## Cloud Armor policy (superseded)
+## Cloud Armor policy (GCP edge parity reference)
 
 **This describes the retiring GCP edge.** The rules and thresholds below are
 what `edge.ts` declares, and they are the reference the Hetzner edge's
