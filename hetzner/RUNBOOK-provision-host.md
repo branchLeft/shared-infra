@@ -220,6 +220,40 @@ the Caddy and CrowdSec stack.
 A missing `enabled` is the failure that only shows up at the next reboot, when
 the estate silently loses its egress.
 
+The three rule checks above only prove the rules are present now, not that
+anything caused them to be re-asserted. Docker never flushes `DOCKER-USER`
+across a restart, and the masquerade rule lives in the `nat` table, which
+Docker does not own at all -- so on a host that is already correctly
+configured, all three rules survive a `docker.service` restart whether or
+not `PartOf=docker.service` actually reran the reconciler. Proving that needs
+a second signal: `branchleft-nat.service`'s own activation timestamp,
+captured before and after the restart. Prove both, once, after provisioning:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> '
+  set -e
+  BEFORE="$(systemctl show -p ActiveEnterTimestamp --value branchleft-nat.service)"
+  systemctl restart docker.service
+  AFTER="$(systemctl show -p ActiveEnterTimestamp --value branchleft-nat.service)"
+  test "$BEFORE" != "$AFTER"
+  iptables -t nat -S POSTROUTING | grep -- "-s 10.20.1.0/24 .*-j MASQUERADE"
+  iptables -t filter -S DOCKER-USER | grep -- "-s 10.20.1.0/24 .*-j ACCEPT"
+  iptables -t filter -S DOCKER-USER | grep -E -- "-d 10.20.1.0/24 .*ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j ACCEPT"
+  echo "gateway survives a docker restart, reconciler reran at $AFTER"
+'
+```
+
+The timestamp check runs first and is the one that actually exercises
+`PartOf=docker.service`: if it never fired, `branchleft-nat.service` was
+never restarted, `$BEFORE` and `$AFTER` are identical, and the command stops
+there -- before the three rule checks get a chance to pass for the wrong
+reason. Those still run afterward, on the same exit-on-first-miss shape as
+the boot-time check above, because a reconciler that reran and still left a
+rule missing is a different failure worth telling apart from one that never
+ran at all. A command that hangs instead of returning means the restart
+wedged rather than completed; `systemctl status branchleft-nat.service
+docker.service` on the host is the first thing to read.
+
 ### 4. Provision a host that has no public address
 
 Reached through the gateway, over the private network — no firewall rule
