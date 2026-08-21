@@ -263,10 +263,24 @@ The command prompts. Pass no value on the command line: an argument lands in
 shell history and in the process table, and a token that has been in either
 is a token that has to be rotated.
 
-The token is scoped to one hcloud project. A lab-project token must never be
-set on a production stack and the reverse is worse — the project boundary is
-the only isolation hcloud offers, since a token has full power over
-everything in its project.
+The token is scoped to one hcloud project, and there are three: mail (`mx1`
+alone), estate (the network and every platform host), and lab. A token from
+the wrong one must never be set on a stack — the project boundary is the only
+isolation hcloud offers, since a token has full power over everything in its
+project.
+
+Both stacks in `hetzner/` check this themselves rather than trusting the step
+above: `projectGuard.ts` lists the servers the token can see, on every
+preview, and refuses the program if `mx1` is among them. It cannot do better
+than a sentinel — hcloud exposes no project API, and nothing in a token says
+which project minted it — so a lab token still passes, because a lab project
+is empty and so is an estate project before its first apply. The guard rules
+out the expensive mistake, not every mistake. Confirm
+the project by what the token can see before the first apply of a new stack:
+
+```bash
+HCLOUD_TOKEN='<the token>' hcloud server list
+```
 
 ## 5. Prove the backend before you rely on it
 

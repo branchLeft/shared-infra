@@ -5,7 +5,8 @@
 # ciphertext is only as safe as that passphrase, so both stay operator-held
 # and are written into the working copy only, never committed. The token has
 # no source but the operator's own copy (`pulumi config set --secret
-# hcloud:token` prompts for it); the salt does not need one; it is
+# hcloud:token` prompts for it) and must be the **estate** project's, which
+# `projectGuard.ts` checks rather than assumes; the salt does not need one; it is
 # recoverable from the state bucket with read access alone —
 # `pulumi stack export` returns it uninterpreted as
 # `deployment.secrets_providers.state.salt`. **Never run `pulumi stack init`
@@ -53,6 +54,11 @@ config:
   # decision, and a shared key would make one host's change read as every
   # host's.
   branchleft-hetzner-estate:edge1ServerType: cx23
+  # The *name* the key is registered under in the hcloud project, not key
+  # material. `hcloud ssh-key list` is the only place the current names can be
+  # read, and the name is per-project — a project that does not carry this one
+  # fails the apply, because `sshKeys` is create-time-only. The key behind it
+  # is `id_ed25519_hetzner`, SHA256:UZLm2m1fvggsRn3wQ7Y/oJ66dqiAhexsgkKkvTshRzk.
   branchleft-hetzner-estate:ownerSshKeyNames:
     - rob@branchleft.co.uk
   branchleft-hetzner-estate:edge1DeployPublicKey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPRwF0ZN5JU3j235hE9gBswGUkbEcriGlR5dBa4PEyMY deploy@edge1
