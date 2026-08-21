@@ -1,3 +1,17 @@
 name: branchleft-mail
 runtime: nodejs
+
+# Pinned in the project rather than left to whatever the workstation last
+# logged into, matching hetzner/Pulumi.yaml — the full argument lives there.
+# This stack's state was moved here from gs://branchleft-pulumi-state
+# (hetzner/RUNBOOK-existing-stack-migration.md Part B); until the source
+# object is retired, the old checkpoint still exists, and this pin is what
+# stops a stray `pulumi login` operating against it.
+#
+# The location below is the bucket's (`hel1`), not the server's (`nbg1`).
+# Both the endpoint host and the `region` parameter must name the bucket's
+# own location; a mismatch fails as an opaque 403 that reads as a credential
+# problem.
+backend:
+  url: 's3://branchleft-pulumi-state?endpoint=hel1.your-objectstorage.com&s3ForcePathStyle=true&region=hel1'
 description: Hetzner-hosted mail delivery host (mx1) and its firewall — the outbound-port-25 component of the self-hosted mail architecture. A separate Pulumi project from branchleft-shared-infra, deliberately — different cloud (Hetzner, not GCP), different credential, and a stack whose only two resources must never be perturbed by an edge-stack change.

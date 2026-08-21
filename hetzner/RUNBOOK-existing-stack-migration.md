@@ -208,7 +208,7 @@ Three repos hold a `PULUMI_CONFIG_PASSPHRASE` secret, and all three are set:
 
 | Repo                        | Stack it applies                                                                                                            |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `branchLeft/shared-infra`   | `branchleft-shared-infra/production` (and `branchleft-mail/production`, which has no CI apply path but shares the repo)     |
+| `branchLeft/shared-infra`   | `branchleft-shared-infra/production` (`branchleft-mail/production` shares the repo but has its own secret, `PULUMI_PASSPHRASE_MAIL`) |
 | `branchLeft/website`        | `branchleft-website-infra/production`                                                                                       |
 | `branchLeft/ghost-platform` | `branchleft-ghost-platform/platform`, `branchleft-ghost-provisioning/blog` and, during provisioning, the tenant's own stack |
 
@@ -239,9 +239,16 @@ environment-variable name; that repo's workflows can already reach every one
 of its stacks, so the isolation being given up is smaller than it first looks.
 This is settled — do not re-open it per stack while working through A.2.
 
-`shared-infra` is unaffected either way: `branchleft-mail` has no CI apply
-path at all, so only `branchleft-shared-infra/production`'s passphrase is ever
-needed in a workflow there.
+`shared-infra` reached the same collision when `branchleft-mail` gained its CI
+apply path, and resolved it the other way: **per-stack passphrases with
+per-stack secret names**, each mapped into `PULUMI_CONFIG_PASSPHRASE` at the
+job that needs it (`PULUMI_CONFIG_PASSPHRASE` itself stays the edge stack's
+secret for continuity; mail's is `PULUMI_PASSPHRASE_MAIL`, and the estate
+stacks follow that naming as they join). The repos differ deliberately:
+`ghost-platform`'s workflows already reach all three of its stacks in one run,
+so a shared passphrase gave up little; `shared-infra`'s stacks are separate
+pipelines for separate blast radii — mx1 above all — and keeping their
+passphrases separate is the point of the project split.
 
 ### The hazard that decision creates: one checkpoint, two repos
 
@@ -455,15 +462,17 @@ not from the password manager, and every check in step 6 decrypts using that
 same temp file — so a stack re-wrapped under a mistyped passphrase verifies
 perfectly and then dies at step 8, when the only copy that worked is deleted.
 
-It matters most for **`branchleft-mail/production`**, and step 7 is not
-optional there under any circumstances. Every other stack has a CI apply path
-that would fail loudly on its next run, while the KMS archive is still
+It mattered most for **`branchleft-mail/production`**, and step 7 was not
+optional there under any circumstances. Every other stack had a CI apply path
+that would fail loudly on its next run, while the KMS archive was still
 restorable — a second chance that costs a broken pipeline and nothing worse.
-`mail` has no CI apply path at all, and it is the one stack that outlives the
-GCP estate, so nothing would exercise its passphrase until somebody genuinely
-needed it: potentially months later, long after the archives were deleted and
-the key destroyed. It stays early in the order because it is the gentlest
-stack to learn on, not because it is the most forgiving to get wrong.
+`mail` had no CI apply path when its Part A ran (it has since gained one —
+the `mail-plan`/`mail-apply` jobs in `.github/workflows/ci.yml`, which now
+exercise its passphrase on every merge), and it is the one stack that
+outlives the GCP estate, so at the time nothing would have exercised its
+passphrase until somebody genuinely needed it. It stayed early in the order
+because it was the gentlest stack to learn on, not because it was the most
+forgiving to get wrong.
 
 Step 4 is the one that turns a silent failure into a loud one. `pulumi stack
 export` without `--show-secrets` succeeds without decrypting anything, so it
@@ -512,7 +521,8 @@ usable locally. **That line must never be staged or committed.** Every stack
 in this estate is salt-injected-at-deploy: the salt lives only as a
 repository secret, appended to the working copy at apply time — by CI for a
 stack CI applies, by the operator's own copy for one that has no CI apply
-path (`mail/`, `hetzner/`) — and it is never committed. This repo's own
+path (`hetzner/`'s two stacks, until they join CI applies) — and it is never
+committed. This repo's own
 `Restore the stack's encryption salt` step in `.github/workflows/ci.yml` is
 the pattern to match. Committing it publishes an offline verifier for the
 stack's passphrase in a public repo, which is exactly what A.0 exists to

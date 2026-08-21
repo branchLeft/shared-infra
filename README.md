@@ -261,11 +261,14 @@ isolated keeps a mistake here from ever being able to propose replacing
 them.
 
 See [`mail/RUNBOOK-import-mail-host.md`](mail/RUNBOOK-import-mail-host.md)
-for the import procedure, gated on the platform owner. Unlike the edge
-project above — CI-applied on merge to `main` — this project has no CI apply
-path: Hetzner's API is a plain bearer token with no Workload Identity
-Federation equivalent, so CI type-checks `mail/` only (no credentials), and
-its `pulumi up` is run by the platform owner from a workstation.
+for the first-time import procedure, gated on the platform owner. Steady-state
+applies happen in CI on merge to `main`, same as the edge project above — the
+`mail-plan`/`mail-apply` jobs in `.github/workflows/ci.yml` preview, gate on
+the Hetzner delete guard, pause for a human to read the plan, and apply.
+Hetzner's API is a plain bearer token with no Workload Identity Federation
+equivalent, so the jobs hold a long-lived token scoped to the mail hcloud
+project alone (`HCLOUD_TOKEN_MAIL`) rather than a federated credential — the
+trade doc 14 §3.5 records.
 
 ## Related documents
 
