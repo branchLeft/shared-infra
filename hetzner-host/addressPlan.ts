@@ -27,8 +27,23 @@ export const HOST_IPS = {
   edge1: '10.20.1.10',
   db1: '10.20.1.20',
   mon1: '10.20.1.30',
-  mx1: '10.20.1.40',
 } as const;
+
+/**
+ * `10.20.1.40` is not listed above and is not free either.
+ *
+ * It was mx1's reservation, from when the estate and the mail host were
+ * expected to share this network. They cannot: mx1 lives in its own hcloud
+ * project, networks do not span projects, and the only cross-project path
+ * Hetzner offers is a Robot vSwitch this programme has no dedicated-server
+ * side for. So the Ghost→shim hop stays on the public internet permanently,
+ * and an address here for mx1 would be a number that resolves to nothing
+ * while looking exactly like one that resolves to a host.
+ *
+ * It is left unallocated rather than handed to the next host, so that a
+ * firewall rule or scrape target still carrying the old value fails to match
+ * anything instead of quietly reaching whatever took the address over.
+ */
 
 /**
  * App hosts occupy .100 upwards, listed rather than computed: an address that

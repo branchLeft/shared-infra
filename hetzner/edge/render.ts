@@ -112,11 +112,14 @@ const HOSTNAME = /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/;
 const PRIVATE_ADDRESSES: Record<string, string> = { ...HOST_IPS, ...APP_HOST_IPS };
 
 /**
- * The mail host is on the estate's address plan but not behind this edge: it
- * terminates SMTP, has its own firewall, and is not on the private network at
- * all. `edge1` is this host, so naming it produces a proxy loop that answers
- * every request with a timeout after exhausting the connection pool. Both are
- * registry mistakes worth failing on rather than rendering.
+ * `mx1` is not behind this edge and never can be: it lives in its own hcloud
+ * project, and networks do not span projects, so it has no address on the
+ * plan this renderer resolves against. Named here anyway, because it is a
+ * plausible thing to type and the message it earns says why rather than
+ * `unknown upstream host`. `edge1` is this host, so naming it produces a proxy
+ * loop that answers every request with a timeout after exhausting the
+ * connection pool. Both are registry mistakes worth failing on rather than
+ * rendering.
  */
 const NOT_AN_UPSTREAM = new Set(['mx1', 'edge1']);
 

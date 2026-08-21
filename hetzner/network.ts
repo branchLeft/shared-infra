@@ -15,7 +15,9 @@ import { internetEgressRoute } from './egress';
  * - Networks do not span hcloud projects. Anything that needs to reach a
  *   host over private addressing must live in the same project as this
  *   network, which makes the project boundary and the network boundary the
- *   same boundary.
+ *   same boundary. That is why mx1 is not on this network and cannot be: it
+ *   is in the mail project, and the estate is in its own. `projectGuard.ts`
+ *   is what stops this program being applied on the wrong side of it.
  */
 export const network = new hcloud.Network(
   'platform',

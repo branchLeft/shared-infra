@@ -1,6 +1,8 @@
 import { ESTATE_LOCATION, Host, HOST_IPS } from '@branchleft/hetzner-host';
 import * as pulumi from '@pulumi/pulumi';
 
+import { verifyEstateProject } from './projectGuard';
+
 /**
  * The hosts this repository owns: the edge, and the monitoring host once it
  * splits off it. The application and database hosts are homed in the Ghost
@@ -19,6 +21,12 @@ import * as pulumi from '@pulumi/pulumi';
  * of every resource's URN, and these resources attach to a network another
  * project owns.
  */
+
+/**
+ * Refuses the whole program if `hcloud:token` addresses the mail project.
+ * See `projectGuard.ts` for why the check is one-directional.
+ */
+export const estateProjectVerified = verifyEstateProject();
 
 const config = new pulumi.Config();
 
