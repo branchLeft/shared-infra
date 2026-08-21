@@ -136,6 +136,64 @@ destroy fails until they come off, and they come off through an apply:
 
 Once done: the mail project holds `mx1`, the `platform` network and its subnet.
 
+### Step 4 fallback — when the estate stack's passphrase is unavailable
+
+This is the path that was actually executed on 2026-08-21: the stack's
+passphrase was lost at creation-time storage (the incident record is
+[branchLeft/workspace#207](https://github.com/branchLeft/workspace/issues/207)),
+and a stack whose checkpoint cannot be decrypted cannot run `pulumi destroy`.
+The resources still exist and the API still answers, so the teardown moves
+down a layer: delete the resources with the `hcloud` CLI, then discard the
+undecryptable state.
+
+Nothing recoverable is lost this way. The stack's only secret is
+`hcloud:token`, held in the password manager independently, and every
+resource in it is being destroyed by this runbook anyway.
+
+**Work by ID, not by name.** These deletions run against the project mx1
+lives in, and mx1's own protection flags cannot be assumed on (the code
+declaring them merged without an apply path). Read the ids from
+`hcloud server list`, `hcloud primary-ip list` and `hcloud firewall list`,
+`describe` each id to confirm it names the resource you think it does, and
+never type an id belonging to mx1.
+
+```bash
+hcloud server disable-protection <edge1-server-id> delete rebuild
+hcloud server delete <edge1-server-id>
+hcloud primary-ip disable-protection <edge1-ipv4-id> delete
+hcloud primary-ip delete <edge1-ipv4-id>
+hcloud primary-ip disable-protection <edge1-ipv6-id> delete
+hcloud primary-ip delete <edge1-ipv6-id>
+hcloud firewall delete <edge1-firewall-id>
+```
+
+Deleting the server first is load-bearing: it releases the network
+attachment and the firewall application, without which the network (step 5)
+and the firewall cannot be deleted.
+
+Then keep the ciphertext checkpoint (export needs no passphrase) and remove
+the stack:
+
+```bash
+cd hetzner/estate
+pulumi stack export --file ~/estate-orphaned-state-<date>.json
+pulumi stack rm production --force
+```
+
+`--force` is what skips the resources-still-exist refusal, which is accurate
+here: the resources are already gone, the state just cannot know it.
+
+One consequence for step 6: the estate stack no longer exists, so before its
+token can be set it is re-created with a **fresh** passphrase —
+`pulumi stack init production --secrets-provider passphrase` per
+`RUNBOOK-new-stack.md` §3. The committed non-secret config survives in git and
+`stack init` merges around it. Store the new passphrase in the password
+manager and the escrow, then **round-trip it before the first apply**:
+re-enter it from the password-manager entry, not from the shell you generated
+it in, and run one decrypt-touching command (`pulumi preview`). Storage-time
+corruption of a value nobody re-reads is exactly how the passphrase this
+fallback exists for was lost.
+
 ## 5. Destroy the network stack in the mail project
 
 Same checkout, in `hetzner/`. The network is protected twice over and both have
