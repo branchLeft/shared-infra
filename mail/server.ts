@@ -15,12 +15,12 @@ export const mx1 = new hcloud.Server(
     location: 'nbg1',
     image: 'debian-13',
     backups: true,
-    // These track the server's provider-side protection state. Changing
-    // either is a real apply and a deliberate hardening step: setting a
-    // value here that the live server does not have is a diff against the
-    // zero-diff import gate, not a hardening.
-    deleteProtection: false,
-    rebuildProtection: false,
+    // Hetzner-side protection, and a different layer from `protect: true`
+    // below: that stops this program deleting or replacing mx1, this stops
+    // anything else holding the project token doing so out of band. The
+    // provider requires both flags to carry the same value.
+    deleteProtection: true,
+    rebuildProtection: true,
     labels: {
       role: 'mail',
       env: 'production',
