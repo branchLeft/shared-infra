@@ -1,0 +1,1 @@
+{"nodes": [{"id": "hetzner_monitoring_stack_grafana_provisioning_datasources_prometheus", "label": "Grafana Datasource", "file_type": "code", "source_file": "hetzner/monitoring/stack/grafana/provisioning/datasources/prometheus.yaml"}], "edges": [], "hyperedges": []}
