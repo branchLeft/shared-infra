@@ -59,6 +59,15 @@ const PROBE_LOG = '/var/log/caddy/probe.log';
 const PROBE_PORT = 8080;
 
 /**
+ * Port carrying Caddy's own Prometheus metrics, on a listener separate from
+ * every public site. Compose publishes it on `edge1`'s private address only
+ * (`../monitoring/stack/compose.yml`'s Prometheus scrapes it from there) --
+ * never on the public interface, and never through the site blocks above, so
+ * a metrics request cannot reach it by way of a hostname a client controls.
+ */
+const METRICS_PORT = 9091;
+
+/**
  * Service names on the Compose network. The AppSec component is an HTTP server
  * inside the CrowdSec agent, on its own port; neither is published off that
  * network.
@@ -266,6 +275,20 @@ function probeBlock(posture: EdgePosture): Block {
   };
 }
 
+/**
+ * Serves the metrics `servers { metrics }` above collects. Address is a bare
+ * port, same as `probeBlock` -- Compose, not this file, decides which host
+ * interface it is reachable on. No protection chain: this is not
+ * user-facing traffic, and there is nothing here for the throttle or
+ * CrowdSec to usefully evaluate.
+ */
+function metricsBlock(): Block {
+  return {
+    addresses: [`:${METRICS_PORT}`],
+    body: ['metrics'],
+  };
+}
+
 function globalOptions(): string[] {
   return [
     '{',
@@ -279,8 +302,13 @@ function globalOptions(): string[] {
     // retry QUIC against a port Hetzner drops upstream — which browsers survive
     // by falling back, after caching the advertisement and stalling first
     // connections in a way that looks like anything but a firewall rule.
+    //
+    // `metrics` here only turns on collection of the per-server request
+    // counters; it opens no listener of its own. The `metrics` handler in the
+    // dedicated block below is the listener that actually serves them.
     '\tservers {',
     '\t\tprotocols h1 h2',
+    '\t\tmetrics',
     '\t}',
     '\tcrowdsec {',
     `\t\tapi_url ${CROWDSEC_LAPI_URL}`,
@@ -333,6 +361,7 @@ export function renderCaddyfile(
     }
   }
   blocks.push(probeBlock(posture));
+  blocks.push(metricsBlock());
 
   // No blank line between the banner and the global options block: `caddy fmt`
   // removes one, and a rendered file that its own formatter would rewrite makes

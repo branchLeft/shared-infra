@@ -1,0 +1,65 @@
+# Generated from sites.ts and hetzner/monitoring/render.ts.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ['alertmanager:9093']
+
+  - job_name: caddy
+    static_configs:
+      - targets: ['10.20.1.10:9091']
+
+  - job_name: crowdsec
+    static_configs:
+      - targets: ['10.20.1.10:6060']
+
+  - job_name: node
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels: {host: edge1, expected_up: 'true'}
+      - targets: ['10.20.1.100:9100']
+        labels: {host: app1, expected_up: 'false'}
+      - targets: ['10.20.1.20:9100']
+        labels: {host: db1, expected_up: 'false'}
+
+  - job_name: mysqld
+    static_configs:
+      - targets: ['10.20.1.20:9104']
+        labels: {host: db1, expected_up: 'false'}
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  - job_name: blackbox_http
+    metrics_path: /probe
+    params:
+      module: ['http_2xx']
+    static_configs:
+      - targets:
+          - https://branchleft.co.uk
+          - https://www.branchleft.co.uk
+          - https://blog.branchleft.co.uk
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'blackbox-exporter:9115'

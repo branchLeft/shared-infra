@@ -15,9 +15,9 @@ import { defineConfig } from 'vitest/config';
  * option — that single assertion is not the program-level coverage this
  * exclusion is about.
  *
- * `edge/` is included: it renders the edge host's Caddy and CrowdSec
- * configuration and constructs nothing, so unlike the three files above it is
- * both importable and worth measuring.
+ * `edge/` and `monitoring/` are included: each renders one host's config from
+ * the registry and constructs nothing, so unlike the three files above both
+ * are importable and worth measuring.
  *
  * `host.ts`, `firewalls.ts`, `cloudInit.ts` and `addressPlan.ts` — the four
  * files that used to be unit-tested here — moved to `@branchleft/hetzner-host`
@@ -29,7 +29,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig(
   defineStandardTest({
     environment: 'node',
-    coverageInclude: ['*.ts', 'edge/*.ts'],
+    coverageInclude: ['*.ts', 'edge/*.ts', 'monitoring/*.ts'],
     coverageExclude: [
       '**/*.test.ts',
       '**/*.d.ts',

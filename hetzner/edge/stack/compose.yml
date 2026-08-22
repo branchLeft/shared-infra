@@ -20,6 +20,10 @@ services:
       # The probe listener is how the runbook observes the enforcement posture
       # before any hostname resolves to this host.
       - '127.0.0.1:8080:8080'
+      # Caddy's own Prometheus metrics, bound to edge1's private address only
+      # -- reachable from the monitoring stack's own Compose project on this
+      # same host, never from the public interface.
+      - '10.20.1.10:9091:9091'
     environment:
       # Registered on the CrowdSec side by BOUNCER_KEY_caddy below, so the two
       # read the same value from /etc/branchleft/edge.env and nothing generates
@@ -48,6 +52,21 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    # Real containment, not the systemd drop-in beside this file: `branchleft-compose@edge`
+    # is `Type=oneshot` running `docker compose up -d`, which detaches and
+    # exits -- dockerd then creates this container in its own sibling scope
+    # under system.slice, not nested inside that unit's cgroup, so a
+    # `MemoryMax`/`CPUWeight` set there does not reach it. `mem_limit` and
+    # `cpu_shares` here are Docker's own per-container HostConfig, applied at
+    # creation regardless of that ancestry -- see RUNBOOK-monitoring.md's
+    # "Colocation cgroup bounds" section for the full reasoning and the
+    # combined edge+monitoring memory budget this number is one line of.
+    mem_limit: 256m
+    # Caddy over CrowdSec's AppSec component within the edge stack's own
+    # share of the host: CrowdSec's bouncer is `appsec_fail_open`, so under
+    # CPU pressure it is CrowdSec's WAF check that is designed to be skipped,
+    # not Caddy's TLS termination and reverse-proxying.
+    cpu_shares: 768
 
   crowdsec:
     image: docker.io/crowdsecurity/crowdsec:v1.7.8@sha256:2f527c9bb8b367120eb08b82890aa912ce96bfa1ada93dda0721700e4b4e0dde
@@ -60,6 +79,11 @@ services:
       # a sub-processor and a personal-data decision, not a configuration
       # default, so it stays off until it has been taken deliberately.
       DISABLE_ONLINE_API: 'true'
+      # Default is 127.0.0.1, invisible to any container that is not this
+      # one. The `ports:` mapping below is what actually restricts exposure
+      # to edge1's private address -- this only makes the metrics endpoint
+      # reachable at all.
+      PROMETHEUS_LISTEN_ADDR: '0.0.0.0'
       COLLECTIONS: >-
         crowdsecurity/caddy
         crowdsecurity/appsec-virtual-patching
@@ -71,6 +95,10 @@ services:
       APPSEC_CONFIGS: >-
         crowdsecurity/appsec-default
         crowdsecurity/crs
+    ports:
+      # Bound to edge1's private address only, same reasoning as Caddy's
+      # metrics port above.
+      - '10.20.1.10:6060:6060'
     volumes:
       - crowdsec-config:/etc/crowdsec
       # Mounted inside the volume above: the acquisition files are generated
@@ -79,6 +107,12 @@ services:
       - ./crowdsec/acquis.d:/etc/crowdsec/acquis.d:ro
       - crowdsec-data:/var/lib/crowdsec/data
       - caddy-logs:/var/log/caddy:ro
+    # Same reasoning as Caddy's limit above -- this is the actual containment,
+    # the systemd unit's MemoryMax does not reach this container. Sized for
+    # the agent plus AppSec plus CRS combined (doc 14 §3.1's 150+400 MB
+    # worst case), with headroom for rule-set growth during a real attack.
+    mem_limit: 1024m
+    cpu_shares: 256
 
 volumes:
   caddy-data:
