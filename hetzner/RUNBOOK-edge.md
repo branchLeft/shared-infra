@@ -83,10 +83,17 @@ Read the digest the deploy will pin:
 
 ```bash
 docker buildx imagetools inspect ghcr.io/branchleft/edge-caddy:caddy-2.11.4-1 \
-  --format '{{.Manifest.Digest}}'
+  --format '{{.Manifest.Digest}}' | grep -o 'sha256:[0-9a-f]*' | head -1
 ```
 
-Keep that value. Everywhere below it is written `<DIGEST>`.
+Keep that value. Everywhere below it is written `<DIGEST>`, and it means the
+**full** `sha256:<hex>` form: `branchleft-deploy` refuses a bare hex digest
+with `image reference must be digest-pinned`, because `name@<hex>` without
+the algorithm prefix is not a valid OCI reference. The `grep` is not
+decoration: `imagetools inspect` has been observed printing a
+`Name:`/`MediaType:`/`Digest:` block despite the `--format`, and the filter
+yields the bare `sha256:…` value on either output shape. Both traps bit the
+2026-08-22 redeploy.
 
 ## 2. Validate the configuration against the image that will run it
 

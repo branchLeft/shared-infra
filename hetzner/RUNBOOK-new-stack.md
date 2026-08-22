@@ -65,6 +65,18 @@ failure mode than the KMS key it replaces, and it is accepted because the
 alternative is a dependency on the very cloud account this migration exists to
 leave. Store it in two places before you use it once.
 
+**Then round-trip it — "saved and readable" is not custody.** The value that
+initialises the stack in step 3 must be entered by reading it back _out of
+the password-manager entry_, never from the terminal that generated it or
+the clipboard that still holds it; and after `stack init`, re-enter it from
+the entry once more and run one decrypt-touching command (`pulumi preview`
+does; see step 5) before the first apply. A wrong value saved at storage
+time propagates silently into every later copy — the vault export, the
+escrow — and nothing reads it back until the first real use, which can be
+days later and mid-operation. That exact failure cost the estate stack its
+state on 2026-08-21: the stack had to be torn down at the provider and
+re-initialised because no custody copy opened it.
+
 Work through the steps in order and run the teardown block at the end. Every
 `export` below is live for the whole session, so do not stop halfway.
 
@@ -126,6 +138,17 @@ and it reads the standard chain regardless of who is serving the API. That
 also means an unrelated AWS profile on the workstation will be picked up if
 these are unset — check `pulumi whoami --verbose` before trusting the result
 of anything below.
+
+**Two backends share the bucket name `branchleft-pulumi-state`** — the legacy
+GCS bucket (`gs://`) that predates the migration, and this Object Storage
+one. A stack lives in exactly one of them, so "no stack named X" against a
+backend that answers fine usually means the _other_ backend, not a missing
+stack. `scripts/pulumi-stack-inventory.json` **at the repository root** (not
+`hetzner/scripts/`, where step 2's `cd` puts you) records which stack lives
+where. Related trap: a `PULUMI_BACKEND_URL` export overrides everything and
+survives into the next project you `cd` into — unset it when switching
+projects, and let `pulumi whoami --verbose` arbitrate whenever the answer
+matters.
 
 ## 2. Install the dependencies, and know which directory you are in
 
@@ -289,6 +312,15 @@ pulumi stack ls                     # the new stack, on the new backend
 pulumi preview --stack production   # expect a create plan, no errors
 ```
 
+The preview is also the **passphrase check, and the only shape of check to
+trust**: it fails closed at `error: getting stack configuration: get stack
+secrets manager: incorrect passphrase` before touching provider or program.
+`pulumi stack export --show-secrets` is **not** a decrypt proof — observed on
+v3.255.0 exiting 0 under a wrong passphrase — and a verification built on it
+passes vacuously in both directions (INC-4 in
+`ghost-platform-docs/INCIDENTS.md`: it reported a successful production
+rotation as failed, and drove a second, unnecessary one).
+
 Then run the same preview a second time from a different machine or a clean
 checkout. The point is not the plan; it is that two clients can read the same
 state and that the lock is taken and released. Pulumi's S3 backend locks with
@@ -347,6 +379,41 @@ answer is no.
 It undoes what it wrote — restoring the bucket's prior versioning state rather
 than forcing one, never writing a state it failed to read, and reporting every
 step it could not reverse.
+
+## Rotating the passphrase later
+
+**Platform-owner work, always.** `change-secrets-provider` on a live stack
+rewrites every secret in place and sits on the authorisation registry's
+never-list for agents — the same scope rule the end of this file states for
+the migration sweep. An agent prepares these commands; the platform owner
+runs them.
+
+`pulumi stack change-secrets-provider passphrase` re-wraps config and state
+in place. Two things decide whether the rotation actually happens:
+
+- **Answer prompts by their wording, never their order.** "Enter your new
+  passphrase to **protect** config/secrets" (asked first, with a confirm)
+  takes the NEW value; "Enter your passphrase to **unlock** config/secrets"
+  takes the OLD. With `PULUMI_CONFIG_PASSPHRASE` or
+  `PULUMI_CONFIG_PASSPHRASE_FILE` set, the environment feeds the _unlock_
+  role and the new value is still prompted — so env-holds-old plus
+  new-at-the-prompt rotates correctly, and a fully interactive run works
+  too. What must never happen is reasoning from prompt order.
+- **Verify both directions with a fail-closed probe** (see step 5) — after
+  first clearing the session's passphrase plumbing: the step 3 temp file
+  still holds the OLD value and `PULUMI_CONFIG_PASSPHRASE_FILE` still points
+  at it, so a "new value" probe run without rewriting the file reads the old
+  value and reports the rotation failed (the INC-4 misdiagnosis, from the
+  other direction). Write the new value into the file, probe, write the old
+  value, probe again: the new value's `pulumi preview` gets past `getting
+stack configuration`, and the old value's fails there. An unlock prompt rejecting the old value is
+  equally conclusive. Do not use `stack export --show-secrets` for either
+  direction.
+
+The command rewrites `encryptionsalt` in the working-copy
+`Pulumi.<stack>.yaml`; revert it before staging anything, as ever. Update
+the password-manager entry and any escrow export afterwards — an escrow is a
+snapshot, and after a rotation it holds a dead value until re-exported.
 
 ## 6. Tear the session down
 
