@@ -405,7 +405,16 @@ jobs:
       # accept from one they reject, the same gap `edge-config-validate` closes
       # for Caddy.
       - name: Validate the Prometheus config and alert rules
+        # `chmod a+r` first: these images run as a non-root user, and a bind
+        # mount is read as that container-side user regardless of who wrote
+        # the file on the runner. Both files are committed with ordinary
+        # git-checkout permissions, which are already world-readable in
+        # practice, but this is the same class of failure
+        # `render_alertmanager_config.py`'s 0600 output hits below -- fixed
+        # here too so it can't recur on a future rendered file.
         run: |
+          chmod a+r hetzner/monitoring/stack/prometheus/prometheus.yml \
+            hetzner/monitoring/stack/prometheus/alerts.yml
           docker run --rm \
             -v "$PWD/hetzner/monitoring/stack/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
             -v "$PWD/hetzner/monitoring/stack/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro" \
@@ -422,7 +431,15 @@ jobs:
         run: python3 hetzner/monitoring/stack/render_alertmanager_config.py
 
       - name: Validate the Alertmanager config
+        # render_alertmanager_config.py writes this file `0600` -- correct on
+        # the real host, where it carries a real password, but unreadable to
+        # the alertmanager image's non-root user here, where a bind mount is
+        # read as that container-side user regardless of the runner's own
+        # (root) ownership. `chmod a+r` validates the same artifact the host
+        # will mount without weakening what ships there -- this step's copy
+        # never leaves the runner and is deleted immediately below.
         run: |
+          chmod a+r hetzner/monitoring/stack/alertmanager/alertmanager.yml
           docker run --rm \
             -v "$PWD/hetzner/monitoring/stack/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro" \
             --entrypoint /bin/amtool \
@@ -438,6 +455,7 @@ jobs:
 
       - name: Validate the blackbox_exporter config
         run: |
+          chmod a+r hetzner/monitoring/stack/blackbox/blackbox.yml
           docker run --rm \
             -v "$PWD/hetzner/monitoring/stack/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro" \
             --entrypoint /bin/blackbox_exporter \

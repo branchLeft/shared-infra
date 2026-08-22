@@ -148,7 +148,7 @@ as that address -- provision an `alerts` mailbox first via
 `mail/RUNBOOK-mx1-provision.md`.
 
 This step, the mailbox decision and the resulting credential are all
-Rob-gated -- see the PR's "Rob-gated steps" section for the exact command.
+platform-owner-gated -- see the PR's handover steps for the exact command.
 
 ## 3. Write the stack's secrets on the host
 
@@ -163,7 +163,7 @@ an environment variable itself, unlike Caddy's `{env.X}`.
 |---|---|---|
 | `SMTP_USERNAME` | Alertmanager (via the render script) | Step 2's submission credential |
 | `SMTP_PASSWORD` | Alertmanager (via the render script) | Step 2's submission credential |
-| `HEALTHCHECKS_PING_URL` | Alertmanager (via the render script) | The Healthchecks.io check's ping URL (PR's "Rob-gated steps") |
+| `HEALTHCHECKS_PING_URL` | Alertmanager (via the render script) | The Healthchecks.io check's ping URL (PR's handover steps) |
 | `ALERT_RECIPIENT_EMAIL` | Alertmanager (via the render script) | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too |
 | `GRAFANA_ADMIN_PASSWORD` | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`) | Generated fresh, stored in the password manager |
 
@@ -372,7 +372,7 @@ only evaluating it:
 curl -s http://127.0.0.1:9093/api/v2/status | python3 -m json.tool | grep -A2 lastNotificationTime
 ```
 
-On the Healthchecks.io side: the check named in the PR's "Rob-gated steps"
+On the Healthchecks.io side: the check named in the PR's handover steps
 should show "Last ping" within the last couple of minutes and never move to
 "Late" or "Down" while the stack is healthy.
 
@@ -397,7 +397,7 @@ alarm:
    recovers.
 
 Both are owner-executed, one-time, real-world proofs -- listed in the PR's
-"Rob-gated steps" rather than performed by CI or by an agent.
+handover steps rather than performed by CI or by an agent.
 
 ## 13. Rolling back
 
