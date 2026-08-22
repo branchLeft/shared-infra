@@ -30,9 +30,17 @@ existing server, with a different set of `ignoreChanges`. `sshKeys` and
 create-time-only at the provider, regardless of how the server came to
 exist.
 
-A `Host` produces five resources: the server, a role-scoped firewall, a
-private-network attachment at its fixed address, and — unless
-`publicNetworking` is off — an IPv4 and an IPv6 primary IP of its own. Four
+A public `Host` produces five resources: the server, a role-scoped firewall,
+a private-network attachment at its fixed address, and an IPv4 and an IPv6
+primary IP of its own. A private-only host (`publicNetworking: false`)
+produces two — server and firewall — because its network rides *inline on
+the server* rather than as a separate attachment: with no public interface
+and no inline network, Hetzner refuses to start the server at all, and the
+separate attachment lands only after creation, which is too late to boot.
+The shape is fixed at creation; moving a live host between the two shapes is
+not a supported in-place edit, and whether the inline `networks` field is
+create-time-only at the provider is unverified — preview any such flip
+against a lab host before trusting it. Four
 properties are worth knowing before using it:
 
 - **The firewall is declared on the server, not attached afterwards.** An
