@@ -11,6 +11,14 @@
 # drop-in in `../systemd/monitoring.override.conf` runs it as an
 # `ExecStartPre`, so a plain `docker compose up` run by hand needs it run
 # first too. See RUNBOOK-monitoring.md.
+#
+# Every service's `mem_limit`/`cpu_shares` is the actual cgroup containment
+# for that container -- the systemd drop-in's `MemoryMax`/`CPUWeight` do not
+# reach containers dockerd creates (see `../systemd/monitoring.override.conf`
+# for why). The `cpu_shares` values total 2048 here against 1024 across
+# `hetzner/edge/stack/compose.yml`'s two containers -- the same 2:1 ratio the
+# systemd drop-ins' `CPUWeight` express, implemented where it actually takes
+# effect.
 name: monitoring
 
 services:
@@ -34,9 +42,16 @@ services:
       - prometheus-data:/prometheus
     # Sized from the §3.1 arithmetic in RUNBOOK-monitoring.md: a ceiling well
     # above the ~300-500 MB doc 14 estimates for this host count and series
-    # volume, not a tight budget -- the systemd-level MemoryMax on the whole
-    # unit is the real backstop.
+    # volume, not a tight budget. This is the real containment -- Docker's
+    # own per-container HostConfig, applied at creation -- not the systemd
+    # drop-in's MemoryMax, which bounds `branchleft-compose@monitoring`'s own
+    # cgroup and not the containers dockerd creates as its siblings under
+    # system.slice. See RUNBOOK-monitoring.md's "Colocation cgroup bounds".
     mem_limit: 768m
+    # Highest share in this stack: doc 14 names "an Alertmanager that can
+    # still evaluate and dispatch" as what colocation must not lose, and that
+    # chain starts with Prometheus evaluating rules against fresh scrapes.
+    cpu_shares: 1024
     depends_on:
       alertmanager:
         condition: service_started
@@ -58,6 +73,8 @@ services:
       - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager-data:/alertmanager
     mem_limit: 128m
+    # Second-highest: the other half of "still evaluate and dispatch".
+    cpu_shares: 512
 
   grafana:
     image: docker.io/grafana/grafana:12.4.9@sha256:615caa575e7272e2f65f423f4c6b2c901334c5ba72bbae71f4bab1b7c3211fe9
@@ -80,6 +97,7 @@ services:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
     mem_limit: 384m
+    cpu_shares: 256
     depends_on:
       prometheus:
         condition: service_started
@@ -100,6 +118,7 @@ services:
       - /sys:/host/sys:ro
       - /:/host/root:ro
     mem_limit: 64m
+    cpu_shares: 128
 
   blackbox-exporter:
     image: docker.io/prom/blackbox-exporter:v0.28.0@sha256:43027b43fb785b7c5adc53bd3b5dbc1a258270a2e8aff24f477b45c4e38dac68
@@ -107,6 +126,7 @@ services:
     volumes:
       - ./blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
     mem_limit: 64m
+    cpu_shares: 64
 
   cadvisor:
     image: ghcr.io/google/cadvisor:v0.60.5@sha256:763aecf1c32c2be8a1a75f9abfc2fc461005c9dbbaa39cb356b354aac1296dbe
@@ -121,6 +141,7 @@ services:
       - /var/lib/docker:/var/lib/docker:ro
       - /dev/disk:/dev/disk:ro
     mem_limit: 256m
+    cpu_shares: 64
 
 volumes:
   prometheus-data:

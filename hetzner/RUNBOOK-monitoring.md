@@ -4,8 +4,8 @@ Deploying Prometheus, Alertmanager, Grafana and their exporters onto `edge1`,
 colocated with the edge stack until TENANT_1
 (`ghost-platform-docs/14-hetzner-migration-programme.md` §3.1), and verifying
 the three mitigations that ride with that collocation: cgroup bounds on both
-compose units, Grafana bound to the private address only, and a heartbeat
-wired to an external dead-man's switch.
+compose stacks' containers, Grafana bound to the private address only, and a
+heartbeat wired to an external dead-man's switch.
 
 `edge1` is `46.225.95.167` (private `10.20.1.10`), a `cx23` in `nbg1`. Every
 `ssh`/`scp` below uses the platform owner's key, `~/.ssh/id_ed25519_hetzner`.
@@ -30,20 +30,33 @@ Expect `active` then `ready`. `python3` is what
 `stack/render_alertmanager_config.py` runs under -- see "Colocation cgroup
 bounds" below for why that script exists at all.
 
-## Colocation cgroup bounds -- the sizing arithmetic
+## Colocation cgroup bounds -- the sizing arithmetic and where it actually lives
 
 The amendment accepted onto this story asks for `MemoryMax` and `CPUWeight`
 bounds on the CrowdSec and Prometheus units so that neither can starve the
-other. The two systemd instances involved are `branchleft-compose@edge` and
-`branchleft-compose@monitoring` -- a Compose stack has no per-container
-systemd unit of its own, so a bound "on the CrowdSec unit" is a bound on the
-whole edge stack it runs in, and likewise for Prometheus and the monitoring
-stack.
+other.
+
+**Where the real containment lives is not the systemd units.**
+`branchleft-compose@edge`/`@monitoring` are `Type=oneshot` running `docker
+compose up -d`, which detaches and exits the moment the containers are
+created -- dockerd then runs each container in its own sibling scope under
+`system.slice`, not nested inside the calling unit's cgroup. A `MemoryMax` or
+`CPUWeight` set on the unit therefore bounds the `docker compose` CLI
+invocation and this stack's `ExecStartPre` script, not Caddy, CrowdSec,
+Prometheus or any of the other five containers. The systemd drop-ins below
+are still installed -- `systemctl show` on them is part of the amendment's
+literal acceptance text, and they are a real (if narrow) backstop on whatever
+does run inside that cgroup -- but they are not what makes the mitigation
+real. **The actual per-process containment is `mem_limit`/`cpu_shares` set
+directly on each service in both `compose.yml` files** -- Docker's own
+per-container `HostConfig`, applied at container creation regardless of
+which process asked for it, so it holds whether or not the containers are
+cgroup-descendants of the systemd unit that started them.
 
 **Worst-case memory, per doc 14 §3.1's own arithmetic plus this story's
 additions:**
 
-| Component | Worst case | Unit |
+| Component | Worst case | Stack |
 |---|---|---|
 | Caddy | 100 MB | edge |
 | CrowdSec agent | 150 MB | edge |
@@ -59,68 +72,67 @@ additions:**
 
 Doc 14's own figure (1.2-1.8 GB of 4 GB) predates this story's exporters,
 cAdvisor and Grafana; 650 MB + 1060 MB = 1710 MB is the like-for-like update.
-OS, Docker and sshd overhead (300-400 MB per doc 14) sits outside both cgroups
--- `branchleft-compose@X.service`'s slice bounds only that unit's own
-processes, not `docker.service` itself.
+OS, Docker and sshd overhead (300-400 MB per doc 14) sits outside every
+container's cgroup by construction.
 
-**Chosen ceilings:**
+**Per-container `mem_limit`s, committed in each `compose.yml`:**
 
-- `edge`: `MemoryMax=1536M` -- roughly 2.4x the 650 MB worst case, headroom
-  for AppSec/CRS rule-set growth during an actual attack rather than a tight
-  budget.
-- `monitoring`: `MemoryMax=2048M` -- roughly 1.9x the 1060 MB worst case,
-  headroom for Prometheus series growth as the estate scales before this
-  number gets revisited at the TENANT_1 split.
+- `edge`: Caddy `256m` (~2.5x the 100 MB worst case), CrowdSec `1024m`
+  (~1.9x the combined 550 MB agent+AppSec+CRS worst case, headroom for
+  rule-set growth during a real attack) -- 1280 MB committed.
+- `monitoring`: `768+128+384+64+64+256 = 1664 MB` committed (Prometheus,
+  Alertmanager, Grafana, node_exporter, blackbox_exporter, cAdvisor in that
+  order).
 
-1536 + 2048 = 3584 MB of 4096 MB, leaving 512 MB (12.5%) for everything
-outside both slices -- comfortably above the 300-400 MB doc 14 estimates
-needs there.
+1280 + 1664 = 2944 MB of 4096 MB committed across every container ceiling,
+leaving 1152 MB (28%) for OS/Docker/sshd overhead and burst above any single
+container's own limit -- comfortably above the 300-400 MB doc 14 estimates
+needs there. The systemd drop-ins' `MemoryMax` (`1536M` edge, `2048M`
+monitoring) are set above each stack's own container-limit total for the
+same reason: whatever they do bound should never be the thing that trips
+first.
 
-**`CPUWeight` is asymmetric on purpose.** Doc 14 §3.1 names what separating
-the hosts would buy that collocation does not get for free: "an Alertmanager
-that can still evaluate and dispatch" while the edge is CPU-saturated
-(cgroup2 CPUWeight range is 1-10000; unprivileged default is 100). `edge` gets
-the default, 100 -- it is the side most likely to be under attack, and boosting
-it further would only take proportional CPU share away from the alerting
-path under exactly the contention this bound exists for. `monitoring` gets
-`CPUWeight=200`, double weight, so that when the two compete for a saturated
-CPU, Prometheus keeps evaluating rules and Alertmanager keeps dispatching --
-which is what lets the Watchdog heartbeat (below) keep firing through an edge
-incident rather than only after it, and is what turns "the edge is flooded"
-into a distinguishable alert instead of total silence.
+**`cpu_shares` (containers) and `CPUWeight` (systemd units) are both
+asymmetric, for the same reason.** Doc 14 §3.1 names what separating the
+hosts would buy that collocation does not get for free: "an Alertmanager
+that can still evaluate and dispatch" while the edge is CPU-saturated.
+`edge`'s two containers total `1024` shares (Caddy `768`, CrowdSec `256` --
+CrowdSec's bouncer is `appsec_fail_open`, so under pressure it is designed to
+be the one that degrades, not Caddy's TLS termination and reverse-proxying).
+`monitoring`'s six containers total `2048` shares (Prometheus `1024`,
+Alertmanager `512`, Grafana `256`, node_exporter `128`, blackbox_exporter
+`64`, cAdvisor `64` -- weighted so the evaluate-and-dispatch chain wins first
+call on whatever CPU is available). `2048:1024` is the same `2:1` ratio the
+systemd drop-ins' `CPUWeight=200`/`CPUWeight=100` express -- implemented
+twice, once where the amendment's text points and once where it actually
+takes effect, so that when the two stacks compete for a saturated CPU,
+Prometheus keeps evaluating rules and Alertmanager keeps dispatching. That is
+what lets the Watchdog heartbeat (§11 below) keep firing through an edge
+incident rather than only after it.
 
-Per-container `mem_limit`s inside `hetzner/monitoring/stack/compose.yml` give
-the individual containers real containment within the monitoring unit's own
-2048 MB ceiling (768+128+384+64+64+256 = 1664 MB committed, leaving headroom
-within the slice); `hetzner/edge/stack/compose.yml` is deliberately left
-without new per-container limits here -- the amendment's fix for that side is
-the unit-level bound, and adding per-container limits there would be
-unrelated churn in a file this story is only scoped to touch for the metrics
-endpoints below.
+**Verified locally** (not on `edge1` -- this workstation has no `10.20.1.10`
+to bind, so only the container-creation half of each stack could be brought
+up): `docker inspect --format '{{.HostConfig.Memory}} {{.HostConfig.CPUShares}}'`
+against every container in both stacks read back exactly the bytes and
+shares above. The host-side verification in step 10 below is the same check,
+plus the one thing this workstation cannot show: that the containers are
+*not* nested under either systemd unit's cgroup.
 
-## 1. Enable metrics endpoints on the edge stack (already in this PR)
+## 1. Copy the updated edge stack (metrics endpoints + cgroup containment)
 
 `hetzner/edge/render.ts` and `hetzner/edge/stack/compose.yml` already carry
-this change; nothing to do here except know it happened. Caddy now serves its
-own Prometheus metrics on `:9091` inside its container, and CrowdSec's
-built-in metrics endpoint (`PROMETHEUS_LISTEN_ADDR=0.0.0.0`, its own default
-is `127.0.0.1`, invisible to any other container) is on `:6060`. Compose
-publishes both at `10.20.1.10:<port>` -- edge1's private address, never the
-public one -- so redeploying the edge stack is a precondition for this
-stack's `caddy` and `crowdsec` scrape jobs to have anything to read.
-
-Re-run `RUNBOOK-edge.md` step 4 (`rsync hetzner/edge/stack/` to
-`/opt/branchleft/edge/`) to pick up the new `compose.yml`, then:
+this PR's edge-side changes: Caddy's own Prometheus metrics on `:9091`,
+CrowdSec's built-in metrics moved off its default `127.0.0.1` via
+`PROMETHEUS_LISTEN_ADDR=0.0.0.0` onto `:6060`, both published at
+`10.20.1.10:<port>` only, and the `mem_limit`/`cpu_shares` from the section
+above. Copy it, but **do not restart yet** -- step 6 restarts once, after the
+cgroup drop-in below is also in place, so `edge` does not need reloading
+twice.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
-  'systemctl restart branchleft-compose@edge'
+rsync -av --delete -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
+  hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/
 ```
-
-No new image and no `branchleft-deploy` invocation -- this change is
-Compose-only, the digest already running is unaffected. Do this before step 7
-below, or the `caddy` and `crowdsec` scrape targets read as `down` for a
-reason unrelated to this stack.
 
 ## 2. Provision the Alertmanager submission credential
 
@@ -156,8 +168,8 @@ an environment variable itself, unlike Caddy's `{env.X}`.
 | `GRAFANA_ADMIN_PASSWORD` | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`) | Generated fresh, stored in the password manager |
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
-  'test -f /etc/branchleft/monitoring.env && grep -c . /etc/branchleft/monitoring.env || echo "absent"'
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+  test -f /etc/branchleft/monitoring.env && grep -c . /etc/branchleft/monitoring.env || echo "absent"'
 ```
 
 `absent` means there is nothing to lose. Anything else: edit the file in
@@ -179,7 +191,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
 
 Expect `-rw------- 1 root root`. Do not print the file.
 
-## 4. Copy the stack directory onto the host
+## 4. Copy the monitoring stack directory onto the host
 
 ```bash
 rsync -av --delete -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
@@ -189,7 +201,7 @@ rsync -av --delete -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
 `--delete` matters here specifically: `render_alertmanager_config.py` writes
 `alertmanager/alertmanager.yml` on the host, which does not exist in the
 committed tree, so every copy deletes the previous render. That is expected
--- step 6's `ExecStartPre` regenerates it before every start.
+-- step 7's `ExecStartPre` regenerates it before every start.
 
 ## 5. Install the systemd cgroup drop-ins
 
@@ -209,10 +221,27 @@ scp -i ~/.ssh/id_ed25519_hetzner \
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 'systemctl daemon-reload'
 ```
 
-The edge drop-in takes effect on that unit's next restart -- part of step 1
-above.
+Neither drop-in takes effect until the affected unit next starts or
+restarts -- step 6 does that for `edge`, and step 7's first-ever start does
+it for `monitoring`.
 
-## 6. Enable and start the monitoring unit
+## 6. Restart the edge stack
+
+One restart picks up everything queued since step 1: the metrics endpoints,
+the `mem_limit`/`cpu_shares` containment, and the systemd drop-in installed
+in step 5.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  'systemctl restart branchleft-compose@edge'
+```
+
+No new image and no `branchleft-deploy` invocation -- every change since the
+digest currently running is Compose- or systemd-config-only. Do this before
+step 8 below, or the `caddy` and `crowdsec` scrape targets read as `down`
+for a reason unrelated to this stack.
+
+## 7. Enable and start the monitoring unit
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
@@ -224,7 +253,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
 up`; a missing or blank secret in `/etc/branchleft/monitoring.env` fails the
 unit start with the exact variable name, before any container starts.
 
-## 7. Verify the stack is up
+## 8. Verify the stack is up
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
@@ -246,7 +275,7 @@ those hosts have no exporter yet (see `render.ts`'s `MONITORED_NODE_HOSTS`
 docstring). A `down` target with `expected_up: "true"` in its labels is the
 only one worth investigating.
 
-## 8. Verify Grafana is private-only
+## 9. Verify Grafana is private-only
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://46.225.95.167:3000/  # from the workstation, over the public address
@@ -270,7 +299,10 @@ grep -R 'grafana\|10.20.1.10' sites.ts hetzner/edge/stack/Caddyfile
 Expect no match in either file -- Grafana carries no hostname, no Caddy
 route and no public listener anywhere in this repository.
 
-## 9. Verify the colocation cgroup bounds
+## 10. Verify the cgroup containment reaches the containers
+
+**The systemd unit properties, for completeness -- but this alone proves
+nothing about the containers** (see "Colocation cgroup bounds" above):
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
@@ -279,22 +311,53 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
 ```
 
 Expect `MemoryMax=1610612736` (1536M) / `CPUWeight=100` for `edge`, and
-`MemoryMax=2147483648` (2048M) / `CPUWeight=200` for `monitoring`. Both
-`[Service]` drop-ins take effect only after `daemon-reload` plus a restart of
-the affected unit -- if either value reads `infinity`/`100` unexpectedly,
-re-check `systemctl cat branchleft-compose@edge.service` for the drop-in
-actually loading.
+`MemoryMax=2147483648` (2048M) / `CPUWeight=200` for `monitoring`. This
+reports the unit's *configured* property whether or not any container
+process actually sits in that cgroup, so a pass here is not evidence the
+mitigation reached anything -- it only confirms the drop-in loaded.
+
+**The real check -- per-container limits, read from each container's own
+`HostConfig`:**
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
-  systemctl status branchleft-compose@edge.service --no-pager | grep Memory &&
-  systemctl status branchleft-compose@monitoring.service --no-pager | grep Memory'
+  for c in $(docker ps --filter label=com.docker.compose.project=edge -q) \
+           $(docker ps --filter label=com.docker.compose.project=monitoring -q); do
+    docker inspect "$c" --format \
+      "{{.Name}}: Memory={{.HostConfig.Memory}} CPUShares={{.HostConfig.CPUShares}}"
+  done'
 ```
 
-Live usage should sit far below each ceiling -- these are circuit breakers
-against a leak or an attack, not a tight budget.
+Expect (bytes): `caddy` `268435456`/`768`, `crowdsec` `1073741824`/`256`,
+`prometheus` `805306368`/`1024`, `alertmanager` `134217728`/`512`, `grafana`
+`402653184`/`256`, `node-exporter` `67108864`/`128`, `blackbox-exporter`
+`67108864`/`64`, `cadvisor` `268435456`/`64`. A `0`/`0` on any container
+means its `mem_limit`/`cpu_shares` did not make it into the compose file
+that shipped, not that the systemd bound is compensating for it -- there is
+no compensation.
 
-## 10. Verify the heartbeat is wired to the dead-man's switch
+**Confirm the containers are genuinely not nested under either systemd
+unit's cgroup** (the reason the check above is necessary at all, not just
+belt-and-braces):
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+  CADDY_PID=$(docker inspect --format "{{.State.Pid}}" \
+    $(docker ps --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy -q)) &&
+  cat /proc/$CADDY_PID/cgroup &&
+  systemctl show -p ControlGroup branchleft-compose@edge.service'
+```
+
+Expect the container's cgroup path to read something like
+`0::/system.slice/docker-<container-id>.scope` and the unit's `ControlGroup`
+to read `/system.slice/branchleft-compose@edge.service` -- two different,
+sibling paths under `system.slice`, not one nested inside the other. If a
+future Docker/systemd upgrade changes this and the container's path *does*
+start with the unit's path, the systemd-level bound has started doing real
+work and this section is due a rewrite -- but do not assume that from a
+version bump alone; re-run this check.
+
+## 11. Verify the heartbeat is wired to the dead-man's switch
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner -L 9093:127.0.0.1:9093 root@46.225.95.167 -N &
@@ -313,7 +376,7 @@ On the Healthchecks.io side: the check named in the PR's "Rob-gated steps"
 should show "Last ping" within the last couple of minutes and never move to
 "Late" or "Down" while the stack is healthy.
 
-## 11. The proof standard
+## 12. The proof standard
 
 A `200`/`204` proves an HTTP endpoint answered, not that an alert reaches a
 human or that a real silence is caught. This estate's standard, same as
@@ -322,7 +385,7 @@ alarm:
 
 1. **A real alert via mx1.** Trigger `HostDiskSpaceLow` or similar by hand
    (`amtool alert add alertname=ManualTest severity=critical --alertmanager.url=http://127.0.0.1:9093`
-   over the tunnel from step 10) and confirm an email actually arrives at
+   over the tunnel from step 11) and confirm an email actually arrives at
    `ALERT_RECIPIENT_EMAIL`, not only that Alertmanager's API reports it
    dispatched.
 2. **A real dead-man alarm.** Stop the monitoring stack
@@ -336,7 +399,7 @@ alarm:
 Both are owner-executed, one-time, real-world proofs -- listed in the PR's
 "Rob-gated steps" rather than performed by CI or by an agent.
 
-## 12. Rolling back
+## 13. Rolling back
 
 Same shape as `RUNBOOK-edge.md` §12: restore the previous `stack/` from git,
 re-copy, restart.
@@ -349,7 +412,10 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
   'systemctl restart branchleft-compose@monitoring'
 ```
 
-Then `git checkout HEAD -- hetzner/monitoring/stack` on the workstation.
+Then `git checkout HEAD -- hetzner/monitoring/stack` on the workstation. If
+the rollback also needs to undo an edge-side change (the metrics endpoints
+or the cgroup containment), the same pattern applies to
+`hetzner/edge/stack`, followed by `systemctl restart branchleft-compose@edge`.
 
 ## What this stack deliberately does not do
 
@@ -367,3 +433,11 @@ Then `git checkout HEAD -- hetzner/monitoring/stack` on the workstation.
   per-tenant p95 latency, shim queue drain time). Doc 14 §9.2 and §4 name
   these as later, separately-scoped additions; this story covers the host
   and platform-component layer only.
+- **It does not rely on `--cgroup-parent`/`Delegate=yes` to nest containers
+  under either systemd unit.** That would make the unit-level `MemoryMax`
+  genuinely bound the containers, but it depends on the host's configured
+  cgroup driver (systemd vs. cgroupfs) in a way this repository cannot see
+  or test without SSH access to a live host, and a wrong `cgroup_parent`
+  value fails container *creation* -- a materially worse outcome than the
+  gap it would close. `mem_limit`/`cpu_shares` per container is the
+  guaranteed-correct alternative and is what this stack actually ships.
