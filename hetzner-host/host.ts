@@ -93,7 +93,12 @@ export interface HostArgs {
 export class Host extends pulumi.ComponentResource {
   public readonly server: hcloud.Server;
   public readonly firewall: hcloud.Firewall;
-  public readonly networkAttachment: hcloud.ServerNetwork;
+  /**
+   * Present only when the host has public networking. A private-only host
+   * carries its network inline on the server (see the `networks` input
+   * below), so there is no separate attachment resource to expose.
+   */
+  public readonly networkAttachment?: hcloud.ServerNetwork;
   public readonly primaryIpv4?: hcloud.PrimaryIp;
   public readonly primaryIpv6?: hcloud.PrimaryIp;
   /**
@@ -196,6 +201,26 @@ export class Host extends pulumi.ComponentResource {
               }
             : { ipv4Enabled: false, ipv6Enabled: false },
         ],
+        // A private-only host must carry its network interface at first
+        // boot: with no public interface and no inline network, Hetzner
+        // refuses to start the server at all ("no public or private network
+        // interfaces found"). The separate ServerNetwork attachment below is
+        // created only after the server exists, which is too late for that
+        // case — so a private-only host attaches inline here and skips the
+        // separate resource. A public host keeps the separate attachment:
+        // moving a live host between the two shapes plans a detach/attach,
+        // so the shape is fixed at creation. `aliasIps: []` is required —
+        // left undefined, the provider detaches and reattaches the network
+        // on every apply (upstream provider issue #650).
+        networks: wantsPublicNetworking
+          ? undefined
+          : [
+              {
+                networkId: pulumi.output(args.networkId).apply((id) => Number(id)),
+                ip: args.privateIp,
+                aliasIps: [],
+              },
+            ],
         deleteProtection: protection,
         rebuildProtection: protection,
         labels,
@@ -228,15 +253,17 @@ export class Host extends pulumi.ComponentResource {
       }
     );
 
-    this.networkAttachment = new hcloud.ServerNetwork(
-      `${args.name}-network`,
-      {
-        serverId: this.server.id.apply((id) => Number(id)),
-        networkId: pulumi.output(args.networkId).apply((id) => Number(id)),
-        ip: args.privateIp,
-      },
-      { parent: this }
-    );
+    if (wantsPublicNetworking) {
+      this.networkAttachment = new hcloud.ServerNetwork(
+        `${args.name}-network`,
+        {
+          serverId: this.server.id.apply((id) => Number(id)),
+          networkId: pulumi.output(args.networkId).apply((id) => Number(id)),
+          ip: args.privateIp,
+        },
+        { parent: this }
+      );
+    }
 
     // The primary IP's own value where one is declared: it outlives the
     // server, so a consumer that reads it from the server would see it
