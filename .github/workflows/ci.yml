@@ -472,7 +472,12 @@ jobs:
   # Two things the machinery cannot enforce, on the approver:
   #   - Approve each queued apply individually, with its own plan summary open.
   #     The pending-deployments screen offers a multi-select approve, and using
-  #     it signs off plans nobody read.
+  #     it signs off plans nobody read. Every merge fires every pipeline — up
+  #     to four approvals, mostly no-op plans — and that is an accepted cost:
+  #     a path filter was considered and rejected, because a wrong filter
+  #     skips a deploy and reports green, which is worse than reading a no-op
+  #     plan. A no-op plan reads in seconds; approving it unread is the thing
+  #     that must not become the habit.
   #   - The environment rule itself lives in repo settings. Each apply job's
   #     first step verifies via the API that a required-reviewer rule is live
   #     and fails the apply if not, so an unconfigured gate is a red run, not a
