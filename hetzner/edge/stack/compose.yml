@@ -20,6 +20,10 @@ services:
       # The probe listener is how the runbook observes the enforcement posture
       # before any hostname resolves to this host.
       - '127.0.0.1:8080:8080'
+      # Caddy's own Prometheus metrics, bound to edge1's private address only
+      # -- reachable from the monitoring stack's own Compose project on this
+      # same host, never from the public interface.
+      - '10.20.1.10:9091:9091'
     environment:
       # Registered on the CrowdSec side by BOUNCER_KEY_caddy below, so the two
       # read the same value from /etc/branchleft/edge.env and nothing generates
@@ -60,6 +64,11 @@ services:
       # a sub-processor and a personal-data decision, not a configuration
       # default, so it stays off until it has been taken deliberately.
       DISABLE_ONLINE_API: 'true'
+      # Default is 127.0.0.1, invisible to any container that is not this
+      # one. The `ports:` mapping below is what actually restricts exposure
+      # to edge1's private address -- this only makes the metrics endpoint
+      # reachable at all.
+      PROMETHEUS_LISTEN_ADDR: '0.0.0.0'
       COLLECTIONS: >-
         crowdsecurity/caddy
         crowdsecurity/appsec-virtual-patching
@@ -71,6 +80,10 @@ services:
       APPSEC_CONFIGS: >-
         crowdsecurity/appsec-default
         crowdsecurity/crs
+    ports:
+      # Bound to edge1's private address only, same reasoning as Caddy's
+      # metrics port above.
+      - '10.20.1.10:6060:6060'
     volumes:
       - crowdsec-config:/etc/crowdsec
       # Mounted inside the volume above: the acquisition files are generated

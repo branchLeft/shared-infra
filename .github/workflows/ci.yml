@@ -376,6 +376,74 @@ jobs:
           done
           exit "$status"
 
+  monitoring-config-validate:
+    name: Validate (monitoring stack config)
+    runs-on: ubuntu-latest
+    # Same reasoning as edge-config-validate above and deliberately not in
+    # `deploy`'s `needs` for the same reason: monitoring/ is not a Pulumi
+    # program, it renders config for a Compose stack colocated on edge1, so
+    # this gates review rather than any apply.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # render_alertmanager_config.py's own unit tests -- the pure
+      # string-substitution logic that stands in for Alertmanager's lack of
+      # `{env.X}` support (see that script's docstring).
+      - name: Python unit tests
+        run: python3 -m unittest discover -s hetzner/monitoring -p 'test_*.py' -v
+
+      - name: Check the Compose file resolves
+        env:
+          GRAFANA_ADMIN_PASSWORD: validation-only
+        run: docker compose -f hetzner/monitoring/stack/compose.yml config -q
+
+      # The renderer's own tests are string assertions over their own output;
+      # this is what tells a directive Prometheus/Alertmanager/blackbox_exporter
+      # accept from one they reject, the same gap `edge-config-validate` closes
+      # for Caddy.
+      - name: Validate the Prometheus config and alert rules
+        run: |
+          docker run --rm \
+            -v "$PWD/hetzner/monitoring/stack/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
+            -v "$PWD/hetzner/monitoring/stack/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro" \
+            --entrypoint /bin/promtool \
+            docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
+            check config /etc/prometheus/prometheus.yml
+
+      - name: Render the Alertmanager config with placeholder secrets
+        env:
+          SMTP_USERNAME: validation-user
+          SMTP_PASSWORD: validation/pass&word
+          HEALTHCHECKS_PING_URL: https://hc-ping.com/validation-only
+          ALERT_RECIPIENT_EMAIL: ops@example.invalid
+        run: python3 hetzner/monitoring/stack/render_alertmanager_config.py
+
+      - name: Validate the Alertmanager config
+        run: |
+          docker run --rm \
+            -v "$PWD/hetzner/monitoring/stack/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro" \
+            --entrypoint /bin/amtool \
+            docker.io/prom/alertmanager:v0.34.0@sha256:268d4bf0e4bc0fe6dbdef6a59ce81a2918c88458bf8edf7dd0572ad372a093e6 \
+            check-config /etc/alertmanager/alertmanager.yml
+
+      # Never committed: it carries the placeholder secrets rendered above,
+      # and the real thing carries real ones -- the same reason RUNBOOK-monitoring.md
+      # tells the operator to re-render rather than to hand-edit this file.
+      - name: Remove the rendered Alertmanager config
+        if: always()
+        run: rm -f hetzner/monitoring/stack/alertmanager/alertmanager.yml
+
+      - name: Validate the blackbox_exporter config
+        run: |
+          docker run --rm \
+            -v "$PWD/hetzner/monitoring/stack/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro" \
+            --entrypoint /bin/blackbox_exporter \
+            docker.io/prom/blackbox-exporter:v0.28.0@sha256:43027b43fb785b7c5adc53bd3b5dbc1a258270a2e8aff24f477b45c4e38dac68 \
+            --config.file=/etc/blackbox_exporter/config.yml --config.check
+
   scripts-tests:
     name: Test (scripts)
     runs-on: ubuntu-latest

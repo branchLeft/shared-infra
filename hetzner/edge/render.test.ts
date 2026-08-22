@@ -129,6 +129,25 @@ describe('the rendered Caddyfile', () => {
     expect(render(ENFORCING)).toContain(':8080 {');
   });
 
+  it('always carries a metrics listener, independent of posture', () => {
+    expect(render(DETECT_ONLY)).toContain(':9091 {');
+    expect(render(ENFORCING)).toContain(':9091 {');
+  });
+
+  it('serves metrics with no protection chain in front of it', () => {
+    const rendered = render(ENFORCING);
+    const block = rendered.split(':9091 {')[1]?.split('\n}')[0] ?? '';
+    expect(block).toContain('metrics');
+    expect(block).not.toContain('rate_limit');
+    expect(block).not.toContain('crowdsec');
+    expect(block).not.toContain('appsec');
+  });
+
+  it('turns on request-metrics collection globally, alongside the HTTP/3 option it shares a block with', () => {
+    const rendered = render(DETECT_ONLY);
+    expect(rendered).toMatch(/servers \{\n\t\tprotocols h1 h2\n\t\tmetrics\n\t\}/);
+  });
+
   it('keeps probe traffic out of the log CrowdSec parses', () => {
     const rendered = render(ENFORCING);
     expect(rendered).toContain('output file /var/log/caddy/probe.log');

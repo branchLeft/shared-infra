@@ -1,0 +1,128 @@
+# The monitoring Compose stack, deployed as `monitoring` under
+# /opt/branchleft/monitoring, colocated on edge1 until TENANT_1
+# (ghost-platform-docs/14-hetzner-migration-programme.md §3.1).
+#
+# Every image below is pinned by tag-plus-digest, matching
+# hetzner/edge/stack/compose.yml's pattern: the tag is for a human reading a
+# `docker ps`, the digest is what actually gets pulled.
+#
+# `render_alertmanager_config.py` must have already written `alertmanager.yml`
+# from `alertmanager.yml.tmpl` before `alertmanager` starts -- the systemd
+# drop-in in `../systemd/monitoring.override.conf` runs it as an
+# `ExecStartPre`, so a plain `docker compose up` run by hand needs it run
+# first too. See RUNBOOK-monitoring.md.
+name: monitoring
+
+services:
+  prometheus:
+    image: docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.listen-address=0.0.0.0:9090
+    # Loopback only -- reached over an SSH tunnel for owner debugging, same
+    # mechanism the runbook uses for Grafana. Nothing in this stack needs
+    # Prometheus's own port; every internal scrape and query goes by Compose
+    # service name.
+    ports:
+      - '127.0.0.1:9090:9090'
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    # Sized from the §3.1 arithmetic in RUNBOOK-monitoring.md: a ceiling well
+    # above the ~300-500 MB doc 14 estimates for this host count and series
+    # volume, not a tight budget -- the systemd-level MemoryMax on the whole
+    # unit is the real backstop.
+    mem_limit: 768m
+    depends_on:
+      alertmanager:
+        condition: service_started
+
+  alertmanager:
+    image: docker.io/prom/alertmanager:v0.34.0@sha256:268d4bf0e4bc0fe6dbdef6a59ce81a2918c88458bf8edf7dd0572ad372a093e6
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.listen-address=0.0.0.0:9093
+    ports:
+      - '127.0.0.1:9093:9093'
+    volumes:
+      # Not alertmanager.yml.tmpl: render_alertmanager_config.py writes the
+      # real file beside the template, and this mount deliberately names the
+      # rendered one so a stack started without that step first fails to find
+      # it rather than loading placeholder tokens as literal config values.
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    mem_limit: 128m
+
+  grafana:
+    image: docker.io/grafana/grafana:12.4.9@sha256:615caa575e7272e2f65f423f4c6b2c901334c5ba72bbae71f4bab1b7c3211fe9
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in /etc/branchleft/monitoring.env}
+      GF_SERVER_ROOT_URL: http://10.20.1.10:3000/
+      # Both false: an update check and an anonymous usage report are each an
+      # outbound call to a third party this platform did not choose, on a
+      # host whose entire purpose is watching for exactly that class of
+      # unexpected egress.
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+      GF_ANALYTICS_CHECK_FOR_UPDATES: 'false'
+    # The amendment's requirement: private address only, reached over an SSH
+    # tunnel, never in sites.ts, Caddy config or any public listener.
+    ports:
+      - '10.20.1.10:3000:3000'
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    mem_limit: 384m
+    depends_on:
+      prometheus:
+        condition: service_started
+
+  node-exporter:
+    image: docker.io/prom/node-exporter:v1.12.1@sha256:da83fae85603c4e47e6c68369a7d746e2dda683dc35ea2e234b4f171e0d92798
+    restart: unless-stopped
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+)($$|/)
+    # Read-only host mounts, no host networking: edge1's own filesystem and
+    # kernel counters, visible to this container without publishing anything
+    # on the host's network at all. Prometheus reaches it by service name.
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+    mem_limit: 64m
+
+  blackbox-exporter:
+    image: docker.io/prom/blackbox-exporter:v0.28.0@sha256:43027b43fb785b7c5adc53bd3b5dbc1a258270a2e8aff24f477b45c4e38dac68
+    restart: unless-stopped
+    volumes:
+      - ./blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    mem_limit: 64m
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.5@sha256:763aecf1c32c2be8a1a75f9abfc2fc461005c9dbbaa39cb356b354aac1296dbe
+    restart: unless-stopped
+    # The standard cAdvisor recipe: read-only views onto the host's own
+    # cgroups and the Docker runtime's state, nothing writable and nothing
+    # published on the host's network.
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    mem_limit: 256m
+
+volumes:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:

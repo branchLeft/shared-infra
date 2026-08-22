@@ -5,6 +5,7 @@
 	acme_ca https://acme-v02.api.letsencrypt.org/directory
 	servers {
 		protocols h1 h2
+		metrics
 	}
 	crowdsec {
 		api_url http://crowdsec:8080
@@ -57,4 +58,8 @@ authoring.invalid {
 		appsec
 		respond 204
 	}
+}
+
+:9091 {
+	metrics
 }

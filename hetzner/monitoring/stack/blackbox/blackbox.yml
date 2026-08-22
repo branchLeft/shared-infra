@@ -1,0 +1,15 @@
+# Hand-written, unlike the rest of stack/: a probe module is a fixed check
+# definition, not a hostname, so there is nothing here for sites.ts to derive.
+# Prometheus's own scrape config (prometheus.yml, generated) is what supplies
+# the per-hostname target list this module gets applied to.
+modules:
+  http_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      valid_status_codes: []  # defaults to 2xx
+      method: GET
+      preferred_ip_protocol: ip4
+      follow_redirects: true
+      tls_config:
+        insecure_skip_verify: false

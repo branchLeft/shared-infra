@@ -1,0 +1,12 @@
+# Hand-written: a datasource pointing at the Prometheus service in this same
+# Compose project, so Grafana is queryable the moment the stack is up rather
+# than after someone clicks through the UI once over the SSH tunnel.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
