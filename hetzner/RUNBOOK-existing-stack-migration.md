@@ -206,11 +206,11 @@ account this programme exists to leave.
 Three repos hold a `PULUMI_CONFIG_PASSPHRASE` secret, and all three are set:
 `branchLeft/shared-infra`, `branchLeft/website` and `branchLeft/ghost-platform`.
 
-| Repo                        | Stack it applies                                                                                                            |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Repo                        | Stack it applies                                                                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `branchLeft/shared-infra`   | `branchleft-shared-infra/production` (`branchleft-mail/production` shares the repo but has its own secret, `PULUMI_PASSPHRASE_MAIL`) |
-| `branchLeft/website`        | `branchleft-website-infra/production`                                                                                       |
-| `branchLeft/ghost-platform` | `branchleft-ghost-platform/platform`, `branchleft-ghost-provisioning/blog` and, during provisioning, the tenant's own stack |
+| `branchLeft/website`        | `branchleft-website-infra/production`                                                                                                |
+| `branchLeft/ghost-platform` | `branchleft-ghost-platform/platform`, `branchleft-ghost-provisioning/blog` and, during provisioning, the tenant's own stack          |
 
 **`branchLeft/ghost-tenant-blog` is not a fourth row.** `blog-infra/blog` is a
 tenant stack, and unlike the three repos above, its secret was never set at
@@ -416,8 +416,11 @@ pulumi stack export --stack <stack> --file ~/pulumi-archive-<project>-<stack>.js
 
 # 4. Prove the current provider can decrypt, before replacing it. A stack that
 #    cannot decrypt now will fail mid-rewrite, and mid-rewrite is the one place
-#    this procedure has no clean recovery.
-pulumi stack export --stack <stack> --show-secrets > /dev/null && echo 'decrypt OK'
+#    this procedure has no clean recovery. `pulumi preview` is the probe
+#    because it fails closed on a wrong passphrase; `stack export
+#    --show-secrets` does not (it exits 0 regardless, observed v3.255.0 --
+#    INC-4 in ghost-platform-docs/INCIDENTS.md), so it proves nothing here.
+pulumi preview --stack <stack> > /dev/null && echo 'decrypt OK'
 
 # 5. Re-wrap. Reads through the old provider, writes through the new one,
 #    rewrites every encrypted value in the checkpoint and in
@@ -427,8 +430,11 @@ pulumi stack change-secrets-provider passphrase --stack <stack>
 # 6. Verify before moving on. All three, in this order.
 git diff --stat Pulumi.<stack>.yaml          # secretsprovider: gcpkms -> passphrase (also
                                               # gains an encryptionsalt line -- not committed, see below)
-pulumi stack export --stack <stack> --show-secrets > /dev/null && echo 'decrypt OK'
-pulumi preview --stack <stack>               # expect: no changes
+pulumi preview --stack <stack>               # expect: no changes -- and reaching
+                                              # the plan at all IS the decrypt
+                                              # proof (fails closed on a wrong
+                                              # passphrase; `stack export
+                                              # --show-secrets` does not)
 
 # 6b. Post-re-wrap archive. This is the DURABLE BACKUP, wrapped by the new
 #     passphrase, and it is the only archive of this stack that still opens
@@ -447,8 +453,13 @@ read -rs "STORED?Passphrase AS STORED in the password manager: "; echo
 printf '%s' "$STORED" > ~/.pulumi-passphrase-check; unset STORED
 [ -s ~/.pulumi-passphrase-check ] || { echo 'EMPTY PASSPHRASE FILE -- do not continue'; return 1 2>/dev/null || exit 1; }
 PULUMI_CONFIG_PASSPHRASE_FILE=~/.pulumi-passphrase-check \
-  pulumi stack export --stack <stack> --show-secrets > /dev/null \
+  pulumi preview --stack <stack> > /dev/null \
   && echo 'STORED COPY OK' || echo 'STORED COPY FAILED -- do not run step 8'
+# `pulumi preview`, not `stack export --show-secrets`: export exits 0 under a
+# wrong passphrase (v3.255.0), and this is the gate that authorises deleting
+# the only other copy -- the one check in this file that must be able to fail.
+# A wrong value stored at creation is not hypothetical: it is how the estate
+# stack's state was lost on 2026-08-21 (INC-3).
 
 # 8. Only once step 7 printed OK.
 rm -f ~/.pulumi-passphrase-tmp ~/.pulumi-passphrase-check
@@ -474,19 +485,21 @@ passphrase until somebody genuinely needed it. It stayed early in the order
 because it was the gentlest stack to learn on, not because it was the most
 forgiving to get wrong.
 
-Step 4 is the one that turns a silent failure into a loud one. `pulumi stack
-export` without `--show-secrets` succeeds without decrypting anything, so it
-proves nothing about the key. With it, Pulumi must unwrap the data key and
-decrypt every value, which is precisely the capability the gate is about.
-Redirect to `/dev/null` rather than to a file: the output is every secret the
-stack holds, in plaintext.
+Step 4 is the one that turns a silent failure into a loud one, and its probe
+is `pulumi preview`, which refuses to proceed at `getting stack
+configuration` when the provider cannot decrypt. It was originally written
+around `stack export --show-secrets` on the theory that emitting plaintext
+forces the decryption; **observed reality disagrees** — with the passphrase
+provider on v3.255.0 that command exits 0 under a wrong passphrase (INC-4 in
+`ghost-platform-docs/INCIDENTS.md`). Whether the KMS provider behaves
+differently is moot: preview fails closed for both, and emits no secrets.
 
 **Record step 6's result in the stack's PR description** — the three commands
 and their output, minus the export itself. This is not ceremony: the audit
 script reads committed configuration only, and the KMS dependency also lives
 in the checkpoint, in its `secrets_providers` block. A half-finished re-wrap
 is exactly the case where the two disagree, and no committed file shows it.
-`pulumi stack export --show-secrets` succeeding is the only proof the
+step 6's clean preview is the proof the
 checkpoint side moved, and if it is not written down it did not happen.
 
 `change-secrets-provider` rewrites `Pulumi.<stack>.yaml` mechanically and
@@ -756,8 +769,10 @@ pulumi stack import --stack <stack> --file ~/pulumi-move-<project>-<stack>.json
 
 # 5. Prove it.
 pulumi whoami --verbose
-pulumi stack export --stack <stack> --show-secrets > /dev/null && echo 'decrypt OK'
-pulumi preview --stack <stack>          # expect: no changes
+pulumi preview --stack <stack>          # expect: no changes -- reaching the plan
+                                        # is also the decrypt proof; `stack
+                                        # export --show-secrets` exits 0 under
+                                        # a wrong passphrase and proves nothing
 ```
 
 Step 3 is the trap in this half. Everything up to step 5 succeeds without it,
@@ -879,10 +894,11 @@ into it. Two stages, both of which must pass:
    every encrypted value in it, so this is the stage that proves the archive's
    own secrets open — not merely that the passphrase matches its salt.
 
-`pulumi stack export --show-secrets` is deliberately not used. It is the
-decryption proof A.2 step 4 uses against a live stack, but its output is every
-secret the stack holds in plaintext, and an import forces the same decryption
-while emitting nothing.
+`pulumi stack export --show-secrets` is deliberately not used — for two
+reasons now. Its output is every secret the stack holds in plaintext, and it
+is not a decryption proof at all: with the passphrase provider on v3.255.0
+it exits 0 under a wrong passphrase (INC-4). An import forces real
+decryption while emitting nothing, which is why stage 2 is trustworthy.
 
 Three properties worth knowing before relying on it:
 
