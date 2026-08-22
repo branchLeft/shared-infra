@@ -563,7 +563,10 @@ jobs:
   #     a path filter was considered and rejected, because a wrong filter
   #     skips a deploy and reports green, which is worse than reading a no-op
   #     plan. A no-op plan reads in seconds; approving it unread is the thing
-  #     that must not become the habit.
+  #     that must not become the habit. Exception: graphify's own PR carries
+  #     `[skip ci]` in its title so GitHub never starts a run for its merge
+  #     commit — every other merge, including Dependabot's, still fires every
+  #     pipeline by design.
   #   - The environment rule itself lives in repo settings. Each apply job's
   #     first step verifies via the API that a required-reviewer rule is live
   #     and fails the apply if not, so an unconfigured gate is a red run, not a
