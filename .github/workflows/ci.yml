@@ -164,9 +164,9 @@ jobs:
     name: Type check (hetzner)
     runs-on: ubuntu-latest
     # Third project, third job, for the same reason mail has its own: separate
-    # package.json, separate provider tree, and no CI apply path. The stack
-    # this project declares is created and applied by the platform owner --
-    # nothing here holds a Hetzner credential.
+    # package.json, separate provider tree. This job stays credential-free;
+    # the stacks this directory declares are applied by the
+    # hetzner-network-plan/apply and hetzner-estate-plan/apply pairs below.
     defaults:
       run:
         working-directory: hetzner
@@ -472,7 +472,12 @@ jobs:
   # Two things the machinery cannot enforce, on the approver:
   #   - Approve each queued apply individually, with its own plan summary open.
   #     The pending-deployments screen offers a multi-select approve, and using
-  #     it signs off plans nobody read.
+  #     it signs off plans nobody read. Every merge fires every pipeline — up
+  #     to four approvals, mostly no-op plans — and that is an accepted cost:
+  #     a path filter was considered and rejected, because a wrong filter
+  #     skips a deploy and reports green, which is worse than reading a no-op
+  #     plan. A no-op plan reads in seconds; approving it unread is the thing
+  #     that must not become the habit.
   #   - The environment rule itself lives in repo settings. Each apply job's
   #     first step verifies via the API that a required-reviewer rule is live
   #     and fails the apply if not, so an unconfigured gate is a red run, not a
@@ -960,6 +965,444 @@ jobs:
         run: |
           {
             echo '## Mail deploy'
+            echo
+            echo "Commit: \`${COMMIT_SHA}\`"
+            echo
+            echo '### Plan this run applied'
+            echo
+            echo '```json'
+            python3 -m json.tool preview.json 2>/dev/null \
+              || echo '(no plan captured — the run failed before preview)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  hetzner-network-plan:
+    name: Plan (hetzner network, pulumi preview)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Only the jobs that gate this stack's own surface, same reasoning as
+    # mail-plan: coupling the GCP edge's checks here would block a network
+    # fix on an unrelated red.
+    needs:
+      [
+        hetzner-typecheck,
+        hetzner-host-typecheck,
+        hetzner-provision-checks,
+        scripts-tests,
+        pulumi-inventory-audit,
+      ]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    defaults:
+      run:
+        working-directory: hetzner
+
+    # Same posture as the mail jobs (header guardrail 2): no federation
+    # exists for Hetzner, so the token is a long-lived secret scoped to the
+    # estate hcloud project alone — and projectGuard.ts refuses the program
+    # outright if a mail-project token is ever wired in by mistake. The state
+    # backend is pinned in hetzner/Pulumi.yaml — no `pulumi login` step.
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_NETWORK }}
+      PULUMI_SALT_HETZNER_NETWORK: ${{ secrets.PULUMI_SALT_HETZNER_NETWORK }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_ESTATE }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: hetzner/.nvmrc
+          cache: npm
+          cache-dependency-path: hetzner/package-lock.json
+          registry-url: https://npm.pkg.github.com
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Verify the deploy secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_NETWORK is empty or unset" ; fail=1; }
+          [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_ESTATE is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          case "$PULUMI_SALT_HETZNER_NETWORK" in
+            v1:*) ;;
+            *) echo "::error::PULUMI_SALT_HETZNER_NETWORK is empty or does not start with 'v1:'" ; fail=1;;
+          esac
+          exit "$fail"
+
+      - name: Restore the stack's encryption salt
+        run: |
+          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_HETZNER_NETWORK" >> Pulumi.production.yaml
+
+      - name: Preview the plan
+        run: pulumi preview --stack production --json > preview.json
+
+      - name: Refuse a plan that destroys the network
+        run: |
+          python3 ../scripts/assert-no-hetzner-deletes.py --self-test
+          python3 ../scripts/assert-no-hetzner-deletes.py --verify-coverage .
+
+          if ! python3 ../scripts/assert-no-hetzner-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      - name: Write the plan to the job summary
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo '## Hetzner network plan — read before approving the apply'
+            echo
+            echo "Commit: \`${COMMIT_SHA}\`"
+            echo
+            echo '```json'
+            python3 -m json.tool preview.json 2>/dev/null \
+              || echo '(no plan captured — the run failed before preview)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  hetzner-network-apply:
+    name: Apply (hetzner network, pulumi up)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [hetzner-network-plan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    # Same environment as every other production apply, so one
+    # required-reviewer rule pauses them all.
+    environment: production
+
+    concurrency:
+      group: pulumi-hetzner-network-deploy
+      cancel-in-progress: false
+
+    defaults:
+      run:
+        working-directory: hetzner
+
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_NETWORK }}
+      PULUMI_SALT_HETZNER_NETWORK: ${{ secrets.PULUMI_SALT_HETZNER_NETWORK }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_ESTATE }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+
+    steps:
+      # If the job is running and no required-reviewer rule exists, nothing
+      # paused it — the environment key is silently inert without one. Fail
+      # here, before any credential is touched, rather than apply unattended.
+      - name: Refuse to apply through an ungated environment
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reviewers=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          if [ "${reviewers:-0}" -eq 0 ]; then
+            echo "::error::the production environment has no required-reviewer rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: hetzner/.nvmrc
+          cache: npm
+          cache-dependency-path: hetzner/package-lock.json
+          registry-url: https://npm.pkg.github.com
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Verify the deploy secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_NETWORK is empty or unset" ; fail=1; }
+          [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_ESTATE is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          case "$PULUMI_SALT_HETZNER_NETWORK" in
+            v1:*) ;;
+            *) echo "::error::PULUMI_SALT_HETZNER_NETWORK is empty or does not start with 'v1:'" ; fail=1;;
+          esac
+          exit "$fail"
+
+      - name: Restore the stack's encryption salt
+        run: |
+          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_HETZNER_NETWORK" >> Pulumi.production.yaml
+
+      # Re-planned and re-gated after approval, not carried over from the plan
+      # job: two jobs are two runners, and the guard must see the exact plan
+      # this apply acts on.
+      - name: Preview the plan
+        run: pulumi preview --stack production --json > preview.json
+
+      - name: Refuse to apply a plan that destroys the network
+        run: |
+          python3 ../scripts/assert-no-hetzner-deletes.py --self-test
+          python3 ../scripts/assert-no-hetzner-deletes.py --verify-coverage .
+
+          if ! python3 ../scripts/assert-no-hetzner-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      - name: Apply
+        run: pulumi up --stack production --yes
+
+      - name: Write outcome to job summary
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo '## Hetzner network deploy'
+            echo
+            echo "Commit: \`${COMMIT_SHA}\`"
+            echo
+            echo '### Plan this run applied'
+            echo
+            echo '```json'
+            python3 -m json.tool preview.json 2>/dev/null \
+              || echo '(no plan captured — the run failed before preview)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  hetzner-estate-plan:
+    name: Plan (hetzner estate, pulumi preview)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Serialised behind the network apply, not merely the network plan: the
+    # estate program resolves a StackReference to the network stack's current
+    # outputs, so a plan taken before the network applied would show the
+    # approver a state the same merge is about to change.
+    needs:
+      [
+        hetzner-typecheck,
+        hetzner-host-typecheck,
+        hetzner-provision-checks,
+        scripts-tests,
+        pulumi-inventory-audit,
+        hetzner-network-apply,
+      ]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    defaults:
+      run:
+        working-directory: hetzner/estate
+
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_ESTATE }}
+      PULUMI_SALT_HETZNER_ESTATE: ${{ secrets.PULUMI_SALT_HETZNER_ESTATE }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_ESTATE }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: hetzner/.nvmrc
+          cache: npm
+          cache-dependency-path: hetzner/package-lock.json
+          registry-url: https://npm.pkg.github.com
+
+      # The estate project shares hetzner/'s node_modules by design — its
+      # program file sits in the package root so both projects resolve one
+      # @pulumi/hcloud (see estate.ts's header).
+      - name: Install dependencies
+        working-directory: hetzner
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Verify the deploy secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_ESTATE is empty or unset" ; fail=1; }
+          [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_ESTATE is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          case "$PULUMI_SALT_HETZNER_ESTATE" in
+            v1:*) ;;
+            *) echo "::error::PULUMI_SALT_HETZNER_ESTATE is empty or does not start with 'v1:'" ; fail=1;;
+          esac
+          exit "$fail"
+
+      - name: Restore the stack's encryption salt
+        run: |
+          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_HETZNER_ESTATE" >> Pulumi.production.yaml
+
+      - name: Preview the plan
+        run: pulumi preview --stack production --json > preview.json
+
+      - name: Refuse a plan that destroys the estate
+        run: |
+          python3 ../../scripts/assert-no-hetzner-deletes.py --self-test
+          python3 ../../scripts/assert-no-hetzner-deletes.py --verify-coverage ..
+
+          if ! python3 ../../scripts/assert-no-hetzner-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      - name: Write the plan to the job summary
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo '## Hetzner estate plan — read before approving the apply'
+            echo
+            echo "Commit: \`${COMMIT_SHA}\`"
+            echo
+            echo '```json'
+            python3 -m json.tool preview.json 2>/dev/null \
+              || echo '(no plan captured — the run failed before preview)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  hetzner-estate-apply:
+    name: Apply (hetzner estate, pulumi up)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [hetzner-estate-plan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    environment: production
+
+    concurrency:
+      group: pulumi-hetzner-estate-deploy
+      cancel-in-progress: false
+
+    defaults:
+      run:
+        working-directory: hetzner/estate
+
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_ESTATE }}
+      PULUMI_SALT_HETZNER_ESTATE: ${{ secrets.PULUMI_SALT_HETZNER_ESTATE }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_ESTATE }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+
+    steps:
+      - name: Refuse to apply through an ungated environment
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reviewers=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          if [ "${reviewers:-0}" -eq 0 ]; then
+            echo "::error::the production environment has no required-reviewer rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: hetzner/.nvmrc
+          cache: npm
+          cache-dependency-path: hetzner/package-lock.json
+          registry-url: https://npm.pkg.github.com
+
+      - name: Install dependencies
+        working-directory: hetzner
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Verify the deploy secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_ESTATE is empty or unset" ; fail=1; }
+          [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_ESTATE is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          case "$PULUMI_SALT_HETZNER_ESTATE" in
+            v1:*) ;;
+            *) echo "::error::PULUMI_SALT_HETZNER_ESTATE is empty or does not start with 'v1:'" ; fail=1;;
+          esac
+          exit "$fail"
+
+      - name: Restore the stack's encryption salt
+        run: |
+          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_HETZNER_ESTATE" >> Pulumi.production.yaml
+
+      - name: Preview the plan
+        run: pulumi preview --stack production --json > preview.json
+
+      - name: Refuse to apply a plan that destroys the estate
+        run: |
+          python3 ../../scripts/assert-no-hetzner-deletes.py --self-test
+          python3 ../../scripts/assert-no-hetzner-deletes.py --verify-coverage ..
+
+          if ! python3 ../../scripts/assert-no-hetzner-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      - name: Apply
+        run: pulumi up --stack production --yes
+
+      - name: Write outcome to job summary
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo '## Hetzner estate deploy'
             echo
             echo "Commit: \`${COMMIT_SHA}\`"
             echo

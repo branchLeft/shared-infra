@@ -211,10 +211,9 @@ environment variable, a process listing or shell history.
 **Never commit that.** It is an offline verifier for the passphrase — anyone
 holding it can attempt the passphrase at their own rate, with nothing in the
 loop to notice — and `scripts/assert-no-committed-pulumi-secrets.py` runs on
-every commit and in CI to refuse it outright. There is no CI apply path here
-to append it at deploy time either (`CLAUDE.md`): the salt is written into the
-working copy only, on every machine that applies this stack, and is never
-staged.
+every commit and in CI to refuse it outright. At deploy time CI appends it
+from the stack's `PULUMI_SALT_*` repository secret (§7); on a workstation it
+is written into the working copy only, and is never staged.
 
 **The command above is for a stack that does not exist yet — never run it
 against one that already does.** `stack init` always mints a fresh salt, and
@@ -433,23 +432,30 @@ project never issued one — see step 1.
 
 ## 7. Wire CI
 
-Neither stack this runbook has created has a CI apply path today (`CLAUDE.md`
-— `hetzner/` is type-checked and tested in CI, never applied by it); this
-step is what a future one would need, not a description of anything that
-runs now. The applying workflow needs four secrets and no federated identity.
-There is
-no Workload Identity Federation equivalent here: the Hetzner API authenticates
-a bearer token and nothing else, so the short-lived-credential posture the GCP
-stacks have does not carry over. That trade is accepted deliberately; what it
+Every Hetzner stack in this repository applies from CI on merge to `main`
+(`.github/workflows/ci.yml`): a plan job previews and gates on
+`scripts/assert-no-hetzner-deletes.py`, then an apply job — paused by the
+`production` environment's required-reviewer rule until a human has read the
+plan — runs `pulumi up`. A new stack joins by adding its own plan/apply job
+pair on that template and the secrets below. There is no Workload Identity
+Federation equivalent here: the Hetzner API authenticates a bearer token and
+nothing else, so the short-lived-credential posture the GCP stacks have does
+not carry over. That trade is accepted deliberately (doc 14 §3.5); what it
 demands in return is that each token is scoped to one project and one
 pipeline.
 
-| Secret                         | Purpose                                                      |
-| ------------------------------ | ------------------------------------------------------------ |
-| `HCLOUD_TOKEN`                 | The Hetzner Cloud API token for this stack's project         |
-| `PULUMI_CONFIG_PASSPHRASE`     | Decrypts this stack's secrets                                |
-| `HETZNER_S3_ACCESS_KEY_ID`     | Object Storage state access, exported as `AWS_ACCESS_KEY_ID` |
-| `HETZNER_S3_SECRET_ACCESS_KEY` | Its secret, exported as `AWS_SECRET_ACCESS_KEY`              |
+The secrets, per stack — named per stack because `PULUMI_CONFIG_PASSPHRASE`
+is a fixed environment-variable name and one repo now carries several
+passphrases (the workflow maps each secret into that variable at the job that
+needs it):
+
+| Secret                         | Purpose                                                                        |
+| ------------------------------ | ------------------------------------------------------------------------------ |
+| `HCLOUD_TOKEN_<project>`       | The Hetzner Cloud API token for this stack's project, exported as `HCLOUD_TOKEN` (`HCLOUD_TOKEN_ESTATE` for both estate stacks, `HCLOUD_TOKEN_MAIL` for mail) |
+| `PULUMI_PASSPHRASE_<stack>`    | Decrypts this stack's secrets, exported as `PULUMI_CONFIG_PASSPHRASE`          |
+| `PULUMI_SALT_<stack>`          | The stack's `encryptionsalt`, appended to its config file on the runner        |
+| `HETZNER_S3_ACCESS_KEY_ID`     | Object Storage state access, exported as `AWS_ACCESS_KEY_ID` (shared)          |
+| `HETZNER_S3_SECRET_ACCESS_KEY` | Its secret, exported as `AWS_SECRET_ACCESS_KEY` (shared)                       |
 
 The workflow needs no `pulumi login` step: `backend.url` in `Pulumi.yaml`
 already fixes the backend, which is the point of pinning it there. Do not add

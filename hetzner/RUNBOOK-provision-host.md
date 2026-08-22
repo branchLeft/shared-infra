@@ -55,8 +55,10 @@ it is the only one whose forwarding adds no exposure that did not exist.
 
 ### 1. Apply the route
 
-`hetzner/` has no CI apply path, so this is run by hand, by the platform
-owner, from a checkout of `main` that already contains the route.
+Steady-state applies for `hetzner/` happen in CI on merge to `main`
+(`.github/workflows/ci.yml`); the hand-run shape below is for first-time
+provisioning, run by the platform owner from a checkout of `main` that
+already contains the route.
 
 Four values have to be in the environment before any command that reads
 state: the Object Storage credential for the backend `Pulumi.yaml` pins, and

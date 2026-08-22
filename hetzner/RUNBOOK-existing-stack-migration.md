@@ -532,10 +532,9 @@ nothing else. Two things follow, and both matter more than the wording:
 `Pulumi.<stack>.yaml` in step 5 — Pulumi has no other way to leave the file
 usable locally. **That line must never be staged or committed.** Every stack
 in this estate is salt-injected-at-deploy: the salt lives only as a
-repository secret, appended to the working copy at apply time — by CI for a
-stack CI applies, by the operator's own copy for one that has no CI apply
-path (`hetzner/`'s two stacks, until they join CI applies) — and it is never
-committed. This repo's own
+repository secret, appended to the working copy at apply time — by CI on
+every merge-driven apply, by the operator's own copy during a hand-gated
+stack operation — and it is never committed. This repo's own
 `Restore the stack's encryption salt` step in `.github/workflows/ci.yml` is
 the pattern to match. Committing it publishes an offline verifier for the
 stack's passphrase in a public repo, which is exactly what A.0 exists to
@@ -610,11 +609,11 @@ costs least. Concretely:
 
 1. **Anything being removed rather than migrated** — nothing depends on it, and
    it takes a stack out of every future `pulumi stack ls --all`.
-2. **The smallest real stack with no CI apply path.** A stack with a handful of
-   resources and no encrypted values in state exercises the whole procedure
-   without a deploy pipeline participating. If any stack in the sweep outlives
-   the estate being wound down, do this one here — its `step 7` proof is the
-   one that matters most later.
+2. **The smallest real stack whose deploy pipeline is least exercised.** A
+   stack with a handful of resources and no encrypted values in state
+   exercises the whole procedure with the least of the estate participating.
+   If any stack in the sweep outlives the estate being wound down, do this one
+   here — its `step 7` proof is the one that matters most later.
 3. **Stacks whose config file is committed and whose CI applies them**, in
    ascending order of what an outage costs.
 4. **Any stack in a separate state bucket**, which needs its own `pulumi login`
