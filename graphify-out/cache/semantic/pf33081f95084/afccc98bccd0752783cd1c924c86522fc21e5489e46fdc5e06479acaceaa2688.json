@@ -1,0 +1,1 @@
+{"nodes": [{"id": "hetzner_runbook_provision_host", "label": "Host Provisioning Runbook", "file_type": "document", "source_file": "hetzner/RUNBOOK-provision-host.md"}], "edges": [], "hyperedges": []}
