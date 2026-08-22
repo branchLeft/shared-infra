@@ -4,10 +4,12 @@
 # `encryptionsalt` and the `hcloud:token` ciphertext are deliberately absent
 # from this committed file, for the same reason as
 # `hetzner/estate/Pulumi.production.yaml`'s: the salt is an offline
-# passphrase verifier and the ciphertext is only as safe as that passphrase,
-# so both stay operator-held. This project has no CI apply path (`CLAUDE.md`),
-# so the operator appends both from their own source before any `pulumi`
-# command that reads state, and never commits the result.
+# passphrase verifier and the ciphertext is only as safe as that passphrase.
+# CI appends the salt from the PULUMI_SALT_HETZNER_NETWORK repository secret
+# at deploy and supplies the token as the HCLOUD_TOKEN environment variable
+# (`.github/workflows/ci.yml`); an operator running a hand-gated stack
+# operation appends both from their own source instead, and never commits
+# the result.
 #
 # The token has no source but the operator's own copy —
 # `pulumi config set --secret hcloud:token` prompts for it. It must be the

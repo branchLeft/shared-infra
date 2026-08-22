@@ -2,11 +2,14 @@
 #
 # `encryptionsalt` and the `hcloud:token` ciphertext never belong in this
 # file. The salt is an offline verifier for the stack passphrase and the
-# ciphertext is only as safe as that passphrase, so both stay operator-held
-# and are written into the working copy only, never committed. The token has
-# no source but the operator's own copy (`pulumi config set --secret
-# hcloud:token` prompts for it) and must be the **estate** project's, which
-# `projectGuard.ts` checks rather than assumes; the salt does not need one; it is
+# ciphertext is only as safe as that passphrase, so both are written into the
+# working copy only, never committed. CI appends the salt from the
+# PULUMI_SALT_HETZNER_ESTATE repository secret at deploy and supplies the
+# token as the HCLOUD_TOKEN environment variable (`.github/workflows/ci.yml`);
+# an operator running a hand-gated stack operation supplies both themselves
+# (`pulumi config set --secret hcloud:token` prompts for the token). Either
+# way it must be the **estate** project's token, which
+# `projectGuard.ts` checks rather than assumes; the salt needs no vault; it is
 # recoverable from the state bucket with read access alone —
 # `pulumi stack export` returns it uninterpreted as
 # `deployment.secrets_providers.state.salt`. **Never run `pulumi stack init`
