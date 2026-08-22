@@ -108,6 +108,7 @@ describe('Host', () => {
       name: 'priv1',
       role: 'db',
       publicNetworking: false,
+      privateIp: '10.20.1.20',
     });
     expect(resources.filter((r) => r.type === 'hcloud:index/primaryIp:PrimaryIp')).toHaveLength(0);
     const server = resources.find((r) => r.type === 'hcloud:index/server:Server');
@@ -115,10 +116,37 @@ describe('Host', () => {
     expect(host.publicIpv4).toBeUndefined();
   });
 
-  it('attaches to the private network at the address it was given', async () => {
+  it('gives a private-only host its network inline, so it has an interface at first boot', async () => {
+    // With no public interface and no inline network, Hetzner refuses to
+    // start the server ("no public or private network interfaces found") —
+    // the separate attachment resource lands after creation, which is too
+    // late. The empty aliasIps is load-bearing: left undefined, the provider
+    // detaches and reattaches the network on every apply.
+    const { host, resources } = await build({
+      name: 'priv2',
+      role: 'db',
+      publicNetworking: false,
+      privateIp: '10.20.1.20',
+    });
+    const server = resources.find((r) => r.type === 'hcloud:index/server:Server');
+    expect(server?.inputs.networks).toEqual([
+      { networkId: 4242, ip: '10.20.1.20', aliasIps: [] },
+    ]);
+    expect(
+      resources.filter((r) => r.type === 'hcloud:index/serverNetwork:ServerNetwork')
+    ).toHaveLength(0);
+    expect(host.networkAttachment).toBeUndefined();
+  });
+
+  it('attaches a public host to the private network at the address it was given', async () => {
+    // The separate-attachment shape stays for public hosts: moving a live
+    // host between the two shapes plans a detach/attach, so the shape is
+    // fixed at creation and edge1/app1 keep the one they were created with.
     const { resources } = await build({ name: 'net1', role: 'app', privateIp: '10.20.1.100' });
     const attachment = resources.find((r) => r.type === 'hcloud:index/serverNetwork:ServerNetwork');
     expect(attachment?.inputs.ip).toBe('10.20.1.100');
+    const server = resources.find((r) => r.type === 'hcloud:index/server:Server');
+    expect(server?.inputs.networks).toBeUndefined();
   });
 
   it('protects a production host from delete and rebuild by default', async () => {
