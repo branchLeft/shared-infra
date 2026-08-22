@@ -1,7 +1,8 @@
 name: CI
 
-# Type-checks the Pulumi program on every PR, and applies it on every push to
-# `main`.
+# Type-checks every Pulumi program on every PR, and applies the CI-owned
+# stacks on every push to `main` — each through a plan job whose output a
+# human approves before the paired apply job runs.
 #
 # **This file used to say the opposite**, and its reasoning was sound as far as
 # it went: this stack owns the single load balancer, URL map and certificate map
@@ -13,27 +14,44 @@ name: CI
 # laptops — a hand-run `pulumi up` has the same blast radius with an ambient
 # owner-level credential, no review, no audit trail beyond shell history, and
 # nothing stopping it applying uncommitted local edits. The guardrails the old
-# reasoning actually asked for are the five below; the argument for each, and
+# reasoning actually asked for are the six below; the argument for each, and
 # the bootstrap that has to happen once before any of it works, are in
 # RUNBOOK-ci-bootstrap.md.
 #
-#   1. The apply runs only on `push` to `main` — a reviewed, merged commit.
-#      Pull requests get type-check only, and no credentials of any kind.
-#   2. Credentials are short-lived, exchanged via Workload Identity Federation
-#      and scoped by `attributeCondition` to this repo *and* `refs/heads/main`.
-#      No service-account key exists anywhere.
-#   3. The deployer identity cannot grant itself a role, widen its own
+#   1. Anything credentialed runs only on `push` to `main` — a reviewed, merged
+#      commit. Pull requests get type-check only, and no credentials of any
+#      kind.
+#   2. The GCP edge stack's credentials are short-lived, exchanged via Workload
+#      Identity Federation and scoped by `attributeCondition` to this repo
+#      *and* `refs/heads/main`; no service-account key exists anywhere. The
+#      Hetzner mail stack has no federation equivalent — its API accepts a
+#      bearer token and nothing else — so its token is scoped to one hcloud
+#      project and one pipeline instead (hetzner/RUNBOOK-new-stack.md §7), a
+#      trade doc 14 §3.5 records deliberately.
+#   3. The GCP deployer identity cannot grant itself a role, widen its own
 #      federation, or delete a certificate — see serviceAccounts.ts.
 #   4. A preflight parses the real `pulumi preview` plan for this exact run and
-#      aborts before `pulumi up` if it would destroy any part of the edge
-#      (scripts/assert-no-edge-deletes.py).
-#   5. The deploy job declares an `environment` and a concurrency group.
+#      aborts before `pulumi up` if it would destroy protected infrastructure
+#      (scripts/assert-no-edge-deletes.py for the GCP edge,
+#      scripts/assert-no-hetzner-deletes.py for the Hetzner stacks).
+#   5. Every apply job declares an `environment` and a concurrency group. The
+#      environment's required-reviewer rule is what pauses the apply until a
+#      human has read the plan job's summary — the delete guard catches the
+#      destruction class mechanically, the reviewer catches the plan that is
+#      green, non-destructive and still wrong. An environment with no
+#      protection rule pauses nothing and says nothing; verify the rule via
+#      the API before trusting the gate.
+#   6. The apply job re-runs preview and the guard immediately before
+#      `pulumi up`: what was approved and what is applied can diverge only
+#      inside one run's window, and never past the guard.
 #
 # There is deliberately no `pulumi preview` job on pull requests. It is the
-# obvious next step, but it means handing GCP credentials to a job running
-# unmerged code, and the provider's branch condition correctly refuses to
-# federate a PR head branch. It needs its own read-only identity rather than
-# being bolted on here.
+# obvious next step, but it means handing credentials to a job running
+# unmerged code — for GCP the provider's branch condition correctly refuses to
+# federate a PR head branch, and for Hetzner a bearer token would work
+# anywhere, which makes the risk live rather than blocked. The
+# plan-then-approve split above is the compensating control: no plan applies
+# unread.
 
 on:
   push:
@@ -92,9 +110,8 @@ jobs:
     # Separate project (mail/, own package.json and Pulumi.yaml), separate
     # job: `hcloud` and `gcp` are different providers with independent
     # dependency trees, and a failure or credential need in one must never
-    # block or touch the other. Unlike the root project, the mail project has
-    # no CI apply path at all — no credentials here, and its stack operations
-    # are platform-owner-gated via mail/RUNBOOK-import-mail-host.md.
+    # block or touch the other. This job stays credential-free; the mail
+    # stack's own apply path is the mail-plan/mail-apply pair below.
     defaults:
       run:
         working-directory: mail
@@ -444,9 +461,28 @@ jobs:
       - name: Parity check
         run: python3 scripts/assert-cloud-armor-baseline-parity.py
 
-  deploy:
-    name: Deploy (pulumi up)
+  # ---------------------------------------------------------------------------
+  # Deploy pipelines. Each stack gets a plan job and an apply job: the plan job
+  # writes the real `pulumi preview` plan for this exact commit to its job
+  # summary, and the apply job — gated by the `production` environment's
+  # required-reviewer rule — runs only after a human has read it. The apply job
+  # re-runs preview and the delete guard itself, so the approved window can
+  # never smuggle a plan past the gate.
+  #
+  # Two things the machinery cannot enforce, on the approver:
+  #   - Approve each queued apply individually, with its own plan summary open.
+  #     The pending-deployments screen offers a multi-select approve, and using
+  #     it signs off plans nobody read.
+  #   - The environment rule itself lives in repo settings. Each apply job's
+  #     first step verifies via the API that a required-reviewer rule is live
+  #     and fails the apply if not, so an unconfigured gate is a red run, not a
+  #     silent unattended apply.
+  # ---------------------------------------------------------------------------
+
+  deploy-plan:
+    name: Plan (edge, pulumi preview)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs:
       [
         typecheck,
@@ -461,29 +497,19 @@ jobs:
       ]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
-    # An environment carrying no protection rule neither pauses a run nor says
-    # so, and this key's presence says nothing about whether one is configured.
-    # Read `protection_rules` via the API before believing a deploy is gated.
-    environment: production
-
     # Job-level permissions replace the workflow-level block entirely, so
     # `contents: read` and `packages: read` are restated alongside the scope
     # actually being added. `id-token: write` is what lets the runner request
-    # the OIDC token WIF exchanges, and it is granted on this job alone.
+    # the OIDC token WIF exchanges, and it is granted to the edge plan/apply
+    # jobs alone.
     permissions:
       contents: read
       packages: read
       id-token: write
 
-    # `cancel-in-progress: false` deliberately: cancelling an apply mid-flight
-    # leaves the stack locked and half-applied, which is worse than waiting.
-    concurrency:
-      group: pulumi-shared-infra-deploy
-      cancel-in-progress: false
-
     # Every pulumi command that reads stack state requires this once the
-    # stack is passphrase-wrapped; while the stack is KMS-wrapped it is
-    # ignored. Without it the deploy fails closed at the preview step.
+    # stack is passphrase-wrapped. Without it the plan fails closed at the
+    # preview step.
     env:
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
       PULUMI_SALT_EDGE: ${{ secrets.PULUMI_SALT_EDGE }}
@@ -559,10 +585,134 @@ jobs:
       - name: Preview the plan
         run: pulumi preview --stack production --json > preview.json
 
-      - name: Refuse to apply a plan that destroys the edge
+      - name: Refuse a plan that destroys the edge
         run: |
           # Self-test first. A gate whose matcher has quietly stopped matching
           # passes everything, so prove it still works before trusting a pass.
+          python3 scripts/assert-no-edge-deletes.py --self-test
+          python3 scripts/assert-no-edge-deletes.py --verify-coverage .
+
+          if ! python3 scripts/assert-no-edge-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      # This summary is what the approver of the apply job reads. It has to be
+      # written by the plan job, because the apply job's own summary does not
+      # exist until after approval.
+      - name: Write the plan to the job summary
+        if: always()
+        # Bound rather than interpolated: a `${{ }}` inside `run` is
+        # substituted before the shell parses the script.
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo '## Shared edge plan — read before approving the apply'
+            echo
+            echo "Commit: \`${COMMIT_SHA}\`"
+            echo
+            echo '```json'
+            # Resource URNs, step ops and this stack's non-secret config only.
+            # Job summaries are visible to anyone who can read the repo, and
+            # URNs here carry site names — which is the same audience sites.ts
+            # already has. Revisit if a secret config value is ever added.
+            python3 -m json.tool preview.json 2>/dev/null \
+              || echo '(no plan captured — the run failed before preview)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-apply:
+    name: Apply (edge, pulumi up)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [deploy-plan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    # The pause. An environment carrying no protection rule neither pauses a
+    # run nor says so, and this key's presence says nothing about whether one
+    # is configured. Read `protection_rules` via the API before believing an
+    # apply is gated.
+    environment: production
+
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+
+    # `cancel-in-progress: false` deliberately: cancelling an apply mid-flight
+    # leaves the stack locked and half-applied, which is worse than waiting.
+    concurrency:
+      group: pulumi-shared-infra-deploy
+      cancel-in-progress: false
+
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+      PULUMI_SALT_EDGE: ${{ secrets.PULUMI_SALT_EDGE }}
+
+    steps:
+      # If the job is running and no required-reviewer rule exists, nothing
+      # paused it — the environment key is silently inert without one. Fail
+      # here, before any credential is touched, rather than apply unattended.
+      # Needs no checkout; the token's read access covers the endpoint.
+      - name: Refuse to apply through an ungated environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reviewers=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          if [ "${reviewers:-0}" -eq 0 ]; then
+            echo "::error::the production environment has no required-reviewer rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          registry-url: https://npm.pkg.github.com
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Authenticate to GCP (Workload Identity Federation)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA_EMAIL }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Restore the stack's encryption salt
+        run: |
+          if [ -z "$PULUMI_SALT_EDGE" ]; then
+            echo "PULUMI_SALT_EDGE is empty or unset -- set the repository secret before deploying" >&2
+            exit 1
+          fi
+          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_EDGE" >> Pulumi.production.yaml
+
+      - name: Log in to the Pulumi state backend
+        run: pulumi login gs://branchleft-pulumi-state
+
+      # Re-planned and re-gated after approval, not carried over from the plan
+      # job: two jobs are two runners, and the guard must see the exact plan
+      # this apply acts on.
+      - name: Preview the plan
+        run: pulumi preview --stack production --json > preview.json
+
+      - name: Refuse to apply a plan that destroys the edge
+        run: |
           python3 scripts/assert-no-edge-deletes.py --self-test
           python3 scripts/assert-no-edge-deletes.py --verify-coverage .
 
@@ -577,8 +727,6 @@ jobs:
 
       - name: Write outcome to job summary
         if: always()
-        # Bound rather than interpolated: a `${{ }}` inside `run` is
-        # substituted before the shell parses the script.
         env:
           COMMIT_SHA: ${{ github.sha }}
         run: |
@@ -590,10 +738,234 @@ jobs:
             echo '### Plan this run applied'
             echo
             echo '```json'
-            # Resource URNs, step ops and this stack's non-secret config only.
-            # Job summaries are visible to anyone who can read the repo, and
-            # URNs here carry site names — which is the same audience sites.ts
-            # already has. Revisit if a secret config value is ever added.
+            python3 -m json.tool preview.json 2>/dev/null \
+              || echo '(no plan captured — the run failed before preview)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  mail-plan:
+    name: Plan (mail, pulumi preview)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Only the jobs that actually gate this stack: its own project checks, the
+    # delete guard's unit tests, and the backend/secrets inventory audit. The
+    # GCP edge's parity and typecheck jobs share nothing with mx1, and
+    # coupling them would block a mail fix on an unrelated red.
+    needs: [mail-typecheck, mail-provision-checks, scripts-tests, pulumi-inventory-audit]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    defaults:
+      run:
+        working-directory: mail
+
+    # No federation exists for Hetzner (guardrail 2 in the header): the API
+    # takes a bearer token, so the token is a long-lived secret scoped to the
+    # mail hcloud project alone and named for it. The state backend is pinned
+    # in mail/Pulumi.yaml — no `pulumi login` step, per
+    # hetzner/RUNBOOK-new-stack.md §7 — and its Object Storage credential pair
+    # arrives as the AWS_* variables the S3 backend reads. The bucket's
+    # location is `hel1` (not the servers' `nbg1`); a mismatch fails as an
+    # opaque 403.
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_MAIL }}
+      PULUMI_SALT_MAIL: ${{ secrets.PULUMI_SALT_MAIL }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_MAIL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: mail/.nvmrc
+          cache: npm
+          cache-dependency-path: mail/package-lock.json
+          registry-url: https://npm.pkg.github.com
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      # Fail closed on every secret this job depends on, before any of them is
+      # used: each produces its own opaque failure downstream (Pulumi reports
+      # corrupt secrets for a blank salt, the S3 backend a 403, the provider a
+      # 401), and every one of those debugs toward the wrong thing. The salt
+      # must additionally carry Pulumi's `v1:` prefix — a truncated paste
+      # passes an emptiness check and still corrupts every decrypt.
+      - name: Verify the deploy secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_MAIL is empty or unset" ; fail=1; }
+          [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_MAIL is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          case "$PULUMI_SALT_MAIL" in
+            v1:*) ;;
+            *) echo "::error::PULUMI_SALT_MAIL is empty or does not start with 'v1:'" ; fail=1;;
+          esac
+          exit "$fail"
+
+      # Same reasoning as the edge jobs' salt restore: the committed file must
+      # not carry the offline passphrase verifier, so it is appended on the
+      # runner, for this job only.
+      - name: Restore the stack's encryption salt
+        run: |
+          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_MAIL" >> Pulumi.production.yaml
+
+      - name: Preview the plan
+        run: pulumi preview --stack production --json > preview.json
+
+      - name: Refuse a plan that destroys the mail host
+        run: |
+          python3 ../scripts/assert-no-hetzner-deletes.py --self-test
+          python3 ../scripts/assert-no-hetzner-deletes.py --verify-coverage .
+
+          if ! python3 ../scripts/assert-no-hetzner-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      - name: Write the plan to the job summary
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo '## Mail plan — read before approving the apply'
+            echo
+            echo "Commit: \`${COMMIT_SHA}\`"
+            echo
+            echo '```json'
+            python3 -m json.tool preview.json 2>/dev/null \
+              || echo '(no plan captured — the run failed before preview)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  mail-apply:
+    name: Apply (mail, pulumi up)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [mail-plan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    # Same environment as the edge apply, so one required-reviewer rule pauses
+    # every production apply in this repository.
+    environment: production
+
+    concurrency:
+      group: pulumi-mail-deploy
+      cancel-in-progress: false
+
+    defaults:
+      run:
+        working-directory: mail
+
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_MAIL }}
+      PULUMI_SALT_MAIL: ${{ secrets.PULUMI_SALT_MAIL }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_MAIL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+
+    steps:
+      # If the job is running and no required-reviewer rule exists, nothing
+      # paused it — the environment key is silently inert without one. Fail
+      # here, before any credential is touched, rather than apply unattended.
+      - name: Refuse to apply through an ungated environment
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reviewers=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          if [ "${reviewers:-0}" -eq 0 ]; then
+            echo "::error::the production environment has no required-reviewer rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: mail/.nvmrc
+          cache: npm
+          cache-dependency-path: mail/package-lock.json
+          registry-url: https://npm.pkg.github.com
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Verify the deploy secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_MAIL is empty or unset" ; fail=1; }
+          [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_MAIL is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          case "$PULUMI_SALT_MAIL" in
+            v1:*) ;;
+            *) echo "::error::PULUMI_SALT_MAIL is empty or does not start with 'v1:'" ; fail=1;;
+          esac
+          exit "$fail"
+
+      - name: Restore the stack's encryption salt
+        run: |
+          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_MAIL" >> Pulumi.production.yaml
+
+      # Re-planned and re-gated after approval, not carried over from the plan
+      # job: two jobs are two runners, and the guard must see the exact plan
+      # this apply acts on.
+      - name: Preview the plan
+        run: pulumi preview --stack production --json > preview.json
+
+      - name: Refuse to apply a plan that destroys the mail host
+        run: |
+          python3 ../scripts/assert-no-hetzner-deletes.py --self-test
+          python3 ../scripts/assert-no-hetzner-deletes.py --verify-coverage .
+
+          if ! python3 ../scripts/assert-no-hetzner-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      - name: Apply
+        run: pulumi up --stack production --yes
+
+      - name: Write outcome to job summary
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo '## Mail deploy'
+            echo
+            echo "Commit: \`${COMMIT_SHA}\`"
+            echo
+            echo '### Plan this run applied'
+            echo
+            echo '```json'
             python3 -m json.tool preview.json 2>/dev/null \
               || echo '(no plan captured — the run failed before preview)'
             echo '```'

@@ -4,8 +4,9 @@
 # `encryptionsalt` is deliberately absent from this committed file. It is a
 # passphrase verifier: anyone holding it can test candidate passphrases offline,
 # at their own rate, with no service in the loop and nothing to notice. The
-# stack still needs it to decrypt its own state, and this project has no CI
-# apply path, so the operator appends it from their own copy before any
-# `pulumi` command that reads state, and does not commit the result:
+# stack still needs it to decrypt its own state, so CI appends it from the
+# PULUMI_SALT_MAIL repository secret at deploy (.github/workflows/ci.yml), and
+# an operator running a hand-gated stack operation appends it from their own
+# copy the same way, never committing the result:
 #
 #     printf '\nencryptionsalt: %s\n' "$SALT" >> mail/Pulumi.production.yaml

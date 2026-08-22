@@ -61,6 +61,12 @@ You need:
 
 ## 1. Create the stack
 
+> **Do not run the commands below against the live stack.** They are the
+> original bootstrap record only. The live stack uses the passphrase secrets
+> provider (Part A of `hetzner/RUNBOOK-existing-stack-migration.md`) and the
+> Hetzner Object Storage backend pinned in `mail/Pulumi.yaml` (Part B) — not
+> the GCS bucket or the KMS key ring named here.
+
 This is a brand-new Pulumi project (`branchleft-mail`), so it has no stack
 yet. Initialize one against the same state bucket and KMS key ring the root
 `shared-infra` stack uses — one bucket, one key ring, to grant/revoke/audit
@@ -96,20 +102,17 @@ Option A is the one to use if you want the token available every time you
 never appears in this repo, in a commit, or in a PR — only its ciphertext
 (Option A) or your own shell environment (Option B).
 
-**No GitHub Actions secret exists for this today, and none is being added.**
-The repo's root (GCP edge) project is CI-applied on merge to `main` via GCP
-Workload Identity Federation (`.github/workflows/ci.yml`), but that mechanism
-has no Hetzner equivalent — Hetzner's API is a plain bearer token, not
-something a GitHub OIDC exchange can stand in for. So this `mail/` project is
-deliberately different from the rest of the repo: CI type-checks it only
-(`mail-typecheck` job, credential-free), and every stack operation is run by
-the platform owner from a workstation per this runbook. If this stack ever
-moves to CI-applied, the token would need to be a real stored secret — a
-repository or environment secret named `HCLOUD_TOKEN`, exposed to a deploy
-job only, exported as an env var for a step that runs `pulumi up`. That is a
-future decision with its own guardrails (long-lived bearer secret in CI is a
-materially weaker posture than the root project's short-lived federated
-credentials), not something this change sets up.
+**The token also lives in CI, as the `HCLOUD_TOKEN_MAIL` repository secret.**
+Doc 14 §3.5 decided that this stack applies from CI on merge to `main` —
+Hetzner's API is a plain bearer token with no OIDC equivalent, and that trade
+is accepted with per-project, per-pipeline token scoping as the compensating
+control. The secret is scoped to the mail hcloud project alone and exposed
+only to the `mail-plan`/`mail-apply` jobs in `.github/workflows/ci.yml`,
+which preview, gate on `scripts/assert-no-hetzner-deletes.py`, pause for a
+human to read the plan, and apply. **Steady-state applies happen on merge;
+this runbook is the first-time import procedure only.** Option A/B above is
+how an operator supplies the token for a hand-gated stack operation — the
+value never appears in this repo, a commit, or a PR.
 
 ## 3. Import mx1 first
 

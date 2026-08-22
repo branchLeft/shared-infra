@@ -52,10 +52,10 @@
       "repo": "shared-infra",
       "project_path": "mail/Pulumi.yaml",
       "config_path": "mail/Pulumi.production.yaml",
-      "state_backend": "shared",
+      "state_backend": "hetzner",
       "expected_secrets_provider": "passphrase",
       "terminal_state": "migrate",
-      "note": "The only stack that outlives the GCP estate. No CI apply path, so an operator appends the passphrase salt from their own copy before any `pulumi` command that reads state and never commits it.",
+      "note": "The only stack that outlives the GCP estate. State moved off gs://branchleft-pulumi-state to the Hetzner backend per RUNBOOK-existing-stack-migration.md Part B, and the backend is now pinned in mail/Pulumi.yaml. CI applies on merge (mail-plan/mail-apply in ci.yml) and appends the passphrase salt from the PULUMI_SALT_MAIL repository secret; hand-gated stack operations append it from the operator's own copy.",
       "attestation": {
         "state": "migrated",
         "date": "2026-08-17",
@@ -130,11 +130,11 @@
       "stack": "production",
       "repo": "shared-infra",
       "project_path": "hetzner/Pulumi.yaml",
-      "config_path": null,
+      "config_path": "hetzner/Pulumi.production.yaml",
       "state_backend": "hetzner",
       "expected_secrets_provider": "passphrase",
       "terminal_state": "never-kms",
-      "note": "Born on the passphrase provider and never wrapped by the KMS key -- terminal_state never-kms, satisfied without an attestation, because demanding one from a stack with no KMS dependency to migrate away from is exactly the 'gate red in its own success state' failure the rest of this script exists to avoid. Not yet created: `config_path` stays null because hetzner/Pulumi.production.yaml does not exist on main yet (lands via branchLeft/shared-infra#4, which commits non-secret configuration only -- not `encryptionsalt`, since `pulumi stack init` has not run). Point `config_path` here once that file is committed.",
+      "note": "Born on the passphrase provider and never wrapped by the KMS key -- terminal_state never-kms, satisfied without an attestation, because demanding one from a stack with no KMS dependency to migrate away from is exactly the 'gate red in its own success state' failure the rest of this script exists to avoid. hetzner/Pulumi.production.yaml is committed (landed via branchLeft/shared-infra#4) and holds non-secret configuration only -- no `encryptionsalt`, so the file reads `absent`, which reports `needs-attestation` -- not drift -- and never-kms accepts that on its own, same as the estate entry below.",
       "attestation": null
     },
     {
@@ -155,7 +155,7 @@
       "path": ".github/workflows/ci.yml",
       "kind": "ci",
       "backend": "shared",
-      "note": "`pulumi login gs://branchleft-pulumi-state` in the deploy job."
+      "note": "`pulumi login gs://branchleft-pulumi-state` in the edge stack's deploy-plan and deploy-apply jobs. The mail jobs never log in: their backend is pinned in mail/Pulumi.yaml."
     },
     {
       "path": "README.md",
@@ -181,7 +181,13 @@
       "path": "hetzner/Pulumi.yaml",
       "kind": "pinned",
       "backend": "hetzner",
-      "note": "The only project in the estate that pins its own backend rather than relying on the ambient login."
+      "note": "Pins its own backend rather than relying on the ambient login; mail/Pulumi.yaml and hetzner/estate/Pulumi.yaml do the same."
+    },
+    {
+      "path": "mail/Pulumi.yaml",
+      "kind": "pinned",
+      "backend": "hetzner",
+      "note": "Pinned when the stack's state moved off gs:// (RUNBOOK-existing-stack-migration.md Part B) and its CI apply path landed — the pin is what the mail-plan/mail-apply jobs rely on instead of a `pulumi login` step."
     },
     {
       "path": "hetzner/estate/Pulumi.yaml",
