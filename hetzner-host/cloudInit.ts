@@ -22,6 +22,19 @@ export interface CloudInitArgs {
    * must never reach this repository. A distinct keypair per host keeps a
    * compromised runner secret scoped to one machine. */
   deployPublicKey: pulumi.Input<string>;
+  /**
+   * Whether this host has no public interface at all. A plain boolean, not
+   * an `Input`: it comes from `HostArgs.publicNetworking`, itself a plain
+   * boolean because the networking shape is a creation-time decision, never
+   * a stack output.
+   *
+   * A private-only host's only route off the subnet is the network's own
+   * gateway, and Hetzner's DHCP delivers the subnet route but never a
+   * default (`hetzner/egress.ts`). Left false, `package_update` below is the
+   * first thing on such a host with nowhere to reach, and every apt mirror
+   * fails "temporary failure resolving" for the rest of first boot.
+   */
+  privateOnly: boolean;
 }
 
 /**
@@ -84,6 +97,34 @@ export function assertDeployPublicKey(key: string): string {
   }
   return key;
 }
+
+/**
+ * Two `runcmd` entries that give a private-only host a working default route
+ * and resolver before `package_update` below runs.
+ *
+ * `runcmd`'s own module runs ahead of package installation in cloud-init's
+ * default module ordering, which is what makes this placement work at all --
+ * moving these into `write_files`/`bootcmd` territory is not needed and
+ * `bootcmd` would be wrong regardless, since it re-runs on every boot and
+ * this file's whole premise is that nothing here survives past first boot.
+ * Durable persistence across every later reboot is
+ * `provision/05-configure-host-egress.sh`'s job, once it has been run.
+ *
+ * Exec form is avoided here (unlike the plain commands below) because the
+ * gateway has to be derived from the routing table, which needs a shell.
+ * Every string literal in the embedded awk/shell is double-quoted rather
+ * than single-quoted so that wrapping the whole command in a YAML
+ * double-quoted scalar needs no nested-quote gymnastics beyond escaping
+ * those doubles for YAML itself.
+ */
+const PRIVATE_ONLY_RUNCMD = `
+  # A private-only host has no public interface, so its only route off the
+  # subnet is the network's own gateway -- and Hetzner's DHCP delivers the
+  # subnet route but never a default (hetzner/egress.ts). First boot only:
+  # provision/05-configure-host-egress.sh (and the systemd unit it installs)
+  # is what keeps this true across every later reboot.
+  - [ sh, -c, "GW=$(ip -4 route show | awk '$1 != \\"default\\" && $1 != \\"169.254.169.254\\" { for (i=1;i<=NF;i++) if ($i==\\"via\\") { print $(i+1); exit } }'); [ -n \\"$GW\\" ] && ip route replace default via \\"$GW\\" || true" ]
+  - [ sh, -c, "mkdir -p /etc/resolvconf/resolv.conf.d && { echo 'nameserver 185.12.64.1'; echo 'nameserver 185.12.64.2'; } > /etc/resolvconf/resolv.conf.d/head && resolvconf -u || true" ]`;
 
 export function renderCloudInit(args: CloudInitArgs): pulumi.Output<string> {
   // Checked twice, and the eager half is the one that behaves well. In
@@ -149,7 +190,7 @@ packages:
   - curl
   - gnupg
 
-runcmd:
+runcmd:${args.privateOnly ? PRIVATE_ONLY_RUNCMD : ''}
   - [ install, -d, -m, '0755', -o, root, -g, root, /etc/branchleft ]
   - [ install, -d, -m, '0755', -o, root, -g, root, /opt/branchleft ]
   # Absolute path: runcmd's exec form does not go through a login shell, and

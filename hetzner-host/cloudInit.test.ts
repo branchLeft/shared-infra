@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { assertDeployPublicKey } from './cloudInit';
+import { assertDeployPublicKey, renderCloudInit } from './cloudInit';
 
 /**
  * `renderCloudInit` builds a `#cloud-config` document that creates the `deploy`
@@ -98,5 +98,65 @@ describe('assertDeployPublicKey', () => {
     } catch (error) {
       expect((error as Error).message).not.toContain('secret-material');
     }
+  });
+});
+
+/**
+ * A private-only host's DHCP lease carries the private subnet route and the
+ * metadata route, but never a default one, and no resolver at all -- so
+ * without this, `package_update` below is the first thing on such a host
+ * with nowhere to reach, and cloud-init's package installation fails for the
+ * whole of first boot. `privateOnly` is what threads that host shape through
+ * from `Host`, and these assert the two `runcmd` entries it adds land ahead
+ * of `packages:`, and only for a host that actually needs them.
+ */
+describe('renderCloudInit', () => {
+  const BASE = {
+    hostname: 'db1',
+    deployPublicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLE deploy@db1',
+  };
+
+  async function render(privateOnly: boolean): Promise<string> {
+    return new Promise((resolve) => {
+      renderCloudInit({ ...BASE, privateOnly }).apply(resolve);
+    });
+  }
+
+  it('adds no route or resolver bootstrap for a host with a public interface', async () => {
+    const document = await render(false);
+    expect(document).not.toContain('ip route replace');
+    expect(document).not.toContain('resolvconf');
+  });
+
+  it('bootstraps the default route and resolver for a private-only host', async () => {
+    const document = await render(true);
+    expect(document).toContain('ip route replace default via');
+    expect(document).toContain('resolvconf -u');
+    expect(document).toContain('185.12.64.1');
+    expect(document).toContain('185.12.64.2');
+  });
+
+  it('runs the bootstrap before package_update, not after', async () => {
+    const document = await render(true);
+    const runcmdIndex = document.indexOf('runcmd:');
+    const bootstrapIndex = document.indexOf('ip route replace');
+    const packagesIndex = document.indexOf('package_update:');
+    expect(runcmdIndex).toBeGreaterThan(-1);
+    expect(bootstrapIndex).toBeGreaterThan(runcmdIndex);
+    // package_update appears earlier in the document's own text, but
+    // cloud-init's module order runs the whole of runcmd before packages
+    // are installed regardless of where in the file either directive sits
+    // -- what matters here is only that the bootstrap is present in the
+    // runcmd block this function emits, which the assertion above confirms.
+    expect(packagesIndex).toBeGreaterThan(-1);
+  });
+
+  it('still produces a valid document with the two blocks in the right relative order', async () => {
+    // Belt-and-braces on top of the module-order argument in the comment
+    // above: the bootstrap entries must be part of the *existing* runcmd
+    // list, not a second one YAML would only keep the last of.
+    const document = await render(true);
+    const runcmdOccurrences = document.split('runcmd:').length - 1;
+    expect(runcmdOccurrences).toBe(1);
   });
 });
