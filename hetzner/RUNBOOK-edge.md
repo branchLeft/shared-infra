@@ -330,6 +330,48 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
 
 5. Confirm it took, with step 8a's loop. Expect roughly `200 204` followed by
    `50 429` rather than `250 204`.
+6. Confirm the members magic-link throttle separately — it is a second,
+   independent zone on the same switch (`hetzner/edge/posture.ts`), five
+   requests per 60 seconds rather than 200, and it only matches `POST` to
+   `/members/api/send-magic-link`:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+  for i in $(seq 1 8); do
+    curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+      http://127.0.0.1:8080/members/api/send-magic-link
+  done | sort | uniq -c'
+```
+
+   Expect `5 204` followed by `3 429` — tripped well inside the general
+   throttle's own 200-request budget, which the loop in step 8a already
+   confirms is untouched by this. Then confirm the matcher is on the method,
+   not only the path — a `GET` to the same path must not count against this
+   budget at all:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+  for i in $(seq 1 8); do
+    curl -s -o /dev/null -w "%{http_code}\n" \
+      http://127.0.0.1:8080/members/api/send-magic-link
+  done | sort | uniq -c'
+```
+
+   Expect `8 204`.
+
+   **This proves the throttle logic; it does not prove hostname routing.**
+   The loopback probe answers on a bare port with no `Host` match, so it
+   exercises the same handler chain every site gets but not a specific
+   site's route. Once a real (even non-production) hostname has a
+   `privateUpstream` entry — added per §11 below — repeat the same two loops
+   against `https://<that-hostname>/members/api/send-magic-link`, from a
+   workstation rather than over SSH, to prove the rule on the actual routed
+   path a client would use. Nothing before that point has proven the rule
+   end-to-end; the loopback checks above are what is possible immediately
+   after this flip lands, with no site changes required. **Neither loop runs
+   itself: merging the posture change does not deploy it and does not run
+   this verification — both are this section's steps 1–4 and this one,
+   performed by whoever holds `~/.ssh/id_ed25519_hetzner`.**
 
 ### 10b. The WAF and IP remediation
 

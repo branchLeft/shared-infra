@@ -47,6 +47,42 @@ export const RATE_LIMIT_EVENTS = 200;
 export const RATE_LIMIT_WINDOW_SECONDS = 60;
 
 /**
+ * The members magic-link send path (`/members/api/send-magic-link`) is a
+ * different threat class from page-serving: every request makes the platform
+ * send email from `mx1`, so the cost of a flood lands on deliverability, not
+ * on compute. The threshold below is sized from plausible legitimate use of
+ * that one endpoint by a small publication, not from the page-serving figure
+ * above and not from what is convenient to trip in a test:
+ *
+ * - A member sends at most two requests per login or signup attempt: the
+ *   first, and one resend if the email is slow to arrive. Clicking resend a
+ *   third time before troubleshooting elsewhere is not the common case.
+ * - The tenant base is small UK public-interest local outlets, not a large
+ *   title, so the realistic multi-person case is a handful of members behind
+ *   one shared address -- an office, a library, a school -- opening the same
+ *   link within the same minute after it goes out in a newsletter or gets
+ *   shared in a group chat. Two such members retrying once each is already a
+ *   generous bound for that case.
+ *
+ * Five events per 60 seconds covers two members at two attempts each with a
+ * full request of headroom, while sitting under 3% of the page-serving
+ * threshold above -- "far below", the same standard that threshold was set to.
+ *
+ * The zone this is enforced in (`hetzner/edge/render.ts`) is global across
+ * every hostname this edge serves, unlike the per-site zone above. That is
+ * deliberate and is the one thing this control adds that Ghost's own
+ * per-instance limiter cannot: `membersAuthEnumeration` in Ghost's
+ * `spam-prevention.js` counts per Ghost instance, so a client that sends one
+ * request to tenant A and one to tenant B never trips either instance's own
+ * counter. A single edge-wide bucket does. It does not, and cannot, defeat a
+ * rotating-source attack -- an attacker with enough distinct source addresses
+ * still gets one attempt per address before any counter trips. It raises the
+ * cost of the lazy version of this attack, not the cost of the competent one.
+ */
+export const MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS = 5;
+export const MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS = 60;
+
+/**
  * TLS floor for every hostname. Absent from the captured Cloud Armor baseline
  * because on GCP it lived on the target proxy's SSL policy rather than in the
  * security policy, so the parity gate cannot check this line against that

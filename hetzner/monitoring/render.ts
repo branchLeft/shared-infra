@@ -57,6 +57,25 @@ export const MONITORED_NODE_HOSTS: readonly MonitoredHost[] = [
   { name: 'db1', address: HOST_IPS.db1, expectedUp: false },
 ];
 
+/**
+ * `mx1` is not, and cannot yet be, a target here -- unlike `app1`/`db1`
+ * above, this is not "the exporter isn't provisioned yet" (a `db1`-style
+ * `expectedUp: false` entry would still be a real, if currently-failing,
+ * scrape). `mx1` lives in its own hcloud project (`edge/render.ts`'s
+ * `NOT_AN_UPSTREAM` carries the same fact for the edge), so it shares no
+ * private network with this host, and its firewall
+ * (`mail/firewall.ts`) opens only mail protocol ports and the bulk-mail
+ * shim's API -- nothing a Prometheus scrape could reach. Stalwart's own
+ * metrics are not configured anywhere in this repo either, since `mail/`
+ * carries no config-as-code for it. A rule against a metric with no
+ * network path and no confirmed source would never evaluate, which is
+ * worse than not having it -- it would read as covered. Filed instead of
+ * built: the gap needs a network-path decision (a firewalled, authenticated
+ * public endpoint on `mx1`, since no private path can exist across the
+ * project boundary) and confirmation of what Stalwart can actually export,
+ * neither of which is a rendering change.
+ */
+
 /** `db1`'s MySQL exporter lands in a parallel story; the target is listed now
  * so the scrape config and the alert rule are already correct when it does. */
 export const MONITORED_MYSQLD_HOST: MonitoredHost = {
