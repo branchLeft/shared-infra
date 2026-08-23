@@ -53,6 +53,17 @@ if [[ "$has_public_interface" -eq 1 ]]; then
     exit 0
 fi
 
+# Checked before anything is mutated, not left to fail where it is used.
+# `resolvconf -u` runs unguarded under `set -euo pipefail`, invoked by a
+# systemd unit that 05-configure-host-egress.sh starts inside run-all.sh's
+# own `set -euo pipefail` -- a missing binary there is exit 127 from a
+# command whose name never appears in run-all.sh's output, which reads as a
+# broken script rather than a missing package.
+if ! command -v resolvconf >/dev/null 2>&1; then
+    echo "branchleft-host-egress: resolvconf is not installed -- install the resolvconf package on this host and re-run" >&2
+    exit 1
+fi
+
 # The subnet route DHCP delivers alongside the metadata route above -- the
 # only other gateway-bearing entry a private-only host's table carries.
 # Read from the table rather than assumed: the hand-repair this script

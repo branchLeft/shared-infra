@@ -107,8 +107,21 @@ describe('assertDeployPublicKey', () => {
  * without this, `package_update` below is the first thing on such a host
  * with nowhere to reach, and cloud-init's package installation fails for the
  * whole of first boot. `privateOnly` is what threads that host shape through
- * from `Host`, and these assert the two `runcmd` entries it adds land ahead
- * of `packages:`, and only for a host that actually needs them.
+ * from `Host`.
+ *
+ * The bootstrap has to land in `bootcmd`, not `runcmd`: `runcmd`'s own
+ * module only writes the command list to disk during cloud-init's config
+ * stage, and that script is not actually executed until `scripts-user`,
+ * which runs near the end of the *later* final stage -- after
+ * `package-update-upgrade-install`, which sits at the *start* of that same
+ * final stage. Putting the bootstrap in `runcmd` would place it in the
+ * document but have it execute too late to help, which is exactly what an
+ * earlier version of this file got wrong (and asserted incorrectly, via a
+ * test that only checked string position in the rendered YAML rather than
+ * which module the position belongs to). `bootcmd` is a distinct, earlier
+ * module in cloud-init's *init* stage, which precedes both config and final
+ * — the assertions below check block membership, not text order, because
+ * text order is exactly what let the wrong placement pass before.
  */
 describe('renderCloudInit', () => {
   const BASE = {
@@ -122,41 +135,53 @@ describe('renderCloudInit', () => {
     });
   }
 
-  it('adds no route or resolver bootstrap for a host with a public interface', async () => {
+  /**
+   * Extracts the content of one top-level cloud-config block, from
+   * `key:` to (exclusive) the next top-level key, or to the end of the
+   * document when `key` is the last block. A plain substring search would
+   * be fooled by the same failure this file exists to catch: text that is
+   * merely *near* `runcmd:` is not the same as text `scripts-user` will
+   * actually execute as part of it.
+   */
+  function block(document: string, key: string): string {
+    const startMatch = document.match(new RegExp(`\\n${key}:\\n?`));
+    if (!startMatch || startMatch.index === undefined) {
+      return '';
+    }
+    const rest = document.slice(startMatch.index + startMatch[0].length);
+    const nextKey = rest.match(/\n[a-zA-Z_-]+:/);
+    return nextKey && nextKey.index !== undefined ? rest.slice(0, nextKey.index) : rest;
+  }
+
+  it('adds no bootcmd block at all for a host with a public interface', async () => {
     const document = await render(false);
+    expect(document).not.toContain('bootcmd:');
     expect(document).not.toContain('ip route replace');
     expect(document).not.toContain('resolvconf');
   });
 
-  it('bootstraps the default route and resolver for a private-only host', async () => {
+  it('puts the route and resolver bootstrap in bootcmd for a private-only host', async () => {
     const document = await render(true);
-    expect(document).toContain('ip route replace default via');
-    expect(document).toContain('resolvconf -u');
-    expect(document).toContain('185.12.64.1');
-    expect(document).toContain('185.12.64.2');
+    const bootcmd = block(document, 'bootcmd');
+    expect(bootcmd).toContain('ip route replace default via');
+    expect(bootcmd).toContain('resolvconf -u');
+    expect(bootcmd).toContain('185.12.64.1');
+    expect(bootcmd).toContain('185.12.64.2');
   });
 
-  it('runs the bootstrap before package_update, not after', async () => {
+  it('never puts the bootstrap in runcmd, which executes too late to help', async () => {
     const document = await render(true);
-    const runcmdIndex = document.indexOf('runcmd:');
-    const bootstrapIndex = document.indexOf('ip route replace');
-    const packagesIndex = document.indexOf('package_update:');
-    expect(runcmdIndex).toBeGreaterThan(-1);
-    expect(bootstrapIndex).toBeGreaterThan(runcmdIndex);
-    // package_update appears earlier in the document's own text, but
-    // cloud-init's module order runs the whole of runcmd before packages
-    // are installed regardless of where in the file either directive sits
-    // -- what matters here is only that the bootstrap is present in the
-    // runcmd block this function emits, which the assertion above confirms.
-    expect(packagesIndex).toBeGreaterThan(-1);
+    const runcmd = block(document, 'runcmd');
+    expect(runcmd).not.toContain('ip route replace');
+    expect(runcmd).not.toContain('resolvconf');
+    // The existing runcmd entries are still exactly where they were.
+    expect(runcmd).toContain('/etc/branchleft');
+    expect(runcmd).toContain('sshd');
   });
 
-  it('still produces a valid document with the two blocks in the right relative order', async () => {
-    // Belt-and-braces on top of the module-order argument in the comment
-    // above: the bootstrap entries must be part of the *existing* runcmd
-    // list, not a second one YAML would only keep the last of.
+  it('emits exactly one bootcmd block and one runcmd block', async () => {
     const document = await render(true);
-    const runcmdOccurrences = document.split('runcmd:').length - 1;
-    expect(runcmdOccurrences).toBe(1);
+    expect(document.split('bootcmd:').length - 1).toBe(1);
+    expect(document.split('runcmd:').length - 1).toBe(1);
   });
 });

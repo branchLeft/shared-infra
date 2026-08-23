@@ -10,6 +10,15 @@ import * as pulumi from '@pulumi/pulumi';
  * rest: the platform owner's key on `root`, and the CI deploy key on
  * `deploy`.
  *
+ * One deliberate exception: a private-only host's `bootcmd` entries (see
+ * `PRIVATE_ONLY_BOOTCMD` below) re-run on every boot, not once. `bootcmd`
+ * is the only cloud-init stage early enough to matter here, and re-running
+ * is also the point of putting them there — it covers the window between
+ * first boot and `provision/05-configure-host-egress.sh` (and the systemd
+ * unit it installs) actually taking over the same job permanently. Both
+ * commands are idempotent, so the repetition costs nothing once that unit
+ * exists.
+ *
  * The image is Debian, whose cloud image ships cloud-init with the standard
  * modules; nothing here depends on a Hetzner-specific datasource.
  */
@@ -99,16 +108,27 @@ export function assertDeployPublicKey(key: string): string {
 }
 
 /**
- * Two `runcmd` entries that give a private-only host a working default route
- * and resolver before `package_update` below runs.
+ * `bootcmd` entries that give a private-only host a working default route
+ * and resolver before `package_update`/`packages` below installs anything.
  *
- * `runcmd`'s own module runs ahead of package installation in cloud-init's
- * default module ordering, which is what makes this placement work at all --
- * moving these into `write_files`/`bootcmd` territory is not needed and
- * `bootcmd` would be wrong regardless, since it re-runs on every boot and
- * this file's whole premise is that nothing here survives past first boot.
- * Durable persistence across every later reboot is
- * `provision/05-configure-host-egress.sh`'s job, once it has been run.
+ * This has to be `bootcmd`, not `runcmd`, and the distinction is not
+ * cosmetic. `runcmd`'s own module only *writes* the command list to a script
+ * on disk during cloud-init's config stage; that script is not actually
+ * *executed* until the `scripts-user` module, which sits near the end of the
+ * later final stage -- and `package-update-upgrade-install` (the module
+ * behind `package_update`/`packages`) is at the *start* of that same final
+ * stage. A `runcmd` entry here would therefore still run after package
+ * installation has already failed, which is the exact bug this block exists
+ * to fix. `bootcmd` is a separate, earlier module in cloud-init's very first
+ * (init) stage, which precedes the config stage entirely -- config, in turn,
+ * precedes final -- so this is the one placement that actually lands ahead
+ * of `package_update`.
+ *
+ * The trade-off named at the top of this file: `bootcmd` re-runs on every
+ * boot, not once, which is why both commands below are written to be safe
+ * to repeat (`ip route replace`, and a plain overwrite-and-`resolvconf -u`
+ * with no compare-first check, since bootcmd has no equivalent of a
+ * provisioning log to skip redundant work against).
  *
  * Exec form is avoided here (unlike the plain commands below) because the
  * gateway has to be derived from the routing table, which needs a shell.
@@ -117,14 +137,16 @@ export function assertDeployPublicKey(key: string): string {
  * double-quoted scalar needs no nested-quote gymnastics beyond escaping
  * those doubles for YAML itself.
  */
-const PRIVATE_ONLY_RUNCMD = `
+const PRIVATE_ONLY_BOOTCMD = `
+bootcmd:
   # A private-only host has no public interface, so its only route off the
   # subnet is the network's own gateway -- and Hetzner's DHCP delivers the
-  # subnet route but never a default (hetzner/egress.ts). First boot only:
+  # subnet route but never a default (hetzner/egress.ts). Every boot, until
   # provision/05-configure-host-egress.sh (and the systemd unit it installs)
-  # is what keeps this true across every later reboot.
+  # has taken over the same job permanently.
   - [ sh, -c, "GW=$(ip -4 route show | awk '$1 != \\"default\\" && $1 != \\"169.254.169.254\\" { for (i=1;i<=NF;i++) if ($i==\\"via\\") { print $(i+1); exit } }'); [ -n \\"$GW\\" ] && ip route replace default via \\"$GW\\" || true" ]
-  - [ sh, -c, "mkdir -p /etc/resolvconf/resolv.conf.d && { echo 'nameserver 185.12.64.1'; echo 'nameserver 185.12.64.2'; } > /etc/resolvconf/resolv.conf.d/head && resolvconf -u || true" ]`;
+  - [ sh, -c, "mkdir -p /etc/resolvconf/resolv.conf.d && { echo 'nameserver 185.12.64.1'; echo 'nameserver 185.12.64.2'; } > /etc/resolvconf/resolv.conf.d/head && resolvconf -u || true" ]
+`;
 
 export function renderCloudInit(args: CloudInitArgs): pulumi.Output<string> {
   // Checked twice, and the eager half is the one that behaves well. In
@@ -142,7 +164,7 @@ export function renderCloudInit(args: CloudInitArgs): pulumi.Output<string> {
 hostname: ${args.hostname}
 preserve_hostname: false
 fqdn: ${args.hostname}
-
+${args.privateOnly ? PRIVATE_ONLY_BOOTCMD : ''}
 disable_root: false
 
 users:
@@ -190,7 +212,7 @@ packages:
   - curl
   - gnupg
 
-runcmd:${args.privateOnly ? PRIVATE_ONLY_RUNCMD : ''}
+runcmd:
   - [ install, -d, -m, '0755', -o, root, -g, root, /etc/branchleft ]
   - [ install, -d, -m, '0755', -o, root, -g, root, /opt/branchleft ]
   # Absolute path: runcmd's exec form does not go through a login shell, and

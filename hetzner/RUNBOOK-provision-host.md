@@ -59,13 +59,22 @@ delivers the subnet route (`10.20.0.0/16 via <gateway>`) and the metadata
 route, but never a default route and no resolver at all — the network and
 gateway halves above only give the _network_ a path out; nothing tells the
 host to use it. `05-configure-host-egress.sh` (part of `run-all.sh`) and the
-matching first-boot commands in `hetzner-host`'s cloud-init are that third
+matching `bootcmd` entries in `hetzner-host`'s cloud-init are that third
 half: the script installs a reconciler and a boot-time unit that derive the
 gateway from the host's own routing table and keep the default route and the
 Hetzner-recursor resolver config (`185.12.64.1` / `185.12.64.2`) true across
-every reboot; cloud-init covers the gap before `run-all.sh` has ever run, by
-applying the same fix once at first boot so `package_update` has somewhere to
-reach.
+every reboot.
+
+Cloud-init covers the gap before `run-all.sh` has ever run — but only from
+`bootcmd`, not `runcmd`. `runcmd`'s own module merely writes its command list
+to disk during cloud-init's config stage; the script it writes is not
+executed until `scripts-user`, near the end of the _later_ final stage, and
+`package_update`/`packages` install from a module at the _start_ of that
+same final stage. A `runcmd` entry would still run after package
+installation had already failed. `bootcmd` is the one placement early enough
+— it runs in cloud-init's first (init) stage, ahead of both — and, because it
+re-runs on every boot rather than once, it also covers every reboot between
+first boot and `run-all.sh` actually taking over the same job permanently.
 
 Verify it on a host that has already had `run-all.sh` run:
 
@@ -82,10 +91,11 @@ Hetzner nameservers. A host created before this fix existed, and not yet
 re-provisioned with it, loses the route on every reboot until `run-all.sh` is
 re-run; the immediate one-line repair, run on the host itself, derives the
 gateway the same way the reconciler does rather than restating an address
-that is only true for one host today:
+that is only true for one host today — and fails closed the same way too,
+rather than guessing among more than one candidate route:
 
 ```bash
-GW=$(ip -4 route show | awk '$1 != "default" && $1 != "169.254.169.254" { for (i=1;i<=NF;i++) if ($i=="via") { print $(i+1); exit } }'); ip route replace default via "$GW"
+GW=$(ip -4 route show | awk '$1 != "default" && $1 != "169.254.169.254" && /via/{c++; for(i=1;i<=NF;i++) if($i=="via") g=$(i+1)} END{if(c==1) print g}'); [ -n "$GW" ] && ip route replace default via "$GW" || echo "no single candidate route found, not applying anything" >&2
 ```
 
 ### 1. Apply the route

@@ -16,6 +16,7 @@ script reads as an override.
 """
 
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -116,7 +117,10 @@ class HostEgressTests(unittest.TestCase):
         route_default=NO_DEFAULT_ROUTE,
         nameserver_1=None,
         nameserver_2=None,
+        drop_resolvconf=False,
     ):
+        if drop_resolvconf:
+            os.remove(os.path.join(self.bin_dir, "resolvconf"))
         env = dict(os.environ)
         env.update(
             {
@@ -240,6 +244,24 @@ class HostEgressTests(unittest.TestCase):
             self.ip_calls(), ["route replace default via 10.20.0.1 dev enp7s0"]
         )
 
+    def test_fails_closed_rather_than_exit_127_when_resolvconf_is_missing(self):
+        # A bare "command not found" (exit 127) is what run-all.sh's
+        # `set -euo pipefail` would otherwise abort on, and it names no
+        # missing package -- it reads as this script being broken rather
+        # than a host missing a dependency. Checked before the route is
+        # touched, so a host without resolvconf is left exactly as found
+        # rather than half-repaired.
+        result = self.run_script(
+            PRIVATE_ONLY_ADDRESSES,
+            route_table=SUBNET_ROUTE_TABLE,
+            route_default=NO_DEFAULT_ROUTE,
+            drop_resolvconf=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotEqual(result.returncode, 127)
+        self.assertIn("resolvconf is not installed", result.stderr)
+        self.assertEqual(self.ip_calls(), [])
+
     def test_fails_when_no_subnet_route_can_be_found(self):
         result = self.run_script(
             PRIVATE_ONLY_ADDRESSES, route_table="", route_default=NO_DEFAULT_ROUTE
@@ -302,6 +324,84 @@ class RunbookHostEgressPreconditionTests(unittest.TestCase):
 
     def test_never_uses_a_platform_owner_gated_phrasing_that_docs_lint_rejects(self):
         self.assertNotIn("Rob-gated", self.text)
+
+
+def _extract_repair_one_liner():
+    with open(RUNBOOK, encoding="utf-8") as handle:
+        text = handle.read()
+    match = re.search(r"^GW=\$\(ip -4 route show.*$", text, re.MULTILINE)
+    if not match:
+        raise AssertionError(
+            "the manual repair one-liner was not found in RUNBOOK-provision-host.md"
+        )
+    return match.group(0)
+
+
+class RunbookRepairOneLinerTests(unittest.TestCase):
+    """The manual repair line is pasted directly into a root shell on a live
+    host with nothing else reviewing it, so its actual behaviour is asserted
+    against synthetic `ip` output here -- not just checked for containing
+    the right substrings. It has to fail closed the same way the reconciler
+    does: guessing a gateway among more than one candidate risks pointing a
+    host's whole egress at the wrong address."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+        bin_dir = os.path.join(self.tmp.name, "bin")
+        os.makedirs(bin_dir)
+        path = os.path.join(bin_dir, "ip")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(FAKE_IP)
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        os.chmod(path, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        self.bin_dir = bin_dir
+        self.ip_log = os.path.join(self.tmp.name, "ip.log")
+        self.command = _extract_repair_one_liner()
+
+    def run_repair(self, route_table):
+        env = dict(os.environ)
+        env.update(
+            {
+                "PATH": f"{self.bin_dir}:/usr/bin:/bin",
+                "FAKE_IP_ROUTE_TABLE": route_table,
+                "FAKE_IP_LOG": self.ip_log,
+            }
+        )
+        return subprocess.run(
+            ["bash", "-c", self.command],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def ip_calls(self):
+        if not os.path.exists(self.ip_log):
+            return []
+        with open(self.ip_log, encoding="utf-8") as handle:
+            return [line.rstrip("\n") for line in handle]
+
+    def test_applies_the_single_candidate_gateway(self):
+        self.run_repair(SUBNET_ROUTE_TABLE)
+        self.assertEqual(self.ip_calls(), ["route replace default via 10.20.0.1"])
+
+    def test_fails_closed_rather_than_guesses_with_two_candidates(self):
+        route_table = "\n".join(
+            [
+                "10.20.0.0/16 via 10.20.0.1 dev enp7s0",
+                "10.21.0.0/16 via 10.21.0.1 dev enp7s0",
+            ]
+        )
+        result = self.run_repair(route_table)
+        self.assertEqual(self.ip_calls(), [])
+        self.assertIn("no single candidate route found", result.stderr)
+
+    def test_fails_closed_rather_than_guesses_with_no_candidates(self):
+        result = self.run_repair("")
+        self.assertEqual(self.ip_calls(), [])
+        self.assertIn("no single candidate route found", result.stderr)
 
 
 if __name__ == "__main__":
