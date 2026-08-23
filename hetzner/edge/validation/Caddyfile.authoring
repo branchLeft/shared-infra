@@ -29,7 +29,7 @@ authoring.invalid {
 	@inspected not path /ghost/api/*
 	@members_magic_link {
 		method POST
-		path /members/api/send-magic-link
+		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
 	route {
 		rate_limit {
@@ -59,7 +59,7 @@ authoring.invalid {
 	}
 	@members_magic_link {
 		method POST
-		path /members/api/send-magic-link
+		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
 	route {
 		rate_limit {

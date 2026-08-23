@@ -192,11 +192,32 @@ describe('the rendered Caddyfile', () => {
     const rendered = render(ENFORCING);
     expect(rendered).toContain('@members_magic_link {');
     expect(rendered).toContain('method POST');
-    expect(rendered).toContain('path /members/api/send-magic-link');
     expect(rendered).toContain('rate_limit @members_magic_link {');
     expect(rendered).toContain(`events ${MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS}`);
     expect(rendered).toContain(`window ${MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS}s`);
     expect(MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS).toBeLessThan(RATE_LIMIT_EVENTS / 10);
+  });
+
+  it('matches both the bare path and its trailing-slash form, exactly -- not a prefix wildcard', () => {
+    // Express's default router (strict: false) treats a trailing slash as the
+    // same route, so a matcher that only listed the bare path would let an
+    // attacker who appends '/' spend the general 200/60s zone instead of this
+    // one. A '*' suffix would close that gap too, but would also swallow any
+    // longer, unrelated path sharing this prefix -- exact enumeration is the
+    // narrower fix.
+    const rendered = render(ENFORCING);
+    const matcherBlock = rendered.split('@members_magic_link {')[1]?.split('\n\t}')[0] ?? '';
+    expect(matcherBlock).toContain('path /members/api/send-magic-link /members/api/send-magic-link/');
+    expect(matcherBlock).not.toContain('*');
+  });
+
+  it('needs no case-variant path listed -- Caddy path matching is case-insensitive on the pinned 2.11.4', () => {
+    // Not exercised by the renderer's own output (there is nothing case-variant
+    // to assert in a string it emits); recorded here as the test that would
+    // need to change, and the comment that would need revisiting, if the
+    // Dockerfile's CADDY_VERSION ever moves.
+    const rendered = render(ENFORCING);
+    expect(rendered).not.toMatch(/path .*[A-Z].*[sS]end-[mM]agic-[lL]ink/);
   });
 
   it('declares the same members magic-link zone name in every site, unlike the per-site zone above', () => {

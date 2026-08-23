@@ -78,6 +78,12 @@ export const RATE_LIMIT_WINDOW_SECONDS = 60;
  * rotating-source attack -- an attacker with enough distinct source addresses
  * still gets one attempt per address before any counter trips. It raises the
  * cost of the lazy version of this attack, not the cost of the competent one.
+ *
+ * Two costs accepted rather than left unstated: a throttled member sees
+ * Ghost's generic portal error, not a specific wait time, because Caddy's
+ * `rate_limit` answers a bodyless 429 and Ghost's own JSON-error parsing
+ * falls back to it (doc 12 §1 has the verified detail); and the zone's
+ * memory is swept, not hard-capped, same as the general zone above.
  */
 export const MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS = 5;
 export const MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS = 60;
