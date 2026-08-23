@@ -28,7 +28,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 158,
+      "community": 161,
       "community_name": "Pulumi Project: branchleft-shared-infra",
       "norm_label": "pulumi project: branchleft-shared-infra",
       "_origin": "semantic",
@@ -40,7 +40,7 @@
       "source_file": "config.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "config.ts",
       "id": "config"
     },
@@ -50,7 +50,7 @@
       "source_file": "config.ts",
       "source_location": "L3",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "config",
       "id": "config_config"
     },
@@ -60,7 +60,7 @@
       "source_file": "config.ts",
       "source_location": "L4",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "gcpconfig",
       "id": "config_gcpconfig"
     },
@@ -70,7 +70,7 @@
       "source_file": "config.ts",
       "source_location": "L6",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "projectid",
       "id": "config_projectid"
     },
@@ -80,7 +80,7 @@
       "source_file": "config.ts",
       "source_location": "L16",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "region",
       "id": "config_region"
     },
@@ -90,7 +90,7 @@
       "source_file": "config.ts",
       "source_location": "L19",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "githubrepo",
       "id": "config_githubrepo"
     },
@@ -100,7 +100,7 @@
       "source_file": "config.ts",
       "source_location": "L26",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "workloadidentitypoolid",
       "id": "config_workloadidentitypoolid"
     },
@@ -110,7 +110,7 @@
       "source_file": "index.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "index.ts",
       "id": "index"
     },
@@ -120,7 +120,7 @@
       "source_file": "index.ts",
       "source_location": "L8",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "edge",
       "id": "index_edge"
     },
@@ -130,7 +130,7 @@
       "source_file": "index.ts",
       "source_location": "L12",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "edgeipaddress",
       "id": "index_edgeipaddress"
     },
@@ -140,7 +140,7 @@
       "source_file": "index.ts",
       "source_location": "L18",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "certificatednsauthorizationrecords",
       "id": "index_certificatednsauthorizationrecords"
     },
@@ -150,7 +150,7 @@
       "source_file": "index.ts",
       "source_location": "L23",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "certificatenames",
       "id": "index_certificatenames"
     },
@@ -160,7 +160,7 @@
       "source_file": "index.ts",
       "source_location": "L24",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "securitypolicyname",
       "id": "index_securitypolicyname"
     },
@@ -180,7 +180,7 @@
       "source_file": "serviceAccounts.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "serviceaccounts.ts",
       "id": "serviceaccounts"
     },
@@ -190,7 +190,7 @@
       "source_file": "serviceAccounts.ts",
       "source_location": "L14",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "deployersa",
       "id": "serviceaccounts_deployersa"
     },
@@ -200,7 +200,7 @@
       "source_file": "serviceAccounts.ts",
       "source_location": "L19",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "deployermember",
       "id": "serviceaccounts_deployermember"
     },
@@ -210,7 +210,7 @@
       "source_file": "serviceAccounts.ts",
       "source_location": "L27",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "projectroles",
       "id": "serviceaccounts_projectroles"
     },
@@ -220,7 +220,7 @@
       "source_file": "serviceAccounts.ts",
       "source_location": "L56",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "deployerserviceaccountemail",
       "id": "serviceaccounts_deployerserviceaccountemail"
     },
@@ -230,7 +230,7 @@
       "source_file": "workloadIdentity.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "workloadidentity.ts",
       "id": "workloadidentity"
     },
@@ -240,7 +240,7 @@
       "source_file": "workloadIdentity.ts",
       "source_location": "L6",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "pool",
       "id": "workloadidentity_pool"
     },
@@ -250,7 +250,7 @@
       "source_file": "workloadIdentity.ts",
       "source_location": "L13",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "provider",
       "id": "workloadidentity_provider"
     },
@@ -260,7 +260,7 @@
       "source_file": "workloadIdentity.ts",
       "source_location": "L48",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "deployerimpersonation",
       "id": "workloadidentity_deployerimpersonation"
     },
@@ -270,7 +270,7 @@
       "source_file": "workloadIdentity.ts",
       "source_location": "L57",
       "_origin": "ast",
-      "community": 22,
+      "community": 20,
       "norm_label": "workloadidentityprovider",
       "id": "workloadidentity_workloadidentityprovider"
     },
@@ -334,7 +334,7 @@
         "kind": "file"
       },
       "_origin": "ast",
-      "community": 114,
+      "community": 115,
       "norm_label": "mail/provision/00-harden-ssh.sh",
       "id": "mail_provision_00_harden_ssh"
     },
@@ -348,7 +348,7 @@
         "kind": "bash_entrypoint"
       },
       "_origin": "ast",
-      "community": 114,
+      "community": 115,
       "norm_label": "00-harden-ssh.sh script",
       "id": "mail_provision_00_harden_ssh_sh__entry"
     },
@@ -446,7 +446,7 @@
         "kind": "file"
       },
       "_origin": "ast",
-      "community": 115,
+      "community": 116,
       "norm_label": "30-deploy-stalwart.sh",
       "id": "mail_provision_30_deploy_stalwart"
     },
@@ -460,7 +460,7 @@
         "kind": "bash_entrypoint"
       },
       "_origin": "ast",
-      "community": 115,
+      "community": 116,
       "norm_label": "30-deploy-stalwart.sh script",
       "id": "mail_provision_30_deploy_stalwart_sh__entry"
     },
@@ -474,7 +474,7 @@
         "kind": "file"
       },
       "_origin": "ast",
-      "community": 116,
+      "community": 117,
       "norm_label": "40-configure-stalwart.sh",
       "id": "mail_provision_40_configure_stalwart"
     },
@@ -488,7 +488,7 @@
         "kind": "bash_entrypoint"
       },
       "_origin": "ast",
-      "community": 116,
+      "community": 117,
       "norm_label": "40-configure-stalwart.sh script",
       "id": "mail_provision_40_configure_stalwart_sh__entry"
     },
@@ -572,7 +572,7 @@
       "source_file": "mail/provision/list_and_clear_blocked_ips.py",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": "list_and_clear_blocked_ips.py",
       "id": "mail_provision_list_and_clear_blocked_ips"
     },
@@ -583,7 +583,7 @@
       "source_location": "L32",
       "_callable": true,
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": "select_ids_to_clear()",
       "id": "mail_provision_list_and_clear_blocked_ips_select_ids_to_clear"
     },
@@ -593,7 +593,7 @@
       "source_file": "",
       "source_location": "",
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": "any",
       "id": "mail_provision_list_and_clear_blocked_ips_py_any"
     },
@@ -604,7 +604,7 @@
       "source_location": "L57",
       "_callable": true,
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": "_jmap_call()",
       "id": "mail_provision_list_and_clear_blocked_ips_jmap_call"
     },
@@ -615,7 +615,7 @@
       "source_location": "L73",
       "_callable": true,
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": "main()",
       "id": "mail_provision_list_and_clear_blocked_ips_main"
     },
@@ -625,7 +625,7 @@
       "source_file": "mail/provision/list_and_clear_blocked_ips.py",
       "source_location": "L35",
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": "pure selection logic: which blocked-entry ids to destroy, given the live...",
       "id": "mail_provision_list_and_clear_blocked_ips_rationale_35"
     },
@@ -1170,7 +1170,7 @@
         "kind": "file"
       },
       "_origin": "ast",
-      "community": 117,
+      "community": 118,
       "norm_label": "50-provision-mailboxes.sh",
       "id": "mail_provision_50_provision_mailboxes"
     },
@@ -1184,14 +1184,14 @@
         "kind": "bash_entrypoint"
       },
       "_origin": "ast",
-      "community": 117,
+      "community": 118,
       "norm_label": "50-provision-mailboxes.sh script",
       "id": "mail_provision_50_provision_mailboxes_sh__entry"
     },
     {
       "label": "Stalwart JMAP Management API",
       "file_type": "concept",
-      "community": 166,
+      "community": 169,
       "norm_label": "stalwart jmap management api",
       "_origin": "semantic",
       "id": "stalwart_jmap_api"
@@ -1199,7 +1199,7 @@
     {
       "label": "ACME TLS-ALPN-01 Challenge",
       "file_type": "concept",
-      "community": 124,
+      "community": 125,
       "norm_label": "acme tls-alpn-01 challenge",
       "_origin": "semantic",
       "id": "acme_tls_alpn_01"
@@ -1214,7 +1214,7 @@
         "kind": "file"
       },
       "_origin": "ast",
-      "community": 118,
+      "community": 119,
       "norm_label": "60-provision-website-submission-credential.sh",
       "id": "mail_provision_60_provision_website_submission_credential"
     },
@@ -1228,7 +1228,7 @@
         "kind": "bash_entrypoint"
       },
       "_origin": "ast",
-      "community": 118,
+      "community": 119,
       "norm_label": "60-provision-website-submission-credential.sh script",
       "id": "mail_provision_60_provision_website_submission_credential_sh__entry"
     },
@@ -1258,7 +1258,7 @@
       "source_file": "",
       "source_location": "",
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": "logger",
       "id": "logger"
     },
@@ -1268,7 +1268,7 @@
       "source_file": "",
       "source_location": "",
       "_origin": "ast",
-      "community": 165,
+      "community": 168,
       "norm_label": "skipunless",
       "id": "skipunless"
     },
@@ -1361,7 +1361,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 125,
+      "community": 126,
       "norm_label": "branchleft/github-workflows/.github/workflows/graphify.yml@v1.0.6",
       "_origin": "semantic",
       "id": "branchleft_github_workflows_graphify_yml"
@@ -1376,7 +1376,7 @@
         "kind": "file"
       },
       "_origin": "ast",
-      "community": 119,
+      "community": 120,
       "norm_label": "61-provision-blog-submission-credential.sh",
       "id": "mail_provision_61_provision_blog_submission_credential"
     },
@@ -1390,7 +1390,7 @@
         "kind": "bash_entrypoint"
       },
       "_origin": "ast",
-      "community": 119,
+      "community": 120,
       "norm_label": "61-provision-blog-submission-credential.sh script",
       "id": "mail_provision_61_provision_blog_submission_credential_sh__entry"
     },
@@ -1400,7 +1400,7 @@
       "source_file": "",
       "source_location": "",
       "_origin": "ast",
-      "community": 149,
+      "community": 152,
       "norm_label": "any",
       "id": "mail_provision_provision_mailboxes_py_any"
     },
@@ -2050,7 +2050,7 @@
         "kind": "file"
       },
       "_origin": "ast",
-      "community": 120,
+      "community": 121,
       "norm_label": "62-provision-shim-submission-credential.sh",
       "id": "mail_provision_62_provision_shim_submission_credential"
     },
@@ -2064,7 +2064,7 @@
         "kind": "bash_entrypoint"
       },
       "_origin": "ast",
-      "community": 120,
+      "community": 121,
       "norm_label": "62-provision-shim-submission-credential.sh script",
       "id": "mail_provision_62_provision_shim_submission_credential_sh__entry"
     },
@@ -2162,7 +2162,7 @@
         "kind": "file"
       },
       "_origin": "ast",
-      "community": 123,
+      "community": 124,
       "norm_label": "mail/provision/run-all.sh",
       "id": "mail_provision_run_all"
     },
@@ -2176,7 +2176,7 @@
         "kind": "bash_entrypoint"
       },
       "_origin": "ast",
-      "community": 123,
+      "community": 124,
       "norm_label": "run-all.sh script",
       "id": "mail_provision_run_all_sh__entry"
     },
@@ -2533,7 +2533,7 @@
         "kind": "file"
       },
       "_origin": "ast",
-      "community": 121,
+      "community": 122,
       "norm_label": "63-deploy-mailgun-shim.sh",
       "id": "mail_provision_63_deploy_mailgun_shim"
     },
@@ -2547,7 +2547,7 @@
         "kind": "bash_entrypoint"
       },
       "_origin": "ast",
-      "community": 121,
+      "community": 122,
       "norm_label": "63-deploy-mailgun-shim.sh script",
       "id": "mail_provision_63_deploy_mailgun_shim_sh__entry"
     },
@@ -2557,7 +2557,7 @@
       "source_file": "mail/package.json",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "mail/package.json",
       "id": "mail_package"
     },
@@ -2567,7 +2567,7 @@
       "source_file": "mail/package.json",
       "source_location": "L2",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "name",
       "id": "mail_package_name"
     },
@@ -2577,7 +2577,7 @@
       "source_file": "mail/package.json",
       "source_location": "L3",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "private",
       "id": "mail_package_private"
     },
@@ -2587,7 +2587,7 @@
       "source_file": "mail/package.json",
       "source_location": "L4",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "main",
       "id": "mail_package_main"
     },
@@ -2597,7 +2597,7 @@
       "source_file": "mail/package.json",
       "source_location": "L5",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "scripts",
       "id": "mail_package_scripts"
     },
@@ -2607,7 +2607,7 @@
       "source_file": "mail/package.json",
       "source_location": "L6",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "typecheck",
       "id": "mail_package_scripts_typecheck"
     },
@@ -2617,7 +2617,7 @@
       "source_file": "mail/package.json",
       "source_location": "L8",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "comment",
       "id": "mail_package_comment"
     },
@@ -2627,7 +2627,7 @@
       "source_file": "mail/package.json",
       "source_location": "L9",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "dependencies",
       "id": "mail_package_dependencies"
     },
@@ -2637,7 +2637,7 @@
       "source_file": "mail/package.json",
       "source_location": "L10",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "@pulumi/hcloud",
       "id": "mail_package_dependencies_pulumi_hcloud"
     },
@@ -2647,7 +2647,7 @@
       "source_file": "mail/package.json",
       "source_location": "L11",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "@pulumi/pulumi",
       "id": "mail_package_dependencies_pulumi_pulumi"
     },
@@ -2657,7 +2657,7 @@
       "source_file": "mail/package.json",
       "source_location": "L11",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "@pulumi/pulumi",
       "id": "mail_package_json_pulumi_pulumi"
     },
@@ -2667,7 +2667,7 @@
       "source_file": "mail/package.json",
       "source_location": "L13",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "devdependencies",
       "id": "mail_package_devdependencies"
     },
@@ -2677,7 +2677,7 @@
       "source_file": "mail/package.json",
       "source_location": "L14",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "@branchleft/tsconfig",
       "id": "mail_package_devdependencies_branchleft_tsconfig"
     },
@@ -2687,7 +2687,7 @@
       "source_file": "mail/package.json",
       "source_location": "L15",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "@types/node",
       "id": "mail_package_devdependencies_types_node"
     },
@@ -2697,7 +2697,7 @@
       "source_file": "mail/package.json",
       "source_location": "L16",
       "_origin": "ast",
-      "community": 40,
+      "community": 39,
       "norm_label": "typescript",
       "id": "mail_package_devdependencies_typescript"
     },
@@ -2707,7 +2707,7 @@
       "source_file": "mail/tsconfig.json",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 82,
+      "community": 88,
       "norm_label": "mail/tsconfig.json",
       "id": "mail_tsconfig"
     },
@@ -2717,7 +2717,7 @@
       "source_file": "mail/tsconfig.json",
       "source_location": "L2",
       "_origin": "ast",
-      "community": 82,
+      "community": 57,
       "norm_label": "extends",
       "id": "mail_tsconfig_extends"
     },
@@ -2727,7 +2727,7 @@
       "source_file": "mail/tsconfig.json",
       "source_location": "L3",
       "_origin": "ast",
-      "community": 82,
+      "community": 88,
       "norm_label": "compileroptions",
       "id": "mail_tsconfig_compileroptions"
     },
@@ -2737,7 +2737,7 @@
       "source_file": "mail/tsconfig.json",
       "source_location": "L4",
       "_origin": "ast",
-      "community": 82,
+      "community": 88,
       "norm_label": "pretty",
       "id": "mail_tsconfig_compileroptions_pretty"
     },
@@ -2747,7 +2747,7 @@
       "source_file": "mail/tsconfig.json",
       "source_location": "L8",
       "_origin": "ast",
-      "community": 82,
+      "community": 88,
       "norm_label": "include",
       "id": "mail_tsconfig_include"
     },
@@ -2757,7 +2757,7 @@
       "source_file": "mail/tsconfig.json",
       "source_location": "L8",
       "_origin": "ast",
-      "community": 82,
+      "community": 88,
       "norm_label": "**/*.ts",
       "id": "mail_tsconfig_json_ref_ts"
     },
@@ -2777,7 +2777,7 @@
       "source_file": "package.json",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "package.json",
       "id": "package"
     },
@@ -2787,7 +2787,7 @@
       "source_file": "package.json",
       "source_location": "L2",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "name",
       "id": "package_name"
     },
@@ -2797,7 +2797,7 @@
       "source_file": "package.json",
       "source_location": "L3",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "private",
       "id": "package_private"
     },
@@ -2807,7 +2807,7 @@
       "source_file": "package.json",
       "source_location": "L4",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "main",
       "id": "package_main"
     },
@@ -2817,7 +2817,7 @@
       "source_file": "package.json",
       "source_location": "L5",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "prettier",
       "id": "package_prettier"
     },
@@ -2827,7 +2827,7 @@
       "source_file": "package.json",
       "source_location": "L6",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "scripts",
       "id": "package_scripts"
     },
@@ -2837,7 +2837,7 @@
       "source_file": "package.json",
       "source_location": "L7",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "typecheck",
       "id": "package_scripts_typecheck"
     },
@@ -2847,7 +2847,7 @@
       "source_file": "package.json",
       "source_location": "L8",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "format",
       "id": "package_scripts_format"
     },
@@ -2857,7 +2857,7 @@
       "source_file": "package.json",
       "source_location": "L9",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "format:check",
       "id": "package_scripts_format_check"
     },
@@ -2867,7 +2867,7 @@
       "source_file": "package.json",
       "source_location": "L11",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "comment",
       "id": "package_comment"
     },
@@ -2877,7 +2877,7 @@
       "source_file": "package.json",
       "source_location": "L12",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "dependencies",
       "id": "package_dependencies"
     },
@@ -2887,7 +2887,7 @@
       "source_file": "package.json",
       "source_location": "L13",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "@pulumi/gcp",
       "id": "package_dependencies_pulumi_gcp"
     },
@@ -2897,7 +2897,7 @@
       "source_file": "package.json",
       "source_location": "L13",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "@pulumi/gcp",
       "id": "pulumi_gcp"
     },
@@ -2907,7 +2907,7 @@
       "source_file": "package.json",
       "source_location": "L14",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "@pulumi/pulumi",
       "id": "package_dependencies_pulumi_pulumi"
     },
@@ -2917,7 +2917,7 @@
       "source_file": "package.json",
       "source_location": "L14",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "@pulumi/pulumi",
       "id": "package_json_pulumi_pulumi"
     },
@@ -2927,7 +2927,7 @@
       "source_file": "package.json",
       "source_location": "L16",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "devdependencies",
       "id": "package_devdependencies"
     },
@@ -2937,7 +2937,7 @@
       "source_file": "package.json",
       "source_location": "L17",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "@branchleft/prettier-config",
       "id": "package_devdependencies_branchleft_prettier_config"
     },
@@ -2947,7 +2947,7 @@
       "source_file": "package.json",
       "source_location": "L17",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "@branchleft/prettier-config",
       "id": "branchleft_prettier_config"
     },
@@ -2957,7 +2957,7 @@
       "source_file": "package.json",
       "source_location": "L18",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "@branchleft/tsconfig",
       "id": "package_devdependencies_branchleft_tsconfig"
     },
@@ -2967,7 +2967,7 @@
       "source_file": "package.json",
       "source_location": "L19",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "@types/node",
       "id": "package_devdependencies_types_node"
     },
@@ -2977,7 +2977,7 @@
       "source_file": "package.json",
       "source_location": "L20",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "prettier",
       "id": "package_devdependencies_prettier"
     },
@@ -2987,7 +2987,7 @@
       "source_file": "package.json",
       "source_location": "L20",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "prettier",
       "id": "prettier"
     },
@@ -2997,7 +2997,7 @@
       "source_file": "package.json",
       "source_location": "L21",
       "_origin": "ast",
-      "community": 21,
+      "community": 22,
       "norm_label": "typescript",
       "id": "package_devdependencies_typescript"
     },
@@ -3005,25 +3005,16 @@
       "label": "RUNBOOK-ci-bootstrap.md",
       "file_type": "document",
       "source_file": "RUNBOOK-ci-bootstrap.md",
-      "community": 163,
+      "community": 166,
       "norm_label": "runbook-ci-bootstrap.md",
       "_origin": "semantic",
       "id": "runbook_ci_bootstrap"
     },
     {
-      "label": ".github/workflows/graphify.yml",
-      "file_type": "code",
-      "source_file": ".github/workflows/graphify.yml",
-      "community": 136,
-      "norm_label": ".github/workflows/graphify.yml",
-      "_origin": "semantic",
-      "id": "github_workflows_graphify_workflow"
-    },
-    {
       "label": "mail/provision/docker-compose.yml",
       "file_type": "code",
       "source_file": "mail/provision/docker-compose.yml",
-      "community": 148,
+      "community": 151,
       "norm_label": "mail/provision/docker-compose.yml",
       "_origin": "semantic",
       "id": "mail_docker_compose"
@@ -3032,7 +3023,7 @@
       "label": "mail/provision/shim-compose.yml",
       "file_type": "code",
       "source_file": "mail/provision/shim-compose.yml",
-      "community": 153,
+      "community": 156,
       "norm_label": "mail/provision/shim-compose.yml",
       "_origin": "semantic",
       "id": "mail_shim_compose"
@@ -3159,7 +3150,7 @@
         "kind": "file"
       },
       "_origin": "ast",
-      "community": 110,
+      "community": 111,
       "norm_label": "hetzner/provision/30-install-deploy-tooling.sh",
       "id": "hetzner_provision_30_install_deploy_tooling"
     },
@@ -3173,7 +3164,7 @@
         "kind": "bash_entrypoint"
       },
       "_origin": "ast",
-      "community": 110,
+      "community": 111,
       "norm_label": "30-install-deploy-tooling.sh script",
       "id": "hetzner_provision_30_install_deploy_tooling_sh__entry"
     },
@@ -3801,7 +3792,7 @@
       "source_file": "hetzner/tsconfig.json",
       "source_location": "L2",
       "_origin": "ast",
-      "community": 56,
+      "community": 57,
       "norm_label": "extends",
       "id": "hetzner_tsconfig_extends"
     },
@@ -3881,7 +3872,7 @@
       "source_file": "",
       "source_location": "",
       "_origin": "ast",
-      "community": 168,
+      "community": 171,
       "norm_label": "valueerror",
       "id": "valueerror"
     },
@@ -4018,7 +4009,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 84,
+      "community": 83,
       "norm_label": "signingkeytests",
       "id": "hetzner_scripts_test_probe_object_storage_signingkeytests"
     },
@@ -4029,7 +4020,7 @@
       "source_location": "L114",
       "_callable": true,
       "_origin": "ast",
-      "community": 84,
+      "community": 83,
       "norm_label": ".test_reproduces_the_published_s3_get_object_signature()",
       "id": "hetzner_scripts_test_probe_object_storage_signingkeytests_test_reproduces_the_published_s3_get_object_signature"
     },
@@ -4040,7 +4031,7 @@
       "source_location": "L147",
       "_callable": true,
       "_origin": "ast",
-      "community": 84,
+      "community": 83,
       "norm_label": ".test_region_participates()",
       "id": "hetzner_scripts_test_probe_object_storage_signingkeytests_test_region_participates"
     },
@@ -4286,7 +4277,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 85,
+      "community": 84,
       "norm_label": "transportwiringtests",
       "id": "hetzner_scripts_test_probe_object_storage_transportwiringtests"
     },
@@ -4297,7 +4288,7 @@
       "source_location": "L334",
       "_callable": true,
       "_origin": "ast",
-      "community": 85,
+      "community": 84,
       "norm_label": ".test_signed_request_puts_the_authorization_header_on_the_wire()",
       "id": "hetzner_scripts_test_probe_object_storage_transportwiringtests_test_signed_request_puts_the_authorization_header_on_the_wire"
     },
@@ -4308,7 +4299,7 @@
       "source_location": "L342",
       "_callable": true,
       "_origin": "ast",
-      "community": 85,
+      "community": 84,
       "norm_label": ".test_extra_headers_reach_the_wire()",
       "id": "hetzner_scripts_test_probe_object_storage_transportwiringtests_test_extra_headers_reach_the_wire"
     },
@@ -4319,7 +4310,7 @@
       "source_location": "L349",
       "_callable": true,
       "_origin": "ast",
-      "community": 85,
+      "community": 84,
       "norm_label": ".test_unsigned_request_carries_no_authorization_header()",
       "id": "hetzner_scripts_test_probe_object_storage_transportwiringtests_test_unsigned_request_carries_no_authorization_header"
     },
@@ -4868,7 +4859,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 72,
+      "community": 70,
       "norm_label": "xmlparsingtests",
       "id": "hetzner_scripts_test_probe_object_storage_xmlparsingtests"
     },
@@ -4879,7 +4870,7 @@
       "source_location": "L792",
       "_callable": true,
       "_origin": "ast",
-      "community": 72,
+      "community": 70,
       "norm_label": ".test_versioning_status_with_namespace()",
       "id": "hetzner_scripts_test_probe_object_storage_xmlparsingtests_test_versioning_status_with_namespace"
     },
@@ -4890,7 +4881,7 @@
       "source_location": "L799",
       "_callable": true,
       "_origin": "ast",
-      "community": 72,
+      "community": 70,
       "norm_label": ".test_versioning_status_of_a_never_versioned_bucket_is_absent()",
       "id": "hetzner_scripts_test_probe_object_storage_xmlparsingtests_test_versioning_status_of_a_never_versioned_bucket_is_absent"
     },
@@ -4901,7 +4892,7 @@
       "source_location": "L803",
       "_callable": true,
       "_origin": "ast",
-      "community": 72,
+      "community": 70,
       "norm_label": ".test_noncurrent_days_round_trip()",
       "id": "hetzner_scripts_test_probe_object_storage_xmlparsingtests_test_noncurrent_days_round_trip"
     },
@@ -4912,7 +4903,7 @@
       "source_location": "L811",
       "_callable": true,
       "_origin": "ast",
-      "community": 72,
+      "community": 70,
       "norm_label": ".test_non_numeric_noncurrent_days_does_not_raise()",
       "id": "hetzner_scripts_test_probe_object_storage_xmlparsingtests_test_non_numeric_noncurrent_days_does_not_raise"
     },
@@ -4923,7 +4914,7 @@
       "source_location": "L819",
       "_callable": true,
       "_origin": "ast",
-      "community": 72,
+      "community": 70,
       "norm_label": ".test_counts_versions()",
       "id": "hetzner_scripts_test_probe_object_storage_xmlparsingtests_test_counts_versions"
     },
@@ -4934,7 +4925,7 @@
       "source_location": "L827",
       "_callable": true,
       "_origin": "ast",
-      "community": 72,
+      "community": 70,
       "norm_label": ".test_counts_zero_versions_on_unparseable_body()",
       "id": "hetzner_scripts_test_probe_object_storage_xmlparsingtests_test_counts_zero_versions_on_unparseable_body"
     },
@@ -5008,7 +4999,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L109",
       "_origin": "ast",
-      "community": 84,
+      "community": 83,
       "norm_label": "checked against aws's published worked example rather than against a remembered...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_109"
     },
@@ -5018,7 +5009,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L148",
       "_origin": "ast",
-      "community": 84,
+      "community": 83,
       "norm_label": "the one that bites on this endpoint: `region` is cosmetic on gcs and load-...",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_148"
     },
@@ -5048,7 +5039,7 @@
       "source_file": "hetzner/scripts/test_probe_object_storage.py",
       "source_location": "L332",
       "_origin": "ast",
-      "community": 85,
+      "community": 84,
       "norm_label": "whatever the signer computes has to be what goes on the wire.",
       "id": "hetzner_scripts_test_probe_object_storage_rationale_332"
     },
@@ -5196,7 +5187,7 @@
       "label": "Pulumi State Backend (S3/GCS)",
       "file_type": "concept",
       "source_file": null,
-      "community": 161,
+      "community": 164,
       "norm_label": "pulumi state backend (s3/gcs)",
       "_origin": "semantic",
       "id": "pulumi_state_backend"
@@ -6072,7 +6063,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": "parsingtests",
       "id": "hetzner_scripts_test_check_hetzner_projects_parsingtests"
     },
@@ -6083,7 +6074,7 @@
       "source_location": "L363",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": ".test_a_commented_out_main_is_not_a_main()",
       "id": "hetzner_scripts_test_check_hetzner_projects_parsingtests_test_a_commented_out_main_is_not_a_main"
     },
@@ -6094,7 +6085,7 @@
       "source_location": "L366",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": ".test_a_trailing_comment_is_not_part_of_the_value()",
       "id": "hetzner_scripts_test_check_hetzner_projects_parsingtests_test_a_trailing_comment_is_not_part_of_the_value"
     },
@@ -6105,7 +6096,7 @@
       "source_location": "L370",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": ".test_a_hash_without_leading_whitespace_stays_in_the_value()",
       "id": "hetzner_scripts_test_check_hetzner_projects_parsingtests_test_a_hash_without_leading_whitespace_stays_in_the_value"
     },
@@ -6116,7 +6107,7 @@
       "source_location": "L374",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": ".test_a_hash_inside_a_quoted_value_stays()",
       "id": "hetzner_scripts_test_check_hetzner_projects_parsingtests_test_a_hash_inside_a_quoted_value_stays"
     },
@@ -6127,7 +6118,7 @@
       "source_location": "L377",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": ".test_an_indented_key_is_not_top_level()",
       "id": "hetzner_scripts_test_check_hetzner_projects_parsingtests_test_an_indented_key_is_not_top_level"
     },
@@ -6138,7 +6129,7 @@
       "source_location": "L382",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": ".test_duplicate_keys_are_reported_in_order()",
       "id": "hetzner_scripts_test_check_hetzner_projects_parsingtests_test_duplicate_keys_are_reported_in_order"
     },
@@ -6149,7 +6140,7 @@
       "source_location": "L387",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": ".test_backend_url_stops_at_the_next_top_level_key()",
       "id": "hetzner_scripts_test_check_hetzner_projects_parsingtests_test_backend_url_stops_at_the_next_top_level_key"
     },
@@ -6160,7 +6151,7 @@
       "source_location": "L391",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": ".test_backend_url_is_unquoted()",
       "id": "hetzner_scripts_test_check_hetzner_projects_parsingtests_test_backend_url_is_unquoted"
     },
@@ -6171,7 +6162,7 @@
       "source_location": "L394",
       "_callable": true,
       "_origin": "ast",
-      "community": 57,
+      "community": 56,
       "norm_label": ".test_absent_backend_block_reads_as_none_with_no_problem()",
       "id": "hetzner_scripts_test_check_hetzner_projects_parsingtests_test_absent_backend_block_reads_as_none_with_no_problem"
     },
@@ -6269,7 +6260,7 @@
       "source_file": "",
       "source_location": "",
       "_origin": "ast",
-      "community": 155,
+      "community": 158,
       "norm_label": "path",
       "id": "path"
     },
@@ -7088,7 +7079,7 @@
         "kind": "file"
       },
       "_origin": "ast",
-      "community": 122,
+      "community": 123,
       "norm_label": "70-schedule-dnsbl-check.sh",
       "id": "mail_provision_70_schedule_dnsbl_check"
     },
@@ -7102,7 +7093,7 @@
         "kind": "bash_entrypoint"
       },
       "_origin": "ast",
-      "community": 122,
+      "community": 123,
       "norm_label": "70-schedule-dnsbl-check.sh script",
       "id": "mail_provision_70_schedule_dnsbl_check_sh__entry"
     },
@@ -7259,7 +7250,7 @@
       "source_location": "L287",
       "_callable": true,
       "_origin": "ast",
-      "community": 73,
+      "community": 71,
       "norm_label": "_encode_name()",
       "id": "mail_provision_check_dnsbl_blocklist_encode_name"
     },
@@ -7347,7 +7338,7 @@
       "source_location": "L466",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": "_syslog_socket_reachable()",
       "id": "mail_provision_check_dnsbl_blocklist_syslog_socket_reachable"
     },
@@ -7358,7 +7349,7 @@
       "source_location": "L485",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": "_configure_logging()",
       "id": "mail_provision_check_dnsbl_blocklist_configure_logging"
     },
@@ -7471,7 +7462,7 @@
       "source_file": "mail/provision/check_dnsbl_blocklist.py",
       "source_location": "L288",
       "_origin": "ast",
-      "community": 73,
+      "community": 71,
       "norm_label": "pure: a hostname in dns wire format (length-prefixed labels, root terminator).",
       "id": "mail_provision_check_dnsbl_blocklist_rationale_288"
     },
@@ -7531,7 +7522,7 @@
       "source_file": "mail/provision/check_dnsbl_blocklist.py",
       "source_location": "L467",
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": "sysloghandler's own constructor doesn't reliably fail when `address` isn't a...",
       "id": "mail_provision_check_dnsbl_blocklist_rationale_467"
     },
@@ -8244,7 +8235,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 73,
+      "community": 71,
       "norm_label": "buildquerytests",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildquerytests"
     },
@@ -8255,7 +8246,7 @@
       "source_location": "L311",
       "_callable": true,
       "_origin": "ast",
-      "community": 73,
+      "community": 71,
       "norm_label": ".test_query_is_one_recursion_desired_a_question()",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildquerytests_test_query_is_one_recursion_desired_a_question"
     },
@@ -8266,7 +8257,7 @@
       "source_location": "L319",
       "_callable": true,
       "_origin": "ast",
-      "community": 73,
+      "community": 71,
       "norm_label": ".test_labels_are_length_prefixed_and_root_terminated()",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildquerytests_test_labels_are_length_prefixed_and_root_terminated"
     },
@@ -8277,7 +8268,7 @@
       "source_location": "L322",
       "_callable": true,
       "_origin": "ast",
-      "community": 73,
+      "community": 71,
       "norm_label": ".test_an_over_long_label_is_rejected()",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildquerytests_test_an_over_long_label_is_rejected"
     },
@@ -8288,7 +8279,7 @@
       "source_location": "L326",
       "_callable": true,
       "_origin": "ast",
-      "community": 73,
+      "community": 71,
       "norm_label": ".test_an_empty_hostname_is_rejected()",
       "id": "mail_provision_test_check_dnsbl_blocklist_buildquerytests_test_an_empty_hostname_is_rejected"
     },
@@ -8690,7 +8681,7 @@
       "source_location": "L531",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": "_live_unix_dgram_socket()",
       "id": "mail_provision_test_check_dnsbl_blocklist_live_unix_dgram_socket"
     },
@@ -8702,7 +8693,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": "syslogsocketreachabletests",
       "id": "mail_provision_test_check_dnsbl_blocklist_syslogsocketreachabletests"
     },
@@ -8713,7 +8704,7 @@
       "source_location": "L546",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": ".test_a_path_with_nothing_listening_is_unreachable()",
       "id": "mail_provision_test_check_dnsbl_blocklist_syslogsocketreachabletests_test_a_path_with_nothing_listening_is_unreachable"
     },
@@ -8724,7 +8715,7 @@
       "source_location": "L549",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": ".test_a_live_bound_socket_is_reachable()",
       "id": "mail_provision_test_check_dnsbl_blocklist_syslogsocketreachabletests_test_a_live_bound_socket_is_reachable"
     },
@@ -8736,7 +8727,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": "configureloggingregressiontests",
       "id": "mail_provision_test_check_dnsbl_blocklist_configureloggingregressiontests"
     },
@@ -8747,7 +8738,7 @@
       "source_location": "L564",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": ".setup()",
       "id": "mail_provision_test_check_dnsbl_blocklist_configureloggingregressiontests_setup"
     },
@@ -8758,7 +8749,7 @@
       "source_location": "L569",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": ".teardown()",
       "id": "mail_provision_test_check_dnsbl_blocklist_configureloggingregressiontests_teardown"
     },
@@ -8769,7 +8760,7 @@
       "source_location": "L574",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": ".test_falls_back_to_a_stream_handler_when_nothing_is_listening()",
       "id": "mail_provision_test_check_dnsbl_blocklist_configureloggingregressiontests_test_falls_back_to_a_stream_handler_when_nothing_is_listening"
     },
@@ -8780,7 +8771,7 @@
       "source_location": "L588",
       "_callable": true,
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": ".test_uses_the_syslog_handler_when_a_socket_is_actually_listening()",
       "id": "mail_provision_test_check_dnsbl_blocklist_configureloggingregressiontests_test_uses_the_syslog_handler_when_a_socket_is_actually_listening"
     },
@@ -8840,7 +8831,7 @@
       "source_file": "mail/provision/test_check_dnsbl_blocklist.py",
       "source_location": "L532",
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": "a real, bound unix datagram socket -- the shape /dev/log actually is on a linux...",
       "id": "mail_provision_test_check_dnsbl_blocklist_rationale_532"
     },
@@ -8850,7 +8841,7 @@
       "source_file": "mail/provision/test_check_dnsbl_blocklist.py",
       "source_location": "L555",
       "_origin": "ast",
-      "community": 39,
+      "community": 38,
       "norm_label": "regression coverage for a real bug found and fixed during this script's own...",
       "id": "mail_provision_test_check_dnsbl_blocklist_rationale_555"
     },
@@ -8860,7 +8851,7 @@
       "source_file": "mail/provision/test_list_and_clear_blocked_ips.py",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": "test_list_and_clear_blocked_ips.py",
       "id": "mail_provision_test_list_and_clear_blocked_ips"
     },
@@ -8872,7 +8863,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": "selectidstocleartests",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests"
     },
@@ -8883,7 +8874,7 @@
       "source_location": "L22",
       "_callable": true,
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": ".test_all_selects_every_id()",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_all_selects_every_id"
     },
@@ -8894,7 +8885,7 @@
       "source_location": "L25",
       "_callable": true,
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": ".test_single_ip_selects_only_its_id()",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_single_ip_selects_only_its_id"
     },
@@ -8905,7 +8896,7 @@
       "source_location": "L28",
       "_callable": true,
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": ".test_multiple_ips_select_their_ids_only()",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_multiple_ips_select_their_ids_only"
     },
@@ -8916,7 +8907,7 @@
       "source_location": "L36",
       "_callable": true,
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": ".test_neither_all_nor_ip_is_refused()",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_neither_all_nor_ip_is_refused"
     },
@@ -8927,7 +8918,7 @@
       "source_location": "L40",
       "_callable": true,
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": ".test_all_and_ip_together_is_refused()",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_all_and_ip_together_is_refused"
     },
@@ -8938,7 +8929,7 @@
       "source_location": "L44",
       "_callable": true,
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": ".test_ip_not_currently_blocked_is_refused_not_silently_ignored()",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_ip_not_currently_blocked_is_refused_not_silently_ignored"
     },
@@ -8949,7 +8940,7 @@
       "source_location": "L48",
       "_callable": true,
       "_origin": "ast",
-      "community": 41,
+      "community": 40,
       "norm_label": ".test_all_on_empty_blocked_list_selects_nothing()",
       "id": "mail_provision_test_list_and_clear_blocked_ips_selectidstocleartests_test_all_on_empty_blocked_list_selects_nothing"
     },
@@ -9866,7 +9857,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": "extractiontests",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests"
     },
@@ -9877,7 +9868,7 @@
       "source_location": "L208",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_owasp_rulesets()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_owasp_rulesets"
     },
@@ -9888,7 +9879,7 @@
       "source_location": "L214",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_owasp_rulesets_raises_when_priority_formula_missing()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_owasp_rulesets_raises_when_priority_formula_missing"
     },
@@ -9899,7 +9890,7 @@
       "source_location": "L219",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_owasp_rulesets_raises_when_constant_renamed()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_owasp_rulesets_raises_when_constant_renamed"
     },
@@ -9910,7 +9901,7 @@
       "source_location": "L224",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_content_sensitive_rulesets()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_content_sensitive_rulesets"
     },
@@ -9921,7 +9912,7 @@
       "source_location": "L230",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_rate_limit_priority()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_rate_limit_priority"
     },
@@ -9932,7 +9923,7 @@
       "source_location": "L233",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_rate_limit_params()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_rate_limit_params"
     },
@@ -9943,7 +9934,7 @@
       "source_location": "L236",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_preview_copy_base_priority()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_preview_copy_base_priority"
     },
@@ -9954,7 +9945,7 @@
       "source_location": "L239",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_default_allow_priority()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_default_allow_priority"
     },
@@ -9965,7 +9956,7 @@
       "source_location": "L242",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_policy_name()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_policy_name"
     },
@@ -9976,7 +9967,7 @@
       "source_location": "L245",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_preview_only_hosts_one()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_preview_only_hosts_one"
     },
@@ -9987,7 +9978,7 @@
       "source_location": "L248",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_preview_only_hosts_none()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_preview_only_hosts_none"
     },
@@ -9998,7 +9989,7 @@
       "source_location": "L251",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_preview_only_hosts_multiple_on_one_site()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_preview_only_hosts_multiple_on_one_site"
     },
@@ -10009,7 +10000,7 @@
       "source_location": "L268",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_preview_only_hosts_survives_a_nested_object_in_a_site_entry()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_preview_only_hosts_survives_a_nested_object_in_a_site_entry"
     },
@@ -10020,7 +10011,7 @@
       "source_location": "L299",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_preview_only_hosts_raises_when_sites_array_missing()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_preview_only_hosts_raises_when_sites_array_missing"
     },
@@ -10031,7 +10022,7 @@
       "source_location": "L303",
       "_callable": true,
       "_origin": "ast",
-      "community": 38,
+      "community": 37,
       "norm_label": ".test_confirm_literal_raises_when_expression_builder_changed()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_extractiontests_test_confirm_literal_raises_when_expression_builder_changed"
     },
@@ -10143,7 +10134,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": "checkparitytests",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests"
     },
@@ -10154,7 +10145,7 @@
       "source_location": "L387",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 19,
       "norm_label": ".setup()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_setup"
     },
@@ -10165,7 +10156,7 @@
       "source_location": "L391",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_clean_baseline_reports_no_problems()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_clean_baseline_reports_no_problems"
     },
@@ -10187,7 +10178,7 @@
       "source_location": "L411",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_an_extra_undeclared_rule_is_caught()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_an_extra_undeclared_rule_is_caught"
     },
@@ -10198,7 +10189,7 @@
       "source_location": "L426",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_rate_limit_threshold_silently_defeated_is_caught()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_rate_limit_threshold_silently_defeated_is_caught"
     },
@@ -10209,7 +10200,7 @@
       "source_location": "L444",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_preview_copy_flipped_to_enforcing_is_caught()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_preview_copy_flipped_to_enforcing_is_caught"
     },
@@ -10220,7 +10211,7 @@
       "source_location": "L453",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_default_allow_rule_changed_to_deny_is_caught()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_default_allow_rule_changed_to_deny_is_caught"
     },
@@ -10231,7 +10222,7 @@
       "source_location": "L462",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_policy_renamed_is_caught()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_policy_renamed_is_caught"
     },
@@ -10242,7 +10233,7 @@
       "source_location": "L469",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_policy_type_changed_is_caught()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_policy_type_changed_is_caught"
     },
@@ -10253,7 +10244,7 @@
       "source_location": "L476",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_missing_rule_is_caught()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_missing_rule_is_caught"
     },
@@ -10264,7 +10255,7 @@
       "source_location": "L483",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_action_mismatch_is_caught()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_action_mismatch_is_caught"
     },
@@ -10275,7 +10266,7 @@
       "source_location": "L492",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_malformed_baseline_raises_rather_than_reporting_clean()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_malformed_baseline_raises_rather_than_reporting_clean"
     },
@@ -10286,7 +10277,7 @@
       "source_location": "L503",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_a_rule_this_script_cannot_read_fails_closed()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_a_rule_this_script_cannot_read_fails_closed"
     },
@@ -10297,7 +10288,7 @@
       "source_location": "L530",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_a_non_boolean_preview_is_reported_not_coerced()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_a_non_boolean_preview_is_reported_not_coerced"
     },
@@ -10308,7 +10299,7 @@
       "source_location": "L544",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_an_absent_preview_key_means_not_in_preview()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_an_absent_preview_key_means_not_in_preview"
     },
@@ -10319,7 +10310,7 @@
       "source_location": "L554",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_extraction_error_propagates_not_swallowed()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_extraction_error_propagates_not_swallowed"
     },
@@ -10341,7 +10332,7 @@
       "source_location": "L567",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_duplicate_priority_fails_closed()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_duplicate_priority_fails_closed"
     },
@@ -10352,7 +10343,7 @@
       "source_location": "L578",
       "_callable": true,
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": ".test_policy_identity_problems_carry_no_priority()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_policy_identity_problems_carry_no_priority"
     },
@@ -10674,7 +10665,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 69,
+      "community": 68,
       "norm_label": "realrepofilestests",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests"
     },
@@ -10685,7 +10676,7 @@
       "source_location": "L855",
       "_callable": true,
       "_origin": "ast",
-      "community": 69,
+      "community": 68,
       "norm_label": ".setup()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_setup"
     },
@@ -10696,7 +10687,7 @@
       "source_location": "L868",
       "_callable": true,
       "_origin": "ast",
-      "community": 69,
+      "community": 68,
       "norm_label": ".test_the_real_edge_ts_still_yields_every_rule_the_script_expects()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_test_the_real_edge_ts_still_yields_every_rule_the_script_expects"
     },
@@ -10707,7 +10698,7 @@
       "source_location": "L873",
       "_callable": true,
       "_origin": "ast",
-      "community": 69,
+      "community": 68,
       "norm_label": ".test_the_real_baseline_is_structurally_readable()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_test_the_real_baseline_is_structurally_readable"
     },
@@ -10718,7 +10709,7 @@
       "source_location": "L878",
       "_callable": true,
       "_origin": "ast",
-      "community": 69,
+      "community": 68,
       "norm_label": ".test_the_committed_accepted_failures_file_is_valid()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_test_the_committed_accepted_failures_file_is_valid"
     },
@@ -10729,7 +10720,7 @@
       "source_location": "L882",
       "_callable": true,
       "_origin": "ast",
-      "community": 69,
+      "community": 68,
       "norm_label": ".test_the_committed_acceptances_can_be_applied_to_the_real_problems()",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_test_the_committed_acceptances_can_be_applied_to_the_real_problems"
     },
@@ -10789,7 +10780,7 @@
       "source_file": "scripts/test_assert_cloud_armor_baseline_parity.py",
       "source_location": "L385",
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": "the core property: does the comparison itself distinguish clean from broken.",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_rationale_385"
     },
@@ -10809,7 +10800,7 @@
       "source_file": "scripts/test_assert_cloud_armor_baseline_parity.py",
       "source_location": "L412",
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": "the concrete bypass a subset-only comparison misses: cloud armor stops at the...",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_rationale_412"
     },
@@ -10819,7 +10810,7 @@
       "source_file": "scripts/test_assert_cloud_armor_baseline_parity.py",
       "source_location": "L504",
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": "every shape below was silently dropped from the priority index by an earlier...",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_rationale_504"
     },
@@ -10829,7 +10820,7 @@
       "source_file": "scripts/test_assert_cloud_armor_baseline_parity.py",
       "source_location": "L531",
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": "`bool(\"false\")` is true. coercing would read a rule that is not enforcing as...",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_rationale_531"
     },
@@ -10839,7 +10830,7 @@
       "source_file": "scripts/test_assert_cloud_armor_baseline_parity.py",
       "source_location": "L568",
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": "an earlier version let the last entry win, reasoning that cloud armor would...",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_rationale_568"
     },
@@ -10849,7 +10840,7 @@
       "source_file": "scripts/test_assert_cloud_armor_baseline_parity.py",
       "source_location": "L579",
       "_origin": "ast",
-      "community": 20,
+      "community": 23,
       "norm_label": "policy `name`/`type` divergences must be unacceptable, and the accepted-...",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_rationale_579"
     },
@@ -10969,7 +10960,7 @@
       "source_file": "scripts/test_assert_cloud_armor_baseline_parity.py",
       "source_location": "L842",
       "_origin": "ast",
-      "community": 69,
+      "community": 68,
       "norm_label": "assertions about this checkout's actual files that hold whatever state the live...",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_rationale_842"
     },
@@ -10979,7 +10970,7 @@
       "source_file": "scripts/test_assert_cloud_armor_baseline_parity.py",
       "source_location": "L883",
       "_origin": "ast",
-      "community": 69,
+      "community": 68,
       "norm_label": "whether any entry is currently stale is the real check's verdict to report, not...",
       "id": "scripts_test_assert_cloud_armor_baseline_parity_rationale_883"
     },
@@ -10987,7 +10978,7 @@
       "label": "RUNBOOK-edge-state-move.md",
       "file_type": "document",
       "source_file": "RUNBOOK-edge-state-move.md",
-      "community": 164,
+      "community": 167,
       "norm_label": "runbook-edge-state-move.md",
       "_origin": "semantic",
       "id": "runbook_edge_state_move_md"
@@ -11284,7 +11275,7 @@
       "source_file": "hetzner-host/tsconfig.json",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 71,
+      "community": 65,
       "norm_label": "hetzner-host/tsconfig.json",
       "id": "hetzner_host_tsconfig"
     },
@@ -11294,7 +11285,7 @@
       "source_file": "hetzner-host/tsconfig.json",
       "source_location": "L2",
       "_origin": "ast",
-      "community": 56,
+      "community": 65,
       "norm_label": "extends",
       "id": "hetzner_host_tsconfig_extends"
     },
@@ -11304,7 +11295,7 @@
       "source_file": "hetzner-host/tsconfig.json",
       "source_location": "L3",
       "_origin": "ast",
-      "community": 71,
+      "community": 65,
       "norm_label": "compileroptions",
       "id": "hetzner_host_tsconfig_compileroptions"
     },
@@ -11314,7 +11305,7 @@
       "source_file": "hetzner-host/tsconfig.json",
       "source_location": "L4",
       "_origin": "ast",
-      "community": 71,
+      "community": 65,
       "norm_label": "pretty",
       "id": "hetzner_host_tsconfig_compileroptions_pretty"
     },
@@ -11324,7 +11315,7 @@
       "source_file": "hetzner-host/tsconfig.json",
       "source_location": "L6",
       "_origin": "ast",
-      "community": 71,
+      "community": 65,
       "norm_label": "include",
       "id": "hetzner_host_tsconfig_include"
     },
@@ -11334,7 +11325,7 @@
       "source_file": "hetzner-host/tsconfig.json",
       "source_location": "L6",
       "_origin": "ast",
-      "community": 71,
+      "community": 65,
       "norm_label": "**/*.ts",
       "id": "hetzner_host_tsconfig_json_ref_ts"
     },
@@ -11344,7 +11335,7 @@
       "source_file": "hetzner-host/tsconfig.json",
       "source_location": "L7",
       "_origin": "ast",
-      "community": 71,
+      "community": 65,
       "norm_label": "exclude",
       "id": "hetzner_host_tsconfig_exclude"
     },
@@ -11354,7 +11345,7 @@
       "source_file": "hetzner-host/tsconfig.json",
       "source_location": "L7",
       "_origin": "ast",
-      "community": 71,
+      "community": 65,
       "norm_label": "dist",
       "id": "hetzner_host_tsconfig_json_ref_dist"
     },
@@ -11374,7 +11365,7 @@
       "source_file": "hetzner/hetznerHost.test.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 91,
+      "community": 92,
       "norm_label": "hetznerhost.test.ts",
       "id": "hetzner_hetznerhost_test"
     },
@@ -11386,7 +11377,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 91,
+      "community": 92,
       "norm_label": "created",
       "id": "hetzner_hetznerhost_test_created"
     },
@@ -11397,7 +11388,7 @@
       "source_location": "L32",
       "_callable": true,
       "_origin": "ast",
-      "community": 91,
+      "community": 92,
       "norm_label": "newresource()",
       "id": "hetzner_hetznerhost_test_newresource"
     },
@@ -11408,7 +11399,7 @@
       "source_location": "L36",
       "_callable": true,
       "_origin": "ast",
-      "community": 91,
+      "community": 92,
       "norm_label": "call()",
       "id": "hetzner_hetznerhost_test_call"
     },
@@ -11418,7 +11409,7 @@
       "source_file": "tsconfig.json",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 56,
+      "community": 57,
       "norm_label": "tsconfig.json",
       "id": "tsconfig"
     },
@@ -11428,7 +11419,7 @@
       "source_file": "tsconfig.json",
       "source_location": "L2",
       "_origin": "ast",
-      "community": 56,
+      "community": 57,
       "norm_label": "extends",
       "id": "tsconfig_extends"
     },
@@ -11438,7 +11429,7 @@
       "source_file": "tsconfig.json",
       "source_location": "L2",
       "_origin": "ast",
-      "community": 56,
+      "community": 57,
       "norm_label": "@branchleft/tsconfig/strict-1.json",
       "id": "tsconfig_json_ref_branchleft_tsconfig_strict_1_json"
     },
@@ -11448,7 +11439,7 @@
       "source_file": "tsconfig.json",
       "source_location": "L2",
       "_origin": "ast",
-      "community": 56,
+      "community": 57,
       "norm_label": "@branchleft/tsconfig/pulumi.json",
       "id": "tsconfig_json_ref_branchleft_tsconfig_pulumi_json"
     },
@@ -11458,7 +11449,7 @@
       "source_file": "tsconfig.json",
       "source_location": "L3",
       "_origin": "ast",
-      "community": 56,
+      "community": 57,
       "norm_label": "compileroptions",
       "id": "tsconfig_compileroptions"
     },
@@ -11468,7 +11459,7 @@
       "source_file": "tsconfig.json",
       "source_location": "L4",
       "_origin": "ast",
-      "community": 56,
+      "community": 57,
       "norm_label": "pretty",
       "id": "tsconfig_compileroptions_pretty"
     },
@@ -11478,7 +11469,7 @@
       "source_file": "tsconfig.json",
       "source_location": "L13",
       "_origin": "ast",
-      "community": 56,
+      "community": 57,
       "norm_label": "include",
       "id": "tsconfig_include"
     },
@@ -11488,7 +11479,7 @@
       "source_file": "tsconfig.json",
       "source_location": "L13",
       "_origin": "ast",
-      "community": 56,
+      "community": 57,
       "norm_label": "**/*.ts",
       "id": "tsconfig_json_ref_ts"
     },
@@ -11498,7 +11489,7 @@
       "source_file": "tsconfig.json",
       "source_location": "L14",
       "_origin": "ast",
-      "community": 83,
+      "community": 81,
       "norm_label": "exclude",
       "id": "tsconfig_exclude"
     },
@@ -11518,7 +11509,7 @@
       "source_file": "tsconfig.json",
       "source_location": "L14",
       "_origin": "ast",
-      "community": 83,
+      "community": 81,
       "norm_label": "mail",
       "id": "ref_mail"
     },
@@ -11528,7 +11519,7 @@
       "source_file": "tsconfig.json",
       "source_location": "L14",
       "_origin": "ast",
-      "community": 83,
+      "community": 81,
       "norm_label": "hetzner",
       "id": "ref_hetzner"
     },
@@ -11538,7 +11529,7 @@
       "source_file": "tsconfig.json",
       "source_location": "L14",
       "_origin": "ast",
-      "community": 83,
+      "community": 81,
       "norm_label": "hetzner-host",
       "id": "ref_hetzner_host"
     },
@@ -11548,7 +11539,7 @@
       "source_file": "tsconfig.json",
       "source_location": "L14",
       "_origin": "ast",
-      "community": 83,
+      "community": 81,
       "norm_label": ".claude",
       "id": "ref_claude"
     },
@@ -11558,7 +11549,7 @@
       "source_file": "tsconfig.json",
       "source_location": "L14",
       "_origin": "ast",
-      "community": 83,
+      "community": 81,
       "norm_label": ".worktrees",
       "id": "ref_worktrees"
     },
@@ -11566,7 +11557,7 @@
       "label": "Pulumi.production.yaml",
       "file_type": "code",
       "source_file": "Pulumi.production.yaml",
-      "community": 160,
+      "community": 163,
       "norm_label": "pulumi.production.yaml",
       "_origin": "semantic",
       "id": "pulumi_production_yaml"
@@ -11593,7 +11584,7 @@
       "label": "Mail History Migration Runbook",
       "file_type": "document",
       "source_file": "mail/RUNBOOK-mail-history-migration.md",
-      "community": 152,
+      "community": 155,
       "norm_label": "mail history migration runbook",
       "_origin": "semantic",
       "id": "mail_runbook_mail_history_migration_md"
@@ -11604,7 +11595,7 @@
       "source_file": "edge.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 37,
+      "community": 41,
       "norm_label": "edge.ts",
       "id": "edge"
     },
@@ -11616,7 +11607,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 41,
       "norm_label": "dnsauthorizationrecord",
       "id": "edge_dnsauthorizationrecord"
     },
@@ -11628,7 +11619,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 41,
       "norm_label": "edge",
       "id": "edge_edge"
     },
@@ -11638,7 +11629,7 @@
       "source_file": "edge.ts",
       "source_location": "L97",
       "_origin": "ast",
-      "community": 37,
+      "community": 41,
       "norm_label": "owasp_rulesets",
       "id": "edge_owasp_rulesets"
     },
@@ -11648,7 +11639,7 @@
       "source_file": "edge.ts",
       "source_location": "L104",
       "_origin": "ast",
-      "community": 37,
+      "community": 41,
       "norm_label": "content_sensitive_rulesets",
       "id": "edge_content_sensitive_rulesets"
     },
@@ -11659,7 +11650,7 @@
       "source_location": "L106",
       "_callable": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 41,
       "norm_label": "preconfiguredwaf()",
       "id": "edge_preconfiguredwaf"
     },
@@ -11670,7 +11661,7 @@
       "source_location": "L113",
       "_callable": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 41,
       "norm_label": "hostequals()",
       "id": "edge_hostequals"
     },
@@ -11680,7 +11671,7 @@
       "source_file": "edge.ts",
       "source_location": "L115",
       "_origin": "ast",
-      "community": 37,
+      "community": 41,
       "norm_label": "all_source_ips",
       "id": "edge_all_source_ips"
     },
@@ -11691,7 +11682,7 @@
       "source_location": "L134",
       "_callable": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 41,
       "norm_label": "createedge()",
       "id": "edge_createedge"
     },
@@ -11873,7 +11864,7 @@
       "source_file": "hetzner/package.json",
       "source_location": "L13",
       "_origin": "ast",
-      "community": 65,
+      "community": 69,
       "norm_label": "dependencies",
       "id": "hetzner_package_dependencies"
     },
@@ -11883,7 +11874,7 @@
       "source_file": "hetzner/package.json",
       "source_location": "L14",
       "_origin": "ast",
-      "community": 65,
+      "community": 69,
       "norm_label": "@branchleft/hetzner-host",
       "id": "hetzner_package_dependencies_branchleft_hetzner_host"
     },
@@ -11893,7 +11884,7 @@
       "source_file": "hetzner/package.json",
       "source_location": "L14",
       "_origin": "ast",
-      "community": 65,
+      "community": 69,
       "norm_label": "@branchleft/hetzner-host",
       "id": "branchleft_hetzner_host"
     },
@@ -11903,7 +11894,7 @@
       "source_file": "hetzner/package.json",
       "source_location": "L15",
       "_origin": "ast",
-      "community": 65,
+      "community": 82,
       "norm_label": "@pulumi/hcloud",
       "id": "hetzner_package_dependencies_pulumi_hcloud"
     },
@@ -11913,7 +11904,7 @@
       "source_file": "hetzner/package.json",
       "source_location": "L15",
       "_origin": "ast",
-      "community": 92,
+      "community": 82,
       "norm_label": "@pulumi/hcloud",
       "id": "pulumi_hcloud"
     },
@@ -11923,7 +11914,7 @@
       "source_file": "hetzner/package.json",
       "source_location": "L16",
       "_origin": "ast",
-      "community": 65,
+      "community": 69,
       "norm_label": "@pulumi/pulumi",
       "id": "hetzner_package_dependencies_pulumi_pulumi"
     },
@@ -11933,7 +11924,7 @@
       "source_file": "hetzner/package.json",
       "source_location": "L16",
       "_origin": "ast",
-      "community": 65,
+      "community": 69,
       "norm_label": "@pulumi/pulumi",
       "id": "pulumi_pulumi"
     },
@@ -12253,7 +12244,7 @@
       "source_file": "siteTypes.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 37,
+      "community": 41,
       "norm_label": "sitetypes.ts",
       "id": "sitetypes"
     },
@@ -12265,7 +12256,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 41,
       "norm_label": "privateupstream",
       "id": "sitetypes_privateupstream"
     },
@@ -12277,7 +12268,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 41,
       "norm_label": "edgesite",
       "id": "sitetypes_edgesite"
     },
@@ -12289,45 +12280,15 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 37,
+      "community": 41,
       "norm_label": "hostredirect",
       "id": "sitetypes_hostredirect"
-    },
-    {
-      "label": "sites.ts",
-      "file_type": "code",
-      "source_file": "sites.ts",
-      "source_location": "L1",
-      "_origin": "ast",
-      "community": 37,
-      "norm_label": "sites.ts",
-      "id": "sites"
-    },
-    {
-      "label": "sites",
-      "file_type": "code",
-      "source_file": "sites.ts",
-      "source_location": "L70",
-      "_origin": "ast",
-      "community": 37,
-      "norm_label": "sites",
-      "id": "sites_sites"
-    },
-    {
-      "label": "hostRedirects",
-      "file_type": "code",
-      "source_file": "sites.ts",
-      "source_location": "L94",
-      "_origin": "ast",
-      "community": 37,
-      "norm_label": "hostredirects",
-      "id": "sites_hostredirects"
     },
     {
       "label": "Cloud Armor Baseline Documentation",
       "file_type": "document",
       "source_file": "CLOUD-ARMOR-BASELINE.md",
-      "community": 129,
+      "community": 130,
       "norm_label": "cloud armor baseline documentation",
       "_origin": "semantic",
       "id": "cloud_armor_baseline_md"
@@ -12363,7 +12324,7 @@
       "label": "Pulumi Passphrase",
       "file_type": "concept",
       "source_file": null,
-      "community": 159,
+      "community": 162,
       "norm_label": "pulumi passphrase",
       "_origin": "semantic",
       "id": "pulumi_passphrase"
@@ -12372,7 +12333,7 @@
       "label": "Encryption Salt",
       "file_type": "concept",
       "source_file": null,
-      "community": 130,
+      "community": 131,
       "norm_label": "encryption salt",
       "_origin": "semantic",
       "id": "encryptionsalt"
@@ -12859,7 +12820,7 @@
       "label": ".pre-commit-config.yaml",
       "file_type": "code",
       "source_file": ".pre-commit-config.yaml",
-      "community": 156,
+      "community": 159,
       "norm_label": ".pre-commit-config.yaml",
       "_origin": "semantic",
       "id": "pre_commit_config_yaml"
@@ -14588,7 +14549,7 @@
       "label": "branchleft-compose@.service",
       "file_type": "code",
       "source_file": "branchleft-compose@.service",
-      "community": 132,
+      "community": 133,
       "norm_label": "branchleft-compose@.service",
       "_origin": "semantic",
       "id": "etc_systemd_system_branchleft_compose_at_service"
@@ -14610,7 +14571,7 @@
       "source_location": "L70",
       "_callable": true,
       "_origin": "ast",
-      "community": 81,
+      "community": 75,
       "norm_label": "sieve_script_contents()",
       "id": "mail_provision_provision_mailboxes_sieve_script_contents"
     },
@@ -14621,7 +14582,7 @@
       "source_location": "L79",
       "_callable": true,
       "_origin": "ast",
-      "community": 75,
+      "community": 73,
       "norm_label": "missing_mailboxes()",
       "id": "mail_provision_provision_mailboxes_missing_mailboxes"
     },
@@ -14632,7 +14593,7 @@
       "source_location": "L87",
       "_callable": true,
       "_origin": "ast",
-      "community": 74,
+      "community": 72,
       "norm_label": "build_account_create_args()",
       "id": "mail_provision_provision_mailboxes_build_account_create_args"
     },
@@ -14698,7 +14659,7 @@
       "source_location": "L161",
       "_callable": true,
       "_origin": "ast",
-      "community": 68,
+      "community": 74,
       "norm_label": "resolve_mailbox_secret()",
       "id": "mail_provision_provision_mailboxes_resolve_mailbox_secret"
     },
@@ -14851,7 +14812,7 @@
       "source_file": "mail/provision/provision_mailboxes.py",
       "source_location": "L71",
       "_origin": "ast",
-      "community": 81,
+      "community": 75,
       "norm_label": "the exact script every role address gets -- `:copy` (rfc 3894) so the original...",
       "id": "mail_provision_provision_mailboxes_rationale_71"
     },
@@ -14861,7 +14822,7 @@
       "source_file": "mail/provision/provision_mailboxes.py",
       "source_location": "L80",
       "_origin": "ast",
-      "community": 75,
+      "community": 73,
       "norm_label": "pure diff: local-parts in `mailboxes` that don't have an account under this...",
       "id": "mail_provision_provision_mailboxes_rationale_80"
     },
@@ -14871,7 +14832,7 @@
       "source_file": "mail/provision/provision_mailboxes.py",
       "source_location": "L88",
       "_origin": "ast",
-      "community": 74,
+      "community": 72,
       "norm_label": "the actual x:account/set create object for one mailbox -- separated from...",
       "id": "mail_provision_provision_mailboxes_rationale_88"
     },
@@ -14891,7 +14852,7 @@
       "source_file": "mail/provision/provision_mailboxes.py",
       "source_location": "L162",
       "_origin": "ast",
-      "community": 68,
+      "community": 74,
       "norm_label": "reuses a secret already recorded for `local` if one exists, otherwise calls...",
       "id": "mail_provision_provision_mailboxes_rationale_162"
     },
@@ -14911,7 +14872,7 @@
       "source_file": "mail/provision/test_provision_mailboxes.py",
       "source_location": "L1",
       "_origin": "ast",
-      "community": 68,
+      "community": 75,
       "norm_label": "test_provision_mailboxes.py",
       "id": "mail_provision_test_provision_mailboxes"
     },
@@ -14923,7 +14884,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 87,
+      "community": 86,
       "norm_label": "mailboxesandroleaddressestests",
       "id": "mail_provision_test_provision_mailboxes_mailboxesandroleaddressestests"
     },
@@ -14934,7 +14895,7 @@
       "source_location": "L30",
       "_callable": true,
       "_origin": "ast",
-      "community": 87,
+      "community": 86,
       "norm_label": ".test_rob_is_a_mailbox_but_not_a_role_address()",
       "id": "mail_provision_test_provision_mailboxes_mailboxesandroleaddressestests_test_rob_is_a_mailbox_but_not_a_role_address"
     },
@@ -14945,7 +14906,7 @@
       "source_location": "L34",
       "_callable": true,
       "_origin": "ast",
-      "community": 87,
+      "community": 86,
       "norm_label": ".test_every_role_address_is_also_a_mailbox()",
       "id": "mail_provision_test_provision_mailboxes_mailboxesandroleaddressestests_test_every_role_address_is_also_a_mailbox"
     },
@@ -14956,7 +14917,7 @@
       "source_location": "L38",
       "_callable": true,
       "_origin": "ast",
-      "community": 87,
+      "community": 86,
       "norm_label": ".test_exactly_eight_mailboxes_seven_role_addresses()",
       "id": "mail_provision_test_provision_mailboxes_mailboxesandroleaddressestests_test_exactly_eight_mailboxes_seven_role_addresses"
     },
@@ -14967,7 +14928,7 @@
       "source_location": "L42",
       "_callable": true,
       "_origin": "ast",
-      "community": 87,
+      "community": 86,
       "norm_label": ".test_forward_target_is_rob_at_the_mail_domain()",
       "id": "mail_provision_test_provision_mailboxes_mailboxesandroleaddressestests_test_forward_target_is_rob_at_the_mail_domain"
     },
@@ -14979,7 +14940,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 81,
+      "community": 75,
       "norm_label": "sievescriptcontentstests",
       "id": "mail_provision_test_provision_mailboxes_sievescriptcontentstests"
     },
@@ -14990,7 +14951,7 @@
       "source_location": "L47",
       "_callable": true,
       "_origin": "ast",
-      "community": 81,
+      "community": 75,
       "norm_label": ".test_uses_copy_modifier_not_a_plain_redirect()",
       "id": "mail_provision_test_provision_mailboxes_sievescriptcontentstests_test_uses_copy_modifier_not_a_plain_redirect"
     },
@@ -15001,7 +14962,7 @@
       "source_location": "L55",
       "_callable": true,
       "_origin": "ast",
-      "community": 81,
+      "community": 75,
       "norm_label": ".test_declares_the_copy_extension()",
       "id": "mail_provision_test_provision_mailboxes_sievescriptcontentstests_test_declares_the_copy_extension"
     },
@@ -15012,7 +14973,7 @@
       "source_location": "L59",
       "_callable": true,
       "_origin": "ast",
-      "community": 81,
+      "community": 75,
       "norm_label": ".test_is_parameterised_on_the_forward_target()",
       "id": "mail_provision_test_provision_mailboxes_sievescriptcontentstests_test_is_parameterised_on_the_forward_target"
     },
@@ -15024,7 +14985,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 74,
+      "community": 72,
       "norm_label": "buildaccountcreateargstests",
       "id": "mail_provision_test_provision_mailboxes_buildaccountcreateargstests"
     },
@@ -15035,7 +14996,7 @@
       "source_location": "L66",
       "_callable": true,
       "_origin": "ast",
-      "community": 74,
+      "community": 72,
       "norm_label": ".test_sets_type_user_and_the_given_name_and_domain()",
       "id": "mail_provision_test_provision_mailboxes_buildaccountcreateargstests_test_sets_type_user_and_the_given_name_and_domain"
     },
@@ -15046,7 +15007,7 @@
       "source_location": "L73",
       "_callable": true,
       "_origin": "ast",
-      "community": 74,
+      "community": 72,
       "norm_label": ".test_credentials_is_an_index_keyed_object_not_a_json_array()",
       "id": "mail_provision_test_provision_mailboxes_buildaccountcreateargstests_test_credentials_is_an_index_keyed_object_not_a_json_array"
     },
@@ -15057,7 +15018,7 @@
       "source_location": "L86",
       "_callable": true,
       "_origin": "ast",
-      "community": 74,
+      "community": 72,
       "norm_label": ".test_only_one_credential_is_set()",
       "id": "mail_provision_test_provision_mailboxes_buildaccountcreateargstests_test_only_one_credential_is_set"
     },
@@ -15068,7 +15029,7 @@
       "source_location": "L91",
       "_callable": true,
       "_origin": "ast",
-      "community": 74,
+      "community": 72,
       "norm_label": ".test_no_roles_or_permissions_are_set()",
       "id": "mail_provision_test_provision_mailboxes_buildaccountcreateargstests_test_no_roles_or_permissions_are_set"
     },
@@ -15080,7 +15041,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 75,
+      "community": 73,
       "norm_label": "missingmailboxestests",
       "id": "mail_provision_test_provision_mailboxes_missingmailboxestests"
     },
@@ -15091,7 +15052,7 @@
       "source_location": "L105",
       "_callable": true,
       "_origin": "ast",
-      "community": 75,
+      "community": 73,
       "norm_label": ".test_all_missing_when_none_exist()",
       "id": "mail_provision_test_provision_mailboxes_missingmailboxestests_test_all_missing_when_none_exist"
     },
@@ -15102,7 +15063,7 @@
       "source_location": "L110",
       "_callable": true,
       "_origin": "ast",
-      "community": 75,
+      "community": 73,
       "norm_label": ".test_none_missing_when_all_exist()",
       "id": "mail_provision_test_provision_mailboxes_missingmailboxestests_test_none_missing_when_all_exist"
     },
@@ -15113,7 +15074,7 @@
       "source_location": "L115",
       "_callable": true,
       "_origin": "ast",
-      "community": 75,
+      "community": 73,
       "norm_label": ".test_only_the_absent_ones_are_returned_in_order()",
       "id": "mail_provision_test_provision_mailboxes_missingmailboxestests_test_only_the_absent_ones_are_returned_in_order"
     },
@@ -15124,7 +15085,7 @@
       "source_location": "L122",
       "_callable": true,
       "_origin": "ast",
-      "community": 75,
+      "community": 73,
       "norm_label": ".test_unrelated_existing_accounts_are_ignored()",
       "id": "mail_provision_test_provision_mailboxes_missingmailboxestests_test_unrelated_existing_accounts_are_ignored"
     },
@@ -15203,7 +15164,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 68,
+      "community": 74,
       "norm_label": "resolvemailboxsecrettests",
       "id": "mail_provision_test_provision_mailboxes_resolvemailboxsecrettests"
     },
@@ -15214,7 +15175,7 @@
       "source_location": "L185",
       "_callable": true,
       "_origin": "ast",
-      "community": 68,
+      "community": 74,
       "norm_label": ".test_reuses_a_recorded_secret_instead_of_generating_a_new_one()",
       "id": "mail_provision_test_provision_mailboxes_resolvemailboxsecrettests_test_reuses_a_recorded_secret_instead_of_generating_a_new_one"
     },
@@ -15225,7 +15186,7 @@
       "source_location": "L198",
       "_callable": true,
       "_origin": "ast",
-      "community": 68,
+      "community": 74,
       "norm_label": ".test_generates_a_fresh_secret_when_none_is_recorded()",
       "id": "mail_provision_test_provision_mailboxes_resolvemailboxsecrettests_test_generates_a_fresh_secret_when_none_is_recorded"
     },
@@ -15236,7 +15197,7 @@
       "source_location": "L203",
       "_callable": true,
       "_origin": "ast",
-      "community": 68,
+      "community": 74,
       "norm_label": ".test_only_the_matching_local_parts_recorded_secret_is_returned()",
       "id": "mail_provision_test_provision_mailboxes_resolvemailboxsecrettests_test_only_the_matching_local_parts_recorded_secret_is_returned"
     },
@@ -15248,7 +15209,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 86,
+      "community": 85,
       "norm_label": "loadrecordedsecretstests",
       "id": "mail_provision_test_provision_mailboxes_loadrecordedsecretstests"
     },
@@ -15259,7 +15220,7 @@
       "source_location": "L211",
       "_callable": true,
       "_origin": "ast",
-      "community": 86,
+      "community": 85,
       "norm_label": ".test_missing_file_is_an_empty_dict()",
       "id": "mail_provision_test_provision_mailboxes_loadrecordedsecretstests_test_missing_file_is_an_empty_dict"
     },
@@ -15270,7 +15231,7 @@
       "source_location": "L216",
       "_callable": true,
       "_origin": "ast",
-      "community": 86,
+      "community": 85,
       "norm_label": ".test_parses_one_local_colon_secret_pair_per_line()",
       "id": "mail_provision_test_provision_mailboxes_loadrecordedsecretstests_test_parses_one_local_colon_secret_pair_per_line"
     },
@@ -15281,7 +15242,7 @@
       "source_location": "L226",
       "_callable": true,
       "_origin": "ast",
-      "community": 86,
+      "community": 85,
       "norm_label": ".test_a_secret_containing_a_colon_is_preserved_whole()",
       "id": "mail_provision_test_provision_mailboxes_loadrecordedsecretstests_test_a_secret_containing_a_colon_is_preserved_whole"
     },
@@ -15292,7 +15253,7 @@
       "source_location": "L237",
       "_callable": true,
       "_origin": "ast",
-      "community": 86,
+      "community": 85,
       "norm_label": ".test_blank_lines_are_skipped()",
       "id": "mail_provision_test_provision_mailboxes_loadrecordedsecretstests_test_blank_lines_are_skipped"
     },
@@ -15371,7 +15332,7 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "community": 88,
+      "community": 87,
       "norm_label": "mainorchestrationtests",
       "id": "mail_provision_test_provision_mailboxes_mainorchestrationtests"
     },
@@ -15382,7 +15343,7 @@
       "source_location": "L396",
       "_callable": true,
       "_origin": "ast",
-      "community": 88,
+      "community": 87,
       "norm_label": ".setup()",
       "id": "mail_provision_test_provision_mailboxes_mainorchestrationtests_setup"
     },
@@ -15393,7 +15354,7 @@
       "source_location": "L401",
       "_callable": true,
       "_origin": "ast",
-      "community": 88,
+      "community": 87,
       "norm_label": ".test_calls_each_stage_in_order_and_returns_zero()",
       "id": "mail_provision_test_provision_mailboxes_mainorchestrationtests_test_calls_each_stage_in_order_and_returns_zero"
     },
@@ -15404,7 +15365,7 @@
       "source_location": "L435",
       "_callable": true,
       "_origin": "ast",
-      "community": 88,
+      "community": 87,
       "norm_label": ".test_a_failure_reconciling_accounts_propagates_and_skips_sieve_scripts()",
       "id": "mail_provision_test_provision_mailboxes_mainorchestrationtests_test_a_failure_reconciling_accounts_propagates_and_skips_sieve_scripts"
     },
@@ -15414,7 +15375,7 @@
       "source_file": "mail/provision/test_provision_mailboxes.py",
       "source_location": "L179",
       "_origin": "ast",
-      "community": 68,
+      "community": 74,
       "norm_label": "the crux of the credential-loss-on-partial-failure fix: a secret already on...",
       "id": "mail_provision_test_provision_mailboxes_rationale_179"
     },
@@ -15434,7 +15395,7 @@
       "source_file": "mail/provision/test_provision_mailboxes.py",
       "source_location": "L392",
       "_origin": "ast",
-      "community": 88,
+      "community": 87,
       "norm_label": "main()'s call order and error propagation, against a fully faked module surface...",
       "id": "mail_provision_test_provision_mailboxes_rationale_392"
     },
@@ -15442,7 +15403,7 @@
       "label": "Stalwart Mail Server",
       "file_type": "concept",
       "source_file": "mail/RUNBOOK-mx1-provision.md",
-      "community": 167,
+      "community": 170,
       "norm_label": "stalwart mail server",
       "_origin": "semantic",
       "id": "stalwart_mail_server"
@@ -15451,7 +15412,7 @@
       "label": "Mailgun Shim",
       "file_type": "concept",
       "source_file": "mail/RUNBOOK-mx1-provision.md",
-      "community": 154,
+      "community": 157,
       "norm_label": "mailgun shim",
       "_origin": "semantic",
       "id": "mailgun_shim"
@@ -16664,7 +16625,7 @@
       "label": "Edge Environment Secrets",
       "file_type": "code",
       "source_file": "/etc/branchleft/edge.env",
-      "community": 131,
+      "community": 132,
       "norm_label": "edge environment secrets",
       "_origin": "semantic",
       "id": "etc_branchleft_edge_env"
@@ -16733,7 +16694,7 @@
         "kind": "file"
       },
       "_origin": "ast",
-      "community": 111,
+      "community": 112,
       "norm_label": "hetzner/provision/nat-gateway.sh",
       "id": "hetzner_provision_nat_gateway"
     },
@@ -16747,7 +16708,7 @@
         "kind": "bash_entrypoint"
       },
       "_origin": "ast",
-      "community": 111,
+      "community": 112,
       "norm_label": "nat-gateway.sh script",
       "id": "hetzner_provision_nat_gateway_sh__entry"
     },
@@ -16761,7 +16722,7 @@
         "kind": "file"
       },
       "_origin": "ast",
-      "community": 112,
+      "community": 113,
       "norm_label": "hetzner/provision/run-all.sh",
       "id": "hetzner_provision_run_all"
     },
@@ -16775,7 +16736,7 @@
         "kind": "bash_entrypoint"
       },
       "_origin": "ast",
-      "community": 112,
+      "community": 113,
       "norm_label": "run-all.sh script",
       "id": "hetzner_provision_run_all_sh__entry"
     },
@@ -18711,7 +18672,7 @@
       "label": "Hetzner Foundations Documentation",
       "file_type": "document",
       "source_file": "hetzner/README.md",
-      "community": 109,
+      "community": 110,
       "norm_label": "hetzner foundations documentation",
       "_origin": "semantic",
       "id": "hetzner_readme_md"
@@ -18720,7 +18681,7 @@
       "label": "Runbook: Estate Project Move",
       "file_type": "document",
       "source_file": "hetzner/RUNBOOK-estate-project-move.md",
-      "community": 145,
+      "community": 148,
       "norm_label": "runbook: estate project move",
       "_origin": "semantic",
       "id": "hetzner_runbook_estate_project_move_md"
@@ -18729,7 +18690,7 @@
       "label": "Address Plan",
       "file_type": "code",
       "source_file": "../hetzner-host/addressPlan.ts",
-      "community": 109,
+      "community": 110,
       "norm_label": "address plan",
       "_origin": "semantic",
       "id": "hetzner_host_addressplan_ts"
@@ -19293,7 +19254,7 @@
       "label": "README.md",
       "file_type": "document",
       "source_file": "README.md",
-      "community": 162,
+      "community": 165,
       "norm_label": "readme.md",
       "_origin": "semantic",
       "id": "readme_md"
@@ -19311,7 +19272,7 @@
       "label": "Mail Host Import Runbook",
       "file_type": "document",
       "source_file": "mail/RUNBOOK-import-mail-host.md",
-      "community": 151,
+      "community": 154,
       "norm_label": "mail host import runbook",
       "_origin": "semantic",
       "id": "mail_runbook_import_mail_host_md"
@@ -19320,7 +19281,7 @@
       "label": "GCP KMS Key (pulumi-secrets)",
       "file_type": "concept",
       "source_file": "README.md",
-      "community": 134,
+      "community": 135,
       "norm_label": "gcp kms key (pulumi-secrets)",
       "_origin": "semantic",
       "id": "gcp_kms_key"
@@ -19329,7 +19290,7 @@
       "label": "Shared Infra Stack",
       "file_type": "concept",
       "source_file": "README.md",
-      "community": 127,
+      "community": 128,
       "norm_label": "shared infra stack",
       "_origin": "semantic",
       "id": "branchleft_shared_infra"
@@ -19338,7 +19299,7 @@
       "label": "Mail Stack",
       "file_type": "concept",
       "source_file": "mail/Pulumi.yaml",
-      "community": 126,
+      "community": 127,
       "norm_label": "mail stack",
       "_origin": "semantic",
       "id": "branchleft_mail"
@@ -19356,7 +19317,7 @@
       "label": "Mail Stack Configuration",
       "file_type": "code",
       "source_file": "mail/Pulumi.production.yaml",
-      "community": 150,
+      "community": 153,
       "norm_label": "mail stack configuration",
       "_origin": "semantic",
       "id": "mail_pulumi_production"
@@ -19389,7 +19350,7 @@
     {
       "label": "Pulumi",
       "file_type": "concept",
-      "community": 157,
+      "community": 160,
       "norm_label": "pulumi",
       "_origin": "semantic",
       "id": "pulumi"
@@ -19397,7 +19358,7 @@
     {
       "label": "GCP KMS",
       "file_type": "concept",
-      "community": 133,
+      "community": 134,
       "norm_label": "gcp kms",
       "_origin": "semantic",
       "id": "gcp_kms"
@@ -19406,7 +19367,7 @@
       "label": "CLAUDE.md",
       "file_type": "document",
       "source_file": "CLAUDE.md",
-      "community": 128,
+      "community": 129,
       "norm_label": "claude.md",
       "_origin": "semantic",
       "id": "claudemd"
@@ -19415,7 +19376,7 @@
       "label": "Hetzner Network Config",
       "file_type": "code",
       "source_file": "hetzner/Pulumi.production.yaml",
-      "community": 108,
+      "community": 109,
       "norm_label": "hetzner network config",
       "_origin": "semantic",
       "id": "hetzner_pulumi_production"
@@ -19424,7 +19385,7 @@
       "label": "Existing Stack Migration Runbook",
       "file_type": "document",
       "source_file": "hetzner/RUNBOOK-existing-stack-migration.md",
-      "community": 113,
+      "community": 114,
       "norm_label": "existing stack migration runbook",
       "_origin": "semantic",
       "id": "hetzner_runbook_existing_stack_migration"
@@ -19433,7 +19394,7 @@
       "label": "New Stack Runbook",
       "file_type": "document",
       "source_file": "hetzner/RUNBOOK-new-stack.md",
-      "community": 113,
+      "community": 114,
       "norm_label": "new stack runbook",
       "_origin": "semantic",
       "id": "hetzner_runbook_new_stack"
@@ -19442,7 +19403,7 @@
       "label": "Host Provisioning Runbook",
       "file_type": "document",
       "source_file": "hetzner/RUNBOOK-provision-host.md",
-      "community": 146,
+      "community": 149,
       "norm_label": "host provisioning runbook",
       "_origin": "semantic",
       "id": "hetzner_runbook_provision_host"
@@ -19451,7 +19412,7 @@
       "label": "Hetzner Estate Config",
       "file_type": "code",
       "source_file": "hetzner/estate/Pulumi.production.yaml",
-      "community": 108,
+      "community": 109,
       "norm_label": "hetzner estate config",
       "_origin": "semantic",
       "id": "hetzner_estate_pulumi_production"
@@ -19785,7 +19746,7 @@
       "source_file": "hetzner-host/package.json",
       "source_location": "L25",
       "_origin": "ast",
-      "community": 65,
+      "community": 69,
       "norm_label": "dependencies",
       "id": "hetzner_host_package_dependencies"
     },
@@ -19795,7 +19756,7 @@
       "source_file": "hetzner-host/package.json",
       "source_location": "L26",
       "_origin": "ast",
-      "community": 65,
+      "community": 69,
       "norm_label": "@pulumi/pulumi",
       "id": "hetzner_host_package_dependencies_pulumi_pulumi"
     },
@@ -19805,7 +19766,7 @@
       "source_file": "hetzner-host/package.json",
       "source_location": "L28",
       "_origin": "ast",
-      "community": 92,
+      "community": 82,
       "norm_label": "peerdependencies",
       "id": "hetzner_host_package_peerdependencies"
     },
@@ -19815,7 +19776,7 @@
       "source_file": "hetzner-host/package.json",
       "source_location": "L29",
       "_origin": "ast",
-      "community": 92,
+      "community": 82,
       "norm_label": "@pulumi/hcloud",
       "id": "hetzner_host_package_peerdependencies_pulumi_hcloud"
     },
@@ -19855,7 +19816,7 @@
       "source_file": "hetzner-host/package.json",
       "source_location": "L34",
       "_origin": "ast",
-      "community": 92,
+      "community": 82,
       "norm_label": "@pulumi/hcloud",
       "id": "hetzner_host_package_devdependencies_pulumi_hcloud"
     },
@@ -19905,9 +19866,9 @@
       "source_file": "hetzner/edge/render.test.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "hetzner_edge_render_test",
       "community": 42,
-      "norm_label": "edge/render.test.ts"
+      "norm_label": "edge/render.test.ts",
+      "id": "hetzner_edge_render_test"
     },
     {
       "label": "DETECT_ONLY",
@@ -19915,9 +19876,9 @@
       "source_file": "hetzner/edge/render.test.ts",
       "source_location": "L26",
       "_origin": "ast",
-      "id": "hetzner_edge_render_test_detect_only",
       "community": 42,
-      "norm_label": "detect_only"
+      "norm_label": "detect_only",
+      "id": "hetzner_edge_render_test_detect_only"
     },
     {
       "label": "ENFORCING",
@@ -19925,9 +19886,9 @@
       "source_file": "hetzner/edge/render.test.ts",
       "source_location": "L27",
       "_origin": "ast",
-      "id": "hetzner_edge_render_test_enforcing",
       "community": 42,
-      "norm_label": "enforcing"
+      "norm_label": "enforcing",
+      "id": "hetzner_edge_render_test_enforcing"
     },
     {
       "label": "site()",
@@ -19936,9 +19897,9 @@
       "source_location": "L29",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_test_site",
       "community": 42,
-      "norm_label": "site()"
+      "norm_label": "site()",
+      "id": "hetzner_edge_render_test_site"
     },
     {
       "label": "render()",
@@ -19947,9 +19908,9 @@
       "source_location": "L37",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_test_render",
       "community": 25,
-      "norm_label": "render()"
+      "norm_label": "render()",
+      "id": "hetzner_edge_render_test_render"
     },
     {
       "label": "repositoryFile()",
@@ -19958,9 +19919,9 @@
       "source_location": "L303",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_test_repositoryfile",
       "community": 42,
-      "norm_label": "repositoryfile()"
+      "norm_label": "repositoryfile()",
+      "id": "hetzner_edge_render_test_repositoryfile"
     },
     {
       "label": "numericConstant()",
@@ -19969,9 +19930,9 @@
       "source_location": "L305",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_test_numericconstant",
       "community": 42,
-      "norm_label": "numericconstant()"
+      "norm_label": "numericconstant()",
+      "id": "hetzner_edge_render_test_numericconstant"
     },
     {
       "label": "edge/render.ts",
@@ -19979,9 +19940,9 @@
       "source_file": "hetzner/edge/render.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "hetzner_edge_render",
       "community": 25,
-      "norm_label": "edge/render.ts"
+      "norm_label": "edge/render.ts",
+      "id": "hetzner_edge_render"
     },
     {
       "label": "GENERATED_BANNER",
@@ -19989,9 +19950,9 @@
       "source_file": "hetzner/edge/render.ts",
       "source_location": "L27",
       "_origin": "ast",
-      "id": "hetzner_edge_render_generated_banner",
       "community": 25,
-      "norm_label": "generated_banner"
+      "norm_label": "generated_banner",
+      "id": "hetzner_edge_render_generated_banner"
     },
     {
       "label": "AUTHORING_API_PATHS",
@@ -19999,9 +19960,9 @@
       "source_file": "hetzner/edge/render.ts",
       "source_location": "L44",
       "_origin": "ast",
-      "id": "hetzner_edge_render_authoring_api_paths",
       "community": 25,
-      "norm_label": "authoring_api_paths"
+      "norm_label": "authoring_api_paths",
+      "id": "hetzner_edge_render_authoring_api_paths"
     },
     {
       "label": "PRIVATE_ADDRESSES",
@@ -20009,9 +19970,9 @@
       "source_file": "hetzner/edge/render.ts",
       "source_location": "L121",
       "_origin": "ast",
-      "id": "hetzner_edge_render_private_addresses",
       "community": 25,
-      "norm_label": "private_addresses"
+      "norm_label": "private_addresses",
+      "id": "hetzner_edge_render_private_addresses"
     },
     {
       "label": "NOT_AN_UPSTREAM",
@@ -20019,9 +19980,9 @@
       "source_file": "hetzner/edge/render.ts",
       "source_location": "L133",
       "_origin": "ast",
-      "id": "hetzner_edge_render_not_an_upstream",
       "community": 25,
-      "norm_label": "not_an_upstream"
+      "norm_label": "not_an_upstream",
+      "id": "hetzner_edge_render_not_an_upstream"
     },
     {
       "label": "resolvePrivateAddress()",
@@ -20030,9 +19991,9 @@
       "source_location": "L135",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_resolveprivateaddress",
       "community": 25,
-      "norm_label": "resolveprivateaddress()"
+      "norm_label": "resolveprivateaddress()",
+      "id": "hetzner_edge_render_resolveprivateaddress"
     },
     {
       "label": "assertHostname()",
@@ -20041,9 +20002,9 @@
       "source_location": "L149",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_asserthostname",
       "community": 25,
-      "norm_label": "asserthostname()"
+      "norm_label": "asserthostname()",
+      "id": "hetzner_edge_render_asserthostname"
     },
     {
       "label": "servableSites()",
@@ -20052,9 +20013,9 @@
       "source_location": "L157",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_servablesites",
       "community": 25,
-      "norm_label": "servablesites()"
+      "norm_label": "servablesites()",
+      "id": "hetzner_edge_render_servablesites"
     },
     {
       "label": "Block",
@@ -20064,9 +20025,9 @@
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_block",
       "community": 25,
-      "norm_label": "block"
+      "norm_label": "block",
+      "id": "hetzner_edge_render_block"
     },
     {
       "label": "logDirective()",
@@ -20075,9 +20036,9 @@
       "source_location": "L166",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_logdirective",
       "community": 25,
-      "norm_label": "logdirective()"
+      "norm_label": "logdirective()",
+      "id": "hetzner_edge_render_logdirective"
     },
     {
       "label": "tlsDirective()",
@@ -20086,9 +20047,9 @@
       "source_location": "L170",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_tlsdirective",
       "community": 25,
-      "norm_label": "tlsdirective()"
+      "norm_label": "tlsdirective()",
+      "id": "hetzner_edge_render_tlsdirective"
     },
     {
       "label": "rateLimitDirective()",
@@ -20097,9 +20058,9 @@
       "source_location": "L174",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_ratelimitdirective",
       "community": 25,
-      "norm_label": "ratelimitdirective()"
+      "norm_label": "ratelimitdirective()",
+      "id": "hetzner_edge_render_ratelimitdirective"
     },
     {
       "label": "protectionChain()",
@@ -20108,9 +20069,9 @@
       "source_location": "L200",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_protectionchain",
       "community": 25,
-      "norm_label": "protectionchain()"
+      "norm_label": "protectionchain()",
+      "id": "hetzner_edge_render_protectionchain"
     },
     {
       "label": "siteBlock()",
@@ -20119,9 +20080,9 @@
       "source_location": "L220",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_siteblock",
       "community": 25,
-      "norm_label": "siteblock()"
+      "norm_label": "siteblock()",
+      "id": "hetzner_edge_render_siteblock"
     },
     {
       "label": "redirectBlock()",
@@ -20130,9 +20091,9 @@
       "source_location": "L242",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_redirectblock",
       "community": 25,
-      "norm_label": "redirectblock()"
+      "norm_label": "redirectblock()",
+      "id": "hetzner_edge_render_redirectblock"
     },
     {
       "label": "probeBlock()",
@@ -20141,9 +20102,9 @@
       "source_location": "L265",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_probeblock",
       "community": 25,
-      "norm_label": "probeblock()"
+      "norm_label": "probeblock()",
+      "id": "hetzner_edge_render_probeblock"
     },
     {
       "label": "metricsBlock()",
@@ -20152,9 +20113,9 @@
       "source_location": "L285",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_metricsblock",
       "community": 25,
-      "norm_label": "metricsblock()"
+      "norm_label": "metricsblock()",
+      "id": "hetzner_edge_render_metricsblock"
     },
     {
       "label": "globalOptions()",
@@ -20163,9 +20124,9 @@
       "source_location": "L292",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_globaloptions",
       "community": 25,
-      "norm_label": "globaloptions()"
+      "norm_label": "globaloptions()",
+      "id": "hetzner_edge_render_globaloptions"
     },
     {
       "label": "renderBlock()",
@@ -20174,9 +20135,9 @@
       "source_location": "L330",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_renderblock",
       "community": 25,
-      "norm_label": "renderblock()"
+      "norm_label": "renderblock()",
+      "id": "hetzner_edge_render_renderblock"
     },
     {
       "label": "renderCaddyfile()",
@@ -20185,9 +20146,9 @@
       "source_location": "L334",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_rendercaddyfile",
       "community": 25,
-      "norm_label": "rendercaddyfile()"
+      "norm_label": "rendercaddyfile()",
+      "id": "hetzner_edge_render_rendercaddyfile"
     },
     {
       "label": "renderAppsecAcquisition()",
@@ -20196,9 +20157,9 @@
       "source_location": "L384",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_renderappsecacquisition",
       "community": 42,
-      "norm_label": "renderappsecacquisition()"
+      "norm_label": "renderappsecacquisition()",
+      "id": "hetzner_edge_render_renderappsecacquisition"
     },
     {
       "label": "renderCaddyLogAcquisition()",
@@ -20207,9 +20168,201 @@
       "source_location": "L405",
       "_callable": true,
       "_origin": "ast",
-      "id": "hetzner_edge_render_rendercaddylogacquisition",
       "community": 42,
-      "norm_label": "rendercaddylogacquisition()"
+      "norm_label": "rendercaddylogacquisition()",
+      "id": "hetzner_edge_render_rendercaddylogacquisition"
+    },
+    {
+      "label": "render_alertmanager_config.py",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
+      "source_location": "L1",
+      "_origin": "ast",
+      "community": 49,
+      "norm_label": "render_alertmanager_config.py",
+      "id": "hetzner_monitoring_stack_render_alertmanager_config"
+    },
+    {
+      "label": "render()",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
+      "source_location": "L40",
+      "_callable": true,
+      "_origin": "ast",
+      "community": 49,
+      "norm_label": "render()",
+      "id": "hetzner_monitoring_stack_render_alertmanager_config_render"
+    },
+    {
+      "label": "main()",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
+      "source_location": "L55",
+      "_callable": true,
+      "_origin": "ast",
+      "community": 49,
+      "norm_label": "main()",
+      "id": "hetzner_monitoring_stack_render_alertmanager_config_main"
+    },
+    {
+      "label": "Pure substitution -- no I/O, so this is what the unit tests exercise.",
+      "file_type": "rationale",
+      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
+      "source_location": "L41",
+      "_origin": "ast",
+      "community": 49,
+      "norm_label": "pure substitution -- no i/o, so this is what the unit tests exercise.",
+      "id": "hetzner_monitoring_stack_render_alertmanager_config_rationale_41"
+    },
+    {
+      "label": "test_render_alertmanager_config.py",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L1",
+      "_origin": "ast",
+      "community": 49,
+      "norm_label": "test_render_alertmanager_config.py",
+      "id": "hetzner_monitoring_test_render_alertmanager_config"
+    },
+    {
+      "label": "RenderTests",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L38",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast",
+      "community": 49,
+      "norm_label": "rendertests",
+      "id": "hetzner_monitoring_test_render_alertmanager_config_rendertests"
+    },
+    {
+      "label": ".test_substitutes_every_placeholder()",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L39",
+      "_callable": true,
+      "_origin": "ast",
+      "community": 49,
+      "norm_label": ".test_substitutes_every_placeholder()",
+      "id": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_substitutes_every_placeholder"
+    },
+    {
+      "label": ".test_refuses_each_missing_variable_in_turn()",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L48",
+      "_callable": true,
+      "_origin": "ast",
+      "community": 49,
+      "norm_label": ".test_refuses_each_missing_variable_in_turn()",
+      "id": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_refuses_each_missing_variable_in_turn"
+    },
+    {
+      "label": ".test_refuses_a_blank_value_the_same_as_an_absent_one()",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L55",
+      "_callable": true,
+      "_origin": "ast",
+      "community": 49,
+      "norm_label": ".test_refuses_a_blank_value_the_same_as_an_absent_one()",
+      "id": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_refuses_a_blank_value_the_same_as_an_absent_one"
+    },
+    {
+      "label": ".test_a_value_containing_regex_and_shell_metacharacters_survives_literally()",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L61",
+      "_callable": true,
+      "_origin": "ast",
+      "community": 49,
+      "norm_label": ".test_a_value_containing_regex_and_shell_metacharacters_survives_literally()",
+      "id": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_a_value_containing_regex_and_shell_metacharacters_survives_literally"
+    },
+    {
+      "label": ".test_does_not_touch_text_outside_the_known_placeholders()",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L75",
+      "_callable": true,
+      "_origin": "ast",
+      "community": 49,
+      "norm_label": ".test_does_not_touch_text_outside_the_known_placeholders()",
+      "id": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_does_not_touch_text_outside_the_known_placeholders"
+    },
+    {
+      "label": "hetzner/vitest.config.ts",
+      "file_type": "code",
+      "source_file": "hetzner/vitest.config.ts",
+      "source_location": "L1",
+      "_origin": "ast",
+      "community": 150,
+      "norm_label": "hetzner/vitest.config.ts",
+      "id": "hetzner_vitest_config"
+    },
+    {
+      "label": "Monitoring Runbook",
+      "file_type": "document",
+      "source_file": "hetzner/RUNBOOK-monitoring.md",
+      "community": 91,
+      "norm_label": "monitoring runbook",
+      "_origin": "semantic",
+      "id": "hetzner_runbook_monitoring"
+    },
+    {
+      "label": "Edge Compose Stack",
+      "file_type": "code",
+      "source_file": "hetzner/edge/stack/compose.yml",
+      "community": 91,
+      "norm_label": "edge compose stack",
+      "_origin": "semantic",
+      "id": "hetzner_edge_stack_compose"
+    },
+    {
+      "label": "Monitoring Compose Stack",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/stack/compose.yml",
+      "community": 91,
+      "norm_label": "monitoring compose stack",
+      "_origin": "semantic",
+      "id": "hetzner_monitoring_stack_compose"
+    },
+    {
+      "label": "Prometheus Alerts",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/stack/prometheus/alerts.yml",
+      "community": 91,
+      "norm_label": "prometheus alerts",
+      "_origin": "semantic",
+      "id": "hetzner_monitoring_stack_prometheus_alerts"
+    },
+    {
+      "label": "Blackbox Exporter Config",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/stack/blackbox/blackbox.yml",
+      "community": 145,
+      "norm_label": "blackbox exporter config",
+      "_origin": "semantic",
+      "id": "hetzner_monitoring_stack_blackbox_blackbox"
+    },
+    {
+      "label": "Grafana Datasource",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/stack/grafana/provisioning/datasources/prometheus.yaml",
+      "community": 146,
+      "norm_label": "grafana datasource",
+      "_origin": "semantic",
+      "id": "hetzner_monitoring_stack_grafana_provisioning_datasources_prometheus"
+    },
+    {
+      "label": "Hetzner Host Package",
+      "file_type": "document",
+      "source_file": "hetzner-host/README.md",
+      "community": 143,
+      "norm_label": "hetzner host package",
+      "_origin": "semantic",
+      "id": "hetzner_host_readme"
     },
     {
       "label": "monitoring/render.test.ts",
@@ -20218,7 +20371,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "hetzner_monitoring_render_test",
-      "community": 23,
+      "community": 21,
       "norm_label": "monitoring/render.test.ts"
     },
     {
@@ -20229,7 +20382,7 @@
       "_callable": true,
       "_origin": "ast",
       "id": "hetzner_monitoring_render_test_site",
-      "community": 23,
+      "community": 21,
       "norm_label": "site()"
     },
     {
@@ -20239,7 +20392,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "hetzner_monitoring_render",
-      "community": 23,
+      "community": 21,
       "norm_label": "monitoring/render.ts"
     },
     {
@@ -20249,7 +20402,7 @@
       "source_location": "L28",
       "_origin": "ast",
       "id": "hetzner_monitoring_render_generated_banner",
-      "community": 23,
+      "community": 21,
       "norm_label": "generated_banner"
     },
     {
@@ -20261,7 +20414,7 @@
       "_callable_class": true,
       "_origin": "ast",
       "id": "hetzner_monitoring_render_monitoredhost",
-      "community": 23,
+      "community": 21,
       "norm_label": "monitoredhost"
     },
     {
@@ -20271,7 +20424,7 @@
       "source_location": "L54",
       "_origin": "ast",
       "id": "hetzner_monitoring_render_monitored_node_hosts",
-      "community": 23,
+      "community": 21,
       "norm_label": "monitored_node_hosts"
     },
     {
@@ -20281,7 +20434,7 @@
       "source_location": "L62",
       "_origin": "ast",
       "id": "hetzner_monitoring_render_monitored_mysqld_host",
-      "community": 23,
+      "community": 21,
       "norm_label": "monitored_mysqld_host"
     },
     {
@@ -20291,7 +20444,7 @@
       "source_location": "L68",
       "_origin": "ast",
       "id": "hetzner_monitoring_render_node_exporter_port",
-      "community": 23,
+      "community": 21,
       "norm_label": "node_exporter_port"
     },
     {
@@ -20301,7 +20454,7 @@
       "source_location": "L69",
       "_origin": "ast",
       "id": "hetzner_monitoring_render_mysqld_exporter_port",
-      "community": 23,
+      "community": 21,
       "norm_label": "mysqld_exporter_port"
     },
     {
@@ -20311,7 +20464,7 @@
       "source_location": "L70",
       "_origin": "ast",
       "id": "hetzner_monitoring_render_cadvisor_port",
-      "community": 23,
+      "community": 21,
       "norm_label": "cadvisor_port"
     },
     {
@@ -20321,7 +20474,7 @@
       "source_location": "L71",
       "_origin": "ast",
       "id": "hetzner_monitoring_render_blackbox_exporter_port",
-      "community": 23,
+      "community": 21,
       "norm_label": "blackbox_exporter_port"
     },
     {
@@ -20331,7 +20484,7 @@
       "source_location": "L72",
       "_origin": "ast",
       "id": "hetzner_monitoring_render_alertmanager_port",
-      "community": 23,
+      "community": 21,
       "norm_label": "alertmanager_port"
     },
     {
@@ -20341,7 +20494,7 @@
       "source_location": "L73",
       "_origin": "ast",
       "id": "hetzner_monitoring_render_prometheus_port",
-      "community": 23,
+      "community": 21,
       "norm_label": "prometheus_port"
     },
     {
@@ -20351,7 +20504,7 @@
       "source_location": "L84",
       "_origin": "ast",
       "id": "hetzner_monitoring_render_caddy_metrics_port",
-      "community": 23,
+      "community": 21,
       "norm_label": "caddy_metrics_port"
     },
     {
@@ -20361,285 +20514,156 @@
       "source_location": "L85",
       "_origin": "ast",
       "id": "hetzner_monitoring_render_crowdsec_metrics_port",
-      "community": 23,
+      "community": 21,
       "norm_label": "crowdsec_metrics_port"
+    },
+    {
+      "label": "WEBSITE_METRICS_PORT",
+      "file_type": "code",
+      "source_file": "hetzner/monitoring/render.ts",
+      "source_location": "L94",
+      "_origin": "ast",
+      "id": "hetzner_monitoring_render_website_metrics_port",
+      "community": 21,
+      "norm_label": "website_metrics_port"
     },
     {
       "label": "BLACKBOX_MODULE",
       "file_type": "code",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L87",
+      "source_location": "L96",
       "_origin": "ast",
       "id": "hetzner_monitoring_render_blackbox_module",
-      "community": 23,
+      "community": 21,
       "norm_label": "blackbox_module"
     },
     {
       "label": "targetLabels()",
       "file_type": "code",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L89",
+      "source_location": "L98",
       "_callable": true,
       "_origin": "ast",
       "id": "hetzner_monitoring_render_targetlabels",
-      "community": 23,
+      "community": 21,
       "norm_label": "targetlabels()"
     },
     {
       "label": "nodeTarget()",
       "file_type": "code",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L99",
+      "source_location": "L108",
       "_callable": true,
       "_origin": "ast",
       "id": "hetzner_monitoring_render_nodetarget",
-      "community": 23,
+      "community": 21,
       "norm_label": "nodetarget()"
     },
     {
       "label": "blackboxTargets()",
       "file_type": "code",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L108",
+      "source_location": "L119",
       "_callable": true,
       "_origin": "ast",
       "id": "hetzner_monitoring_render_blackboxtargets",
-      "community": 23,
+      "community": 21,
       "norm_label": "blackboxtargets()"
     },
     {
       "label": "renderPrometheusConfig()",
       "file_type": "code",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L112",
+      "source_location": "L123",
       "_callable": true,
       "_origin": "ast",
       "id": "hetzner_monitoring_render_renderprometheusconfig",
-      "community": 23,
+      "community": 21,
       "norm_label": "renderprometheusconfig()"
     },
     {
       "label": "renderAlertRules()",
       "file_type": "code",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L177",
+      "source_location": "L192",
       "_callable": true,
       "_origin": "ast",
       "id": "hetzner_monitoring_render_renderalertrules",
-      "community": 23,
+      "community": 21,
       "norm_label": "renderalertrules()"
     },
     {
       "label": "renderAlertmanagerTemplate()",
       "file_type": "code",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L263",
+      "source_location": "L278",
       "_callable": true,
       "_origin": "ast",
       "id": "hetzner_monitoring_render_renderalertmanagertemplate",
-      "community": 23,
+      "community": 21,
       "norm_label": "renderalertmanagertemplate()"
     },
     {
-      "label": "render_alertmanager_config.py",
+      "label": "sites.ts",
       "file_type": "code",
-      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
+      "source_file": "sites.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "hetzner_monitoring_stack_render_alertmanager_config",
-      "community": 49,
-      "norm_label": "render_alertmanager_config.py"
+      "id": "sites",
+      "community": 41,
+      "norm_label": "sites.ts"
     },
     {
-      "label": "render()",
+      "label": "sites",
       "file_type": "code",
-      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
-      "source_location": "L40",
-      "_callable": true,
+      "source_file": "sites.ts",
+      "source_location": "L70",
       "_origin": "ast",
-      "id": "hetzner_monitoring_stack_render_alertmanager_config_render",
-      "community": 49,
-      "norm_label": "render()"
+      "id": "sites_sites",
+      "community": 21,
+      "norm_label": "sites"
     },
     {
-      "label": "main()",
+      "label": "hostRedirects",
       "file_type": "code",
-      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
-      "source_location": "L55",
-      "_callable": true,
+      "source_file": "sites.ts",
+      "source_location": "L97",
       "_origin": "ast",
-      "id": "hetzner_monitoring_stack_render_alertmanager_config_main",
-      "community": 49,
-      "norm_label": "main()"
-    },
-    {
-      "label": "Pure substitution -- no I/O, so this is what the unit tests exercise.",
-      "file_type": "rationale",
-      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
-      "source_location": "L41",
-      "_origin": "ast",
-      "id": "hetzner_monitoring_stack_render_alertmanager_config_rationale_41",
-      "community": 49,
-      "norm_label": "pure substitution -- no i/o, so this is what the unit tests exercise."
-    },
-    {
-      "label": "test_render_alertmanager_config.py",
-      "file_type": "code",
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L1",
-      "_origin": "ast",
-      "id": "hetzner_monitoring_test_render_alertmanager_config",
-      "community": 49,
-      "norm_label": "test_render_alertmanager_config.py"
-    },
-    {
-      "label": "RenderTests",
-      "file_type": "code",
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L38",
-      "_callable": true,
-      "_callable_class": true,
-      "_origin": "ast",
-      "id": "hetzner_monitoring_test_render_alertmanager_config_rendertests",
-      "community": 49,
-      "norm_label": "rendertests"
-    },
-    {
-      "label": ".test_substitutes_every_placeholder()",
-      "file_type": "code",
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L39",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_substitutes_every_placeholder",
-      "community": 49,
-      "norm_label": ".test_substitutes_every_placeholder()"
-    },
-    {
-      "label": ".test_refuses_each_missing_variable_in_turn()",
-      "file_type": "code",
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L48",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_refuses_each_missing_variable_in_turn",
-      "community": 49,
-      "norm_label": ".test_refuses_each_missing_variable_in_turn()"
-    },
-    {
-      "label": ".test_refuses_a_blank_value_the_same_as_an_absent_one()",
-      "file_type": "code",
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L55",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_refuses_a_blank_value_the_same_as_an_absent_one",
-      "community": 49,
-      "norm_label": ".test_refuses_a_blank_value_the_same_as_an_absent_one()"
-    },
-    {
-      "label": ".test_a_value_containing_regex_and_shell_metacharacters_survives_literally()",
-      "file_type": "code",
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L61",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_a_value_containing_regex_and_shell_metacharacters_survives_literally",
-      "community": 49,
-      "norm_label": ".test_a_value_containing_regex_and_shell_metacharacters_survives_literally()"
-    },
-    {
-      "label": ".test_does_not_touch_text_outside_the_known_placeholders()",
-      "file_type": "code",
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L75",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_does_not_touch_text_outside_the_known_placeholders",
-      "community": 49,
-      "norm_label": ".test_does_not_touch_text_outside_the_known_placeholders()"
-    },
-    {
-      "label": "hetzner/vitest.config.ts",
-      "file_type": "code",
-      "source_file": "hetzner/vitest.config.ts",
-      "source_location": "L1",
-      "_origin": "ast",
-      "id": "hetzner_vitest_config",
-      "community": 147,
-      "norm_label": "hetzner/vitest.config.ts"
+      "id": "sites_hostredirects",
+      "community": 20,
+      "norm_label": "hostredirects"
     },
     {
       "label": "CI Workflow",
       "file_type": "code",
       "source_file": ".github/workflows/ci.yml",
       "id": "github_workflows_ci",
-      "community": 135,
+      "community": 108,
       "norm_label": "ci workflow"
     },
     {
-      "label": "Monitoring Runbook",
-      "file_type": "document",
-      "source_file": "hetzner/RUNBOOK-monitoring.md",
-      "id": "hetzner_runbook_monitoring",
-      "community": 70,
-      "norm_label": "monitoring runbook"
-    },
-    {
-      "label": "Edge Compose Stack",
+      "label": "Graphify Workflow",
       "file_type": "code",
-      "source_file": "hetzner/edge/stack/compose.yml",
-      "id": "hetzner_edge_stack_compose",
-      "community": 70,
-      "norm_label": "edge compose stack"
+      "source_file": ".github/workflows/graphify.yml",
+      "id": "github_workflows_graphify",
+      "community": 136,
+      "norm_label": "graphify workflow"
     },
     {
-      "label": "Monitoring Compose Stack",
+      "label": "Mail Provision Tests",
       "file_type": "code",
-      "source_file": "hetzner/monitoring/stack/compose.yml",
-      "id": "hetzner_monitoring_stack_compose",
-      "community": 70,
-      "norm_label": "monitoring compose stack"
+      "source_file": "mail/provision/test_*.py",
+      "id": "mail_provision_test",
+      "community": 108,
+      "norm_label": "mail provision tests"
     },
     {
-      "label": "Prometheus Config",
+      "label": "Prometheus Configuration",
       "file_type": "code",
       "source_file": "hetzner/monitoring/stack/prometheus/prometheus.yml",
-      "id": "hetzner_monitoring_stack_prometheus_prometheus",
-      "community": 70,
-      "norm_label": "prometheus config"
-    },
-    {
-      "label": "Prometheus Alerts",
-      "file_type": "code",
-      "source_file": "hetzner/monitoring/stack/prometheus/alerts.yml",
-      "id": "hetzner_monitoring_stack_prometheus_alerts",
-      "community": 70,
-      "norm_label": "prometheus alerts"
-    },
-    {
-      "label": "Blackbox Exporter Config",
-      "file_type": "code",
-      "source_file": "hetzner/monitoring/stack/blackbox/blackbox.yml",
-      "id": "hetzner_monitoring_stack_blackbox_blackbox",
-      "community": 70,
-      "norm_label": "blackbox exporter config"
-    },
-    {
-      "label": "Grafana Datasource",
-      "file_type": "code",
-      "source_file": "hetzner/monitoring/stack/grafana/provisioning/datasources/prometheus.yaml",
-      "id": "hetzner_monitoring_stack_grafana_provisioning_datasources_prometheus",
-      "community": 70,
-      "norm_label": "grafana datasource"
-    },
-    {
-      "label": "Hetzner Host Package",
-      "file_type": "document",
-      "source_file": "hetzner-host/README.md",
-      "id": "hetzner_host_readme",
-      "community": 143,
-      "norm_label": "hetzner host package"
+      "id": "hetzner_monitoring_stack_prometheus_prometheus_yml",
+      "community": 147,
+      "norm_label": "prometheus configuration"
     }
   ],
   "links": [
@@ -43810,9 +43834,9 @@
       "source_location": "L4",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_posture",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_posture"
     },
     {
       "relation": "imports_from",
@@ -43822,9 +43846,9 @@
       "source_location": "L8",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_posture",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_posture"
     },
     {
       "relation": "imports",
@@ -43834,9 +43858,9 @@
       "source_location": "L4",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_posture_edgeposture",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_posture_edgeposture"
     },
     {
       "relation": "imports",
@@ -43846,9 +43870,9 @@
       "source_location": "L8",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_posture_edgeposture",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_posture_edgeposture"
     },
     {
       "relation": "imports",
@@ -43858,9 +43882,9 @@
       "source_location": "L7",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_posture_posture",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_posture_posture"
     },
     {
       "relation": "imports",
@@ -43870,9 +43894,9 @@
       "source_location": "L4",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_posture_rate_limit_events",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_posture_rate_limit_events"
     },
     {
       "relation": "imports",
@@ -43882,9 +43906,9 @@
       "source_location": "L7",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_posture_rate_limit_events",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_posture_rate_limit_events"
     },
     {
       "relation": "imports",
@@ -43894,9 +43918,9 @@
       "source_location": "L4",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_posture_rate_limit_window_seconds",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_posture_rate_limit_window_seconds"
     },
     {
       "relation": "imports",
@@ -43906,9 +43930,9 @@
       "source_location": "L7",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_posture_rate_limit_window_seconds",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_posture_rate_limit_window_seconds"
     },
     {
       "relation": "imports",
@@ -43918,9 +43942,9 @@
       "source_location": "L4",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_posture_tls_protocols",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_posture_tls_protocols"
     },
     {
       "relation": "imports",
@@ -43930,9 +43954,9 @@
       "source_location": "L7",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_posture_tls_protocols",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_posture_tls_protocols"
     },
     {
       "relation": "contains",
@@ -44697,9 +44721,9 @@
       "source_location": "L3",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "sitetypes",
-      "confidence_score": 1.0
+      "target": "sitetypes"
     },
     {
       "relation": "imports_from",
@@ -44709,9 +44733,9 @@
       "source_location": "L6",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "sitetypes",
-      "confidence_score": 1.0
+      "target": "sitetypes"
     },
     {
       "relation": "imports_from",
@@ -44745,9 +44769,9 @@
       "source_location": "L1",
       "weight": 1.0,
       "_origin": "ast",
-      "confidence_score": 1.0,
       "source": "sites",
-      "target": "sitetypes"
+      "target": "sitetypes",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -44790,9 +44814,9 @@
       "source_location": "L3",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "sitetypes_edgesite",
-      "confidence_score": 1.0
+      "target": "sitetypes_edgesite"
     },
     {
       "relation": "imports",
@@ -44802,9 +44826,9 @@
       "source_location": "L6",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "sitetypes_edgesite",
-      "confidence_score": 1.0
+      "target": "sitetypes_edgesite"
     },
     {
       "relation": "imports",
@@ -44838,9 +44862,9 @@
       "source_location": "L1",
       "weight": 1.0,
       "_origin": "ast",
-      "confidence_score": 1.0,
       "source": "sites",
-      "target": "sitetypes_edgesite"
+      "target": "sitetypes_edgesite",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports",
@@ -44850,9 +44874,9 @@
       "source_location": "L3",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "sitetypes_hostredirect",
-      "confidence_score": 1.0
+      "target": "sitetypes_hostredirect"
     },
     {
       "relation": "imports",
@@ -44862,9 +44886,9 @@
       "source_location": "L6",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "sitetypes_hostredirect",
-      "confidence_score": 1.0
+      "target": "sitetypes_hostredirect"
     },
     {
       "relation": "imports",
@@ -44874,90 +44898,8 @@
       "source_location": "L1",
       "weight": 1.0,
       "_origin": "ast",
-      "confidence_score": 1.0,
       "source": "sites",
-      "target": "sitetypes_hostredirect"
-    },
-    {
-      "relation": "imports_from",
-      "context": "import",
-      "confidence": "EXTRACTED",
-      "source_file": "hetzner/edge/render.test.ts",
-      "source_location": "L5",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_edge_render_test",
-      "target": "sites",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "imports_from",
-      "context": "import",
-      "confidence": "EXTRACTED",
-      "source_file": "hetzner/monitoring/render.test.ts",
-      "source_location": "L3",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_render_test",
-      "target": "sites",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "sites.ts",
-      "source_location": "L94",
-      "weight": 1.0,
-      "_origin": "ast",
-      "confidence_score": 1.0,
-      "source": "sites",
-      "target": "sites_hostredirects"
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "sites.ts",
-      "source_location": "L70",
-      "weight": 1.0,
-      "_origin": "ast",
-      "confidence_score": 1.0,
-      "source": "sites",
-      "target": "sites_sites"
-    },
-    {
-      "relation": "imports",
-      "context": "import",
-      "confidence": "EXTRACTED",
-      "source_file": "hetzner/edge/render.test.ts",
-      "source_location": "L5",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_edge_render_test",
-      "target": "sites_sites",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "imports",
-      "context": "import",
-      "confidence": "EXTRACTED",
-      "source_file": "hetzner/monitoring/render.test.ts",
-      "source_location": "L3",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_render_test",
-      "target": "sites_sites",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "imports",
-      "context": "import",
-      "confidence": "EXTRACTED",
-      "source_file": "hetzner/edge/render.test.ts",
-      "source_location": "L5",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_edge_render_test",
-      "target": "sites_hostredirects",
+      "target": "sitetypes_hostredirect",
       "confidence_score": 1.0
     },
     {
@@ -57777,9 +57719,9 @@
       "source_location": "L9",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_render",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render"
     },
     {
       "relation": "imports",
@@ -57789,9 +57731,9 @@
       "source_location": "L9",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_render_renderappsecacquisition",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_renderappsecacquisition"
     },
     {
       "relation": "imports",
@@ -57801,9 +57743,9 @@
       "source_location": "L9",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_render_rendercaddyfile",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_rendercaddyfile"
     },
     {
       "relation": "imports",
@@ -57813,9 +57755,9 @@
       "source_location": "L9",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_render_rendercaddylogacquisition",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_rendercaddylogacquisition"
     },
     {
       "relation": "imports",
@@ -57825,9 +57767,9 @@
       "source_location": "L9",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_render_resolveprivateaddress",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_resolveprivateaddress"
     },
     {
       "relation": "imports",
@@ -57837,9 +57779,9 @@
       "source_location": "L9",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_render_servablesites",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_servablesites"
     },
     {
       "relation": "contains",
@@ -57848,9 +57790,9 @@
       "source_location": "L26",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_render_test_detect_only",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_test_detect_only"
     },
     {
       "relation": "contains",
@@ -57859,9 +57801,9 @@
       "source_location": "L27",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_render_test_enforcing",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_test_enforcing"
     },
     {
       "relation": "contains",
@@ -57870,9 +57812,9 @@
       "source_location": "L305",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_render_test_numericconstant",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_test_numericconstant"
     },
     {
       "relation": "contains",
@@ -57881,9 +57823,9 @@
       "source_location": "L37",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_render_test_render",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_test_render"
     },
     {
       "relation": "contains",
@@ -57892,9 +57834,9 @@
       "source_location": "L303",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_render_test_repositoryfile",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_test_repositoryfile"
     },
     {
       "relation": "contains",
@@ -57903,9 +57845,45 @@
       "source_location": "L29",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test",
-      "target": "hetzner_edge_render_test_site",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_test_site"
+    },
+    {
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/edge/render.test.ts",
+      "source_location": "L5",
+      "weight": 1.0,
+      "_origin": "ast",
+      "confidence_score": 1.0,
+      "source": "hetzner_edge_render_test",
+      "target": "sites"
+    },
+    {
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/edge/render.test.ts",
+      "source_location": "L5",
+      "weight": 1.0,
+      "_origin": "ast",
+      "confidence_score": 1.0,
+      "source": "hetzner_edge_render_test",
+      "target": "sites_hostredirects"
+    },
+    {
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/edge/render.test.ts",
+      "source_location": "L5",
+      "weight": 1.0,
+      "_origin": "ast",
+      "confidence_score": 1.0,
+      "source": "hetzner_edge_render_test",
+      "target": "sites_sites"
     },
     {
       "relation": "calls",
@@ -57915,9 +57893,9 @@
       "source_location": "L41",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_test_render",
-      "target": "hetzner_edge_render_rendercaddyfile",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_rendercaddyfile"
     },
     {
       "relation": "contains",
@@ -57926,9 +57904,9 @@
       "source_location": "L149",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_asserthostname",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_asserthostname"
     },
     {
       "relation": "contains",
@@ -57937,9 +57915,9 @@
       "source_location": "L44",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_authoring_api_paths",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_authoring_api_paths"
     },
     {
       "relation": "contains",
@@ -57948,9 +57926,9 @@
       "source_location": "L161",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_block",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_block"
     },
     {
       "relation": "contains",
@@ -57959,9 +57937,9 @@
       "source_location": "L27",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_generated_banner",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_generated_banner"
     },
     {
       "relation": "contains",
@@ -57970,9 +57948,9 @@
       "source_location": "L292",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_globaloptions",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_globaloptions"
     },
     {
       "relation": "contains",
@@ -57981,9 +57959,9 @@
       "source_location": "L166",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_logdirective",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_logdirective"
     },
     {
       "relation": "contains",
@@ -57992,9 +57970,9 @@
       "source_location": "L285",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_metricsblock",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_metricsblock"
     },
     {
       "relation": "contains",
@@ -58003,9 +57981,9 @@
       "source_location": "L133",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_not_an_upstream",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_not_an_upstream"
     },
     {
       "relation": "contains",
@@ -58014,9 +57992,9 @@
       "source_location": "L121",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_private_addresses",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_private_addresses"
     },
     {
       "relation": "contains",
@@ -58025,9 +58003,9 @@
       "source_location": "L265",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_probeblock",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_probeblock"
     },
     {
       "relation": "contains",
@@ -58036,9 +58014,9 @@
       "source_location": "L200",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_protectionchain",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_protectionchain"
     },
     {
       "relation": "contains",
@@ -58047,9 +58025,9 @@
       "source_location": "L174",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_ratelimitdirective",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_ratelimitdirective"
     },
     {
       "relation": "contains",
@@ -58058,9 +58036,9 @@
       "source_location": "L242",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_redirectblock",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_redirectblock"
     },
     {
       "relation": "contains",
@@ -58069,9 +58047,9 @@
       "source_location": "L384",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_renderappsecacquisition",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_renderappsecacquisition"
     },
     {
       "relation": "contains",
@@ -58080,9 +58058,9 @@
       "source_location": "L330",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_renderblock",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_renderblock"
     },
     {
       "relation": "contains",
@@ -58091,9 +58069,9 @@
       "source_location": "L334",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_rendercaddyfile",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_rendercaddyfile"
     },
     {
       "relation": "contains",
@@ -58102,9 +58080,9 @@
       "source_location": "L405",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_rendercaddylogacquisition",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_rendercaddylogacquisition"
     },
     {
       "relation": "contains",
@@ -58113,9 +58091,9 @@
       "source_location": "L135",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_resolveprivateaddress",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_resolveprivateaddress"
     },
     {
       "relation": "contains",
@@ -58124,9 +58102,9 @@
       "source_location": "L157",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_servablesites",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_servablesites"
     },
     {
       "relation": "contains",
@@ -58135,9 +58113,9 @@
       "source_location": "L220",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_siteblock",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_siteblock"
     },
     {
       "relation": "contains",
@@ -58146,9 +58124,9 @@
       "source_location": "L170",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render",
-      "target": "hetzner_edge_render_tlsdirective",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_tlsdirective"
     },
     {
       "relation": "calls",
@@ -58158,9 +58136,9 @@
       "source_location": "L235",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_siteblock",
-      "target": "hetzner_edge_render_resolveprivateaddress",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_resolveprivateaddress"
     },
     {
       "relation": "calls",
@@ -58170,9 +58148,9 @@
       "source_location": "L244",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_redirectblock",
-      "target": "hetzner_edge_render_asserthostname",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_asserthostname"
     },
     {
       "relation": "indirect_call",
@@ -58182,9 +58160,9 @@
       "source_location": "L355",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 0.5,
       "source": "hetzner_edge_render_rendercaddyfile",
-      "target": "hetzner_edge_render_asserthostname",
-      "confidence_score": 0.5
+      "target": "hetzner_edge_render_asserthostname"
     },
     {
       "relation": "calls",
@@ -58194,9 +58172,9 @@
       "source_location": "L339",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_rendercaddyfile",
-      "target": "hetzner_edge_render_servablesites",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_servablesites"
     },
     {
       "relation": "calls",
@@ -58206,9 +58184,9 @@
       "source_location": "L269",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_probeblock",
-      "target": "hetzner_edge_render_logdirective",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_logdirective"
     },
     {
       "relation": "calls",
@@ -58218,9 +58196,9 @@
       "source_location": "L246",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_redirectblock",
-      "target": "hetzner_edge_render_logdirective",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_logdirective"
     },
     {
       "relation": "calls",
@@ -58230,9 +58208,9 @@
       "source_location": "L226",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_siteblock",
-      "target": "hetzner_edge_render_logdirective",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_logdirective"
     },
     {
       "relation": "calls",
@@ -58242,9 +58220,9 @@
       "source_location": "L247",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_redirectblock",
-      "target": "hetzner_edge_render_tlsdirective",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_tlsdirective"
     },
     {
       "relation": "calls",
@@ -58254,9 +58232,9 @@
       "source_location": "L226",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_siteblock",
-      "target": "hetzner_edge_render_tlsdirective",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_tlsdirective"
     },
     {
       "relation": "calls",
@@ -58266,9 +58244,9 @@
       "source_location": "L207",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_protectionchain",
-      "target": "hetzner_edge_render_ratelimitdirective",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_ratelimitdirective"
     },
     {
       "relation": "calls",
@@ -58278,9 +58256,9 @@
       "source_location": "L271",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_probeblock",
-      "target": "hetzner_edge_render_protectionchain",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_protectionchain"
     },
     {
       "relation": "calls",
@@ -58290,9 +58268,9 @@
       "source_location": "L249",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_redirectblock",
-      "target": "hetzner_edge_render_protectionchain",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_protectionchain"
     },
     {
       "relation": "calls",
@@ -58302,9 +58280,9 @@
       "source_location": "L232",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_siteblock",
-      "target": "hetzner_edge_render_protectionchain",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_protectionchain"
     },
     {
       "relation": "calls",
@@ -58314,9 +58292,9 @@
       "source_location": "L357",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_rendercaddyfile",
-      "target": "hetzner_edge_render_siteblock",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_siteblock"
     },
     {
       "relation": "calls",
@@ -58326,9 +58304,9 @@
       "source_location": "L360",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_rendercaddyfile",
-      "target": "hetzner_edge_render_redirectblock",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_redirectblock"
     },
     {
       "relation": "calls",
@@ -58338,9 +58316,9 @@
       "source_location": "L363",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_rendercaddyfile",
-      "target": "hetzner_edge_render_probeblock",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_probeblock"
     },
     {
       "relation": "calls",
@@ -58350,9 +58328,9 @@
       "source_location": "L364",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_rendercaddyfile",
-      "target": "hetzner_edge_render_metricsblock",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_metricsblock"
     },
     {
       "relation": "calls",
@@ -58362,9 +58340,9 @@
       "source_location": "L369",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_rendercaddyfile",
-      "target": "hetzner_edge_render_globaloptions",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_globaloptions"
     },
     {
       "relation": "calls",
@@ -58374,9 +58352,207 @@
       "source_location": "L371",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "hetzner_edge_render_rendercaddyfile",
-      "target": "hetzner_edge_render_renderblock",
-      "confidence_score": 1.0
+      "target": "hetzner_edge_render_renderblock"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
+      "source_location": "L55",
+      "weight": 1.0,
+      "_origin": "ast",
+      "confidence_score": 1.0,
+      "source": "hetzner_monitoring_stack_render_alertmanager_config",
+      "target": "hetzner_monitoring_stack_render_alertmanager_config_main"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
+      "source_location": "L40",
+      "weight": 1.0,
+      "_origin": "ast",
+      "confidence_score": 1.0,
+      "source": "hetzner_monitoring_stack_render_alertmanager_config",
+      "target": "hetzner_monitoring_stack_render_alertmanager_config_render"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
+      "source_location": "L62",
+      "weight": 1.0,
+      "_origin": "ast",
+      "confidence_score": 1.0,
+      "source": "hetzner_monitoring_stack_render_alertmanager_config_main",
+      "target": "hetzner_monitoring_stack_render_alertmanager_config_render"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
+      "source_location": "L41",
+      "weight": 1.0,
+      "_origin": "ast",
+      "confidence_score": 1.0,
+      "source": "hetzner_monitoring_stack_render_alertmanager_config_rationale_41",
+      "target": "hetzner_monitoring_stack_render_alertmanager_config_render"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L71",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_a_value_containing_regex_and_shell_metacharacters_survives_literally",
+      "target": "hetzner_monitoring_stack_render_alertmanager_config_render"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L76",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_does_not_touch_text_outside_the_known_placeholders",
+      "target": "hetzner_monitoring_stack_render_alertmanager_config_render"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L58",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_refuses_a_blank_value_the_same_as_an_absent_one",
+      "target": "hetzner_monitoring_stack_render_alertmanager_config_render"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L52",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_refuses_each_missing_variable_in_turn",
+      "target": "hetzner_monitoring_stack_render_alertmanager_config_render"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L40",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_substitutes_every_placeholder",
+      "target": "hetzner_monitoring_stack_render_alertmanager_config_render"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L38",
+      "weight": 1.0,
+      "_origin": "ast",
+      "confidence_score": 1.0,
+      "source": "hetzner_monitoring_test_render_alertmanager_config",
+      "target": "hetzner_monitoring_test_render_alertmanager_config_rendertests"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L61",
+      "weight": 1.0,
+      "_origin": "ast",
+      "confidence_score": 1.0,
+      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests",
+      "target": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_a_value_containing_regex_and_shell_metacharacters_survives_literally"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L75",
+      "weight": 1.0,
+      "_origin": "ast",
+      "confidence_score": 1.0,
+      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests",
+      "target": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_does_not_touch_text_outside_the_known_placeholders"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L55",
+      "weight": 1.0,
+      "_origin": "ast",
+      "confidence_score": 1.0,
+      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests",
+      "target": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_refuses_a_blank_value_the_same_as_an_absent_one"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L48",
+      "weight": 1.0,
+      "_origin": "ast",
+      "confidence_score": 1.0,
+      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests",
+      "target": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_refuses_each_missing_variable_in_turn"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
+      "source_location": "L39",
+      "weight": 1.0,
+      "_origin": "ast",
+      "confidence_score": 1.0,
+      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests",
+      "target": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_substitutes_every_placeholder"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "hetzner/RUNBOOK-monitoring.md",
+      "_origin": "semantic",
+      "source": "hetzner_runbook_monitoring",
+      "target": "hetzner_edge_stack_compose"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "hetzner/RUNBOOK-monitoring.md",
+      "_origin": "semantic",
+      "source": "hetzner_runbook_monitoring",
+      "target": "hetzner_monitoring_stack_compose"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "hetzner/monitoring/stack/compose.yml",
+      "_origin": "semantic",
+      "source": "hetzner_monitoring_stack_compose",
+      "target": "hetzner_monitoring_stack_prometheus_alerts"
     },
     {
       "relation": "imports_from",
@@ -58474,6 +58650,30 @@
       "confidence_score": 1.0
     },
     {
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/monitoring/render.test.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_monitoring_render_test",
+      "target": "sites",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/monitoring/render.test.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_monitoring_render_test",
+      "target": "sites_sites",
+      "confidence_score": 1.0
+    },
+    {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "hetzner/monitoring/render.ts",
@@ -58499,7 +58699,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L87",
+      "source_location": "L96",
       "weight": 1.0,
       "_origin": "ast",
       "source": "hetzner_monitoring_render",
@@ -58510,7 +58710,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L108",
+      "source_location": "L119",
       "weight": 1.0,
       "_origin": "ast",
       "source": "hetzner_monitoring_render",
@@ -58620,7 +58820,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L99",
+      "source_location": "L108",
       "weight": 1.0,
       "_origin": "ast",
       "source": "hetzner_monitoring_render",
@@ -58642,7 +58842,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L263",
+      "source_location": "L278",
       "weight": 1.0,
       "_origin": "ast",
       "source": "hetzner_monitoring_render",
@@ -58653,7 +58853,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L177",
+      "source_location": "L192",
       "weight": 1.0,
       "_origin": "ast",
       "source": "hetzner_monitoring_render",
@@ -58664,7 +58864,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L112",
+      "source_location": "L123",
       "weight": 1.0,
       "_origin": "ast",
       "source": "hetzner_monitoring_render",
@@ -58675,7 +58875,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L89",
+      "source_location": "L98",
       "weight": 1.0,
       "_origin": "ast",
       "source": "hetzner_monitoring_render",
@@ -58683,11 +58883,22 @@
       "confidence_score": 1.0
     },
     {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "hetzner/monitoring/render.ts",
+      "source_location": "L94",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "hetzner_monitoring_render",
+      "target": "hetzner_monitoring_render_website_metrics_port",
+      "confidence_score": 1.0
+    },
+    {
       "relation": "calls",
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L102",
+      "source_location": "L113",
       "weight": 1.0,
       "_origin": "ast",
       "source": "hetzner_monitoring_render_nodetarget",
@@ -58699,7 +58910,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L154",
+      "source_location": "L169",
       "weight": 1.0,
       "_origin": "ast",
       "source": "hetzner_monitoring_render_renderprometheusconfig",
@@ -58711,7 +58922,7 @@
       "context": "argument",
       "confidence": "INFERRED",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L114",
+      "source_location": "L125",
       "weight": 1.0,
       "_origin": "ast",
       "source": "hetzner_monitoring_render_renderprometheusconfig",
@@ -58723,7 +58934,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "hetzner/monitoring/render.ts",
-      "source_location": "L113",
+      "source_location": "L124",
       "weight": 1.0,
       "_origin": "ast",
       "source": "hetzner_monitoring_render_renderprometheusconfig",
@@ -58733,229 +58944,32 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
-      "source_location": "L55",
+      "source_file": "sites.ts",
+      "source_location": "L97",
       "weight": 1.0,
       "_origin": "ast",
-      "source": "hetzner_monitoring_stack_render_alertmanager_config",
-      "target": "hetzner_monitoring_stack_render_alertmanager_config_main",
+      "source": "sites",
+      "target": "sites_hostredirects",
       "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
-      "source_location": "L40",
+      "source_file": "sites.ts",
+      "source_location": "L70",
       "weight": 1.0,
       "_origin": "ast",
-      "source": "hetzner_monitoring_stack_render_alertmanager_config",
-      "target": "hetzner_monitoring_stack_render_alertmanager_config_render",
+      "source": "sites",
+      "target": "sites_sites",
       "confidence_score": 1.0
     },
     {
       "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
-      "source_location": "L62",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_stack_render_alertmanager_config_main",
-      "target": "hetzner_monitoring_stack_render_alertmanager_config_render",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "rationale_for",
-      "confidence": "EXTRACTED",
-      "source_file": "hetzner/monitoring/stack/render_alertmanager_config.py",
-      "source_location": "L41",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_stack_render_alertmanager_config_rationale_41",
-      "target": "hetzner_monitoring_stack_render_alertmanager_config_render",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "INFERRED",
-      "confidence_score": 0.8,
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L71",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_a_value_containing_regex_and_shell_metacharacters_survives_literally",
-      "target": "hetzner_monitoring_stack_render_alertmanager_config_render"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "INFERRED",
-      "confidence_score": 0.8,
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L76",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_does_not_touch_text_outside_the_known_placeholders",
-      "target": "hetzner_monitoring_stack_render_alertmanager_config_render"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "INFERRED",
-      "confidence_score": 0.8,
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L58",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_refuses_a_blank_value_the_same_as_an_absent_one",
-      "target": "hetzner_monitoring_stack_render_alertmanager_config_render"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "INFERRED",
-      "confidence_score": 0.8,
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L52",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_refuses_each_missing_variable_in_turn",
-      "target": "hetzner_monitoring_stack_render_alertmanager_config_render"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "INFERRED",
-      "confidence_score": 0.8,
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L40",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_substitutes_every_placeholder",
-      "target": "hetzner_monitoring_stack_render_alertmanager_config_render"
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L38",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_test_render_alertmanager_config",
-      "target": "hetzner_monitoring_test_render_alertmanager_config_rendertests",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "method",
-      "confidence": "EXTRACTED",
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L61",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests",
-      "target": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_a_value_containing_regex_and_shell_metacharacters_survives_literally",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "method",
-      "confidence": "EXTRACTED",
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L75",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests",
-      "target": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_does_not_touch_text_outside_the_known_placeholders",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "method",
-      "confidence": "EXTRACTED",
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L55",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests",
-      "target": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_refuses_a_blank_value_the_same_as_an_absent_one",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "method",
-      "confidence": "EXTRACTED",
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L48",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests",
-      "target": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_refuses_each_missing_variable_in_turn",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "method",
-      "confidence": "EXTRACTED",
-      "source_file": "hetzner/monitoring/test_render_alertmanager_config.py",
-      "source_location": "L39",
-      "weight": 1.0,
-      "_origin": "ast",
-      "source": "hetzner_monitoring_test_render_alertmanager_config_rendertests",
-      "target": "hetzner_monitoring_test_render_alertmanager_config_rendertests_test_substitutes_every_placeholder",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "references",
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
-      "source_file": "hetzner/RUNBOOK-monitoring.md",
-      "source": "hetzner_runbook_monitoring",
-      "target": "hetzner_edge_stack_compose"
-    },
-    {
-      "relation": "references",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "source_file": "hetzner/RUNBOOK-monitoring.md",
-      "source": "hetzner_runbook_monitoring",
-      "target": "hetzner_monitoring_stack_compose"
-    },
-    {
-      "relation": "references",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "source_file": "hetzner/monitoring/stack/compose.yml",
-      "source": "hetzner_monitoring_stack_compose",
-      "target": "hetzner_monitoring_stack_prometheus_alerts"
-    },
-    {
-      "relation": "references",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "source_file": "hetzner/monitoring/stack/compose.yml",
-      "source": "hetzner_monitoring_stack_compose",
-      "target": "hetzner_monitoring_stack_prometheus_prometheus"
-    },
-    {
-      "relation": "references",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "source_file": "hetzner/monitoring/stack/grafana/provisioning/datasources/prometheus.yaml",
-      "source": "hetzner_monitoring_stack_grafana_provisioning_datasources_prometheus",
-      "target": "hetzner_monitoring_stack_prometheus_prometheus"
-    },
-    {
-      "relation": "references",
-      "confidence": "INFERRED",
-      "confidence_score": 0.9,
-      "source_file": "hetzner/monitoring/stack/prometheus/prometheus.yml",
-      "source": "hetzner_monitoring_stack_prometheus_prometheus",
-      "target": "hetzner_monitoring_stack_blackbox_blackbox"
-    },
-    {
-      "relation": "references",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "source_file": "hetzner/monitoring/stack/prometheus/prometheus.yml",
-      "source": "hetzner_monitoring_stack_prometheus_prometheus",
-      "target": "hetzner_monitoring_stack_prometheus_alerts"
+      "source_file": ".github/workflows/ci.yml",
+      "source": "github_workflows_ci",
+      "target": "mail_provision_test"
     }
   ],
   "hyperedges": [
@@ -58973,5 +58987,5 @@
       "confidence_score": 1.0
     }
   ],
-  "built_at_commit": "fee5faef2c9885e60823fba72e7f07f6b68e27df"
+  "built_at_commit": "605bd2f2230e8789cee7eaa6a3a736fd6c5df0ec"
 }
