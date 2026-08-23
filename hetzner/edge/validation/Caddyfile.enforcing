@@ -18,6 +18,49 @@
 	}
 }
 
+branchleft.co.uk {
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	route {
+		rate_limit {
+			zone website_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		crowdsec
+		appsec
+		reverse_proxy 10.20.1.100:8080
+	}
+}
+
+www.branchleft.co.uk {
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	route {
+		rate_limit {
+			zone website_redirect_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		crowdsec
+		redir https://branchleft.co.uk{uri} permanent
+	}
+}
+
 :8080 {
 	log {
 		output file /var/log/caddy/probe.log

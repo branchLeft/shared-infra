@@ -72,6 +72,9 @@ export const sites: EdgeSite[] = [
     name: 'website',
     hostnames: ['branchleft.co.uk', 'www.branchleft.co.uk'],
     cloudRunService: 'branchleft-website',
+    // Port matches deploy/compose.yml's `website` service in
+    // branchLeft/website -- the two must move together, and each states so.
+    privateUpstream: { host: 'app1', port: 8080 },
   },
 
   {
