@@ -84,6 +84,15 @@ export const PROMETHEUS_PORT = 9090;
 export const CADDY_METRICS_PORT = 9091;
 export const CROWDSEC_METRICS_PORT = 6060;
 
+/**
+ * The website's contact-form send-failure counter (doc 14 §9.2), served by
+ * its own Compose service in `branchLeft/website`'s `deploy/compose.yml`,
+ * bound to `app1`'s private address the same way Caddy's and CrowdSec's
+ * metrics ports above are bound to `edge1`'s -- never through Caddy, never on
+ * the public interface.
+ */
+export const WEBSITE_METRICS_PORT = 9092;
+
 export const BLACKBOX_MODULE = 'http_2xx';
 
 function targetLabels(host: MonitoredHost): string {
@@ -98,7 +107,9 @@ function targetLabels(host: MonitoredHost): string {
  */
 function nodeTarget(host: MonitoredHost): string {
   const address =
-    host.name === 'edge1' ? `node-exporter:${NODE_EXPORTER_PORT}` : `${host.address}:${NODE_EXPORTER_PORT}`;
+    host.name === 'edge1'
+      ? `node-exporter:${NODE_EXPORTER_PORT}`
+      : `${host.address}:${NODE_EXPORTER_PORT}`;
   return `      - targets: ['${address}']\n        labels: ${targetLabels(host)}`;
 }
 
@@ -143,6 +154,10 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '  - job_name: crowdsec',
     '    static_configs:',
     `      - targets: ['${HOST_IPS.edge1}:${CROWDSEC_METRICS_PORT}']`,
+    '',
+    '  - job_name: website',
+    '    static_configs:',
+    `      - targets: ['${APP_HOST_IPS.app1}:${WEBSITE_METRICS_PORT}']`,
     '',
     '  - job_name: node',
     '    static_configs:',

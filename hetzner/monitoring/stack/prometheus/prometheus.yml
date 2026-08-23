@@ -29,6 +29,10 @@ scrape_configs:
     static_configs:
       - targets: ['10.20.1.10:6060']
 
+  - job_name: website
+    static_configs:
+      - targets: ['10.20.1.100:9092']
+
   - job_name: node
     static_configs:
       - targets: ['node-exporter:9100']

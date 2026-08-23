@@ -31,7 +31,11 @@ describe('blackboxTargets', () => {
       site({ hostnames: ['a.test', 'b.test'] }),
       site({ name: 'other', hostnames: ['c.test'] }),
     ];
-    expect(blackboxTargets(entries)).toEqual(['https://a.test', 'https://b.test', 'https://c.test']);
+    expect(blackboxTargets(entries)).toEqual([
+      'https://a.test',
+      'https://b.test',
+      'https://c.test',
+    ]);
   });
 
   it('includes a redirect source, not only a servable site', () => {
@@ -99,6 +103,12 @@ describe('the rendered Prometheus config', () => {
     const rendered = renderPrometheusConfig(sites);
     expect(rendered).toContain("targets: ['10.20.1.10:9091']");
     expect(rendered).toContain("targets: ['10.20.1.10:6060']");
+  });
+
+  it("scrapes the website's contact-form metric on app1's private address, not through Caddy", () => {
+    const rendered = renderPrometheusConfig(sites);
+    expect(rendered).toContain('job_name: website');
+    expect(rendered).toContain("targets: ['10.20.1.100:9092']");
   });
 
   it('scrapes itself and Alertmanager', () => {

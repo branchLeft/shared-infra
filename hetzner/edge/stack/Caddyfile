@@ -18,6 +18,33 @@
 	}
 }
 
+branchleft.co.uk {
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	route {
+		appsec
+		reverse_proxy 10.20.1.100:8080
+	}
+}
+
+www.branchleft.co.uk {
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	route {
+		redir https://branchleft.co.uk{uri} permanent
+	}
+}
+
 :8080 {
 	log {
 		output file /var/log/caddy/probe.log
