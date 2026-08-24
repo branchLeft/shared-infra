@@ -35,9 +35,9 @@ class MailboxesAndRoleAddressesTests(unittest.TestCase):
         for role in ROLE_ADDRESSES:
             self.assertIn(role, MAILBOXES)
 
-    def test_exactly_eight_mailboxes_seven_role_addresses(self):
-        self.assertEqual(len(MAILBOXES), 8)
-        self.assertEqual(len(ROLE_ADDRESSES), 7)
+    def test_exactly_nine_mailboxes_eight_role_addresses(self):
+        self.assertEqual(len(MAILBOXES), 9)
+        self.assertEqual(len(ROLE_ADDRESSES), 8)
 
     def test_forward_target_is_rob_at_the_mail_domain(self):
         self.assertEqual(FORWARD_TARGET, "rob@branchleft.co.uk")
@@ -117,7 +117,9 @@ class MissingMailboxesTests(unittest.TestCase):
 
         result = missing_mailboxes(MAILBOXES, existing)
 
-        self.assertEqual(result, ["contact", "info", "complaints", "abuse", "blog", "acme"])
+        self.assertEqual(
+            result, ["contact", "info", "complaints", "abuse", "blog", "acme", "alerts"]
+        )
 
     def test_unrelated_existing_accounts_are_ignored(self):
         # e.g. the Stalwart admin bootstrap account, or some other domain's
@@ -130,7 +132,10 @@ class MissingMailboxesTests(unittest.TestCase):
 
         result = missing_mailboxes(MAILBOXES, existing)
 
-        self.assertEqual(result, ["contact", "info", "sales", "complaints", "abuse", "blog", "acme"])
+        self.assertEqual(
+            result,
+            ["contact", "info", "sales", "complaints", "abuse", "blog", "acme", "alerts"],
+        )
 
 
 class PlanSieveActionTests(unittest.TestCase):
@@ -449,6 +454,35 @@ class MainOrchestrationTests(unittest.TestCase):
                 pm.main()
 
         self.assertEqual(sieve_mock_calls, [])
+
+
+class OneRedirectPerScriptTests(unittest.TestCase):
+    """Stalwart caps an untrusted Sieve script at `maxRedirects` (default 1)
+    redirections per execution. A script with two `redirect` commands still
+    compiles, activates, and diffs clean on a re-run -- the second is dropped
+    at delivery, silently. So the cap is asserted here, where it is visible,
+    rather than trusted to a comment.
+    """
+
+    def test_the_rendered_script_carries_exactly_one_redirect(self):
+        script = sieve_script_contents(FORWARD_TARGET)
+
+        self.assertEqual(script.count("redirect"), 1)
+
+    def test_every_role_address_gets_the_same_single_redirect_script(self):
+        """There is one script shape, so no address can drift into a second
+        redirect without this failing."""
+        for local in ROLE_ADDRESSES:
+            with self.subTest(local=local):
+                self.assertEqual(sieve_script_contents(FORWARD_TARGET).count("redirect"), 1)
+
+
+class AlertsMailboxTests(unittest.TestCase):
+    def test_alerts_is_a_mailbox_and_a_role_address(self):
+        """Alertmanager's submission credential authenticates into a real
+        account, so alerts@ must exist as a mailbox, not only as an alias."""
+        self.assertIn("alerts", MAILBOXES)
+        self.assertIn("alerts", ROLE_ADDRESSES)
 
 
 if __name__ == "__main__":

@@ -136,8 +136,12 @@ rsync -av --delete -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
 
 ## 2. Provision the Alertmanager submission credential
 
-`mail/` is read-only to this story -- its provisioning tooling is generic and
-already supports a new credential without any code change.
+`mail/` needed one change for this story, and only one: the mailbox. Its
+credential tooling is genuinely generic -- but
+`provision_website_submission_credential.py` authenticates into an *existing*
+account, and `provision_mailboxes.py`'s `MAILBOXES` is a hardcoded tuple with
+no environment override, so `alerts@` had to be added there and provisioned on
+mx1 before any of this works.
 `mail/provision/provision_website_submission_credential.py` provisions one
 submission-only SMTP credential per invocation, parameterised by
 `SEND_AS_LOCAL`, `CREDENTIAL_LABEL` and `APP_PASSWORD_DESCRIPTION` (see
@@ -147,8 +151,21 @@ as that address -- provision an `alerts` mailbox first via
 `mail/provision/provision_mailboxes.py` if one does not already exist, per
 `mail/RUNBOOK-mx1-provision.md`.
 
+Both steps are `run-all.sh` entries, so a rebuilt host restores them without a
+runbook: `50-provision-mailboxes.sh` creates the mailbox and its copy-forward
+to `rob@`, and `64-provision-alerting-submission-credential.sh` provisions the
+credential itself.
+
+`alerts@` forwards to `rob@` only, like every other role address, and
+deliberately carries no second redirect: Stalwart caps an untrusted Sieve
+script at `maxRedirects` (default 1) per execution, so a second one is dropped
+at delivery while the script still compiles and diffs clean. Alert mail reaches
+an address off mx1 by being **sent** there -- that is what `ALERT_RECIPIENT_EMAIL`
+below is for -- not by being forwarded from mx1, which would also fail SPF at
+the receiving provider for want of SRS.
+
 This step, the mailbox decision and the resulting credential are all
-platform-owner-gated -- see the PR's handover steps for the exact command.
+platform-owner-gated -- mx1 is live production mail.
 
 ## 3. Write the stack's secrets on the host
 

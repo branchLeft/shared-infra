@@ -218,7 +218,7 @@ If the import has not run at all, 443 lands in the same `pulumi up` that opens
 
 `50-provision-mailboxes.sh` runs `provision_mailboxes.py`, which creates real
 mailbox accounts — `rob@`, `contact@`, `info@`, `sales@`, `complaints@`,
-`abuse@`, `blog@` and `acme@` at `branchleft.co.uk` (`MAILBOXES`) — each with
+`abuse@`, `blog@`, `acme@` and `alerts@` at `branchleft.co.uk` (`MAILBOXES`) — each with
 its own storage, not an alias, and gives each role address (not `rob@`;
 `ROLE_ADDRESSES`) a per-mailbox Sieve script that copies inbound mail to
 `rob@` without suppressing the original delivery. `blog@` gets a mailbox and
@@ -227,7 +227,23 @@ uses to _send_ mail is a separate app password, see "Blog submission
 credential" below. `acme@` is the mailbox the Hetzner edge's `ACME_EMAIL`
 points at (`hetzner/RUNBOOK-edge.md`) — where Let's Encrypt sends
 certificate-expiry warnings, so it needs the same real storage and copy-
-forward as any other role address, not just an alias.
+forward as any other role address, not just an alias. `alerts@` is the account
+Alertmanager's submission credential authenticates into and sends as
+(`hetzner/RUNBOOK-monitoring.md`); what arrives *in* it is bounces and replies
+to alert mail, which is why it gets the same real storage and copy-forward.
+
+**Every role script carries exactly one `redirect`, and that is a constraint
+rather than a style.** Stalwart caps an untrusted Sieve script at
+`maxRedirects` — [default `1`](https://stalw.art/docs/sieve/interpreter/untrusted/)
+— redirections per execution, and `configure_stalwart.py` never materialises
+the `SieveUserInterpreter` singleton, so the default applies. A second
+`redirect` compiles, activates, and diffs clean on a re-run; it is dropped at
+*delivery*, silently. So a copy to an address off this host cannot be added
+here. Mail reaches an off-host address by being **sent** there — for alerting,
+that is the monitoring stack's `ALERT_RECIPIENT_EMAIL` — which is also the
+correct mechanism for a second reason: a plain Sieve `redirect` preserves the
+original envelope sender and does no SRS, so forwarded mail fails SPF at the
+receiving provider and costs mx1 reputation while its IP is still warming.
 
 Any standard IMAP client reads these mailboxes: `<mail-host>` port 993
 (SSL/TLS) for IMAP, port 587 (STARTTLS) for submission, username the full
