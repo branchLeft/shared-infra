@@ -282,20 +282,15 @@ committed tree, so every copy deletes the previous render. That is expected
 ## 5. Install the systemd cgroup drop-ins
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
-  install -d -m 0755 /etc/systemd/system/branchleft-compose@edge.service.d \
-                      /etc/systemd/system/branchleft-compose@monitoring.service.d'
-
-scp -i ~/.ssh/id_ed25519_hetzner \
-  hetzner/monitoring/systemd/edge.override.conf \
-  root@46.225.95.167:/etc/systemd/system/branchleft-compose@edge.service.d/override.conf
-
-scp -i ~/.ssh/id_ed25519_hetzner \
-  hetzner/monitoring/systemd/monitoring.override.conf \
-  root@46.225.95.167:/etc/systemd/system/branchleft-compose@monitoring.service.d/override.conf
-
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 'systemctl daemon-reload'
+hetzner/provision/install-systemd-drop-ins.sh root@46.225.95.167
 ```
+
+The script walks every committed `*/systemd/*.override.conf` under
+`hetzner/` -- the same search `drop_in_for()` in
+`test_compose_unit_contract.py` uses -- so it installs `edge.override.conf`
+and `monitoring.override.conf` today, and any future drop-in with no script
+change. It creates each unit's `.service.d` directory, copies the drop-in
+in, and reloads systemd once at the end.
 
 Neither drop-in takes effect until the affected unit next starts or
 restarts -- step 6 does that for `edge`, and step 7's first-ever start does
