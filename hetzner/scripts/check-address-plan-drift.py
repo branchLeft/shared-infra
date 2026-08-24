@@ -4,11 +4,12 @@
 `hetzner-host/addressPlan.ts` is the one place `NETWORK_CIDR`, `SUBNET_CIDR`
 and `HOST_IPS`/`APP_HOST_IPS` are decided. `hetzner/network.ts` and
 `hetzner/egress.ts` import that module, so Pulumi always sees a plan change.
-The NAT gateway script and the provisioning runbook cannot: the script runs on
-a host with no repository checkout to import from, and the runbook is prose a
-human reads, not code anything executes. Both therefore carry the plan's
-subnet and edge1's address as literals, and nothing stops those literals
-drifting from the module that is supposed to be their source.
+The NAT gateway script, the DOCKER-USER isolation-policy script, and the
+provisioning runbook cannot: the scripts run on a host with no repository
+checkout to import from, and the runbook is prose a human reads, not code
+anything executes. All three therefore carry a copy of the plan's subnet
+and/or a host address as a literal, and nothing stops those literals drifting
+from the module that is supposed to be their source.
 
 **A drifted literal presents as success.** The NAT script's own
 `only a /24 subnet is understood` guard validates its own literal against
@@ -19,10 +20,11 @@ still names. Either way the host that is actually misconfigured is the one
 outside the plan's current range, and every check available reports it
 healthy.
 
-This gate reads the plan's current values and asserts every subnet-shaped and
-edge1-shaped literal in the shell script and the runbook still matches them --
-every occurrence, not the first one found, because a file edited in one place
-and left stale in another is the half-updated state the gate exists to catch.
+This gate reads the plan's current values and asserts every subnet-shaped,
+edge1-shaped and db1-shaped literal in the shell scripts and the runbook
+still matches them -- every occurrence, not the first one found, because a
+file edited in one place and left stale in another is the half-updated state
+the gate exists to catch.
 
 Two things a naive text match over these files would get wrong, both handled
 below:
@@ -114,9 +116,26 @@ class AddressPlan:
     def edge1(self) -> str:
         return self.host_ips["edge1"]
 
+    @property
+    def db1(self) -> str:
+        return self.host_ips["db1"]
+
     def known_values(self) -> set[str]:
-        """Every address or range this plan currently claims as its own."""
-        return {self.network_cidr, self.subnet_cidr, *self.host_ips.values(), *self.app_host_ips.values()}
+        """Every address or range this plan currently claims as its own,
+        plus each host's single-address form (`.../32`) -- the shape a rule
+        that targets one host by address renders it in (`iptables -S` always
+        prints an unmasked `-d <addr>` back with `/32`), and information
+        identical to the bare address already in this set. Without this, a
+        correct `<host>/32` literal and a genuinely stale one are
+        indistinguishable from a CIDR-shaped literal's point of view -- both
+        fall inside `NETWORK_CIDR` and match no *bare* plan value."""
+        host_addresses = {*self.host_ips.values(), *self.app_host_ips.values()}
+        return {
+            self.network_cidr,
+            self.subnet_cidr,
+            *host_addresses,
+            *(f"{address}/32" for address in host_addresses),
+        }
 
 
 def read_address_plan(path: pathlib.Path) -> AddressPlan:
@@ -146,6 +165,8 @@ def read_address_plan(path: pathlib.Path) -> AddressPlan:
         raise ValueError(f"{path}: no `export const HOST_IPS = {{ ... }} as const` block found")
     if "edge1" not in host_ips:
         raise ValueError(f"{path}: HOST_IPS block names no `edge1`")
+    if "db1" not in host_ips:
+        raise ValueError(f"{path}: HOST_IPS block names no `db1`")
 
     # Optional: it only widens which addresses are recognised as someone
     # else's, legitimate value rather than a stale copy. Its absence narrows
@@ -160,6 +181,14 @@ _CIDR_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}\b")
 # immediately followed by "/" is the CIDR's own base address, not a second,
 # bare literal sitting next to it.
 _BARE_IPV4_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b(?!/)")
+# A single host expressed as a `/32` -- the form `iptables -S` renders an
+# unmasked `-d <addr>` back as, and the shape a rule naming one host by
+# address ends up in, distinct from the /16 and /24 literals _CIDR_RE's other
+# callers are actually looking for. A dedicated pattern rather than filtering
+# _CIDR_RE's matches keeps this checked host-by-host below, with its own
+# expected value and its own message, instead of folding into whichever
+# subnet check happens to run over the same file.
+_HOST_SLASH_32_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}/32\b")
 
 
 def _within(literal: str, network: ipaddress.IPv4Network) -> bool:
@@ -243,6 +272,13 @@ def check(root: pathlib.Path) -> list[str]:
         plan,
     )
     failures += _check_literals(
+        root / "hetzner" / "provision" / "branchleft_docker_user_policy.sh",
+        _BARE_IPV4_RE,
+        plan.db1,
+        "HOST_IPS.db1",
+        plan,
+    )
+    failures += _check_literals(
         root / "hetzner" / "RUNBOOK-provision-host.md",
         _CIDR_RE,
         plan.subnet_cidr,
@@ -254,6 +290,13 @@ def check(root: pathlib.Path) -> list[str]:
         _BARE_IPV4_RE,
         plan.edge1,
         "HOST_IPS.edge1",
+        plan,
+    )
+    failures += _check_literals(
+        root / "hetzner" / "RUNBOOK-provision-host.md",
+        _HOST_SLASH_32_RE,
+        f"{plan.db1}/32",
+        "HOST_IPS.db1 (as a /32)",
         plan,
     )
     return failures

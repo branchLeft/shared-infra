@@ -26,6 +26,7 @@ than a step inside it.
 | `20-install-docker.sh`          | Installs Docker CE from Docker's apt repo, and reconciles the signing key and apt source on every run                                              |
 | `30-install-deploy-tooling.sh`  | Installs `branchleft-compose@.service` and `/usr/local/sbin/branchleft-deploy`, and verifies the sudoers drop-in parses                            |
 | `nat-gateway.sh`                | **Gateway host only.** Installs the NAT reconciler and the unit that reasserts it at boot, then runs it once                                       |
+| `app-host-isolation.sh`         | **App hosts only.** Installs the `DOCKER-USER` isolation-policy reconciler and the unit that reasserts it at boot, then runs it once               |
 
 `run-all.sh` runs the first five in order. Every one of them is idempotent:
 re-running the set is a no-op on a host that is already correct, which is what
@@ -34,6 +35,12 @@ makes this the right response to "I am not sure whether that host is current".
 `nat-gateway.sh` is deliberately outside `run-all.sh`. Exactly one host in the
 estate is the gateway, and the script refuses to run anywhere the estate's
 egress could not work from.
+
+`app-host-isolation.sh` is deliberately outside `run-all.sh` too, for the
+matching reason: it is scoped to app hosts, and its reconciler
+(`branchleft_docker_user_policy.sh`) refuses to run on the gateway rather than
+relying on nobody ever pointing it there. See "5. Confine tenant containers on
+each app host" below.
 
 ## The estate's egress path
 
@@ -334,9 +341,12 @@ ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<host-private-ip> 
 ```
 
 That `scp -r` copies the whole of `provision/` — `nat-gateway.sh`,
-`branchleft_nat.sh` and the unit file included. They land on the host and must
-never be run there: a second host masquerading the subnet builds a path
-nothing routes to, and `run-all.sh` does not touch any of the three.
+`branchleft_nat.sh` and its unit file, and `app-host-isolation.sh`,
+`branchleft_docker_user_policy.sh` and its unit file, all included. None of
+the six are touched by `run-all.sh`; `nat-gateway.sh` must never be run on
+this host (a second gateway masquerading the subnet builds a path nothing
+routes to), and `app-host-isolation.sh` is the next step below if this host
+is an app host.
 
 ### What this does not solve
 
@@ -345,6 +355,95 @@ traffic, including the security updates `unattended-upgrades` fetches for the
 life of the host. An `edge1` that is down or wedged is an estate whose private
 hosts stop being patched, and nothing reports that today — the failure is
 silent until someone looks. Monitoring it belongs with the monitoring host.
+
+### 5. Confine tenant containers on each app host
+
+A tenant container's published port makes it reachable from `edge1` and from
+a Prometheus scrape, and `DOCKER-USER` — the chain Docker inserts its own
+per-container rules ahead of — sees every packet a container forwards, not
+only the ones a rule was written for. Left alone, that chain has no rule
+narrower than "forward it", so a tenant container can also reach `db1`'s
+non-MySQL sockets, `edge1`'s metrics and CrowdSec local API on `10.20.1.10`,
+the monitoring host, and the Hetzner metadata service at `169.254.169.254`.
+`app-host-isolation.sh` closes that down to the one destination a tenant
+legitimately opens, `db1:3306`.
+
+**App hosts only, and the reconciler enforces that itself.** `edge1` is the
+estate's NAT gateway: it forwards every private-only host's own internet
+egress, and it originates its own reverse-proxy connections into the subnet.
+`DOCKER-USER` matches on destination address alone, not on which host wrote
+the rule, so if this policy ever landed on `edge1` it would cut its own path
+to every app host and to `db1` — the outage this runbook exists to prevent,
+not merely document. **"Holds a public interface" is not the guard**, even
+though it might look like the obvious one: `app1` is also created with
+`publicNetworking: true`, deliberately
+(`ghost-platform/infra/hosts/index.ts`), so that GitHub-hosted CI runners can
+reach it over SSH to deploy — a host with no public address cannot be
+reached by a runner at all. `branchleft_docker_user_policy.sh` instead
+refuses to run on whichever host holds `10.20.1.10`, the address
+`hetzner-host/addressPlan.ts` assigns to `edge1` alone and the one this
+runbook's own gateway steps above already name it by.
+
+**Rule order is the other way this goes wrong, and it is silent in the
+opposite direction: not a refusal, an outage.** `DOCKER-USER` sits in
+`filter/FORWARD` and matches **post-DNAT** addresses. A published port is a
+DNAT, so an inbound flow (`edge1` → a tenant's Ghost; a scrape → a tenant's
+metrics port) is forwarded, and its **reply** leaves the container with `dst`
+inside `10.20.1.0/24` — matched exactly by a bare deny toward that subnet. The
+reconciler installs `-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT`
+ahead of the drop for exactly this reason; reversing that order is an outage
+of every tenant site on the host, not a tightening.
+
+**Scope limit, stated here rather than only in the script.** `DOCKER-USER`
+only sees _forwarded_ traffic. A container reaching the app host's **own**
+private address (`10.20.1.100`, say) is delivered locally via `INPUT`, which
+this chain never sees — so this policy does not bound container → its own
+host, including the co-located website container's published port. Bounding
+that needs an `INPUT` rule with a different blast radius and is out of scope
+here. Traffic to `169.254.169.254` _is_ forwarded, so that half of the drop
+is real.
+
+Run it the same way as step 4, on each app host. `app1`, at `10.20.1.100`, is
+the only one that exists today; the command is otherwise unchanged for a
+future `app2`/`app3`, substituting that host's own private IP:
+
+```bash
+cd ~/branchLeft/shared-infra
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@46.225.95.167"
+scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@10.20.1.100:/root/platform-provision
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@10.20.1.100 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/app-host-isolation.sh'
+```
+
+Confirm it:
+
+```bash
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@46.225.95.167"
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@10.20.1.100 '
+  set -e
+  iptables -t filter -S DOCKER-USER | grep -E -- "-m conntrack --ctstate (ESTABLISHED,RELATED|RELATED,ESTABLISHED) -j ACCEPT"
+  iptables -t filter -S DOCKER-USER | grep -- "-d 10.20.1.20/32 -p tcp -m tcp --dport 3306 -j ACCEPT"
+  iptables -t filter -S DOCKER-USER | grep -- "-d 10.20.1.0/24 -j DROP"
+  iptables -t filter -S DOCKER-USER | grep -- "-d 169.254.169.254/32 -j DROP"
+  systemctl is-enabled branchleft-docker-user-policy.service
+  echo "app-host isolation ok"
+'
+```
+
+Expect four rule lines, `enabled`, and `app-host isolation ok`. The conntrack
+check matches either bitmask ordering: `iptables -S` renders the state set
+`branchleft_docker_user_policy.sh` passes as `RELATED,ESTABLISHED`, not the
+order the script gives it in — the same normalisation §3's gateway check
+above already accounts for.
+
+**What this does not give you: a signal if it ever silently stops applying.**
+Unlike `branchleft-nat.service`, whose reconciler refuses to run and fails the
+unit when `DOCKER-USER` is absent, an app host that loses `DOCKER-USER` — a
+switch to Docker's `nftables` firewall backend, which `20-install-docker.sh`
+leaves free to happen under unattended-upgrades — keeps every tenant site
+working while this policy's protection quietly stops existing. Closing that
+gap needs a monitoring input this estate does not have yet (an alert on the
+chain's absence or on the reconciler unit's state), and is filed as its own
+piece of work rather than claimed here.
 
 ## Run the whole set
 

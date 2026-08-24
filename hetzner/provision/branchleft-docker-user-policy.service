@@ -1,0 +1,29 @@
+# Reasserts the app-host isolation policy at every boot. The rules live in
+# DOCKER-USER, which dockerd owns and does not persist across a reinstall of
+# the chain itself -- there is no iptables-persistent here, deliberately, for
+# the same reason branchleft-nat.service has none: a saved ruleset would also
+# save Docker's own chains and restore a stale copy before dockerd is running
+# to own them again.
+[Unit]
+Description=branchLeft app-host DOCKER-USER isolation policy
+# After, without Requires: the reconciler refuses cleanly on a host that is
+# not an app host (the gateway) or that has no DOCKER-USER chain yet, so this
+# unit is never on the critical path for a host it does not apply to.
+After=network-online.target docker.service
+Wants=network-online.target
+# PartOf, not Requires or BindsTo: a later `systemctl restart docker.service`
+# -- what an unattended docker-ce upgrade does -- propagates here as a
+# restart too, reasserting the policy against whatever chain dockerd just
+# rebuilt. Requires/BindsTo would do the same but also pull docker.service in
+# as a start dependency, which is exactly what the After above stays clear
+# of. PartOf only propagates stop/restart, never start, so boot ordering is
+# unaffected.
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/branchleft-docker-user-policy
+
+[Install]
+WantedBy=multi-user.target
