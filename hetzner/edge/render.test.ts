@@ -4,7 +4,14 @@ import { describe, expect, it } from 'vitest';
 
 import { hostRedirects, sites } from '../../sites';
 import type { EdgeSite, HostRedirect } from '../../siteTypes';
-import { POSTURE, RATE_LIMIT_EVENTS, RATE_LIMIT_WINDOW_SECONDS, TLS_PROTOCOLS } from './posture';
+import {
+  MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS,
+  MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS,
+  POSTURE,
+  RATE_LIMIT_EVENTS,
+  RATE_LIMIT_WINDOW_SECONDS,
+  TLS_PROTOCOLS,
+} from './posture';
 import type { EdgePosture } from './posture';
 import {
   renderAppsecAcquisition,
@@ -167,12 +174,82 @@ describe('the rendered Caddyfile', () => {
     expect(RATE_LIMIT_WINDOW_SECONDS).toBe(60);
   });
 
-  it('throttles first, then checks IP decisions, then inspects, then proxies', () => {
+  it('throttles first (general, then members magic-link), then checks IP decisions, then inspects, then proxies', () => {
     const chain = render(ENFORCING)
       .split('\n')
       .filter((line) => /^\t\t(rate_limit|crowdsec|appsec|reverse_proxy)\b/.test(line))
       .map((line) => line.trim().split(' ')[0]);
-    expect(chain.slice(0, 4)).toEqual(['rate_limit', 'crowdsec', 'appsec', 'reverse_proxy']);
+    expect(chain.slice(0, 5)).toEqual([
+      'rate_limit',
+      'rate_limit',
+      'crowdsec',
+      'appsec',
+      'reverse_proxy',
+    ]);
+  });
+
+  it('throttles the members magic-link path far below the general per-site threshold', () => {
+    const rendered = render(ENFORCING);
+    expect(rendered).toContain('@members_magic_link {');
+    expect(rendered).toContain('method POST');
+    expect(rendered).toContain('rate_limit @members_magic_link {');
+    expect(rendered).toContain(`events ${MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS}`);
+    expect(rendered).toContain(`window ${MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS}s`);
+    expect(MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS).toBeLessThan(RATE_LIMIT_EVENTS / 10);
+  });
+
+  it('matches both the bare path and its trailing-slash form, exactly -- not a prefix wildcard', () => {
+    // Express's default router (strict: false) treats a trailing slash as the
+    // same route, so a matcher that only listed the bare path would let an
+    // attacker who appends '/' spend the general 200/60s zone instead of this
+    // one. A '*' suffix would close that gap too, but would also swallow any
+    // longer, unrelated path sharing this prefix -- exact enumeration is the
+    // narrower fix.
+    const rendered = render(ENFORCING);
+    const matcherBlock = rendered.split('@members_magic_link {')[1]?.split('\n\t}')[0] ?? '';
+    expect(matcherBlock).toContain('path /members/api/send-magic-link /members/api/send-magic-link/');
+    expect(matcherBlock).not.toContain('*');
+  });
+
+  it('needs no case-variant path listed -- Caddy path matching is case-insensitive on the pinned 2.11.4', () => {
+    // Not exercised by the renderer's own output (there is nothing case-variant
+    // to assert in a string it emits); recorded here as the test that would
+    // need to change, and the comment that would need revisiting, if the
+    // Dockerfile's CADDY_VERSION ever moves.
+    const rendered = render(ENFORCING);
+    expect(rendered).not.toMatch(/path .*[A-Z].*[sS]end-[mM]agic-[lL]ink/);
+  });
+
+  it('declares the same members magic-link zone name in every site, unlike the per-site zone above', () => {
+    // Caddy has no "reference a zone declared elsewhere" syntax, so each site's
+    // route carries its own full declaration -- but caddy-ratelimit's zone
+    // registry is keyed by name and shared process-wide (`LoadOrStore`), so
+    // repeating the identical name attaches every site to the same counter
+    // rather than giving each its own, which is what makes this control see a
+    // client across tenant hostnames. `zone one_per_ip` / `zone two_per_ip`
+    // below prove the *general* throttle does the opposite on purpose.
+    const rendered = render(ENFORCING, [
+      site({ name: 'one', hostnames: ['one.test'] }),
+      site({ name: 'two', hostnames: ['two.test'] }),
+    ]);
+    // Three, not two: the loopback probe below carries the same matcher and
+    // zone so the throttle can be trip-tested before any site serves the path.
+    const zoneMatches = rendered.match(/zone members_magic_link_per_ip \{/g) ?? [];
+    expect(zoneMatches).toHaveLength(3);
+    expect(rendered).toContain('zone one_per_ip {');
+    expect(rendered).toContain('zone two_per_ip {');
+  });
+
+  it('carries the members magic-link throttle on the loopback probe too, so it can be trip-tested before any site serves the path', () => {
+    const rendered = render(ENFORCING);
+    const probeBlockText = rendered.split(':8080 {')[1]?.split('\n}')[0] ?? '';
+    expect(probeBlockText).toContain('@members_magic_link {');
+    expect(probeBlockText).toContain('rate_limit @members_magic_link {');
+  });
+
+  it('renders no members magic-link throttle when the rate limiter is off, same as the general one', () => {
+    const rendered = render(DETECT_ONLY);
+    expect(rendered).not.toContain('members_magic_link');
   });
 
   it('gives each site its own throttle zone, so one site cannot spend another site budget', () => {

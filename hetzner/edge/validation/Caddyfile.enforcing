@@ -26,12 +26,23 @@ branchleft.co.uk {
 	tls {
 		protocols tls1.2 tls1.3
 	}
+	@members_magic_link {
+		method POST
+		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
 	route {
 		rate_limit {
 			zone website_per_ip {
 				key {http.request.remote.host}
 				window 60s
 				events 200
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 5
 			}
 		}
 		crowdsec
@@ -66,12 +77,23 @@ www.branchleft.co.uk {
 		output file /var/log/caddy/probe.log
 		format json
 	}
+	@members_magic_link {
+		method POST
+		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
 	route {
 		rate_limit {
 			zone probe_per_ip {
 				key {http.request.remote.host}
 				window 60s
 				events 200
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 5
 			}
 		}
 		crowdsec
