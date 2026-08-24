@@ -275,8 +275,7 @@ rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
   hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/ &&
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
-  'chown -R root:root /opt/branchleft/monitoring/ &&
-   systemctl restart branchleft-compose@monitoring'
+  'chown -R root:root /opt/branchleft/monitoring/'
 ```
 
 `--delete` matters here specifically: `render_alertmanager_config.py` writes
