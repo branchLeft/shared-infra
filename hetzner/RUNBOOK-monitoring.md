@@ -265,7 +265,10 @@ to close that gap. Starting the unit without the drop-in installed fails with:
 branchleft-compose@monitoring.service: Failed to load environment files: No such file or directory
 ```
 
-which reads like a missing secrets file and is not one.
+which names nothing. It has one cause: the drop-in is not installed. A missing
+or blank `/etc/branchleft/monitoring.env` cannot produce it -- the drop-in
+re-adds that file with a leading dash precisely so the failure comes from
+`ExecStartPre` or from Compose, naming the variable.
 
 ## 8. Verify the stack is up
 
