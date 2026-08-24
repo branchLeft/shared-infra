@@ -368,12 +368,16 @@ ssh -i ~/.ssh/id_ed25519_hetzner -L 9090:127.0.0.1:9090 root@46.225.95.167 -N &
 curl -s http://127.0.0.1:9090/api/v1/targets | python3 -m json.tool | grep -E '"job"|"health"'
 ```
 
-Expect `caddy`, `crowdsec`, `cadvisor`, `blackbox_http` (three targets, one
-per `sites.ts` hostname) and the `node` target for `edge1` all `up`. `node`
-for `app1`, `mysqld` for `db1` and `node` for `db1` are expected `down` --
-those hosts have no exporter yet (see `render.ts`'s `MONITORED_NODE_HOSTS`
-docstring). A `down` target with `expected_up: "true"` in its labels is the
-only one worth investigating.
+Expect `prometheus`, `alertmanager`, `caddy`, `crowdsec`, `website`,
+`cadvisor`, `blackbox_http` (three targets, one per `sites.ts` hostname) and
+the `node` target for `edge1` all `up`. `prometheus` and `alertmanager` are
+self-scrapes; `website` is the contact-form send-failure counter on `app1`
+(`render.ts`'s `WEBSITE_METRICS_PORT`) and carries no `expected_up` label, so
+a `down` there cannot page -- this list is the only place its absence would
+be noticed. `node` for `app1`, `mysqld` for `db1` and `node` for `db1` are
+expected `down` -- those hosts have no exporter yet (see `render.ts`'s
+`MONITORED_NODE_HOSTS` docstring). A `down` target with `expected_up: "true"`
+in its labels is the only one worth investigating.
 
 ## 9. Verify Grafana is private-only
 
