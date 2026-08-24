@@ -8,8 +8,12 @@ provisioning scripts in this repo are tested (e.g.
 from __future__ import annotations
 
 import importlib.util
+import os
 import pathlib
+import stat
+import tempfile
 import unittest
+from unittest import mock
 
 MODULE_PATH = pathlib.Path(__file__).resolve().parent / "stack" / "render_alertmanager_config.py"
 
@@ -76,6 +80,87 @@ class RenderTests(unittest.TestCase):
         rendered = render(TEMPLATE, FULL_ENV)
         self.assertIn("smtp_auth_username:", rendered)
         self.assertIn("ping:", rendered)
+
+
+
+class OutputPermissionsTests(unittest.TestCase):
+    """The rendered file must be readable by the process it exists for.
+
+    Alertmanager reads it through a bind mount, which is read as the
+    container-side user (`nobody`) regardless of who wrote the file on the host.
+    A root-owned 0600 file is unreadable to it, and Alertmanager exits with
+    `error loading configuration file: ... permission denied` on every start --
+    while the unit still reports success, because `docker compose up -d --wait`
+    does not catch a container that starts and then dies.
+
+    So the mode must stay 0600 -- the file holds an SMTP password in plaintext,
+    and 0644 would expose it to every other account on the host, including the
+    CI deploy account -- *and* ownership must move to that uid. Both halves are
+    asserted, because either alone leaves the file unreadable or the password
+    over-exposed.
+    """
+
+    def _render_into(self, directory: pathlib.Path) -> pathlib.Path:
+        """Run `main()` with the module rooted at `directory`."""
+        (directory / "alertmanager").mkdir()
+        (directory / "alertmanager" / render_alertmanager_config.TEMPLATE_NAME).write_text(
+            TEMPLATE, encoding="utf-8"
+        )
+        with mock.patch.object(
+            render_alertmanager_config, "__file__", str(directory / "render.py")
+        ), mock.patch.dict(os.environ, FULL_ENV, clear=False):
+            self.assertEqual(render_alertmanager_config.main([]), 0)
+        # `.resolve()`: main() resolves its own path, and on macOS /var is a
+        # symlink to /private/var, so an unresolved path here compares unequal
+        # to the one the module actually used.
+        return (
+            directory / "alertmanager" / render_alertmanager_config.OUTPUT_NAME
+        ).resolve()
+
+    def test_the_rendered_file_is_0600(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self._render_into(pathlib.Path(tmp))
+
+            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+
+    def test_it_chowns_to_the_container_uid_when_running_as_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(os, "geteuid", return_value=0), mock.patch.object(
+                os, "chown"
+            ) as chown:
+                output = self._render_into(pathlib.Path(tmp))
+
+            chown.assert_called_once_with(
+                output,
+                render_alertmanager_config.ALERTMANAGER_UID,
+                render_alertmanager_config.ALERTMANAGER_UID,
+            )
+
+    def test_it_does_not_chown_when_not_root(self) -> None:
+        """CI and a local render have no container to read the file and no
+        privilege to chown with; attempting it would fail the whole render."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(os, "geteuid", return_value=1000), mock.patch.object(
+                os, "chown"
+            ) as chown:
+                self._render_into(pathlib.Path(tmp))
+
+            chown.assert_not_called()
+
+    def test_the_container_uid_is_nobody(self) -> None:
+        """65534 is `nobody` in the prom/alertmanager image. If a future image
+        changes its user, this is the one constant to move."""
+        self.assertEqual(render_alertmanager_config.ALERTMANAGER_UID, 65534)
+
+    def test_the_secret_never_becomes_world_readable(self) -> None:
+        """The whole point of chowning rather than widening the mode."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self._render_into(pathlib.Path(tmp))
+
+            mode = stat.S_IMODE(output.stat().st_mode)
+            self.assertEqual(mode & stat.S_IRGRP, 0)
+            self.assertEqual(mode & stat.S_IROTH, 0)
+            self.assertIn(FULL_ENV["SMTP_PASSWORD"], output.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

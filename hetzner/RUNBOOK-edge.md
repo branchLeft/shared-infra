@@ -168,7 +168,8 @@ configuration, and the generated CrowdSec acquisition files. It is copied
 verbatim.
 
 ```bash
-rsync -av --delete -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
+rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
+  -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
   hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/
 ```
 
@@ -474,7 +475,8 @@ re-copy:
 
 ```bash
 git checkout <PREVIOUS_MERGED_SHA> -- hetzner/edge/stack
-rsync -av --delete -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
+rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
+  -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
   hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
   'systemctl restart branchleft-compose@edge'
