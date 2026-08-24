@@ -31,6 +31,7 @@ needed to change.
 | `61-provision-blog-submission-credential.sh` / `provision_website_submission_credential.py`    | Same script as `60-...sh`, parameterised via environment variables for the blog's dedicated, submission-only SMTP credential (send-as `blog@`) instead. See "Blog submission credential" below.                                                  |
 | `62-provision-shim-submission-credential.sh` / `provision_website_submission_credential.py`    | Same script again, parameterised for the mailgun-shim's own bulk-mail submission credential (send-as `blog@`, independently revocable from `61`'s transactional one). See "Mailgun shim (bulk mail)" below.                                      |
 | `63-deploy-mailgun-shim.sh` / `render_shim_env.py`                                             | Installs and starts the mailgun-shim + Caddy compose stack (`shim-compose.yml`, `Caddyfile`) behind TLS on `8443`. See "Mailgun shim (bulk mail)" below.                                                                                         |
+| `64-provision-alerting-submission-credential.sh`                                                | Provisions Alertmanager's submission-only SMTP credential (send-as `alerts@`). Same script as 60/61/62, different parameters. Runs *before* `63` in `run-all.sh` — see "Alerting submission credential" below.                                    |
 | `65-install-local-resolver.sh`                                                                 | Installs `unbound` as a loopback-only, fully recursive resolver (no forwarders) so DNSBL queries originate from mx1's own IP. Leaves `/etc/resolv.conf` alone. See "Local recursive resolver" below.                                             |
 | `70-schedule-dnsbl-check.sh`                                                                   | Idempotently installs the hourly `/etc/cron.d/dnsbl-check` entry that runs `check_dnsbl_blocklist.py`. See "DNSBL blocklist monitoring" below.                                                                                                   |
 | `check_dnsbl_blocklist.py`                                                                     | Not part of `run-all.sh` directly (it's what the cron entry above runs) — checks mx1's IP against five DNSBLs, alerting on any listing. `--status` prints the last recorded result without querying DNS. See "DNSBL blocklist monitoring" below. |
@@ -41,9 +42,18 @@ needed to change.
 Run the whole set:
 
 ```bash
-scp -r mail/provision root@<mail-host>:/root/mail-provision
+scp -r mail/provision/. root@<mail-host>:/root/mail-provision
 ssh root@<mail-host> 'chmod +x /root/mail-provision/*.sh /root/mail-provision/*.py && /root/mail-provision/run-all.sh'
 ```
+
+**The trailing `/.` on the `scp` source is load-bearing**, the same way it is
+in `hetzner/RUNBOOK-provision-host.md`. `/root/mail-provision` already exists on
+any host that has been provisioned once, and without the `/.` a recursive copy
+nests the tree at `/root/mail-provision/provision/` rather than replacing it --
+leaving the old scripts exactly where the next line executes them. That failure
+is silent: the previous `provision_mailboxes.py` runs, finds every mailbox it
+knows about already present, and prints `no-op`, which is indistinguishable
+from success.
 
 (No CI/CD path deploys this. `.github/workflows/ci.yml`'s `mail-typecheck`
 job type-checks the Pulumi program and its `mail-provision-checks` job
@@ -218,7 +228,7 @@ If the import has not run at all, 443 lands in the same `pulumi up` that opens
 
 `50-provision-mailboxes.sh` runs `provision_mailboxes.py`, which creates real
 mailbox accounts — `rob@`, `contact@`, `info@`, `sales@`, `complaints@`,
-`abuse@`, `blog@` and `acme@` at `branchleft.co.uk` (`MAILBOXES`) — each with
+`abuse@`, `blog@`, `acme@` and `alerts@` at `branchleft.co.uk` (`MAILBOXES`) — each with
 its own storage, not an alias, and gives each role address (not `rob@`;
 `ROLE_ADDRESSES`) a per-mailbox Sieve script that copies inbound mail to
 `rob@` without suppressing the original delivery. `blog@` gets a mailbox and
@@ -227,7 +237,23 @@ uses to _send_ mail is a separate app password, see "Blog submission
 credential" below. `acme@` is the mailbox the Hetzner edge's `ACME_EMAIL`
 points at (`hetzner/RUNBOOK-edge.md`) — where Let's Encrypt sends
 certificate-expiry warnings, so it needs the same real storage and copy-
-forward as any other role address, not just an alias.
+forward as any other role address, not just an alias. `alerts@` is the account
+Alertmanager's submission credential authenticates into and sends as
+(`hetzner/RUNBOOK-monitoring.md`); what arrives *in* it is bounces and replies
+to alert mail, which is why it gets the same real storage and copy-forward.
+
+**Every role script carries exactly one `redirect`, and that is a constraint
+rather than a style.** Stalwart caps an untrusted Sieve script at
+`maxRedirects` — [default `1`](https://stalw.art/docs/sieve/interpreter/untrusted/)
+— redirections per execution, and `configure_stalwart.py` never materialises
+the `SieveUserInterpreter` singleton, so the default applies. A second
+`redirect` compiles, activates, and diffs clean on a re-run; it is dropped at
+*delivery*, silently. So a copy to an address off this host cannot be added
+here. Mail reaches an off-host address by being **sent** there — for alerting,
+that is the monitoring stack's `ALERT_RECIPIENT_EMAIL` — which is also the
+correct mechanism for a second reason: a plain Sieve `redirect` preserves the
+original envelope sender and does no SRS, so forwarded mail fails SPF at the
+receiving provider and costs mx1 reputation while its IP is still warming.
 
 Any standard IMAP client reads these mailboxes: `<mail-host>` port 993
 (SSL/TLS) for IMAP, port 587 (STARTTLS) for submission, username the full
@@ -649,7 +675,7 @@ deploy and for every later change (a new compose file, a new Caddyfile, a
 rotated credential via a fresh `62` run, or a new shim image digest):
 
 ```bash
-scp -i ~/.ssh/id_ed25519_hetzner -r mail/provision root@mx1.branchleft.co.uk:/root/mail-provision
+scp -i ~/.ssh/id_ed25519_hetzner -r mail/provision/. root@mx1.branchleft.co.uk:/root/mail-provision
 ssh root@<mail-host> 'chmod +x /root/mail-provision/*.sh /root/mail-provision/*.py && /root/mail-provision/62-provision-shim-submission-credential.sh && /root/mail-provision/63-deploy-mailgun-shim.sh'
 ```
 
@@ -726,6 +752,43 @@ In order, once the image digest is real:
 3. Run the deploy procedure above (`62` then `63`).
 4. Run the tenant registration command above and hand the printed API key to
    wherever the sending application reads it from.
+
+## Alerting submission credential
+
+`64-provision-alerting-submission-credential.sh` runs the same
+`provision_website_submission_credential.py` as the website, blog and shim
+steps, parameterised for Alertmanager:
+
+| Variable | Value |
+|---|---|
+| `SEND_AS_LOCAL` | `alerts` |
+| `CREDENTIAL_LABEL` | `alerting-submission` |
+| `APP_PASSWORD_DESCRIPTION` | `monitoring-alert-relay` |
+
+**The username is the full address, `alerts@branchleft.co.uk`** — not the local
+part. Stalwart's `must_match_sender` restriction rejects a submission whose
+authenticated identity does not match the `From:`, and
+`hetzner/monitoring/render.ts` renders `smtp_from: 'alerts@branchleft.co.uk'`,
+so `alerts` alone fails every send. The secret is written to
+`/root/.stalwart-service-credentials` under the `alerting-submission` label; the
+"If the create response is lost" recovery above applies to it unchanged.
+
+It is in `run-all.sh` ahead of `63-deploy-mailgun-shim.sh` rather than after
+it, despite the numbering — see the comment at the top of `run-all.sh`.
+
+### Live validation
+
+The other submission credentials each have one, and this one needs it more:
+**nothing else detects a broken alert path.** Alertmanager's Watchdog goes to a
+`webhook_configs` receiver (Healthchecks.io), not to `email_configs`, so a
+credential that cannot authenticate leaves every health signal green — the
+heartbeat keeps pinging, `docker ps` is clean, and no alert email is ever
+delivered.
+
+`hetzner/RUNBOOK-monitoring.md` §12's first proof is that validation: trigger a
+real alert and confirm it arrives at `ALERT_RECIPIENT_EMAIL`. Alertmanager's
+API reporting a notification as dispatched does not prove delivery, and neither
+does this script exiting 0.
 
 ## DNSBL blocklist monitoring
 

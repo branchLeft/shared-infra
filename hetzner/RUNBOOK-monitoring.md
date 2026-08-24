@@ -136,8 +136,12 @@ rsync -av --delete -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
 
 ## 2. Provision the Alertmanager submission credential
 
-`mail/` is read-only to this story -- its provisioning tooling is generic and
-already supports a new credential without any code change.
+`mail/` needed one change for this story, and only one: the mailbox. Its
+credential tooling is genuinely generic -- but
+`provision_website_submission_credential.py` authenticates into an *existing*
+account, and `provision_mailboxes.py`'s `MAILBOXES` is a hardcoded tuple with
+no environment override, so `alerts@` had to be added there and provisioned on
+mx1 before any of this works.
 `mail/provision/provision_website_submission_credential.py` provisions one
 submission-only SMTP credential per invocation, parameterised by
 `SEND_AS_LOCAL`, `CREDENTIAL_LABEL` and `APP_PASSWORD_DESCRIPTION` (see
@@ -147,8 +151,42 @@ as that address -- provision an `alerts` mailbox first via
 `mail/provision/provision_mailboxes.py` if one does not already exist, per
 `mail/RUNBOOK-mx1-provision.md`.
 
+Both steps are `run-all.sh` entries, so a rebuilt host restores them without a
+runbook: `50-provision-mailboxes.sh` creates the mailbox and its copy-forward
+to `rob@`, and `64-provision-alerting-submission-credential.sh` provisions the
+credential itself.
+
+```bash
+scp -i ~/.ssh/id_ed25519_hetzner -r mail/provision/. root@mx1.branchleft.co.uk:/root/mail-provision
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk '
+  chmod +x /root/mail-provision/*.sh /root/mail-provision/*.py &&
+  /root/mail-provision/50-provision-mailboxes.sh &&
+  /root/mail-provision/64-provision-alerting-submission-credential.sh'
+```
+
+The trailing `/.` is load-bearing -- without it a recursive copy nests the tree
+inside the existing directory and the *old* scripts run, printing `no-op` and
+looking like success. See `mail/RUNBOOK-mx1-provision.md`.
+
+**`SMTP_USERNAME` is `alerts@branchleft.co.uk`, the full address**, not the
+local part: Stalwart's `must_match_sender` rejects a submission whose
+authenticated identity does not match the `From:`, and `monitoring/render.ts`
+renders `smtp_from: 'alerts@branchleft.co.uk'`. `SMTP_PASSWORD` is the secret
+the script records under the `alerting-submission` label -- see
+`mail/RUNBOOK-mx1-provision.md`'s "Alerting submission credential".
+
+`alerts@` copies inbound mail to `rob@` only, and carries no second redirect to
+an address off mx1 -- one is the cap, and the reasoning is in
+`mail/RUNBOOK-mx1-provision.md#mailbox-provisioning`. **This is not a mitigated
+gap, it is an accepted one:** alert email is submitted *through* mx1, so when
+mx1 is down no alert mail is sent at all, and no Sieve rule on that host could
+have helped either. `ALERT_RECIPIENT_EMAIL` being off-mx1 covers a different
+case -- mx1 up, the alerting mailbox unreachable or unread. The only thing that
+reports an mx1-down or edge1-down condition is the Healthchecks.io dead-man's
+switch in 11, which is why 12's second proof is not optional.
+
 This step, the mailbox decision and the resulting credential are all
-platform-owner-gated -- see the PR's handover steps for the exact command.
+platform-owner-gated -- mx1 is live production mail.
 
 ## 3. Write the stack's secrets on the host
 

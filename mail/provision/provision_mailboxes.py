@@ -55,11 +55,16 @@ MAIL_DOMAIN = os.environ.get("MAIL_DOMAIN", "branchleft.co.uk")
 # ownership verification and RFC 2142 abuse-reporting convention -- and for
 # blog@ -- the account the blog's submission-only SMTP credential
 # authenticates into and sends as, see provision_website_submission_credential.py
-# -- and for acme@ -- the Hetzner edge's ACME_EMAIL, see hetzner/RUNBOOK-edge.md).
-MAILBOXES = ("rob", "contact", "info", "sales", "complaints", "abuse", "blog", "acme")
+# -- and for acme@ -- the Hetzner edge's ACME_EMAIL, see hetzner/RUNBOOK-edge.md
+# -- and for alerts@ -- the account Alertmanager's submission-only SMTP
+# credential authenticates into and sends as, see hetzner/RUNBOOK-monitoring.md).
+MAILBOXES = ("rob", "contact", "info", "sales", "complaints", "abuse", "blog", "acme", "alerts")
 
 # The ones that get a copy-forward to rob@ -- rob@ itself gets no script.
-ROLE_ADDRESSES = ("contact", "info", "sales", "complaints", "abuse", "blog", "acme")
+# Exactly one `redirect` each, never two: a second is dropped at delivery while
+# the script still compiles and diffs clean. See
+# mail/RUNBOOK-mx1-provision.md#mailbox-provisioning.
+ROLE_ADDRESSES = ("contact", "info", "sales", "complaints", "abuse", "blog", "acme", "alerts")
 
 FORWARD_TARGET = f"rob@{MAIL_DOMAIN}"
 SIEVE_SCRIPT_NAME = "forward-copy-to-rob"
