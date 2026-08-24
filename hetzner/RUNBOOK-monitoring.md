@@ -168,7 +168,9 @@ twice.
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/
+  hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  'chown -R root:root /opt/branchleft/edge/'
 ```
 
 ## 2. Provision the Alertmanager submission credential
@@ -271,31 +273,33 @@ Expect `-rw------- 1 root root`. Do not print the file.
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/
+  hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  'chown -R root:root /opt/branchleft/monitoring/'
 ```
 
 `--delete` matters here specifically: `render_alertmanager_config.py` writes
 `alertmanager/alertmanager.yml` on the host, which does not exist in the
 committed tree, so every copy deletes the previous render. That is expected
--- step 7's `ExecStartPre` regenerates it before every start.
+-- step 7's `ExecStartPre` regenerates it before every start. The `chown`
+corrects file ownership on the receiving end, covering both files and directories.
+
+**Note: `alertmanager/alertmanager.yml` must remain owned by uid 65534.** See
+`render_alertmanager_config.py` — Alertmanager runs as `nobody` and a bind mount
+is read as the container-side user, so a root-owned file becomes unreadable.
 
 ## 5. Install the systemd cgroup drop-ins
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
-  install -d -m 0755 /etc/systemd/system/branchleft-compose@edge.service.d \
-                      /etc/systemd/system/branchleft-compose@monitoring.service.d'
-
-scp -i ~/.ssh/id_ed25519_hetzner \
-  hetzner/monitoring/systemd/edge.override.conf \
-  root@46.225.95.167:/etc/systemd/system/branchleft-compose@edge.service.d/override.conf
-
-scp -i ~/.ssh/id_ed25519_hetzner \
-  hetzner/monitoring/systemd/monitoring.override.conf \
-  root@46.225.95.167:/etc/systemd/system/branchleft-compose@monitoring.service.d/override.conf
-
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 'systemctl daemon-reload'
+hetzner/provision/install-systemd-drop-ins.sh root@46.225.95.167
 ```
+
+The script walks every committed `*/systemd/*.override.conf` under
+`hetzner/` -- the same search `drop_in_for()` in
+`test_compose_unit_contract.py` uses -- so it installs `edge.override.conf`
+and `monitoring.override.conf` today, and any future drop-in with no script
+change. It creates each unit's `.service.d` directory, copies the drop-in
+in, and reloads systemd once at the end.
 
 Neither drop-in takes effect until the affected unit next starts or
 restarts -- step 6 does that for `edge`, and step 7's first-ever start does
@@ -368,12 +372,16 @@ ssh -i ~/.ssh/id_ed25519_hetzner -L 9090:127.0.0.1:9090 root@46.225.95.167 -N &
 curl -s http://127.0.0.1:9090/api/v1/targets | python3 -m json.tool | grep -E '"job"|"health"'
 ```
 
-Expect `caddy`, `crowdsec`, `cadvisor`, `blackbox_http` (three targets, one
-per `sites.ts` hostname) and the `node` target for `edge1` all `up`. `node`
-for `app1`, `mysqld` for `db1` and `node` for `db1` are expected `down` --
-those hosts have no exporter yet (see `render.ts`'s `MONITORED_NODE_HOSTS`
-docstring). A `down` target with `expected_up: "true"` in its labels is the
-only one worth investigating.
+Expect `prometheus`, `alertmanager`, `caddy`, `crowdsec`, `website`,
+`cadvisor`, `blackbox_http` (three targets, one per `sites.ts` hostname) and
+the `node` target for `edge1` all `up`. `prometheus` and `alertmanager` are
+self-scrapes; `website` is the contact-form send-failure counter on `app1`
+(`render.ts`'s `WEBSITE_METRICS_PORT`) and carries no `expected_up` label, so
+a `down` there cannot page -- this list is the only place its absence would
+be noticed. `node` for `app1`, `mysqld` for `db1` and `node` for `db1` are
+expected `down` -- those hosts have no exporter yet (see `render.ts`'s
+`MONITORED_NODE_HOSTS` docstring). A `down` target with `expected_up: "true"`
+in its labels is the only one worth investigating.
 
 ## 9. Verify Grafana is private-only
 
@@ -508,9 +516,10 @@ re-copy, restart.
 git checkout <PREVIOUS_MERGED_SHA> -- hetzner/monitoring/stack
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/
+  hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/ &&
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
-  'systemctl restart branchleft-compose@monitoring'
+  'chown -R root:root /opt/branchleft/monitoring/ &&
+   systemctl restart branchleft-compose@monitoring'
 ```
 
 Then `git checkout HEAD -- hetzner/monitoring/stack` on the workstation. If
