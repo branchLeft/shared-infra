@@ -129,13 +129,34 @@ describe('Host', () => {
       privateIp: '10.20.1.20',
     });
     const server = resources.find((r) => r.type === 'hcloud:index/server:Server');
-    expect(server?.inputs.networks).toEqual([
-      { networkId: 4242, ip: '10.20.1.20', aliasIps: [] },
-    ]);
+    expect(server?.inputs.networks).toEqual([{ networkId: 4242, ip: '10.20.1.20', aliasIps: [] }]);
     expect(
       resources.filter((r) => r.type === 'hcloud:index/serverNetwork:ServerNetwork')
     ).toHaveLength(0);
     expect(host.networkAttachment).toBeUndefined();
+  });
+
+  it('threads privateOnly into cloud-init so a private-only host boots with a route', async () => {
+    // A private-only host's DHCP lease never carries a default route
+    // (hetzner/egress.ts), so first-boot package installation has nowhere to
+    // reach unless cloud-init's userData carries the bootstrap
+    // renderCloudInit adds for `privateOnly: true`. This is the only thing
+    // wiring `publicNetworking` on `Host` to that flag; a regression here is
+    // silent until a private-only host's first apt run fails.
+    const { resources } = await build({
+      name: 'priv3',
+      role: 'db',
+      publicNetworking: false,
+      privateIp: '10.20.1.21',
+    });
+    const server = resources.find((r) => r.type === 'hcloud:index/server:Server');
+    expect(server?.inputs.userData as string).toContain('ip route replace default via');
+  });
+
+  it('does not add the private-only bootstrap to a public host', async () => {
+    const { resources } = await build({ name: 'pub2', role: 'app', privateIp: '10.20.1.101' });
+    const server = resources.find((r) => r.type === 'hcloud:index/server:Server');
+    expect(server?.inputs.userData as string).not.toContain('ip route replace');
   });
 
   it('attaches a public host to the private network at the address it was given', async () => {

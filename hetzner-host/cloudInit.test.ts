@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { assertDeployPublicKey } from './cloudInit';
+import { assertDeployPublicKey, renderCloudInit } from './cloudInit';
 
 /**
  * `renderCloudInit` builds a `#cloud-config` document that creates the `deploy`
@@ -98,5 +98,90 @@ describe('assertDeployPublicKey', () => {
     } catch (error) {
       expect((error as Error).message).not.toContain('secret-material');
     }
+  });
+});
+
+/**
+ * A private-only host's DHCP lease carries the private subnet route and the
+ * metadata route, but never a default one, and no resolver at all -- so
+ * without this, `package_update` below is the first thing on such a host
+ * with nowhere to reach, and cloud-init's package installation fails for the
+ * whole of first boot. `privateOnly` is what threads that host shape through
+ * from `Host`.
+ *
+ * The bootstrap has to land in `bootcmd`, not `runcmd`: `runcmd`'s own
+ * module only writes the command list to disk during cloud-init's config
+ * stage, and that script is not actually executed until `scripts-user`,
+ * which runs near the end of the *later* final stage -- after
+ * `package-update-upgrade-install`, which sits at the *start* of that same
+ * final stage. Putting the bootstrap in `runcmd` would place it in the
+ * document but have it execute too late to help, which is exactly what an
+ * earlier version of this file got wrong (and asserted incorrectly, via a
+ * test that only checked string position in the rendered YAML rather than
+ * which module the position belongs to). `bootcmd` is a distinct, earlier
+ * module in cloud-init's *init* stage, which precedes both config and final
+ * — the assertions below check block membership, not text order, because
+ * text order is exactly what let the wrong placement pass before.
+ */
+describe('renderCloudInit', () => {
+  const BASE = {
+    hostname: 'db1',
+    deployPublicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLE deploy@db1',
+  };
+
+  async function render(privateOnly: boolean): Promise<string> {
+    return new Promise((resolve) => {
+      renderCloudInit({ ...BASE, privateOnly }).apply(resolve);
+    });
+  }
+
+  /**
+   * Extracts the content of one top-level cloud-config block, from
+   * `key:` to (exclusive) the next top-level key, or to the end of the
+   * document when `key` is the last block. A plain substring search would
+   * be fooled by the same failure this file exists to catch: text that is
+   * merely *near* `runcmd:` is not the same as text `scripts-user` will
+   * actually execute as part of it.
+   */
+  function block(document: string, key: string): string {
+    const startMatch = document.match(new RegExp(`\\n${key}:\\n?`));
+    if (!startMatch || startMatch.index === undefined) {
+      return '';
+    }
+    const rest = document.slice(startMatch.index + startMatch[0].length);
+    const nextKey = rest.match(/\n[a-zA-Z_-]+:/);
+    return nextKey && nextKey.index !== undefined ? rest.slice(0, nextKey.index) : rest;
+  }
+
+  it('adds no bootcmd block at all for a host with a public interface', async () => {
+    const document = await render(false);
+    expect(document).not.toContain('bootcmd:');
+    expect(document).not.toContain('ip route replace');
+    expect(document).not.toContain('resolvconf');
+  });
+
+  it('puts the route and resolver bootstrap in bootcmd for a private-only host', async () => {
+    const document = await render(true);
+    const bootcmd = block(document, 'bootcmd');
+    expect(bootcmd).toContain('ip route replace default via');
+    expect(bootcmd).toContain('resolvconf -u');
+    expect(bootcmd).toContain('185.12.64.1');
+    expect(bootcmd).toContain('185.12.64.2');
+  });
+
+  it('never puts the bootstrap in runcmd, which executes too late to help', async () => {
+    const document = await render(true);
+    const runcmd = block(document, 'runcmd');
+    expect(runcmd).not.toContain('ip route replace');
+    expect(runcmd).not.toContain('resolvconf');
+    // The existing runcmd entries are still exactly where they were.
+    expect(runcmd).toContain('/etc/branchleft');
+    expect(runcmd).toContain('sshd');
+  });
+
+  it('emits exactly one bootcmd block and one runcmd block', async () => {
+    const document = await render(true);
+    expect(document.split('bootcmd:').length - 1).toBe(1);
+    expect(document.split('runcmd:').length - 1).toBe(1);
   });
 });

@@ -1,0 +1,19 @@
+# Reasserts a private-only host's default route and resolver at every boot.
+# Neither survives a reboot on its own: the route is kernel state nothing
+# persists, and re-running the reconciler is the mechanism, not a fallback.
+[Unit]
+Description=branchLeft private host egress (route + resolver)
+# After, not Requires: the reconciler no-ops immediately on a host with a
+# public interface, and such a host must still boot cleanly if
+# network-online.target is ever slow to report -- this unit is never on the
+# critical path for a host that does not need it.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/branchleft-host-egress
+
+[Install]
+WantedBy=multi-user.target

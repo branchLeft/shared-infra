@@ -18,15 +18,16 @@ than a step inside it.
 
 ## What each script does
 
-| Script                          | Effect                                                                                                                  |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `00-harden-ssh.sh`              | Reasserts the key-only SSH drop-in, then fails the run if `sshd -T` shows another drop-in outranking it                 |
-| `10-harden-updates-fail2ban.sh` | Installs and enables `unattended-upgrades` and `fail2ban`, with an SSH jail this repo owns                              |
-| `20-install-docker.sh`          | Installs Docker CE from Docker's apt repo, and reconciles the signing key and apt source on every run                   |
-| `30-install-deploy-tooling.sh`  | Installs `branchleft-compose@.service` and `/usr/local/sbin/branchleft-deploy`, and verifies the sudoers drop-in parses |
-| `nat-gateway.sh`                | **Gateway host only.** Installs the NAT reconciler and the unit that reasserts it at boot, then runs it once            |
+| Script                          | Effect                                                                                                                                             |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `00-harden-ssh.sh`              | Reasserts the key-only SSH drop-in, then fails the run if `sshd -T` shows another drop-in outranking it                                            |
+| `05-configure-host-egress.sh`   | Installs the private-host-egress reconciler and the unit that reasserts it at boot, then runs it once. A no-op on any host with a public interface |
+| `10-harden-updates-fail2ban.sh` | Installs and enables `unattended-upgrades` and `fail2ban`, with an SSH jail this repo owns                                                         |
+| `20-install-docker.sh`          | Installs Docker CE from Docker's apt repo, and reconciles the signing key and apt source on every run                                              |
+| `30-install-deploy-tooling.sh`  | Installs `branchleft-compose@.service` and `/usr/local/sbin/branchleft-deploy`, and verifies the sudoers drop-in parses                            |
+| `nat-gateway.sh`                | **Gateway host only.** Installs the NAT reconciler and the unit that reasserts it at boot, then runs it once                                       |
 
-`run-all.sh` runs the first four in order. Every one of them is idempotent:
+`run-all.sh` runs the first five in order. Every one of them is idempotent:
 re-running the set is a no-op on a host that is already correct, which is what
 makes this the right response to "I am not sure whether that host is current".
 
@@ -52,6 +53,50 @@ scripts is not on its own enough to repair that.
 The gateway is `edge1`, at `10.20.1.10`, which is the address the route names.
 It is the only host in the estate that already terminates public traffic, so
 it is the only one whose forwarding adds no exposure that did not exist.
+
+**A third precondition sits on the private-only host itself.** Hetzner's DHCP
+delivers the subnet route (`10.20.0.0/16 via <gateway>`) and the metadata
+route, but never a default route and no resolver at all — the network and
+gateway halves above only give the _network_ a path out; nothing tells the
+host to use it. `05-configure-host-egress.sh` (part of `run-all.sh`) and the
+matching `bootcmd` entries in `hetzner-host`'s cloud-init are that third
+half: the script installs a reconciler and a boot-time unit that derive the
+gateway from the host's own routing table and keep the default route and the
+Hetzner-recursor resolver config (`185.12.64.1` / `185.12.64.2`) true across
+every reboot.
+
+Cloud-init covers the gap before `run-all.sh` has ever run — but only from
+`bootcmd`, not `runcmd`. `runcmd`'s own module merely writes its command list
+to disk during cloud-init's config stage; the script it writes is not
+executed until `scripts-user`, near the end of the _later_ final stage, and
+`package_update`/`packages` install from a module at the _start_ of that
+same final stage. A `runcmd` entry would still run after package
+installation had already failed. `bootcmd` is the one placement early enough
+— it runs in cloud-init's first (init) stage, ahead of both — and, because it
+re-runs on every boot rather than once, it also covers every reboot between
+first boot and `run-all.sh` actually taking over the same job permanently.
+
+Verify it on a host that has already had `run-all.sh` run:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<host-private-ip> '
+  ip route show default
+  systemctl is-enabled branchleft-host-egress.service
+  cat /etc/resolvconf/resolv.conf.d/head
+'
+```
+
+Expect a `default` line via the private gateway, `enabled`, and the two
+Hetzner nameservers. A host created before this fix existed, and not yet
+re-provisioned with it, loses the route on every reboot until `run-all.sh` is
+re-run; the immediate one-line repair, run on the host itself, derives the
+gateway the same way the reconciler does rather than restating an address
+that is only true for one host today — and fails closed the same way too,
+rather than guessing among more than one candidate route:
+
+```bash
+GW=$(ip -4 route show | awk '$1 != "default" && $1 != "169.254.169.254" && /via/{c++; for(i=1;i<=NF;i++) if($i=="via") g=$(i+1)} END{if(c==1) print g}'); [ -n "$GW" ] && ip route replace default via "$GW" || echo "no single candidate route found, not applying anything" >&2
+```
 
 ### 1. Apply the route
 
@@ -174,7 +219,7 @@ it after a Docker reinstall: the rules live in netfilter, and the chain they
 are inserted into is one Docker owns.
 
 The trailing `/.` on the `scp` source is load-bearing: without it, `scp -r`
-copies the directory *inside* the destination once the destination already
+copies the directory _inside_ the destination once the destination already
 exists, nesting a stale copy under a fresh one on any re-run. The destination
 itself must carry **no** trailing slash — `scp` in SFTP mode fails outright on
 a destination with one if the destination does not yet exist, which is

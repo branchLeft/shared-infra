@@ -184,6 +184,7 @@ export class Host extends pulumi.ComponentResource {
         userData: renderCloudInit({
           hostname: args.name,
           deployPublicKey: args.deployPublicKey,
+          privateOnly: !wantsPublicNetworking,
         }),
         // Declared on the server rather than through a separate attachment
         // resource: this is the only place the provider treats the firewall
