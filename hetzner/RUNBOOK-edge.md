@@ -170,11 +170,17 @@ verbatim.
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/
+  hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  'chown -R root:root /opt/branchleft/edge/'
 ```
 
 `--delete` is deliberate: a stale acquisition file left behind from an earlier
-copy is a CrowdSec configuration nobody is reading in the repository.
+copy is a CrowdSec configuration nobody is reading in the repository. The `chown`
+corrects file ownership on the receiving end, covering both files and directories;
+`rsync --no-owner --no-group` does not modify existing file ownership, so an
+explicit chown is needed to fix files that were copied with incorrect ownership
+from a previous deployment.
 
 ## 5. Enable the unit
 
@@ -477,9 +483,10 @@ re-copy:
 git checkout <PREVIOUS_MERGED_SHA> -- hetzner/edge/stack
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/
+  hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/ &&
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
-  'systemctl restart branchleft-compose@edge'
+  'chown -R root:root /opt/branchleft/edge/ &&
+   systemctl restart branchleft-compose@edge'
 ```
 
 Then `git checkout HEAD -- hetzner/edge/stack` on the workstation, so the
