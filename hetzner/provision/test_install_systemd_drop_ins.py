@@ -43,6 +43,11 @@ printf 'scp %s\\n' "$*" >> "$CAPTURE"
 exit 0
 """
 
+FAKE_SCP_FAILS = """#!/usr/bin/env bash
+printf 'scp %s\\n' "$*" >> "$CAPTURE"
+exit 1
+"""
+
 
 def committed_drop_ins() -> list[pathlib.Path]:
     """Every committed instance drop-in, found the same way drop_in_for() in
@@ -75,11 +80,15 @@ class InstallSystemdDropInsTests(unittest.TestCase):
         mode = stat.S_IMODE(os.stat(path).st_mode)
         os.chmod(path, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
-    def run_script(self, *args):
+    def run_script(self, *args, hetzner_root=None, extra_env=None):
         env = dict(os.environ)
         env["PATH"] = self.bin_dir + os.pathsep + env.get("PATH", "")
         env["CAPTURE"] = self.capture
         env["SSH_KEY"] = "/fake/id_ed25519_hetzner"
+        if hetzner_root is not None:
+            env["HETZNER_ROOT"] = hetzner_root
+        if extra_env:
+            env.update(extra_env)
         return subprocess.run(
             ["bash", str(SCRIPT), *args],
             env=env,
@@ -87,6 +96,20 @@ class InstallSystemdDropInsTests(unittest.TestCase):
             text=True,
             check=False,
         )
+
+    def make_drop_in_tree(self, layout: dict[str, str]) -> str:
+        """A throwaway `*/systemd/*.override.conf` tree, keyed by relative
+        path (e.g. "monitoring/systemd/edge.override.conf"), for tests that
+        need a drop-in set the real committed tree does not have -- a
+        collision, in particular, which the repository correctly has none
+        of."""
+        root = os.path.join(self.tmp.name, "hetzner-root")
+        for relative_path, content in layout.items():
+            full = os.path.join(root, relative_path)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "w", encoding="utf-8") as handle:
+                handle.write(content)
+        return root
 
     def captured(self) -> list[str]:
         if not os.path.exists(self.capture):
@@ -159,6 +182,53 @@ class InstallSystemdDropInsTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("usage", result.stderr.lower())
         self.assertEqual(self.captured(), [])
+
+    def test_two_drop_ins_for_the_same_stack_are_refused_rather_than_raced(self):
+        # Two different committed paths both naming the "edge" instance --
+        # exactly what drop_in_for() in test_compose_unit_contract.py already
+        # raises AssertionError for. This script has no access to that
+        # function, so it has to refuse the same shape on its own account
+        # rather than silently letting the later scp win.
+        root = self.make_drop_in_tree(
+            {
+                "monitoring/systemd/edge.override.conf": "[Service]\n",
+                "edge/systemd/edge.override.conf": "[Service]\n",
+            }
+        )
+        result = self.run_script("root@testhost", hetzner_root=root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("more than one drop-in for edge", result.stderr)
+        self.assertFalse(
+            [line for line in self.captured() if "daemon-reload" in line],
+            "must not reach systemctl daemon-reload after refusing a collision",
+        )
+
+    def test_a_non_default_ifs_does_not_change_which_directories_are_created(self):
+        # ${array[*]} joins with the first character of $IFS, not a literal
+        # space -- an inherited IFS="" would silently concatenate every
+        # instance directory into one bogus path. The install command must
+        # list both real directories, space-separated, regardless.
+        result = self.run_script("root@testhost", extra_env={"IFS": ""})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        install_line = next(
+            line for line in self.captured() if line.startswith("ssh ") and "install -d" in line
+        )
+        for drop_in in committed_drop_ins():
+            stack = stack_name(drop_in)
+            self.assertIn(
+                f" /etc/systemd/system/branchleft-compose@{stack}.service.d",
+                install_line,
+                "expected a space-separated directory, not one concatenated with its neighbour",
+            )
+
+    def test_a_failed_copy_aborts_before_reload(self):
+        self._write_fake(os.path.join(self.bin_dir, "scp"), FAKE_SCP_FAILS)
+        result = self.run_script("root@testhost")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(
+            [line for line in self.captured() if "daemon-reload" in line],
+            "systemd must not be reloaded against a partially copied set of drop-ins",
+        )
 
 
 class RunbookInvokesTheScriptTests(unittest.TestCase):
