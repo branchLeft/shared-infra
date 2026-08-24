@@ -7,6 +7,7 @@ convenience behaviour, and both are covered here rather than left to a live
 deploy to discover.
 """
 
+import io
 import os
 import stat
 import subprocess
@@ -255,6 +256,54 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(run.calls, [])
 
 
+class SlotStdinTests(unittest.TestCase):
+    """The only value a slot key supplies.
+
+    In slot mode the stack name comes from the forced command in
+    authorized_keys, which only root writes, so everything a tenant controls
+    arrives through this one function.
+    """
+
+    def test_accepts_one_digest_pinned_reference(self):
+        self.assertEqual(bd.read_slot_image(io.StringIO(f"{VALID_IMAGE}\n")), VALID_IMAGE)
+
+    def test_accepts_a_reference_with_no_trailing_newline(self):
+        self.assertEqual(bd.read_slot_image(io.StringIO(VALID_IMAGE)), VALID_IMAGE)
+
+    def test_rejects_empty_input(self):
+        for text in ("", "\n"):
+            with self.assertRaises(bd.DeployError):
+                bd.read_slot_image(io.StringIO(text))
+
+    def test_rejects_a_second_line(self):
+        # The shape an attacker reaches for first: a second reference, or a
+        # second stack name, smuggled behind a newline.
+        for text in (
+            f"{VALID_IMAGE}\nother-tenant\n",
+            f"{VALID_IMAGE}\n{VALID_IMAGE}\n",
+            f"{VALID_IMAGE}\n\n",
+        ):
+            with self.assertRaises(bd.DeployError):
+                bd.read_slot_image(io.StringIO(text))
+
+    def test_rejects_a_line_break_python_splits_on_but_a_newline_scan_would_not(self):
+        for separator in ("\x0b", "\x0c", "\x1c", " "):
+            with self.assertRaises(bd.DeployError):
+                bd.read_slot_image(io.StringIO(f"{VALID_IMAGE}{separator}other-tenant"))
+
+    def test_rejects_a_tag_only_reference(self):
+        with self.assertRaises(bd.DeployError):
+            bd.read_slot_image(io.StringIO("ghcr.io/branchleft/example:latest\n"))
+
+    def test_rejects_a_reference_with_an_appended_argument(self):
+        with self.assertRaises(bd.DeployError):
+            bd.read_slot_image(io.StringIO(f"{VALID_IMAGE} other-tenant\n"))
+
+    def test_rejects_input_beyond_the_read_limit(self):
+        with self.assertRaises(bd.DeployError):
+            bd.read_slot_image(io.StringIO("x" * (bd.SLOT_STDIN_LIMIT + 1)))
+
+
 class MainTests(unittest.TestCase):
     def test_wrong_argument_count_is_a_usage_error(self):
         self.assertEqual(bd.main(["branchleft-deploy"]), 2)
@@ -265,6 +314,41 @@ class MainTests(unittest.TestCase):
 
     def test_invalid_input_exits_one_without_touching_the_host(self):
         self.assertEqual(bd.main(["branchleft-deploy", "../edge", VALID_IMAGE]), 1)
+
+    def test_slot_mode_takes_no_second_positional_argument(self):
+        # `--slot blog other-tenant` is the direct attempt to name a stack the
+        # key was not issued for. There is no argument position for it.
+        self.assertEqual(
+            bd.main(["branchleft-deploy", "--slot", "blog", "other-tenant"]), 2
+        )
+
+    def test_slot_mode_refuses_a_hostile_stack_name_without_reading_stdin(self):
+        # The name reaches this only from a root-written forced command, so a
+        # bad one is a corrupted host rather than a caller's argument -- and
+        # blocking on a read it will never use is the wrong way to say so.
+        stdin = io.StringIO(f"{VALID_IMAGE}\n")
+        self.assertEqual(
+            bd.main(["branchleft-deploy", "--slot", "../edge"], stdin=stdin), 1
+        )
+        self.assertEqual(stdin.tell(), 0)
+
+    def test_slot_mode_rejects_an_image_that_names_another_stack(self):
+        self.assertEqual(
+            bd.main(
+                ["branchleft-deploy", "--slot", "blog"],
+                stdin=io.StringIO(f"other-tenant {VALID_IMAGE}\n"),
+            ),
+            1,
+        )
+
+    def test_positional_mode_ignores_stdin_entirely(self):
+        stdin = io.StringIO("ghcr.io/branchleft/hostile@sha256:" + "b" * 64 + "\n")
+        # No compose file exists for this stack, so the failure is the expected
+        # one; what matters is that stdin was never consulted to produce it.
+        self.assertEqual(
+            bd.main(["branchleft-deploy", "no-such-stack", VALID_IMAGE], stdin=stdin), 1
+        )
+        self.assertEqual(stdin.tell(), 0)
 
 
 class ResolvesImageFromEnvTests(unittest.TestCase):

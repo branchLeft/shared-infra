@@ -22,6 +22,33 @@ Two rules it exists to enforce:
 On a failed restart the previous digest is restored and the unit restarted
 again, so a bad deploy leaves the host on the last image that worked rather
 than on a file describing an image that does not run.
+
+Two calling conventions, and the difference between them is which principal
+chooses the stack:
+
+    branchleft-deploy <stack> <image@sha256:...>
+
+  The unscoped form. The caller names any stack on the host, so possession of
+  a key that can reach it is authority over every stack on that host. It is
+  what the platform's own repositories use.
+
+    branchleft-deploy --slot <stack>            # image read from stdin
+
+  The scoped form. The stack name is not an argument the caller supplies: it
+  is fixed in the `command=` of the authorized_keys entry the presented key
+  authenticated against, which only root can write
+  (`provision_deploy_slot.py`). The caller supplies the image and nothing
+  else, so a key issued for one stack cannot address another, and there is no
+  name for this script to cross-check because there is no name from the
+  caller to distrust.
+
+  The image arrives on stdin rather than in SSH_ORIGINAL_COMMAND because a
+  forced command discards the client's argv, leaving those two as the only
+  channels. Carrying it in the environment would need sudo's env_reset opened
+  for that variable, which means editing the sudoers grant on every live host
+  in order to add a control; stdin needs no change to any privileged file,
+  and does not leave a caller-controlled string in a root process's
+  environment where a later reader could find it.
 """
 
 from __future__ import annotations
@@ -245,16 +272,65 @@ def deploy(
     )
 
 
-def main(argv: list[str]) -> int:
+# Generous next to a reference that cannot exceed a few hundred bytes, and
+# small enough that a caller piping something else entirely is refused rather
+# than read into memory. The read asks for one byte more so "at the limit" and
+# "truncated at the limit" are distinguishable.
+SLOT_STDIN_LIMIT = 4096
+
+SLOT_FLAG = "--slot"
+
+
+def read_slot_image(stream, *, limit: int = SLOT_STDIN_LIMIT) -> str:
+    """The one caller-supplied value in slot mode, taken from stdin.
+
+    `splitlines()` rather than a newline split: it also breaks on the vertical
+    tab, form feed and separator characters, so a payload that hides a second
+    token behind one of them is two lines here and refused, instead of being
+    one line that the image pattern would then have to be relied on to reject.
+    """
+    raw = stream.read(limit + 1)
+    if len(raw) > limit:
+        raise DeployError(
+            f"image reference on stdin exceeds {limit} bytes; expected one "
+            "digest-pinned reference"
+        )
+    lines = raw.splitlines()
+    if not lines:
+        raise DeployError("no image reference on stdin")
+    if len(lines) != 1:
+        raise DeployError(
+            f"expected exactly one line on stdin, got {len(lines)}; a slot key "
+            "deploys one image to its own stack and nothing else"
+        )
+    return validate_image_ref(lines[0])
+
+
+def main(argv: list[str], *, stdin=None) -> int:
+    usage = (
+        "usage: branchleft-deploy <stack> <image@sha256:...>\n"
+        f"       branchleft-deploy {SLOT_FLAG} <stack>   (image read from stdin)"
+    )
     if len(argv) != 3:
-        print("usage: branchleft-deploy <stack> <image@sha256:...>", file=sys.stderr)
+        print(usage, file=sys.stderr)
         return 2
+
+    slot_mode = argv[1] == SLOT_FLAG
+    stack = argv[2] if slot_mode else argv[1]
     try:
-        deploy(argv[1], argv[2])
+        if slot_mode:
+            # Ahead of the read, which blocks until the caller closes the
+            # channel: a rejected stack name should not first wait on input it
+            # is never going to use.
+            validate_stack_name(stack)
+            image = read_slot_image(stdin or sys.stdin)
+        else:
+            image = argv[2]
+        deploy(stack, image)
     except DeployError as error:
         print(f"branchleft-deploy: {error}", file=sys.stderr)
         return 1
-    print(f"branchleft-deploy: {argv[1]} now pinned to {argv[2]}")
+    print(f"branchleft-deploy: {stack} now pinned to {image}")
     return 0
 
 

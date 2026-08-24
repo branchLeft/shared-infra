@@ -27,6 +27,7 @@ than a step inside it.
 | `30-install-deploy-tooling.sh`  | Installs `branchleft-compose@.service` and `/usr/local/sbin/branchleft-deploy`, and verifies the sudoers drop-in parses                            |
 | `nat-gateway.sh`                | **Gateway host only.** Installs the NAT reconciler and the unit that reasserts it at boot, then runs it once                                       |
 | `app-host-isolation.sh`         | **App hosts only.** Installs the `DOCKER-USER` isolation-policy reconciler and the unit that reasserts it at boot, then runs it once               |
+| `provision_deploy_slot.py`      | **Per stack, not per host.** Grants one keypair a forced command reaching one stack, and renders `authorized_keys` from its own register           |
 
 `run-all.sh` runs the first five in order. Every one of them is idempotent:
 re-running the set is a no-op on a host that is already correct, which is what
@@ -485,7 +486,113 @@ this too. It is repeated here because this block is also the answer to "is
 that host still correct" months later, when nobody has run the scripts
 recently.
 
+## Granting a stack its own deploy slot
+
+Every repository that deploys to an app host gets a keypair that reaches its
+own stack and no other. On a host running one stack the distinction is
+invisible; on a host running ten tenants it is the whole boundary, because the
+unscoped form of `branchleft-deploy` lets the caller name the stack. `hetzner/README.md`
+carries the design; this is the procedure.
+
+Run once per stack, before that repository's first deploy. Steps 1–3 are the
+platform owner's; step 5 is the platform owner's too, because it writes a
+credential into a repository.
+
+```bash
+# 1. Generate the keypair, on the workstation. One per stack, never reused.
+ssh-keygen -t ed25519 -N '' -C 'unused' -f ~/.ssh/id_ed25519_slot_<stack>
+
+# 2. Refresh the provisioning scripts on the host.
+scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@<host-ipv4>:/root/platform-provision
+
+# 3. Install the public half. It travels on stdin, so the run leaves no copy
+#    of it on the host to remember to delete.
+ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+  'chmod +x /root/platform-provision/*.py && \
+   /root/platform-provision/provision_deploy_slot.py --public-key-file /dev/stdin <stack>' \
+  < ~/.ssh/id_ed25519_slot_<stack>.pub
+```
+
+Expect a line per action, ending in `authorized_keys rendered with N slot
+entries`.
+
+**Step 4 is not optional, and it is the reason this procedure has a
+verification step at all.** The grant takes `/home/deploy`, `/home/deploy/.ssh`
+and `authorized_keys` to `root:root` — that is what stops the deploy account
+rewriting the restrictions it is subject to — and an ownership change under a
+file sshd reads on every connection is the kind of change that is discovered
+by a failed production deploy if it is not checked here.
+
+```bash
+# 4a. The host-level key still authenticates and still reaches sudo.
+ssh -i ~/.ssh/id_ed25519_deploy_<host> deploy@<host-ipv4> \
+  'sudo -n /usr/local/sbin/branchleft-deploy 2>&1 | head -2'
+
+# 4b. The new slot key authenticates, and reaches its own stack only.
+printf '%s\n' 'not-an-image' \
+  | ssh -T -i ~/.ssh/id_ed25519_slot_<stack> deploy@<host-ipv4>
+```
+
+Expect the wrapper's two usage lines from 4a, and from 4b
+`branchleft-deploy: image reference must be digest-pinned`. That second
+message is the proof that matters: the key authenticated, the forced command
+ran, and the only thing left for the caller to supply was the image. If 4a
+fails, the ownership change is the suspect — restore it with
+`ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> 'chown -R deploy:deploy /home/deploy'`
+and stop, because that host's CI deploys are down until it is resolved.
+
+5. Put the private half in the deploying repository as an
+   **environment-scoped** Actions secret on its `production` environment, so
+   the required-reviewer rule stands in front of it:
+
+```bash
+gh secret set APP_HOST_DEPLOY_KEY --repo branchLeft/<repo> --env production \
+  < ~/.ssh/id_ed25519_slot_<stack>
+```
+
+6. Delete the private half from the workstation. Its only copies should be the
+   repository secret and the host's `authorized_keys`.
+
+The deploying repository's step is then one command, with the reference on
+stdin because the forced command discards its argv:
+
+```bash
+printf '%s\n' "ghcr.io/branchleft/<image>@sha256:<digest>" \
+  | ssh -T -i "$KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+        -o UserKnownHostsFile=known_hosts deploy@<host-ipv4>
+```
+
+### Auditing and revoking slots
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+  '/root/platform-provision/provision_deploy_slot.py --list-slots'
+```
+
+One `<stack>=SHA256:<fingerprint>` line per slot, comparable against
+`ssh-keygen -lf ~/.ssh/id_ed25519_slot_<stack>.pub`. It refuses rather than
+reports if `authorized_keys` carries a managed entry the register does not —
+that entry was added by hand and the next grant on the host would silently drop
+it.
+
+Rotation is a re-run of step 3 with the new public half: `authorized_keys` is
+rendered from the register rather than appended to, so the superseded key stops
+working at that moment and cannot be left behind as a second working entry.
+That is the opposite ordering to the unscoped rotation below, and deliberately
+so — prove the new key with step 4b before pointing CI at it, not after.
+
+```bash
+# Revoking. Immediate: the stack keeps running, and nothing can redeploy it.
+ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+  '/root/platform-provision/provision_deploy_slot.py --revoke <stack>'
+```
+
 ## Rotating the deploy key
+
+This is the **unscoped, host-level** key — the one whose holder can name any
+stack on the host. A slot key rotates by re-running the grant above instead,
+because its `authorized_keys` entry is rendered rather than appended and the
+append-then-remove ordering below would not apply.
 
 The programme accepts a long-lived SSH deploy key in GitHub Actions secrets —
 a weaker posture than the federated identity the GCP stacks use — on the

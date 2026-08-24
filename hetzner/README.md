@@ -260,12 +260,13 @@ deploy account it installs does not exist until it has run. This stays here
 rather than moving with the pattern: it operates on a created host, not on
 the create pattern itself.
 
-## Identity: two keys, two jobs
+## Identity: three keys, three jobs
 
-| Identity | Key                                                                                        | Reaches               | Held by                                                              |
-| -------- | ------------------------------------------------------------------------------------------ | --------------------- | -------------------------------------------------------------------- |
-| `root`   | The platform owner's key, registered in the hcloud project and injected at server creation | Everything            | The platform owner only — never CI                                   |
-| `deploy` | A per-host keypair generated for CI                                                        | One command, via sudo | Private half is a GitHub Actions secret; public half is stack config |
+| Identity           | Key                                                                                        | Reaches                                               | Held by                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `root`             | The platform owner's key, registered in the hcloud project and injected at server creation | Everything                                            | The platform owner only — never CI                                             |
+| `deploy`, unscoped | A per-host keypair generated for CI                                                        | One command, via sudo — but **any stack on the host** | Private half is a GitHub Actions secret; public half is stack config           |
+| `deploy`, slotted  | A per-stack keypair, installed by `provision/provision_deploy_slot.py`                     | One image pin and restart, on **one** stack           | Private half is a GitHub Actions secret in the repository that owns that stack |
 
 The `deploy` account is deliberately **not** in the `docker` group. Docker
 group membership is root-equivalent — the socket will happily build a
@@ -275,9 +276,55 @@ sudoers entry names exactly one binary, `/usr/local/sbin/branchleft-deploy`,
 with no wildcard: a wildcard in a sudoers command matches spaces, which turns
 any pattern-based restriction into argument injection.
 
-Its `authorized_keys` entry carries `restrict` and nothing added back. A
-forced command is the tighter option and is the next step once the deploy verb
-set stops moving.
+**One binary is a sufficient bound on a host running one stack, and not on a
+host running ten.** The unscoped form lets the caller name the stack, so on a
+bin-packed app host every repository holding that key can pin an arbitrary
+image into every other tenant's Compose slot and restart it. That is complete
+takeover of a co-tenant's site by a credential meant only to redeploy its own,
+and it is the primitive the move off per-service Cloud Run identities
+introduces. Slot keys are the replacement.
+
+### Slot keys
+
+A slot key's `authorized_keys` entry carries `restrict` **and a forced
+command**, and the stack name lives inside that forced command:
+
+```
+restrict,command="/usr/bin/sudo -n /usr/local/sbin/branchleft-deploy --slot blog" ssh-ed25519 AAAA… branchleft-slot:blog
+```
+
+sshd runs exactly that whatever the client asked for, so the key's entire
+capability is one image pin and one restart on `blog`. The image reference
+arrives on stdin — the only channel a forced command leaves open once the
+client's argv is discarded, short of opening sudo's `env_reset` for
+`SSH_ORIGINAL_COMMAND`, which would mean editing the privileged sudoers grant
+on every live host in order to add a control.
+
+The binding has to come from the forced command because nothing else on the
+path is out of the caller's reach. The alternative — one shared account, and
+the wrapper deciding from which key authenticated — has no trustworthy channel
+to decide from: sshd does not put the accepted key's fingerprint in the session
+environment, and `PermitUserEnvironment`, which would, also lets anything
+holding the account write `~/.ssh/environment` and `LD_PRELOAD` the sudo call
+the whole path depends on.
+
+`provision/provision_deploy_slot.py` is the only writer. It keeps a root-owned
+register at `/etc/branchleft/deploy-slots/<stack>.pub` and **renders**
+`authorized_keys` from it rather than appending, so a rotation cannot leave the
+superseded key behind as a second working entry and a revoke is a re-render. It
+also takes `/home/deploy`, `/home/deploy/.ssh` and `authorized_keys` to
+`root:root` — an account that owns the directory holding that file can delete
+it and write its own, forced commands and all.
+
+**What a slot key does not bound, stated rather than implied.** The sudoers
+grant still names `branchleft-deploy` with no argument restriction, because the
+platform's own repositories still call the unscoped form. So the forced command
+is the only layer: anything obtaining arbitrary execution as `deploy` reaches
+every stack on the host regardless of which key it arrived on. A second layer
+means per-slot sudoers entries with exact arguments, and those buy nothing
+while a broader rule still matches — sudo takes the last matching rule. It
+becomes available once every caller is slotted and the unscoped grant is
+withdrawn.
 
 Root stays key-reachable over SSH because it is the provisioning identity for
 `provision/run-all.sh`. The break-glass path if that is ever lost is the
@@ -285,8 +332,9 @@ Hetzner console and rescue system, not a password.
 
 ## Deploys
 
-`branchleft-deploy <stack> <image@sha256:...>` is the whole of what CI can do
-as root. It refuses anything but a digest-pinned reference, refuses a
+`branchleft-deploy <stack> <image@sha256:...>` — or `branchleft-deploy --slot
+<stack>` with the reference on stdin, for a slot key — is the whole of what CI
+can do as root. It refuses anything but a digest-pinned reference, refuses a
 `compose.yml` that does not resolve its image from `${IMAGE}` — a validated
 digest the Compose file never reads is a pin in name only — writes
 `/etc/branchleft/<stack>.image.env` atomically, restarts
