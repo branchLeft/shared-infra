@@ -403,18 +403,22 @@ that needs an `INPUT` rule with a different blast radius and is out of scope
 here. Traffic to `169.254.169.254` _is_ forwarded, so that half of the drop
 is real.
 
-Run it the same way as step 4, on each app host:
+Run it the same way as step 4, on each app host. `app1`, at `10.20.1.100`, is
+the only one that exists today; the command is otherwise unchanged for a
+future `app2`/`app3`, substituting that host's own private IP:
 
 ```bash
 cd ~/branchLeft/shared-infra
-scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@<app-host-private-ip>:/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<app-host-private-ip> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/app-host-isolation.sh'
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@46.225.95.167"
+scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@10.20.1.100:/root/platform-provision
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@10.20.1.100 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/app-host-isolation.sh'
 ```
 
 Confirm it:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<app-host-private-ip> '
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@46.225.95.167"
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@10.20.1.100 '
   set -e
   iptables -t filter -S DOCKER-USER | grep -E -- "-m conntrack --ctstate (ESTABLISHED,RELATED|RELATED,ESTABLISHED) -j ACCEPT"
   iptables -t filter -S DOCKER-USER | grep -- "-d 10.20.1.20/32 -p tcp -m tcp --dport 3306 -j ACCEPT"

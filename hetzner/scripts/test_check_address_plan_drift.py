@@ -40,15 +40,16 @@ capd = _load_module()
 
 SUBNET_CIDR = "10.20.1.0/24"
 EDGE1 = "10.20.1.10"
+DB1 = "10.20.1.20"
 
 
-def address_plan(subnet_cidr: str = SUBNET_CIDR, edge1: str = EDGE1) -> str:
+def address_plan(subnet_cidr: str = SUBNET_CIDR, edge1: str = EDGE1, db1: str = DB1) -> str:
     return (
         "export const NETWORK_CIDR = '10.20.0.0/16';\n"
         f"export const SUBNET_CIDR = '{subnet_cidr}';\n"
         "export const HOST_IPS = {\n"
         f"  edge1: '{edge1}',\n"
-        "  db1: '10.20.1.20',\n"
+        f"  db1: '{db1}',\n"
         "} as const;\n"
         "export const APP_HOST_IPS = {\n"
         "  app1: '10.20.1.100',\n"
@@ -60,17 +61,28 @@ def nat_script(subnet_cidr: str = SUBNET_CIDR) -> str:
     return f'SUBNET="${{BRANCHLEFT_NAT_SUBNET:-{subnet_cidr}}}"\n'
 
 
-def runbook(subnet_cidr: str = SUBNET_CIDR, edge1: str = EDGE1, second_cidr: str | None = None) -> str:
+def docker_user_policy_script(db1: str = DB1) -> str:
+    return f'DB_HOST="${{BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST:-{db1}}}"\n'
+
+
+def runbook(
+    subnet_cidr: str = SUBNET_CIDR,
+    edge1: str = EDGE1,
+    second_cidr: str | None = None,
+    db1: str = DB1,
+) -> str:
     """A runbook with one bare edge1 reference and two verification blocks,
     matching the shape RUNBOOK-provision-host.md actually has: several
-    verification steps each grepping the subnet, plus one prose mention of
-    the gateway's own address."""
+    verification steps each grepping the subnet, one prose mention of the
+    gateway's own address, and one verification line naming db1 as the single
+    host a DOCKER-USER accept rule renders back with a `/32`."""
     second_cidr = subnet_cidr if second_cidr is None else second_cidr
     return (
         f"The gateway is `edge1`, at `{edge1}`, which is the address the route names.\n"
         f'  iptables -t nat -S POSTROUTING | grep -- "-s {subnet_cidr} .*-j MASQUERADE"\n'
         f'  iptables -t filter -S DOCKER-USER | grep -- "-s {subnet_cidr} .*-j ACCEPT"\n'
         f'  iptables -t nat -S POSTROUTING | grep -- "-s {second_cidr} .*-j MASQUERADE"\n'
+        f'  iptables -t filter -S DOCKER-USER | grep -- "-d {db1}/32 -p tcp --dport 3306 -j ACCEPT"\n'
     )
 
 
@@ -90,23 +102,33 @@ class TreeBuilder:
         self,
         plan_subnet: str = SUBNET_CIDR,
         plan_edge1: str = EDGE1,
+        plan_db1: str = DB1,
         nat_subnet: str = SUBNET_CIDR,
+        docker_user_policy_db1: str = DB1,
         runbook_subnet: str = SUBNET_CIDR,
         runbook_second_subnet: str | None = None,
         runbook_edge1: str = EDGE1,
+        runbook_db1: str = DB1,
     ) -> "TreeBuilder":
         # Every shell-side value defaults to the *original* literal, not to
-        # whatever `plan_*` is this call -- so overriding only `plan_subnet`
-        # or `plan_edge1` is what building a drifted tree looks like, without
-        # every other parameter having to be restated at every call site.
+        # whatever `plan_*` is this call -- so overriding only `plan_subnet`,
+        # `plan_edge1` or `plan_db1` is what building a drifted tree looks
+        # like, without every other parameter having to be restated at every
+        # call site.
         runbook_second_subnet = (
             runbook_subnet if runbook_second_subnet is None else runbook_second_subnet
         )
-        self.write("hetzner-host/addressPlan.ts", address_plan(plan_subnet, plan_edge1))
+        self.write(
+            "hetzner-host/addressPlan.ts", address_plan(plan_subnet, plan_edge1, plan_db1)
+        )
         self.write("hetzner/provision/branchleft_nat.sh", nat_script(nat_subnet))
         self.write(
+            "hetzner/provision/branchleft_docker_user_policy.sh",
+            docker_user_policy_script(docker_user_policy_db1),
+        )
+        self.write(
             "hetzner/RUNBOOK-provision-host.md",
-            runbook(runbook_subnet, runbook_edge1, runbook_second_subnet),
+            runbook(runbook_subnet, runbook_edge1, runbook_second_subnet, runbook_db1),
         )
         return self
 
@@ -200,6 +222,53 @@ class Edge1DriftTests(unittest.TestCase):
             self.assertFalse(any("10.20.1.10" in f for f in failures), failures)
 
 
+class Db1DriftTests(unittest.TestCase):
+    """db1's address is checked in two places this PR adds: the bare literal
+    branchleft_docker_user_policy.sh hardcodes as its DB_HOST default (no
+    repository checkout on the host to derive it from, same constraint
+    branchleft_nat.sh's SUBNET literal already has), and the `/32` form the
+    runbook's own verification block greps for against real `iptables -S`
+    output."""
+
+    def test_a_moved_db1_left_stale_in_the_docker_user_policy_script_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound(plan_db1="10.20.1.25")
+            failures = capd.check(tree.root)
+            script_failures = [
+                f
+                for f in failures
+                if "branchleft_docker_user_policy.sh" in f and "10.20.1.20" in f and "10.20.1.25" in f
+            ]
+            self.assertEqual(len(script_failures), 1, failures)
+
+    def test_a_moved_db1_left_stale_in_the_runbook_slash_32_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound(
+                plan_db1="10.20.1.25",
+                docker_user_policy_db1="10.20.1.25",  # caught up; only the runbook is stale
+            )
+            failures = capd.check(tree.root)
+            runbook_failures = [
+                f
+                for f in failures
+                if "RUNBOOK-provision-host.md" in f
+                and "10.20.1.20/32" in f
+                and "10.20.1.25/32" in f
+            ]
+            self.assertEqual(len(runbook_failures), 1, failures)
+
+    def test_db1_agreeing_while_subnet_drifts_reports_only_the_subnet_fault(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound(plan_subnet="10.20.2.0/24")
+            failures = capd.check(tree.root)
+            self.assertFalse(any("10.20.1.20" in f for f in failures), failures)
+
+    def test_db1_and_edge1_and_subnet_all_agreeing_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            self.assertEqual(capd.check(tree.root), [])
+
+
 class MissingLiteralTests(unittest.TestCase):
     def test_a_runbook_that_stops_mentioning_the_subnet_fails_rather_than_passing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -225,6 +294,19 @@ class MissingLiteralTests(unittest.TestCase):
             self.assertTrue(
                 any(
                     "branchleft_nat.sh" in f and "found none" in f
+                    for f in failures
+                ),
+                failures,
+            )
+
+    def test_a_docker_user_policy_script_with_no_db1_literal_fails_rather_than_passing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            tree.write("hetzner/provision/branchleft_docker_user_policy.sh", "echo hello\n")
+            failures = capd.check(tree.root)
+            self.assertTrue(
+                any(
+                    "branchleft_docker_user_policy.sh" in f and "found none" in f
                     for f in failures
                 ),
                 failures,
@@ -292,6 +374,19 @@ class MalformedAddressPlanTests(unittest.TestCase):
             failures = capd.check(root)
             self.assertEqual(len(failures), 1)
             self.assertIn("names no `edge1`", failures[0])
+
+    def test_a_host_ips_block_with_no_db1_fails_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            TreeBuilder(root).sound()
+            (root / "hetzner-host" / "addressPlan.ts").write_text(
+                "export const NETWORK_CIDR = '10.20.0.0/16';\n"
+                "export const SUBNET_CIDR = '10.20.1.0/24';\n"
+                "export const HOST_IPS = {\n  edge1: '10.20.1.10',\n} as const;\n"
+            )
+            failures = capd.check(root)
+            self.assertEqual(len(failures), 1)
+            self.assertIn("names no `db1`", failures[0])
 
     def test_an_empty_address_plan_fails_loudly(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -381,6 +476,35 @@ class FalsePositiveExemptionTests(unittest.TestCase):
             failures = capd.check(tree.root)
             self.assertTrue(any("branchleft_nat.sh" in f for f in failures), failures)
 
+    def test_a_hosts_own_address_as_a_slash_32_is_not_flagged_as_a_subnet(self):
+        # The regression this guards: a DOCKER-USER accept rule naming one
+        # host renders back as `<addr>/32` from `iptables -S`, which is
+        # CIDR-shaped and falls inside NETWORK_CIDR -- exactly what the
+        # SUBNET_CIDR check's own literal scan would otherwise flag as a
+        # stale copy of the subnet, on no stronger basis than sharing its
+        # shape with one.
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            text = tree.root.joinpath("hetzner/RUNBOOK-provision-host.md").read_text()
+            text += "\n`db1` is reachable at `10.20.1.20/32`.\n"
+            tree.write("hetzner/RUNBOOK-provision-host.md", text)
+            self.assertEqual(capd.check(tree.root), [])
+
+    def test_a_stale_slash_32_still_fails_despite_the_exemption_above(self):
+        # The exemption must not swallow the real failure either: a stale
+        # host address written as a /32 is inside NETWORK_CIDR too, and
+        # matches no *current* plan value in either form.
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            text = tree.root.joinpath("hetzner/RUNBOOK-provision-host.md").read_text()
+            text += "\n`db1` used to be reachable at `10.20.1.25/32`.\n"
+            tree.write("hetzner/RUNBOOK-provision-host.md", text)
+            failures = capd.check(tree.root)
+            self.assertTrue(
+                any("RUNBOOK-provision-host.md" in f and "10.20.1.25/32" in f for f in failures),
+                failures,
+            )
+
 
 class ParsingTests(unittest.TestCase):
     def test_read_address_plan_returns_the_plans_values(self):
@@ -390,6 +514,7 @@ class ParsingTests(unittest.TestCase):
             plan = capd.read_address_plan(path)
             self.assertEqual(plan.subnet_cidr, SUBNET_CIDR)
             self.assertEqual(plan.edge1, EDGE1)
+            self.assertEqual(plan.db1, DB1)
             self.assertEqual(plan.network_cidr, "10.20.0.0/16")
             self.assertEqual(plan.host_ips["db1"], "10.20.1.20")
             self.assertEqual(plan.app_host_ips["app1"], "10.20.1.100")
@@ -400,16 +525,37 @@ class ParsingTests(unittest.TestCase):
             path.write_text(
                 "export const NETWORK_CIDR = '10.20.0.0/16';\n"
                 "export const SUBNET_CIDR = '10.20.1.0/24';\n"
-                "export const HOST_IPS = {\n  edge1: '10.20.1.10',\n} as const;\n"
+                "export const HOST_IPS = {\n  edge1: '10.20.1.10',\n  db1: '10.20.1.20',\n} as const;\n"
             )
             plan = capd.read_address_plan(path)
             self.assertEqual(plan.app_host_ips, {})
+
+    def test_known_values_includes_each_hosts_address_as_a_slash_32(self):
+        # The form iptables -S renders an unmasked -d <addr> back as. Without
+        # this, a correct /32 host literal and a stale one are
+        # indistinguishable from a CIDR-shaped literal's point of view.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "addressPlan.ts"
+            path.write_text(address_plan())
+            plan = capd.read_address_plan(path)
+            known = plan.known_values()
+            self.assertIn(f"{EDGE1}/32", known)
+            self.assertIn(f"{DB1}/32", known)
+            self.assertIn("10.20.1.100/32", known)  # app1
+            # The bare forms stay too -- this only adds to the set.
+            self.assertIn(EDGE1, known)
+            self.assertIn(DB1, known)
 
     def test_a_bare_ipv4_regex_does_not_match_inside_a_cidr(self):
         self.assertEqual(capd._BARE_IPV4_RE.findall("10.20.1.0/24"), [])
 
     def test_a_cidr_regex_does_not_match_a_bare_address(self):
         self.assertEqual(capd._CIDR_RE.findall("10.20.1.10"), [])
+
+    def test_host_slash_32_regex_matches_only_the_slash_32_form(self):
+        self.assertEqual(capd._HOST_SLASH_32_RE.findall("10.20.1.20/32"), ["10.20.1.20/32"])
+        self.assertEqual(capd._HOST_SLASH_32_RE.findall("10.20.1.0/24"), [])
+        self.assertEqual(capd._HOST_SLASH_32_RE.findall("10.20.1.20"), [])
 
     def test_strip_comments_removes_block_and_line_comments(self):
         text = (
