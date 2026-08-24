@@ -46,7 +46,7 @@ hand afterwards:
    register is `/etc/branchleft/deploy-slots/<stack>.pub`, root-owned `0700`
    directory, `0600` files. Every managed line is regenerated from it on every
    run and unmanaged lines are preserved verbatim, so a revoke is a re-render
-   rather than an edit, and a rotation cannot leave the superseded key behind
+   rather than an edit, and a rotation cannot leave the replaced key behind
    as a second working entry -- the failure mode of the append-then-remove
    procedure this replaces for slot keys.
 

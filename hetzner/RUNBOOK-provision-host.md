@@ -576,7 +576,7 @@ that entry was added by hand and the next grant on the host would silently drop
 it.
 
 Rotation is a re-run of step 3 with the new public half: `authorized_keys` is
-rendered from the register rather than appended to, so the superseded key stops
+rendered from the register rather than appended to, so the replaced key stops
 working at that moment and cannot be left behind as a second working entry.
 That is the opposite ordering to the unscoped rotation below, and deliberately
 so — prove the new key with step 4b before pointing CI at it, not after.

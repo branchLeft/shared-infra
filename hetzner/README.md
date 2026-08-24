@@ -289,7 +289,7 @@ introduces. Slot keys are the replacement.
 A slot key's `authorized_keys` entry carries `restrict` **and a forced
 command**, and the stack name lives inside that forced command:
 
-```
+```text
 restrict,command="/usr/bin/sudo -n /usr/local/sbin/branchleft-deploy --slot blog" ssh-ed25519 AAAA… branchleft-slot:blog
 ```
 
@@ -311,7 +311,7 @@ the whole path depends on.
 `provision/provision_deploy_slot.py` is the only writer. It keeps a root-owned
 register at `/etc/branchleft/deploy-slots/<stack>.pub` and **renders**
 `authorized_keys` from it rather than appending, so a rotation cannot leave the
-superseded key behind as a second working entry and a revoke is a re-render. It
+replaced key behind as a second working entry and a revoke is a re-render. It
 also takes `/home/deploy`, `/home/deploy/.ssh` and `authorized_keys` to
 `root:root` — an account that owns the directory holding that file can delete
 it and write its own, forced commands and all.
