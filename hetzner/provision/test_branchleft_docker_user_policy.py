@@ -54,11 +54,24 @@ APP_HOST_ADDRESSES = (
 )
 
 # edge1's own addresses, the same fixture test_branchleft_nat.py uses for it:
-# the one host in the estate that terminates public traffic.
+# the estate's NAT gateway, identified by holding 10.20.1.10.
 GATEWAY_ADDRESSES = "\n".join(
     [
         "2: eth0    inet 203.0.113.10/32 brd 203.0.113.10 scope global dynamic eth0",
         "3: enp7s0    inet 10.20.1.10/32 brd 10.20.1.10 scope global dynamic enp7s0",
+    ]
+)
+
+# app1's real shape: publicNetworking: true is deliberate for it too
+# (ghost-platform/infra/hosts/index.ts, for CI SSH deploy access), so it
+# holds a public address exactly like edge1 does. This is the fixture that
+# would have tripped a "holds any public interface" guard -- the bug this
+# script does not ship because the guard checks the gateway's specific
+# address instead.
+APP_HOST_WITH_PUBLIC_IP_ADDRESSES = "\n".join(
+    [
+        "2: eth0    inet 203.0.113.50/32 brd 203.0.113.50 scope global dynamic eth0",
+        "3: enp7s0    inet 10.20.1.100/32 brd 10.20.1.100 scope global dynamic enp7s0",
     ]
 )
 
@@ -91,6 +104,7 @@ class DockerUserPolicyTests(unittest.TestCase):
         subnet=None,
         db_host=None,
         db_port=None,
+        gateway_ip=None,
         drop_iptables=False,
         insert_exit="0",
     ):
@@ -113,6 +127,8 @@ class DockerUserPolicyTests(unittest.TestCase):
             env["BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST"] = db_host
         if db_port is not None:
             env["BRANCHLEFT_DOCKER_USER_POLICY_DB_PORT"] = db_port
+        if gateway_ip is not None:
+            env["BRANCHLEFT_DOCKER_USER_POLICY_GATEWAY_IP"] = gateway_ip
         return subprocess.run(
             ["bash", SCRIPT],
             env=env,
@@ -229,18 +245,37 @@ class DockerUserPolicyTests(unittest.TestCase):
 
     # -- Trap 2: this policy is for app hosts only -----------------------
 
-    def test_refuses_a_host_with_a_public_interface(self):
+    def test_refuses_the_host_holding_the_gateway_address(self):
         result = self.run_script(addresses=GATEWAY_ADDRESSES)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("estate's NAT gateway", result.stderr)
+        self.assertIn("estate's gateway address", result.stderr)
         self.assertIn("scoped to app hosts only", result.stderr)
         self.assertEqual(self.inserted(), [])
 
     def test_a_private_only_host_is_not_treated_as_the_gateway(self):
         # The discriminating case for the guard: an app host's own private
-        # address must not itself trip the public-interface check.
+        # address must not itself trip it.
         result = self.run_script(addresses=APP_HOST_ADDRESSES)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_public_app_host_is_not_treated_as_the_gateway(self):
+        # The regression this guards: app1 is also created with
+        # publicNetworking: true, deliberately, for CI's SSH deploy path
+        # (ghost-platform/infra/hosts/index.ts) -- so "does this host hold
+        # any public address" is not a valid test for "is this the gateway".
+        # A guard built on that premise would refuse to run on the one host
+        # this policy exists to protect, while reporting a role-scope error
+        # that looks like it is working as designed.
+        result = self.run_script(addresses=APP_HOST_WITH_PUBLIC_IP_ADDRESSES)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(self.inserted(), [])
+
+    def test_the_guards_own_gateway_address_is_overridable_for_testing(self):
+        result = self.run_script(
+            addresses=APP_HOST_ADDRESSES, gateway_ip="10.20.1.100"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("estate's gateway address", result.stderr)
 
     # -- Trap 3: DOCKER-USER's existence is conditional, fail closed ----
 

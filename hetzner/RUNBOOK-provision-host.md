@@ -374,9 +374,15 @@ egress, and it originates its own reverse-proxy connections into the subnet.
 `DOCKER-USER` matches on destination address alone, not on which host wrote
 the rule, so if this policy ever landed on `edge1` it would cut its own path
 to every app host and to `db1` — the outage this runbook exists to prevent,
-not merely document. `branchleft_docker_user_policy.sh` refuses to run on any
-host that holds a public interface, which today is exactly `edge1` and no
-other host in the estate.
+not merely document. **"Holds a public interface" is not the guard**, even
+though it might look like the obvious one: `app1` is also created with
+`publicNetworking: true`, deliberately
+(`ghost-platform/infra/hosts/index.ts`), so that GitHub-hosted CI runners can
+reach it over SSH to deploy — a host with no public address cannot be
+reached by a runner at all. `branchleft_docker_user_policy.sh` instead
+refuses to run on whichever host holds `10.20.1.10`, the address
+`hetzner-host/addressPlan.ts` assigns to `edge1` alone and the one this
+runbook's own gateway steps above already name it by.
 
 **Rule order is the other way this goes wrong, and it is silent in the
 opposite direction: not a refusal, an outage.** `DOCKER-USER` sits in
@@ -410,7 +416,7 @@ Confirm it:
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<app-host-private-ip> '
   set -e
-  iptables -t filter -S DOCKER-USER | grep -- "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
+  iptables -t filter -S DOCKER-USER | grep -E -- "-m conntrack --ctstate (ESTABLISHED,RELATED|RELATED,ESTABLISHED) -j ACCEPT"
   iptables -t filter -S DOCKER-USER | grep -- "-d 10.20.1.20/32 -p tcp -m tcp --dport 3306 -j ACCEPT"
   iptables -t filter -S DOCKER-USER | grep -- "-d 10.20.1.0/24 -j DROP"
   iptables -t filter -S DOCKER-USER | grep -- "-d 169.254.169.254/32 -j DROP"
@@ -419,7 +425,11 @@ ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<app-host-private-
 '
 ```
 
-Expect four rule lines, `enabled`, and `app-host isolation ok`.
+Expect four rule lines, `enabled`, and `app-host isolation ok`. The conntrack
+check matches either bitmask ordering: `iptables -S` renders the state set
+`branchleft_docker_user_policy.sh` passes as `RELATED,ESTABLISHED`, not the
+order the script gives it in — the same normalisation §3's gateway check
+above already accounts for.
 
 **What this does not give you: a signal if it ever silently stops applying.**
 Unlike `branchleft-nat.service`, whose reconciler refuses to run and fails the

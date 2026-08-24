@@ -9,9 +9,8 @@
 # branchleft-docker-user-policy.service. Idempotent: every rule is checked
 # before it is added.
 #
-# App hosts only. Refuses to run on the estate's NAT gateway: edge1 is the
-# only host in the estate with a public interface (hetzner/estate.ts), and
-# it forwards every private-only host's own internet egress plus its own
+# App hosts only. Refuses to run on the estate's NAT gateway, edge1, which
+# forwards every private-only host's own internet egress plus its own
 # reverse-proxy connections into the subnet. DOCKER-USER matches on address
 # alone, not on which script wrote the rule, so installing this policy there
 # would drop edge1's path to every app host and to db1.
@@ -19,12 +18,14 @@ set -euo pipefail
 
 # Overridable so the tests can drive different values; production always
 # gets the defaults, since nothing sets these in the environment. db1's
-# address is hetzner-host/addressPlan.ts's HOST_IPS.db1, restated rather than
-# read from stack state because this script has no Pulumi context to read it
-# from -- the same reason branchleft_nat.sh's SUBNET is a literal default.
+# address and the gateway's are hetzner-host/addressPlan.ts's HOST_IPS,
+# restated rather than read from stack state because this script has no
+# Pulumi context to read them from -- the same reason branchleft_nat.sh's
+# SUBNET is a literal default.
 SUBNET="${BRANCHLEFT_DOCKER_USER_POLICY_SUBNET:-10.20.1.0/24}"
 DB_HOST="${BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST:-10.20.1.20}"
 DB_PORT="${BRANCHLEFT_DOCKER_USER_POLICY_DB_PORT:-3306}"
+GATEWAY_PRIVATE_IP="${BRANCHLEFT_DOCKER_USER_POLICY_GATEWAY_IP:-10.20.1.10}"
 
 # The metadata service's own address, hardcoded because it is Hetzner's, not
 # the estate's -- the same reasoning branchleft_host_egress.sh uses for it.
@@ -38,28 +39,27 @@ if ! command -v iptables >/dev/null 2>&1; then
     exit 1
 fi
 
-is_private_v4() {
-    case "$1" in
-        10.*|192.168.*|127.*|169.254.*) return 0 ;;
-        172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-# The role guard. Every app host is created with publicNetworking: false, and
-# edge1 is the one host in the estate created with it true -- so "does this
-# host hold a public address at all" is an exact test for "is this the
-# gateway", not a heuristic that happens to work today.
-has_public_interface=0
+# The role guard. "Does this host hold a public address" is NOT the test:
+# app1 is also created with publicNetworking: true, deliberately, so that
+# GitHub-hosted CI runners can reach it over SSH to deploy
+# (ghost-platform/infra/hosts/index.ts) -- a host with no public address
+# cannot be reached by a runner at all, and first provisioning needs the same
+# door before the deploy account exists. So the estate has at least two hosts
+# with a public interface, and only one of them is the gateway.
+#
+# What actually identifies edge1 is its address: 10.20.1.10 is assigned to
+# it alone (hetzner-host/addressPlan.ts's HOST_IPS.edge1), the same address
+# RUNBOOK-provision-host.md's own gateway instructions and `hetzner/network.ts`'s
+# route already name it by. Checking for that address is checking the one
+# fact about this host that is actually load-bearing for "is this the
+# gateway", rather than a network property two different roles both have.
+holds_gateway_address=0
 while read -r address; do
-    [[ -z "$address" ]] && continue
-    if ! is_private_v4 "$address"; then
-        has_public_interface=1
-    fi
+    [[ "$address" == "$GATEWAY_PRIVATE_IP" ]] && holds_gateway_address=1
 done < <(ip -4 -o addr show scope global | awk '{ split($4, a, "/"); print a[1] }')
 
-if [[ "$has_public_interface" -eq 1 ]]; then
-    echo "branchleft-docker-user-policy: this host has a public interface -- it is the estate's NAT gateway, not an app host, and this policy is scoped to app hosts only" >&2
+if [[ "$holds_gateway_address" -eq 1 ]]; then
+    echo "branchleft-docker-user-policy: this host holds the estate's gateway address ($GATEWAY_PRIVATE_IP) -- it is edge1, not an app host, and this policy is scoped to app hosts only" >&2
     exit 1
 fi
 
