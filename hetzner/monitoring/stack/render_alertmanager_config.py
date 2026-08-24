@@ -52,6 +52,21 @@ def render(template: str, env: dict[str, str]) -> str:
     return rendered
 
 
+# The image runs as `nobody`, and a bind mount is read as the container-side
+# user regardless of who wrote the file on the host. A root-owned 0600 file is
+# therefore unreadable to the one process it exists for, and Alertmanager exits
+# with "error loading configuration file: ... permission denied" on every start.
+#
+# Ownership moves to that uid rather than the mode widening: the file holds an
+# SMTP password in plaintext, and 0644 would expose it to every other account
+# on the host, including the CI deploy account.
+#
+# Only when running as root -- which is how the systemd ExecStartPre invokes
+# this. Under CI, or a local render, there is no container to read the file and
+# no privilege to chown with.
+ALERTMANAGER_UID = int(os.environ.get("ALERTMANAGER_UID", "65534"))
+
+
 def main(argv: list[str]) -> int:
     del argv
     alertmanager_dir = pathlib.Path(__file__).resolve().parent / "alertmanager"
@@ -65,9 +80,12 @@ def main(argv: list[str]) -> int:
         return 1
 
     # 0600: the output carries the SMTP password and the heartbeat URL in
-    # plaintext, unlike the template beside it.
+    # plaintext, unlike the template beside it. The mode alone is not enough --
+    # see ALERTMANAGER_UID.
     output_path.write_text(rendered)
     output_path.chmod(0o600)
+    if os.geteuid() == 0:
+        os.chown(output_path, ALERTMANAGER_UID, ALERTMANAGER_UID)
     print(f"render_alertmanager_config: wrote {output_path}")
     return 0
 

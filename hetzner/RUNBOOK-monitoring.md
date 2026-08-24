@@ -118,6 +118,42 @@ shares above. The host-side verification in step 10 below is the same check,
 plus the one thing this workstation cannot show: that the containers are
 *not* nested under either systemd unit's cgroup.
 
+## Why every `rsync` here carries `--no-owner --no-group --chmod`
+
+`-a` implies `-p`, `-o` and `-g`, and the last two take effect because the
+receiving side is `root`. A plain `rsync -av` therefore reproduces the
+*workstation's* file modes and uid/gid on the host -- and every container in
+both stacks reads its config through a bind mount **as the container-side
+user**, not as root.
+
+That combination has already broken a deploy. `hetzner/monitoring/stack/prometheus/prometheus.yml`
+is written by `npm run render` (a Vitest file snapshot), which left it `0600` in
+one workstation checkout. Git records `100644` and cannot see the difference --
+it tracks only the executable bit -- so the mode is invisible to review, to
+`git status` and to CI, which checks out its own copy at `0644`. `rsync -av`
+copied `0600 uid=501 gid=20` onto `edge1`, where uid 501 does not exist, and
+Prometheus (running as `nobody`) crash-looped on
+
+```
+Error loading config (--config.file=/etc/prometheus/prometheus.yml) ... permission denied
+```
+
+`--no-owner --no-group` drops the meaningless workstation uid/gid, and
+`--chmod=u=rwX,go=rX` sets modes on the receiving side rather than copying
+them -- `0644` for files, `0755` for directories -- **regardless of what the
+source happens to carry**. It also repairs a destination file that is already
+wrong, which `--no-perms` does not: `--no-perms` leaves an existing file's mode
+untouched, so it would not have fixed the host.
+
+The `--chmod=u=rwX,go=rX` spelling is deliberate. The `--chmod=D755,F644` form
+is rsync 3.0 syntax, and macOS still ships rsync 2.6.9, which rejects it with
+`Invalid argument passed to --chmod`.
+
+Nothing in either `stack/` directory is secret -- `alertmanager.yml.tmpl` holds
+placeholders, and the real secrets live in `/etc/branchleft/monitoring.env` and
+in the rendered `alertmanager.yml`, which is generated on the host and never
+copied. See §7's note on that file's ownership.
+
 ## 1. Copy the updated edge stack (metrics endpoints + cgroup containment)
 
 `hetzner/edge/render.ts` and `hetzner/edge/stack/compose.yml` already carry
@@ -130,7 +166,8 @@ cgroup drop-in below is also in place, so `edge` does not need reloading
 twice.
 
 ```bash
-rsync -av --delete -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
+rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
+  -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
   hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/
 ```
 
@@ -232,7 +269,8 @@ Expect `-rw------- 1 root root`. Do not print the file.
 ## 4. Copy the monitoring stack directory onto the host
 
 ```bash
-rsync -av --delete -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
+rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
+  -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
   hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/
 ```
 
@@ -290,6 +328,13 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
 `ExecStartPre` runs `render_alertmanager_config.py` before `docker compose
 up`; a missing or blank secret in `/etc/branchleft/monitoring.env` fails the
 unit start with the exact variable name, before any container starts.
+
+`render_alertmanager_config.py` writes `alertmanager.yml` `0600` and chowns it
+to uid 65534, the `nobody` the Alertmanager image runs as. The mode alone would
+lock out the only process the file exists for -- a bind mount is read as the
+container-side user however the file was written -- and widening the mode to
+`0644` instead would expose an SMTP password to every other account on the
+host. Ownership is the narrower of the two fixes.
 
 **Step 5 is a hard precondition for this step, not just tidiness.** The shared
 unit template loads `/etc/branchleft/%i.image.env` with no leading dash, so
@@ -461,7 +506,8 @@ re-copy, restart.
 
 ```bash
 git checkout <PREVIOUS_MERGED_SHA> -- hetzner/monitoring/stack
-rsync -av --delete -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
+rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
+  -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
   hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
   'systemctl restart branchleft-compose@monitoring'

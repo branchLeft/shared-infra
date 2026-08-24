@@ -407,11 +407,14 @@ jobs:
       - name: Validate the Prometheus config and alert rules
         # `chmod a+r` first: these images run as a non-root user, and a bind
         # mount is read as that container-side user regardless of who wrote
-        # the file on the runner. Both files are committed with ordinary
-        # git-checkout permissions, which are already world-readable in
-        # practice, but this is the same class of failure
-        # `render_alertmanager_config.py`'s 0600 output hits below -- fixed
-        # here too so it can't recur on a future rendered file.
+        # the file. A fresh checkout here is 0644, but a workstation checkout
+        # need not be -- `npm run render` rewrites prometheus.yml in place and
+        # left it 0600 once, which git cannot see (it tracks only the exec
+        # bit) and which `rsync -av` then copied faithfully onto the host,
+        # crash-looping Prometheus. This step cannot catch that, because it
+        # never sees the workstation's copy; the deploy is what has to be
+        # immune, which is why every rsync in the runbooks now sets modes on
+        # the receiving side. This line only keeps *this* job honest.
         run: |
           chmod a+r hetzner/monitoring/stack/prometheus/prometheus.yml \
             hetzner/monitoring/stack/prometheus/alerts.yml
@@ -431,13 +434,14 @@ jobs:
         run: python3 hetzner/monitoring/stack/render_alertmanager_config.py
 
       - name: Validate the Alertmanager config
-        # render_alertmanager_config.py writes this file `0600` -- correct on
-        # the real host, where it carries a real password, but unreadable to
-        # the alertmanager image's non-root user here, where a bind mount is
-        # read as that container-side user regardless of the runner's own
-        # (root) ownership. `chmod a+r` validates the same artifact the host
-        # will mount without weakening what ships there -- this step's copy
-        # never leaves the runner and is deleted immediately below.
+        # render_alertmanager_config.py writes this file `0600` and, when it
+        # runs as root, chowns it to the uid the alertmanager image runs as.
+        # This job is not root, so no chown happens and the file stays owned
+        # by the runner -- hence `chmod a+r` here. The previous version of
+        # this comment called the bare 0600 "correct on the real host": it was
+        # not. The bind mount is read as the container-side user on the host
+        # too, and Alertmanager crash-looped on exactly that. This copy never
+        # leaves the runner and is deleted immediately below.
         run: |
           chmod a+r hetzner/monitoring/stack/alertmanager/alertmanager.yml
           docker run --rm \
