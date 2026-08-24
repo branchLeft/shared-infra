@@ -97,6 +97,26 @@ def read_current_image(path: str) -> str | None:
     return None
 
 
+def resolves_image_from_env(compose_text: str) -> bool:
+    """Whether a Compose file actually substitutes the pin this script writes.
+
+    Comment lines are stripped first: a `# uses ${IMAGE}` line would otherwise
+    satisfy the check while the services below it run a hardcoded tag, which is
+    precisely the state being guarded against.
+
+    Module-level rather than inline in `deploy()` because the unit template's
+    image-pin contract has a second half this script cannot enforce -- a stack
+    that pins inline needs its drop-in to reset `EnvironmentFile=`, or it has no
+    writer for a file it cannot start without. The repository-wide test of that
+    invariant calls this, so the two halves cannot drift into disagreeing about
+    what "resolves its image from ${IMAGE}" means.
+    """
+    effective = "\n".join(
+        line for line in compose_text.splitlines() if not line.lstrip().startswith("#")
+    )
+    return "${IMAGE}" in effective
+
+
 def write_image_env(path: str, image: str) -> None:
     """Replace the file atomically.
 
@@ -140,13 +160,8 @@ def deploy(
     # success. The digest-pinning property only exists if the substitution is
     # actually wired up, so it is checked rather than assumed.
     with open(compose_file, encoding="utf-8") as handle:
-        # Comment lines are stripped first: a `# uses ${IMAGE}` line would
-        # otherwise satisfy the check while the services below it run a
-        # hardcoded tag, which is precisely the state being guarded against.
-        effective = "\n".join(
-            line for line in handle.read().splitlines() if not line.lstrip().startswith("#")
-        )
-    if "${IMAGE}" not in effective:
+        compose_text = handle.read()
+    if not resolves_image_from_env(compose_text):
         raise DeployError(
             f"{compose_file} does not resolve its image from ${{IMAGE}}, "
             "so a pin written here would not take effect"
