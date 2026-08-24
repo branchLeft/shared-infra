@@ -260,12 +260,13 @@ deploy account it installs does not exist until it has run. This stays here
 rather than moving with the pattern: it operates on a created host, not on
 the create pattern itself.
 
-## Identity: two keys, two jobs
+## Identity: three keys, three jobs
 
-| Identity | Key                                                                                        | Reaches               | Held by                                                              |
-| -------- | ------------------------------------------------------------------------------------------ | --------------------- | -------------------------------------------------------------------- |
-| `root`   | The platform owner's key, registered in the hcloud project and injected at server creation | Everything            | The platform owner only — never CI                                   |
-| `deploy` | A per-host keypair generated for CI                                                        | One command, via sudo | Private half is a GitHub Actions secret; public half is stack config |
+| Identity           | Key                                                                                        | Reaches                                               | Held by                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `root`             | The platform owner's key, registered in the hcloud project and injected at server creation | Everything                                            | The platform owner only — never CI                                             |
+| `deploy`, unscoped | A per-host keypair generated for CI                                                        | One command, via sudo — but **any stack on the host** | Private half is a GitHub Actions secret; public half is stack config           |
+| `deploy`, slotted  | A per-stack keypair, installed by `provision/provision_deploy_slot.py`                     | One image pin and restart, on **one** stack           | Private half is a GitHub Actions secret in the repository that owns that stack |
 
 The `deploy` account is deliberately **not** in the `docker` group. Docker
 group membership is root-equivalent — the socket will happily build a
@@ -275,9 +276,88 @@ sudoers entry names exactly one binary, `/usr/local/sbin/branchleft-deploy`,
 with no wildcard: a wildcard in a sudoers command matches spaces, which turns
 any pattern-based restriction into argument injection.
 
-Its `authorized_keys` entry carries `restrict` and nothing added back. A
-forced command is the tighter option and is the next step once the deploy verb
-set stops moving.
+**One binary is a sufficient bound on a host running one stack, and not on a
+host running ten.** The unscoped form lets the caller name the stack, so on a
+bin-packed app host every repository holding that key can pin an arbitrary
+image into every other tenant's Compose slot and restart it. That is complete
+takeover of a co-tenant's site by a credential meant only to redeploy its own,
+and it is the primitive the move off per-service Cloud Run identities
+introduces. Slot keys are the replacement.
+
+### Slot keys
+
+A slot key's `authorized_keys` entry carries `restrict` **and a forced
+command**, and the stack name lives inside that forced command:
+
+```text
+restrict,command="/usr/bin/sudo -n /usr/local/sbin/branchleft-deploy --slot blog" ssh-ed25519 AAAA… branchleft-slot:blog
+```
+
+sshd runs exactly that whatever the client asked for, so the key's entire
+capability is one image pin and one restart on `blog`. The image reference
+arrives on stdin — the only channel a forced command leaves open once the
+client's argv is discarded, short of opening sudo's `env_reset` for
+`SSH_ORIGINAL_COMMAND`, which would mean editing the privileged sudoers grant
+on every live host in order to add a control.
+
+**The binding comes from the forced command because that removes the name
+rather than checking it.** The alternative — one shared account, and the
+wrapper deciding from which key authenticated — is not impossible, and it is
+worth being accurate about why it loses. sshd _can_ be told to expose the
+authenticating credential: `ExposeAuthInfo` writes the accepted key to a file
+named by `SSH_USER_AUTH`, and `AuthorizedKeysCommand` receives its fingerprint
+as `%f`. Both are server-side and neither is writable by the account. What
+every such design still has is a comparison — caller-supplied stack name
+against identity — that has to stay correct through every future edit, and
+whose failure is silent, because a wrong comparison still deploys something. A
+forced command has no comparison to get wrong. (`environment=` in
+`authorized_keys` is a third option and a bad one: it needs
+`PermitUserEnvironment`, which also lets anything holding the account set
+`BASH_ENV` for the non-interactive shell every forced command runs under.)
+
+`provision/provision_deploy_slot.py` is the only writer, and holds three
+properties worth naming:
+
+- **One key, one slot.** sshd stops at the first matching `authorized_keys`
+  line, so a key installed twice always resolves to the same one. A grant is
+  refused if the key already holds another slot, or matches a key on a line
+  this script does not manage — that second case is the sharp one, because the
+  unmanaged line renders first, so the slot would be cosmetic while the
+  register reported it as scoped.
+- **Rendered from a register, reconciled before every write.**
+  `/etc/branchleft/deploy-slots/<stack>.pub` is the source of truth, and one
+  `reconcile()` is the single arbiter that grant, revoke and `--list-slots` all
+  call. A marked line the register cannot explain stops the run instead of
+  being dropped by the re-render. That matters because the marker is a plain
+  last field: an unrelated key whose comment happened to end in one would
+  otherwise be deleted, and on this estate the unrelated key is the host-level
+  one the marketing site deploys through.
+- **The deploy account cannot write anything in its own home.** The home,
+  `.ssh`, `authorized_keys` and every file beneath them move to root. Recursive
+  is not tidiness: sshd runs a forced command through `$SHELL -c`, Debian
+  builds bash with `SSH_SOURCE_BASHRC`, so a writable `~/.bashrc` runs ahead of
+  every slot key on the host. It also closes `~/.ssh/authorized_keys2`, which
+  sshd's default `AuthorizedKeysFile` still includes.
+
+**What a slot key does not bound, stated rather than implied.** The sudoers
+grant still names `branchleft-deploy` with no argument restriction, so the
+forced command is the only layer: anything obtaining arbitrary execution as
+`deploy` reaches every stack on the host regardless of which key it arrived on.
+A second layer means per-slot sudoers entries with exact arguments, and those
+buy nothing while a broader rule still matches — sudo takes the last matching
+rule.
+
+**Exactly one caller keeps that broader rule alive, and it is not the three you
+would guess.** `edge` and `monitoring` are deployed by an operator over SSH
+**as root** (`RUNBOOK-edge.md` §6, `RUNBOOK-monitoring.md`), which needs no
+sudoers grant at all. The single remaining user of the `deploy` account is
+`branchLeft/website`'s CI, which calls
+`sudo -n /usr/local/sbin/branchleft-deploy website <image>@<digest>`. That same
+workflow then runs an arbitrary `curl` over the same key as its smoke test —
+so the website deploy key is a **shell** on the `deploy` account, not a scoped
+credential, and it is the concrete instance of "arbitrary execution as
+`deploy`" above. Slotting `website` therefore needs its smoke test rehomed
+first; a forced command would break it.
 
 Root stays key-reachable over SSH because it is the provisioning identity for
 `provision/run-all.sh`. The break-glass path if that is ever lost is the
@@ -285,8 +365,9 @@ Hetzner console and rescue system, not a password.
 
 ## Deploys
 
-`branchleft-deploy <stack> <image@sha256:...>` is the whole of what CI can do
-as root. It refuses anything but a digest-pinned reference, refuses a
+`branchleft-deploy <stack> <image@sha256:...>` — or `branchleft-deploy --slot
+<stack>` with the reference on stdin, for a slot key — is the whole of what CI
+can do as root. It refuses anything but a digest-pinned reference, refuses a
 `compose.yml` that does not resolve its image from `${IMAGE}` — a validated
 digest the Compose file never reads is a pin in name only — writes
 `/etc/branchleft/<stack>.image.env` atomically, restarts

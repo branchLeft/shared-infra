@@ -27,6 +27,7 @@ than a step inside it.
 | `30-install-deploy-tooling.sh`  | Installs `branchleft-compose@.service` and `/usr/local/sbin/branchleft-deploy`, and verifies the sudoers drop-in parses                            |
 | `nat-gateway.sh`                | **Gateway host only.** Installs the NAT reconciler and the unit that reasserts it at boot, then runs it once                                       |
 | `app-host-isolation.sh`         | **App hosts only.** Installs the `DOCKER-USER` isolation-policy reconciler and the unit that reasserts it at boot, then runs it once               |
+| `provision_deploy_slot.py`      | **Per stack, not per host.** Grants one keypair a forced command reaching one stack, and renders `authorized_keys` from its own register           |
 
 `run-all.sh` runs the first five in order. Every one of them is idempotent:
 re-running the set is a no-op on a host that is already correct, which is what
@@ -485,7 +486,173 @@ this too. It is repeated here because this block is also the answer to "is
 that host still correct" months later, when nobody has run the scripts
 recently.
 
+## Granting a stack its own deploy slot
+
+Every repository that deploys to an app host gets a keypair that reaches its
+own stack and no other. On a host running one stack the distinction is
+invisible; on a host running ten tenants it is the whole boundary, because the
+unscoped form of `branchleft-deploy` lets the caller name the stack. `hetzner/README.md`
+carries the design; this is the procedure.
+
+Run once per stack, before that repository's first deploy. Steps 1–3 are the
+platform owner's; step 5 is the platform owner's too, because it writes a
+credential into a repository.
+
+```bash
+# 1. Generate the keypair, on the workstation. One per stack, never reused --
+#    a key installed against two slots resolves to whichever authorized_keys
+#    entry sshd reaches first, which hands one repository a deploy into the
+#    other's stack. The grant refuses it, but generating per slot is the habit
+#    that means never meeting the refusal.
+ssh-keygen -t ed25519 -N '' -C 'unused' -f ~/.ssh/id_ed25519_slot_<stack>
+
+# 2. Refresh the provisioning scripts on the host.
+scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@<host-ipv4>:/root/platform-provision
+
+# 3. Install the wrapper that understands --slot. NOT optional on a host
+#    provisioned before slot keys existed: the grant would succeed, the key
+#    would authenticate, and every deploy would fail with
+#    `invalid stack name: '--slot'` because the forced command's argv means
+#    nothing to the older wrapper. This is a provisioning script, so unlike
+#    cloud-init it does reach an already-running host.
+ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+  '/root/platform-provision/30-install-deploy-tooling.sh'
+
+# 4. Install the public half. It travels on stdin, so the run leaves no copy
+#    of it on the host to remember to delete.
+ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+  '/root/platform-provision/provision_deploy_slot.py --public-key-file /dev/stdin <stack>' \
+  < ~/.ssh/id_ed25519_slot_<stack>.pub
+```
+
+Expect a line per action, ending in `authorized_keys rendered with N slot
+entries`. A refusal naming `--adopt-existing-stack` means this host already
+runs a stack of that name: check it is not a platform stack before re-running
+with the flag, because granting `website`'s slot to a tenant repository hands
+that repository the marketing site.
+
+**Step 5 is the proof gate for the whole mechanism, not a formality.** Nothing
+in CI can cover the path a slot key actually takes — sshd forced command →
+`$SHELL -c` → `sudo -n` with no controlling terminal → stdin → wrapper — so
+until this step runs on a real host, the mechanism is unproven. The specific
+thing to watch: **sudo 1.9.14 and later enable `use_pty` by default**, which
+changes how sudo relays stdin when it is not attached to a terminal. If that
+interferes, 5b fails at the one channel the design depends on and the fix is a
+`Defaults!/usr/local/sbin/branchleft-deploy !use_pty` drop-in, not a change to
+the key.
+
+The grant also moves `/home/deploy`, `/home/deploy/.ssh`, `authorized_keys` and
+every file beneath the home to `root`, which is what stops the account
+rewriting the restrictions it is subject to. That is a change under a file sshd
+reads on every connection, so it is checked here rather than discovered by a
+failed production deploy.
+
+```bash
+# 5a. The host-level key still authenticates and still reaches sudo.
+ssh -i ~/.ssh/id_ed25519_deploy_<host> deploy@<host-ipv4> \
+  'sudo -n /usr/local/sbin/branchleft-deploy 2>&1 | head -2'
+
+# 5b. The new slot key authenticates, and reaches its own stack only.
+printf '%s\n' 'not-an-image' \
+  | ssh -T -i ~/.ssh/id_ed25519_slot_<stack> deploy@<host-ipv4>
+```
+
+Expect the wrapper's two usage lines from 5a, and from 5b
+`branchleft-deploy: image reference must be digest-pinned`. That second
+message is the proof that matters: the key authenticated, the forced command
+ran, sudo passed stdin through, and the only thing left for the caller to
+supply was the image. Silence or a hang at 5b is the `use_pty` case above.
+
+**If 5a fails, diagnose before changing anything — and do not reach for
+`chown -R deploy:deploy /home/deploy`.** That command restores exactly the
+state the grant exists to remove: the account regains the ability to rewrite
+`authorized_keys`, to delete the forced commands, and to create
+`~/.ssh/authorized_keys2`, which sshd's default `AuthorizedKeysFile` still
+includes. Every slot stays installed and every deploy keeps working, so
+nothing else on the host would ever tell you the boundary is gone.
+`root:deploy` at `0750`/`0640` satisfies `StrictModes`, so the ownership is
+usually not the cause. Read the actual reason first:
+
+```bash
+# What sshd rejected, and what the paths actually look like.
+ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+  'journalctl -u ssh -n 40 --no-pager | grep -iE "authorized|bad ownership|refus"; \
+   ls -lan /home/deploy /home/deploy/.ssh; \
+   sshd -T | grep -iE "authorizedkeysfile|strictmodes|pubkeyauth"'
+```
+
+If a rollback is genuinely the answer, **revoke every slot first** — otherwise
+the host is left advertising scoped keys it is no longer enforcing:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+  'for s in $(/root/platform-provision/provision_deploy_slot.py --list-slots | cut -d= -f1); do \
+     /root/platform-provision/provision_deploy_slot.py --revoke "$s"; done; \
+   chown -R deploy:deploy /home/deploy'
+```
+
+6. Put the private half in the deploying repository as an
+   **environment-scoped** Actions secret on its `production` environment, so
+   the required-reviewer rule stands in front of it:
+
+```bash
+gh secret set APP_HOST_DEPLOY_KEY --repo branchLeft/<repo> --env production \
+  < ~/.ssh/id_ed25519_slot_<stack>
+```
+
+7. Delete the private half from the workstation. Its only copies should be the
+   repository secret and the host's `authorized_keys`.
+
+The deploying repository's step is then one command, with the reference on
+stdin because the forced command discards its argv:
+
+```bash
+printf '%s\n' "ghcr.io/branchleft/<image>@sha256:<digest>" \
+  | ssh -T -i "$KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+        -o UserKnownHostsFile=known_hosts deploy@<host-ipv4>
+```
+
+### Auditing and revoking slots
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+  '/root/platform-provision/provision_deploy_slot.py --list-slots'
+```
+
+One `<stack>=SHA256:<fingerprint>` line per slot, comparable against
+`ssh-keygen -lf ~/.ssh/id_ed25519_slot_<stack>.pub`. It is a verification
+command, not just a listing — it refuses, naming what is wrong, if
+`authorized_keys` carries a marked entry the register cannot explain, if two
+slots share a key, or if anything under `/home/deploy` has drifted back to
+being account-writable. Run it after any hand edit on a host, and after any
+rollback.
+
+Rotation is a re-run of step 4 with the new public half: `authorized_keys` is
+rendered from the register rather than appended to, so the old key stops
+working the moment the new one is written.
+
+**Name that window rather than reading it as strictly better.** This is
+revoke-then-prove, the reverse of the unscoped rotation below, which is
+append-then-prove-then-remove. The trade is deliberate — rendering is what
+makes it impossible to leave a replaced key behind as a second working entry,
+which is the failure the unscoped procedure needs three ordered steps to avoid
+— but it does mean that between step 4 and a successful step 5b, that stack has
+no working deploy key. It is a small window on a stack that is not deploying at
+that moment, and the recovery is re-running step 4 with the old public half.
+Do not rotate a slot during an incident on that stack.
+
+```bash
+# Revoking. Immediate: the stack keeps running, and nothing can redeploy it.
+ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+  '/root/platform-provision/provision_deploy_slot.py --revoke <stack>'
+```
+
 ## Rotating the deploy key
+
+This is the **unscoped, host-level** key — the one whose holder can name any
+stack on the host. A slot key rotates by re-running the grant above instead,
+because its `authorized_keys` entry is rendered rather than appended and the
+append-then-remove ordering below would not apply.
 
 The programme accepts a long-lived SSH deploy key in GitHub Actions secrets —
 a weaker posture than the federated identity the GCP stacks use — on the
