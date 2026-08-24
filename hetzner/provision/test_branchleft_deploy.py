@@ -267,5 +267,99 @@ class MainTests(unittest.TestCase):
         self.assertEqual(bd.main(["branchleft-deploy", "../edge", VALID_IMAGE]), 1)
 
 
+class ResolvesImageFromEnvTests(unittest.TestCase):
+    """The predicate is the sole arbiter of whether a stack's pin is enforced.
+
+    It decides two things at once: whether `deploy` will write a pin at all, and
+    whether `test_compose_unit_contract` demands the drop-in reset that drops the
+    pin. A misclassification therefore does not merely mis-report -- it either
+    exempts a stack from the guard or instructs its author to disable the pin.
+    Its input classes are covered directly rather than through `deploy()`.
+    """
+
+    def test_a_live_bare_reference_resolves(self):
+        self.assertTrue(bd.resolves_image_from_env("services:\n  a:\n    image: ${IMAGE}\n"))
+
+    def test_a_fail_closed_default_resolves(self):
+        """`${IMAGE:?msg}` aborts by name on an empty pin, so it is a real pin."""
+        self.assertTrue(
+            bd.resolves_image_from_env(
+                "services:\n  a:\n    image: ${IMAGE:?set by branchleft-deploy}\n"
+            )
+        )
+
+    def test_a_whole_line_comment_does_not_resolve(self):
+        self.assertFalse(
+            bd.resolves_image_from_env("services:\n  a:\n    # image: ${IMAGE}\n")
+        )
+
+    def test_a_trailing_comment_does_not_resolve(self):
+        """The line runs a hardcoded digest; the reference is commentary."""
+        self.assertFalse(
+            bd.resolves_image_from_env(
+                "services:\n  a:\n    image: prom/prometheus@sha256:aa  # was ${IMAGE}\n"
+            )
+        )
+
+    def test_a_fail_open_default_does_not_resolve(self):
+        """`${IMAGE:-x}` silently becomes `x` the moment the pin is empty."""
+        self.assertFalse(
+            bd.resolves_image_from_env(
+                "services:\n  a:\n    image: ${IMAGE:-ghcr.io/x/y:latest}\n"
+            )
+        )
+
+    def test_an_unbraced_reference_does_not_resolve(self):
+        self.assertFalse(bd.resolves_image_from_env("services:\n  a:\n    image: $IMAGE\n"))
+
+    def test_a_longer_variable_name_is_not_mistaken_for_the_pin(self):
+        self.assertFalse(
+            bd.resolves_image_from_env("services:\n  a:\n    image: ${IMAGE_TAG}\n")
+        )
+
+    def test_a_hash_in_a_digest_is_not_treated_as_a_comment(self):
+        """`sha256:` digests carry no `#`, but the cut must be whitespace-anchored
+        so an inline `#` cannot truncate a live reference that follows it."""
+        self.assertTrue(
+            bd.resolves_image_from_env("services:\n  a:\n    image: ${IMAGE}#notacomment\n")
+        )
+
+
+class FailOpenImageReferenceTests(unittest.TestCase):
+    def test_the_fail_open_forms_are_named(self):
+        for compose in (
+            "    image: ${IMAGE:-ghcr.io/x/y:latest}\n",
+            "    image: ${IMAGE:+override}\n",
+            "    image: $IMAGE\n",
+        ):
+            with self.subTest(compose=compose):
+                self.assertTrue(bd.has_fail_open_image_reference(compose))
+
+    def test_the_fail_closed_forms_are_not(self):
+        for compose in ("    image: ${IMAGE}\n", "    image: ${IMAGE:?set it}\n"):
+            with self.subTest(compose=compose):
+                self.assertFalse(bd.has_fail_open_image_reference(compose))
+
+    def test_commentary_is_not_named(self):
+        self.assertFalse(bd.has_fail_open_image_reference("    # image: ${IMAGE:-x}\n"))
+
+    def test_deploy_names_the_fail_open_form_specifically(self):
+        with tempfile.TemporaryDirectory() as stack_dir:
+            os.makedirs(os.path.join(stack_dir, "edge"))
+            with open(os.path.join(stack_dir, "edge", "compose.yml"), "w", encoding="utf-8") as f:
+                f.write("services:\n  a:\n    image: ${IMAGE:-ghcr.io/x/y:latest}\n")
+            with tempfile.TemporaryDirectory() as config_dir:
+                with self.assertRaises(bd.DeployError) as raised:
+                    bd.deploy(
+                        "edge",
+                        VALID_IMAGE,
+                        config_dir=config_dir,
+                        stack_dir=stack_dir,
+                        run=FakeRun([0]),
+                    )
+                self.assertIn("survives an empty pin", str(raised.exception))
+                self.assertEqual(os.listdir(config_dir), [])
+
+
 if __name__ == "__main__":
     unittest.main()

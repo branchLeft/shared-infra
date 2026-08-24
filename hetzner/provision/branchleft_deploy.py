@@ -97,6 +97,61 @@ def read_current_image(path: str) -> str | None:
     return None
 
 
+# `${IMAGE}` and `${IMAGE:?message}` only. Both fail closed: the first
+# substitutes empty and Compose rejects the resulting `image:`, the second
+# aborts by name. `${IMAGE:-default}` is deliberately absent -- it fails *open*,
+# resolving to a hardcoded reference the moment the pin is empty, which is the
+# state the mandatory EnvironmentFile exists to make impossible.
+IMAGE_PIN_REFERENCE = re.compile(r"\$\{IMAGE(?::\?[^}]*)?\}")
+
+# The fail-open forms, matched so a caller can name them rather than reporting
+# the far more confusing "does not resolve its image from ${IMAGE}" about a file
+# that visibly mentions IMAGE on the `image:` line.
+IMAGE_FALLBACK_REFERENCE = re.compile(r"\$\{IMAGE:[-+=][^}]*\}|\$IMAGE(?![A-Za-z0-9_])")
+
+# YAML begins a comment at a `#` that starts the line or follows whitespace.
+_COMMENT = re.compile(r"(?:^|\s)#")
+
+
+def strip_yaml_comments(compose_text: str) -> str:
+    """Drop commented-out text so commentary cannot be read as configuration.
+
+    Trailing comments are cut as well as whole lines: `image: foo@sha256:...
+    # was ${IMAGE}` otherwise reads as a live pin reference while the service
+    below it runs a hardcoded digest, which is exactly the state being guarded
+    against.
+
+    Quoting is not tracked. The only question asked of the result is whether an
+    IMAGE reference is live configuration or commentary, and a `#` inside a
+    quoted scalar ahead of one would be pathological in a Compose file.
+    """
+    kept = []
+    for line in compose_text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        comment = _COMMENT.search(line)
+        kept.append(line[: comment.start()] if comment else line)
+    return "\n".join(kept)
+
+
+def resolves_image_from_env(compose_text: str) -> bool:
+    """Whether a Compose file actually substitutes the pin this script writes.
+
+    Module-level rather than inline in `deploy()` because the unit template's
+    image-pin contract has a second half this script cannot enforce -- a stack
+    that pins inline needs its drop-in to reset `EnvironmentFile=`, or it has no
+    writer for a file it cannot start without. The repository-wide test of that
+    invariant calls this, so the two halves cannot drift into disagreeing about
+    what "resolves its image from ${IMAGE}" means.
+    """
+    return bool(IMAGE_PIN_REFERENCE.search(strip_yaml_comments(compose_text)))
+
+
+def has_fail_open_image_reference(compose_text: str) -> bool:
+    """Whether a Compose file reaches for IMAGE in a form that survives an empty pin."""
+    return bool(IMAGE_FALLBACK_REFERENCE.search(strip_yaml_comments(compose_text)))
+
+
 def write_image_env(path: str, image: str) -> None:
     """Replace the file atomically.
 
@@ -140,13 +195,14 @@ def deploy(
     # success. The digest-pinning property only exists if the substitution is
     # actually wired up, so it is checked rather than assumed.
     with open(compose_file, encoding="utf-8") as handle:
-        # Comment lines are stripped first: a `# uses ${IMAGE}` line would
-        # otherwise satisfy the check while the services below it run a
-        # hardcoded tag, which is precisely the state being guarded against.
-        effective = "\n".join(
-            line for line in handle.read().splitlines() if not line.lstrip().startswith("#")
-        )
-    if "${IMAGE}" not in effective:
+        compose_text = handle.read()
+    if not resolves_image_from_env(compose_text):
+        if has_fail_open_image_reference(compose_text):
+            raise DeployError(
+                f"{compose_file} reaches for IMAGE in a form that survives an empty "
+                "pin (${IMAGE:-default} or $IMAGE); use ${IMAGE} or ${IMAGE:?message}, "
+                "which fail closed"
+            )
         raise DeployError(
             f"{compose_file} does not resolve its image from ${{IMAGE}}, "
             "so a pin written here would not take effect"

@@ -301,6 +301,17 @@ no committed placeholder for a local apply to revert production to.
 Stack secrets live in `/etc/branchleft/<stack>.env`, which no automated path
 writes — the unit loads both files and only the image pin is machine-managed.
 
+**A stack that pins every image inline is outside this mechanism entirely, and
+has to say so.** `branchleft-deploy` refuses it by design, so nothing writes its
+`/etc/branchleft/<stack>.image.env`, and the template's mandatory
+`EnvironmentFile=` for that file would then stop the unit starting at all. Such
+a stack carries an instance drop-in resetting `EnvironmentFile=` and re-adding
+its own secrets file — `monitoring` is the first, and
+`hetzner/provision/test_compose_unit_contract.py` holds every stack to whichever
+half of the contract it falls under. Deploying a new image to one of these means
+editing the committed digest and re-copying `stack/`, not calling
+`branchleft-deploy`.
+
 `branchleft_deploy.py` is the one piece here with real logic, and it is the
 sum total of the CI account's privilege, so its argument validation and its
 rollback path are unit-tested rather than left to a live deploy to discover.

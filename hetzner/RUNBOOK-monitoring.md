@@ -253,6 +253,23 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
 up`; a missing or blank secret in `/etc/branchleft/monitoring.env` fails the
 unit start with the exact variable name, before any container starts.
 
+**Step 5 is a hard precondition for this step, not just tidiness.** The shared
+unit template loads `/etc/branchleft/%i.image.env` with no leading dash, so
+systemd fails the start on a missing pin file before `ExecStartPre` runs at
+all. This stack pins all six images inline and resolves no `${IMAGE}`, so
+`branchleft-deploy` refuses to write that pin -- correctly, since nothing would
+read it. `monitoring.override.conf` resets `EnvironmentFile=` for this instance
+to close that gap. Starting the unit without the drop-in installed fails with:
+
+```
+branchleft-compose@monitoring.service: Failed to load environment files: No such file or directory
+```
+
+which names nothing. It has one cause: the drop-in is not installed. A missing
+or blank `/etc/branchleft/monitoring.env` cannot produce it -- the drop-in
+re-adds that file with a leading dash precisely so the failure comes from
+`ExecStartPre` or from Compose, naming the variable.
+
 ## 8. Verify the stack is up
 
 ```bash
