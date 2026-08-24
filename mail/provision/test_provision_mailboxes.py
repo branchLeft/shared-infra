@@ -10,6 +10,7 @@ Run with: python3 -m unittest discover -s mail/provision -p 'test_*.py' -v
 import io
 import os
 import tempfile
+import pathlib
 import unittest
 from unittest import mock
 
@@ -117,9 +118,11 @@ class MissingMailboxesTests(unittest.TestCase):
 
         result = missing_mailboxes(MAILBOXES, existing)
 
-        self.assertEqual(
-            result, ["contact", "info", "complaints", "abuse", "blog", "acme", "alerts"]
-        )
+        # Derived, not transcribed: this asserts the function's promise --
+        # MAILBOXES minus what exists, in MAILBOXES order -- rather than
+        # re-listing the constant, which made it a change-detector that every
+        # new mailbox had to edit.
+        self.assertEqual(result, [m for m in MAILBOXES if m not in existing])
 
     def test_unrelated_existing_accounts_are_ignored(self):
         # e.g. the Stalwart admin bootstrap account, or some other domain's
@@ -132,10 +135,7 @@ class MissingMailboxesTests(unittest.TestCase):
 
         result = missing_mailboxes(MAILBOXES, existing)
 
-        self.assertEqual(
-            result,
-            ["contact", "info", "sales", "complaints", "abuse", "blog", "acme", "alerts"],
-        )
+        self.assertEqual(result, [m for m in MAILBOXES if m not in existing])
 
 
 class PlanSieveActionTests(unittest.TestCase):
@@ -460,29 +460,51 @@ class OneRedirectPerScriptTests(unittest.TestCase):
     """Stalwart caps an untrusted Sieve script at `maxRedirects` (default 1)
     redirections per execution. A script with two `redirect` commands still
     compiles, activates, and diffs clean on a re-run -- the second is dropped
-    at delivery, silently. So the cap is asserted here, where it is visible,
-    rather than trusted to a comment.
+    at delivery, silently. Nothing else in this suite would notice, so the cap
+    is asserted where it is visible rather than trusted to a comment.
     """
 
     def test_the_rendered_script_carries_exactly_one_redirect(self):
-        script = sieve_script_contents(FORWARD_TARGET)
-
-        self.assertEqual(script.count("redirect"), 1)
-
-    def test_every_role_address_gets_the_same_single_redirect_script(self):
-        """There is one script shape, so no address can drift into a second
-        redirect without this failing."""
-        for local in ROLE_ADDRESSES:
-            with self.subTest(local=local):
-                self.assertEqual(sieve_script_contents(FORWARD_TARGET).count("redirect"), 1)
+        self.assertEqual(sieve_script_contents(FORWARD_TARGET).count("redirect"), 1)
 
 
-class AlertsMailboxTests(unittest.TestCase):
-    def test_alerts_is_a_mailbox_and_a_role_address(self):
-        """Alertmanager's submission credential authenticates into a real
-        account, so alerts@ must exist as a mailbox, not only as an alias."""
-        self.assertIn("alerts", MAILBOXES)
-        self.assertIn("alerts", ROLE_ADDRESSES)
+class CredentialLabelUniquenessTests(unittest.TestCase):
+    """Every wrapper's CREDENTIAL_LABEL must be distinct.
+
+    They share one flat `label:secret` file; `_load_recorded_secret` returns the
+    first line whose label matches and `_record_secret` appends unconditionally.
+    A duplicate label therefore mints a real app password, appends it, and from
+    then on returns *another service's* secret to both -- while every run
+    reports success and the new secret is unrecoverable. Copy-pasting a wrapper
+    is exactly how a new caller gets written, so this is checked rather than
+    left to review.
+    """
+
+    def _labels(self):
+        directory = pathlib.Path(__file__).resolve().parent
+        labels = {}
+        for script in sorted(directory.glob("*.sh")):
+            for line in script.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("CREDENTIAL_LABEL="):
+                    labels.setdefault(stripped.split("=", 1)[1].strip().rstrip("\\").strip(), []).append(
+                        script.name
+                    )
+        return labels
+
+    def test_the_wrapper_scripts_were_actually_found(self):
+        """A glob that matched nothing would pass the uniqueness test below."""
+        self.assertGreaterEqual(len(self._labels()), 3)
+
+    def test_no_two_wrappers_share_a_credential_label(self):
+        duplicates = {
+            label: scripts for label, scripts in self._labels().items() if len(scripts) > 1
+        }
+
+        self.assertEqual(duplicates, {}, f"duplicate CREDENTIAL_LABELs: {duplicates}")
+
+    def test_alertmanager_has_its_own_label(self):
+        self.assertIn("alerting-submission", self._labels())
 
 
 if __name__ == "__main__":

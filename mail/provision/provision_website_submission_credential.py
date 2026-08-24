@@ -7,9 +7,18 @@ real mail. Parameterised via SEND_AS_LOCAL / CREDENTIAL_LABEL /
 APP_PASSWORD_DESCRIPTION (environment variables, defaults below) so the same
 logic provisions every submission-only credential this platform needs --
 currently the website contact form (branchLeft/website#61, send-as info@,
-wired up by 60-provision-website-submission-credential.sh) and the blog's
+wired up by 60-provision-website-submission-credential.sh), the blog's
 transactional mail (send-as blog@, wired up by
-61-provision-blog-submission-credential.sh).
+61-provision-blog-submission-credential.sh), the Mailgun shim (send-as blog@,
+62-provision-shim-submission-credential.sh) and Alertmanager (send-as alerts@,
+64-provision-alerting-submission-credential.sh).
+
+Every caller must use a distinct CREDENTIAL_LABEL. They share one flat
+label:secret file, _load_recorded_secret returns the first matching line and
+_record_secret appends unconditionally, so a duplicate label mints a real app
+password and then permanently returns another service's secret instead --
+while reporting success. test_provision_mailboxes.py asserts the labels in
+mail/provision/*.sh are unique.
 
 Confirmed from Stalwart's own source before writing this, not assumed by
 analogy to provision_mailboxes.py's Account creation:

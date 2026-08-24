@@ -156,13 +156,34 @@ runbook: `50-provision-mailboxes.sh` creates the mailbox and its copy-forward
 to `rob@`, and `64-provision-alerting-submission-credential.sh` provisions the
 credential itself.
 
-`alerts@` forwards to `rob@` only, like every other role address, and
-deliberately carries no second redirect: Stalwart caps an untrusted Sieve
-script at `maxRedirects` (default 1) per execution, so a second one is dropped
-at delivery while the script still compiles and diffs clean. Alert mail reaches
-an address off mx1 by being **sent** there -- that is what `ALERT_RECIPIENT_EMAIL`
-below is for -- not by being forwarded from mx1, which would also fail SPF at
-the receiving provider for want of SRS.
+```bash
+scp -i ~/.ssh/id_ed25519_hetzner -r mail/provision/. root@mx1.branchleft.co.uk:/root/mail-provision
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk '
+  chmod +x /root/mail-provision/*.sh /root/mail-provision/*.py &&
+  /root/mail-provision/50-provision-mailboxes.sh &&
+  /root/mail-provision/64-provision-alerting-submission-credential.sh'
+```
+
+The trailing `/.` is load-bearing -- without it a recursive copy nests the tree
+inside the existing directory and the *old* scripts run, printing `no-op` and
+looking like success. See `mail/RUNBOOK-mx1-provision.md`.
+
+**`SMTP_USERNAME` is `alerts@branchleft.co.uk`, the full address**, not the
+local part: Stalwart's `must_match_sender` rejects a submission whose
+authenticated identity does not match the `From:`, and `monitoring/render.ts`
+renders `smtp_from: 'alerts@branchleft.co.uk'`. `SMTP_PASSWORD` is the secret
+the script records under the `alerting-submission` label -- see
+`mail/RUNBOOK-mx1-provision.md`'s "Alerting submission credential".
+
+`alerts@` copies inbound mail to `rob@` only, and carries no second redirect to
+an address off mx1 -- one is the cap, and the reasoning is in
+`mail/RUNBOOK-mx1-provision.md#mailbox-provisioning`. **This is not a mitigated
+gap, it is an accepted one:** alert email is submitted *through* mx1, so when
+mx1 is down no alert mail is sent at all, and no Sieve rule on that host could
+have helped either. `ALERT_RECIPIENT_EMAIL` being off-mx1 covers a different
+case -- mx1 up, the alerting mailbox unreachable or unread. The only thing that
+reports an mx1-down or edge1-down condition is the Healthchecks.io dead-man's
+switch in 11, which is why 12's second proof is not optional.
 
 This step, the mailbox decision and the resulting credential are all
 platform-owner-gated -- mx1 is live production mail.
