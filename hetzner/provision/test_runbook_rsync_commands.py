@@ -14,6 +14,11 @@ tracks only the executable bit — so the mode is invisible to review, to
 copied `0600 uid=501 gid=20` onto the host and Prometheus, running as `nobody`,
 crash-looped on `permission denied`.
 
+Additionally, `rsync --no-owner --no-group` does not modify the ownership of
+files that already exist on the receiving host. Files copied with incorrect
+ownership must be corrected with an explicit `chown -R root:root` after the
+rsync.
+
 Nothing available to CI can observe a workstation's file modes, so the deploy
 command itself has to be immune to them. That makes the command *shape* the
 control, and this asserts the shape — the same reasoning, and the same
@@ -34,6 +39,10 @@ REQUIRED_FLAGS = ("--no-owner", "--no-group", "--chmod=u=rwX,go=rX")
 # A fenced command may be wrapped over several lines with trailing backslashes.
 RSYNC_COMMAND = re.compile(r"^rsync .*?(?:\\\n.*?)*$", re.MULTILINE)
 
+# A chown command that fixes file ownership. Matches the pattern:
+# ssh -i ~/.ssh/id_ed25519_hetzner root@<host> 'chown -R root:root /opt/branchleft/<path>/'
+CHOWN_COMMAND = re.compile(r"ssh\s+-i\s+~/.ssh/id_ed25519_hetzner\s+root@[\d.]+\s+'chown\s+-R\s+root:root\s+/opt/branchleft/\S+/?'", re.MULTILINE)
+
 
 def runbooks() -> list[pathlib.Path]:
     return sorted(p for p in HETZNER.glob("RUNBOOK-*.md"))
@@ -44,6 +53,33 @@ def rsync_commands() -> list[tuple[pathlib.Path, str]]:
     for runbook in runbooks():
         for match in RSYNC_COMMAND.finditer(runbook.read_text(encoding="utf-8")):
             found.append((runbook, " ".join(match.group(0).replace("\\\n", " ").split())))
+    return found
+
+
+def rsync_commands_with_following_context() -> list[tuple[pathlib.Path, str, str]]:
+    """Find rsync commands and capture the text that follows them.
+
+    Returns tuples of (runbook_path, rsync_command, following_context).
+    The following_context includes lines after the rsync until EOF or the next ## heading.
+    """
+    found = []
+    for runbook in runbooks():
+        text = runbook.read_text(encoding="utf-8")
+        for match in RSYNC_COMMAND.finditer(text):
+            # Get the rsync command
+            rsync_cmd = " ".join(match.group(0).replace("\\\n", " ").split())
+
+            # Get text from end of rsync to end of file (or next ## heading)
+            start_pos = match.end()
+            remaining = text[start_pos:]
+            # Find the next ## heading if it exists
+            next_heading = re.search(r"\n## ", remaining)
+            if next_heading:
+                context = remaining[:next_heading.start()]
+            else:
+                context = remaining
+
+            found.append((runbook, rsync_cmd, context))
     return found
 
 
@@ -74,6 +110,20 @@ class RunbookRsyncCommandTests(unittest.TestCase):
                     command,
                     r"--chmod=[DF]\d",
                     f"{runbook.name}: rsync 2.6.9 on macOS rejects the D/F chmod form",
+                )
+
+    def test_every_rsync_is_followed_by_chown_root_root(self):
+        """Each rsync must be followed by an explicit chown -R root:root to fix
+        file ownership on the receiving end. rsync --no-owner --no-group does
+        not modify the ownership of files that already exist on the host."""
+        for runbook, command, context in rsync_commands_with_following_context():
+            with self.subTest(runbook=runbook.name, rsync=command):
+                self.assertRegex(
+                    context,
+                    r"chown\s+-R\s+root:root\s+/opt/branchleft/\S+/?",
+                    f"{runbook.name}: this rsync must be followed by a 'chown -R root:root' "
+                    f"command to fix file ownership on the receiving end. The rsync command "
+                    f"with --no-owner --no-group does not modify existing file ownership.",
                 )
 
 
