@@ -168,7 +168,9 @@ twice.
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/
+  hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  'chown -R root:root /opt/branchleft/edge/'
 ```
 
 ## 2. Provision the Alertmanager submission credential
@@ -271,13 +273,20 @@ Expect `-rw------- 1 root root`. Do not print the file.
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/
+  hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  'chown -R root:root /opt/branchleft/monitoring/'
 ```
 
 `--delete` matters here specifically: `render_alertmanager_config.py` writes
 `alertmanager/alertmanager.yml` on the host, which does not exist in the
 committed tree, so every copy deletes the previous render. That is expected
--- step 7's `ExecStartPre` regenerates it before every start.
+-- step 7's `ExecStartPre` regenerates it before every start. The `chown`
+corrects file ownership on the receiving end, covering both files and directories.
+
+**Note: `alertmanager/alertmanager.yml` must remain owned by uid 65534.** See
+`render_alertmanager_config.py` — Alertmanager runs as `nobody` and a bind mount
+is read as the container-side user, so a root-owned file becomes unreadable.
 
 ## 5. Install the systemd cgroup drop-ins
 
@@ -512,9 +521,10 @@ re-copy, restart.
 git checkout <PREVIOUS_MERGED_SHA> -- hetzner/monitoring/stack
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/
+  hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/ &&
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
-  'systemctl restart branchleft-compose@monitoring'
+  'chown -R root:root /opt/branchleft/monitoring/ &&
+   systemctl restart branchleft-compose@monitoring'
 ```
 
 Then `git checkout HEAD -- hetzner/monitoring/stack` on the workstation. If
