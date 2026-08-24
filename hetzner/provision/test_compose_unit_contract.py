@@ -19,6 +19,14 @@ both directions: an inline-pinned stack has the reset, and an `${IMAGE}` stack
 does not -- a stray reset there would silently disable the mandatory pin, which
 is the guarantee the no-leading-dash was chosen for.
 
+The same file holds a second contract, for the same reason: `--wait` is only a
+deploy signal for a service that declares a `healthcheck:`. Without one Compose
+waits for *running*, which a crash-looping container transiently is, so the
+stack reports a clean start in front of it and branchleft-deploy's rollback --
+which fires on a non-zero `systemctl restart` and nothing else -- never runs.
+That is invisible to `docker compose config` and to the config-validation jobs,
+because none of them start a container.
+
 Everything here reads the `[Service]` section only, and matches whole stripped
 lines. systemd ignores assignments before a section header, so a directive
 found anywhere in the file is not a directive systemd applies.
@@ -42,6 +50,80 @@ RESET_DIRECTIVE = "EnvironmentFile="
 # position so a stack whose only variable is the pin is correctly read as
 # needing no secrets.
 COMPOSE_VARIABLE = re.compile(r"\$\{(?!IMAGE[}:])([A-Za-z_][A-Za-z0-9_]*)")
+
+# A top-level mapping key: column 0, so `services:` is told from a key nested
+# under it.
+TOP_LEVEL_KEY = re.compile(r"\A([A-Za-z0-9_.-]+):")
+
+# A service name under `services:`, at Compose's two-space nesting. Matched at
+# a fixed indent rather than by name so a service added at the wrong depth --
+# which Compose would not read as a service at all -- is not silently counted
+# as one that has a healthcheck.
+SERVICE_HEADER = re.compile(r"\A {2}([A-Za-z0-9][A-Za-z0-9_.-]*):\s*\Z")
+
+HEALTHCHECK_KEY = "    healthcheck:"
+
+# Services whose image carries its own `HEALTHCHECK` instruction, so Compose
+# already waits for *healthy* without the Compose file restating it. Docker
+# reports these as `Up (healthy)` exactly as a Compose-declared one does, which
+# is why a stack can look uniformly healthy while most of it is not covered.
+#
+# Listed rather than detected: reading an image's metadata needs a Docker
+# daemon and a pulled image, which this suite deliberately has neither of. The
+# cost of that is a stale entry here if an image drops its healthcheck, which is
+# what `test_every_named_service_still_exists` bounds.
+IMAGE_PROVIDED_HEALTHCHECK: dict[tuple[str, str], str] = {
+    ("monitoring", "cadvisor"): (
+        "ghcr.io/google/cadvisor ships HEALTHCHECK CMD-SHELL /usr/bin/healthcheck.sh. "
+        "Left to the image rather than restated here: a Compose-level healthcheck "
+        "replaces the image's outright, so restating it would swap a probe cAdvisor "
+        "maintains for one this repository would have to."
+    ),
+}
+
+# Services with no health signal at all. An entry here is a decision to rely on
+# the unit template's ExecStartPost instead, which reads the restart state
+# directly and so needs nothing of the image -- but only sees a container that is
+# looping at the instant it runs. Keep this list short.
+HEALTHCHECK_EXEMPT: dict[tuple[str, str], str] = {
+    ("edge", "crowdsec"): (
+        "docker.io/crowdsecurity/crowdsec carries no HEALTHCHECK, so a probe would "
+        "have to be written here -- against a live production-facing host, where a "
+        "wrong one fails every future deploy of branchleft.co.uk's edge. CrowdSec "
+        "also loads hub collections at start, so the settling time a probe would "
+        "have to tolerate is set by network conditions rather than by the image. "
+        "The edge stack's rollback signal does not depend on this: `caddy` is the "
+        "only service there resolving ${IMAGE}, so it is the only one a deploy can "
+        "change, and it has a healthcheck."
+    ),
+}
+
+
+def services_with_healthcheck(compose: pathlib.Path) -> dict[str, bool]:
+    """Every service in `services:`, mapped to whether it declares a healthcheck.
+
+    Regex rather than a YAML parse to keep this module stdlib-only, matching how
+    the image-pin half above reads the same files. A parser this shallow could
+    silently find nothing and pass every assertion, so
+    `test_the_parser_still_reads_the_committed_stacks` asserts what it found.
+    """
+    services: dict[str, bool] = {}
+    current: str | None = None
+    in_services = False
+    for raw in bd.strip_yaml_comments(compose.read_text(encoding="utf-8")).splitlines():
+        if TOP_LEVEL_KEY.match(raw):
+            in_services = raw.startswith("services:")
+            current = None
+            continue
+        if not in_services:
+            continue
+        header = SERVICE_HEADER.match(raw)
+        if header:
+            current = header.group(1)
+            services[current] = False
+        elif current is not None and raw.startswith(HEALTHCHECK_KEY):
+            services[current] = True
+    return services
 
 
 def secrets_directive(stack: str) -> re.Pattern[str]:
@@ -205,6 +287,77 @@ class ComposeUnitContractTests(unittest.TestCase):
                 )
 
 
+class WaitSignalContractTests(unittest.TestCase):
+    """`docker compose up --wait` is only a deploy signal where healthchecks are."""
+
+    def test_the_parser_still_reads_the_committed_stacks(self):
+        """A parser that found nothing would pass every assertion below."""
+        found = {
+            (stack, service)
+            for stack, compose in stack_compose_files().items()
+            for service in services_with_healthcheck(compose)
+        }
+        for expected in [
+            ("monitoring", "prometheus"),
+            ("monitoring", "alertmanager"),
+            ("monitoring", "cadvisor"),
+            ("edge", "caddy"),
+            ("edge", "crowdsec"),
+        ]:
+            self.assertIn(expected, found)
+
+    def test_every_service_declares_a_healthcheck_or_is_a_named_exemption(self):
+        for stack, compose in stack_compose_files().items():
+            for service, has_healthcheck in services_with_healthcheck(compose).items():
+                with self.subTest(stack=stack, service=service):
+                    if (stack, service) in IMAGE_PROVIDED_HEALTHCHECK:
+                        continue
+                    if (stack, service) in HEALTHCHECK_EXEMPT:
+                        continue
+                    self.assertTrue(
+                        has_healthcheck,
+                        f"{compose}: `{service}` declares no healthcheck, so "
+                        "`docker compose up --wait` waits only for it to be running. "
+                        "A container that starts and dies is transiently running, so "
+                        "the unit start succeeds in front of a crash loop and "
+                        "branchleft-deploy never rolls the image back. Give it a "
+                        "healthcheck, or name it in IMAGE_PROVIDED_HEALTHCHECK or "
+                        "HEALTHCHECK_EXEMPT with the reason.",
+                    )
+
+    def test_every_named_service_still_exists(self):
+        """A stale entry silently widens the rule for whatever is named next."""
+        real = {
+            (stack, service)
+            for stack, compose in stack_compose_files().items()
+            for service in services_with_healthcheck(compose)
+        }
+        for table, name in (
+            (IMAGE_PROVIDED_HEALTHCHECK, "IMAGE_PROVIDED_HEALTHCHECK"),
+            (HEALTHCHECK_EXEMPT, "HEALTHCHECK_EXEMPT"),
+        ):
+            for entry in table:
+                with self.subTest(table=name, entry=entry):
+                    self.assertIn(
+                        entry,
+                        real,
+                        f"{name} names {entry}, which no committed stack defines. "
+                        "Remove it rather than leaving it to match a future service "
+                        "of the same name.",
+                    )
+
+    def test_nothing_is_excused_without_a_reason(self):
+        for table in (IMAGE_PROVIDED_HEALTHCHECK, HEALTHCHECK_EXEMPT):
+            for entry, reason in table.items():
+                with self.subTest(entry=entry):
+                    self.assertTrue(reason.strip(), f"{entry} is excused with no reason")
+
+    def test_a_service_is_not_named_in_both_tables(self):
+        """The two are different claims: one is covered, the other is knowingly not."""
+        overlap = set(IMAGE_PROVIDED_HEALTHCHECK) & set(HEALTHCHECK_EXEMPT)
+        self.assertFalse(overlap, f"named in both tables: {sorted(overlap)}")
+
+
 class UnitTemplateAssumptionTests(unittest.TestCase):
     """The tests above are only meaningful while the template still reads this way.
 
@@ -221,6 +374,27 @@ class UnitTemplateAssumptionTests(unittest.TestCase):
 
     def test_the_secrets_file_is_still_optional(self):
         self.assertIn("EnvironmentFile=-/etc/branchleft/%i.env", self.lines)
+
+    def test_the_start_still_waits(self):
+        """Without `--wait` the healthchecks above are diagnostic and nothing more."""
+        self.assertIn(
+            "ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait",
+            self.lines,
+        )
+
+    def test_a_crash_looping_container_still_fails_the_start(self):
+        """The backstop for every service HEALTHCHECK_EXEMPT covers."""
+        assertions = [line for line in self.lines if line.startswith("ExecStartPost=")]
+        self.assertTrue(
+            assertions,
+            "the unit has no ExecStartPost asserting the post-start restart state, so "
+            "a service without a healthcheck can crash-loop behind a successful "
+            "`systemctl start`. Every entry in HEALTHCHECK_EXEMPT relies on it.",
+        )
+        self.assertTrue(
+            any("--status restarting" in line for line in assertions),
+            f"no ExecStartPost reads the restart state: {assertions}",
+        )
 
 
 if __name__ == "__main__":

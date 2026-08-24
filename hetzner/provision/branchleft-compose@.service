@@ -22,10 +22,24 @@ EnvironmentFile=/etc/branchleft/%i.image.env
 EnvironmentFile=-/etc/branchleft/%i.env
 
 ExecStartPre=/usr/bin/docker compose pull --quiet
-# `--wait` is what makes a bad image a failed unit start rather than a
-# running unit in front of a crash-looping container -- it is the signal
-# branchleft-deploy's rollback depends on.
+# `--wait` is the signal branchleft-deploy's rollback depends on, but it only
+# waits for *healthy* where the service declares a healthcheck. Without one it
+# waits for *running*, which a crash-looping container transiently is, and the
+# stack then reports a successful start in front of it. Every service in the
+# committed stacks that can support a healthcheck declares one, and
+# test_compose_unit_contract.py is what holds that line.
 ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait
+# The backstop for a service that cannot support one. It reads the restart
+# state directly, so it needs nothing of the image, but it only sees a
+# container that is looping at this instant -- it supplements the healthchecks
+# rather than standing in for them. `grep .` prints the offending names into
+# the journal and exits 0 when there is at least one, which is the failure.
+#
+# The bare `ps` first is not redundant: a pipeline takes the exit status of
+# its last command, so a `docker compose ps` that failed outright would reach
+# `grep` as empty input and be read as "nothing is restarting". Failing on it
+# separately is what keeps this assertion closed rather than open.
+ExecStartPost=/bin/sh -c '/usr/bin/docker compose ps --quiet > /dev/null || exit 1; if /usr/bin/docker compose ps --status restarting --format "{{.Name}}" | grep .; then echo "branchleft-compose: the container(s) above are crash-looping; failing the unit start so a deploy rolls back" >&2; exit 1; fi'
 ExecStop=/usr/bin/docker compose down
 
 # A registry pull plus a health-check wait on a cold host exceeds systemd's
