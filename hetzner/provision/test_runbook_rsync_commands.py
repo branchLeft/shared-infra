@@ -39,21 +39,9 @@ REQUIRED_FLAGS = ("--no-owner", "--no-group", "--chmod=u=rwX,go=rX")
 # A fenced command may be wrapped over several lines with trailing backslashes.
 RSYNC_COMMAND = re.compile(r"^rsync .*?(?:\\\n.*?)*$", re.MULTILINE)
 
-# A chown command that fixes file ownership. Matches the pattern:
-# ssh -i ~/.ssh/id_ed25519_hetzner root@<host> 'chown -R root:root /opt/branchleft/<path>/'
-CHOWN_COMMAND = re.compile(r"ssh\s+-i\s+~/.ssh/id_ed25519_hetzner\s+root@[\d.]+\s+'chown\s+-R\s+root:root\s+/opt/branchleft/\S+/?'", re.MULTILINE)
-
 
 def runbooks() -> list[pathlib.Path]:
     return sorted(p for p in HETZNER.glob("RUNBOOK-*.md"))
-
-
-def rsync_commands() -> list[tuple[pathlib.Path, str]]:
-    found = []
-    for runbook in runbooks():
-        for match in RSYNC_COMMAND.finditer(runbook.read_text(encoding="utf-8")):
-            found.append((runbook, " ".join(match.group(0).replace("\\\n", " ").split())))
-    return found
 
 
 def rsync_commands_with_following_context() -> list[tuple[pathlib.Path, str, str]]:
@@ -81,6 +69,12 @@ def rsync_commands_with_following_context() -> list[tuple[pathlib.Path, str, str
 
             found.append((runbook, rsync_cmd, context))
     return found
+
+
+def rsync_commands() -> list[tuple[pathlib.Path, str]]:
+    """Find rsync commands without context. Reuses rsync_commands_with_following_context
+    to avoid duplication."""
+    return [(runbook, cmd) for runbook, cmd, _ in rsync_commands_with_following_context()]
 
 
 class RunbookRsyncCommandTests(unittest.TestCase):
