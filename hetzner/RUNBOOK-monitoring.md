@@ -275,7 +275,8 @@ rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
   hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/ &&
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
-  'chown -R root:root /opt/branchleft/monitoring/'
+  'chown -R root:root /opt/branchleft/monitoring/ &&
+   systemctl restart branchleft-compose@monitoring'
 ```
 
 `--delete` matters here specifically: `render_alertmanager_config.py` writes
@@ -283,6 +284,10 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
 committed tree, so every copy deletes the previous render. That is expected
 -- step 7's `ExecStartPre` regenerates it before every start. The `chown`
 corrects file ownership on the receiving end, covering both files and directories.
+
+**Note: `alertmanager/alertmanager.yml` must remain owned by uid 65534.** See
+`render_alertmanager_config.py` — Alertmanager runs as `nobody` and a bind mount
+is read as the container-side user, so a root-owned file becomes unreadable.
 
 ## 5. Install the systemd cgroup drop-ins
 
