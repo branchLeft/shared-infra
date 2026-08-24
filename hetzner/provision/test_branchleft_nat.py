@@ -574,7 +574,7 @@ class RunbookScpCommandTests(unittest.TestCase):
 
     def test_every_scp_site_copies_provision_dot_to_a_slash_free_destination(self):
         commands = _extract_scp_commands()
-        self.assertEqual(len(commands), 3, commands)
+        self.assertEqual(len(commands), 4, commands)
         for command in commands:
             tokens = command.split()
             source = next(t for t in tokens if t.startswith("hetzner/provision"))
