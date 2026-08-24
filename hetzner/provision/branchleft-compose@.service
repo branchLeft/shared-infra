@@ -35,11 +35,17 @@ ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait
 # rather than standing in for them. `grep .` prints the offending names into
 # the journal and exits 0 when there is at least one, which is the failure.
 #
-# The bare `ps` first is not redundant: a pipeline takes the exit status of
-# its last command, so a `docker compose ps` that failed outright would reach
-# `grep` as empty input and be read as "nothing is restarting". Failing on it
-# separately is what keeps this assertion closed rather than open.
-ExecStartPost=/bin/sh -c '/usr/bin/docker compose ps --quiet > /dev/null || exit 1; if /usr/bin/docker compose ps --status restarting --format "{{.Name}}" | grep .; then echo "branchleft-compose: the container(s) above are crash-looping; failing the unit start so a deploy rolls back" >&2; exit 1; fi'
+# The same query runs twice, and the discarded first run is the load-bearing
+# one. A pipeline takes the exit status of its last command, so a query that
+# failed outright -- `--status` unsupported on this host's Compose, an
+# unreachable daemon, an unresolvable project -- would reach `grep` as empty
+# input and be read as "nothing is restarting". That is this unit's own defect
+# one level down: reporting a clean start because it could not look. Running it
+# first with its status checked is what makes a failed query fail the unit.
+#
+# It must be the *identical* query, not a cheaper stand-in: an unsupported flag
+# is only discovered by a command that carries the flag.
+ExecStartPost=/bin/sh -c '/usr/bin/docker compose ps --status restarting --format "{{.Name}}" > /dev/null || exit 1; if /usr/bin/docker compose ps --status restarting --format "{{.Name}}" | grep .; then echo "branchleft-compose: the container(s) above are crash-looping; failing the unit start so a deploy rolls back" >&2; exit 1; fi'
 ExecStop=/usr/bin/docker compose down
 
 # A registry pull plus a health-check wait on a cold host exceeds systemd's

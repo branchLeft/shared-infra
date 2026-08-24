@@ -32,8 +32,12 @@ lines. systemd ignores assignments before a section header, so a directive
 found anywhere in the file is not a directive systemd applies.
 """
 
+import os
 import pathlib
 import re
+import stat
+import subprocess
+import tempfile
 import unittest
 
 import branchleft_deploy as bd
@@ -97,6 +101,47 @@ HEALTHCHECK_EXEMPT: dict[tuple[str, str], str] = {
         "change, and it has a healthcheck."
     ),
 }
+
+
+EXEC_START_POST = re.compile(r"\AExecStartPost=/bin/sh -c '(?P<body>.*)'\Z")
+
+
+def crash_loop_assertion_body() -> str:
+    """The shell the unit's ExecStartPost actually runs.
+
+    Read out of the committed unit rather than restated in the test, so the
+    behaviour asserted below is the behaviour systemd would get.
+    """
+    unit = HETZNER / "provision" / "branchleft-compose@.service"
+    bodies = [
+        match.group("body")
+        for match in (EXEC_START_POST.match(line) for line in service_lines(unit))
+        if match
+    ]
+    if len(bodies) != 1:
+        raise AssertionError(f"expected exactly one `sh -c` ExecStartPost, found {len(bodies)}")
+    return bodies[0]
+
+
+def run_assertion_against(stub: str) -> subprocess.CompletedProcess[str]:
+    """Run that shell with `docker` replaced by a stub of known behaviour.
+
+    The point is the exit status the assertion reports for a given `docker
+    compose ps`, which is what systemd reads and what branchleft-deploy's
+    rollback keys on. A stub is the only way to reach the failure branches --
+    a real daemon cannot be made to reject a flag on demand.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        fake = os.path.join(directory, "docker")
+        with open(fake, "w", encoding="utf-8") as handle:
+            handle.write(stub)
+        os.chmod(fake, os.stat(fake).st_mode | stat.S_IXUSR)
+        return subprocess.run(
+            ["/bin/sh", "-c", crash_loop_assertion_body().replace("/usr/bin/docker", fake)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
 
 def services_with_healthcheck(compose: pathlib.Path) -> dict[str, bool]:
@@ -394,6 +439,72 @@ class UnitTemplateAssumptionTests(unittest.TestCase):
         self.assertTrue(
             any("--status restarting" in line for line in assertions),
             f"no ExecStartPost reads the restart state: {assertions}",
+        )
+
+
+class CrashLoopAssertionBehaviourTests(unittest.TestCase):
+    """What the ExecStartPost reports back to systemd, run rather than read.
+
+    The text assertions in UnitTemplateAssumptionTests only prove the directive
+    is present. Whether it is *sound* is a question about exit statuses, and a
+    guard that cannot fail is worth nothing -- which is the whole subject of
+    this file.
+    """
+
+    NOTHING_RESTARTING = "#!/bin/sh\nexit 0\n"
+    ONE_RESTARTING = '#!/bin/sh\necho monitoring-prometheus-1\nexit 0\n'
+    # What an older Compose does with a flag it does not have: nothing on
+    # stdout, a diagnostic on stderr, non-zero.
+    QUERY_FAILS = '#!/bin/sh\necho "unknown flag: --status" >&2\nexit 125\n'
+
+    def test_a_settled_stack_passes(self):
+        result = run_assertion_against(self.NOTHING_RESTARTING)
+        self.assertEqual(
+            result.returncode, 0, f"a settled stack must start: {result.stderr}"
+        )
+
+    def test_a_crash_looping_container_fails_the_start(self):
+        result = run_assertion_against(self.ONE_RESTARTING)
+        self.assertNotEqual(
+            result.returncode, 0, "a restarting container must fail the unit start"
+        )
+        self.assertIn(
+            "monitoring-prometheus-1",
+            result.stdout,
+            "the offending container must be named in the journal",
+        )
+
+    def test_a_query_that_fails_fails_the_start(self):
+        """The property this guard exists to have: it never passes by not looking.
+
+        `docker compose ps` writes nothing to stdout when it fails, so a
+        pipeline into `grep` reads a broken query as "nothing is restarting"
+        and the unit starts clean over an unknown stack. That is the same shape
+        as the `--wait` defect this whole file guards.
+        """
+        result = run_assertion_against(self.QUERY_FAILS)
+        self.assertNotEqual(
+            result.returncode,
+            0,
+            "a `docker compose ps` that failed outright was read as `nothing is "
+            "restarting` and the unit start succeeded. A query that could not be "
+            "answered must fail the unit, never pass it.",
+        )
+
+    def test_the_query_is_validated_with_the_flag_it_depends_on(self):
+        """A cheaper pre-flight would miss an unsupported `--status`.
+
+        The host's Compose version is not pinned (20-install-docker.sh installs
+        docker-compose-plugin unpinned, deliberately), so `--status` support is
+        not something this repository controls. Only a probe carrying the flag
+        discovers its absence, which is why the same query runs twice.
+        """
+        body = crash_loop_assertion_body()
+        self.assertEqual(
+            body.count("--status restarting"),
+            2,
+            "the pre-flight query must be identical to the one whose output is "
+            f"read, flag included: {body}",
         )
 
 
