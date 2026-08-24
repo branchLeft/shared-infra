@@ -47,11 +47,17 @@ export interface CloudInitArgs {
 }
 
 /**
- * `restrict` is the whole-set deny (no agent forwarding, no port forwarding,
- * no X11, no pty, no user-rc), with nothing added back. A forced command is
- * the tighter option and is not used yet because the deploy verb set is
- * still moving; the sudo allow-list below is what bounds the key's power in
- * the meantime, and it grants exactly one binary.
+ * Options on the **host-level** deploy key — the one this document installs at
+ * first boot. `restrict` is the whole-set deny (no agent forwarding, no port
+ * forwarding, no X11, no pty, no user-rc), with nothing added back.
+ *
+ * Deliberately no forced command here, and that is now a scoping decision
+ * rather than a deferral. This key is the platform's own and names the stack it
+ * deploys, so it reaches every stack on the host; per-stack keys carry
+ * `restrict` **plus** a `command=` naming one stack, and are added after first
+ * boot by `hetzner/provision/provision_deploy_slot.py`, which is the only
+ * writer of `authorized_keys` thereafter. Cloud-init cannot install them: it
+ * runs once, and slots are granted per tenant over the host's life.
  */
 const AUTHORIZED_KEY_OPTIONS = 'restrict';
 

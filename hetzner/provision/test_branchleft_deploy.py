@@ -315,6 +315,40 @@ class MainTests(unittest.TestCase):
     def test_invalid_input_exits_one_without_touching_the_host(self):
         self.assertEqual(bd.main(["branchleft-deploy", "../edge", VALID_IMAGE]), 1)
 
+    def test_slot_mode_deploys_the_slots_stack_with_the_image_from_stdin(self):
+        # The binding itself, asserted positively. Every other slot test here
+        # asserts a refusal, and a refusal is also what broken wiring produces
+        # -- so without this one, deleting slot mode outright leaves the suite
+        # green.
+        calls = []
+        code = bd.main(
+            ["branchleft-deploy", "--slot", "blog"],
+            stdin=io.StringIO(f"{VALID_IMAGE}\n"),
+            deploy=lambda stack, image: calls.append((stack, image)),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [("blog", VALID_IMAGE)])
+
+    def test_positional_mode_deploys_the_named_stack_with_the_argument_image(self):
+        calls = []
+        code = bd.main(
+            ["branchleft-deploy", "edge", VALID_IMAGE],
+            deploy=lambda stack, image: calls.append((stack, image)),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [("edge", VALID_IMAGE)])
+
+    def test_a_slot_key_cannot_reach_another_stack_through_stdin(self):
+        # The whole point of the slot: whatever arrives on stdin, the stack
+        # deployed is the one the forced command named.
+        calls = []
+        bd.main(
+            ["branchleft-deploy", "--slot", "blog"],
+            stdin=io.StringIO(f"{VALID_IMAGE}\n"),
+            deploy=lambda stack, image: calls.append((stack, image)),
+        )
+        self.assertEqual([stack for stack, _ in calls], ["blog"])
+
     def test_slot_mode_takes_no_second_positional_argument(self):
         # `--slot blog other-tenant` is the direct attempt to name a stack the
         # key was not issued for. There is no argument position for it.

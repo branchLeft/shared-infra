@@ -300,31 +300,64 @@ client's argv is discarded, short of opening sudo's `env_reset` for
 `SSH_ORIGINAL_COMMAND`, which would mean editing the privileged sudoers grant
 on every live host in order to add a control.
 
-The binding has to come from the forced command because nothing else on the
-path is out of the caller's reach. The alternative — one shared account, and
-the wrapper deciding from which key authenticated — has no trustworthy channel
-to decide from: sshd does not put the accepted key's fingerprint in the session
-environment, and `PermitUserEnvironment`, which would, also lets anything
-holding the account write `~/.ssh/environment` and `LD_PRELOAD` the sudo call
-the whole path depends on.
+**The binding comes from the forced command because that removes the name
+rather than checking it.** The alternative — one shared account, and the
+wrapper deciding from which key authenticated — is not impossible, and it is
+worth being accurate about why it loses. sshd _can_ be told to expose the
+authenticating credential: `ExposeAuthInfo` writes the accepted key to a file
+named by `SSH_USER_AUTH`, and `AuthorizedKeysCommand` receives its fingerprint
+as `%f`. Both are server-side and neither is writable by the account. What
+every such design still has is a comparison — caller-supplied stack name
+against identity — that has to stay correct through every future edit, and
+whose failure is silent, because a wrong comparison still deploys something. A
+forced command has no comparison to get wrong. (`environment=` in
+`authorized_keys` is a third option and a bad one: it needs
+`PermitUserEnvironment`, which also lets anything holding the account set
+`BASH_ENV` for the non-interactive shell every forced command runs under.)
 
-`provision/provision_deploy_slot.py` is the only writer. It keeps a root-owned
-register at `/etc/branchleft/deploy-slots/<stack>.pub` and **renders**
-`authorized_keys` from it rather than appending, so a rotation cannot leave the
-replaced key behind as a second working entry and a revoke is a re-render. It
-also takes `/home/deploy`, `/home/deploy/.ssh` and `authorized_keys` to
-`root:root` — an account that owns the directory holding that file can delete
-it and write its own, forced commands and all.
+`provision/provision_deploy_slot.py` is the only writer, and holds three
+properties worth naming:
+
+- **One key, one slot.** sshd stops at the first matching `authorized_keys`
+  line, so a key installed twice always resolves to the same one. A grant is
+  refused if the key already holds another slot, or matches a key on a line
+  this script does not manage — that second case is the sharp one, because the
+  unmanaged line renders first, so the slot would be cosmetic while the
+  register reported it as scoped.
+- **Rendered from a register, reconciled before every write.**
+  `/etc/branchleft/deploy-slots/<stack>.pub` is the source of truth, and one
+  `reconcile()` is the single arbiter that grant, revoke and `--list-slots` all
+  call. A marked line the register cannot explain stops the run instead of
+  being dropped by the re-render. That matters because the marker is a plain
+  last field: an unrelated key whose comment happened to end in one would
+  otherwise be deleted, and on this estate the unrelated key is the host-level
+  one the marketing site deploys through.
+- **The deploy account cannot write anything in its own home.** The home,
+  `.ssh`, `authorized_keys` and every file beneath them move to root. Recursive
+  is not tidiness: sshd runs a forced command through `$SHELL -c`, Debian
+  builds bash with `SSH_SOURCE_BASHRC`, so a writable `~/.bashrc` runs ahead of
+  every slot key on the host. It also closes `~/.ssh/authorized_keys2`, which
+  sshd's default `AuthorizedKeysFile` still includes.
 
 **What a slot key does not bound, stated rather than implied.** The sudoers
-grant still names `branchleft-deploy` with no argument restriction, because the
-platform's own repositories still call the unscoped form. So the forced command
-is the only layer: anything obtaining arbitrary execution as `deploy` reaches
-every stack on the host regardless of which key it arrived on. A second layer
-means per-slot sudoers entries with exact arguments, and those buy nothing
-while a broader rule still matches — sudo takes the last matching rule. It
-becomes available once every caller is slotted and the unscoped grant is
-withdrawn.
+grant still names `branchleft-deploy` with no argument restriction, so the
+forced command is the only layer: anything obtaining arbitrary execution as
+`deploy` reaches every stack on the host regardless of which key it arrived on.
+A second layer means per-slot sudoers entries with exact arguments, and those
+buy nothing while a broader rule still matches — sudo takes the last matching
+rule.
+
+**Exactly one caller keeps that broader rule alive, and it is not the three you
+would guess.** `edge` and `monitoring` are deployed by an operator over SSH
+**as root** (`RUNBOOK-edge.md` §6, `RUNBOOK-monitoring.md`), which needs no
+sudoers grant at all. The single remaining user of the `deploy` account is
+`branchLeft/website`'s CI, which calls
+`sudo -n /usr/local/sbin/branchleft-deploy website <image>@<digest>`. That same
+workflow then runs an arbitrary `curl` over the same key as its smoke test —
+so the website deploy key is a **shell** on the `deploy` account, not a scoped
+credential, and it is the concrete instance of "arbitrary execution as
+`deploy`" above. Slotting `website` therefore needs its smoke test rehomed
+first; a forced command would break it.
 
 Root stays key-reachable over SSH because it is the provisioning identity for
 `provision/run-all.sh`. The break-glass path if that is ever lost is the

@@ -306,7 +306,7 @@ def read_slot_image(stream, *, limit: int = SLOT_STDIN_LIMIT) -> str:
     return validate_image_ref(lines[0])
 
 
-def main(argv: list[str], *, stdin=None) -> int:
+def main(argv: list[str], *, stdin=None, deploy=deploy) -> int:
     usage = (
         "usage: branchleft-deploy <stack> <image@sha256:...>\n"
         f"       branchleft-deploy {SLOT_FLAG} <stack>   (image read from stdin)"
