@@ -22,9 +22,11 @@ EnvironmentFile=/etc/branchleft/%i.image.env
 EnvironmentFile=-/etc/branchleft/%i.env
 
 ExecStartPre=/usr/bin/docker compose pull --quiet
-# `--wait` is what makes a bad image a failed unit start rather than a
-# running unit in front of a crash-looping container -- it is the signal
-# branchleft-deploy's rollback depends on.
+# `--wait` waits for *healthy* only where the service declares a healthcheck;
+# without one it waits for *running*, which a crash-looping container is. That
+# is the whole rollback signal. test_compose_unit_contract.py holds the stacks
+# this repository commits to declaring one, bar a single recorded exception; a
+# stack that comes from anywhere else has to bring its own.
 ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait
 ExecStop=/usr/bin/docker compose down
 

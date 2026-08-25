@@ -19,6 +19,13 @@
 # `hetzner/edge/stack/compose.yml`'s two containers -- the same 2:1 ratio the
 # systemd drop-ins' `CPUWeight` express, implemented where it actually takes
 # effect.
+#
+# Every service declares a `healthcheck:` because that is what makes `--wait` a
+# deploy signal; `cadvisor` needs none, its image carries its own HEALTHCHECK
+# and a Compose-level one would replace it. `node-exporter` is probed on `/`
+# because it serves no `/-/healthy` and would answer 404; Grafana's route is
+# `/api/health`. The probes use each image's own busybox `wget` -- none of these
+# images carries `curl`.
 name: monitoring
 
 services:
@@ -47,6 +54,12 @@ services:
     # drop-in's MemoryMax, which bounds `branchleft-compose@monitoring`'s own
     # cgroup and not the containers dockerd creates as its siblings under
     # system.slice. See RUNBOOK-monitoring.md's "Colocation cgroup bounds".
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:9090/-/healthy']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     mem_limit: 768m
     # Highest share in this stack: doc 14 names "an Alertmanager that can
     # still evaluate and dispatch" as what colocation must not lose, and that
@@ -72,6 +85,12 @@ services:
       # it rather than loading placeholder tokens as literal config values.
       - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager-data:/alertmanager
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:9093/-/healthy']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     mem_limit: 128m
     # Second-highest: the other half of "still evaluate and dispatch".
     cpu_shares: 512
@@ -96,6 +115,12 @@ services:
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:3000/api/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     mem_limit: 384m
     cpu_shares: 256
     depends_on:
@@ -117,6 +142,12 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/root:ro
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:9100/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     mem_limit: 64m
     cpu_shares: 128
 
@@ -125,6 +156,12 @@ services:
     restart: unless-stopped
     volumes:
       - ./blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:9115/-/healthy']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     mem_limit: 64m
     cpu_shares: 64
 
