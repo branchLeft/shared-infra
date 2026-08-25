@@ -1,0 +1,122 @@
+# Regenerate nothing here -- unlike alerts.yml this file is hand-written and
+# is not read at runtime. `promtool test rules` runs it against the
+# committed rule file directly, so it always exercises exactly what edge1
+# will load.
+#
+# `rule_files` is relative to this file's own directory.
+rule_files:
+  - stack/prometheus/alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # A crash loop: the container answers one scrape then dies for the next
+  # two, repeating for the full 15m window `changes()` looks back over.
+  # `for: 5m` on HostOrServiceDown never accumulates because the outage is
+  # never continuous -- this is the gap the issue describes, reproduced
+  # without touching a live host.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="crowdsec", instance="10.20.1.10:6060", host="edge1", expected_up="true"}'
+        values: '1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0'
+    alert_rule_test:
+      - eval_time: 14m30s
+        alertname: ServiceFlapping
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: crowdsec
+              instance: 10.20.1.10:6060
+              host: edge1
+              expected_up: 'true'
+            exp_annotations:
+              summary: 'crowdsec on edge1 has restarted repeatedly in the last 15 minutes.'
+              description: >-
+                Catches what HostOrServiceDown cannot: for: requires up == 0 to hold continuously, so a container that restarts on a backoff loop -- coming up just long enough to answer one scrape before dying again -- never accumulates an unbroken outage window and resets that timer every cycle. Counting transitions over a trailing window instead of requiring continuous downtime is why this rule carries no for: of its own -- adding one would reintroduce the same blind spot one level up. Threshold assumes routine deploys restart a service at most once or twice in any 15-minute span (at most 4 transitions); a scrape interval of 30s gives a genuine crash loop many more transitions than that inside the same window. Scoped to expected_up="true" for the same reason as HostOrServiceDown above.
+      - eval_time: 14m30s
+        alertname: HostOrServiceDown
+        exp_alerts: []
+
+  # A single ordinary restart: one down scrape, then back up for the rest of
+  # the window. Proves the new rule does not page on routine deploys.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="crowdsec", instance="10.20.1.10:6060", host="edge1", expected_up="true"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 14m30s
+        alertname: ServiceFlapping
+        exp_alerts: []
+      - eval_time: 14m30s
+        alertname: HostOrServiceDown
+        exp_alerts: []
+
+  # The same crash-loop shape as the first case, but on a target the estate
+  # has deliberately not provisioned yet (app1/db1/mysqld carry
+  # expected_up="false"). Neither rule is scoped to see it.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="mysqld", instance="10.20.1.20:9104", host="db1", expected_up="false"}'
+        values: '1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0'
+    alert_rule_test:
+      - eval_time: 14m30s
+        alertname: ServiceFlapping
+        exp_alerts: []
+      - eval_time: 14m30s
+        alertname: HostOrServiceDown
+        exp_alerts: []
+
+  # HostOrServiceDown on a genuine, continuous outage of an expected_up="true"
+  # target -- the detector this estate already relies on still works. Checked
+  # via the ALERTS series rather than alert_rule_test/exp_annotations: that
+  # keeps this assertion on the expression and the firing state, not on
+  # HostOrServiceDown's annotation prose, which is a moving target -- another
+  # PR against the same generated file rewrites its description independently
+  # of this one.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="crowdsec", instance="10.20.1.10:6060", host="edge1", expected_up="true"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    promql_expr_test:
+      - expr: ALERTS{alertname="HostOrServiceDown", alertstate="firing"}
+        eval_time: 5m30s
+        exp_samples:
+          - labels: 'ALERTS{alertname="HostOrServiceDown", alertstate="firing", severity="critical", job="crowdsec", instance="10.20.1.10:6060", host="edge1", expected_up="true"}'
+            value: 1
+      - expr: ALERTS{alertname="ServiceFlapping", alertstate="firing"}
+        eval_time: 5m30s
+        exp_samples: []
+
+  # The same continuous outage, but on an expected_up="false" target
+  # (app1's node_exporter, not provisioned yet). The mute is a real
+  # selector match failure, not a rule that happens never to have been
+  # exercised down this path.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node", instance="10.20.1.100:9100", host="app1", expected_up="false"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 5m30s
+        alertname: HostOrServiceDown
+        exp_alerts: []
+
+  # BlackboxProbeFailed: a public hostname that stops answering its HTTPS
+  # probe continuously for over 5m fires; one that keeps answering does not.
+  - interval: 30s
+    input_series:
+      - series: 'probe_success{job="blackbox_http", instance="https://example.branchleft.co.uk"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'probe_success{job="blackbox_http", instance="https://ok.branchleft.co.uk"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 5m30s
+        alertname: BlackboxProbeFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: blackbox_http
+              instance: https://example.branchleft.co.uk
+            exp_annotations:
+              summary: 'https://example.branchleft.co.uk failed its external probe for 5 minutes.'
+              description: >-
+                The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS.
