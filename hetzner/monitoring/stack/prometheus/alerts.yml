@@ -26,9 +26,8 @@ groups:
           summary: "{{ $labels.job }} on {{ $labels.host }} has been unreachable for 5 minutes."
           description: >-
             Scoped to expected_up="true" targets only -- app1 and db1 carry
-            expected_up="false" until their own exporters are provisioned in a
-            later story, so a target that has never existed does not page
-            anyone.
+            expected_up="false" until their node exporters are provisioned,
+            so targets without exporters do not page anyone.
 
       - alert: HostMemoryPressure
         expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.75
