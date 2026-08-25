@@ -262,10 +262,17 @@ def deploy(
     # while it is down, which is the state nobody investigates.
     rollback = run(["systemctl", "restart", f"branchleft-compose@{stack}"], check=False)
     if rollback.returncode != 0:
+        # A failed oneshot restart runs ExecStopPost, never ExecStop, so
+        # `docker compose down` does not fire here -- every container the
+        # last successful `up -d` started is still running, whatever this
+        # restart's own exit code says about the unit.
         raise DeployError(
             f"restart of branchleft-compose@{stack} failed AND the rollback to "
-            f"{previous} also failed to start; the stack is down and needs "
-            "an operator"
+            f"{previous} also failed to start; branchleft-compose@{stack} is "
+            "now `failed` on both pins, which is the unit's state, not the "
+            "containers' -- check `docker ps --filter "
+            f"label=com.docker.compose.project={stack}` for what is actually "
+            "running before assuming an outage"
         )
     raise DeployError(
         f"restart of branchleft-compose@{stack} failed; rolled back to {previous}"
