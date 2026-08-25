@@ -1,18 +1,18 @@
 # Merged over the image's config.yaml by CrowdSec's own `.local` overlay, so the
-# container still populates and owns config.yaml itself. Hand-maintained: unlike
-# acquis.d/ beside it, nothing renders this file.
+# container still populates and owns config.yaml itself. Hand-maintained --
+# nothing renders this file, unlike acquis.d/ beside it.
 #
 # Pinning the hub branch is what keeps a start independent of the CrowdSec hub.
-# Left unset, every `cscli` hub command resolves the branch by fetching
-# version.crowdsec.net first, and the entrypoint runs two *unconditional*
-# `cscli parsers install` calls (docker-logs, cri-logs) on every start, neither
-# guarded by `|| true`. Under the entrypoint's `set -e`, a failed install and
-# its equally unguarded retry exit the entrypoint, so an unreachable hub
-# crash-loops the container even when every item is already installed and
-# current. With the branch pinned, cscli never makes that call and the installs
-# are a local no-op.
+# Unset, every `cscli` hub command fetches version.crowdsec.net first to choose
+# a branch, and the entrypoint runs two unguarded `cscli parsers install` calls
+# on every start under `set -e` -- so an unreachable hub crash-loops the
+# container even when every item is already installed and current.
 #
-# The value must stay whatever `cscli hub branch` resolves to for the pinned
-# image version -- re-check it with that command when the digest is bumped.
+# `master` is the branch cscli picks while the pinned image is upstream's
+# newest release. It goes stale when upstream ships a version NEWER than the
+# image: from that moment an unpinned cscli would pick the `v<image-version>`
+# branch, and this pin instead keeps pulling hub content built for an agent
+# newer than the one running. The trigger is an upstream release, not any
+# change in this repository, so nothing here detects it.
 cscli:
   hub_branch: master
