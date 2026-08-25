@@ -126,12 +126,19 @@ function targetLabels(host: Pick<MonitoredHost, 'name' | 'expectedUp'>): string 
  * `HostOrServiceDown`'s `expr` picks up every `expected_up="true"` series
  * without any change to the alert rule itself.
  *
- * `prometheus` and `alertmanager` are included for the same reason as the
- * rest -- a transient crash-and-restart of either still produces a real
- * alert once it recovers -- but a *sustained* loss of the whole monitoring
- * stack cannot page through this rule: the evaluator that would fire it is
- * the thing that died. The `Watchdog` heartbeat's external dead-man's switch
- * (`RUNBOOK-monitoring.md` §11) is what actually catches that case.
+ * `alertmanager` is included for the same reason as the rest: Prometheus
+ * keeps running and evaluating while only Alertmanager is down, so a
+ * crash-and-restart still produces a real, if delayed, alert once
+ * Alertmanager is back to receive it. `prometheus`'s own self-scrape cannot
+ * behave the same way -- while the Prometheus process itself is down nothing
+ * evaluates or records a sample at all, and the instant it restarts its
+ * self-scrape immediately succeeds, so `up{job="prometheus"}==0` can never
+ * be observed true for a sustained window. It is labelled `true` anyway for
+ * consistency with `RUNBOOK-monitoring.md` §8's verification list, not
+ * because this rule can ever catch a Prometheus outage: a sustained loss of
+ * the whole monitoring stack is caught by the `Watchdog` heartbeat's
+ * external dead-man's switch (`RUNBOOK-monitoring.md` §11) instead, which
+ * observes from outside this process entirely.
  */
 const EDGE1_SERVICE_LABELS = targetLabels({ name: 'edge1', expectedUp: true });
 const APP1_SERVICE_LABELS = targetLabels({ name: 'app1', expectedUp: true });
