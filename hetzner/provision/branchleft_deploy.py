@@ -263,9 +263,9 @@ def deploy(
     rollback = run(["systemctl", "restart", f"branchleft-compose@{stack}"], check=False)
     if rollback.returncode != 0:
         # A failed oneshot restart runs ExecStopPost, never ExecStop, so
-        # `docker compose down` does not fire here -- every container the
-        # last successful `up -d` started is still running, whatever this
-        # restart's own exit code says about the unit.
+        # `docker compose down` does not fire here -- whatever the most
+        # recent `up -d --wait` attempt started is still running, healthy or
+        # not, whatever this restart's own exit code says about the unit.
         raise DeployError(
             f"restart of branchleft-compose@{stack} failed AND the rollback to "
             f"{previous} also failed to start; branchleft-compose@{stack} is "

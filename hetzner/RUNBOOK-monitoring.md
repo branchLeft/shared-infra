@@ -31,11 +31,10 @@ Expect `active` then `ready`. `python3` is what
 bounds" below for why that script exists at all.
 
 A `failed` reading here is not proof the edge stack is down. The unit is
-`Type=oneshot`, and a failed restart never runs `ExecStop`, so a stack that
-failed after already being up is still running whatever containers its last
-successful `docker compose up -d` started. Check
-`docker ps --filter label=com.docker.compose.project=edge` on the host before
-treating `failed` as an outage.
+`Type=oneshot`, and a failed restart never runs `ExecStop`, so whatever the
+most recent `docker compose up -d` attempt started is still running, healthy
+or not. Check `docker ps --filter label=com.docker.compose.project=edge` on
+the host before treating `failed` as an outage.
 
 ## Colocation cgroup bounds -- the sizing arithmetic and where it actually lives
 

@@ -208,8 +208,8 @@ back to and it says so.
 
 If that rollback restart also fails, `branchleft-compose@edge` ends up
 `failed` on both pins — but a failed oneshot restart never runs `ExecStop`, so
-`docker compose down` does not fire, and every container the last successful
-`up -d` started is still running regardless. `systemctl is-active
+`docker compose down` does not fire, and whatever the most recent `up -d`
+attempt started is still running, healthy or not. `systemctl is-active
 branchleft-compose@edge` reading `failed` here is not proof the stack is
 down; use the `docker ps` check in step 7 below to see what is actually
 running before treating it as an outage.
