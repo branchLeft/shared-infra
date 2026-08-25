@@ -1,1 +1,0 @@
-{"nodes": [{"id": "hetzner_monitoring_stack_compose", "label": "Monitoring Compose Stack", "file_type": "code", "source_file": "hetzner/monitoring/stack/compose.yml"}], "edges": [], "hyperedges": []}
