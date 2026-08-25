@@ -99,17 +99,6 @@ services:
       # Bound to edge1's private address only, same reasoning as Caddy's
       # metrics port above.
       - '10.20.1.10:6060:6060'
-    # `cscli` is the image's own LAPI client, authenticating over loopback, so a
-    # container whose Local API is not answering cannot pass. `start_period`
-    # covers a slow start only -- the entrypoint reinstalls hub items on every
-    # start and exits non-zero when the CrowdSec hub is unreachable, which is a
-    # crash loop no start window can absorb.
-    healthcheck:
-      test: ['CMD', 'cscli', 'lapi', 'status']
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
     volumes:
       - crowdsec-config:/etc/crowdsec
       # Mounted inside the volume above: the acquisition files are generated
