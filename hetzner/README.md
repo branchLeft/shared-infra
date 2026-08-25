@@ -420,7 +420,8 @@ about whether those stacks declare a health signal, so a service in one that
 declares none is deployed unwatched, with `--wait` reporting a clean start over
 it. The two registers in that test module are the machine-checked copy of this
 table: a stack this repository names anywhere and classifies in neither of them
-fails the suite, and so does this table falling out of step with them. They are
+fails the suite, and so does a row here whose last column disagrees with them.
+They are
 a floor rather than a census — a tenant slug granted a deploy slot is written
 down in no file here at all, so nothing here can discover it.
 
