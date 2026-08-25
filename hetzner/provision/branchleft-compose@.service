@@ -24,8 +24,9 @@ EnvironmentFile=-/etc/branchleft/%i.env
 ExecStartPre=/usr/bin/docker compose pull --quiet
 # `--wait` waits for *healthy* only where the service declares a healthcheck;
 # without one it waits for *running*, which a crash-looping container is. That
-# is the whole rollback signal, so every committed service declares one --
-# hetzner/provision/test_compose_unit_contract.py is what holds that.
+# is the whole rollback signal. test_compose_unit_contract.py holds the stacks
+# this repository commits to declaring one; a stack that comes from anywhere
+# else has to bring its own.
 ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait
 ExecStop=/usr/bin/docker compose down
 

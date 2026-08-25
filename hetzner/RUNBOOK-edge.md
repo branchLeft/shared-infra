@@ -230,9 +230,11 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
 ```
 
 Expect two containers listed, both `Up (healthy)`, and one bouncer named
-`caddy` with a recent "last pull". A bare `Up` on either means its
-healthcheck has not passed yet, and `branchleft-compose@edge` would not have
-reported a successful start in that state.
+`caddy` with a recent "last pull". `Up (health: starting)` means the probe has
+not passed yet. A bare `Up` with no health field at all means the container was
+created from a Compose file that declares no healthcheck, so this host is behind
+`hetzner/edge/stack/compose.yml` and the stack needs re-copying — not that the
+probe failed.
 
 `appsec-configs list` shows more than the two configurations `compose.yml`
 enables: the hub installs their dependencies too, on first start. On `edge1`,
