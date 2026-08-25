@@ -393,6 +393,37 @@ half of the contract it falls under. Deploying a new image to one of these means
 editing the committed digest and re-copying `stack/`, not calling
 `branchleft-deploy`.
 
+### Which instances the health-wait contract actually reaches
+
+`--wait` is a deploy signal only for a service that declares a `healthcheck:`.
+Without one Compose waits for _running_, which a crash-looping container
+transiently is, so the unit start succeeds in front of the crash loop and the
+rollback above never fires.
+
+`provision/test_compose_unit_contract.py` holds every service in this
+repository's stacks to declaring one, bar a single recorded exception. It
+cannot hold anything else: the unit template is installed on every host role by
+the base provisioning sequence, and `branchleft-deploy` restarts
+`branchleft-compose@<stack>` for any stack name, while that test globs
+`hetzner/*/stack/compose.yml`.
+
+| Instance                                                   | Compose file committed in                                                    | Read by that test |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------- |
+| `branchleft-compose@edge`                                  | here, `hetzner/edge/stack/`                                                  | yes               |
+| `branchleft-compose@monitoring`                            | here, `hetzner/monitoring/stack/`                                            | yes               |
+| `branchleft-compose@website`                               | `branchLeft/website`, `deploy/compose.yml`                                   | no                |
+| `branchleft-compose@db`                                    | `branchLeft/ghost-platform`, `db/stack/compose.yml`                          | no                |
+| `branchleft-compose@blog`, and one per further tenant slug | nowhere: rendered by `branchLeft/ghost-platform`'s `infra/tenant/compose.ts` | no                |
+
+**No means unread, not failed.** Nothing in this repository has an opinion
+about whether those stacks declare a health signal, so a service in one that
+declares none is deployed unwatched, with `--wait` reporting a clean start over
+it. The two registers in that test module are the machine-checked copy of this
+table: a stack this repository names anywhere and classifies in neither of them
+fails the suite, and so does this table falling out of step with them. They are
+a floor rather than a census — a tenant slug granted a deploy slot is written
+down in no file here at all, so nothing here can discover it.
+
 `branchleft_deploy.py` is the one piece here with real logic, and it is the
 sum total of the CI account's privilege, so its argument validation and its
 rollback path are unit-tested rather than left to a live deploy to discover.

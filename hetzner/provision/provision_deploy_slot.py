@@ -93,6 +93,16 @@ afterwards:
    directory yet, so the normal path never sees this; granting a slot on
    `website` does, which is the case worth stopping.
 
+**What a slot does not carry with it.** The forced command bounds which stack
+the key may restart. It says nothing about whether that stack's Compose file
+declares a health signal, and the unit template's `--wait` is a rollback signal
+only for a service that does -- without one it waits for *running*, which a
+crash-looping container transiently is. Every stack reached through a slot has
+its Compose file in the repository being granted the slot, or has it rendered
+by the tooling that builds that repository, so nothing here reads it. The
+register in `test_compose_unit_contract.py` records which instances that
+leaves unchecked, and by whom.
+
 **Residual, stated rather than implied.** The `deploy` account's sudoers grant
 still names `/usr/local/sbin/branchleft-deploy` with no argument restriction.
 Nothing reaches it through this account today, so the forced command is not
