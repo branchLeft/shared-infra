@@ -1056,13 +1056,18 @@ class ContractReachTests(unittest.TestCase):
         """
         globbed = set(stack_compose_files().values())
         for path in sorted(HETZNER.rglob("compose.y*ml")):
-            if any(part in UNSCANNED_DIRECTORIES for part in path.parts):
+            # Relative to the repository, never the absolute path: a checkout
+            # under a directory named here -- `.worktrees` is the ordinary case
+            # -- would otherwise match every path and skip the whole loop, which
+            # passes silently and only in the checkout it was written in.
+            relative = path.relative_to(REPOSITORY)
+            if any(part in UNSCANNED_DIRECTORIES for part in relative.parts):
                 continue
-            with self.subTest(path=str(path.relative_to(REPOSITORY))):
+            with self.subTest(path=str(relative)):
                 self.assertIn(
                     path,
                     globbed,
-                    f"{path.relative_to(REPOSITORY)} is a Compose file this repository "
+                    f"{relative} is a Compose file this repository "
                     "commits outside `<stack>/stack/compose.yml`, so nothing in this "
                     "module reads it and no register accounts for it. Move it onto "
                     "that path, or widen the glob and EXPECTED_SERVICES together.",
