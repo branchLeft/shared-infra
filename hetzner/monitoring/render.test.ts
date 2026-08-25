@@ -133,6 +133,55 @@ describe('the rendered Prometheus config', () => {
   it('names the Alertmanager rule file it loads', () => {
     expect(renderPrometheusConfig(sites)).toContain('/etc/prometheus/alerts.yml');
   });
+
+  it('gives every scrape job an expected_up label, so HostOrServiceDown can see it -- blackbox_http excepted, it has its own probe_success-based alert', () => {
+    const rendered = renderPrometheusConfig(sites);
+    const jobSections = rendered
+      .split(/\n(?=  - job_name: )/)
+      .filter((section) => /job_name: /.test(section));
+    expect(jobSections.length).toBeGreaterThan(0);
+    for (const section of jobSections) {
+      const jobName = section.match(/job_name: (\S+)/)?.[1];
+      if (jobName === 'blackbox_http') continue;
+      expect(section).toMatch(/expected_up: '(true|false)'/);
+    }
+  });
+
+  it('marks crowdsec and caddy expected up on edge1 -- a down WAF or reverse proxy is the outage this fix exists for', () => {
+    const rendered = renderPrometheusConfig(sites);
+    expect(rendered).toContain(
+      "targets: ['10.20.1.10:9091']\n        labels: {host: edge1, expected_up: 'true'}"
+    );
+    expect(rendered).toContain(
+      "targets: ['10.20.1.10:6060']\n        labels: {host: edge1, expected_up: 'true'}"
+    );
+  });
+
+  it('marks the website contact-form metrics target expected up -- it is live on app1', () => {
+    const rendered = renderPrometheusConfig(sites);
+    expect(rendered).toContain(
+      "targets: ['10.20.1.100:9092']\n        labels: {host: app1, expected_up: 'true'}"
+    );
+  });
+
+  it('marks cadvisor, prometheus and alertmanager expected up -- all three already run on edge1', () => {
+    const rendered = renderPrometheusConfig(sites);
+    expect(rendered).toContain(
+      "targets: ['cadvisor:8080']\n        labels: {host: edge1, expected_up: 'true'}"
+    );
+    expect(rendered).toContain(
+      "targets: ['localhost:9090']\n        labels: {host: edge1, expected_up: 'true'}"
+    );
+    expect(rendered).toContain(
+      "targets: ['alertmanager:9093']\n        labels: {host: edge1, expected_up: 'true'}"
+    );
+  });
+
+  it('does not require an expected_up label on the blackbox multi-target job -- BlackboxProbeFailed covers it on probe_success instead', () => {
+    const rendered = renderPrometheusConfig(sites);
+    const blackboxSection = rendered.slice(rendered.indexOf('  - job_name: blackbox_http'));
+    expect(blackboxSection).not.toContain('expected_up');
+  });
 });
 
 describe('the rendered alert rules', () => {
