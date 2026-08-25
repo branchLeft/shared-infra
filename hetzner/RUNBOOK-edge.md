@@ -229,8 +229,10 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
   docker exec "$CROWDSEC_CTR" cscli bouncers list'
 ```
 
-Expect two containers listed, both `Up`, and one bouncer named `caddy` with a
-recent "last pull".
+Expect two containers listed, both `Up (healthy)`, and one bouncer named
+`caddy` with a recent "last pull". A bare `Up` on either means its
+healthcheck has not passed yet, and `branchleft-compose@edge` would not have
+reported a successful start in that state.
 
 `appsec-configs list` shows more than the two configurations `compose.yml`
 enables: the hub installs their dependencies too, on first start. On `edge1`,

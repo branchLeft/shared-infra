@@ -22,30 +22,11 @@ EnvironmentFile=/etc/branchleft/%i.image.env
 EnvironmentFile=-/etc/branchleft/%i.env
 
 ExecStartPre=/usr/bin/docker compose pull --quiet
-# `--wait` is the signal branchleft-deploy's rollback depends on, but it only
-# waits for *healthy* where the service declares a healthcheck. Without one it
-# waits for *running*, which a crash-looping container transiently is, and the
-# stack then reports a successful start in front of it. Every service in the
-# committed stacks that can support a healthcheck declares one, and
-# test_compose_unit_contract.py is what holds that line.
+# `--wait` waits for *healthy* only where the service declares a healthcheck;
+# without one it waits for *running*, which a crash-looping container is. That
+# is the whole rollback signal, so every committed service declares one --
+# hetzner/provision/test_compose_unit_contract.py is what holds that.
 ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait
-# The backstop for a service that cannot support one. It reads the restart
-# state directly, so it needs nothing of the image, but it only sees a
-# container that is looping at this instant -- it supplements the healthchecks
-# rather than standing in for them. `grep .` prints the offending names into
-# the journal and exits 0 when there is at least one, which is the failure.
-#
-# The same query runs twice, and the discarded first run is the load-bearing
-# one. A pipeline takes the exit status of its last command, so a query that
-# failed outright -- `--status` unsupported on this host's Compose, an
-# unreachable daemon, an unresolvable project -- would reach `grep` as empty
-# input and be read as "nothing is restarting". That is this unit's own defect
-# one level down: reporting a clean start because it could not look. Running it
-# first with its status checked is what makes a failed query fail the unit.
-#
-# It must be the *identical* query, not a cheaper stand-in: an unsupported flag
-# is only discovered by a command that carries the flag.
-ExecStartPost=/bin/sh -c '/usr/bin/docker compose ps --status restarting --format "{{.Name}}" > /dev/null || exit 1; if /usr/bin/docker compose ps --status restarting --format "{{.Name}}" | grep .; then echo "branchleft-compose: the container(s) above are crash-looping; failing the unit start so a deploy rolls back" >&2; exit 1; fi'
 ExecStop=/usr/bin/docker compose down
 
 # A registry pull plus a health-check wait on a cold host exceeds systemd's

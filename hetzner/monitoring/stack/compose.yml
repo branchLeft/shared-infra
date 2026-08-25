@@ -20,18 +20,12 @@
 # systemd drop-ins' `CPUWeight` express, implemented where it actually takes
 # effect.
 #
-# Every long-running service declares a `healthcheck:` because that is what
-# makes `branchleft-compose@monitoring`'s `--wait` a deploy signal: without one
-# Compose waits for *running*, which a crash-looping container transiently is.
-# `cadvisor` is the exception and needs none -- its image carries its own
-# HEALTHCHECK, which Compose honours identically. Held by
-# hetzner/provision/test_compose_unit_contract.py.
-#
-# `node-exporter` is probed on `/` rather than the `/-/healthy` Prometheus,
-# Alertmanager and blackbox_exporter serve: it has no such route and answers
-# 404, so that probe would mark a working container unhealthy and fail every
-# deploy. Grafana's own route is `/api/health`. All five probes use the busybox
-# `wget` inside their own image; none of these images carries `curl`.
+# Every service declares a `healthcheck:` because that is what makes `--wait` a
+# deploy signal; `cadvisor` needs none, its image carries its own HEALTHCHECK
+# and a Compose-level one would replace it. `node-exporter` is probed on `/`
+# because it serves no `/-/healthy` and would answer 404; Grafana's route is
+# `/api/health`. The probes use each image's own busybox `wget` -- none of these
+# images carries `curl`.
 name: monitoring
 
 services:
