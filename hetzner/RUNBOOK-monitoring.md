@@ -374,14 +374,21 @@ curl -s http://127.0.0.1:9090/api/v1/targets | python3 -m json.tool | grep -E '"
 
 Expect `prometheus`, `alertmanager`, `caddy`, `crowdsec`, `website`,
 `cadvisor`, `blackbox_http` (three targets, one per `sites.ts` hostname) and
-the `node` target for `edge1` all `up`. `prometheus` and `alertmanager` are
-self-scrapes; `website` is the contact-form send-failure counter on `app1`
-(`render.ts`'s `WEBSITE_METRICS_PORT`) and carries no `expected_up` label, so
-a `down` there cannot page -- this list is the only place its absence would
-be noticed. `node` for `app1`, `mysqld` for `db1` and `node` for `db1` are
-expected `down` -- those hosts have no exporter yet (see `render.ts`'s
-`MONITORED_NODE_HOSTS` docstring). A `down` target with `expected_up: "true"`
+the `node` target for `edge1` all `up`. `prometheus`, `alertmanager`, `caddy`,
+`crowdsec`, `website` and `cadvisor` all carry `expected_up: 'true'` -- a
+sustained `down` on any of them pages within 5 minutes via `HostOrServiceDown`.
+`website` is the contact-form send-failure counter on `app1` (`render.ts`'s
+`WEBSITE_METRICS_PORT`). `blackbox_http` carries no `expected_up` label;
+`BlackboxProbeFailed` covers it independently, on `probe_success` rather than
+`up`. `node` for `app1`, `mysqld` for `db1` and `node` for `db1` are expected
+`down` -- those hosts have no exporter yet (see `render.ts`'s
+`MONITORED_NODE_HOSTS` docstring). A `down` target with `expected_up: 'true'`
 in its labels is the only one worth investigating.
+
+A total loss of the monitoring stack itself -- not just one service on it --
+cannot page through `HostOrServiceDown`: the evaluator that would fire it
+dies with it. §11 below verifies the mechanism that actually catches that
+case, the `Watchdog` heartbeat's external dead-man's switch.
 
 ## 9. Verify Grafana is private-only
 

@@ -114,9 +114,34 @@ export const WEBSITE_METRICS_PORT = 9092;
 
 export const BLACKBOX_MODULE = 'http_2xx';
 
-function targetLabels(host: MonitoredHost): string {
+function targetLabels(host: Pick<MonitoredHost, 'name' | 'expectedUp'>): string {
   return `{host: ${host.name}, expected_up: '${String(host.expectedUp)}'}`;
 }
+
+/**
+ * The single-instance service jobs below (`caddy`, `crowdsec`, `website`,
+ * `cadvisor`, `prometheus`, `alertmanager`) have exactly one target each, so
+ * they are declared inline rather than through `MonitoredHost` -- there is no
+ * per-host list to derive. All six are live today, hence `true` throughout;
+ * `HostOrServiceDown`'s `expr` picks up every `expected_up="true"` series
+ * without any change to the alert rule itself.
+ *
+ * `alertmanager` is included for the same reason as the rest: Prometheus
+ * keeps running and evaluating while only Alertmanager is down, so a
+ * crash-and-restart still produces a real, if delayed, alert once
+ * Alertmanager is back to receive it. `prometheus`'s own self-scrape cannot
+ * behave the same way -- while the Prometheus process itself is down nothing
+ * evaluates or records a sample at all, and the instant it restarts its
+ * self-scrape immediately succeeds, so `up{job="prometheus"}==0` can never
+ * be observed true for a sustained window. It is labelled `true` anyway for
+ * consistency with `RUNBOOK-monitoring.md` §8's verification list, not
+ * because this rule can ever catch a Prometheus outage: a sustained loss of
+ * the whole monitoring stack is caught by the `Watchdog` heartbeat's
+ * external dead-man's switch (`RUNBOOK-monitoring.md` §11) instead, which
+ * observes from outside this process entirely.
+ */
+const EDGE1_SERVICE_LABELS = targetLabels({ name: 'edge1', expectedUp: true });
+const APP1_SERVICE_LABELS = targetLabels({ name: 'app1', expectedUp: true });
 
 /**
  * The scrape config for one estate host's node_exporter. `edge1`'s own
@@ -161,22 +186,27 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '  - job_name: prometheus',
     '    static_configs:',
     `      - targets: ['localhost:${PROMETHEUS_PORT}']`,
+    `        labels: ${EDGE1_SERVICE_LABELS}`,
     '',
     '  - job_name: alertmanager',
     '    static_configs:',
     `      - targets: ['alertmanager:${ALERTMANAGER_PORT}']`,
+    `        labels: ${EDGE1_SERVICE_LABELS}`,
     '',
     '  - job_name: caddy',
     '    static_configs:',
     `      - targets: ['${HOST_IPS.edge1}:${CADDY_METRICS_PORT}']`,
+    `        labels: ${EDGE1_SERVICE_LABELS}`,
     '',
     '  - job_name: crowdsec',
     '    static_configs:',
     `      - targets: ['${HOST_IPS.edge1}:${CROWDSEC_METRICS_PORT}']`,
+    `        labels: ${EDGE1_SERVICE_LABELS}`,
     '',
     '  - job_name: website',
     '    static_configs:',
     `      - targets: ['${APP_HOST_IPS.app1}:${WEBSITE_METRICS_PORT}']`,
+    `        labels: ${APP1_SERVICE_LABELS}`,
     '',
     '  - job_name: node',
     '    static_configs:',
@@ -190,6 +220,7 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '  - job_name: cadvisor',
     '    static_configs:',
     `      - targets: ['cadvisor:${CADVISOR_PORT}']`,
+    `        labels: ${EDGE1_SERVICE_LABELS}`,
     '',
     '  - job_name: blackbox_http',
     '    metrics_path: /probe',
