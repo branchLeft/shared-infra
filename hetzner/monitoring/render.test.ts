@@ -134,7 +134,16 @@ describe('the rendered Prometheus config', () => {
     expect(renderPrometheusConfig(sites)).toContain('/etc/prometheus/alerts.yml');
   });
 
-  it('gives every scrape job an expected_up label, so HostOrServiceDown can see it -- blackbox_http excepted, it has its own probe_success-based alert', () => {
+  // Jobs deliberately rendered without an expected_up label, named here
+  // rather than skipped inline inside the assertion loop below. An inline
+  // skip reads as "this job doesn't need checking" and survives unnoticed
+  // when a new job is added; a named list is something a reviewer has to
+  // look at and defend. Empty today -- every scrape job this estate runs,
+  // blackbox_http included, carries the label, so a job missing it is
+  // exactly the defect this test exists to catch.
+  const JOBS_WITHOUT_EXPECTED_UP: readonly string[] = [];
+
+  it('gives every scrape job an expected_up label, so HostOrServiceDown can see it, unless the job is named in the exemption list above', () => {
     const rendered = renderPrometheusConfig(sites);
     const jobSections = rendered
       .split(/\n(?=  - job_name: )/)
@@ -142,7 +151,7 @@ describe('the rendered Prometheus config', () => {
     expect(jobSections.length).toBeGreaterThan(0);
     for (const section of jobSections) {
       const jobName = section.match(/job_name: (\S+)/)?.[1];
-      if (jobName === 'blackbox_http') continue;
+      if (jobName && JOBS_WITHOUT_EXPECTED_UP.includes(jobName)) continue;
       expect(section).toMatch(/expected_up: '(true|false)'/);
     }
   });
@@ -177,10 +186,10 @@ describe('the rendered Prometheus config', () => {
     );
   });
 
-  it('does not require an expected_up label on the blackbox multi-target job -- BlackboxProbeFailed covers it on probe_success instead', () => {
+  it('marks blackbox_http expected up -- BlackboxProbeFailed fires on probe_success == 0, which never exists if the exporter itself is down and no probe ever ran', () => {
     const rendered = renderPrometheusConfig(sites);
     const blackboxSection = rendered.slice(rendered.indexOf('  - job_name: blackbox_http'));
-    expect(blackboxSection).not.toContain('expected_up');
+    expect(blackboxSection).toContain("labels: {host: edge1, expected_up: 'true'}");
   });
 });
 
