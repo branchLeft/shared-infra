@@ -1397,14 +1397,19 @@ jobs:
         hetzner-provision-checks,
         scripts-tests,
         pulumi-inventory-audit,
+        hetzner-network-plan,
         hetzner-network-apply,
       ]
     # `!failure() && !cancelled()` replaces the default success()-gated needs
-    # deliberately: an estate-only change leaves hetzner-network-apply above
+    # deliberately: an estate-only change leaves both network jobs above
     # skipped, not succeeded, and the default gate treats a skipped need the
-    # same as a failed one. This still blocks on an actual failure anywhere
-    # in `needs` — including a real network apply failure, which the estate
-    # plan must not read a StackReference past.
+    # same as a failed one. `failure()` only inspects *direct* needs, not the
+    # whole ancestor chain, so `hetzner-network-plan` has to be listed here
+    # explicitly alongside `hetzner-network-apply` — depending on the apply
+    # alone would miss a network plan that fails outright: apply then never
+    # runs (correctly skipped, not failed), and this job would otherwise see
+    # only skips among its direct needs and proceed against a StackReference
+    # to network outputs this same push's changes never reached.
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.changes.outputs.hetzner_estate == 'true' &&
