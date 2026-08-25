@@ -1,0 +1,18 @@
+# Merged over the image's config.yaml by CrowdSec's own `.local` overlay, so the
+# container still populates and owns config.yaml itself. Hand-maintained: unlike
+# acquis.d/ beside it, nothing renders this file.
+#
+# Pinning the hub branch is what keeps a start independent of the CrowdSec hub.
+# Left unset, every `cscli` hub command resolves the branch by fetching
+# version.crowdsec.net first, and the entrypoint runs two *unconditional*
+# `cscli parsers install` calls (docker-logs, cri-logs) on every start, neither
+# guarded by `|| true`. Under the entrypoint's `set -e`, a failed install and
+# its equally unguarded retry exit the entrypoint, so an unreachable hub
+# crash-loops the container even when every item is already installed and
+# current. With the branch pinned, cscli never makes that call and the installs
+# are a local no-op.
+#
+# The value must stay whatever `cscli hub branch` resolves to for the pinned
+# image version -- re-check it with that command when the digest is bumped.
+cscli:
+  hub_branch: master
