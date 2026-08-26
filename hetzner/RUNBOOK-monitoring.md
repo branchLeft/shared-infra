@@ -381,15 +381,17 @@ curl -s http://127.0.0.1:9090/api/v1/targets | python3 -m json.tool | grep -E '"
 Expect `prometheus`, `alertmanager`, `caddy`, `crowdsec`, `website`,
 `cadvisor`, `blackbox_http` (three targets, one per `sites.ts` hostname) and
 the `node` target for `edge1` all `up`. `prometheus`, `alertmanager`, `caddy`,
-`crowdsec`, `website` and `cadvisor` all carry `expected_up: 'true'` -- a
-sustained `down` on any of them pages within 5 minutes via `HostOrServiceDown`.
-`website` is the contact-form send-failure counter on `app1` (`render.ts`'s
-`WEBSITE_METRICS_PORT`). `blackbox_http` carries no `expected_up` label;
-`BlackboxProbeFailed` covers it independently, on `probe_success` rather than
-`up`. `node` for `app1`, `mysqld` for `db1` and `node` for `db1` are expected
-`down` -- those hosts have no exporter yet (see `render.ts`'s
-`MONITORED_NODE_HOSTS` docstring). A `down` target with `expected_up: 'true'`
-in its labels is the only one worth investigating.
+`crowdsec`, `website`, `cadvisor` and `blackbox_http` all carry
+`expected_up: 'true'` -- a sustained `down` on any of them pages within 5
+minutes via `HostOrServiceDown`. `website` is the contact-form send-failure
+counter on `app1` (`render.ts`'s `WEBSITE_METRICS_PORT`). `blackbox_http`'s
+label is what catches the exporter itself being down -- a dead exporter runs
+no probe, so there is no `probe_success` series for `BlackboxProbeFailed` to
+see; that alert instead covers a live exporter reporting a failed probe, on
+`probe_success` rather than `up`. `node` for `app1`, `mysqld` for `db1` and
+`node` for `db1` are expected `down` -- those hosts have no exporter yet (see
+`render.ts`'s `MONITORED_NODE_HOSTS` docstring). A `down` target with
+`expected_up: 'true'` in its labels is the only one worth investigating.
 
 A total loss of the monitoring stack itself -- not just one service on it --
 cannot page through `HostOrServiceDown`: the evaluator that would fire it

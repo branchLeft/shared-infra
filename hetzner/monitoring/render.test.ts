@@ -134,17 +134,55 @@ describe('the rendered Prometheus config', () => {
     expect(renderPrometheusConfig(sites)).toContain('/etc/prometheus/alerts.yml');
   });
 
-  it('gives every scrape job an expected_up label, so HostOrServiceDown can see it -- blackbox_http excepted, it has its own probe_success-based alert', () => {
-    const rendered = renderPrometheusConfig(sites);
+  /**
+   * Extracted so the exemption mechanism is testable on its own -- proving a
+   * job missing the label gets caught is not the same as proving a named
+   * exemption actually suppresses that catch for the job it names, and only
+   * that job. See the test below.
+   */
+  function jobsMissingExpectedUp(rendered: string, exempt: readonly string[]): string[] {
     const jobSections = rendered
       .split(/\n(?=  - job_name: )/)
       .filter((section) => /job_name: /.test(section));
-    expect(jobSections.length).toBeGreaterThan(0);
-    for (const section of jobSections) {
+    return jobSections.flatMap((section) => {
       const jobName = section.match(/job_name: (\S+)/)?.[1];
-      if (jobName === 'blackbox_http') continue;
-      expect(section).toMatch(/expected_up: '(true|false)'/);
-    }
+      if (!jobName || exempt.includes(jobName)) return [];
+      return /expected_up: '(true|false)'/.test(section) ? [] : [jobName];
+    });
+  }
+
+  // Jobs deliberately rendered without an expected_up label, named here
+  // rather than skipped inline inside the assertion loop below. An inline
+  // skip reads as "this job doesn't need checking" and survives unnoticed
+  // when a new job is added; a named list is something a reviewer has to
+  // look at and defend. Empty today -- every scrape job this estate runs,
+  // blackbox_http included, carries the label, so a job missing it is
+  // exactly the defect this test exists to catch.
+  const JOBS_WITHOUT_EXPECTED_UP: readonly string[] = [];
+
+  it('gives every scrape job an expected_up label, so HostOrServiceDown can see it, unless the job is named in the exemption list above', () => {
+    const rendered = renderPrometheusConfig(sites);
+    expect(rendered).toContain('job_name: blackbox_http'); // guards against the regex above silently matching nothing
+    expect(jobsMissingExpectedUp(rendered, JOBS_WITHOUT_EXPECTED_UP)).toEqual([]);
+  });
+
+  it('an exemption suppresses the check only for the job it names, not for every job', () => {
+    const twoUnlabelledJobs = [
+      '  - job_name: unlabelled_example',
+      '    static_configs:',
+      "      - targets: ['example:1234']",
+      '',
+      '  - job_name: also_unlabelled',
+      '    static_configs:',
+      "      - targets: ['example:5678']",
+    ].join('\n');
+    expect(jobsMissingExpectedUp(twoUnlabelledJobs, [])).toEqual([
+      'unlabelled_example',
+      'also_unlabelled',
+    ]);
+    expect(jobsMissingExpectedUp(twoUnlabelledJobs, ['unlabelled_example'])).toEqual([
+      'also_unlabelled',
+    ]);
   });
 
   it('marks crowdsec and caddy expected up on edge1 -- a down WAF or reverse proxy is the outage this fix exists for', () => {
@@ -177,10 +215,10 @@ describe('the rendered Prometheus config', () => {
     );
   });
 
-  it('does not require an expected_up label on the blackbox multi-target job -- BlackboxProbeFailed covers it on probe_success instead', () => {
+  it('marks blackbox_http expected up -- BlackboxProbeFailed fires on probe_success == 0, which never exists if the exporter itself is down and no probe ever ran', () => {
     const rendered = renderPrometheusConfig(sites);
     const blackboxSection = rendered.slice(rendered.indexOf('  - job_name: blackbox_http'));
-    expect(blackboxSection).not.toContain('expected_up');
+    expect(blackboxSection).toContain("labels: {host: edge1, expected_up: 'true'}");
   });
 });
 

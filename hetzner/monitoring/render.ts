@@ -231,6 +231,7 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '    static_configs:',
     '      - targets:',
     ...targets.map((target) => `          - ${target}`),
+    `        labels: ${EDGE1_SERVICE_LABELS}`,
     '    relabel_configs:',
     '      - source_labels: [__address__]',
     '        target_label: __param_target',
