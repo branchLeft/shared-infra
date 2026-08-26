@@ -1,0 +1,1 @@
+{"nodes": [{"id": "claudemd_claudemd", "label": "CLAUDE.md", "file_type": "document", "source_file": "CLAUDE.md"}], "edges": [{"source": "claudemd_claudemd", "target": "github_workflows_ci_yml", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "CLAUDE.md"}], "hyperedges": []}
