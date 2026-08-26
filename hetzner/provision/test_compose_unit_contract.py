@@ -33,11 +33,23 @@ why there is no general exemption table here. `NO_DEPLOY_TIME_COVERAGE` is not
 one: it holds a single pinned entry recording a service knowingly left
 uncovered, and a second entry fails this suite.
 
+The third contract is the reach of the first two, and it is the one a glob
+cannot state. `branchleft-compose@.service` is installed by
+30-install-deploy-tooling.sh, which run-all.sh runs on every host role, and
+`branchleft-deploy` restarts `branchleft-compose@<stack>` for any stack name.
+The template therefore starts instances whose Compose file is committed in a
+different repository, and nothing here reads those -- so for them "no assertion
+failed" means no file was read at all, which is the opposite of what it means
+for a stack this repository commits. `CONTRACT_COVERS` and
+`CONTRACT_DOES_NOT_REACH` name both sides, and the scan below refuses to let
+this repository write down a stack that is in neither.
+
 Everything here reads the `[Service]` section only, and matches whole stripped
 lines. systemd ignores assignments before a section header, so a directive
 found anywhere in the file is not a directive systemd applies.
 """
 
+import os
 import pathlib
 import re
 import unittest
@@ -152,6 +164,204 @@ EXPECTED_SERVICES: dict[str, set[str]] = {
         "cadvisor",
     },
 }
+
+# The stacks every assertion above is about: exactly the ones whose Compose file
+# this repository commits, which is what `stack_compose_files()` globs and what
+# `EXPECTED_SERVICES` pins. Derived from that table rather than restated, so
+# there is one place a stack is added and no second list to forget.
+CONTRACT_COVERS = frozenset(EXPECTED_SERVICES)
+
+# The instances the same template starts whose Compose file lives in another
+# repository, mapped to where that file is. Nothing here reads any of them: a
+# service in one that declares no health signal reaches a running host with
+# `--wait` reporting a clean start, and the rollback never fires. Written down
+# because the alternative is a glob that reads as full coverage of a set it
+# defines silently -- a reader of the unit template sees `%i` and cannot tell
+# which instances have been checked and which have not.
+#
+# This list is a floor, not a census, and the difference is load-bearing. A
+# stack introduced entirely from another repository -- a tenant slug is the
+# ordinary case -- is named in no file here, so nothing in this module can
+# discover it. What the scan below does guarantee is that a stack this
+# repository *does* write down cannot stay unclassified.
+CONTRACT_DOES_NOT_REACH: dict[str, str] = {
+    "website": (
+        "branchLeft/website commits deploy/compose.yml and deploys it through "
+        "the unscoped wrapper from its own CI. That repository is the only "
+        "thing that reads the file, and it runs no equivalent of this module."
+    ),
+    "db": (
+        "branchLeft/ghost-platform commits db/stack/compose.yml for the "
+        "database host. Same shape as website: committed in that repository, "
+        "deployed through the wrapper, unread here."
+    ),
+    "blog": (
+        "One instance per tenant, rendered by branchLeft/ghost-platform's "
+        "infra/tenant/compose.ts and never committed as a Compose file at all, "
+        "so there is no file for any static check here to read. `blog` is the "
+        "only slug this repository names; the set is open, and a slug granted "
+        "a deploy slot on a host appears in no file here."
+    ),
+}
+
+# The stack-name rule the deploy wrapper actually applies, reused rather than
+# restated: a wrapper widened to accept more names than this scan looks for
+# would leave the wider names invisible to it, which is the drift this whole
+# module exists to refuse.
+STACK_NAME_FRAGMENT = bd.STACK_NAME.pattern.removeprefix(r"\A").removesuffix(r"\Z")
+
+# Every written shape that names one instance of the template. Placeholders --
+# `%i`, `<stack>`, `${stack}`, and the template's own `@.service` -- are
+# excluded by the character class rather than by a stop list, because none of
+# them begins with a lowercase letter.
+STACK_MENTIONS = (
+    re.compile(rf"branchleft-compose@({STACK_NAME_FRAGMENT})"),
+    re.compile(rf"/opt/branchleft/({STACK_NAME_FRAGMENT})"),
+    # The `.env` suffix is required so `/etc/branchleft/deploy-slots`, which is
+    # the slot register's directory and not a stack, is not read as one.
+    re.compile(rf"/etc/branchleft/({STACK_NAME_FRAGMENT})(?:\.image)?\.env"),
+    re.compile(rf"branchleft-slot:({STACK_NAME_FRAGMENT})"),
+)
+
+REPOSITORY = HETZNER.parent
+
+# Every suffix the tree currently holds bar the excused ones below, so the scan
+# reads all of it. An allow-list that happened to omit a suffix would make a
+# whole file type invisible while every assertion below still passed; the census
+# test pairs this with `UNSCANNED_SUFFIXES` so a suffix in neither is a failure
+# rather than a silent gap.
+#
+# `.local` is the shape that makes that census worth its cost: the suffix names
+# an overlay convention rather than a file format, so `config.yaml.local` is
+# hand-written YAML that the `.yaml` entry here does not match.
+SCANNED_SUFFIXES = frozenset(
+    {
+        "",
+        ".authoring",
+        ".conf",
+        ".enforcing",
+        ".json",
+        ".local",
+        ".md",
+        ".mode",
+        ".py",
+        ".service",
+        ".sh",
+        ".tmpl",
+        ".ts",
+        ".yaml",
+        ".yml",
+    }
+)
+
+# Suffixes deliberately not read, with why. An entry here is the only way a file
+# type leaves the scan, and it has to be a claim about the file holding no text
+# this repository authored -- not a claim that it happens to name no stack.
+UNSCANNED_SUFFIXES: dict[str, str] = {
+    ".pyc": (
+        "compiled bytecode. The source it was compiled from is scanned, and a "
+        "name reachable only through a stale .pyc is not one anybody wrote down."
+    ),
+}
+
+# Pruned during the walk, not filtered after it: `node_modules` alone holds more
+# files than the rest of the tree by two orders of magnitude. Membership is
+# pinned by a test of its own -- every name here is a directory whose contents
+# this repository does not author, and adding one that it does would remove that
+# directory from every assertion below in a one-word edit.
+UNSCANNED_DIRECTORIES: dict[str, str] = {
+    ".git": "git's own object store",
+    ".worktrees": "sibling checkouts of this same repository",
+    "graphify-out": "generated by CI, never hand-edited",
+    "node_modules": "installed dependencies",
+}
+
+
+def scanned_files() -> list[pathlib.Path]:
+    """The files the stack-name scan reads.
+
+    Test modules are skipped. Their fixtures invent stack names for hosts that
+    do not exist, and a fixture is not an estate stack -- including them would
+    make every new test case a classification decision. It also keeps the two
+    tables above out of their own scan, so the register cannot satisfy the scan
+    by describing itself.
+    """
+    return sorted(
+        path
+        for path in walked_files()
+        if not path.name.startswith("test_") and path.suffix in SCANNED_SUFFIXES
+    )
+
+
+def walked_files() -> list[pathlib.Path]:
+    """Every file under the tree the scan is allowed to see, before filtering."""
+    paths = []
+    for directory, subdirectories, filenames in os.walk(REPOSITORY):
+        subdirectories[:] = [name for name in subdirectories if name not in UNSCANNED_DIRECTORIES]
+        paths.extend(pathlib.Path(directory, filename) for filename in filenames)
+    return paths
+
+
+# One row of the reach table: the instance it names, and whether the row claims
+# this module reads that stack's Compose file. Read from the cells rather than
+# searched for as text, because a `yes` found anywhere in the row would also
+# match one inside the prose of a different column.
+REACH_ROW_INSTANCE = re.compile(rf"`branchleft-compose@({STACK_NAME_FRAGMENT})`")
+
+
+def documented_reach(readme: pathlib.Path) -> dict[str, bool]:
+    """The reach table as a mapping of instance name to "this module reads it".
+
+    Raises rather than skips, in both directions: a row naming two instances and
+    a verdict cell holding anything but yes/no are each a shape this cannot
+    classify, and returning a partial mapping would leave the rows it dropped
+    unasserted.
+    """
+    reach: dict[str, bool] = {}
+    for line in readme.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        instances = REACH_ROW_INSTANCE.findall(cells[0])
+        if not instances:
+            continue
+        if len(instances) != 1:
+            raise AssertionError(
+                f"reach table row names {len(instances)} instances: {line!r}. One row "
+                "per instance, or the verdict column says nothing about which."
+            )
+        verdict = cells[-1].lower()
+        if verdict not in ("yes", "no"):
+            raise AssertionError(
+                f"reach table row for {instances[0]} has verdict {cells[-1]!r}, which "
+                "is neither yes nor no."
+            )
+        reach[instances[0]] = verdict == "yes"
+    return reach
+
+
+def stacks_named_in_this_repository() -> dict[str, set[str]]:
+    """Stack instance names this repository writes down, each with where.
+
+    Carries the files rather than returning bare names so a failure can say
+    where the unclassified name came from; a name with nowhere to look is a
+    failure whose author has to reproduce the scan by hand before acting on it.
+
+    Drop-in filenames are a source in their own right: `<stack>.override.conf`
+    names an instance whether or not any prose mentions it, and a drop-in is
+    exactly what a stack from another repository needs if it pins its images
+    inline.
+    """
+    found: dict[str, set[str]] = {}
+    for path in scanned_files():
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for pattern in STACK_MENTIONS:
+            for match in pattern.finditer(text):
+                found.setdefault(match.group(1), set()).add(str(path.relative_to(REPOSITORY)))
+    for drop_in in sorted(HETZNER.glob("*/systemd/*.override.conf")):
+        stack = drop_in.name.removesuffix(".override.conf")
+        found.setdefault(stack, set()).add(str(drop_in.relative_to(REPOSITORY)))
+    return found
 
 
 class ComposeParseError(AssertionError):
@@ -576,7 +786,12 @@ class WaitSignalContractTests(unittest.TestCase):
                     )
 
     def test_nothing_is_excused_without_a_reason(self):
-        for table in (IMAGE_PROVIDED_HEALTHCHECK, NO_DEPLOY_TIME_COVERAGE):
+        for table in (
+            IMAGE_PROVIDED_HEALTHCHECK,
+            NO_DEPLOY_TIME_COVERAGE,
+            UNSCANNED_SUFFIXES,
+            UNSCANNED_DIRECTORIES,
+        ):
             for entry, reason in table.items():
                 with self.subTest(entry=entry):
                     self.assertTrue(reason.strip(), f"{entry} is excused with no reason")
@@ -659,6 +874,270 @@ class UnitTemplateAssumptionTests(unittest.TestCase):
             "the unit has an ExecStartPost. If a post-start assertion is being "
             "reintroduced, replace this test with one that states what it "
             "guarantees that `--wait` does not.",
+        )
+
+
+class StackNameScanTests(unittest.TestCase):
+    """The scan's failure direction, against shapes this repository does not hold.
+
+    Every assertion in `ContractReachTests` that reads the scan is a statement
+    about what it found, so a pattern that quietly stopped matching would leave
+    those assertions true and empty -- the same vacuous pass the Compose parser
+    above raises rather than returns.
+    """
+
+    def names(self, text: str) -> set[str]:
+        return {
+            match.group(1) for pattern in STACK_MENTIONS for match in pattern.finditer(text)
+        }
+
+    def test_the_scan_applies_the_deploy_wrappers_own_stack_name_rule(self):
+        """The fragment is sliced off `bd.STACK_NAME`, so it has to still fit it."""
+        self.assertEqual(rf"\A{STACK_NAME_FRAGMENT}\Z", bd.STACK_NAME.pattern)
+
+    def test_each_shape_that_names_an_instance_is_read(self):
+        for text, expected in (
+            ("systemctl restart branchleft-compose@cache", "cache"),
+            ("branchleft-compose@cache.service.d/override.conf", "cache"),
+            ("WorkingDirectory=/opt/branchleft/cache", "cache"),
+            ("EnvironmentFile=/etc/branchleft/cache.env", "cache"),
+            ("EnvironmentFile=/etc/branchleft/cache.image.env", "cache"),
+            ("ssh-ed25519 AAAA branchleft-slot:cache", "cache"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(self.names(text), {expected})
+
+    def test_a_placeholder_is_not_read_as_an_instance(self):
+        """The spellings the template, the wrapper and the prose all use."""
+        for text in (
+            "branchleft-compose@.service",
+            "branchleft-compose@%i",
+            "branchleft-compose@<stack>",
+            "branchleft-compose@${stack}",
+            "branchleft-compose@{stack}",
+            "WorkingDirectory=/opt/branchleft/%i",
+            "EnvironmentFile=-/etc/branchleft/%i.env",
+            "/etc/branchleft/<stack>.env",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(self.names(text), set())
+
+    def test_the_slot_register_directory_is_not_read_as_a_stack(self):
+        """`deploy-slots` is a well-formed stack name and is not a stack."""
+        self.assertEqual(self.names("/etc/branchleft/deploy-slots/blog.pub"), set())
+
+    def test_a_name_the_deploy_wrapper_would_refuse_is_not_read_as_one(self):
+        """Pinned against today's rule, and meant to fail if that rule widens.
+
+        The fragment tracks `bd.STACK_NAME` automatically, so a widened rule
+        would widen the scan with it and fail here anyway. That is the wanted
+        direction: accepting a new character class in unit names is a decision
+        about what a stack may be called, and this module reads those names out
+        of prose, where a wider class matches more of it.
+        """
+        self.assertEqual(self.names("branchleft-compose@Cache"), set())
+
+
+class ContractReachTests(unittest.TestCase):
+    """Which instances of the template the contract above reads, and which not.
+
+    The assertions above all say something about a file that was read. These
+    say which files there are to read, because a glob reports nothing at all
+    about the stacks it does not match and a reader cannot see the difference
+    between "checked and correct" and "never looked at".
+    """
+
+    def test_the_two_sets_are_disjoint(self):
+        """A stack is read here or it is not; there is no third state to hold."""
+        overlap = CONTRACT_COVERS & set(CONTRACT_DOES_NOT_REACH)
+        self.assertFalse(overlap, f"registered on both sides of the boundary: {sorted(overlap)}")
+
+    def test_a_stack_the_contract_does_not_reach_has_no_compose_file_here(self):
+        """The register is a claim about the tree, so the tree is what settles it."""
+        committed = set(stack_compose_files())
+        for stack in sorted(CONTRACT_DOES_NOT_REACH):
+            with self.subTest(stack=stack):
+                self.assertNotIn(
+                    stack,
+                    committed,
+                    f"{stack} is registered as owned by another repository, but this "
+                    "one now commits a Compose file for it. Move it into "
+                    "EXPECTED_SERVICES, deciding each service's health signal as you "
+                    "do -- it is covered now, and the register says it is not.",
+                )
+
+    def test_every_registered_stack_is_a_name_the_deploy_wrapper_accepts(self):
+        """A name the wrapper refuses is not an instance the template ever starts."""
+        for stack in sorted(CONTRACT_COVERS | set(CONTRACT_DOES_NOT_REACH)):
+            with self.subTest(stack=stack):
+                self.assertRegex(stack, bd.STACK_NAME)
+
+    def test_every_out_of_reach_stack_names_the_repository_that_owns_it(self):
+        """An entry saying only "somewhere else" records the state being fixed.
+
+        The owning repository is the only actionable thing in such an entry: it
+        is where a reader goes to find out whether that stack declares a health
+        signal, which is the question this module cannot answer for it.
+        """
+        for stack, owner in CONTRACT_DOES_NOT_REACH.items():
+            with self.subTest(stack=stack):
+                self.assertIn(
+                    "branchLeft/",
+                    owner,
+                    f"{stack} is registered as out of reach without naming the "
+                    "repository that owns its Compose file.",
+                )
+
+    def test_no_stack_this_repository_names_is_left_unclassified(self):
+        classified = CONTRACT_COVERS | set(CONTRACT_DOES_NOT_REACH)
+        for stack, where in sorted(stacks_named_in_this_repository().items()):
+            with self.subTest(stack=stack):
+                self.assertIn(
+                    stack,
+                    classified,
+                    f"{sorted(where)} name the instance branchleft-compose@{stack}, "
+                    "which is in neither register. Add it to EXPECTED_SERVICES if its "
+                    "Compose file is committed here -- deciding each service's health "
+                    "signal as you do -- or to CONTRACT_DOES_NOT_REACH naming the "
+                    "repository that owns it, which records that nothing here sees "
+                    "whether it declares one.",
+                )
+
+    def test_the_scan_still_sees_both_sides_of_the_boundary(self):
+        """Otherwise the assertion above passes over an empty scan.
+
+        The covered half is structural: this repository commits those stacks,
+        so their names are in its own configuration whatever the prose says.
+
+        The other half is not, and the difference is worth stating rather than
+        implying. `website`, `db` and `blog` are named in `hetzner/README.md`
+        and nowhere else here, and the README assertion below is what puts two
+        of them there -- so this half detects the registers being emptied and
+        does not prove the scan can see a mention from outside. Nothing in this
+        repository can prove that, which is the same limit as the register being
+        a floor rather than a census.
+        """
+        found = set(stacks_named_in_this_repository())
+        self.assertLessEqual(
+            CONTRACT_COVERS,
+            found,
+            "the scan no longer finds the stacks this repository commits, so it "
+            "would read an unregistered one as absent rather than as new.",
+        )
+        self.assertTrue(
+            found & set(CONTRACT_DOES_NOT_REACH),
+            "the scan finds no stack from outside this repository, so it can no "
+            "longer tell the two sides of the boundary apart.",
+        )
+
+    def test_the_unit_template_states_its_own_reach(self):
+        """A reader of the unit file sees `%i` and cannot tell what checked it."""
+        template = (HETZNER / "provision" / "branchleft-compose@.service").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "test_compose_unit_contract.py",
+            template,
+            "the unit template no longer names the module holding its contract, so "
+            "the trail from the file that starts the stacks to the file that checks "
+            "them is broken.",
+        )
+        for stack in sorted(CONTRACT_COVERS):
+            with self.subTest(stack=stack):
+                self.assertRegex(
+                    template,
+                    rf"\b{re.escape(stack)}\b",
+                    f"the unit template does not name {stack}, so its comment "
+                    "understates which instances the contract has actually read.",
+                )
+
+    def test_every_compose_file_committed_here_is_at_the_globbed_path(self):
+        """The register claims no Compose file here, and the glob is one layout.
+
+        `stack_compose_files()` matches `*/stack/compose.yml`. A Compose file a
+        directory above that is committed here, is read by no assertion in this
+        module, and is still consistent with a register entry saying another
+        repository owns the stack -- which is the claim the register makes.
+        """
+        globbed = set(stack_compose_files().values())
+        for path in sorted(HETZNER.rglob("compose.y*ml")):
+            # Relative to the repository, never the absolute path: a checkout
+            # under a directory named here -- `.worktrees` is the ordinary case
+            # -- would otherwise match every path and skip the whole loop, which
+            # passes silently and only in the checkout it was written in.
+            relative = path.relative_to(REPOSITORY)
+            if any(part in UNSCANNED_DIRECTORIES for part in relative.parts):
+                continue
+            with self.subTest(path=str(relative)):
+                self.assertIn(
+                    path,
+                    globbed,
+                    f"{relative} is a Compose file this repository "
+                    "commits outside `<stack>/stack/compose.yml`, so nothing in this "
+                    "module reads it and no register accounts for it. Move it onto "
+                    "that path, or widen the glob and EXPECTED_SERVICES together.",
+                )
+
+    def test_the_deploy_documentation_agrees_with_the_registers(self):
+        """One place a reader finds the whole set, and it has to be the true one.
+
+        The table's verdict column is the only part of it carrying a claim.
+        Asserting only that each instance is *mentioned* leaves a row free to
+        say a stack is checked when nothing reads it -- the original defect,
+        restated inside the document written to remove it.
+        """
+        documented = documented_reach(HETZNER / "README.md")
+        self.assertEqual(
+            set(documented),
+            CONTRACT_COVERS | set(CONTRACT_DOES_NOT_REACH),
+            "hetzner/README.md's reach table and the registers hold different sets. "
+            "The table is what a reader finds, so it is the one that goes stale "
+            "unmentioned.",
+        )
+        for stack, documented_as_read in sorted(documented.items()):
+            with self.subTest(stack=stack):
+                self.assertEqual(
+                    documented_as_read,
+                    stack in CONTRACT_COVERS,
+                    f"hetzner/README.md says branchleft-compose@{stack} is "
+                    f"{'read' if documented_as_read else 'not read'} by this module, "
+                    f"and the registers say it is "
+                    f"{'read' if stack in CONTRACT_COVERS else 'not read'}.",
+                )
+
+    def test_the_scan_surface_accounts_for_every_file_type_in_the_tree(self):
+        """A suffix in neither set is a file type the scan silently cannot see.
+
+        Both sets are hand-written, so without this the cheapest way to make a
+        newly-failing scan pass is to drop the suffix that found the stack, and
+        the cheapest way to introduce an unseen one is to write it in a file type
+        nobody added.
+        """
+        for suffix in sorted({path.suffix for path in walked_files()}):
+            with self.subTest(suffix=suffix or "(no extension)"):
+                self.assertIn(
+                    suffix,
+                    SCANNED_SUFFIXES | set(UNSCANNED_SUFFIXES),
+                    f"{suffix or 'files with no extension'} appear in this repository "
+                    "and the scan neither reads them nor excuses them. Add the suffix "
+                    "to SCANNED_SUFFIXES, or to UNSCANNED_SUFFIXES with why that file "
+                    "type holds no text anybody authored.",
+                )
+
+    def test_the_walk_still_descends_into_everything_authored_here(self):
+        """Membership is pinned: a pruned directory is invisible to every test above.
+
+        Each name is a directory whose contents this repository does not write.
+        Adding one that it does -- `mail`, `scripts`, a stack directory -- is a
+        one-word edit that removes it from the scan with nothing else failing,
+        which is the shape of drift this module exists to refuse.
+        """
+        self.assertEqual(
+            set(UNSCANNED_DIRECTORIES),
+            {".git", ".worktrees", "graphify-out", "node_modules"},
+            "UNSCANNED_DIRECTORIES is not a list to add to. A directory named here is "
+            "read by nothing in this module, so pruning one that holds authored "
+            "configuration needs its own decision rather than a dict key.",
         )
 
 
