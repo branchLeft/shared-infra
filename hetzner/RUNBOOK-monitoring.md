@@ -30,6 +30,12 @@ Expect `active` then `ready`. `python3` is what
 `stack/render_alertmanager_config.py` runs under -- see "Colocation cgroup
 bounds" below for why that script exists at all.
 
+A `failed` reading here is not proof the edge stack is down. The unit is
+`Type=oneshot`, and a failed restart never runs `ExecStop`, so whatever the
+most recent `docker compose up -d` attempt started is still running, healthy
+or not. Check `docker ps --filter label=com.docker.compose.project=edge` on
+the host before treating `failed` as an outage.
+
 ## Colocation cgroup bounds -- the sizing arithmetic and where it actually lives
 
 The amendment accepted onto this story asks for `MemoryMax` and `CPUWeight`
