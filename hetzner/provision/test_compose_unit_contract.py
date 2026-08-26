@@ -230,6 +230,10 @@ REPOSITORY = HETZNER.parent
 # whole file type invisible while every assertion below still passed; the census
 # test pairs this with `UNSCANNED_SUFFIXES` so a suffix in neither is a failure
 # rather than a silent gap.
+#
+# `.local` is the shape that makes that census worth its cost: the suffix names
+# an overlay convention rather than a file format, so `config.yaml.local` is
+# hand-written YAML that the `.yaml` entry here does not match.
 SCANNED_SUFFIXES = frozenset(
     {
         "",
@@ -237,6 +241,7 @@ SCANNED_SUFFIXES = frozenset(
         ".conf",
         ".enforcing",
         ".json",
+        ".local",
         ".md",
         ".mode",
         ".py",
