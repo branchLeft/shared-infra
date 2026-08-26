@@ -163,6 +163,58 @@ class RunbookRsyncCommandTests(unittest.TestCase):
                 f"unreadable to Alertmanager and crash the service.",
             )
 
+    def test_the_monitoring_copy_step_says_a_restart_is_mandatory(self):
+        """A copy step whose effect depends on a later restart must say so in its
+        own body, not only at the step that eventually restarts.
+
+        Prometheus and Alertmanager read their config files at container start
+        only, and this stack does not pass --web.enable-lifecycle, so nothing
+        short of `systemctl restart branchleft-compose@monitoring` makes a
+        copied change take effect. A reader who stops after the copy step
+        alone must not be able to conclude the change is deployed -- a prose
+        fix at the step that restarts is not enough, because that is not the
+        step the reader is reading.
+        """
+        text = (HETZNER / "RUNBOOK-monitoring.md").read_text(encoding="utf-8")
+        match = re.search(
+            r"## \d+\. Copy the monitoring stack directory onto the host\n.*?"
+            r"(?=\n## \d+\.)",
+            text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(
+            match, "RUNBOOK-monitoring.md: the monitoring stack's copy step was not found"
+        )
+        section = match.group(0)
+
+        self.assertIn(
+            "systemctl restart branchleft-compose@monitoring",
+            section,
+            "the copy step must name the restart command inline, not only at a later step",
+        )
+        self.assertRegex(
+            section,
+            r"(?i)changes nothing|is inert|does not deploy",
+            "the copy step must say plainly that the copy alone does not deploy the change",
+        )
+        self.assertIn(
+            "--delete",
+            section,
+            "sanity: expected to find the rsync --delete flag inside the copy step",
+        )
+        self.assertIn(
+            "alertmanager.yml",
+            section,
+            "the --delete/missing-alertmanager.yml window must be explained where the "
+            "reader meets --delete, i.e. inside the copy step itself",
+        )
+        self.assertIn(
+            "on disk at all",
+            section,
+            "the copy step must state that an un-restarted copy leaves no "
+            "alertmanager.yml on disk at all, not just that it gets deleted",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

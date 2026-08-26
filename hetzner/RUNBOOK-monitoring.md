@@ -284,11 +284,31 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
   'chown -R root:root /opt/branchleft/monitoring/'
 ```
 
+**This copy alone changes nothing in the running stack.** Prometheus and
+Alertmanager read `prometheus.yml`, `alerts.yml` and `alertmanager.yml` at
+container start only -- this stack does not pass `--web.enable-lifecycle`, so
+`POST /-/reload` is disabled and there is no way to make either process pick
+up a new file short of restarting it. Both mounts are `:ro`, so the bytes on
+disk change the instant `rsync` finishes while the running containers go on
+serving the old config indefinitely. The change is not deployed until
+`systemctl restart branchleft-compose@monitoring` runs, in step 7 below --
+first-time bring-up starts it there for the first time; every later update to
+this directory restarts it the same way, in step 7's "Updating an
+already-running stack".
+
 `--delete` matters here specifically: `render_alertmanager_config.py` writes
 `alertmanager/alertmanager.yml` on the host, which does not exist in the
-committed tree, so every copy deletes the previous render. That is expected
--- step 7's `ExecStartPre` regenerates it before every start. The `chown`
-corrects file ownership on the receiving end, covering both files and directories.
+committed tree, so every copy deletes the previous render. That restart is
+what puts it back: step 7's `ExecStartPre` runs
+`render_alertmanager_config.py` before every start, first or otherwise. **A
+copy that is not followed by that restart leaves the host with no
+`alertmanager.yml` on disk at all.** Nothing looks wrong -- the running
+Alertmanager container holds its own file open and keeps serving it -- so the
+gap is invisible until the container is next recreated for any unrelated
+reason and fails to start against a missing file. The `chown` here corrects
+ownership on whatever `--delete` left behind; it never touches
+`alertmanager.yml`, because `--delete` has already removed it by the time
+`chown` runs.
 
 **Note: `alertmanager/alertmanager.yml` must remain owned by uid 65534.** See
 `render_alertmanager_config.py` — Alertmanager runs as `nobody` and a bind mount
@@ -327,7 +347,15 @@ digest currently running is Compose- or systemd-config-only. Do this before
 step 8 below, or the `caddy` and `crowdsec` scrape targets read as `down`
 for a reason unrelated to this stack.
 
-## 7. Enable and start the monitoring unit
+## 7. Start or restart the monitoring unit
+
+First-time bring-up enables and starts the unit (7a). Every later change
+under `hetzner/monitoring/stack/` -- a rules edit, a new scrape target, an
+Alertmanager template change, an image bump -- is step 4 followed by 7b: copy,
+then restart, nothing else. The unit is already enabled, so 7b never runs
+`enable` again.
+
+### 7a. First-time bring-up
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
@@ -363,6 +391,28 @@ or blank `/etc/branchleft/monitoring.env` cannot produce it -- the drop-in
 re-adds that file with a leading dash precisely so the failure comes from
 `ExecStartPre` or from Compose, naming the variable.
 
+### 7b. Updating an already-running stack
+
+Run this immediately after step 4's copy -- the copy on its own has changed
+nothing, per step 4's note above.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  'systemctl restart branchleft-compose@monitoring'
+```
+
+A plain restart reruns `ExecStartPre`, so `alertmanager.yml` is regenerated
+from the current template and secrets, and recreates every container, so
+`prometheus.yml` and `alerts.yml` are read fresh from what step 4 just wrote.
+`enable` is not repeated -- it is idempotent but pointless once the unit is
+already enabled -- and the systemd drop-in install (step 5) only needs
+re-running when a drop-in file itself changes, not for an ordinary config
+update.
+
+Then verify with step 8, and read its note on `/api/v1/targets` before
+trusting the first response: immediately after any restart it reads
+`health: "unknown"` for every target, because no scrape has completed yet.
+
 ## 8. Verify the stack is up
 
 ```bash
@@ -377,6 +427,14 @@ Expect six containers, all `Up`: `prometheus`, `alertmanager`, `grafana`,
 ssh -i ~/.ssh/id_ed25519_hetzner -L 9090:127.0.0.1:9090 root@46.225.95.167 -N &
 curl -s http://127.0.0.1:9090/api/v1/targets | python3 -m json.tool | grep -E '"job"|"health"'
 ```
+
+**Run this twice, a few seconds apart, and trust the second result.**
+Immediately after any restart (7a's first start or 7b's update restart)
+every target answers with correct labels but `health: "unknown"`, because
+the first scrape has not completed yet -- a single post-restart query reads
+as though nothing is up. This warm-up window is specific to
+`/api/v1/targets`; `/api/v1/rules` answers correctly as soon as Prometheus
+itself is up, with no such delay, so do not apply the same caution there.
 
 Expect `prometheus`, `alertmanager`, `caddy`, `crowdsec`, `website`,
 `cadvisor`, `blackbox_http` (three targets, one per `sites.ts` hostname) and
@@ -564,3 +622,19 @@ or the cgroup containment), the same pattern applies to
   value fails container *creation* -- a materially worse outcome than the
   gap it would close. `mem_limit`/`cpu_shares` per container is the
   guaranteed-correct alternative and is what this stack actually ships.
+- **It does not pass `--web.enable-lifecycle` to Prometheus.** That flag
+  would let a rules-only change reload via `POST /-/reload` instead of a
+  restart. Priced and rejected for now: the endpoint takes no
+  authentication, and although the published port is loopback-only, every
+  other container in this Compose project -- `alertmanager`, `grafana`,
+  `node-exporter`, `blackbox-exporter`, `cadvisor` -- can already reach
+  `http://prometheus:9090/-/reload` by service name on the stack's own
+  default network, so the real trust boundary is "any container in this
+  stack", not "SSH access to the host". It would also only ever help
+  Prometheus: Alertmanager's config still needs
+  `render_alertmanager_config.py` to rerun, and only `ExecStartPre` triggers
+  that, so this would add a second, narrower update path alongside the
+  restart this runbook already documents rather than replacing it. Revisit
+  as a change to the running stack, in its own right, only if the restart's
+  cost -- a few seconds with no scraping; the TSDB itself persists across
+  it -- becomes a real problem.
