@@ -101,10 +101,14 @@ services:
       - '10.20.1.10:6060:6060'
     volumes:
       - crowdsec-config:/etc/crowdsec
-      # Mounted inside the volume above: the acquisition files are generated
-      # from the registry and the posture, so the container must not be able to
-      # accumulate its own copy.
-      - ./crowdsec/acquis.d:/etc/crowdsec/acquis.d:ro
+      # The acquisition files are generated from the registry and the
+      # posture, so the container must not be able to accumulate its own
+      # copy -- kept outside /etc/crowdsec, not at .../acquis.d, because on a
+      # cold volume the entrypoint's populate rsync recurses into every path
+      # under /etc/crowdsec and tries to set its mtime; a directory mounted
+      # `:ro` there refuses that with EROFS. `acquisition_dir` in
+      # config.yaml.local repoints CrowdSec at this path instead.
+      - ./crowdsec/acquis.d:/etc/crowdsec-acquis.d:ro
       # Pins the hub branch, which is what stops a start depending on the
       # CrowdSec hub being reachable -- the reasoning is in the file itself.
       # An overlay rather than a mounted config.yaml: the entrypoint only

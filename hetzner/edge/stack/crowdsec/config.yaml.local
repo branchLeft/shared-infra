@@ -16,3 +16,10 @@
 # change in this repository, so nothing here detects it.
 cscli:
   hub_branch: master
+
+# The generated acquisition files are bind-mounted at /etc/crowdsec-acquis.d
+# instead of the conventional /etc/crowdsec/acquis.d -- see the comment on
+# that mount in compose.yml for why. This is what points CrowdSec back at
+# them; acquisition_path is unset here and keeps config.yaml's default.
+crowdsec_service:
+  acquisition_dir: /etc/crowdsec-acquis.d
