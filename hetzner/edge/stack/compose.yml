@@ -105,6 +105,12 @@ services:
       # from the registry and the posture, so the container must not be able to
       # accumulate its own copy.
       - ./crowdsec/acquis.d:/etc/crowdsec/acquis.d:ro
+      # Pins the hub branch, which is what stops a start depending on the
+      # CrowdSec hub being reachable -- the reasoning is in the file itself.
+      # An overlay rather than a mounted config.yaml: the entrypoint only
+      # populates /etc/crowdsec when config.yaml is absent, so supplying that
+      # file directly would leave the rest of the directory unwritten.
+      - ./crowdsec/config.yaml.local:/etc/crowdsec/config.yaml.local:ro
       - crowdsec-data:/var/lib/crowdsec/data
       - caddy-logs:/var/log/caddy:ro
     # Same reasoning as Caddy's limit above -- this is the actual containment,
