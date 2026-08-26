@@ -1,0 +1,42 @@
+name: crowdsec-hub-pin-check
+
+# Detects when hetzner/edge/stack/compose.yml's pinned CrowdSec image is no
+# longer upstream's newest release -- the point at which config.yaml.local's
+# `cscli.hub_branch: master` pin stops being what an unpinned agent would
+# choose, and instead starts pulling hub content built for a newer one.
+#
+# Scheduled rather than a pull-request gate: the trigger is an upstream
+# release, an event no pull request against this repository can depend on,
+# and a PR gate here must never depend on a third-party endpoint being
+# reachable -- that is the exact dependency the pin this checks exists to
+# remove from the container's own start path.
+#
+# Failure mode: this job goes red in the public Actions tab (visible to
+# anyone -- this repository is public) and GitHub emails the account that
+# owns the workflow's schedule (by default whoever last edited the `cron`
+# line) that a scheduled run failed. It is not a required check and cannot
+# block anything; a red run here means "go bump the crowdsec image digest",
+# not "something merged is broken".
+
+on:
+  schedule:
+    # Daily, off the top of the hour where GitHub's own scheduling guidance
+    # says queued jobs are most congested.
+    - cron: '17 6 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check-hub-pin:
+    name: Compare the pinned crowdsec image against upstream latest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the hub pin
+        run: python3 hetzner/scripts/check-crowdsec-hub-pin.py
