@@ -197,6 +197,11 @@ describe('the rendered alert rules', () => {
     expect(rendered).toContain('expr: up{expected_up="true"} == 0');
   });
 
+  it('adds a flap detector alongside HostOrServiceDown, scoped the same way -- see alert_rules_test.yml for the promtool proof that it catches a flap HostOrServiceDown misses and ignores a single clean restart', () => {
+    expect(rendered).toContain('alert: ServiceFlapping');
+    expect(rendered).toContain('expr: changes(up{expected_up="true"}[15m]) > 4');
+  });
+
   it('carries doc 14 §4’s named scale-out thresholds exactly', () => {
     expect(rendered).toContain('> 0.75');
     expect(rendered).toContain('for: 24h');

@@ -425,6 +425,25 @@ jobs:
             docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
             check config /etc/prometheus/prometheus.yml
 
+      # `check config` above only parses the rule file; it never evaluates an
+      # expression against data, so a mistyped selector (e.g. expected_up)
+      # that matches nothing would pass it silently and never be seen to fire
+      # either -- indistinguishable from a healthy estate. alert_rules_test.yml
+      # feeds synthetic series through the real rules and asserts which ones
+      # fire. Its own `rule_files:` entry is relative to itself, so the mount
+      # layout below has to mirror hetzner/monitoring/'s own directory shape.
+      - name: Test the alert rules with promtool
+        run: |
+          chmod a+r hetzner/monitoring/alert_rules_test.yml \
+            hetzner/monitoring/stack/prometheus/alerts.yml
+          docker run --rm \
+            -v "$PWD/hetzner/monitoring/alert_rules_test.yml:/etc/prometheus-tests/alert_rules_test.yml:ro" \
+            -v "$PWD/hetzner/monitoring/stack/prometheus/alerts.yml:/etc/prometheus-tests/stack/prometheus/alerts.yml:ro" \
+            --workdir /etc/prometheus-tests \
+            --entrypoint /bin/promtool \
+            docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
+            test rules alert_rules_test.yml
+
       - name: Render the Alertmanager config with placeholder secrets
         env:
           SMTP_USERNAME: validation-user
