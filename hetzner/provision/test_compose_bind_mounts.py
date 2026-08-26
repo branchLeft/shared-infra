@@ -31,6 +31,17 @@ HETZNER = pathlib.Path(__file__).resolve().parent.parent
 # absolute source is a host path this repository does not ship.
 RELATIVE_BIND_MOUNT = re.compile(r"\A\s*-\s+(?P<source>\./[^:\s]+):")
 
+# The crowdsec acquisition mount specifically, captured with its target this
+# time: `- ./crowdsec/acquis.d:/target:ro`. Its target has to match
+# `crowdsec_service.acquisition_dir` in the sibling `config.yaml.local`, and
+# nothing else ties those two files together (branchLeft/shared-infra#85).
+CROWDSEC_ACQUIS_MOUNT = re.compile(r"\A\s*-\s+\./crowdsec/acquis\.d:(?P<target>[^:\s]+):ro\s*\Z")
+
+# `crowdsec_service:` is the only block this repository's config.yaml.local
+# nests a key under, so a plain `acquisition_dir:` line is unambiguous without
+# tracking indentation depth.
+ACQUISITION_DIR = re.compile(r"\A\s*acquisition_dir:\s*(?P<path>\S+)\s*\Z")
+
 # Sources written on the host at deploy time instead of being committed, keyed
 # by stack. The exemption is the dangerous half of this check -- an entry here
 # is a mount nothing verifies -- so each one is pinned by exact path and needs
@@ -96,6 +107,63 @@ class RelativeBindMountTests(unittest.TestCase):
                     set(),
                     f"{stack} exempts sources it no longer mounts: {sorted(sources - declared)}",
                 )
+
+
+class CrowdsecAcquisitionMountTests(unittest.TestCase):
+    """The entrypoint's populate rsync walks every path under /etc/crowdsec on
+    a cold start; a read-only directory anywhere in that tree fails it with
+    EROFS. The mount lives outside /etc/crowdsec because of that, and
+    `config.yaml.local` repoints CrowdSec at wherever it actually is -- these
+    two assertions are what would catch either file drifting from the other.
+    """
+
+    def test_the_compose_mount_target_matches_the_configured_acquisition_dir(self):
+        compose = HETZNER / "edge" / "stack" / "compose.yml"
+        config_local = HETZNER / "edge" / "stack" / "crowdsec" / "config.yaml.local"
+        target = next(
+            (
+                m.group("target")
+                for line in compose.read_text(encoding="utf-8").splitlines()
+                if (m := CROWDSEC_ACQUIS_MOUNT.match(line))
+            ),
+            None,
+        )
+        configured = next(
+            (
+                m.group("path")
+                for line in config_local.read_text(encoding="utf-8").splitlines()
+                if (m := ACQUISITION_DIR.match(line))
+            ),
+            None,
+        )
+        self.assertIsNotNone(target, f"no acquis.d bind mount found in {compose}")
+        self.assertIsNotNone(configured, f"no acquisition_dir set in {config_local}")
+        self.assertEqual(
+            target,
+            configured,
+            f"{compose} mounts the acquisition files at {target}, but "
+            f"{config_local} points crowdsec_service.acquisition_dir at "
+            f"{configured} -- CrowdSec would silently stop reading them.",
+        )
+
+    def test_the_mount_target_is_not_back_under_etc_crowdsec(self):
+        compose = HETZNER / "edge" / "stack" / "compose.yml"
+        target = next(
+            (
+                m.group("target")
+                for line in compose.read_text(encoding="utf-8").splitlines()
+                if (m := CROWDSEC_ACQUIS_MOUNT.match(line))
+            ),
+            None,
+        )
+        self.assertIsNotNone(target, f"no acquis.d bind mount found in {compose}")
+        self.assertFalse(
+            target == "/etc/crowdsec" or target.startswith("/etc/crowdsec/"),
+            f"{compose} mounts the acquisition files at {target}, which is under "
+            "/etc/crowdsec -- the populate rsync walks everything there on a cold "
+            "start, and a read-only directory there fails it with EROFS "
+            "(branchLeft/shared-infra#85).",
+        )
 
 
 class PatternTests(unittest.TestCase):
