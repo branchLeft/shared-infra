@@ -24,9 +24,15 @@ EnvironmentFile=-/etc/branchleft/%i.env
 ExecStartPre=/usr/bin/docker compose pull --quiet
 # `--wait` waits for *healthy* only where the service declares a healthcheck;
 # without one it waits for *running*, which a crash-looping container is. That
-# is the whole rollback signal. test_compose_unit_contract.py holds the stacks
-# this repository commits to declaring one, bar a single recorded exception; a
-# stack that comes from anywhere else has to bring its own.
+# is the whole rollback signal.
+#
+# That contract is checked for the two stacks whose Compose files this
+# repository commits -- `edge` and `monitoring` -- by
+# test_compose_unit_contract.py, bar a single recorded exception. It is checked
+# for no other instance of this template, because their Compose files live in
+# other repositories and nothing here reads them. Which instances those are,
+# and who owns each one, is the register in that same module; hetzner/README.md
+# states the same split in prose.
 ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait
 ExecStop=/usr/bin/docker compose down
 
