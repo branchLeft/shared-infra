@@ -237,8 +237,11 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
   docker exec "$CROWDSEC_CTR" cscli bouncers list'
 ```
 
-Expect two containers listed, both `Up`, and one bouncer named `caddy` with a
-recent "last pull".
+Expect two containers listed, both `Up (healthy)`, and one bouncer named
+`caddy` with a recent "last pull". A bare `Up` on either is the state
+`docker compose up --wait` is supposed to have refused to return from, so it
+means the health probe is failing and the restart that reported success did
+not, whatever `systemctl` said.
 
 `appsec-configs list` shows more than the two configurations `compose.yml`
 enables: the hub installs their dependencies too, on first start. On `edge1`,

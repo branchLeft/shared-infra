@@ -404,8 +404,8 @@ transiently is, so the unit start succeeds in front of the crash loop and the
 rollback above never fires.
 
 `provision/test_compose_unit_contract.py` holds every service in this
-repository's stacks to declaring one, bar a single recorded exception. It
-cannot hold anything else: the unit template is installed on every host role by
+repository's stacks to declaring one, or to carrying one in its own image. No
+service is excused from both. It cannot hold anything else: the unit template is installed on every host role by
 the base provisioning sequence, and `branchleft-deploy` restarts
 `branchleft-compose@<stack>` for any stack name, while that test globs
 `hetzner/*/stack/compose.yml`.

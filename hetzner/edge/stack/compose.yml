@@ -113,6 +113,26 @@ services:
       - ./crowdsec/config.yaml.local:/etc/crowdsec/config.yaml.local:ro
       - crowdsec-data:/var/lib/crowdsec/data
       - caddy-logs:/var/log/caddy:ro
+    # Without one, `--wait` waits only for *running*, which a crash-looping
+    # container transiently is -- so the unit start succeeds in front of the
+    # loop and branchleft-deploy never rolls the image back. `cscli lapi status`
+    # authenticates against the Local API over loopback with the container's own
+    # machine credentials: it proves the entrypoint got past its unconditional
+    # hub installs and that the interface Caddy's bouncer reads decisions from
+    # is answering. It reaches no network beyond loopback, so it does not
+    # reintroduce the hub dependency config.yaml.local removes. It does not
+    # prove Caddy logs are being parsed -- acquisition starts about a second
+    # after the API listens, and watching that is the monitoring stack's job.
+    healthcheck:
+      test: ['CMD', 'cscli', 'lapi', 'status']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # Grace, not delay: probes run from the start and a passing one ends the
+      # window early. Sized for a cold `crowdsec-config` volume, where the hub
+      # is genuinely downloaded and the entrypoint's populate rsync costs one
+      # automatic restart before the start that sticks.
+      start_period: 60s
     # Same reasoning as Caddy's limit above -- this is the actual containment,
     # the systemd unit's MemoryMax does not reach this container. Sized for
     # the agent plus AppSec plus CRS combined (doc 14 §3.1's 150+400 MB
