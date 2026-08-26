@@ -201,7 +201,9 @@ class DeployTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.env_path()))
         self.assertEqual(run.calls, [])
 
-    def test_failed_rollback_is_reported_as_a_host_that_is_down(self):
+    def test_failed_rollback_names_the_docker_ps_check_instead_of_asserting_an_outage(
+        self,
+    ):
         previous = f"ghcr.io/branchleft/example@sha256:{'c' * 64}"
         self.deploy(previous, FakeRun([0]))
 
@@ -211,7 +213,15 @@ class DeployTests(unittest.TestCase):
 
         message = str(caught.exception)
         self.assertIn("also failed", message)
-        self.assertIn("needs an operator", message)
+        # States the unit's state and the container state as separate facts
+        # rather than asserting an outage.
+        self.assertIn("branchleft-compose@edge", message)
+        self.assertIn("`failed` on both pins", message)
+        self.assertIn(
+            "docker ps --filter label=com.docker.compose.project=edge", message
+        )
+        self.assertNotIn("the stack is down", message)
+        self.assertNotIn("needs an operator", message)
         self.assertEqual(len(run.calls), 2)
 
     def test_failed_restart_rolls_back_to_previous_image(self):

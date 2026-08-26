@@ -425,6 +425,25 @@ jobs:
             docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
             check config /etc/prometheus/prometheus.yml
 
+      # `check config` above only parses the rule file; it never evaluates an
+      # expression against data, so a mistyped selector (e.g. expected_up)
+      # that matches nothing would pass it silently and never be seen to fire
+      # either -- indistinguishable from a healthy estate. alert_rules_test.yml
+      # feeds synthetic series through the real rules and asserts which ones
+      # fire. Its own `rule_files:` entry is relative to itself, so the mount
+      # layout below has to mirror hetzner/monitoring/'s own directory shape.
+      - name: Test the alert rules with promtool
+        run: |
+          chmod a+r hetzner/monitoring/alert_rules_test.yml \
+            hetzner/monitoring/stack/prometheus/alerts.yml
+          docker run --rm \
+            -v "$PWD/hetzner/monitoring/alert_rules_test.yml:/etc/prometheus-tests/alert_rules_test.yml:ro" \
+            -v "$PWD/hetzner/monitoring/stack/prometheus/alerts.yml:/etc/prometheus-tests/stack/prometheus/alerts.yml:ro" \
+            --workdir /etc/prometheus-tests \
+            --entrypoint /bin/promtool \
+            docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
+            test rules alert_rules_test.yml
+
       - name: Render the Alertmanager config with placeholder secrets
         env:
           SMTP_USERNAME: validation-user
@@ -559,23 +578,105 @@ jobs:
   # re-runs preview and the delete guard itself, so the approved window can
   # never smuggle a plan past the gate.
   #
+  # `changes` below decides which of the four pairs even start: a push that
+  # touches none of a stack's own inputs skips that stack's plan, and its
+  # apply with it — a job that `needs` a skipped dependency inherits the skip
+  # by default, so nothing downstream has to repeat the condition. None of
+  # these eight jobs are required-status-check contexts (checked against this
+  # repo's ruleset before this filter was written), so a skip here can never
+  # satisfy a branch-protection gate; it only decides whether an apply gets
+  # queued at all.
+  #
+  # A wrong filter — a path that feeds a stack's plan but isn't listed here —
+  # produces a skip with no red anywhere, which would be worse than the
+  # unread-approval habit this exists to fix. The lists below are traced
+  # against each program's actual import graph, not guessed, and kept
+  # coarse on purpose — a whole dependency directory such as `hetzner-host/**`
+  # rather than the individual files inside it — because a coarse filter's
+  # failure mode is an unnecessary plan and a precise one's is a missed apply.
+  #
   # Two things the machinery cannot enforce, on the approver:
   #   - Approve each queued apply individually, with its own plan summary open.
   #     The pending-deployments screen offers a multi-select approve, and using
-  #     it signs off plans nobody read. Every merge fires every pipeline — up
-  #     to four approvals, mostly no-op plans — and that is an accepted cost:
-  #     a path filter was considered and rejected, because a wrong filter
-  #     skips a deploy and reports green, which is worse than reading a no-op
-  #     plan. A no-op plan reads in seconds; approving it unread is the thing
-  #     that must not become the habit. Exception: graphify's own PR carries
+  #     it signs off plans nobody read. Exception: graphify's own PR carries
   #     `[skip ci]` in its title so GitHub never starts a run for its merge
-  #     commit — every other merge, including Dependabot's, still fires every
-  #     pipeline by design.
+  #     commit.
   #   - The environment rule itself lives in repo settings. Each apply job's
   #     first step verifies via the API that a required-reviewer rule is live
   #     and fails the apply if not, so an unconfigured gate is a red run, not a
   #     silent unattended apply.
   # ---------------------------------------------------------------------------
+
+  changes:
+    name: Detect which stacks' Pulumi inputs changed
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      edge: ${{ steps.filter.outputs.edge }}
+      mail: ${{ steps.filter.outputs.mail }}
+      hetzner_network: ${{ steps.filter.outputs.hetzner_network }}
+      hetzner_estate: ${{ steps.filter.outputs.hetzner_estate }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `base` set explicitly rather than left to the action's own push-event
+      # default: that default resolves to "the commit before this push" only
+      # because the pushed branch happens to match the repository's default
+      # branch setting, a fact this job has no reason to depend on.
+      - name: Diff this push against each stack's own inputs
+        id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          base: ${{ github.event.before }}
+          filters: |
+            edge:
+              - '*.ts'
+              - 'Pulumi.yaml'
+              - 'Pulumi.production.yaml'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.nvmrc'
+              - 'tsconfig.json'
+              - 'scripts/assert-no-edge-deletes.py'
+              - '.github/workflows/ci.yml'
+            mail:
+              - 'mail/*.ts'
+              - 'mail/Pulumi.yaml'
+              - 'mail/Pulumi.production.yaml'
+              - 'mail/package.json'
+              - 'mail/package-lock.json'
+              - 'mail/.nvmrc'
+              - 'mail/tsconfig.json'
+              - 'scripts/assert-no-hetzner-deletes.py'
+              - '.github/workflows/ci.yml'
+            hetzner_network:
+              - 'hetzner/index.ts'
+              - 'hetzner/network.ts'
+              - 'hetzner/egress.ts'
+              - 'hetzner/projectGuard.ts'
+              - 'hetzner/Pulumi.yaml'
+              - 'hetzner/Pulumi.production.yaml'
+              - 'hetzner/package.json'
+              - 'hetzner/package-lock.json'
+              - 'hetzner/.nvmrc'
+              - 'hetzner/tsconfig.json'
+              - 'hetzner-host/**'
+              - 'scripts/assert-no-hetzner-deletes.py'
+              - '.github/workflows/ci.yml'
+            hetzner_estate:
+              - 'hetzner/estate.ts'
+              - 'hetzner/projectGuard.ts'
+              - 'hetzner/estate/**'
+              - 'hetzner/package.json'
+              - 'hetzner/package-lock.json'
+              - 'hetzner/.nvmrc'
+              - 'hetzner/tsconfig.json'
+              - 'hetzner-host/**'
+              - 'scripts/assert-no-hetzner-deletes.py'
+              - '.github/workflows/ci.yml'
 
   deploy-plan:
     name: Plan (edge, pulumi preview)
@@ -583,6 +684,7 @@ jobs:
     timeout-minutes: 30
     needs:
       [
+        changes,
         typecheck,
         mail-typecheck,
         mail-provision-checks,
@@ -593,7 +695,9 @@ jobs:
         pulumi-inventory-audit,
         cloud-armor-baseline-parity,
       ]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.changes.outputs.edge == 'true'
 
     # Job-level permissions replace the workflow-level block entirely, so
     # `contents: read` and `packages: read` are restated alongside the scope
@@ -849,8 +953,10 @@ jobs:
     # delete guard's unit tests, and the backend/secrets inventory audit. The
     # GCP edge's parity and typecheck jobs share nothing with mx1, and
     # coupling them would block a mail fix on an unrelated red.
-    needs: [mail-typecheck, mail-provision-checks, scripts-tests, pulumi-inventory-audit]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [changes, mail-typecheck, mail-provision-checks, scripts-tests, pulumi-inventory-audit]
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.changes.outputs.mail == 'true'
 
     defaults:
       run:
@@ -1078,13 +1184,16 @@ jobs:
     # fix on an unrelated red.
     needs:
       [
+        changes,
         hetzner-typecheck,
         hetzner-host-typecheck,
         hetzner-provision-checks,
         scripts-tests,
         pulumi-inventory-audit,
       ]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.changes.outputs.hetzner_network == 'true'
 
     defaults:
       run:
@@ -1301,14 +1410,29 @@ jobs:
     # approver a state the same merge is about to change.
     needs:
       [
+        changes,
         hetzner-typecheck,
         hetzner-host-typecheck,
         hetzner-provision-checks,
         scripts-tests,
         pulumi-inventory-audit,
+        hetzner-network-plan,
         hetzner-network-apply,
       ]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # `!failure() && !cancelled()` replaces the default success()-gated needs
+    # deliberately: an estate-only change leaves both network jobs above
+    # skipped, not succeeded, and the default gate treats a skipped need the
+    # same as a failed one. `failure()` only inspects *direct* needs, not the
+    # whole ancestor chain, so `hetzner-network-plan` has to be listed here
+    # explicitly alongside `hetzner-network-apply` — depending on the apply
+    # alone would miss a network plan that fails outright: apply then never
+    # runs (correctly skipped, not failed), and this job would otherwise see
+    # only skips among its direct needs and proceed against a StackReference
+    # to network outputs this same push's changes never reached.
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.changes.outputs.hetzner_estate == 'true' &&
+      !failure() && !cancelled()
 
     defaults:
       run:
