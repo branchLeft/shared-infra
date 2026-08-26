@@ -285,16 +285,20 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
 ```
 
 **This copy alone changes nothing in the running stack.** Prometheus and
-Alertmanager read `prometheus.yml`, `alerts.yml` and `alertmanager.yml` at
-container start only -- this stack does not pass `--web.enable-lifecycle`, so
-`POST /-/reload` is disabled and there is no way to make either process pick
-up a new file short of restarting it. Both mounts are `:ro`, so the bytes on
-disk change the instant `rsync` finishes while the running containers go on
-serving the old config indefinitely. The change is not deployed until
-`systemctl restart branchleft-compose@monitoring` runs, in step 7 below --
-first-time bring-up starts it there for the first time; every later update to
-this directory restarts it the same way, in step 7's "Updating an
-already-running stack".
+Alertmanager both read their config only from what is on disk when their
+container starts. Prometheus's reload endpoint is disabled outright -- this
+stack does not pass `--web.enable-lifecycle`, so `POST /-/reload` is refused
+and there is no way to make it pick up a new file short of restarting it.
+Alertmanager's own reload mechanism does not help either: the file it would
+reload is `alertmanager/alertmanager.yml`, which this same rsync deletes (see
+below) and only a restart's `ExecStartPre` regenerates -- there is nothing on
+disk to reload until that has run. All three mounts -- `prometheus.yml`,
+`alerts.yml`, `alertmanager.yml` -- are `:ro`, so the bytes on disk change the
+instant `rsync` finishes while the running containers go on serving whatever
+they last read. The change is not deployed until `systemctl restart
+branchleft-compose@monitoring` runs, in step 7 below -- first-time bring-up
+starts it there for the first time; every later update to this directory
+restarts it the same way, in step 7's "Updating an already-running stack".
 
 `--delete` matters here specifically: `render_alertmanager_config.py` writes
 `alertmanager/alertmanager.yml` on the host, which does not exist in the

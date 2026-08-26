@@ -186,14 +186,17 @@ class RunbookRsyncCommandTests(unittest.TestCase):
             match, "RUNBOOK-monitoring.md: the monitoring stack's copy step was not found"
         )
         section = match.group(0)
+        # Markdown prose wraps at ~80 columns, so a multi-word phrase can carry
+        # an internal newline that a plain substring check would miss.
+        normalized = " ".join(section.split())
 
         self.assertIn(
             "systemctl restart branchleft-compose@monitoring",
-            section,
+            normalized,
             "the copy step must name the restart command inline, not only at a later step",
         )
         self.assertRegex(
-            section,
+            normalized,
             r"(?i)changes nothing|is inert|does not deploy",
             "the copy step must say plainly that the copy alone does not deploy the change",
         )
@@ -210,7 +213,7 @@ class RunbookRsyncCommandTests(unittest.TestCase):
         )
         self.assertIn(
             "on disk at all",
-            section,
+            normalized,
             "the copy step must state that an un-restarted copy leaves no "
             "alertmanager.yml on disk at all, not just that it gets deleted",
         )
