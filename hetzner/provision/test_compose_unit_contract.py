@@ -29,9 +29,11 @@ because none of them start a container.
 
 Nothing else backs that up. There is no post-start assertion in the unit to
 fall back on, so a service with no health signal has none at all -- which is
-why there is no general exemption table here. `NO_DEPLOY_TIME_COVERAGE` is not
-one: it holds a single pinned entry recording a service knowingly left
-uncovered, and a second entry fails this suite.
+why there is no exemption table here at all, empty or otherwise. The only way
+past the assertion is `IMAGE_PROVIDED_HEALTHCHECK`, which claims the image
+carries a probe rather than that none is needed. Excusing a service outright
+would mean writing a second register and the tests that police it, which is a
+visible decision rather than one more key in a dict somebody already trusts.
 
 The third contract is the reach of the first two, and it is the one a glob
 cannot state. `branchleft-compose@.service` is installed by
@@ -118,33 +120,6 @@ IMAGE_PROVIDED_HEALTHCHECK: dict[tuple[str, str], str] = {
         "Left to the image rather than restated here: a Compose-level healthcheck "
         "replaces the image's outright, so restating it would swap a probe cAdvisor "
         "maintains for one this repository would have to."
-    ),
-}
-
-# The one service with no deploy-time coverage at all, and the only one this
-# module will accept as having none. Not an exemption table: an entry here does
-# not mean "covered another way", it means the crash loop this whole module
-# exists to catch will pass `--wait` for that service and reach a running host.
-#
-# `crowdsec` holds the only permitted entry because a probe on it is unsafe
-# until branchLeft/shared-infra#72 is fixed -- the image's entrypoint installs
-# hub items unconditionally on every start, and the retry inside that failure
-# branch is unguarded under `set -e`, so a failed install crash-loops the
-# container and a probe would turn that into a failed edge deploy and an image
-# rollback that repairs nothing. Detecting a down WAF is
-# branchLeft/shared-infra#70's job, not the deploy signal's.
-#
-# `test_the_only_uncovered_service_is_still_crowdsec` pins the membership, so a
-# second service cannot be added here without that decision being made
-# explicitly and reviewed.
-NO_DEPLOY_TIME_COVERAGE: dict[tuple[str, str], str] = {
-    ("edge", "crowdsec"): (
-        "A `cscli lapi status` probe was written and measured against the pinned "
-        "digest and works, but installing it is gated on branchLeft/shared-infra#72: "
-        "an unreachable CrowdSec hub crash-loops the container through an unguarded "
-        "retry, so the probe would fail edge deploys for a cause unrelated to the "
-        "image being deployed. Until then `crowdsec` has no deploy-time health "
-        "signal, which is a recorded decision rather than an oversight."
     ),
 }
 
@@ -730,8 +705,6 @@ class WaitSignalContractTests(unittest.TestCase):
                 with self.subTest(stack=stack, service=service):
                     if (stack, service) in IMAGE_PROVIDED_HEALTHCHECK:
                         continue
-                    if (stack, service) in NO_DEPLOY_TIME_COVERAGE:
-                        continue
                     self.assertEqual(
                         state,
                         DECLARED,
@@ -742,8 +715,8 @@ class WaitSignalContractTests(unittest.TestCase):
                         "branchleft-deploy never rolls the image back. Nothing else "
                         "in the unit looks. Give it a healthcheck, or name it in "
                         "IMAGE_PROVIDED_HEALTHCHECK with the image's own instruction. "
-                        "NO_DEPLOY_TIME_COVERAGE is not the answer here -- it holds one "
-                        "permitted entry and adding a second fails this suite.",
+                        "There is no third answer, and adding one is a change to this "
+                        "module rather than to a table it already reads.",
                     )
 
     def test_an_image_provided_healthcheck_is_neither_restated_nor_switched_off(self):
@@ -771,10 +744,7 @@ class WaitSignalContractTests(unittest.TestCase):
             for stack, services in stack_states().items()
             for service in services
         }
-        for table, name in (
-            (IMAGE_PROVIDED_HEALTHCHECK, "IMAGE_PROVIDED_HEALTHCHECK"),
-            (NO_DEPLOY_TIME_COVERAGE, "NO_DEPLOY_TIME_COVERAGE"),
-        ):
+        for table, name in ((IMAGE_PROVIDED_HEALTHCHECK, "IMAGE_PROVIDED_HEALTHCHECK"),):
             for entry in table:
                 with self.subTest(table=name, entry=entry):
                     self.assertIn(
@@ -788,49 +758,12 @@ class WaitSignalContractTests(unittest.TestCase):
     def test_nothing_is_excused_without_a_reason(self):
         for table in (
             IMAGE_PROVIDED_HEALTHCHECK,
-            NO_DEPLOY_TIME_COVERAGE,
             UNSCANNED_SUFFIXES,
             UNSCANNED_DIRECTORIES,
         ):
             for entry, reason in table.items():
                 with self.subTest(entry=entry):
                     self.assertTrue(reason.strip(), f"{entry} is excused with no reason")
-
-    def test_a_service_is_not_named_in_both_tables(self):
-        """They are opposite claims: covered by the image, versus not covered."""
-        overlap = set(IMAGE_PROVIDED_HEALTHCHECK) & set(NO_DEPLOY_TIME_COVERAGE)
-        self.assertFalse(overlap, f"named in both tables: {sorted(overlap)}")
-
-    def test_the_only_uncovered_service_is_still_crowdsec(self):
-        """Membership is pinned, so a second uncovered service cannot be slipped in.
-
-        `IMAGE_PROVIDED_HEALTHCHECK` says "covered by the image instead".
-        `NO_DEPLOY_TIME_COVERAGE` says "not covered at all", which is the state
-        every other assertion here exists to prevent. One service is in it by an
-        owner decision recorded against branchLeft/shared-infra#72; a second
-        would be a silent widening of the only hole left.
-        """
-        self.assertEqual(
-            set(NO_DEPLOY_TIME_COVERAGE),
-            {("edge", "crowdsec")},
-            "NO_DEPLOY_TIME_COVERAGE is not an exemption list to add to. Removing "
-            "the entry means `crowdsec` now declares a healthcheck; adding one means "
-            "a second service would ship with no crash-loop detection at all, which "
-            "needs its own decision rather than a dict key.",
-        )
-
-    def test_a_service_with_no_deploy_time_coverage_declares_no_probe(self):
-        """The two claims are contradictory, and the file is what settles it."""
-        states = stack_states()
-        for stack, service in NO_DEPLOY_TIME_COVERAGE:
-            with self.subTest(stack=stack, service=service):
-                self.assertEqual(
-                    states.get(stack, {}).get(service),
-                    ABSENT,
-                    f"{stack}: `{service}` is named in NO_DEPLOY_TIME_COVERAGE but its "
-                    "Compose file declares a healthcheck. If the probe is now safe to "
-                    "run, remove the entry; the table records a service that has none.",
-                )
 
 
 class UnitTemplateAssumptionTests(unittest.TestCase):
