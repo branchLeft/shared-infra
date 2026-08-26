@@ -238,10 +238,11 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
 ```
 
 Expect two containers listed, both `Up (healthy)`, and one bouncer named
-`caddy` with a recent "last pull". A bare `Up` on either is the state
-`docker compose up --wait` is supposed to have refused to return from, so it
-means the health probe is failing and the restart that reported success did
-not, whatever `systemctl` said.
+`caddy` with a recent "last pull". A bare `Up` alongside a `systemctl restart`
+that exited 0 means the deployed `compose.yml` on the host carries no
+`healthcheck:` for that service — `--wait` cannot return success on a container
+whose probe is merely failing, so it is the copy in step 4 that did not land,
+not the probe.
 
 `appsec-configs list` shows more than the two configurations `compose.yml`
 enables: the hub installs their dependencies too, on first start. On `edge1`,

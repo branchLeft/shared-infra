@@ -120,13 +120,15 @@ services:
     # Without one, `--wait` waits only for *running*, which a crash-looping
     # container transiently is -- so the unit start succeeds in front of the
     # loop and branchleft-deploy never rolls the image back. `cscli lapi status`
-    # authenticates against the Local API over loopback with the container's own
-    # machine credentials: it proves the entrypoint got past its unconditional
-    # hub installs and that the interface Caddy's bouncer reads decisions from
-    # is answering. It reaches no network beyond loopback, so it does not
-    # reintroduce the hub dependency config.yaml.local removes. It does not
-    # prove Caddy logs are being parsed -- acquisition starts about a second
-    # after the API listens, and watching that is the monitoring stack's job.
+    # authenticates against this container's own Local API with the machine
+    # credentials in its config volume and makes no request outside the
+    # container, so it does not reintroduce the hub dependency
+    # config.yaml.local removes. What it proves is that the entrypoint got past
+    # its unconditional hub installs and that the interface Caddy's bouncer
+    # reads decisions from is answering -- not that Caddy logs are being
+    # parsed, which begins about a second later and is monitoring's to watch.
+    # It forks a `cscli` process inside this container's cgroup, ~115 MB peak
+    # RSS, which the mem_limit below has to cover.
     healthcheck:
       test: ['CMD', 'cscli', 'lapi', 'status']
       interval: 30s
@@ -134,8 +136,10 @@ services:
       retries: 3
       # Grace, not delay: probes run from the start and a passing one ends the
       # window early. Sized for a cold `crowdsec-config` volume, where the hub
-      # is genuinely downloaded and the entrypoint's populate rsync costs one
-      # automatic restart before the start that sticks.
+      # content is downloaded rather than found in place. Widening it to buy
+      # more headroom is not free and not obvious: a longer window measurably
+      # delays the point at which `--wait` gives up on a container that keeps
+      # restarting, which is the signal this whole block exists to produce.
       start_period: 60s
     # Same reasoning as Caddy's limit above -- this is the actual containment,
     # the systemd unit's MemoryMax does not reach this container. Sized for
