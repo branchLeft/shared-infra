@@ -31,12 +31,13 @@ const GENERATED_BANNER = [
 ];
 
 /**
- * The estate hosts this stack watches, and whether each is expected to answer
- * today. `app1` and `db1` carry no exporter yet -- their hosts do not exist,
- * provisioning them is a separate story -- so `up{expected_up="true"} == 0`
- * (the `HostOrServiceDown` alert `renderAlertRules` emits below) never
- * evaluates for them. A target that has never existed must not page anyone;
- * a target that stops answering after existing must.
+ * The estate hosts this stack watches, and whether each node_exporter target
+ * is expected to answer today. `app1` and `db1` are base-provisioned but
+ * carry no node_exporter yet -- provisioning their exporters is a separate
+ * story -- so `up{job="node", expected_up="true"} == 0` and only edge1's
+ * node target contributes to the `HostOrServiceDown` alert `renderAlertRules`
+ * emits below. A target that has never been available must not page anyone;
+ * a target that stops answering after being available must.
  *
  * Deliberately not every entry in `HOST_IPS`/`APP_HOST_IPS`: `mon1`'s address
  * is reserved for the eventual split (doc 14 §3.1) and nothing listens there
@@ -122,9 +123,10 @@ function targetLabels(host: Pick<MonitoredHost, 'name' | 'expectedUp'>): string 
  * The single-instance service jobs below (`caddy`, `crowdsec`, `website`,
  * `cadvisor`, `prometheus`, `alertmanager`) have exactly one target each, so
  * they are declared inline rather than through `MonitoredHost` -- there is no
- * per-host list to derive. All six are live today, hence `true` throughout;
- * `HostOrServiceDown`'s `expr` picks up every `expected_up="true"` series
- * without any change to the alert rule itself.
+ * per-host list to derive. All six services are deployed and operational,
+ * so `expected_up` is `true` throughout; `HostOrServiceDown`'s `expr` picks
+ * up every `expected_up="true"` series without any change to the alert rule
+ * itself.
  *
  * `alertmanager` is included for the same reason as the rest: Prometheus
  * keeps running and evaluating while only Alertmanager is down, so a
@@ -269,9 +271,29 @@ export function renderAlertRules(): string {
     '          summary: "{{ $labels.job }} on {{ $labels.host }} has been unreachable for 5 minutes."',
     '          description: >-',
     '            Scoped to expected_up="true" targets only -- app1 and db1 carry',
-    '            expected_up="false" until their own exporters are provisioned in a',
-    '            later story, so a target that has never existed does not page',
-    '            anyone.',
+    '            expected_up="false" until their node exporters are provisioned,',
+    '            so targets without exporters do not page anyone.',
+    '',
+    '      - alert: ServiceFlapping',
+    '        expr: changes(up{expected_up="true"}[15m]) > 4',
+    '        labels:',
+    '          severity: critical',
+    '        annotations:',
+    '          summary: "{{ $labels.job }} on {{ $labels.host }} has restarted repeatedly in the last 15 minutes."',
+    '          description: >-',
+    '            Catches what HostOrServiceDown cannot: for: requires up == 0 to',
+    '            hold continuously, so a container that restarts on a backoff loop',
+    '            -- coming up just long enough to answer one scrape before dying',
+    '            again -- never accumulates an unbroken outage window and resets',
+    '            that timer every cycle. Counting transitions over a trailing',
+    '            window instead of requiring continuous downtime is why this rule',
+    '            carries no for: of its own -- adding one would reintroduce the',
+    '            same blind spot one level up. Threshold assumes routine deploys',
+    '            restart a service at most once or twice in any 15-minute span (at',
+    '            most 4 transitions); a scrape interval of 30s gives a genuine',
+    '            crash loop many more transitions than that inside the same',
+    '            window. Scoped to expected_up="true" for the same reason as',
+    '            HostOrServiceDown above.',
     '',
     '      - alert: HostMemoryPressure',
     '        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.75',

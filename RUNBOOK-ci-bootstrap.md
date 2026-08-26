@@ -1,6 +1,7 @@
 # RUNBOOK — bootstrapping CI applies for the shared edge
 
-`.github/workflows/ci.yml` applies this stack on every push to `main`. It can
+`.github/workflows/ci.yml` applies this stack on every push to `main` that
+touches its own inputs (a `paths:` filter skips pushes that don't). It can
 only do that once a CI identity exists, and that identity cannot create itself:
 the deployer holds no permission to grant itself a role, and Pulumi cannot log
 in to the state bucket it must be granted access to first.
