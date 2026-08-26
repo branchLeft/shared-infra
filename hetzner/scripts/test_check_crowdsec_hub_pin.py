@@ -78,6 +78,12 @@ class CompareTests(unittest.TestCase):
         with self.assertRaises(chp.CheckError):
             chp.compare("not-a-version", "v1.7.8")
 
+    def test_double_digit_prerelease_does_not_sort_as_a_string(self):
+        # Same trap as the release triple, one level down: 'rc10' < 'rc2' as
+        # a string, but rc10 is the later candidate.
+        self.assertEqual(chp.compare("v1.8.0-rc10", "v1.8.0-rc2"), 1)
+        self.assertEqual(chp.compare("v1.8.0-rc2", "v1.8.0-rc10"), -1)
+
 
 class IsPinStaleTests(unittest.TestCase):
     """The exact condition this whole check exists to catch, and the two
@@ -119,6 +125,25 @@ class PinnedVersionTests(unittest.TestCase):
         version = chp.pinned_version(text)
         self.assertRegex(version, r"^v\d+\.\d+\.\d+")
 
+    def test_commented_out_pin_above_the_live_line_does_not_win(self):
+        # An unanchored search takes the first match in file order. A
+        # previous pin left commented out above the live line -- the exact
+        # residue an image bump tends to leave -- must not silently become
+        # "the" pin.
+        text = _compose(f"# was: {REAL_PIN}") + _compose(
+            "image: docker.io/crowdsecurity/crowdsec:v1.7.9@sha256:"
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        )
+        self.assertEqual(chp.pinned_version(text), "v1.7.9")
+
+    def test_two_distinct_live_pins_is_ambiguous_not_a_guess(self):
+        text = _compose(REAL_PIN) + _compose(
+            "image: docker.io/crowdsecurity/crowdsec:v1.7.9@sha256:"
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        )
+        with self.assertRaises(chp.CheckError):
+            chp.pinned_version(text)
+
 
 class ParseLatestPayloadTests(unittest.TestCase):
     def test_parses_the_documented_shape(self):
@@ -138,6 +163,17 @@ class ParseLatestPayloadTests(unittest.TestCase):
         # findings" -- there is no report to extract a name from.
         with self.assertRaises(chp.CheckError):
             chp._parse_latest_payload(b"[]")
+
+    def test_name_and_tag_name_disagreeing_raises(self):
+        # The two fields have never been observed to differ. A response
+        # where they do is closer to a schema change than a release, and
+        # trusting `name` alone would silently pick one of two answers.
+        raw = b'{"name":"v1.7.8", "tag_name":"v1.7.9"}'
+        with self.assertRaises(chp.CheckError):
+            chp._parse_latest_payload(raw)
+
+    def test_tag_name_absent_is_fine(self):
+        self.assertEqual(chp._parse_latest_payload(b'{"name":"v1.7.8"}'), "v1.7.8")
 
 
 class ReportTests(unittest.TestCase):
@@ -195,6 +231,44 @@ class MainTests(unittest.TestCase):
             chp._fetch_latest_release = original
         self.assertEqual(status, 0)
         self.assertIn("OK", buffer.getvalue())
+
+    def test_unparsable_pinned_version_override_is_exit_2_not_1(self):
+        # Regression: report() used to sit outside main()'s try/except, so a
+        # CheckError raised inside is_pin_stale() -> compare() ->
+        # _parse_release() -- reachable from an override this script never
+        # validates, or from a latest-release name that only passed "is a
+        # non-empty string" -- went uncaught and the interpreter's own exit
+        # status (1) was indistinguishable from a genuine stale finding.
+        original = chp._fetch_latest_release
+        chp._fetch_latest_release = lambda: "v1.7.8"
+        try:
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                status = chp.main(["--pinned-version", "not-a-version"])
+        finally:
+            chp._fetch_latest_release = original
+        self.assertEqual(status, 2)
+        self.assertNotEqual(status, 1)
+
+    def test_unreadable_compose_file_is_exit_2_not_a_crash(self):
+        # Regression: COMPOSE_PATH.read_text() raised a bare OSError that
+        # `except CheckError` could not catch, so main() (and the CLI's
+        # `sys.exit`) surfaced Python's own exit code for an uncaught
+        # exception -- 1, the same code as a genuine stale finding -- for a
+        # compose file that was simply missing or moved.
+        original_path = chp.COMPOSE_PATH
+        chp.COMPOSE_PATH = pathlib.Path("/nonexistent/does-not-exist/compose.yml")
+        original_fetch = chp._fetch_latest_release
+        chp._fetch_latest_release = lambda: "v1.7.8"
+        try:
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                status = chp.main([])
+        finally:
+            chp.COMPOSE_PATH = original_path
+            chp._fetch_latest_release = original_fetch
+        self.assertEqual(status, 2)
+        self.assertNotEqual(status, 1)
 
 
 if __name__ == "__main__":

@@ -58,16 +58,30 @@ class CheckError(Exception):
 def pinned_version(compose_text: str) -> str:
     """The crowdsec image tag pinned in a compose.yml's text.
 
-    Raises rather than returning a fallback: a pin this cannot find is a
-    reason to stop, not a reason to report "not stale" about nothing.
+    Raises rather than returning a fallback: a pin this cannot find -- or
+    finds more than one distinct value for -- is a reason to stop, not a
+    reason to report "not stale" about nothing. Comment lines are skipped
+    before matching, so a commented-out previous pin left above the live
+    line can never silently win an unanchored search.
     """
-    match = _IMAGE_PATTERN.search(compose_text)
-    if not match:
+    matches = {
+        found.group(1)
+        for line in compose_text.splitlines()
+        if not line.strip().startswith("#")
+        for found in [_IMAGE_PATTERN.search(line)]
+        if found
+    }
+    if not matches:
         raise CheckError(
             "no crowdsec image pin found matching "
             f"{_IMAGE_PATTERN.pattern!r} in the compose file"
         )
-    return match.group(1)
+    if len(matches) > 1:
+        raise CheckError(
+            f"more than one crowdsec image pin found: {sorted(matches)} -- "
+            "ambiguous, refusing to guess which one is live"
+        )
+    return next(iter(matches))
 
 
 def _parse_release(version: str) -> tuple[tuple[int, ...], str]:
@@ -83,9 +97,34 @@ def _parse_release(version: str) -> tuple[tuple[int, ...], str]:
     return parts, prerelease
 
 
+_PRERELEASE_RUN = re.compile(r"\d+|\D+")
+
+
+def _prerelease_key(prerelease: str) -> tuple:
+    """A natural-sort key for a prerelease suffix: alternating digit and
+    non-digit runs, digit runs compared by value rather than by byte.
+
+    Without this, 'rc10' sorts before 'rc2' the same way 'v1.7.10' would sort
+    before 'v1.7.8' as a plain string -- the exact trap the release-triple
+    comparison below exists to avoid, left unfixed for the suffix.
+    """
+    return tuple(
+        (0, int(run)) if run.isdigit() else (1, run)
+        for run in _PRERELEASE_RUN.findall(prerelease)
+    )
+
+
 def compare(a: str, b: str) -> int:
-    """-1/0/1 as `golang.org/x/mod/semver.Compare(a, b)` would, restricted to
-    the release-vs-prerelease shape CrowdSec's own tags use.
+    """-1/0/1 for the release triple exactly as `chooseBranch`'s own
+    `semver.Compare` would: numeric release components, and a release
+    outranking a prerelease of the same X.Y.Z. Prerelease-vs-prerelease
+    ordering (an 'rc2' against an 'rc10') is this script's own natural,
+    digit-aware comparison -- not a verified match for
+    `golang.org/x/mod/semver`'s own algorithm, which this script does not
+    read. Neither CrowdSec's tag scheme nor this repository's pinned image
+    exercises that path today: compose.yml only ever pins a GA release, and
+    an upstream release candidate never becomes `version.crowdsec.net/latest`
+    while it is still a candidate.
 
     Comparing the numeric release components as ints, not the tag as a
     string, is load-bearing: 'v1.7.10' sorts before 'v1.7.8' as a string but
@@ -103,7 +142,8 @@ def compare(a: str, b: str) -> int:
         return 1
     if b_pre == "":
         return -1
-    return -1 if a_pre < b_pre else 1
+    a_key, b_key = _prerelease_key(a_pre), _prerelease_key(b_pre)
+    return -1 if a_key < b_key else 1
 
 
 def is_pin_stale(pinned: str, latest: str) -> bool:
@@ -116,6 +156,10 @@ def _parse_latest_payload(raw: bytes) -> str:
     """The release name from `version.crowdsec.net/latest`'s JSON body.
 
     e.g. `{"name":"v1.7.8", "tag_name":"v1.7.8", "published_at":"..."}`.
+    Cross-checked against `tag_name` when the response carries one: the two
+    have never been observed to differ, and a response where they do reads
+    as a schema change rather than a release, so it is treated as
+    unparsable rather than silently trusted on `name` alone.
     """
     try:
         data = json.loads(raw)
@@ -124,6 +168,12 @@ def _parse_latest_payload(raw: bytes) -> str:
     name = data.get("name") if isinstance(data, dict) else None
     if not isinstance(name, str) or not name:
         raise CheckError(f"latest-release response has no usable 'name' field: {data!r}")
+    tag_name = data.get("tag_name") if isinstance(data, dict) else None
+    if isinstance(tag_name, str) and tag_name and tag_name != name:
+        raise CheckError(
+            f"latest-release response disagrees with itself: name={name!r} "
+            f"tag_name={tag_name!r}"
+        )
     return name
 
 
@@ -173,6 +223,16 @@ def report(pinned: str, latest: str) -> int:
     return 0
 
 
+def _read_compose_text() -> str:
+    """compose.yml's text, with a missing or unreadable file reported the
+    same way as any other check failure -- exit 2, not an uncaught
+    `OSError` that a caller could mistake for exit 1's positive finding."""
+    try:
+        return COMPOSE_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise CheckError(f"cannot read {COMPOSE_PATH}: {exc}") from exc
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -181,16 +241,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # report() is inside this try, not after it: is_pin_stale() -> compare()
+    # -> _parse_release() can itself raise CheckError, on either an
+    # --pinned-version override this script did not validate or a
+    # latest-release name that _parse_latest_payload accepted as "a
+    # non-empty string" without confirming it parses as semver. Either one
+    # must land on exit 2, never fall through to exit 1's "the pin is stale"
+    # claim about a version nothing has actually understood.
     try:
-        pinned = args.pinned_version or pinned_version(
-            COMPOSE_PATH.read_text(encoding="utf-8")
-        )
+        pinned = args.pinned_version or pinned_version(_read_compose_text())
         latest = _fetch_latest_release()
+        return report(pinned, latest)
     except CheckError as exc:
         print(f"::error::{exc}")
         return 2
-
-    return report(pinned, latest)
 
 
 if __name__ == "__main__":
