@@ -10,8 +10,17 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.5.0
     hooks:
+      # The exclusion below is scoped to these two hooks alone, not the
+      # top-level `exclude` above: a global exclude is subtracted from every
+      # hook's file set, including `hetzner-unit-tests`, whose whole job is to
+      # run on a hand-edit to one of these same generated paths. Only
+      # `trailing-whitespace` and `end-of-file-fixer` rewrite file content
+      # directly without consulting `.prettierignore` -- they are the ones
+      # that need it, and only them.
       - id: trailing-whitespace
+        exclude: &generated-config-exclude ^hetzner/monitoring/stack/prometheus/(prometheus|alerts)\.yml$|^hetzner/monitoring/stack/alertmanager/alertmanager\.yml\.tmpl$|^hetzner/edge/stack/Caddyfile$|^hetzner/edge/stack/crowdsec/acquis\.d/(appsec|caddy)\.yaml$|^hetzner/edge/validation/Caddyfile\.(enforcing|authoring)$
       - id: end-of-file-fixer
+        exclude: *generated-config-exclude
       - id: check-yaml
       # Stated rather than inherited: the hook's own default has moved before,
       # and this threshold is meant to be the same number in every repo.
