@@ -16,46 +16,46 @@ scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ['localhost:9090']
-        labels: { host: edge1, expected_up: 'true' }
+        labels: {host: edge1, expected_up: 'true'}
 
   - job_name: alertmanager
     static_configs:
       - targets: ['alertmanager:9093']
-        labels: { host: edge1, expected_up: 'true' }
+        labels: {host: edge1, expected_up: 'true'}
 
   - job_name: caddy
     static_configs:
       - targets: ['10.20.1.10:9091']
-        labels: { host: edge1, expected_up: 'true' }
+        labels: {host: edge1, expected_up: 'true'}
 
   - job_name: crowdsec
     static_configs:
       - targets: ['10.20.1.10:6060']
-        labels: { host: edge1, expected_up: 'true' }
+        labels: {host: edge1, expected_up: 'true'}
 
   - job_name: website
     static_configs:
       - targets: ['10.20.1.100:9092']
-        labels: { host: app1, expected_up: 'true' }
+        labels: {host: app1, expected_up: 'true'}
 
   - job_name: node
     static_configs:
       - targets: ['node-exporter:9100']
-        labels: { host: edge1, expected_up: 'true' }
+        labels: {host: edge1, expected_up: 'true'}
       - targets: ['10.20.1.100:9100']
-        labels: { host: app1, expected_up: 'false' }
+        labels: {host: app1, expected_up: 'false'}
       - targets: ['10.20.1.20:9100']
-        labels: { host: db1, expected_up: 'false' }
+        labels: {host: db1, expected_up: 'false'}
 
   - job_name: mysqld
     static_configs:
       - targets: ['10.20.1.20:9104']
-        labels: { host: db1, expected_up: 'false' }
+        labels: {host: db1, expected_up: 'false'}
 
   - job_name: cadvisor
     static_configs:
       - targets: ['cadvisor:8080']
-        labels: { host: edge1, expected_up: 'true' }
+        labels: {host: edge1, expected_up: 'true'}
 
   - job_name: blackbox_http
     metrics_path: /probe
@@ -66,7 +66,7 @@ scrape_configs:
           - https://branchleft.co.uk
           - https://www.branchleft.co.uk
           - https://blog.branchleft.co.uk
-        labels: { host: edge1, expected_up: 'true' }
+        labels: {host: edge1, expected_up: 'true'}
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

@@ -4,7 +4,14 @@
 #
 # The version is pinned rather than floating because a hook set that changes
 # under you rewrites files in a commit nobody reviewed.
-exclude: ^graphify-out/
+#
+# The generated-config alternatives below are `trailing-whitespace` and
+# `end-of-file-fixer`'s exclusion, not Prettier's -- those two hooks rewrite
+# file content directly and do not consult .prettierignore. Both files need
+# the same list for the same class of generated file; .prettierignore alone
+# leaves the built-in hooks free to reintroduce drift Prettier itself no
+# longer causes.
+exclude: ^graphify-out/|^hetzner/monitoring/stack/prometheus/(prometheus|alerts)\.yml$|^hetzner/monitoring/stack/alertmanager/alertmanager\.yml\.tmpl$|^hetzner/edge/stack/Caddyfile$|^hetzner/edge/stack/crowdsec/acquis\.d/(appsec|caddy)\.yaml$|^hetzner/edge/validation/Caddyfile\.(enforcing|authoring)$
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
