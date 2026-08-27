@@ -62,19 +62,19 @@ cgroup-descendants of the systemd unit that started them.
 **Worst-case memory, per doc 14 §3.1's own arithmetic plus this story's
 additions:**
 
-| Component | Worst case | Stack |
-|---|---|---|
-| Caddy | 100 MB | edge |
-| CrowdSec agent | 150 MB | edge |
-| AppSec + CRS | 400 MB | edge |
-| **edge subtotal** | **650 MB** | |
-| Prometheus | 500 MB | monitoring |
-| Alertmanager | 50 MB | monitoring |
-| Grafana | 250 MB | monitoring |
-| node_exporter | 30 MB | monitoring |
-| blackbox_exporter | 30 MB | monitoring |
-| cAdvisor | 200 MB | monitoring |
-| **monitoring subtotal** | **1060 MB** | |
+| Component               | Worst case  | Stack      |
+| ----------------------- | ----------- | ---------- |
+| Caddy                   | 100 MB      | edge       |
+| CrowdSec agent          | 150 MB      | edge       |
+| AppSec + CRS            | 400 MB      | edge       |
+| **edge subtotal**       | **650 MB**  |            |
+| Prometheus              | 500 MB      | monitoring |
+| Alertmanager            | 50 MB       | monitoring |
+| Grafana                 | 250 MB      | monitoring |
+| node_exporter           | 30 MB       | monitoring |
+| blackbox_exporter       | 30 MB       | monitoring |
+| cAdvisor                | 200 MB      | monitoring |
+| **monitoring subtotal** | **1060 MB** |            |
 
 Doc 14's own figure (1.2-1.8 GB of 4 GB) predates this story's exporters,
 cAdvisor and Grafana; 650 MB + 1060 MB = 1710 MB is the like-for-like update.
@@ -122,13 +122,13 @@ up): `docker inspect --format '{{.HostConfig.Memory}} {{.HostConfig.CPUShares}}'
 against every container in both stacks read back exactly the bytes and
 shares above. The host-side verification in step 10 below is the same check,
 plus the one thing this workstation cannot show: that the containers are
-*not* nested under either systemd unit's cgroup.
+_not_ nested under either systemd unit's cgroup.
 
 ## Why every `rsync` here carries `--no-owner --no-group --chmod`
 
 `-a` implies `-p`, `-o` and `-g`, and the last two take effect because the
 receiving side is `root`. A plain `rsync -av` therefore reproduces the
-*workstation's* file modes and uid/gid on the host -- and every container in
+_workstation's_ file modes and uid/gid on the host -- and every container in
 both stacks reads its config through a bind mount **as the container-side
 user**, not as root.
 
@@ -183,7 +183,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
 
 `mail/` needed one change for this story, and only one: the mailbox. Its
 credential tooling is genuinely generic -- but
-`provision_website_submission_credential.py` authenticates into an *existing*
+`provision_website_submission_credential.py` authenticates into an _existing_
 account, and `provision_mailboxes.py`'s `MAILBOXES` is a hardcoded tuple with
 no environment override, so `alerts@` had to be added there and provisioned on
 mx1 before any of this works.
@@ -191,7 +191,7 @@ mx1 before any of this works.
 submission-only SMTP credential per invocation, parameterised by
 `SEND_AS_LOCAL`, `CREDENTIAL_LABEL` and `APP_PASSWORD_DESCRIPTION` (see
 `mail/provision/61-provision-blog-submission-credential.sh` for the pattern
-this follows). It authenticates into an *existing* mailbox restricted to send
+this follows). It authenticates into an _existing_ mailbox restricted to send
 as that address -- provision an `alerts` mailbox first via
 `mail/provision/provision_mailboxes.py` if one does not already exist, per
 `mail/RUNBOOK-mx1-provision.md`.
@@ -210,7 +210,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk '
 ```
 
 The trailing `/.` is load-bearing -- without it a recursive copy nests the tree
-inside the existing directory and the *old* scripts run, printing `no-op` and
+inside the existing directory and the _old_ scripts run, printing `no-op` and
 looking like success. See `mail/RUNBOOK-mx1-provision.md`.
 
 **`SMTP_USERNAME` is `alerts@branchleft.co.uk`, the full address**, not the
@@ -223,7 +223,7 @@ the script records under the `alerting-submission` label -- see
 `alerts@` copies inbound mail to `rob@` only, and carries no second redirect to
 an address off mx1 -- one is the cap, and the reasoning is in
 `mail/RUNBOOK-mx1-provision.md#mailbox-provisioning`. **This is not a mitigated
-gap, it is an accepted one:** alert email is submitted *through* mx1, so when
+gap, it is an accepted one:** alert email is submitted _through_ mx1, so when
 mx1 is down no alert mail is sent at all, and no Sieve rule on that host could
 have helped either. `ALERT_RECIPIENT_EMAIL` being off-mx1 covers a different
 case -- mx1 up, the alerting mailbox unreachable or unread. The only thing that
@@ -242,13 +242,13 @@ shared unit template), and it is also what
 that script's docstring for why Alertmanager's own config format cannot read
 an environment variable itself, unlike Caddy's `{env.X}`.
 
-| Variable | Used by | Where the value comes from |
-|---|---|---|
-| `SMTP_USERNAME` | Alertmanager (via the render script) | Step 2's submission credential |
-| `SMTP_PASSWORD` | Alertmanager (via the render script) | Step 2's submission credential |
-| `HEALTHCHECKS_PING_URL` | Alertmanager (via the render script) | The Healthchecks.io check's ping URL (PR's handover steps) |
-| `ALERT_RECIPIENT_EMAIL` | Alertmanager (via the render script) | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too |
-| `GRAFANA_ADMIN_PASSWORD` | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`) | Generated fresh, stored in the password manager |
+| Variable                 | Used by                                       | Where the value comes from                                                                                                                                 |
+| ------------------------ | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SMTP_USERNAME`          | Alertmanager (via the render script)          | Step 2's submission credential                                                                                                                             |
+| `SMTP_PASSWORD`          | Alertmanager (via the render script)          | Step 2's submission credential                                                                                                                             |
+| `HEALTHCHECKS_PING_URL`  | Alertmanager (via the render script)          | The Healthchecks.io check's ping URL (PR's handover steps)                                                                                                 |
+| `ALERT_RECIPIENT_EMAIL`  | Alertmanager (via the render script)          | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too |
+| `GRAFANA_ADMIN_PASSWORD` | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`) | Generated fresh, stored in the password manager                                                                                                            |
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
@@ -497,7 +497,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
 
 Expect `MemoryMax=1610612736` (1536M) / `CPUWeight=100` for `edge`, and
 `MemoryMax=2147483648` (2048M) / `CPUWeight=200` for `monitoring`. This
-reports the unit's *configured* property whether or not any container
+reports the unit's _configured_ property whether or not any container
 process actually sits in that cgroup, so a pass here is not evidence the
 mitigation reached anything -- it only confirms the drop-in loaded.
 
@@ -537,7 +537,7 @@ Expect the container's cgroup path to read something like
 `0::/system.slice/docker-<container-id>.scope` and the unit's `ControlGroup`
 to read `/system.slice/branchleft-compose@edge.service` -- two different,
 sibling paths under `system.slice`, not one nested inside the other. If a
-future Docker/systemd upgrade changes this and the container's path *does*
+future Docker/systemd upgrade changes this and the container's path _does_
 start with the unit's path, the systemd-level bound has started doing real
 work and this section is due a rewrite -- but do not assume that from a
 version bump alone; re-run this check.
@@ -625,7 +625,7 @@ or the cgroup containment), the same pattern applies to
   genuinely bound the containers, but it depends on the host's configured
   cgroup driver (systemd vs. cgroupfs) in a way this repository cannot see
   or test without SSH access to a live host, and a wrong `cgroup_parent`
-  value fails container *creation* -- a materially worse outcome than the
+  value fails container _creation_ -- a materially worse outcome than the
   gap it would close. `mem_limit`/`cpu_shares` per container is the
   guaranteed-correct alternative and is what this stack actually ships.
 - **It does not pass `--web.enable-lifecycle` to Prometheus.** That flag

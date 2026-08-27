@@ -31,7 +31,7 @@ needed to change.
 | `61-provision-blog-submission-credential.sh` / `provision_website_submission_credential.py`    | Same script as `60-...sh`, parameterised via environment variables for the blog's dedicated, submission-only SMTP credential (send-as `blog@`) instead. See "Blog submission credential" below.                                                  |
 | `62-provision-shim-submission-credential.sh` / `provision_website_submission_credential.py`    | Same script again, parameterised for the mailgun-shim's own bulk-mail submission credential (send-as `blog@`, independently revocable from `61`'s transactional one). See "Mailgun shim (bulk mail)" below.                                      |
 | `63-deploy-mailgun-shim.sh` / `render_shim_env.py`                                             | Installs and starts the mailgun-shim + Caddy compose stack (`shim-compose.yml`, `Caddyfile`) behind TLS on `8443`. See "Mailgun shim (bulk mail)" below.                                                                                         |
-| `64-provision-alerting-submission-credential.sh`                                                | Provisions Alertmanager's submission-only SMTP credential (send-as `alerts@`). Same script as 60/61/62, different parameters. Runs *before* `63` in `run-all.sh` — see "Alerting submission credential" below.                                    |
+| `64-provision-alerting-submission-credential.sh`                                               | Provisions Alertmanager's submission-only SMTP credential (send-as `alerts@`). Same script as 60/61/62, different parameters. Runs _before_ `63` in `run-all.sh` — see "Alerting submission credential" below.                                   |
 | `65-install-local-resolver.sh`                                                                 | Installs `unbound` as a loopback-only, fully recursive resolver (no forwarders) so DNSBL queries originate from mx1's own IP. Leaves `/etc/resolv.conf` alone. See "Local recursive resolver" below.                                             |
 | `70-schedule-dnsbl-check.sh`                                                                   | Idempotently installs the hourly `/etc/cron.d/dnsbl-check` entry that runs `check_dnsbl_blocklist.py`. See "DNSBL blocklist monitoring" below.                                                                                                   |
 | `check_dnsbl_blocklist.py`                                                                     | Not part of `run-all.sh` directly (it's what the cron entry above runs) — checks mx1's IP against five DNSBLs, alerting on any listing. `--status` prints the last recorded result without querying DNS. See "DNSBL blocklist monitoring" below. |
@@ -239,7 +239,7 @@ points at (`hetzner/RUNBOOK-edge.md`) — where Let's Encrypt sends
 certificate-expiry warnings, so it needs the same real storage and copy-
 forward as any other role address, not just an alias. `alerts@` is the account
 Alertmanager's submission credential authenticates into and sends as
-(`hetzner/RUNBOOK-monitoring.md`); what arrives *in* it is bounces and replies
+(`hetzner/RUNBOOK-monitoring.md`); what arrives _in_ it is bounces and replies
 to alert mail, which is why it gets the same real storage and copy-forward.
 
 **Every role script carries exactly one `redirect`, and that is a constraint
@@ -248,7 +248,7 @@ rather than a style.** Stalwart caps an untrusted Sieve script at
 — redirections per execution, and `configure_stalwart.py` never materialises
 the `SieveUserInterpreter` singleton, so the default applies. A second
 `redirect` compiles, activates, and diffs clean on a re-run; it is dropped at
-*delivery*, silently. So a copy to an address off this host cannot be added
+_delivery_, silently. So a copy to an address off this host cannot be added
 here. Mail reaches an off-host address by being **sent** there — for alerting,
 that is the monitoring stack's `ALERT_RECIPIENT_EMAIL` — which is also the
 correct mechanism for a second reason: a plain Sieve `redirect` preserves the
@@ -759,10 +759,10 @@ In order, once the image digest is real:
 `provision_website_submission_credential.py` as the website, blog and shim
 steps, parameterised for Alertmanager:
 
-| Variable | Value |
-|---|---|
-| `SEND_AS_LOCAL` | `alerts` |
-| `CREDENTIAL_LABEL` | `alerting-submission` |
+| Variable                   | Value                    |
+| -------------------------- | ------------------------ |
+| `SEND_AS_LOCAL`            | `alerts`                 |
+| `CREDENTIAL_LABEL`         | `alerting-submission`    |
 | `APP_PASSWORD_DESCRIPTION` | `monitoring-alert-relay` |
 
 **The username is the full address, `alerts@branchleft.co.uk`** — not the local

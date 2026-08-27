@@ -366,11 +366,11 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
   done | sort | uniq -c'
 ```
 
-   Expect `5 204` followed by `3 429` — tripped well inside the general
-   throttle's own 200-request budget, which the loop in step 8a already
-   confirms is untouched by this. Then confirm the matcher is on the method,
-   not only the path — a `GET` to the same path must not count against this
-   budget at all:
+Expect `5 204` followed by `3 429` — tripped well inside the general
+throttle's own 200-request budget, which the loop in step 8a already
+confirms is untouched by this. Then confirm the matcher is on the method,
+not only the path — a `GET` to the same path must not count against this
+budget at all:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
@@ -380,17 +380,17 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
   done | sort | uniq -c'
 ```
 
-   Expect `8 204`.
+Expect `8 204`.
 
-   Then confirm the trailing-slash variant draws from the *same* budget as
-   the bare path rather than falling through to the general 200-request
-   zone — Express's default router treats the two as the same route, and
-   this is the exact gap a wildcard-free, two-pattern matcher exists to
-   close. Run bare and trailing-slash requests in one unbroken loop (not two
-   separate ones — two separate loops each land in their own 60-second
-   window and would each read as a fresh, misleadingly clean `5 204, 3 429`
-   rather than proving anything shared) so the shared counter is what the
-   tally has to reflect regardless of wall-clock timing:
+Then confirm the trailing-slash variant draws from the _same_ budget as
+the bare path rather than falling through to the general 200-request
+zone — Express's default router treats the two as the same route, and
+this is the exact gap a wildcard-free, two-pattern matcher exists to
+close. Run bare and trailing-slash requests in one unbroken loop (not two
+separate ones — two separate loops each land in their own 60-second
+window and would each read as a fresh, misleadingly clean `5 204, 3 429`
+rather than proving anything shared) so the shared counter is what the
+tally has to reflect regardless of wall-clock timing:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
@@ -404,25 +404,25 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
   done' | sort | uniq -c
 ```
 
-   Expect `5 204` then `3 429` — five bare-path successes exhaust the shared
-   budget, so every trailing-slash request that follows in the same window
-   is already throttled. `8 204` here would mean the trailing slash carries
-   its own, separate budget — i.e. that it fell through to the general zone
-   instead of this one.
+Expect `5 204` then `3 429` — five bare-path successes exhaust the shared
+budget, so every trailing-slash request that follows in the same window
+is already throttled. `8 204` here would mean the trailing slash carries
+its own, separate budget — i.e. that it fell through to the general zone
+instead of this one.
 
-   **This proves the throttle logic; it does not prove hostname routing.**
-   The loopback probe answers on a bare port with no `Host` match, so it
-   exercises the same handler chain every site gets but not a specific
-   site's route. Once a real (even non-production) hostname has a
-   `privateUpstream` entry — added per §11 below — repeat the same two loops
-   against `https://<that-hostname>/members/api/send-magic-link`, from a
-   workstation rather than over SSH, to prove the rule on the actual routed
-   path a client would use. Nothing before that point has proven the rule
-   end-to-end; the loopback checks above are what is possible immediately
-   after this flip lands, with no site changes required. **Neither loop runs
-   itself: merging the posture change does not deploy it and does not run
-   this verification — both are this section's steps 1–4 and this one,
-   performed by whoever holds `~/.ssh/id_ed25519_hetzner`.**
+**This proves the throttle logic; it does not prove hostname routing.**
+The loopback probe answers on a bare port with no `Host` match, so it
+exercises the same handler chain every site gets but not a specific
+site's route. Once a real (even non-production) hostname has a
+`privateUpstream` entry — added per §11 below — repeat the same two loops
+against `https://<that-hostname>/members/api/send-magic-link`, from a
+workstation rather than over SSH, to prove the rule on the actual routed
+path a client would use. Nothing before that point has proven the rule
+end-to-end; the loopback checks above are what is possible immediately
+after this flip lands, with no site changes required. **Neither loop runs
+itself: merging the posture change does not deploy it and does not run
+this verification — both are this section's steps 1–4 and this one,
+performed by whoever holds `~/.ssh/id_ed25519_hetzner`.**
 
 ### 10b. The WAF and IP remediation
 
