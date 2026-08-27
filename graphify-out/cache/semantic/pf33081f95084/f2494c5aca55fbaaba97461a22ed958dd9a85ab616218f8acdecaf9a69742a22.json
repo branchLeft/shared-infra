@@ -1,1 +1,0 @@
-{"nodes": [{"id": "hetzner_monitoring_stack_blackbox_blackbox", "label": "Blackbox Exporter Config", "file_type": "code", "source_file": "hetzner/monitoring/stack/blackbox/blackbox.yml"}], "edges": [], "hyperedges": []}
