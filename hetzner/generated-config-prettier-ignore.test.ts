@@ -37,13 +37,25 @@ describe('generated config stays off Prettier and the pre-commit whitespace hook
 
   // `.prettierignore` only reaches Prettier itself. `trailing-whitespace` and
   // `end-of-file-fixer` rewrite file content directly and never consult it,
-  // so the same list has to appear in the pre-commit config's own top-level
-  // `exclude`, which every hook in the file inherits.
-  it.each(GENERATED_FILES)('%s matches the pre-commit exclude pattern', (relPath) => {
+  // so the same list has to reach them too -- but scoped to those two hooks
+  // alone via the `&generated-config-exclude` anchor, not the file's
+  // top-level `exclude`, which every hook inherits including
+  // `hetzner-unit-tests`: excluding these paths there would silently stop it
+  // running on a hand-edit to one of them, the exact drift it exists to catch.
+  it.each(GENERATED_FILES)('%s matches the generated-config-exclude anchor', (relPath) => {
     const config = readFileSync(PRE_COMMIT_CONFIG, 'utf8');
-    const excludeLine = config.match(/^exclude:\s*(.+)$/m);
-    expect(excludeLine, 'pre-commit-config.yaml has a top-level `exclude:`').not.toBeNull();
-    const pattern = new RegExp(excludeLine![1].trim());
+    const anchor = config.match(/exclude:\s*&generated-config-exclude\s+(\S.*)$/m);
+    expect(anchor, '.pre-commit-config.yaml defines &generated-config-exclude').not.toBeNull();
+    const pattern = new RegExp(anchor![1].trim());
     expect(pattern.test(relPath)).toBe(true);
+  });
+
+  it('both trailing-whitespace and end-of-file-fixer carry the exclusion', () => {
+    const config = readFileSync(PRE_COMMIT_CONFIG, 'utf8');
+    // One definition (`&generated-config-exclude`) plus one alias reference
+    // (`*generated-config-exclude`) is the minimum for both hooks to be
+    // covered; fewer means a hook lost its reference silently.
+    const occurrences = config.match(/generated-config-exclude/g) ?? [];
+    expect(occurrences.length).toBeGreaterThanOrEqual(2);
   });
 });
