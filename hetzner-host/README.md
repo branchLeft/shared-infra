@@ -33,8 +33,8 @@ exist.
 A public `Host` produces five resources: the server, a role-scoped firewall,
 a private-network attachment at its fixed address, and an IPv4 and an IPv6
 primary IP of its own. A private-only host (`publicNetworking: false`)
-produces two — server and firewall — because its network rides *inline on
-the server* rather than as a separate attachment: with no public interface
+produces two — server and firewall — because its network rides _inline on
+the server_ rather than as a separate attachment: with no public interface
 and no inline network, Hetzner refuses to start the server at all, and the
 separate attachment lands only after creation, which is too late to boot.
 The shape is fixed at creation; moving a live host between the two shapes is
