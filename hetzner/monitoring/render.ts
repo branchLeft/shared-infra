@@ -120,10 +120,11 @@ function targetLabels(host: Pick<MonitoredHost, 'name' | 'expectedUp'>): string 
 }
 
 /**
- * Labels for services running on edge1 that are expected to be up and
- * answerable at all times. Applied to all scrape targets for edge1 services
- * in the config above. `HostOrServiceDown`'s `expr` picks up every
- * `up{expected_up="true"}` series without any change to the alert rule itself.
+ * Labels for services set up as inline scrape configs, expected to answer.
+ * Each constant names a specific host and sets expected_up=true directly,
+ * rather than deriving from MonitoredHost. `HostOrServiceDown`'s `expr`
+ * picks up every `up{expected_up="true"}` series without any change to the
+ * alert rule itself.
  *
  * `alertmanager` is included for the same reason as the rest: Prometheus
  * keeps running and evaluating while only Alertmanager is down, so a
