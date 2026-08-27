@@ -8,7 +8,7 @@ groups:
         labels:
           severity: none
         annotations:
-          summary: "Heartbeat: the evaluate-and-dispatch path is alive."
+          summary: 'Heartbeat: the evaluate-and-dispatch path is alive.'
           description: >-
             Always firing. Alertmanager routes it to the heartbeat receiver,
             which pings Healthchecks.io on every notification cycle. Silence
@@ -23,7 +23,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.job }} on {{ $labels.host }} has been unreachable for 5 minutes."
+          summary: '{{ $labels.job }} on {{ $labels.host }} has been unreachable for 5 minutes.'
           description: >-
             Scoped to expected_up="true" targets only -- app1 and db1 carry
             expected_up="false" until their node exporters are provisioned,
@@ -34,7 +34,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.job }} on {{ $labels.host }} has restarted repeatedly in the last 15 minutes."
+          summary: '{{ $labels.job }} on {{ $labels.host }} has restarted repeatedly in the last 15 minutes.'
           description: >-
             Catches what HostOrServiceDown cannot: for: requires up == 0 to
             hold continuously, so a container that restarts on a backoff loop
@@ -56,8 +56,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.instance }} has used over 75% of memory for 24 hours."
-          description: "doc 14 §4 scale-out trigger: app-host memory >75% sustained 24h -> provision the next host."
+          summary: '{{ $labels.instance }} has used over 75% of memory for 24 hours.'
+          description: 'doc 14 §4 scale-out trigger: app-host memory >75% sustained 24h -> provision the next host.'
 
       - alert: HostDiskSpaceLow
         expr: >-
@@ -67,8 +67,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.instance }} filesystem {{ $labels.mountpoint }} is over 70% full."
-          description: "doc 14 §4 scale-out trigger: disk >70% anywhere -> grow the volume."
+          summary: '{{ $labels.instance }} filesystem {{ $labels.mountpoint }} is over 70% full.'
+          description: 'doc 14 §4 scale-out trigger: disk >70% anywhere -> grow the volume.'
 
       - alert: MySQLConnectionsHigh
         expr: mysql_global_status_threads_connected / mysql_global_variables_max_connections > 0.70
@@ -76,7 +76,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "db1 is using over 70% of its MySQL connection budget."
+          summary: 'db1 is using over 70% of its MySQL connection budget.'
           description: >-
             doc 14 §4 scale-out trigger: threads_connected >70% of
             max_connections -> escalate the DB rung. No data until the db1
@@ -91,5 +91,5 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.instance }} failed its external probe for 5 minutes."
-          description: "The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS."
+          summary: '{{ $labels.instance }} failed its external probe for 5 minutes.'
+          description: 'The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS.'

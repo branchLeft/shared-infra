@@ -449,13 +449,13 @@ is a fixed environment-variable name and one repo now carries several
 passphrases (the workflow maps each secret into that variable at the job that
 needs it):
 
-| Secret                         | Purpose                                                                        |
-| ------------------------------ | ------------------------------------------------------------------------------ |
+| Secret                         | Purpose                                                                                                                                                       |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `HCLOUD_TOKEN_<project>`       | The Hetzner Cloud API token for this stack's project, exported as `HCLOUD_TOKEN` (`HCLOUD_TOKEN_ESTATE` for both estate stacks, `HCLOUD_TOKEN_MAIL` for mail) |
-| `PULUMI_PASSPHRASE_<stack>`    | Decrypts this stack's secrets, exported as `PULUMI_CONFIG_PASSPHRASE`          |
-| `PULUMI_SALT_<stack>`          | The stack's `encryptionsalt`, appended to its config file on the runner        |
-| `HETZNER_S3_ACCESS_KEY_ID`     | Object Storage state access, exported as `AWS_ACCESS_KEY_ID` (shared)          |
-| `HETZNER_S3_SECRET_ACCESS_KEY` | Its secret, exported as `AWS_SECRET_ACCESS_KEY` (shared)                       |
+| `PULUMI_PASSPHRASE_<stack>`    | Decrypts this stack's secrets, exported as `PULUMI_CONFIG_PASSPHRASE`                                                                                         |
+| `PULUMI_SALT_<stack>`          | The stack's `encryptionsalt`, appended to its config file on the runner                                                                                       |
+| `HETZNER_S3_ACCESS_KEY_ID`     | Object Storage state access, exported as `AWS_ACCESS_KEY_ID` (shared)                                                                                         |
+| `HETZNER_S3_SECRET_ACCESS_KEY` | Its secret, exported as `AWS_SECRET_ACCESS_KEY` (shared)                                                                                                      |
 
 The workflow needs no `pulumi login` step: `backend.url` in `Pulumi.yaml`
 already fixes the backend, which is the point of pinning it there. Do not add

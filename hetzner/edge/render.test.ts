@@ -207,7 +207,9 @@ describe('the rendered Caddyfile', () => {
     // narrower fix.
     const rendered = render(ENFORCING);
     const matcherBlock = rendered.split('@members_magic_link {')[1]?.split('\n\t}')[0] ?? '';
-    expect(matcherBlock).toContain('path /members/api/send-magic-link /members/api/send-magic-link/');
+    expect(matcherBlock).toContain(
+      'path /members/api/send-magic-link /members/api/send-magic-link/'
+    );
     expect(matcherBlock).not.toContain('*');
   });
 
