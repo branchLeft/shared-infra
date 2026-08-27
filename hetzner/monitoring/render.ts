@@ -120,13 +120,10 @@ function targetLabels(host: Pick<MonitoredHost, 'name' | 'expectedUp'>): string 
 }
 
 /**
- * The single-instance service jobs below (`caddy`, `crowdsec`, `website`,
- * `cadvisor`, `prometheus`, `alertmanager`) have exactly one target each, so
- * they are declared inline rather than through `MonitoredHost` -- there is no
- * per-host list to derive. All six services are deployed and operational,
- * so `expected_up` is `true` throughout; `HostOrServiceDown`'s `expr` picks
- * up every `expected_up="true"` series without any change to the alert rule
- * itself.
+ * Labels for services running on edge1 that are expected to be up and
+ * answerable at all times. Applied to all scrape targets for edge1 services
+ * in the config above. `HostOrServiceDown`'s `expr` picks up every
+ * `up{expected_up="true"}` series without any change to the alert rule itself.
  *
  * `alertmanager` is included for the same reason as the rest: Prometheus
  * keeps running and evaluating while only Alertmanager is down, so a
@@ -141,6 +138,12 @@ function targetLabels(host: Pick<MonitoredHost, 'name' | 'expectedUp'>): string 
  * the whole monitoring stack is caught by the `Watchdog` heartbeat's
  * external dead-man's switch (`RUNBOOK-monitoring.md` §11) instead, which
  * observes from outside this process entirely.
+ *
+ * `blackbox_http` carries this label across multiple targets: one per
+ * hostname in `sites.ts`. If the blackbox_exporter dies, `HostOrServiceDown`
+ * fires once per probed hostname rather than once total. That is correct
+ * behaviour — `up{job="blackbox_http"}` measures whether Prometheus can reach
+ * the exporter, not whether a probe succeeded.
  */
 const EDGE1_SERVICE_LABELS = targetLabels({ name: 'edge1', expectedUp: true });
 const APP1_SERVICE_LABELS = targetLabels({ name: 'app1', expectedUp: true });
