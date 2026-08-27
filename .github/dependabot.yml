@@ -1,0 +1,25 @@
+version: 2
+
+updates:
+  # Watches only hetzner/edge/stack/compose.yml's pinned crowdsec image.
+  # A bump here is also what makes crowdsec/config.yaml.local's
+  # `cscli.hub_branch: master` pin correct again once upstream ships past
+  # the pinned release -- but merging restarts the edge container and
+  # briefly interrupts TLS for branchleft.co.uk, so each PR this opens
+  # needs a deliberate, individually reviewed merge rather than the batched
+  # minor/patch auto-merge every other ecosystem entry in this org groups
+  # towards. No `groups:` here on purpose.
+  - package-ecosystem: 'docker-compose'
+    directory: '/hetzner/edge/stack'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 5
+    # caddy's image in the same compose file is `${IMAGE}`, written by the
+    # deploy wrapper at deploy time, not a literal tag Dependabot can read --
+    # this `allow` is defence in depth for the day a second literal image
+    # joins the file, not a workaround for caddy today.
+    allow:
+      - dependency-name: 'crowdsecurity/crowdsec'
+    labels:
+      - 'dependencies'
