@@ -225,6 +225,15 @@ function rateLimitDirective(zone: string): string[] {
     // The edge is the first hop — no proxy in front of it — so the direct peer
     // is the client. `{http.request.client_ip}` would take a forwarded header
     // into account, which here is a header an attacker sets.
+    //
+    // This key and the no-CDN assumption are one decision and must move
+    // together. Put any CDN or scrubbing service in front of this edge and
+    // every request arrives from a handful of its addresses: a per-IP throttle
+    // then counts the whole internet as a few clients and throttles everyone
+    // within seconds of the change. Both zones share this key, so that failure
+    // would take the magic-link path down with the general one. Whoever
+    // evaluates a CDN owns changing this line to a trusted-proxy configuration
+    // in the same change, never afterwards.
     '\t\tkey {http.request.remote.host}',
     `\t\twindow ${RATE_LIMIT_WINDOW_SECONDS}s`,
     `\t\tevents ${RATE_LIMIT_EVENTS}`,
@@ -278,11 +287,16 @@ function protectionChain(
   options: { appsec: 'none' | 'all' | 'except-authoring'; membersMagicLink?: boolean }
 ): string[] {
   const lines: string[] = [];
+  // Two independent conditions, not one nested in the other. The magic-link
+  // throttle protects mx1's deliverability and the general one sheds load off
+  // two vCPUs; they are the same Caddy module at opposite risk profiles, and
+  // nesting them meant the narrow control could not be enabled without the
+  // broad one.
   if (posture.rateLimit === 'enforcing') {
     lines.push(...rateLimitDirective(zone));
-    if (options.membersMagicLink) {
-      lines.push(...membersMagicLinkRateLimitDirective());
-    }
+  }
+  if (posture.membersMagicLinkRateLimit === 'enforcing' && options.membersMagicLink) {
+    lines.push(...membersMagicLinkRateLimitDirective());
   }
   if (posture.crowdsec === 'enforcing') {
     lines.push('crowdsec');
@@ -310,7 +324,11 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   // carries an inert matcher rather than needing a flag to opt in. That is
   // what makes this apply to a future tenant by construction, with no entry
   // in `sites.ts` needed beyond `privateUpstream`.
-  if (posture.rateLimit === 'enforcing') {
+  //
+  // Gated on the magic-link field, not the general one: the matcher exists only
+  // to be referenced by `rate_limit @members_magic_link`, so emitting it under
+  // the wrong condition either leaves a dangling reference or an orphan matcher.
+  if (posture.membersMagicLinkRateLimit === 'enforcing') {
     body.push(...membersMagicLinkMatcher());
   }
   body.push(
@@ -355,7 +373,7 @@ function probeBlock(posture: EdgePosture): Block {
   // what lets the throttle be trip-tested with a loopback `curl` before any
   // hostname serves the path for real, the same way the general throttle
   // already is (RUNBOOK-edge.md §8a).
-  if (posture.rateLimit === 'enforcing') {
+  if (posture.membersMagicLinkRateLimit === 'enforcing') {
     body.push(...membersMagicLinkMatcher());
   }
   body.push(
