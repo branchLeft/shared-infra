@@ -77,12 +77,22 @@ export const MONITORED_NODE_HOSTS: readonly MonitoredHost[] = [
  * neither of which is a rendering change.
  */
 
-/** `db1`'s MySQL exporter lands in a parallel story; the target is listed now
- * so the scrape config and the alert rule are already correct when it does. */
+/**
+ * `db1`'s MySQL exporter is live, so unlike the `node` targets above this one
+ * is expected to answer and pages when it does not.
+ *
+ * It was `false` while the exporter did not exist, which was correct then and
+ * became wrong the moment the exporter shipped -- the flip is a hand edit in
+ * this repo, satisfied by a deploy in another, with nothing connecting the
+ * two. That gap hid a four-day crash loop: the suppression that made the
+ * target quiet is the same suppression that would have reported it shipped
+ * broken. Anything set `false` here is a claim about the present that needs
+ * re-checking against `up` on `edge1`, not a permanent property.
+ */
 export const MONITORED_MYSQLD_HOST: MonitoredHost = {
   name: 'db1',
   address: HOST_IPS.db1,
-  expectedUp: false,
+  expectedUp: true,
 };
 
 export const NODE_EXPORTER_PORT = 9100;

@@ -51,20 +51,46 @@ tests:
         alertname: HostOrServiceDown
         exp_alerts: []
 
-  # The same crash-loop shape as the first case, but on a target the estate
-  # has deliberately not provisioned yet (app1/db1/mysqld carry
-  # expected_up="false"). Neither rule is scoped to see it.
+  # The crash loop that actually happened, on the target it happened to.
+  # db1's mysqld_exporter restarted roughly once a minute for four days and
+  # neither rule was scoped to see it, because the target still carried
+  # expected_up="false" from before the exporter existed. This case is the
+  # assertion that flipping the label bought something: the same input series
+  # that produced silence now fires ServiceFlapping.
+  #
+  # Checked through ALERTS rather than exp_annotations for the reason given
+  # against HostOrServiceDown below -- the description prose is generated and
+  # is rewritten by unrelated PRs against the same file.
   - interval: 30s
     input_series:
-      - series: 'up{job="mysqld", instance="10.20.1.20:9104", host="db1", expected_up="false"}'
+      - series: 'up{job="mysqld", instance="10.20.1.20:9104", host="db1", expected_up="true"}'
         values: '1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ServiceFlapping", alertstate="firing", job="mysqld"}
+        eval_time: 14m30s
+        exp_samples:
+          - labels: 'ALERTS{alertname="ServiceFlapping", alertstate="firing", severity="critical", job="mysqld", instance="10.20.1.20:9104", host="db1", expected_up="true"}'
+            value: 1
     alert_rule_test:
-      - eval_time: 14m30s
-        alertname: ServiceFlapping
-        exp_alerts: []
+      # Still not HostOrServiceDown: a flap never holds up == 0 for 5m. That
+      # is the whole reason ServiceFlapping exists, and it is why flipping the
+      # label alone would not have been enough had only the one rule existed.
       - eval_time: 14m30s
         alertname: HostOrServiceDown
         exp_alerts: []
+
+  # The exporter down continuously rather than flapping -- now in range of
+  # HostOrServiceDown too, which it was not before the flip.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="mysqld", instance="10.20.1.20:9104", host="db1", expected_up="true"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    promql_expr_test:
+      - expr: ALERTS{alertname="HostOrServiceDown", alertstate="firing", job="mysqld"}
+        eval_time: 5m30s
+        exp_samples:
+          - labels: 'ALERTS{alertname="HostOrServiceDown", alertstate="firing", severity="critical", job="mysqld", instance="10.20.1.20:9104", host="db1", expected_up="true"}'
+            value: 1
 
   # HostOrServiceDown on a genuine, continuous outage of an expected_up="true"
   # target -- the detector this estate already relies on still works. Checked
