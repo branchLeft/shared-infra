@@ -319,6 +319,31 @@ describe('the rendered Caddyfile', () => {
       expect(probeBlockText).toContain('rate_limit {');
       expect(probeBlockText).not.toContain('members_magic_link');
     });
+
+    /**
+     * The highest-consequence regression this split could produce, named
+     * explicitly rather than left to the committed-Caddyfile snapshot.
+     *
+     * `redirectBlock()` gets its chain from `protectionChain()` without
+     * `membersMagicLink: true`, so the directive cannot render there — but that
+     * is a property of one argument at one call site, and a redirect block has
+     * no matcher to reference. If it ever gained the directive, the rendered
+     * Caddyfile would carry `rate_limit @members_magic_link` against an
+     * undefined matcher, Caddy would refuse to load the file, and the restart
+     * that deployed it would take every hostname on this edge down rather than
+     * throttling one path.
+     */
+    it('never renders the magic-link directive into a redirect block, which has no matcher to reference', () => {
+      const rendered = render(
+        MAGIC_LINK_ONLY,
+        [site({ hostnames: ['apex.test', 'www.apex.test'] })],
+        [{ from: 'www.apex.test', to: 'apex.test' }]
+      );
+      const redirectBlockText = rendered.split('www.apex.test {')[1]?.split('\n}')[0] ?? '';
+      expect(redirectBlockText).toContain('redir https://apex.test{uri} permanent');
+      expect(redirectBlockText).not.toContain('members_magic_link');
+      expect(redirectBlockText).not.toContain('rate_limit');
+    });
   });
 
   it('gives each site its own throttle zone, so one site cannot spend another site budget', () => {
