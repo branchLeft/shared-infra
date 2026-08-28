@@ -254,15 +254,29 @@ fault to chase. Which of them is _loaded_ is decided by
 `crowdsec/acquis.d/appsec.yaml`, so turning enforcement on later does not
 depend on the CrowdSec hub being reachable at that moment.
 
-## 8. Verify detect-only
+## 8. Verify the deployed posture
 
-Detect-only means: CrowdSec sees everything and records what it would act on,
-and nothing is blocked or throttled. Three checks, all through the loopback
-probe listener, which carries the same handler chain as a public site and
-answers 204.
+The posture is not one thing, so do not verify it as though it were. Three
+independent switches in `hetzner/edge/posture.ts`, and this section proves each
+is in the state that file says:
 
-**a. Nothing is throttled.** 250 requests inside the 60-second window that
-would trip a 200-request limit:
+| Switch                      | Committed state | What that means here                                                |
+| --------------------------- | --------------- | ------------------------------------------------------------------- |
+| `crowdsec`                  | `detect-only`   | sees everything, records what it would act on, blocks nothing       |
+| `rateLimit`                 | `off`           | the general 200/60s page-serving throttle renders no handler at all |
+| `membersMagicLinkRateLimit` | `enforcing`     | POSTs to Ghost's magic-link path are throttled at 5/60s             |
+
+All checks go through the loopback probe listener, which carries the same
+handler chain as a public site and answers 204.
+
+**Both directions matter.** Checks (a) and (b) are a matched pair: (a) proves
+the general throttle is absent, (b) proves the magic-link throttle is present
+and actually fires. Running only the negative one would pass identically if the
+whole `rate_limit` module had silently failed to load, which is the failure this
+pair exists to distinguish (`branchLeft/workspace#209`).
+
+**a. The general throttle is off.** 250 requests inside the 60-second window
+that would trip a 200-request limit:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
@@ -271,8 +285,78 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
   done | sort | uniq -c'
 ```
 
-Expect `250 204` and no `429`. A `429` here means the posture is not
-detect-only — stop and read `hetzner/edge/posture.ts` in the deployed commit.
+Expect `250 204` and no `429`. A `429` here means `rateLimit` is enforcing when
+the committed posture says `off` — stop and read `hetzner/edge/posture.ts` in
+the deployed commit. Note this is a `GET` to `/`, so it never touches the
+magic-link zone; the two counters are independent by construction.
+
+**b. The members magic-link throttle is on, and trips.** Five events per 60
+seconds, matching `POST` only, on `/members/api/send-magic-link` and its
+trailing-slash form. **Leave at least 60 seconds between each of the three
+loops below**: they share one counter, so running them back to back exhausts
+the budget once and every later loop reads `429` regardless of what it is
+actually testing.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+  for i in $(seq 1 8); do
+    curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+      http://127.0.0.1:8080/members/api/send-magic-link
+  done | sort | uniq -c'
+```
+
+Expect `5 204` followed by `3 429`, tripped well inside the general throttle's
+own budget, which check (a) has already confirmed is absent entirely.
+
+Then confirm the matcher keys on the **method**, not only the path — a `GET` to
+the same path must not count against this budget at all:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+  for i in $(seq 1 8); do
+    curl -s -o /dev/null -w "%{http_code}\n" \
+      http://127.0.0.1:8080/members/api/send-magic-link
+  done | sort | uniq -c'
+```
+
+Expect `8 204`.
+
+Then confirm the trailing-slash variant draws from the **same** budget as the
+bare path rather than falling through unthrottled — Express's default router
+treats the two as the same route, and this is the exact gap a wildcard-free,
+two-pattern matcher exists to close. Run bare and trailing-slash requests in one
+unbroken loop, not two separate ones: two loops each land in their own
+60-second window and would each read as a fresh, misleadingly clean
+`5 204, 3 429` rather than proving anything shared.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+  for i in $(seq 1 5); do
+    curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+      http://127.0.0.1:8080/members/api/send-magic-link
+  done
+  for i in $(seq 1 3); do
+    curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+      http://127.0.0.1:8080/members/api/send-magic-link/
+  done' | sort | uniq -c
+```
+
+Expect `5 204` then `3 429` — five bare-path successes exhaust the shared
+budget, so every trailing-slash request that follows in the same window is
+already throttled. `8 204` here would mean the trailing slash carries its own
+separate budget, i.e. that it is not matched by this rule at all.
+
+**This proves the throttle logic; it does not prove hostname routing.** The
+loopback probe answers on a bare port with no `Host` match, so it exercises the
+same handler chain every site gets but not a specific site's route. Repeat the
+first two loops against `https://<hostname>/members/api/send-magic-link` from a
+workstation, against a non-production hostname, to prove the rule on the actual
+routed path a client would use.
+
+**A throttled member sees Ghost's generic portal error, not a wait time.**
+Caddy's `rate_limit` answers a bodyless 429 and Ghost's JSON-error parsing falls
+back to its generic message. That is a known, accepted cost of this control, not
+a defect to chase.
 
 **b. An attack is seen and not blocked.**
 
@@ -324,18 +408,68 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
 
 ## 10. Turning enforcement on
 
-Enforcement is two independent switches in `hetzner/edge/posture.ts`, and each
-is flipped by a pull request, never by a redeploy. Flipping one changes the
+Enforcement is **three** independent switches in `hetzner/edge/posture.ts`, and
+each is flipped by a pull request, never by a redeploy. Flipping one changes the
 rendered files under `hetzner/edge/stack/`, so the diff a reviewer reads is
 literally the configuration the host will run.
 
-Turn them on one at a time, in this order, with time between them: the throttle
-is reversible and low-consequence, and the WAF is the one that can lock an
-author out.
+| Switch                      | State                             | Where it is verified                                    |
+| --------------------------- | --------------------------------- | ------------------------------------------------------- |
+| `membersMagicLinkRateLimit` | **`enforcing`** — already flipped | §8b                                                     |
+| `rateLimit`                 | `off`                             | §10a below turns it on; §8a proves it is off until then |
+| `crowdsec`                  | `detect-only`                     | §10b below turns it on                                  |
 
-### 10a. The throttle
+Turn the remaining two on one at a time, in this order, with time between them:
+the throttle is reversible and low-consequence, and the WAF is the one that can
+lock an author out.
 
-1. In a branch, set `rateLimit: 'enforcing'` in `hetzner/edge/posture.ts`.
+### 10a. The general page-serving throttle
+
+**Do not flip this on the inherited threshold.** `RATE_LIMIT_EVENTS` is 200 per
+60 seconds because the captured Cloud Armor policy says so, and that rule has
+never enforced anything — it is live at `preview: true`, so 200/60s is a number
+no traffic on either edge has ever been measured against. `edge1` averages well
+under 1 req/s but has 1-minute bursts two orders of magnitude above that, and
+nothing currently attributes those to one client or to many. Enabling on the
+inherited number picks one of those on faith.
+
+Derive it first, from the access log — which `posture.ts` names as this
+throttle's observation instrument, and which is enabled in every posture. The
+command below prints the distribution of requests per client address per minute
+and **no addresses**, so client IPs stay on the host:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  'docker exec $(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy) \
+     sh -c "cat /var/log/caddy/access.log"' |
+python3 -c '
+import sys, json, collections
+buckets = collections.Counter()
+for line in sys.stdin:
+    try: e = json.loads(line)
+    except ValueError: continue
+    ip = e.get("request", {}).get("remote_ip")
+    ts = e.get("ts")
+    if ip and ts: buckets[(ip, int(ts // 60))] += 1
+counts = sorted(buckets.values())
+n = len(counts)
+print("IP-minutes observed:", n)
+for pct in (50, 90, 99, 99.9):
+    print(f"p{pct}:", counts[min(n - 1, int(n * pct / 100))])
+print("max:", counts[-1] if counts else 0)
+'
+```
+
+Check the window the log actually covers before trusting the percentiles — it
+rotates. Set the threshold above the legitimate p99.9 with headroom, and record
+the derivation in `posture.ts` the way the magic-link one is recorded. A
+threshold nobody derived is not a threshold. Tracked as
+`branchLeft/workspace#323`.
+
+Then:
+
+1. In a branch, set `rateLimit: 'enforcing'` in `hetzner/edge/posture.ts`, with
+   `RATE_LIMIT_EVENTS` at the derived value.
 2. `cd hetzner && npm run render` — this rewrites `hetzner/edge/stack/Caddyfile`.
 3. Commit both files together and open a pull request. `npm test` fails if the
    rendered file and the posture disagree, so they cannot land apart.
@@ -347,82 +481,17 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
   'systemctl restart branchleft-compose@edge'
 ```
 
-5. Confirm it took, with step 8a's loop. Expect roughly `200 204` followed by
-   `50 429` rather than `250 204`.
-6. Confirm the members magic-link throttle separately — it is a second,
-   independent zone on the same switch (`hetzner/edge/posture.ts`), five
-   requests per 60 seconds rather than 200, and it only matches `POST` to
-   `/members/api/send-magic-link`. **Leave at least 60 seconds between each
-   of the three checks below.** All three share one counter (the GET check
-   is the exception -- it never touches this zone at all), so running the
-   others back to back exhausts the budget once and every later check reads
-   `429` regardless of what it is actually testing:
+5. Confirm it took, with §8a's loop. Expect roughly `200 204` followed by
+   `50 429` rather than `250 204` — the inverse of what §8a asserts today, and
+   the point at which §8a's expected output must be updated in this file.
 
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
-  for i in $(seq 1 8); do
-    curl -s -o /dev/null -w "%{http_code}\n" -X POST \
-      http://127.0.0.1:8080/members/api/send-magic-link
-  done | sort | uniq -c'
-```
+**Counters are in-memory and per-process, so this restart resets every client's
+budget.** Harmless, and the reason sustained-attack behaviour cannot be reasoned
+about across a deploy.
 
-Expect `5 204` followed by `3 429` — tripped well inside the general
-throttle's own 200-request budget, which the loop in step 8a already
-confirms is untouched by this. Then confirm the matcher is on the method,
-not only the path — a `GET` to the same path must not count against this
-budget at all:
-
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
-  for i in $(seq 1 8); do
-    curl -s -o /dev/null -w "%{http_code}\n" \
-      http://127.0.0.1:8080/members/api/send-magic-link
-  done | sort | uniq -c'
-```
-
-Expect `8 204`.
-
-Then confirm the trailing-slash variant draws from the _same_ budget as
-the bare path rather than falling through to the general 200-request
-zone — Express's default router treats the two as the same route, and
-this is the exact gap a wildcard-free, two-pattern matcher exists to
-close. Run bare and trailing-slash requests in one unbroken loop (not two
-separate ones — two separate loops each land in their own 60-second
-window and would each read as a fresh, misleadingly clean `5 204, 3 429`
-rather than proving anything shared) so the shared counter is what the
-tally has to reflect regardless of wall-clock timing:
-
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
-  for i in $(seq 1 5); do
-    curl -s -o /dev/null -w "%{http_code}\n" -X POST \
-      http://127.0.0.1:8080/members/api/send-magic-link
-  done
-  for i in $(seq 1 3); do
-    curl -s -o /dev/null -w "%{http_code}\n" -X POST \
-      http://127.0.0.1:8080/members/api/send-magic-link/
-  done' | sort | uniq -c
-```
-
-Expect `5 204` then `3 429` — five bare-path successes exhaust the shared
-budget, so every trailing-slash request that follows in the same window
-is already throttled. `8 204` here would mean the trailing slash carries
-its own, separate budget — i.e. that it fell through to the general zone
-instead of this one.
-
-**This proves the throttle logic; it does not prove hostname routing.**
-The loopback probe answers on a bare port with no `Host` match, so it
-exercises the same handler chain every site gets but not a specific
-site's route. Once a real (even non-production) hostname has a
-`privateUpstream` entry — added per §11 below — repeat the same two loops
-against `https://<that-hostname>/members/api/send-magic-link`, from a
-workstation rather than over SSH, to prove the rule on the actual routed
-path a client would use. Nothing before that point has proven the rule
-end-to-end; the loopback checks above are what is possible immediately
-after this flip lands, with no site changes required. **Neither loop runs
-itself: merging the posture change does not deploy it and does not run
-this verification — both are this section's steps 1–4 and this one,
-performed by whoever holds `~/.ssh/id_ed25519_hetzner`.**
+**Neither the flip nor its verification runs itself:** merging the posture
+change does not deploy it, and does not run the loop. Both are steps 4 and 5
+above, performed by whoever holds `~/.ssh/id_ed25519_hetzner`.
 
 ### 10b. The WAF and IP remediation
 

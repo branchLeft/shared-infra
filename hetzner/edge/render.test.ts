@@ -30,8 +30,16 @@ import {
  * not another. `npm run render` updates them; `npm test` fails if they drift.
  */
 
-const DETECT_ONLY: EdgePosture = { crowdsec: 'detect-only', rateLimit: 'off' };
-const ENFORCING: EdgePosture = { crowdsec: 'enforcing', rateLimit: 'enforcing' };
+const DETECT_ONLY: EdgePosture = {
+  crowdsec: 'detect-only',
+  rateLimit: 'off',
+  membersMagicLinkRateLimit: 'off',
+};
+const ENFORCING: EdgePosture = {
+  crowdsec: 'enforcing',
+  rateLimit: 'enforcing',
+  membersMagicLinkRateLimit: 'enforcing',
+};
 
 const site = (overrides: Partial<EdgeSite> = {}): EdgeSite => ({
   name: 'example',
@@ -249,9 +257,68 @@ describe('the rendered Caddyfile', () => {
     expect(probeBlockText).toContain('rate_limit @members_magic_link {');
   });
 
-  it('renders no members magic-link throttle when the rate limiter is off, same as the general one', () => {
+  it('renders no members magic-link throttle when both rate limiters are off', () => {
     const rendered = render(DETECT_ONLY);
     expect(rendered).not.toContain('members_magic_link');
+  });
+
+  /**
+   * The two throttles are the same Caddy module protecting different things at
+   * opposite risk profiles, and they were briefly gated behind one flag — the
+   * magic-link directive nested inside the general one's conditional. That made
+   * the narrow, well-derived control unreachable without also enabling a
+   * general threshold inherited from a Cloud Armor rule that has never
+   * enforced. These four assertions are what stop them being recoupled: each
+   * posture is rendered and checked for the presence of one and the absence of
+   * the other, in both directions.
+   */
+  describe('the two throttles are independently switchable', () => {
+    const MAGIC_LINK_ONLY: EdgePosture = {
+      crowdsec: 'detect-only',
+      rateLimit: 'off',
+      membersMagicLinkRateLimit: 'enforcing',
+    };
+    const GENERAL_ONLY: EdgePosture = {
+      crowdsec: 'detect-only',
+      rateLimit: 'enforcing',
+      membersMagicLinkRateLimit: 'off',
+    };
+
+    it('renders the magic-link throttle with the general one off — the committed posture', () => {
+      const rendered = render(MAGIC_LINK_ONLY);
+      expect(rendered).toContain('rate_limit @members_magic_link {');
+      expect(rendered).toContain('zone members_magic_link_per_ip {');
+      // `rate_limit {` matches only the general, matcher-less directive: the
+      // magic-link one always renders as `rate_limit @members_magic_link {`.
+      expect(rendered).not.toContain('rate_limit {');
+    });
+
+    /**
+     * The matcher is gated separately from the directive that references it, so
+     * this is the assertion that catches the two drifting apart. A rendered
+     * `rate_limit @members_magic_link` whose `@members_magic_link` matcher was
+     * not emitted is a Caddyfile that fails to load — the flip would take the
+     * whole edge down rather than throttle one path.
+     */
+    it('emits the magic-link matcher wherever it emits the directive that references it', () => {
+      const rendered = render(MAGIC_LINK_ONLY);
+      const directives = (rendered.match(/rate_limit @members_magic_link \{/g) ?? []).length;
+      const matchers = (rendered.match(/@members_magic_link \{\n\t{1,2}method POST/g) ?? []).length;
+      expect(directives).toBeGreaterThan(0);
+      expect(matchers).toBe(directives);
+    });
+
+    it('renders the general throttle with the magic-link one off, and no matcher for the path', () => {
+      const rendered = render(GENERAL_ONLY);
+      expect(rendered).toContain('rate_limit {');
+      expect(rendered).not.toContain('members_magic_link');
+    });
+
+    it('renders the general throttle on the loopback probe when only it is enforcing', () => {
+      const probeBlockText = render(GENERAL_ONLY).split(':8080 {')[1] ?? '';
+      expect(probeBlockText).toContain('rate_limit {');
+      expect(probeBlockText).not.toContain('members_magic_link');
+    });
   });
 
   it('gives each site its own throttle zone, so one site cannot spend another site budget', () => {
@@ -357,8 +424,25 @@ describe('detect-only', () => {
     expect(configs).toEqual(['crowdsecurity/appsec-default', 'crowdsecurity/crs']);
   });
 
+  /**
+   * Exact equality against a literal, not a containment check, and the literal
+   * is spelled out here rather than reusing a named constant. Every field of
+   * the committed posture is a decision about what the edge does to live
+   * traffic, so changing one has to change this line too — which is what makes
+   * a posture flip impossible to land as an incidental diff, and impossible to
+   * arrive at by redeploying an unchanged tree.
+   */
   it('is what the committed posture says, so enforcement cannot arrive by redeploy', () => {
-    expect(POSTURE).toEqual(DETECT_ONLY);
+    expect(POSTURE).toEqual({
+      crowdsec: 'detect-only',
+      // Still off: its threshold is inherited from a Cloud Armor rule that has
+      // never enforced, so it is a number no traffic has been measured
+      // against. branchLeft/workspace#323.
+      rateLimit: 'off',
+      // On: bounded to one POST path, threshold derived in `posture.ts`, and
+      // what it protects is mx1's deliverability rather than edge compute.
+      membersMagicLinkRateLimit: 'enforcing',
+    });
   });
 });
 
@@ -438,9 +522,9 @@ describe('the fully enforcing posture', () => {
    * during the flip.
    */
   it('renders a configuration CI can load before anything depends on it', async () => {
-    await expect(
-      renderCaddyfile(sites, hostRedirects, { crowdsec: 'enforcing', rateLimit: 'enforcing' })
-    ).toMatchFileSnapshot('./validation/Caddyfile.enforcing');
+    await expect(renderCaddyfile(sites, hostRedirects, ENFORCING)).toMatchFileSnapshot(
+      './validation/Caddyfile.enforcing'
+    );
   });
 
   it('renders a configuration for an authoring site too, which the live one has none of', async () => {
@@ -451,9 +535,9 @@ describe('the fully enforcing posture', () => {
       injectionWafPreviewOnly: true,
       privateUpstream: { host: 'app1', port: 2368 },
     };
-    await expect(
-      renderCaddyfile([authoring], [], { crowdsec: 'enforcing', rateLimit: 'enforcing' })
-    ).toMatchFileSnapshot('./validation/Caddyfile.authoring');
+    await expect(renderCaddyfile([authoring], [], ENFORCING)).toMatchFileSnapshot(
+      './validation/Caddyfile.authoring'
+    );
   });
 });
 

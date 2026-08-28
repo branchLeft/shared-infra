@@ -7,12 +7,33 @@
  * committed, so a flip shows up as a reviewable diff in the files that will be
  * copied onto the host. A redeploy of an unchanged tree cannot change posture.
  *
- * They are separate because the two mechanisms are separate, not because a
- * three-state knob was wanted. `crowdsec` is the WAF and IP-remediation half;
- * `rateLimit` is the per-IP throttle, which is a Caddy module and has no
- * detect mode of its own — the module either throttles or it is absent. The
- * observation instrument for the throttle is therefore the access log, which
- * is enabled in every posture.
+ * They are separate because the mechanisms are separate, not because a
+ * multi-state knob was wanted. `crowdsec` is the WAF and IP-remediation half.
+ * The other two are both the Caddy `rate_limit` module, which has no detect
+ * mode of its own — it either throttles or it is absent. The observation
+ * instrument for a throttle is therefore the access log, which is enabled in
+ * every posture.
+ *
+ * `rateLimit` and `membersMagicLinkRateLimit` are separate fields rather than
+ * one, because they are the same mechanism protecting different things at
+ * opposite risk profiles, and holding them behind one flag made the cheap
+ * control hostage to the expensive one. The magic-link throttle is bounded to
+ * a single POST path, its threshold is derived below from first principles,
+ * and its worst failure is a member seeing a generic portal error. The general
+ * throttle applies to every request on every hostname at a threshold inherited
+ * from a Cloud Armor rule that has never actually enforced (it is live at
+ * `preview: true`), and its worst failure is 429s for legitimate readers.
+ * One decision each.
+ *
+ * Two properties of the module worth knowing before reasoning about either:
+ *
+ * - **Counters are in-memory, per Caddy process.** Every edge deploy resets
+ *   every client's budget. Harmless at this estate's traffic, and the reason
+ *   sustained-attack behaviour cannot be reasoned about across a restart.
+ * - **Both zones key on the direct peer** (`{http.request.remote.host}`), which
+ *   is correct only while this edge is the first hop. See the key's own comment
+ *   in `render.ts`: putting any CDN in front inverts a per-IP throttle into an
+ *   estate-wide outage, so the key and the no-CDN assumption move together.
  */
 export interface EdgePosture {
   /**
@@ -26,15 +47,39 @@ export interface EdgePosture {
    */
   crowdsec: 'detect-only' | 'enforcing';
   /**
-   * `off` renders no `rate_limit` handler at all. `enforcing` renders it at the
-   * threshold below.
+   * The general per-IP page-serving throttle. `off` renders no general
+   * `rate_limit` handler at all; `enforcing` renders it at `RATE_LIMIT_EVENTS`
+   * below.
+   *
+   * Deliberately still `off`. Its threshold is inherited from the captured
+   * Cloud Armor policy, and that rule has never enforced anything — it is live
+   * at `preview: true`, so 200/60s is a number no traffic has ever been
+   * measured against. Enabling it needs a threshold derived from this edge's
+   * own access log (the instrument named above), not the inherited one:
+   * `edge1` averages well under 1 req/s but has 1-minute bursts two orders of
+   * magnitude above that, and nothing currently attributes those to one client
+   * or to many. Tracked in branchLeft/workspace#323.
    */
   rateLimit: 'off' | 'enforcing';
+  /**
+   * The tighter throttle on Ghost's members magic-link send path, in its own
+   * zone with its own counter. `off` renders no handler and no matcher for it.
+   *
+   * `enforcing`, because every request on that path makes the platform send
+   * email from `mx1`, so the cost of a flood lands on deliverability — the one
+   * asset here that is slow and uncertain to recover — rather than on compute.
+   * It also does the one thing Ghost cannot do for itself: `membersAuthEnumeration`
+   * in Ghost's `spam-prevention.js` counts per instance, so a client that sends
+   * one request to tenant A and one to tenant B trips neither instance's
+   * counter, while this zone is global across every hostname the edge serves.
+   */
+  membersMagicLinkRateLimit: 'off' | 'enforcing';
 }
 
 export const POSTURE: EdgePosture = {
   crowdsec: 'detect-only',
   rateLimit: 'off',
+  membersMagicLinkRateLimit: 'enforcing',
 };
 
 /**
