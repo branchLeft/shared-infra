@@ -358,7 +358,7 @@ Caddy's `rate_limit` answers a bodyless 429 and Ghost's JSON-error parsing falls
 back to its generic message. That is a known, accepted cost of this control, not
 a defect to chase.
 
-**b. An attack is seen and not blocked.**
+**c. An attack is seen and not blocked.**
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
@@ -369,7 +369,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
 Expect `204`. The request reached the WAF, tripped an OWASP Core Rule Set rule,
 and was answered normally — which is the whole of what detect-only means.
 
-**c. The detection is recorded.**
+**d. The detection is recorded.**
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
