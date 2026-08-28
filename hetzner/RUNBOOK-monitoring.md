@@ -441,19 +441,32 @@ as though nothing is up. This warm-up window is specific to
 itself is up, with no such delay, so do not apply the same caution there.
 
 Expect `prometheus`, `alertmanager`, `caddy`, `crowdsec`, `website`,
-`cadvisor`, `blackbox_http` (three targets, one per `sites.ts` hostname) and
-the `node` target for `edge1` all `up`. `prometheus`, `alertmanager`, `caddy`,
-`crowdsec`, `website`, `cadvisor` and `blackbox_http` all carry
-`expected_up: 'true'` -- a sustained `down` on any of them pages within 5
-minutes via `HostOrServiceDown`. `website` is the contact-form send-failure
-counter on `app1` (`render.ts`'s `WEBSITE_METRICS_PORT`). `blackbox_http`'s
-label is what catches the exporter itself being down -- a dead exporter runs
-no probe, so there is no `probe_success` series for `BlackboxProbeFailed` to
-see; that alert instead covers a live exporter reporting a failed probe, on
-`probe_success` rather than `up`. `node` for `app1`, `mysqld` for `db1` and
-`node` for `db1` are expected `down` -- those hosts have no exporter yet (see
-`render.ts`'s `MONITORED_NODE_HOSTS` docstring). A `down` target with
-`expected_up: 'true'` in its labels is the only one worth investigating.
+`cadvisor`, `blackbox_http` (three targets, one per `sites.ts` hostname), the
+`node` target for `edge1` and the `mysqld` target for `db1` all `up`. All of
+those carry `expected_up: 'true'` -- a sustained `down` on any of them pages
+within 5 minutes via `HostOrServiceDown`. `website` is the contact-form
+send-failure counter on `app1` (`render.ts`'s `WEBSITE_METRICS_PORT`).
+`blackbox_http`'s label is what catches the exporter itself being down -- a
+dead exporter runs no probe, so there is no `probe_success` series for
+`BlackboxProbeFailed` to see; that alert instead covers a live exporter
+reporting a failed probe, on `probe_success` rather than `up`. Only `node` for
+`app1` and `node` for `db1` are expected `down`: those two exporters are not
+provisioned (see `render.ts`'s `MONITORED_NODE_HOSTS` docstring). A `down`
+target with `expected_up: 'true'` in its labels is the only one worth
+investigating.
+
+`mysqld` being `up` is necessary and not sufficient -- the exporter answers
+with a full 200 and `mysql_up 0` when it cannot read MySQL, which is the state
+`db1` was in for four days. Check the metric, not the target:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  'curl -s --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=mysql_up"'
+```
+
+Expect a single series with value `1`. `MySQLUnreachable` alerts on this, so a
+`0` here is already paging; two series briefly after an `expected_up` flip is
+the pre-flip series inside the staleness window and is not a fault.
 
 A total loss of the monitoring stack itself -- not just one service on it --
 cannot page through `HostOrServiceDown`: the evaluator that would fire it

@@ -126,6 +126,44 @@ tests:
         alertname: HostOrServiceDown
         exp_alerts: []
 
+  # MySQLUnreachable: the exporter answering normally while unable to read
+  # MySQL. `up` is deliberately held at 1 throughout -- that is the whole
+  # point of the rule, and a case that let `up` drop would be proving
+  # HostOrServiceDown instead.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="mysqld", instance="10.20.1.20:9104", host="db1", expected_up="true"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'mysql_up{job="mysqld", instance="10.20.1.20:9104", host="db1", expected_up="true"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    promql_expr_test:
+      - expr: ALERTS{alertname="MySQLUnreachable", alertstate="firing"}
+        eval_time: 10m30s
+        exp_samples:
+          - labels: 'ALERTS{alertname="MySQLUnreachable", alertstate="firing", severity="critical", job="mysqld", instance="10.20.1.20:9104", host="db1", expected_up="true"}'
+            value: 1
+    alert_rule_test:
+      # Neither process-level rule sees this, which is exactly why the rule
+      # above has to exist. If either of these ever starts firing on this
+      # input, the two are no longer covering different failures.
+      - eval_time: 10m30s
+        alertname: HostOrServiceDown
+        exp_alerts: []
+      - eval_time: 10m30s
+        alertname: ServiceFlapping
+        exp_alerts: []
+
+  # A healthy exporter, and a MySQL restart shorter than the 10m window.
+  # Proves the rule does not page on a routine db stack deploy.
+  - interval: 30s
+    input_series:
+      - series: 'mysql_up{job="mysqld", instance="10.20.1.20:9104", host="db1", expected_up="true"}'
+        values: '1 1 1 1 1 1 1 1 1 1 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 10m30s
+        alertname: MySQLUnreachable
+        exp_alerts: []
+
   # BlackboxProbeFailed: a public hostname that stops answering its HTTPS
   # probe continuously for over 5m fires; one that keeps answering does not.
   - interval: 30s
