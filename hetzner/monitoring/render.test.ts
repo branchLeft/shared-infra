@@ -250,6 +250,14 @@ describe('the rendered alert rules', () => {
     expect(rendered).toContain('expr: changes(up{expected_up="true"}[15m]) > 4');
   });
 
+  it('alerts on MySQL being unreadable, which no up-based rule can see -- see alert_rules_test.yml for the promtool proof that it fires while up stays 1', () => {
+    expect(rendered).toContain('alert: MySQLUnreachable');
+    expect(rendered).toContain('expr: mysql_up == 0');
+    // Deliberately not scoped by expected_up: the metric only exists at all
+    // when the exporter is answering, so the target is up by construction.
+    expect(rendered).not.toContain('mysql_up{expected_up="true"} == 0');
+  });
+
   it('carries doc 14 §4’s named scale-out thresholds exactly', () => {
     expect(rendered).toContain('> 0.75');
     expect(rendered).toContain('for: 24h');
