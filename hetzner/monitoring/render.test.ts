@@ -64,11 +64,17 @@ describe('the rendered Prometheus config', () => {
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'db1')?.address).toBe('10.20.1.20');
   });
 
-  it('marks only edge1 expected up -- app1 and db1 have no exporter yet', () => {
+  it('marks only edge1 node_exporter expected up -- app1 and db1 still have none', () => {
+    // Verified against edge1's own target list on 2026-08-28: `node` on app1
+    // and db1 both report `down`, so `false` is a current fact here rather
+    // than an assumption inherited from when the constant was written.
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'edge1')?.expectedUp).toBe(true);
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'app1')?.expectedUp).toBe(false);
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'db1')?.expectedUp).toBe(false);
-    expect(MONITORED_MYSQLD_HOST.expectedUp).toBe(false);
+  });
+
+  it('marks the db1 mysqld_exporter expected up, because it is live', () => {
+    expect(MONITORED_MYSQLD_HOST.expectedUp).toBe(true);
   });
 
   it('excludes reserved-but-unallocated estate members', () => {
@@ -93,10 +99,14 @@ describe('the rendered Prometheus config', () => {
     expect(rendered).toContain("targets: ['10.20.1.20:9100']");
   });
 
-  it('lists the db1 mysqld_exporter target even though nothing answers it yet', () => {
+  it('scrapes the db1 mysqld_exporter and expects it to answer', () => {
     const rendered = renderPrometheusConfig(sites);
     expect(rendered).toContain("targets: ['10.20.1.20:9104']");
-    expect(rendered).toContain("labels: {host: db1, expected_up: 'false'}");
+    expect(rendered).toContain("labels: {host: db1, expected_up: 'true'}");
+    // That the label puts this target inside the set the two scoped rules
+    // actually select over is proved in alert_rules_test.yml, against the
+    // rendered rules themselves -- a string assertion here would pass just as
+    // well with the rules scoped somewhere else entirely.
   });
 
   it("scrapes Caddy's and CrowdSec's metrics on edge1's private address, not a public one", () => {

@@ -50,7 +50,7 @@ scrape_configs:
   - job_name: mysqld
     static_configs:
       - targets: ['10.20.1.20:9104']
-        labels: {host: db1, expected_up: 'false'}
+        labels: {host: db1, expected_up: 'true'}
 
   - job_name: cadvisor
     static_configs:
