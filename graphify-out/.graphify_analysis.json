@@ -1915,22 +1915,6 @@
       "pulumi_gcp"
     ],
     "57": [
-      "branchleft_hetzner_host",
-      "hetzner_host_package_dependencies",
-      "hetzner_host_package_dependencies_pulumi_pulumi",
-      "hetzner_package",
-      "hetzner_package_comment",
-      "hetzner_package_dependencies",
-      "hetzner_package_dependencies_branchleft_hetzner_host",
-      "hetzner_package_dependencies_pulumi_hcloud",
-      "hetzner_package_dependencies_pulumi_pulumi",
-      "hetzner_package_hetznerhostpincomment",
-      "hetzner_package_main",
-      "hetzner_package_name",
-      "hetzner_package_private",
-      "pulumi_pulumi"
-    ],
-    "58": [
       "hetzner_provision_test_branchleft_deploy_rationale_399",
       "hetzner_provision_test_branchleft_deploy_rationale_412",
       "hetzner_provision_test_branchleft_deploy_rationale_425",
@@ -1946,7 +1930,7 @@
       "hetzner_provision_test_branchleft_deploy_resolvesimagefromenvtests_test_a_whole_line_comment_does_not_resolve",
       "hetzner_provision_test_branchleft_deploy_resolvesimagefromenvtests_test_an_unbraced_reference_does_not_resolve"
     ],
-    "59": [
+    "58": [
       "hetzner_provision_test_compose_unit_contract_classify_stacks",
       "hetzner_provision_test_compose_unit_contract_composeunitcontracttests",
       "hetzner_provision_test_compose_unit_contract_composeunitcontracttests_test_a_reset_re_adds_the_secrets_file_of_a_stack_that_reads_one",
@@ -1962,7 +1946,7 @@
       "hetzner_provision_test_compose_unit_contract_service_lines",
       "hetzner_provision_test_compose_unit_contract_unittemplateassumptiontests_setup"
     ],
-    "60": [
+    "59": [
       "hetzner_scripts_test_probe_object_storage_rationale_188",
       "hetzner_scripts_test_probe_object_storage_rationale_324",
       "hetzner_scripts_test_probe_object_storage_sigv4headertests",
@@ -1978,7 +1962,7 @@
       "hetzner_scripts_test_probe_object_storage_sigv4headertests_test_empty_payload_uses_the_empty_sha256",
       "hetzner_scripts_test_probe_object_storage_sigv4headertests_test_extra_header_value_is_normalised_the_same_way_on_the_wire"
     ],
-    "61": [
+    "60": [
       "hetzner_provision_test_00_harden_ssh",
       "hetzner_provision_test_00_harden_ssh_effective_config",
       "hetzner_provision_test_00_harden_ssh_hardensshtests",
@@ -1993,7 +1977,7 @@
       "hetzner_provision_test_00_harden_ssh_hardensshtests_write_fake",
       "hetzner_provision_test_00_harden_ssh_rationale_45"
     ],
-    "62": [
+    "61": [
       "hetzner_provision_test_branchleft_deploy",
       "hetzner_provision_test_branchleft_deploy_failopenimagereferencetests",
       "hetzner_provision_test_branchleft_deploy_failopenimagereferencetests_test_commentary_is_not_named",
@@ -2008,7 +1992,7 @@
       "hetzner_provision_test_branchleft_deploy_writeimageenvtests_test_replaces_rather_than_appends",
       "hetzner_provision_test_branchleft_deploy_writeimageenvtests_test_writes_single_key_with_owner_only_permissions"
     ],
-    "63": [
+    "62": [
       "scripts_test_audit_pulumi_secrets_exitcodetests",
       "scripts_test_audit_pulumi_secrets_exitcodetests_test_a_completed_sweep_exits_zero",
       "scripts_test_audit_pulumi_secrets_exitcodetests_test_drift_always_fails",
@@ -2022,6 +2006,20 @@
       "scripts_test_audit_pulumi_secrets_exitcodetests_test_undeclared_reference_fails",
       "scripts_test_audit_pulumi_secrets_exitcodetests_test_unresolved_fails_the_wind_down_precondition",
       "scripts_test_audit_pulumi_secrets_finding"
+    ],
+    "63": [
+      "branchleft_hetzner_host",
+      "hetzner_host_package_dependencies",
+      "hetzner_host_package_dependencies_pulumi_pulumi",
+      "hetzner_host_package_devdependencies_pulumi_hcloud",
+      "hetzner_host_package_peerdependencies",
+      "hetzner_host_package_peerdependencies_pulumi_hcloud",
+      "hetzner_package_dependencies",
+      "hetzner_package_dependencies_branchleft_hetzner_host",
+      "hetzner_package_dependencies_pulumi_hcloud",
+      "hetzner_package_dependencies_pulumi_pulumi",
+      "pulumi_hcloud",
+      "pulumi_pulumi"
     ],
     "64": [
       "docref_rfc_8737",
@@ -2094,6 +2092,19 @@
       "mail_provision_test_check_dnsbl_blocklist_runcheckstests_test_queries_sentinel_and_target_per_zone_and_routes_results_correctly"
     ],
     "69": [
+      "hetzner_package",
+      "hetzner_package_comment",
+      "hetzner_package_hetznerhostpincomment",
+      "hetzner_package_main",
+      "hetzner_package_name",
+      "hetzner_package_private",
+      "hetzner_package_scripts",
+      "hetzner_package_scripts_postinstall",
+      "hetzner_package_scripts_render",
+      "hetzner_package_scripts_test",
+      "hetzner_package_scripts_typecheck"
+    ],
+    "70": [
       "mail_provision_check_dnsbl_blocklist_build_alert",
       "mail_provision_check_dnsbl_blocklist_checkresult",
       "mail_provision_check_dnsbl_blocklist_rationale_221",
@@ -2106,7 +2117,7 @@
       "mail_provision_test_check_dnsbl_blocklist_buildalerttests_test_repeat_listing_is_marked_still_listed_not_new",
       "mail_provision_test_check_dnsbl_blocklist_buildalerttests_test_state_persists_every_verdict_seen_this_run"
     ],
-    "70": [
+    "71": [
       "scripts_test_audit_pulumi_secrets",
       "scripts_test_audit_pulumi_secrets_backendurltests",
       "scripts_test_audit_pulumi_secrets_backendurltests_test_absent_when_not_pinned",
@@ -2119,7 +2130,7 @@
       "scripts_test_audit_pulumi_secrets_shippedinventorylivestatetests_test_a_regression_to_kms_would_still_be_caught",
       "scripts_test_audit_pulumi_secrets_shippedinventorylivestatetests_test_require_migrated_reports_the_sweep_complete"
     ],
-    "71": [
+    "72": [
       "scripts_test_audit_pulumi_secrets_classifytests",
       "scripts_test_audit_pulumi_secrets_classifytests_test_absent",
       "scripts_test_audit_pulumi_secrets_classifytests_test_bom_does_not_hide_a_gcpkms_config",
@@ -2132,7 +2143,7 @@
       "scripts_test_audit_pulumi_secrets_classifytests_test_single_quoted_key_is_still_read",
       "scripts_test_audit_pulumi_secrets_classifytests_test_third_provider_is_unknown_not_migrated"
     ],
-    "72": [
+    "73": [
       "scripts_test_audit_pulumi_secrets_rationale_234",
       "scripts_test_audit_pulumi_secrets_terminalstatetests",
       "scripts_test_audit_pulumi_secrets_terminalstatetests_test_destroy_bound_stack_is_satisfied_by_removal_not_migration",
@@ -2145,7 +2156,19 @@
       "scripts_test_audit_pulumi_secrets_terminalstatetests_test_shipped_inventory_uses_only_known_terminal_states",
       "scripts_test_audit_pulumi_secrets_terminalstatetests_test_unknown_terminal_state_is_drift"
     ],
-    "73": [
+    "74": [
+      "hetzner_host_tsconfig",
+      "hetzner_host_tsconfig_compileroptions",
+      "hetzner_host_tsconfig_compileroptions_pretty",
+      "hetzner_host_tsconfig_extends",
+      "hetzner_host_tsconfig_include",
+      "hetzner_host_tsconfig_json_ref_ts",
+      "hetzner_tsconfig_extends",
+      "mail_tsconfig_extends",
+      "tsconfig_json_ref_branchleft_tsconfig_pulumi_json",
+      "tsconfig_json_ref_branchleft_tsconfig_strict_1_json"
+    ],
+    "75": [
       "hetzner_host_tsconfig_build",
       "hetzner_host_tsconfig_build_compileroptions",
       "hetzner_host_tsconfig_build_compileroptions_declaration",
@@ -2157,19 +2180,7 @@
       "hetzner_host_tsconfig_build_json_ref_ts",
       "ref_tsconfig_json"
     ],
-    "74": [
-      "hetzner_host_tsconfig_extends",
-      "hetzner_tsconfig_extends",
-      "tsconfig",
-      "tsconfig_compileroptions",
-      "tsconfig_compileroptions_pretty",
-      "tsconfig_extends",
-      "tsconfig_include",
-      "tsconfig_json_ref_branchleft_tsconfig_pulumi_json",
-      "tsconfig_json_ref_branchleft_tsconfig_strict_1_json",
-      "tsconfig_json_ref_ts"
-    ],
-    "75": [
+    "76": [
       "hetzner_provision_test_branchleft_deploy_maintests",
       "hetzner_provision_test_branchleft_deploy_maintests_test_a_slot_key_cannot_reach_another_stack_through_stdin",
       "hetzner_provision_test_branchleft_deploy_maintests_test_invalid_input_exits_one_without_touching_the_host",
@@ -2181,7 +2192,7 @@
       "hetzner_provision_test_branchleft_deploy_maintests_test_slot_mode_takes_no_second_positional_argument",
       "hetzner_provision_test_branchleft_deploy_maintests_test_wrong_argument_count_is_a_usage_error"
     ],
-    "76": [
+    "77": [
       "hetzner_provision_test_branchleft_deploy_rationale_270",
       "hetzner_provision_test_branchleft_deploy_slotstdintests",
       "hetzner_provision_test_branchleft_deploy_slotstdintests_test_accepts_a_reference_with_no_trailing_newline",
@@ -2193,7 +2204,7 @@
       "hetzner_provision_test_branchleft_deploy_slotstdintests_test_rejects_empty_input",
       "hetzner_provision_test_branchleft_deploy_slotstdintests_test_rejects_input_beyond_the_read_limit"
     ],
-    "77": [
+    "78": [
       "mail_provision_check_dnsbl_blocklist_rationale_515",
       "mail_provision_check_dnsbl_blocklist_resolve_target_address",
       "mail_provision_test_check_dnsbl_blocklist_rationale_477",
@@ -2205,7 +2216,7 @@
       "mail_provision_test_check_dnsbl_blocklist_resolvetargetaddresstests_test_more_than_one_address_is_refused_rather_than_guessed",
       "mail_provision_test_check_dnsbl_blocklist_resolvetargetaddresstests_test_no_address_is_refused"
     ],
-    "78": [
+    "79": [
       "mail_provision_provision_mailboxes_rationale_76",
       "mail_provision_provision_mailboxes_sieve_script_contents",
       "mail_provision_test_provision_mailboxes",
@@ -2217,7 +2228,7 @@
       "mail_provision_test_provision_mailboxes_sievescriptcontentstests_test_is_parameterised_on_the_forward_target",
       "mail_provision_test_provision_mailboxes_sievescriptcontentstests_test_uses_copy_modifier_not_a_plain_redirect"
     ],
-    "79": [
+    "80": [
       "scripts_test_assert_cloud_armor_baseline_parity",
       "scripts_test_assert_cloud_armor_baseline_parity_acceptedfailurestests_setup",
       "scripts_test_assert_cloud_armor_baseline_parity_checkparitytests_test_a_rule_with_a_null_match_does_not_crash",
@@ -2229,7 +2240,7 @@
       "scripts_test_assert_cloud_armor_baseline_parity_rationale_36",
       "scripts_test_assert_cloud_armor_baseline_parity_rationale_395"
     ],
-    "80": [
+    "81": [
       "branchleft_prettier_config",
       "hetzner_package_devdependencies_prettier",
       "package_devdependencies",
@@ -2240,7 +2251,7 @@
       "package_devdependencies_typescript",
       "prettier"
     ],
-    "81": [
+    "82": [
       "hetzner_provision_test_branchleft_deploy_imagereftests",
       "hetzner_provision_test_branchleft_deploy_imagereftests_test_accepts_digest_pinned_reference",
       "hetzner_provision_test_branchleft_deploy_imagereftests_test_accepts_registry_port",
@@ -2251,7 +2262,7 @@
       "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_short_or_non_hex_digest",
       "hetzner_provision_test_branchleft_deploy_imagereftests_test_rejects_tag_only_reference"
     ],
-    "82": [
+    "83": [
       "hetzner_provision_test_provision_deploy_slot_granttests",
       "hetzner_provision_test_provision_deploy_slot_granttests_test_a_prefix_named_tenant_does_not_disturb_its_neighbour",
       "hetzner_provision_test_provision_deploy_slot_granttests_test_a_slot_cannot_be_granted_a_key_naming_another_slot",
@@ -2262,7 +2273,7 @@
       "hetzner_provision_test_provision_deploy_slot_granttests_test_granting_twice_is_a_no_op",
       "hetzner_provision_test_provision_deploy_slot_granttests_test_rotation_replaces_rather_than_adds_a_second_working_key"
     ],
-    "83": [
+    "84": [
       "hetzner_scripts_test_probe_object_storage_protectedbuckettests",
       "hetzner_scripts_test_probe_object_storage_protectedbuckettests_run",
       "hetzner_scripts_test_probe_object_storage_protectedbuckettests_test_refuses_a_tenant_state_bucket_that_does_not_exist_yet",
@@ -2273,7 +2284,7 @@
       "hetzner_scripts_test_probe_object_storage_rationale_405",
       "hetzner_scripts_test_probe_object_storage_rationale_410"
     ],
-    "84": [
+    "85": [
       "mail_provision_check_dnsbl_blocklist",
       "mail_provision_check_dnsbl_blocklist_load_state",
       "mail_provision_check_dnsbl_blocklist_main",
@@ -2284,7 +2295,7 @@
       "mail_provision_check_dnsbl_blocklist_read_name",
       "mail_provision_check_dnsbl_blocklist_save_state"
     ],
-    "85": [
+    "86": [
       "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests",
       "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_content_sensitive_rule_carries_carve_out",
       "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_default_allow_rule",
@@ -2295,7 +2306,7 @@
       "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_six_rules_with_zero_preview_only_hosts",
       "scripts_test_assert_cloud_armor_baseline_parity_expectedrulestests_test_throttle_rule_carries_full_rate_limit_parameters"
     ],
-    "86": [
+    "87": [
       "scripts_test_audit_pulumi_secrets_maintests",
       "scripts_test_audit_pulumi_secrets_maintests_run",
       "scripts_test_audit_pulumi_secrets_maintests_test_a_completed_sweep_exits_zero_through_main",
@@ -2306,7 +2317,7 @@
       "scripts_test_audit_pulumi_secrets_maintests_test_without_root_the_unreachable_repos_are_named_not_silently_passed",
       "scripts_test_audit_pulumi_secrets_rationale_603"
     ],
-    "87": [
+    "88": [
       "scripts_test_audit_pulumi_secrets_toplevelscalartests",
       "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_block_openers_are_not_values",
       "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_bom_does_not_hide_the_first_key",
@@ -2317,7 +2328,17 @@
       "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_strips_quotes",
       "scripts_test_audit_pulumi_secrets_toplevelscalartests_test_strips_quotes_from_the_key_too"
     ],
-    "88": [
+    "89": [
+      "hetzner_host_tsconfig_build_exclude",
+      "hetzner_host_tsconfig_build_json_ref_dist",
+      "hetzner_host_tsconfig_exclude",
+      "hetzner_host_tsconfig_json_ref_dist",
+      "mail_tsconfig_exclude",
+      "ref_test_ts",
+      "ref_vitest_config_ts",
+      "tsconfig_json_ref_node_modules"
+    ],
+    "90": [
       "hetzner_provision_test_compose_unit_contract_rationale_770",
       "hetzner_provision_test_compose_unit_contract_rationale_787",
       "hetzner_provision_test_compose_unit_contract_rationale_794",
@@ -2327,7 +2348,7 @@
       "hetzner_provision_test_compose_unit_contract_unittemplateassumptiontests_test_the_start_still_waits",
       "hetzner_provision_test_compose_unit_contract_unittemplateassumptiontests_test_the_wait_is_the_only_post_start_signal"
     ],
-    "89": [
+    "91": [
       "hetzner_scripts_test_probe_object_storage_publicreadpolicytests",
       "hetzner_scripts_test_probe_object_storage_publicreadpolicytests_test_grants_getobject_on_the_probe_prefix_only",
       "hetzner_scripts_test_probe_object_storage_publicreadpolicytests_test_is_valid_json_with_the_expected_shape",
@@ -2337,7 +2358,7 @@
       "hetzner_scripts_test_probe_object_storage_rationale_366",
       "hetzner_scripts_test_probe_object_storage_rationale_371"
     ],
-    "90": [
+    "92": [
       "mail_provision_provision_mailboxes_plan_sieve_action",
       "mail_provision_provision_mailboxes_rationale_107",
       "mail_provision_test_provision_mailboxes_plansieveactiontests",
@@ -2347,7 +2368,7 @@
       "mail_provision_test_provision_mailboxes_plansieveactiontests_test_matching_content_but_inactive_is_an_activate",
       "mail_provision_test_provision_mailboxes_plansieveactiontests_test_no_existing_script_is_a_create"
     ],
-    "91": [
+    "93": [
       "scripts_test_assert_cloud_armor_baseline_parity_rationale_842",
       "scripts_test_assert_cloud_armor_baseline_parity_rationale_883",
       "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests",
@@ -2357,16 +2378,7 @@
       "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_test_the_real_baseline_is_structurally_readable",
       "scripts_test_assert_cloud_armor_baseline_parity_realrepofilestests_test_the_real_edge_ts_still_yields_every_rule_the_script_expects"
     ],
-    "92": [
-      "hetzner_host_tsconfig",
-      "hetzner_host_tsconfig_compileroptions",
-      "hetzner_host_tsconfig_compileroptions_pretty",
-      "hetzner_host_tsconfig_exclude",
-      "hetzner_host_tsconfig_include",
-      "hetzner_host_tsconfig_json_ref_dist",
-      "hetzner_host_tsconfig_json_ref_ts"
-    ],
-    "93": [
+    "94": [
       "hetzner_monitoring_test_runbook_verify_targets",
       "hetzner_monitoring_test_runbook_verify_targets_rationale_47",
       "hetzner_monitoring_test_runbook_verify_targets_rendered_job_names",
@@ -2375,7 +2387,7 @@
       "hetzner_monitoring_test_runbook_verify_targets_runbookverifytargetstests_test_the_job_names_and_the_section_were_actually_found",
       "hetzner_monitoring_test_runbook_verify_targets_section_8_text"
     ],
-    "94": [
+    "95": [
       "hetzner_provision_test_provision_deploy_slot_publickeytests",
       "hetzner_provision_test_provision_deploy_slot_publickeytests_test_discards_the_comment_field",
       "hetzner_provision_test_provision_deploy_slot_publickeytests_test_fingerprint_matches_the_ssh_keygen_form",
@@ -2384,7 +2396,7 @@
       "hetzner_provision_test_provision_deploy_slot_publickeytests_test_rejects_an_oversized_blob",
       "hetzner_provision_test_provision_deploy_slot_publickeytests_test_strips_a_comment_carrying_a_quote"
     ],
-    "95": [
+    "96": [
       "hetzner_provision_test_provision_deploy_slot_rationale_216",
       "hetzner_provision_test_provision_deploy_slot_reconciletests",
       "hetzner_provision_test_provision_deploy_slot_reconciletests_test_accepts_a_file_the_register_explains",
@@ -2393,7 +2405,7 @@
       "hetzner_provision_test_provision_deploy_slot_reconciletests_test_refuses_an_unrelated_key_whose_comment_ends_in_a_marker",
       "hetzner_provision_test_provision_deploy_slot_reconciletests_test_refuses_two_lines_for_one_slot"
     ],
-    "96": [
+    "97": [
       "hetzner_scripts_test_probe_object_storage_xmlparsingtests",
       "hetzner_scripts_test_probe_object_storage_xmlparsingtests_test_counts_versions",
       "hetzner_scripts_test_probe_object_storage_xmlparsingtests_test_counts_zero_versions_on_unparseable_body",
@@ -2402,7 +2414,7 @@
       "hetzner_scripts_test_probe_object_storage_xmlparsingtests_test_versioning_status_of_a_never_versioned_bucket_is_absent",
       "hetzner_scripts_test_probe_object_storage_xmlparsingtests_test_versioning_status_with_namespace"
     ],
-    "97": [
+    "98": [
       "mail_provision_check_dnsbl_blocklist_encode_name",
       "mail_provision_check_dnsbl_blocklist_rationale_288",
       "mail_provision_test_check_dnsbl_blocklist_buildquerytests",
@@ -2411,7 +2423,7 @@
       "mail_provision_test_check_dnsbl_blocklist_buildquerytests_test_labels_are_length_prefixed_and_root_terminated",
       "mail_provision_test_check_dnsbl_blocklist_buildquerytests_test_query_is_one_recursion_desired_a_question"
     ],
-    "98": [
+    "99": [
       "mail_provision_provision_mailboxes_build_account_create_args",
       "mail_provision_provision_mailboxes_rationale_93",
       "mail_provision_test_provision_mailboxes_buildaccountcreateargstests",
@@ -2420,7 +2432,7 @@
       "mail_provision_test_provision_mailboxes_buildaccountcreateargstests_test_only_one_credential_is_set",
       "mail_provision_test_provision_mailboxes_buildaccountcreateargstests_test_sets_type_user_and_the_given_name_and_domain"
     ],
-    "99": [
+    "100": [
       "mail_provision_provision_mailboxes_missing_mailboxes",
       "mail_provision_provision_mailboxes_rationale_85",
       "mail_provision_test_provision_mailboxes_missingmailboxestests",
@@ -2429,7 +2441,7 @@
       "mail_provision_test_provision_mailboxes_missingmailboxestests_test_only_the_absent_ones_are_returned_in_order",
       "mail_provision_test_provision_mailboxes_missingmailboxestests_test_unrelated_existing_accounts_are_ignored"
     ],
-    "100": [
+    "101": [
       "mail_provision_provision_mailboxes_rationale_167",
       "mail_provision_provision_mailboxes_resolve_mailbox_secret",
       "mail_provision_test_provision_mailboxes_rationale_184",
@@ -2438,7 +2450,7 @@
       "mail_provision_test_provision_mailboxes_resolvemailboxsecrettests_test_only_the_matching_local_parts_recorded_secret_is_returned",
       "mail_provision_test_provision_mailboxes_resolvemailboxsecrettests_test_reuses_a_recorded_secret_instead_of_generating_a_new_one"
     ],
-    "101": [
+    "102": [
       "mail_provision_test_provision_mailboxes_credentiallabeluniquenesstests",
       "mail_provision_test_provision_mailboxes_credentiallabeluniquenesstests_labels",
       "mail_provision_test_provision_mailboxes_credentiallabeluniquenesstests_test_alertmanager_has_its_own_label",
@@ -2447,7 +2459,7 @@
       "mail_provision_test_provision_mailboxes_rationale_472",
       "mail_provision_test_provision_mailboxes_rationale_496"
     ],
-    "102": [
+    "103": [
       "mail_provision_test_provision_mailboxes_rationale_254",
       "mail_provision_test_provision_mailboxes_reconcileaccountsorderingtests",
       "mail_provision_test_provision_mailboxes_reconcileaccountsorderingtests_setup",
@@ -2455,14 +2467,6 @@
       "mail_provision_test_provision_mailboxes_reconcileaccountsorderingtests_test_no_missing_mailboxes_makes_no_secret_or_create_calls",
       "mail_provision_test_provision_mailboxes_reconcileaccountsorderingtests_test_secret_is_persisted_even_if_the_create_call_then_fails",
       "mail_provision_test_provision_mailboxes_reconcileaccountsorderingtests_test_secret_is_recorded_before_the_create_call_uses_it"
-    ],
-    "103": [
-      "hetzner_host_tsconfig_build_exclude",
-      "hetzner_host_tsconfig_build_json_ref_dist",
-      "mail_tsconfig_exclude",
-      "ref_test_ts",
-      "ref_vitest_config_ts",
-      "tsconfig_json_ref_node_modules"
     ],
     "104": [
       "hetzner_monitoring_stack_alertmanager",
@@ -2529,20 +2533,20 @@
       "mail_provision_test_check_dnsbl_blocklist_resolversocketfamilytests_test_ipv6_literal"
     ],
     "112": [
-      "mail_tsconfig",
-      "mail_tsconfig_compileroptions",
-      "mail_tsconfig_compileroptions_pretty",
-      "mail_tsconfig_extends",
-      "mail_tsconfig_include",
-      "mail_tsconfig_json_ref_ts"
-    ],
-    "113": [
       "ref_claude",
       "ref_hetzner",
       "ref_hetzner_host",
       "ref_mail",
       "ref_worktrees",
       "tsconfig_exclude"
+    ],
+    "113": [
+      "tsconfig",
+      "tsconfig_compileroptions",
+      "tsconfig_compileroptions_pretty",
+      "tsconfig_extends",
+      "tsconfig_include",
+      "tsconfig_json_ref_ts"
     ],
     "114": [
       "hetzner_generated_config_prettier_ignore_test",
@@ -2552,60 +2556,60 @@
       "hetzner_generated_config_prettier_ignore_test_repo_root"
     ],
     "115": [
-      "hetzner_package_scripts",
-      "hetzner_package_scripts_postinstall",
-      "hetzner_package_scripts_render",
-      "hetzner_package_scripts_test",
-      "hetzner_package_scripts_typecheck"
-    ],
-    "116": [
       "hetzner_provision_test_provision_deploy_slot_maintests",
       "hetzner_provision_test_provision_deploy_slot_maintests_test_a_refusal_about_host_state_exits_one",
       "hetzner_provision_test_provision_deploy_slot_maintests_test_grant_reports_each_action",
       "hetzner_provision_test_provision_deploy_slot_maintests_test_refuses_to_run_as_a_non_root_user",
       "hetzner_provision_test_provision_deploy_slot_maintests_test_usage_errors_exit_two"
     ],
-    "117": [
+    "116": [
       "hetzner_provision_test_provision_deploy_slot_slotlinetests",
       "hetzner_provision_test_provision_deploy_slot_slotlinetests_test_a_prefix_stack_gets_its_own_distinct_line",
       "hetzner_provision_test_provision_deploy_slot_slotlinetests_test_line_carries_restrict_and_a_forced_command",
       "hetzner_provision_test_provision_deploy_slot_slotlinetests_test_line_names_exactly_the_granted_stack",
       "hetzner_provision_test_provision_deploy_slot_slotlinetests_test_refuses_to_emit_an_unvalidated_key"
     ],
-    "118": [
+    "117": [
       "hetzner_scripts_test_probe_object_storage_rationale_109",
       "hetzner_scripts_test_probe_object_storage_rationale_148",
       "hetzner_scripts_test_probe_object_storage_signingkeytests",
       "hetzner_scripts_test_probe_object_storage_signingkeytests_test_region_participates",
       "hetzner_scripts_test_probe_object_storage_signingkeytests_test_reproduces_the_published_s3_get_object_signature"
     ],
-    "119": [
+    "118": [
       "hetzner_scripts_test_probe_object_storage_rationale_332",
       "hetzner_scripts_test_probe_object_storage_transportwiringtests",
       "hetzner_scripts_test_probe_object_storage_transportwiringtests_test_extra_headers_reach_the_wire",
       "hetzner_scripts_test_probe_object_storage_transportwiringtests_test_signed_request_puts_the_authorization_header_on_the_wire",
       "hetzner_scripts_test_probe_object_storage_transportwiringtests_test_unsigned_request_carries_no_authorization_header"
     ],
-    "120": [
+    "119": [
       "mail_provision_test_provision_mailboxes_loadrecordedsecretstests",
       "mail_provision_test_provision_mailboxes_loadrecordedsecretstests_test_a_secret_containing_a_colon_is_preserved_whole",
       "mail_provision_test_provision_mailboxes_loadrecordedsecretstests_test_blank_lines_are_skipped",
       "mail_provision_test_provision_mailboxes_loadrecordedsecretstests_test_missing_file_is_an_empty_dict",
       "mail_provision_test_provision_mailboxes_loadrecordedsecretstests_test_parses_one_local_colon_secret_pair_per_line"
     ],
-    "121": [
+    "120": [
       "mail_provision_test_provision_mailboxes_mailboxesandroleaddressestests",
       "mail_provision_test_provision_mailboxes_mailboxesandroleaddressestests_test_every_role_address_is_also_a_mailbox",
       "mail_provision_test_provision_mailboxes_mailboxesandroleaddressestests_test_exactly_nine_mailboxes_eight_role_addresses",
       "mail_provision_test_provision_mailboxes_mailboxesandroleaddressestests_test_forward_target_is_rob_at_the_mail_domain",
       "mail_provision_test_provision_mailboxes_mailboxesandroleaddressestests_test_rob_is_a_mailbox_but_not_a_role_address"
     ],
-    "122": [
+    "121": [
       "mail_provision_test_provision_mailboxes_mainorchestrationtests",
       "mail_provision_test_provision_mailboxes_mainorchestrationtests_setup",
       "mail_provision_test_provision_mailboxes_mainorchestrationtests_test_a_failure_reconciling_accounts_propagates_and_skips_sieve_scripts",
       "mail_provision_test_provision_mailboxes_mainorchestrationtests_test_calls_each_stage_in_order_and_returns_zero",
       "mail_provision_test_provision_mailboxes_rationale_397"
+    ],
+    "122": [
+      "mail_tsconfig",
+      "mail_tsconfig_compileroptions",
+      "mail_tsconfig_compileroptions_pretty",
+      "mail_tsconfig_include",
+      "mail_tsconfig_json_ref_ts"
     ],
     "123": [
       "scripts_test_audit_pulumi_secrets_inventorytests",
@@ -2621,240 +2625,237 @@
       "hetzner_hetznerhost_test_newresource"
     ],
     "125": [
-      "hetzner_host_package_devdependencies_pulumi_hcloud",
-      "hetzner_host_package_peerdependencies",
-      "hetzner_host_package_peerdependencies_pulumi_hcloud",
-      "pulumi_hcloud"
-    ],
-    "126": [
       "hetzner_host_package_scripts",
       "hetzner_host_package_scripts_build",
       "hetzner_host_package_scripts_test",
       "hetzner_host_package_scripts_typecheck"
     ],
-    "127": [
+    "126": [
       "hetzner_provision_branchleft_nat",
       "hetzner_provision_branchleft_nat_ensure_rule",
       "hetzner_provision_branchleft_nat_is_private_v4",
       "hetzner_provision_branchleft_nat_sh__entry"
     ],
-    "128": [
+    "127": [
       "hetzner_provision_tests",
       "hetzner_scripts_tests",
       "pre_commit_config",
       "scripts_tests"
     ],
-    "129": [
+    "128": [
       "hetzner_scripts_test_probe_object_storage_endtoendtests",
       "hetzner_scripts_test_probe_object_storage_endtoendtests_happy_transport",
       "hetzner_scripts_test_probe_object_storage_endtoendtests_test_a_flawless_run_exits_zero_and_reports_no_teardown_failure",
       "hetzner_scripts_test_probe_object_storage_rationale_685"
     ],
-    "130": [
+    "129": [
       "hetzner_scripts_test_probe_object_storage_rationale_672",
       "hetzner_scripts_test_probe_object_storage_versioningreadtests",
       "hetzner_scripts_test_probe_object_storage_versioningreadtests_test_a_failed_read_is_unknown_not_never_versioned",
       "hetzner_scripts_test_probe_object_storage_versioningreadtests_test_a_successful_read_of_an_unversioned_bucket_is_none"
     ],
-    "131": [
+    "130": [
       "claudemd_claudemd",
       "github_workflows_ci_yml",
       "runbook_ci_bootstrap_runbook"
     ],
-    "132": [
+    "131": [
       "hetzner_object_storage",
       "hetzner_pulumi",
       "mail_pulumi_yaml"
     ],
-    "133": [
+    "132": [
       "hetzner_provision_00_harden_ssh",
       "hetzner_provision_00_harden_ssh_normalize_permitrootlogin",
       "hetzner_provision_00_harden_ssh_sh__entry"
     ],
-    "134": [
+    "133": [
       "hetzner_provision_10_harden_updates_fail2ban",
       "hetzner_provision_10_harden_updates_fail2ban_debian_frontend",
       "hetzner_provision_10_harden_updates_fail2ban_sh__entry"
     ],
-    "135": [
+    "134": [
       "hetzner_provision_20_install_docker",
       "hetzner_provision_20_install_docker_debian_frontend",
       "hetzner_provision_20_install_docker_sh__entry"
     ],
-    "136": [
+    "135": [
       "hetzner_provision_branchleft_docker_user_policy",
       "hetzner_provision_branchleft_docker_user_policy_ensure_rule",
       "hetzner_provision_branchleft_docker_user_policy_sh__entry"
     ],
-    "137": [
+    "136": [
       "hetzner_provision_branchleft_host_egress",
       "hetzner_provision_branchleft_host_egress_is_private_v4",
       "hetzner_provision_branchleft_host_egress_sh__entry"
     ],
-    "138": [
+    "137": [
       "mail_provision_10_harden_updates_fail2ban",
       "mail_provision_10_harden_updates_fail2ban_debian_frontend",
       "mail_provision_10_harden_updates_fail2ban_sh__entry"
     ],
-    "139": [
+    "138": [
       "mail_provision_20_install_docker",
       "mail_provision_20_install_docker_debian_frontend",
       "mail_provision_20_install_docker_sh__entry"
     ],
-    "140": [
+    "139": [
       "mail_provision_65_install_local_resolver",
       "mail_provision_65_install_local_resolver_debian_frontend",
       "mail_provision_65_install_local_resolver_sh__entry"
     ],
-    "141": [
+    "140": [
       "mail_provision_trigger_acme_renewal",
       "mail_provision_trigger_acme_renewal_jmap_call",
       "mail_provision_trigger_acme_renewal_main"
     ],
-    "142": [
+    "141": [
       "branchleft_github_workflows_docs_lint_yml",
       "github_workflows_docs_lint_yml_docs_lint"
     ],
-    "143": [
+    "142": [
       "branchleft_standards_workflow",
       "github_workflows_standards_workflow"
     ],
-    "144": [
+    "143": [
       "crowdsecurity_crowdsec",
       "github_dependabot_yml"
     ],
-    "145": [
+    "144": [
       "hetzner_estate_pulumi_production",
       "hetzner_pulumi_production"
     ],
-    "146": [
+    "145": [
       "hetzner_monitoring_stack_compose",
       "runbook_monitoring"
     ],
-    "147": [
+    "146": [
       "hetzner_provision_05_configure_host_egress",
       "hetzner_provision_05_configure_host_egress_sh__entry"
     ],
-    "148": [
+    "147": [
       "hetzner_provision_30_install_deploy_tooling",
       "hetzner_provision_30_install_deploy_tooling_sh__entry"
     ],
-    "149": [
+    "148": [
       "hetzner_provision_app_host_isolation",
       "hetzner_provision_app_host_isolation_sh__entry"
     ],
-    "150": [
+    "149": [
       "hetzner_provision_install_systemd_drop_ins",
       "hetzner_provision_install_systemd_drop_ins_sh__entry"
     ],
-    "151": [
+    "150": [
       "hetzner_provision_nat_gateway",
       "hetzner_provision_nat_gateway_sh__entry"
     ],
-    "152": [
+    "151": [
       "hetzner_provision_run_all",
       "hetzner_provision_run_all_sh__entry"
     ],
-    "153": [
+    "152": [
       "mail_provision_00_harden_ssh",
       "mail_provision_00_harden_ssh_sh__entry"
     ],
-    "154": [
+    "153": [
       "mail_provision_30_deploy_stalwart",
       "mail_provision_30_deploy_stalwart_sh__entry"
     ],
-    "155": [
+    "154": [
       "mail_provision_40_configure_stalwart",
       "mail_provision_40_configure_stalwart_sh__entry"
     ],
-    "156": [
+    "155": [
       "mail_provision_50_provision_mailboxes",
       "mail_provision_50_provision_mailboxes_sh__entry"
     ],
-    "157": [
+    "156": [
       "mail_provision_60_provision_website_submission_credential",
       "mail_provision_60_provision_website_submission_credential_sh__entry"
     ],
-    "158": [
+    "157": [
       "mail_provision_61_provision_blog_submission_credential",
       "mail_provision_61_provision_blog_submission_credential_sh__entry"
     ],
-    "159": [
+    "158": [
       "mail_provision_62_provision_shim_submission_credential",
       "mail_provision_62_provision_shim_submission_credential_sh__entry"
     ],
-    "160": [
+    "159": [
       "mail_provision_63_deploy_mailgun_shim",
       "mail_provision_63_deploy_mailgun_shim_sh__entry"
     ],
-    "161": [
+    "160": [
       "mail_provision_64_provision_alerting_submission_credential",
       "mail_provision_64_provision_alerting_submission_credential_sh__entry"
     ],
-    "162": [
+    "161": [
       "mail_provision_70_schedule_dnsbl_check",
       "mail_provision_70_schedule_dnsbl_check_sh__entry"
     ],
-    "163": [
+    "162": [
       "mail_provision_run_all",
       "mail_provision_run_all_sh__entry"
     ],
-    "164": [
+    "163": [
       "acme_tls_alpn_01"
     ],
-    "165": [
+    "164": [
       "any"
     ],
-    "166": [
+    "165": [
       "branchleft_github_workflows_graphify_yml"
     ],
-    "167": [
+    "166": [
       "branchleft_mail"
     ],
-    "168": [
+    "167": [
       "branchleft_shared_infra"
     ],
-    "169": [
+    "168": [
       "cloud_armor_baseline_md"
     ],
-    "170": [
+    "169": [
       "doc_14"
     ],
-    "171": [
+    "170": [
       "doc_14_section_4"
     ],
-    "172": [
+    "171": [
       "doc_14_section_9_1"
     ],
-    "173": [
+    "172": [
       "encryptionsalt"
     ],
-    "174": [
+    "173": [
       "etc_branchleft_edge_env"
     ],
-    "175": [
+    "174": [
       "etc_systemd_system_branchleft_compose_at_service"
     ],
-    "176": [
+    "175": [
       "gcp_kms"
     ],
-    "177": [
+    "176": [
       "gcp_kms_key"
     ],
-    "178": [
+    "177": [
       "github_workflows_crowdsec_hub_pin_check"
     ],
-    "179": [
+    "178": [
       "github_workflows_graphify"
     ],
-    "180": [
+    "179": [
       "github_workflows_publish_hetzner_host_yml"
     ],
-    "181": [
+    "180": [
       "grafana"
     ],
-    "182": [
+    "181": [
       "hcloud_token"
+    ],
+    "182": [
+      "hetzner_edge_sites_ts"
     ],
     "183": [
       "hetzner_edge_stack"
@@ -3014,7 +3015,7 @@
     "36": 0.1631578947368421,
     "37": 0.18421052631578946,
     "38": 0.24210526315789474,
-    "39": 0.10526315789473684,
+    "39": 0.1111111111111111,
     "40": 0.23976608187134502,
     "41": 0.15204678362573099,
     "42": 0.1437908496732026,
@@ -3033,52 +3034,52 @@
     "55": 0.21904761904761905,
     "56": 0.13333333333333333,
     "57": 0.14285714285714285,
-    "58": 0.14285714285714285,
-    "59": 0.21978021978021978,
-    "60": 0.2857142857142857,
-    "61": 0.32051282051282054,
-    "62": 0.15384615384615385,
-    "63": 0.28205128205128205,
+    "58": 0.21978021978021978,
+    "59": 0.2857142857142857,
+    "60": 0.32051282051282054,
+    "61": 0.15384615384615385,
+    "62": 0.28205128205128205,
+    "63": 0.16666666666666666,
     "64": 0.25757575757575757,
     "65": 0.21212121212121213,
     "66": 0.22727272727272727,
     "67": 0.16666666666666666,
     "68": 0.2727272727272727,
-    "69": 0.43636363636363634,
-    "70": 0.18181818181818182,
+    "69": 0.18181818181818182,
+    "70": 0.43636363636363634,
     "71": 0.18181818181818182,
     "72": 0.18181818181818182,
-    "73": 0.2,
+    "73": 0.18181818181818182,
     "74": 0.24444444444444444,
     "75": 0.2,
     "76": 0.2,
-    "77": 0.35555555555555557,
-    "78": 0.28888888888888886,
-    "79": 0.2222222222222222,
+    "77": 0.2,
+    "78": 0.35555555555555557,
+    "79": 0.28888888888888886,
     "80": 0.2222222222222222,
     "81": 0.2222222222222222,
     "82": 0.2222222222222222,
-    "83": 0.3333333333333333,
+    "83": 0.2222222222222222,
     "84": 0.3333333333333333,
-    "85": 0.2222222222222222,
-    "86": 0.3888888888888889,
-    "87": 0.2222222222222222,
-    "88": 0.25,
+    "85": 0.3333333333333333,
+    "86": 0.2222222222222222,
+    "87": 0.3888888888888889,
+    "88": 0.2222222222222222,
     "89": 0.25,
-    "90": 0.39285714285714285,
+    "90": 0.25,
     "91": 0.25,
-    "92": 0.2857142857142857,
-    "93": 0.47619047619047616,
-    "94": 0.2857142857142857,
+    "92": 0.39285714285714285,
+    "93": 0.25,
+    "94": 0.47619047619047616,
     "95": 0.2857142857142857,
     "96": 0.2857142857142857,
-    "97": 0.42857142857142855,
+    "97": 0.2857142857142857,
     "98": 0.42857142857142855,
     "99": 0.42857142857142855,
-    "100": 0.38095238095238093,
-    "101": 0.42857142857142855,
-    "102": 0.2857142857142857,
-    "103": 0.3333333333333333,
+    "100": 0.42857142857142855,
+    "101": 0.38095238095238093,
+    "102": 0.42857142857142855,
+    "103": 0.2857142857142857,
     "104": 0.3333333333333333,
     "105": 0.3333333333333333,
     "106": 0.3333333333333333,
@@ -3101,21 +3102,21 @@
     "123": 0.4,
     "124": 0.5,
     "125": 0.5,
-    "126": 0.5,
-    "127": 0.8333333333333334,
-    "128": 0.5,
-    "129": 0.6666666666666666,
-    "130": 0.5,
+    "126": 0.8333333333333334,
+    "127": 0.5,
+    "128": 0.6666666666666666,
+    "129": 0.5,
+    "130": 0.6666666666666666,
     "131": 0.6666666666666666,
     "132": 0.6666666666666666,
     "133": 0.6666666666666666,
     "134": 0.6666666666666666,
-    "135": 0.6666666666666666,
+    "135": 1.0,
     "136": 1.0,
-    "137": 1.0,
+    "137": 0.6666666666666666,
     "138": 0.6666666666666666,
     "139": 0.6666666666666666,
-    "140": 0.6666666666666666,
+    "140": 1.0,
     "141": 1.0,
     "142": 1.0,
     "143": 1.0,
@@ -3274,6 +3275,17 @@
       "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; peripheral node `block()` unexpectedly reaches hub `renderCaddyfile()`"
     },
     {
+      "source": "exclude",
+      "target": "node_modules",
+      "source_files": [
+        "mail/tsconfig.json",
+        "tsconfig.json"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "extends",
+      "why": "connects across different repos/directories; peripheral node `exclude` unexpectedly reaches hub `node_modules`"
+    },
+    {
       "source": "extends",
       "target": "@branchleft/tsconfig/pulumi.json",
       "source_files": [
@@ -3282,7 +3294,7 @@
       ],
       "confidence": "EXTRACTED",
       "relation": "extends",
-      "why": "connects across different repos/directories; bridges separate communities"
+      "why": "connects across different repos/directories"
     },
     {
       "source": "extends",
@@ -3293,22 +3305,11 @@
       ],
       "confidence": "EXTRACTED",
       "relation": "extends",
-      "why": "connects across different repos/directories; bridges separate communities"
-    },
-    {
-      "source": "exclude",
-      "target": "node_modules",
-      "source_files": [
-        "mail/tsconfig.json",
-        "tsconfig.json"
-      ],
-      "confidence": "EXTRACTED",
-      "relation": "extends",
-      "why": "connects across different repos/directories; peripheral node `exclude` unexpectedly reaches hub `node_modules`"
+      "why": "connects across different repos/directories"
     }
   ],
   "tokens": {
     "input": 9270,
-    "output": 1205
+    "output": 1248
   }
 }
