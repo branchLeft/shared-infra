@@ -1091,23 +1091,53 @@ redundancy — fail2ban already had a working `sshd` filter before this
 work started; Stalwart's own auto-ban already covers its own protocols
 without needing one written for it.
 
-### Scan-ban: expect it to fire on your own verification commands
+### Scan-ban: expect it to fire on verification traffic from an unlisted address
 
-Stalwart's auto-ban (above) protects against real abuse, but it is not
-tuned to distinguish "an operator checking their own TLS setup" from "a
-port scanner" — a bare `openssl s_client` connect that never sends a
-protocol command can be enough to trip `security.scan-ban` with
-`reason = "portScanning"` — confirmed live, more than once, while verifying
-the ACME setup from an outside machine. Once blocked, every
-connection from that IP is refused at the listener, so **the operator's
-own next verification command will time out** — the exact scenario this
-section exists to head off.
+Stalwart's ban-rate policy on the `Security` singleton is now managed by
+`configure_stalwart.py` (`SECURITY_TARGET`, `ALLOWED_IPS`), reconciled on
+every run the same as the listeners and ACME provider. Two problems drove
+this: the scan heuristic misfired on an ordinary mail client — a bare
+`openssl s_client` connect that never sends a protocol command can be
+enough to trip `security.scan-ban` with `reason = "portScanning"` —
+confirmed live, more than once, while verifying the ACME setup from an
+outside machine; and every `*BanPeriod` field defaults to unset, where
+**unset means the ban never expires**, so the same false positive that
+misfires once blocks that address permanently.
 
-Check and clear it with `mail/provision/list_and_clear_blocked_ips.py` —
-**by specific IP, not a blanket clear.** A real scanner can be blocked at the
-same moment as an operator's own false positive, and this is not
-hypothetical: it has happened here. An earlier version of this script cleared
-everything unconditionally, which would have released the scanner too.
+The managed posture:
+
+- **`scanBanRate` is disabled outright** (set to `null`), rather than
+  tuned. There is no threshold known to reliably separate a real scan
+  from an ordinary client's connection pattern — the false positive above
+  wasn't an aggressive scan, it was a single TLS handshake.
+- **Every other ban category** (`auth`, `abuse`, `loiter`) is left active
+  at Stalwart's own documented default rate, but with its `*BanPeriod`
+  explicitly set to one day. A ban still happens; it just always expires.
+- **`scanBanPeriod` is still set to one day even though `scanBanRate` is
+  disabled.** `scanBanPaths` — a separate, unmanaged map of HTTP paths
+  that Stalwart documents as banning on the first matching request — is
+  real protection for the admin interface behind the 421 rule (see "The
+  ACME decision" above), and its current contents are unknown to this
+  script, so it is left alone. Whether a null `scanBanRate` also disables
+  a `scanBanPaths`-triggered ban isn't established from source. Setting
+  the period is correct under either reading, and is what guarantees no
+  ban from this category is ever permanent regardless of which path
+  triggered it.
+- **`AllowedIp` now allow-lists the monitoring host** (edge1,
+  `46.225.95.167`) so its own probes are never auto-banned in the first
+  place. This is additive only — `configure_stalwart.py` never destroys
+  an `AllowedIp` entry it doesn't recognise, so one added by hand during
+  an incident survives future runs. Every other address is still subject
+  to the posture above: **verification traffic from any address not on
+  this list can still trip a ban**, and now expires within a day instead
+  of never, rather than pre-empting the ban entirely.
+
+Check and clear an existing ban with
+`mail/provision/list_and_clear_blocked_ips.py` — **by specific IP or
+reason, not a blanket clear.** A real scanner can be blocked at the same
+moment as a false positive, and this is not hypothetical: it has happened
+here. An earlier version of this script cleared everything
+unconditionally, which would have released the scanner too.
 
 ```bash
 ssh root@<mail-host> 'python3 /root/mail-provision/list_and_clear_blocked_ips.py --list-only'
@@ -1118,12 +1148,18 @@ ssh root@<mail-host> 'python3 /root/mail-provision/list_and_clear_blocked_ips.py
 # clears only that IP and reloads the live block list (see below for why the
 # reload step is necessary) -- repeat --ip for more than one address
 
+ssh root@<mail-host> 'python3 /root/mail-provision/list_and_clear_blocked_ips.py --reason portScanning'
+# clears every entry with that reason in one reviewed command -- the
+# accumulated-false-positives case now that scanBanRate no longer runs;
+# --ip and --reason may be combined (a union of both selectors)
+
 # --all clears every blocked IP, including ones that aren't yours -- only use
 # it if you've checked --list-only's output first and mean all of them.
 ```
 
-Bare invocation (no `--list-only`, `--ip`, or `--all`) lists and then
-refuses with a nonzero exit rather than guessing which mode was intended.
+Bare invocation (no `--list-only`, `--ip`, `--reason`, or `--all`) lists
+and then refuses with a nonzero exit rather than guessing which mode was
+intended.
 
 Two things worth knowing about the mechanism itself, both confirmed from
 source (`crates/registry/src/schema/structs.rs`'s `BlockedIp` object,
@@ -1134,8 +1170,9 @@ source (`crates/registry/src/schema/structs.rs`'s `BlockedIp` object,
   doesn't automatically refresh. `list_and_clear_blocked_ips.py` always
   follows the destroy with a `ReloadBlockedIps` action; doing this by hand
   via `x:BlockedIp/set` without the reload leaves the block in place.
-- There's no separate allow-list for "trusted" IPs to pre-empt this
-  entirely — the only lever is clearing the ban after it happens.
+- `BlockedIp` (an active ban) and `AllowedIp` (the pre-emptive list above)
+  are separate registry objects — clearing a ban does not add the
+  cleared address to the allow-list, and vice versa.
 
 ## Confirming the result
 
@@ -1144,8 +1181,9 @@ Run these after a provisioning round, against the actual host. Each is a read.
 - **Idempotence.** Run `run-all.sh` twice from a clean slate (wiped
   `stalwart-etc`/`stalwart-data` volumes and the recorded admin credential).
   The first run completes bootstrap and reconciles the ACME provider,
-  listeners, domain SANs, HTTP access control and tracer; the second run's
-  `40-configure-stalwart.sh` output is five `no-op` lines and nothing else.
+  listeners, domain SANs, HTTP access control, tracer, ban-rate policy and
+  allow-listed IPs; the second run's `40-configure-stalwart.sh` output is
+  seven `no-op` lines and nothing else.
 - **Listeners inside the container.** `docker exec stalwart cat /proc/net/tcp
 /proc/net/tcp6`, filtered to `LISTEN`: expect 25, 443, 465, 587 and 993 on
   `[::]`, and 8080 on `127.0.0.1` only. No 995, no 4190.
