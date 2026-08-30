@@ -67,6 +67,16 @@ against the `https` listener (which would mean `scanBanPaths` matched a path
 and banned on sight) versus repeated connect/disconnect churn on 993 and 587
 (which would mean the rate heuristic tripped).
 
+**Empty output is ambiguous** — it means either that nothing happened in that
+window or that the logs have already rotated past it. Tell the two apart:
+
+```
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'docker logs stalwart 2>&1 | head -1'
+```
+
+If that first line is dated later than the window above, the evidence is gone
+and Step 0 has no more to give. Move on rather than digging.
+
 Save this output. It does not gate the reboot and it does not change the fix,
 but it decides whether `scanBanPaths` also needs managing later.
 
@@ -80,27 +90,34 @@ Read-only, and the precondition for Step 2.
 
 ```
 ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk '
-echo "== restart policies ==";
+echo "== policy AND current state ==";
 for c in stalwart mailgun-shim mailgun-shim-caddy; do
-  printf "%s\t" "$c"; docker inspect --format "{{.HostConfig.RestartPolicy.Name}}" "$c";
+  printf "%s\t" "$c";
+  docker inspect --format "{{.HostConfig.RestartPolicy.Name}}\t{{.State.Status}}" "$c";
 done
 echo "== docker enabled at boot ==";
 systemctl is-enabled docker
-echo "== pending reboot marker ==";
-test -f /var/run/reboot-required && echo "REBOOT REQUIRED" || echo "no marker"
+echo "== when docker/runc were last upgraded ==";
+grep -hE " (upgrade|install) (docker-ce|containerd|runc)" /var/log/dpkg.log* 2>/dev/null | tail -5
 echo "== runc / docker versions ==";
 dpkg -l | grep -E "^ii\s+(docker-ce|containerd|runc)" | awk "{print \$2, \$3}"
 '
 ```
 
-**Expected output:** all three containers print `unless-stopped`; `docker`
-prints `enabled`. The reboot marker and versions are informational — a
-`REBOOT REQUIRED` marker corroborates the diagnosis but its absence does not
-refute it.
+**Expected output:** all three containers print `unless-stopped` **and**
+`running`; `docker` prints `enabled`. The upgrade log and versions are
+informational — an upgrade entry postdating the last boot corroborates the
+diagnosis, but its absence does not refute it.
 
-**Stop here if any container prints `no` or `never`,** or if `docker` prints
-`disabled`. That container will not return on its own and the reboot would
-turn a two-minute outage into an indefinite one. Report the output instead.
+**Both columns matter, and the second is the one that is easy to miss.**
+`unless-stopped` restores a container at boot only if it was running when the
+host went down; a container already stopped stays stopped, whatever its
+policy says. A policy-only check would pass identically in both cases.
+
+**Stop here if any container prints anything other than
+`unless-stopped` + `running`,** or if `docker` prints `disabled`. That
+container will not return on its own and the reboot would turn a two-minute
+outage into an indefinite one. Report the output instead.
 
 ---
 
@@ -127,8 +144,13 @@ Run all of it in one go once the host answers again.
 ```
 ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk '
 echo "== uptime =="; uptime
-echo "== containers =="; docker ps --format "{{.Names}}\t{{.Status}}"
-echo "== exec works =="; docker exec stalwart true && echo "EXEC OK" || echo "EXEC STILL BROKEN"
+echo "== containers (-a, so a restart-looping one is still listed) ==";
+docker ps -a --format "{{.Names}}\t{{.Status}}"
+echo "== exec works, on all three ==";
+for c in stalwart mailgun-shim mailgun-shim-caddy; do
+  printf "%s\t" "$c";
+  docker exec "$c" true >/dev/null 2>&1 && echo "EXEC OK" || echo "EXEC STILL BROKEN";
+done
 echo "== health =="
 for c in stalwart mailgun-shim; do
   printf "%s\t" "$c";
@@ -138,14 +160,23 @@ done
 ```
 
 **A pass looks like:** `uptime` under five minutes; all three containers
-listed; `EXEC OK`; and both healthchecks reporting `healthy` with
-`streak=0`.
+listed and showing `Up`; `EXEC OK` three times; and both healthchecks
+reporting `healthy` with `streak=0`.
+
+`docker ps -a` rather than `docker ps` is deliberate — a container caught
+between restart attempts sits in `Exited` and is simply absent from the
+plain listing, which reads as though it were never expected. `Restarting` or
+`Exited` in that column is a failure, not a slow start.
+
+`mailgun-shim-caddy` has no healthcheck of its own, so the exec probe is the
+only proof of life it gets here; that is why the loop covers all three
+rather than just the two with health status.
 
 `starting` rather than `healthy` immediately after boot is normal — re-run
 the health block after a minute rather than treating it as a failure.
 
-**If it still prints `EXEC STILL BROKEN`,** the runc-upgrade diagnosis was
-wrong. Stop and report; do not reboot a second time.
+**If any container still prints `EXEC STILL BROKEN`,** the runc-upgrade
+diagnosis was wrong. Stop and report; do not reboot a second time.
 
 Then confirm from outside, in a separate local terminal, that mail is
 actually serving again:
@@ -161,6 +192,35 @@ the incident's original signature and means Stalwart is not serving.
 Run that command **once**. Repeated bare connections to mail ports are what
 the scan-ban treats as probing.
 
+Then confirm the two properties a reboot could plausibly disturb and that
+nothing above would notice. Both commands run locally, not on the host —
+`RUNBOOK-mx1-provision.md`'s acceptance list is the authority for both.
+
+**TLS is intact:**
+
+```
+openssl s_client -connect mx1.branchleft.co.uk:465 -servername mx1.branchleft.co.uk </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates
+```
+
+**Expected output:** a subject naming `mx1.branchleft.co.uk`, a Let's Encrypt
+issuer, and a `notAfter` date still in the future. A certificate whose
+`notBefore` reads about an hour earlier than expected is normal — Let's
+Encrypt backdates it for clock skew — and is not evidence of a re-issue.
+
+**The admin interface is still blocked:**
+
+```
+curl -k -s -o /dev/null -w '%{http_code}\n' https://mx1.branchleft.co.uk/
+```
+
+**Expected output:** `421`. Anything else — a `200` above all — means the
+webadmin is reachable from the internet and is an immediate stop: report it
+rather than continuing.
+
+These two exist because the reboot restarts Stalwart, and Stalwart's
+certificate handling and its HTTP access-control rule are both applied at
+start. A start that half-succeeded would still pass every check above.
+
 ---
 
 ## Rollback
@@ -170,9 +230,12 @@ return, that is a Hetzner console matter rather than a rollback.
 
 ## After it succeeds
 
-Close the tracked item citing the Step 3 output — specifically the `EXEC OK`
-line and both healthchecks at `streak=0`. Never paste a credential value, and
-redact recipient addresses from any Step 0 log excerpt.
+Close the tracked item citing the Step 3 output. The evidence is all five
+checks, not just the first: `EXEC OK` for all three containers, both
+healthchecks at `streak=0`, the `220` SMTP banner, `Verify return code: 0`
+with a Let's Encrypt subject, and `421` from the admin probe. Never paste a
+credential value, and redact recipient addresses from any Step 0 log
+excerpt.
 
 If Step 0 showed HTTP requests against the `https` listener immediately before
 the ban, say so in the closing comment: that makes `scanBanPaths` the trigger,
