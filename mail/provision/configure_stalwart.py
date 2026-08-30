@@ -84,6 +84,40 @@ ACME_PROVIDER_TARGET: dict[str, Any] = {
     "reuseKey": False,
 }
 
+_DAY_MS = 86400000  # Duration fields serialise as a u64 of milliseconds
+
+# Managed ban-rate policy on the Security singleton -- reasoning and full
+# posture: mail/RUNBOOK-mx1-provision.md's "Scan-ban" section. Every
+# *BanPeriod is set even when its rate is untouched, because unset means
+# the ban never expires.
+#
+# auth/abuse/loiter rates are deliberately left unmanaged here: their
+# shipped defaults aren't verifiable against the pinned schema, and writing
+# an unverified threshold onto a live ban control is the risk this removes.
+SECURITY_TARGET: dict[str, Any] = {
+    "scanBanRate": None,
+    # scanBanPaths (below, unmanaged) is documented to ban on the first
+    # matching HTTP request; it's not established whether a null
+    # scanBanRate also suppresses that. Setting the period is correct
+    # under either reading and is what guarantees no ban from this
+    # category is ever permanent.
+    "scanBanPeriod": _DAY_MS,
+    "authBanPeriod": _DAY_MS,
+    "abuseBanPeriod": _DAY_MS,
+    "loiterBanPeriod": _DAY_MS,
+}
+
+# scanBanPaths is real protection for the HTTP listener behind the 421
+# rule; its current contents are unknown, so this script never touches it.
+
+# IPs that must never be auto-banned (address, reason pairs), additive only
+# -- see plan_allowed_ips. Write a single host bare, never as `/32`: the
+# server round-trips it as plain `x`, so `x/32` never matches what's written
+# here and plan_allowed_ips would recreate it every run.
+ALLOWED_IPS: list[tuple[str, str]] = [
+    ("46.225.95.167", "monitoring host -- its own probes must never be auto-banned"),
+]
+
 
 def _field_diff(current: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
     """Field-by-field diff of only the fields `target` cares about --
@@ -222,6 +256,44 @@ def plan_tracer_change(tracers: list[dict[str, Any]]) -> dict[str, Any] | None:
             "eventsPolicy": "exclude",
         }
     }
+
+
+def plan_security_change(current: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
+    """Pure diff: return the x:Security/set arguments needed so the ban-rate
+    singleton matches `target`, or an empty dict if it already does.
+    Security has no Create/Destroy method -- unlike Http, the singleton
+    always exists, so this only ever produces an update.
+
+    `_field_diff` compares with `current.get(field) != value`. A dict
+    missing a key and a dict holding that key set to `None` both read back
+    as Python `None` from `.get`, so a live Rate diffing against a `None`
+    target compares unequal (change needed) and an already-`None` field
+    diffing against a `None` target compares equal (no-op) with no
+    special-casing required here.
+    """
+    diff = _field_diff(current, target)
+    if not diff:
+        return {}
+    return {"update": {current["id"]: diff}}
+
+
+def plan_allowed_ips(
+    current_entries: list[dict[str, Any]], target: list[tuple[str, str]]
+) -> dict[str, Any]:
+    """Pure diff: return the x:AllowedIp/set `create` arguments for every
+    (address, reason) pair in `target` not already present, matched on
+    address alone. Additive only -- an entry this script doesn't know
+    about (e.g. one an operator added by hand during an incident) is never
+    destroyed, so a second run against the same live state creates
+    nothing further.
+    """
+    present = {entry["address"] for entry in current_entries}
+    create = {
+        address: {"address": address, "reason": reason}
+        for address, reason in target
+        if address not in present
+    }
+    return {"create": create} if create else {}
 
 
 def _request(method: str, path: str, auth: tuple[str, str], body: bytes | None = None) -> Any:
@@ -367,6 +439,33 @@ def _reconcile_tracer(auth: tuple[str, str]) -> bool:
     return True
 
 
+def _reconcile_security(auth: tuple[str, str]) -> bool:
+    security_list = _jmap_call(auth, "x:Security/get", {"ids": ["singleton"]})["list"]
+    if not security_list:
+        # Security has no Create method (unlike Http's singleton), so an
+        # empty list here isn't a case plan_security_change can resolve --
+        # surface it rather than indexing blindly into a live security control.
+        raise RuntimeError("x:Security/get returned no singleton -- nothing to reconcile against")
+    security_args = plan_security_change(security_list[0], SECURITY_TARGET)
+    if not security_args:
+        print("configure_stalwart: ban-rate policy already up to date, no-op")
+        return False
+    _jmap_call(auth, "x:Security/set", security_args)
+    print("configure_stalwart: updated ban-rate policy (scan-ban disabled, other categories capped at a 1-day expiry)")
+    return True
+
+
+def _reconcile_allowed_ips(auth: tuple[str, str]) -> bool:
+    current = _jmap_call(auth, "x:AllowedIp/get", {})["list"]
+    allowed_ip_args = plan_allowed_ips(current, ALLOWED_IPS)
+    if not allowed_ip_args:
+        print("configure_stalwart: allow-listed IPs already up to date, no-op")
+        return False
+    _jmap_call(auth, "x:AllowedIp/set", allowed_ip_args)
+    print("configure_stalwart: added allow-listed IP(s)")
+    return True
+
+
 def main() -> int:
     if os.path.exists(CREDENTIALS_PATH):
         auth = _load_credentials()
@@ -391,6 +490,8 @@ def main() -> int:
             _reconcile_domains(auth, acme_provider_id),
             _reconcile_http_access(auth),
             _reconcile_tracer(auth),
+            _reconcile_security(auth),
+            _reconcile_allowed_ips(auth),
         ]
     )
 

@@ -11,6 +11,8 @@ Usage:
     python3 list_and_clear_blocked_ips.py --list-only         # same, explicit
     python3 list_and_clear_blocked_ips.py --ip 1.2.3.4        # clear one IP
     python3 list_and_clear_blocked_ips.py --ip 1.2.3.4 --ip 5.6.7.8
+    python3 list_and_clear_blocked_ips.py --reason portScanning   # clear every entry with that reason
+    python3 list_and_clear_blocked_ips.py --reason portScanning --ip 1.2.3.4   # union of both selectors
     python3 list_and_clear_blocked_ips.py --all               # clear every blocked IP
 """
 from __future__ import annotations
@@ -30,28 +32,45 @@ CREDENTIALS_PATH = os.environ.get(
 
 
 def select_ids_to_clear(
-    blocked: list[dict[str, Any]], ips: list[str], clear_all: bool
+    blocked: list[dict[str, Any]], ips: list[str], reasons: list[str], clear_all: bool
 ) -> list[str]:
     """Pure selection logic: which blocked-entry ids to destroy, given the
-    live blocked list and the caller's --ip/--all choice. Raises ValueError
-    if the request is ambiguous or unsafe rather than guessing -- no
-    all-clear without `clear_all` explicitly set, and no silent no-op for
-    an --ip that isn't actually blocked (that's a caller mistake worth
-    surfacing, not swallowing).
+    live blocked list and the caller's --ip/--reason/--all choice. Raises
+    ValueError if the request is ambiguous or unsafe rather than guessing --
+    no all-clear without `clear_all` explicitly set, no silent no-op for an
+    --ip that isn't actually blocked, and no silent no-op when a selection
+    matches nothing overall (a caller mistake -- e.g. a typo'd reason --
+    worth surfacing, not swallowing). --ip and --reason are a union: both
+    selectors may be used together, each contributing whatever it matches.
     """
-    if clear_all and ips:
-        raise ValueError("pass --all or --ip, not both")
-    if not clear_all and not ips:
-        raise ValueError("no selection: pass --ip <addr> (repeatable) or --all")
+    if clear_all and (ips or reasons):
+        raise ValueError("pass --all or --ip/--reason, not both")
+    if not clear_all and not ips and not reasons:
+        raise ValueError(
+            "no selection: pass --ip <addr>, --reason <reason> (either repeatable), or --all"
+        )
 
     if clear_all:
         return [entry["id"] for entry in blocked]
 
     by_address = {entry["address"]: entry["id"] for entry in blocked}
-    missing = [ip for ip in ips if ip not in by_address]
-    if missing:
-        raise ValueError(f"not currently blocked, nothing to clear: {', '.join(missing)}")
-    return [by_address[ip] for ip in ips]
+    selected: set[str] = set()
+
+    if ips:
+        missing = [ip for ip in ips if ip not in by_address]
+        if missing:
+            raise ValueError(f"not currently blocked, nothing to clear: {', '.join(missing)}")
+        selected.update(by_address[ip] for ip in ips)
+
+    if reasons:
+        # Checked independently of `ips` -- a matching --ip must never mask
+        # a --reason that matches nothing (or vice versa).
+        by_reason = {entry["id"] for entry in blocked if entry["reason"] in reasons}
+        if not by_reason:
+            raise ValueError(f"no blocked entries match reason(s): {', '.join(reasons)}")
+        selected.update(by_reason)
+
+    return list(selected)
 
 
 def _jmap_call(auth: tuple[str, str], method: str, args: dict) -> dict:
@@ -76,6 +95,13 @@ def main() -> int:
     parser.add_argument(
         "--ip", action="append", default=[], metavar="ADDR", help="clear this IP (repeatable)"
     )
+    parser.add_argument(
+        "--reason",
+        action="append",
+        default=[],
+        metavar="REASON",
+        help="clear every blocked entry with this reason (repeatable)",
+    )
     parser.add_argument("--all", action="store_true", help="clear every blocked IP")
     args = parser.parse_args()
 
@@ -95,7 +121,7 @@ def main() -> int:
         return 0
 
     try:
-        ids = select_ids_to_clear(blocked, args.ip, args.all)
+        ids = select_ids_to_clear(blocked, args.ip, args.reason, args.all)
     except ValueError as exc:
         print(f"list_and_clear_blocked_ips: {exc}", file=sys.stderr)
         return 1
