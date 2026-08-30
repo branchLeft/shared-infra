@@ -60,6 +60,7 @@ class RunbookVerifyTargetsTests(unittest.TestCase):
                     "mysqld",
                     "cadvisor",
                     "blackbox_http",
+                    "blackbox_mail",
                 ]
             ),
             "prometheus.yml's job_name list changed shape -- update the "

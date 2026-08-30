@@ -111,10 +111,19 @@ groups:
   - name: probes
     rules:
       - alert: BlackboxProbeFailed
-        expr: probe_success == 0
+        expr: probe_success{job!="blackbox_mail"} == 0
         for: 5m
         labels:
           severity: critical
         annotations:
           summary: "{{ $labels.instance }} failed its external probe for 5 minutes."
-          description: "The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS."
+          description: "The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below."
+
+      - alert: MailHostDown
+        expr: probe_success{job="blackbox_mail"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} failed its mail liveness probe for 5 minutes."
+          description: "smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: a follow-up story routes this one through a path that does not transit mx1, which a generic probe alert cannot be scoped to on its own. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe."

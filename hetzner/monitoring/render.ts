@@ -59,22 +59,26 @@ export const MONITORED_NODE_HOSTS: readonly MonitoredHost[] = [
 ];
 
 /**
- * `mx1` is not, and cannot yet be, a target here -- unlike `app1`/`db1`
- * above, this is not "the exporter isn't provisioned yet" (a `db1`-style
- * `expectedUp: false` entry would still be a real, if currently-failing,
- * scrape). `mx1` lives in its own hcloud project (`edge/render.ts`'s
- * `NOT_AN_UPSTREAM` carries the same fact for the edge), so it shares no
- * private network with this host, and its firewall
- * (`mail/firewall.ts`) opens only mail protocol ports and the bulk-mail
- * shim's API -- nothing a Prometheus scrape could reach. Stalwart's own
- * metrics are not configured anywhere in this repo either, since `mail/`
- * carries no config-as-code for it. A rule against a metric with no
- * network path and no confirmed source would never evaluate, which is
- * worse than not having it -- it would read as covered. Filed instead of
- * built: the gap needs a network-path decision (a firewalled, authenticated
- * public endpoint on `mx1`, since no private path can exist across the
- * project boundary) and confirmation of what Stalwart can actually export,
- * neither of which is a rendering change.
+ * `mx1` still is not, and cannot be, a `node`/`mysqld`-style scrape target:
+ * it lives in its own hcloud project (`edge/render.ts`'s `NOT_AN_UPSTREAM`
+ * carries the same fact for the edge), so it shares no private network with
+ * this host, and Stalwart's own metrics are not configured anywhere in this
+ * repo either, since `mail/` carries no config-as-code for it. That half of
+ * the gap needs a firewalled, authenticated public endpoint on `mx1` and
+ * confirmation of what Stalwart can actually export -- neither is a
+ * rendering change, so it stays unbuilt.
+ *
+ * A liveness check needs neither. `mail/firewall.ts` already opens 25,
+ * 465, 587 and 993 to the whole internet, so a blackbox probe from edge1
+ * reaches them the way any other client on the internet does, with no new
+ * firewall rule and no metrics endpoint. It cannot be a plain TCP-connect
+ * probe, though: a scan-banned or dead-backend connection still completes
+ * the handshake and then EOFs, so every one of those ports can read as
+ * healthy while Stalwart serves nothing behind them. `smtp_banner` (25,
+ * 587) reads the `220` greeting and sends `QUIT`; `tls_connect` (465, 993,
+ * both implicit-TLS) requires a completed handshake. Both fail closed the
+ * way a socket-only check cannot -- see `mailProbeTargetsFor()` and the
+ * `blackbox_mail` job below.
  */
 
 /**
@@ -124,6 +128,32 @@ export const CROWDSEC_METRICS_PORT = 6060;
 export const WEBSITE_METRICS_PORT = 9092;
 
 export const BLACKBOX_MODULE = 'http_2xx';
+export const BLACKBOX_MODULE_SMTP_BANNER = 'smtp_banner';
+export const BLACKBOX_MODULE_TLS_CONNECT = 'tls_connect';
+
+/**
+ * mx1 has no entry in the estate address plan -- it is not on this host's
+ * private network, so there is no fixed private address to look one up by
+ * -- so its DNS name is the address a probe uses, the same way blackbox_http
+ * below reaches every sites.ts hostname by name rather than by IP.
+ */
+const MX1_HOSTNAME = 'mx1.branchleft.co.uk';
+
+/**
+ * One static_configs group per probe module: a job's `params:` block can
+ * only carry one module for every target underneath it, so two modules in
+ * one job need `__param_module` set as a target label instead -- a label
+ * named `__param_<x>` becomes that query parameter at scrape time, which is
+ * how blackbox_exporter's own multi-module examples do it.
+ */
+function mailProbeStaticConfig(ports: readonly number[], module: string): string {
+  const targetLines = ports.map((port) => `          - ${MX1_HOSTNAME}:${port}`).join('\n');
+  return [
+    '      - targets:',
+    targetLines,
+    `        labels: {host: mx1, expected_up: 'true', __param_module: ${module}}`,
+  ].join('\n');
+}
 
 function targetLabels(host: Pick<MonitoredHost, 'name' | 'expectedUp'>): string {
   return `{host: ${host.name}, expected_up: '${String(host.expectedUp)}'}`;
@@ -253,6 +283,23 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '        target_label: instance',
     '      - target_label: __address__',
     `        replacement: 'blackbox-exporter:${BLACKBOX_EXPORTER_PORT}'`,
+    '',
+    '  - job_name: blackbox_mail',
+    // Gentle by design: probing mail ports on a schedule is exactly the
+    // traffic scan-ban watches for, so this runs a quarter as often as the
+    // default scrape_interval rather than at it.
+    '    scrape_interval: 60s',
+    '    metrics_path: /probe',
+    '    static_configs:',
+    mailProbeStaticConfig([25, 587], BLACKBOX_MODULE_SMTP_BANNER),
+    mailProbeStaticConfig([465, 993], BLACKBOX_MODULE_TLS_CONNECT),
+    '    relabel_configs:',
+    '      - source_labels: [__address__]',
+    '        target_label: __param_target',
+    '      - source_labels: [__param_target]',
+    '        target_label: instance',
+    '      - target_label: __address__',
+    `        replacement: 'blackbox-exporter:${BLACKBOX_EXPORTER_PORT}'`,
   ].join('\n')}\n`;
 }
 
@@ -370,13 +417,25 @@ export function renderAlertRules(): string {
     '  - name: probes',
     '    rules:',
     '      - alert: BlackboxProbeFailed',
-    '        expr: probe_success == 0',
+    // Excludes blackbox_mail rather than naming blackbox_http: every
+    // blackbox job is covered by exactly one alert, and a job with no
+    // dedicated alert of its own should still fall through to this one.
+    '        expr: probe_success{job!="blackbox_mail"} == 0',
     '        for: 5m',
     '        labels:',
     '          severity: critical',
     '        annotations:',
     '          summary: "{{ $labels.instance }} failed its external probe for 5 minutes."',
-    '          description: "The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS."',
+    '          description: "The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below."',
+    '',
+    '      - alert: MailHostDown',
+    '        expr: probe_success{job="blackbox_mail"} == 0',
+    '        for: 5m',
+    '        labels:',
+    '          severity: critical',
+    '        annotations:',
+    '          summary: "{{ $labels.instance }} failed its mail liveness probe for 5 minutes."',
+    '          description: "smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: a follow-up story routes this one through a path that does not transit mx1, which a generic probe alert cannot be scoped to on its own. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe."',
   ].join('\n')}\n`;
 }
 

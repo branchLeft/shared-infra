@@ -13,3 +13,27 @@ modules:
       follow_redirects: true
       tls_config:
         insecure_skip_verify: false
+
+  # A scan-banned or dead-backend connection still completes the TCP
+  # handshake and then EOFs, so a plain tcp_connect check reads as healthy
+  # through exactly the outage it exists to catch. This module reads the
+  # SMTP greeting instead: `expect` is matched against the first line the
+  # server sends unprompted, then `send` writes the reply.
+  smtp_banner:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      query_response:
+        - expect: '^220'
+        - send: 'QUIT\r\n'
+
+  # Implicit-TLS submission/IMAP ports negotiate TLS immediately on connect,
+  # with no plaintext banner to read -- a completed handshake is the
+  # equivalent liveness signal query_response gives the plaintext ports above.
+  tls_connect:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      tls: true
+      tls_config:
+        insecure_skip_verify: false
