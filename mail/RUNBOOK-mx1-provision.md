@@ -1110,9 +1110,15 @@ The managed posture:
   tuned. There is no threshold known to reliably separate a real scan
   from an ordinary client's connection pattern — the false positive above
   wasn't an aggressive scan, it was a single TLS handshake.
-- **Every other ban category** (`auth`, `abuse`, `loiter`) is left active
-  at Stalwart's own documented default rate, but with its `*BanPeriod`
-  explicitly set to one day. A ban still happens; it just always expires.
+- **Every other ban category's rate** (`auth`, `abuse`, `loiter`) is left
+  unmanaged, at whatever the server already has. The vendor's documented
+  defaults are prose, not something verifiable against the pinned schema,
+  and writing an unverified threshold onto a live ban control is the exact
+  failure this reconciles — get it wrong and the first live run either
+  locks users out after very few failures or effectively disables the
+  category. Only each category's `*BanPeriod` is managed, explicitly set
+  to one day. A ban still happens, under whatever rate is actually
+  running; it just always expires.
 - **`scanBanPeriod` is still set to one day even though `scanBanRate` is
   disabled.** `scanBanPaths` — a separate, unmanaged map of HTTP paths
   that Stalwart documents as banning on the first matching request — is

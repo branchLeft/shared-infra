@@ -12,6 +12,7 @@ from list_and_clear_blocked_ips import select_ids_to_clear
 OPERATOR_IP = "198.51.100.7"
 SCANNER_IP = "198.51.100.42"
 ABUSE_IP = "198.51.100.99"
+UNBLOCKED_IP = "198.51.100.100"
 
 BLOCKED = [
     {"id": "b1", "address": OPERATOR_IP, "reason": "portScanning"},
@@ -72,6 +73,19 @@ class SelectIdsToClearTests(unittest.TestCase):
         # excludes the other's match.
         result = select_ids_to_clear(BLOCKED, [OPERATOR_IP], ["abuseDetected"], False)
         self.assertCountEqual(result, ["b1", "b3"])
+
+    def test_valid_ip_does_not_mask_a_typoed_reason(self):
+        # The exact masking bug this fix closes: a valid --ip matching
+        # something must not let a typo'd --reason matching nothing pass
+        # silently, since the union used to only check combined emptiness.
+        with self.assertRaises(ValueError):
+            select_ids_to_clear(BLOCKED, [OPERATOR_IP], ["typoedReasonXYZ"], False)
+
+    def test_valid_reason_does_not_mask_a_typoed_ip(self):
+        # Mirror case: a valid --reason matching something must not let a
+        # typo'd --ip pass silently either.
+        with self.assertRaises(ValueError):
+            select_ids_to_clear(BLOCKED, [UNBLOCKED_IP], ["portScanning"], False)
 
 
 if __name__ == "__main__":

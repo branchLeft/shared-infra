@@ -54,15 +54,21 @@ def select_ids_to_clear(
         return [entry["id"] for entry in blocked]
 
     by_address = {entry["address"]: entry["id"] for entry in blocked}
-    missing = [ip for ip in ips if ip not in by_address]
-    if missing:
-        raise ValueError(f"not currently blocked, nothing to clear: {', '.join(missing)}")
+    selected: set[str] = set()
 
-    selected = {by_address[ip] for ip in ips}
-    selected.update(entry["id"] for entry in blocked if entry["reason"] in reasons)
+    if ips:
+        missing = [ip for ip in ips if ip not in by_address]
+        if missing:
+            raise ValueError(f"not currently blocked, nothing to clear: {', '.join(missing)}")
+        selected.update(by_address[ip] for ip in ips)
 
-    if not selected:
-        raise ValueError(f"no blocked entries match reason(s): {', '.join(reasons)}")
+    if reasons:
+        # Checked independently of `ips` -- a matching --ip must never mask
+        # a --reason that matches nothing (or vice versa).
+        by_reason = {entry["id"] for entry in blocked if entry["reason"] in reasons}
+        if not by_reason:
+            raise ValueError(f"no blocked entries match reason(s): {', '.join(reasons)}")
+        selected.update(by_reason)
 
     return list(selected)
 

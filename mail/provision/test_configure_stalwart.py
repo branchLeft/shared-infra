@@ -4,8 +4,11 @@ access, no live server needed. Run with: python3 -m unittest discover -s
 mail/provision -p 'test_*.py' -v
 """
 import copy
+import io
 import unittest
+from unittest import mock
 
+import configure_stalwart as cs
 from configure_stalwart import (
     ACME_DIRECTORY,
     ALLOWED_IPS,
@@ -464,6 +467,144 @@ class PlanSecurityChangeTests(unittest.TestCase):
         current = self._drifted(scanBanPaths={"/wp-admin": "banned"})
 
         self.assertEqual(plan_security_change(current, SECURITY_TARGET), {})
+
+    def test_target_never_asserts_an_unverified_ban_rate(self):
+        # authBanRate/abuseBanRate/loiterBanRate were removed because their
+        # shipped defaults can't be verified against the pinned schema --
+        # this pins the target to exactly the verifiable, scalar-or-None
+        # fields so a future edit can't quietly reintroduce one.
+        self.assertEqual(
+            set(SECURITY_TARGET),
+            {
+                "scanBanRate",
+                "scanBanPeriod",
+                "authBanPeriod",
+                "abuseBanPeriod",
+                "loiterBanPeriod",
+            },
+        )
+        for field, value in SECURITY_TARGET.items():
+            self.assertNotIsInstance(value, dict, f"{field} must be a scalar or None")
+
+
+class ReconcileSecurityTests(unittest.TestCase):
+    """_reconcile_security's literal JMAP method strings and call shape,
+    against a fake _jmap_call (unittest.mock, no live server) -- sabotage
+    proved these had zero coverage (renaming "x:Security/set" left the
+    whole suite green), and separately proved the FIX-2 empty-list guard
+    fires before any set call reaches the live server.
+    """
+
+    AUTH = ("admin", "admin-secret-not-real")
+
+    def setUp(self):
+        patcher = mock.patch("sys.stdout", new_callable=io.StringIO)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_get_and_set_use_the_exact_jmap_methods_and_args_when_drifted(self):
+        calls = []
+        current = {"id": "singleton", **SECURITY_TARGET, "authBanPeriod": None}
+
+        def fake_jmap_call(auth, method, args):
+            calls.append((method, args))
+            if method == "x:Security/get":
+                return {"list": [current]}
+            if method == "x:Security/set":
+                return {"updated": {"singleton": {}}}
+            raise AssertionError(f"unexpected method: {method}")
+
+        with mock.patch.object(cs, "_jmap_call", side_effect=fake_jmap_call):
+            changed = cs._reconcile_security(self.AUTH)
+
+        self.assertTrue(changed)
+        self.assertEqual(calls[0], ("x:Security/get", {"ids": ["singleton"]}))
+        self.assertEqual(
+            calls[1],
+            ("x:Security/set", {"update": {"singleton": {"authBanPeriod": cs._DAY_MS}}}),
+        )
+
+    def test_reconciled_state_makes_no_set_call(self):
+        calls = []
+        current = {"id": "singleton", **SECURITY_TARGET}
+
+        def fake_jmap_call(auth, method, args):
+            calls.append((method, args))
+            if method == "x:Security/get":
+                return {"list": [current]}
+            raise AssertionError(f"unexpected method: {method}")
+
+        with mock.patch.object(cs, "_jmap_call", side_effect=fake_jmap_call):
+            changed = cs._reconcile_security(self.AUTH)
+
+        self.assertFalse(changed)
+        self.assertEqual(calls, [("x:Security/get", {"ids": ["singleton"]})])
+
+    def test_empty_list_raises_before_any_set_call(self):
+        calls = []
+
+        def fake_jmap_call(auth, method, args):
+            calls.append((method, args))
+            return {"list": []}
+
+        with mock.patch.object(cs, "_jmap_call", side_effect=fake_jmap_call):
+            with self.assertRaises(RuntimeError):
+                cs._reconcile_security(self.AUTH)
+
+        self.assertEqual(calls, [("x:Security/get", {"ids": ["singleton"]})])
+
+
+class ReconcileAllowedIpsTests(unittest.TestCase):
+    """_reconcile_allowed_ips's literal JMAP method strings and call shape,
+    against a fake _jmap_call -- same sabotage-proved gap as
+    ReconcileSecurityTests, for "x:AllowedIp/get".
+    """
+
+    AUTH = ("admin", "admin-secret-not-real")
+    MONITORING_IP = ALLOWED_IPS[0][0]
+
+    def setUp(self):
+        patcher = mock.patch("sys.stdout", new_callable=io.StringIO)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_get_and_set_use_the_exact_jmap_methods_and_args_when_missing(self):
+        calls = []
+
+        def fake_jmap_call(auth, method, args):
+            calls.append((method, args))
+            if method == "x:AllowedIp/get":
+                return {"list": []}
+            if method == "x:AllowedIp/set":
+                return {"created": {}}
+            raise AssertionError(f"unexpected method: {method}")
+
+        with mock.patch.object(cs, "_jmap_call", side_effect=fake_jmap_call):
+            changed = cs._reconcile_allowed_ips(self.AUTH)
+
+        self.assertTrue(changed)
+        self.assertEqual(calls[0], ("x:AllowedIp/get", {}))
+        set_method, set_args = calls[1]
+        self.assertEqual(set_method, "x:AllowedIp/set")
+        created = list(set_args["create"].values())
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["address"], self.MONITORING_IP)
+
+    def test_entry_already_present_makes_no_set_call(self):
+        calls = []
+        current = [{"id": "a1", "address": self.MONITORING_IP, "reason": "monitoring host"}]
+
+        def fake_jmap_call(auth, method, args):
+            calls.append((method, args))
+            if method == "x:AllowedIp/get":
+                return {"list": current}
+            raise AssertionError(f"unexpected method: {method}")
+
+        with mock.patch.object(cs, "_jmap_call", side_effect=fake_jmap_call):
+            changed = cs._reconcile_allowed_ips(self.AUTH)
+
+        self.assertFalse(changed)
+        self.assertEqual(calls, [("x:AllowedIp/get", {})])
 
 
 # Documentation-range address (RFC 5737) standing in for an operator-added
