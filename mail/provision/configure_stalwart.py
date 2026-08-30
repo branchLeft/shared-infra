@@ -114,6 +114,12 @@ SECURITY_TARGET: dict[str, Any] = {
 
 # IPs that must never be auto-banned by the categories above, as
 # (address, reason) pairs. Additive only -- see plan_allowed_ips.
+#
+# Write a single host bare, never as `/32`. The server stores an address as
+# a mask and renders a full-width mask back with no suffix, so `x/32` is
+# read back as plain `x` and would never match the value written here --
+# leaving plan_allowed_ips creating a duplicate on every run. A genuine
+# subnet (`10.0.0.0/24`) round-trips unchanged and is safe to write.
 ALLOWED_IPS: list[tuple[str, str]] = [
     ("46.225.95.167", "monitoring host -- its own probes must never be auto-banned"),
 ]
