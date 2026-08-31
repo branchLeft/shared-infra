@@ -346,12 +346,50 @@ budget, so every trailing-slash request that follows in the same window is
 already throttled. `8 204` here would mean the trailing slash carries its own
 separate budget, i.e. that it is not matched by this rule at all.
 
-**This proves the throttle logic; it does not prove hostname routing.** The
-loopback probe answers on a bare port with no `Host` match, so it exercises the
-same handler chain every site gets but not a specific site's route. Repeat the
-first two loops against `https://<hostname>/members/api/send-magic-link` from a
-workstation, against a non-production hostname, to prove the rule on the actual
-routed path a client would use.
+**The three loops above prove the throttle logic, not hostname routing.** They
+answer on a bare port with no `Host` match, so they exercise the same handler
+chain every site gets but never Caddy's selection of a site by host. The fourth
+loop is what closes that.
+
+**4. The rule is reached through a site block, and the zone spans hostnames.**
+
+`edge-probe.invalid` is a second probe address on the same port, differing only
+in carrying a host. It is reserved by RFC 2606 and never resolves, so this runs
+entirely on the host and touches no production hostname. Run it as one unbroken
+sequence — the point is that the second half inherits the first half's budget.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+  for i in $(seq 1 5); do
+    curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+      http://127.0.0.1:8080/members/api/send-magic-link
+  done
+  for i in $(seq 1 3); do
+    curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+      -H "Host: edge-probe.invalid" \
+      http://127.0.0.1:8080/members/api/send-magic-link
+  done' | sort | uniq -c
+```
+
+Expect `5 204` then `3 429`. Two distinct facts, and neither is provable
+without the other half of the loop:
+
+- The host-qualified requests were **routed through a site block** Caddy
+  selected by `Host`, and the throttle was reached inside it. A bare-port trip
+  cannot show this.
+- The magic-link zone is **global across hostnames** — the budget spent on the
+  bare port was already spent when the same client arrived on a different host.
+  This is the one thing this control adds that Ghost cannot do for itself:
+  `membersAuthEnumeration` counts per Ghost instance, so it would have let all
+  three through.
+
+`8 204` here means the host-qualified address got its own counter, i.e. the
+global zone is not global and the cross-tenant property is not holding.
+
+Once a real tenant hostname is served by this edge, repeat loops 1 and 2
+against `https://<hostname>/members/api/send-magic-link` from a workstation as
+well. That proves the same thing on a path carrying TLS and a real upstream;
+until then, this loop is the proof.
 
 **A throttled member sees Ghost's generic portal error, not a wait time.**
 Caddy's `rate_limit` answers a bodyless 429 and Ghost's JSON-error parsing falls

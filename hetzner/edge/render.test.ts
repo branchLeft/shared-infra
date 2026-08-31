@@ -242,19 +242,55 @@ describe('the rendered Caddyfile', () => {
       site({ name: 'one', hostnames: ['one.test'] }),
       site({ name: 'two', hostnames: ['two.test'] }),
     ]);
-    // Three, not two: the loopback probe below carries the same matcher and
+    // Four, not two: both loopback probes below carry the same matcher and
     // zone so the throttle can be trip-tested before any site serves the path.
     const zoneMatches = rendered.match(/zone members_magic_link_per_ip \{/g) ?? [];
-    expect(zoneMatches).toHaveLength(3);
+    expect(zoneMatches).toHaveLength(4);
     expect(rendered).toContain('zone one_per_ip {');
     expect(rendered).toContain('zone two_per_ip {');
   });
 
   it('carries the members magic-link throttle on the loopback probe too, so it can be trip-tested before any site serves the path', () => {
     const rendered = render(ENFORCING);
-    const probeBlockText = rendered.split(':8080 {')[1]?.split('\n}')[0] ?? '';
+    const probeBlockText = rendered.split('\n:8080 {')[1]?.split('\n}')[0] ?? '';
     expect(probeBlockText).toContain('@members_magic_link {');
     expect(probeBlockText).toContain('rate_limit @members_magic_link {');
+  });
+
+  it('renders a host-qualified probe on the same port, so the throttle can be tripped through a site block and not only on a bare port', () => {
+    // A bare `:8080` address matches every Host, so tripping the throttle
+    // there exercises no host routing whatsoever. This second address is the
+    // only way to prove, before a tenant hostname resolves here, that a
+    // request reaches the throttle *through* Caddy's site selection -- the
+    // path a real request actually takes.
+    const rendered = render(ENFORCING);
+    const hostProbe = rendered.split('http://edge-probe.invalid:8080 {')[1]?.split('\n}')[0] ?? '';
+    expect(hostProbe).toContain('@members_magic_link {');
+    expect(hostProbe).toContain('rate_limit @members_magic_link {');
+    expect(hostProbe).toContain('respond 204');
+  });
+
+  it('gives the host-qualified probe the same global magic-link zone but its own general zone', () => {
+    // The shared magic-link zone is the property under test in §8b(4): a
+    // budget spent on the bare port must already be spent when the same client
+    // arrives on the host-qualified address, which is exactly what Ghost's
+    // per-instance limiter cannot do. The *general* throttle keeps separate
+    // zones, matching how real sites treat it.
+    const rendered = render({ ...ENFORCING, rateLimit: 'enforcing' });
+    const hostProbe = rendered.split('http://edge-probe.invalid:8080 {')[1]?.split('\n}')[0] ?? '';
+    const barePort = rendered.split('\n:8080 {')[1]?.split('\n}')[0] ?? '';
+    expect(hostProbe).toContain('zone members_magic_link_per_ip {');
+    expect(barePort).toContain('zone members_magic_link_per_ip {');
+    expect(hostProbe).toContain('zone probe_host_per_ip {');
+    expect(barePort).toContain('zone probe_per_ip {');
+  });
+
+  it('never renders the probe hostname as a TLS site, so no CA is ever asked to validate an unresolvable name', () => {
+    // `.invalid` is RFC 2606 reserved and can never be validated. Without the
+    // explicit `http://` scheme Caddy would try ACME for it on every start.
+    const rendered = render(ENFORCING);
+    expect(rendered).toContain('http://edge-probe.invalid:8080 {');
+    expect(rendered).not.toMatch(/^edge-probe\.invalid/m);
   });
 
   it('renders no members magic-link throttle when both rate limiters are off', () => {

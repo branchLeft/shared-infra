@@ -106,6 +106,30 @@ const PROBE_LOG = '/var/log/caddy/probe.log';
 const PROBE_PORT = 8080;
 
 /**
+ * A second probe address on the same port, differing only in carrying a host.
+ *
+ * The bare-port probe proves the handler chain runs; it cannot prove a request
+ * reaches that chain *through a site block*, because a bare `:port` address
+ * matches every Host and so exercises no host routing at all. A control that
+ * has only ever been tripped on the bare port is one whose real delivery path
+ * -- Caddy selecting a site by Host, then running its route -- has never
+ * executed.
+ *
+ * `.invalid` is reserved by RFC 2606 and is guaranteed never to resolve, so
+ * this can never collide with a tenant hostname or be reached from off-host,
+ * and the `http://` scheme keeps Caddy from attempting ACME for a name no CA
+ * could ever validate. The firewall does not open this port and Compose
+ * publishes it on `127.0.0.1` only, exactly as for the bare-port probe.
+ *
+ * It also makes the one property this control adds over Ghost's own limiter
+ * testable: the magic-link zone is global across hostnames, so a budget spent
+ * on the bare-port probe must already be spent when the same client arrives on
+ * this host. Ghost's `membersAuthEnumeration` counts per instance and would
+ * not be. `RUNBOOK-edge.md` §8b(4) is that test.
+ */
+const PROBE_HOSTNAME = 'edge-probe.invalid';
+
+/**
  * Port carrying Caddy's own Prometheus metrics, on a listener separate from
  * every public site. Compose publishes it on `edge1`'s private address only
  * (`../monitoring/stack/compose.yml`'s Prometheus scrapes it from there) --
@@ -366,8 +390,11 @@ function redirectBlock(redirect: HostRedirect, zone: string, posture: EdgePostur
  * host: the throttle and the CrowdSec handlers can be exercised with `curl`
  * against a running edge that serves no public traffic yet. The Hetzner firewall
  * does not open this port and Compose publishes it on `127.0.0.1` only.
+ *
+ * Rendered twice, at the same port, with and without a host. See
+ * `PROBE_HOSTNAME` for why the second one exists.
  */
-function probeBlock(posture: EdgePosture): Block {
+function probeBlock(posture: EdgePosture, address: string, generalZone: string): Block {
   const body: string[] = [...logDirective(PROBE_LOG)];
   // Carries the members magic-link matcher too, same as a real site: this is
   // what lets the throttle be trip-tested with a loopback `curl` before any
@@ -378,14 +405,14 @@ function probeBlock(posture: EdgePosture): Block {
   }
   body.push(
     'route {',
-    ...protectionChain(posture, 'probe_per_ip', {
+    ...protectionChain(posture, generalZone, {
       appsec: 'all',
       membersMagicLink: true,
     }).map((line) => `\t${line}`),
     '\trespond 204',
     '}'
   );
-  return { addresses: [`:${PROBE_PORT}`], body };
+  return { addresses: [address], body };
 }
 
 /**
@@ -473,7 +500,10 @@ export function renderCaddyfile(
       blocks.push(redirectBlock(redirect, `${site.name}_redirect_per_ip`, posture));
     }
   }
-  blocks.push(probeBlock(posture));
+  // Host-qualified first, bare port second. Caddy picks the most specific
+  // matching site regardless of order, so this is for the reader, not for it.
+  blocks.push(probeBlock(posture, `http://${PROBE_HOSTNAME}:${PROBE_PORT}`, 'probe_host_per_ip'));
+  blocks.push(probeBlock(posture, `:${PROBE_PORT}`, 'probe_per_ip'));
   blocks.push(metricsBlock());
 
   // No blank line between the banner and the global options block: `caddy fmt`

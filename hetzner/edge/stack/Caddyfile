@@ -56,6 +56,28 @@ www.branchleft.co.uk {
 	}
 }
 
+http://edge-probe.invalid:8080 {
+	log {
+		output file /var/log/caddy/probe.log
+		format json
+	}
+	@members_magic_link {
+		method POST
+		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
+	route {
+		rate_limit @members_magic_link {
+			zone members_magic_link_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 5
+			}
+		}
+		appsec
+		respond 204
+	}
+}
+
 :8080 {
 	log {
 		output file /var/log/caddy/probe.log
