@@ -23,9 +23,22 @@ modules:
     prober: tcp
     timeout: 10s
     tcp:
+      # The tcp prober defaults to ip6, and mx1 publishes an AAAA record that
+      # the monitoring network has no route to -- without this every probe
+      # fails on dial and the alert pages permanently.
+      preferred_ip_protocol: ip4
       query_response:
         - expect: '^220'
-        - send: 'QUIT\r\n'
+        # Double-quoted deliberately: YAML single quotes keep a backslash
+        # literal, so 'QUIT\r\n' sends the six characters rather than a
+        # CRLF-terminated command -- a malformed command on a mail port, which
+        # is the event class that bans a source.
+        - send: "QUIT\r\n"
+        # Reading the goodbye line is not politeness: closing with the
+        # server's reply still inbound makes the kernel answer it with an RST,
+        # and an abnormally terminated session on a mail port is the shape a
+        # ban heuristic keys on.
+        - expect: '^221'
 
   # Implicit-TLS submission/IMAP ports negotiate TLS immediately on connect,
   # with no plaintext banner to read -- a completed handshake is the
@@ -34,6 +47,7 @@ modules:
     prober: tcp
     timeout: 10s
     tcp:
+      preferred_ip_protocol: ip4
       tls: true
       tls_config:
         insecure_skip_verify: false
