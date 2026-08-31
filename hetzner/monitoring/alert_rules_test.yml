@@ -339,6 +339,39 @@ tests:
           - labels: 'ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing", severity="warning", zone="members_magic_link_per_ip", key="203.0.113.5", host="edge1"}'
             value: 1
 
+  # Boundary coverage for the character class itself: 1[6-9]|2\d|3[01] must
+  # match exactly the 172.16.0.0/12 range (172.16-172.31), not just the
+  # 172.18.0.1 case above -- dropping either alternative from the class
+  # would still pass a test that only ever exercises 172.18.x. Every key
+  # here sits at an edge of one alternative or just outside the range.
+  - interval: 30s
+    input_series:
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.16.0.1", host="edge1"}'
+        values: '0+1x30'
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.19.9.9", host="edge1"}'
+        values: '0+1x30'
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.20.0.0", host="edge1"}'
+        values: '0+1x30'
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.29.9.9", host="edge1"}'
+        values: '0+1x30'
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.30.0.0", host="edge1"}'
+        values: '0+1x30'
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.31.255.255", host="edge1"}'
+        values: '0+1x30'
+      # Just outside the range on both sides -- these must fire.
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.15.255.255", host="edge1"}'
+        values: '0+1x30'
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.32.0.1", host="edge1"}'
+        values: '0+1x30'
+    promql_expr_test:
+      - expr: ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing"}
+        eval_time: 15m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing", severity="warning", zone="members_magic_link_per_ip", key="172.15.255.255", host="edge1"}'
+            value: 1
+          - labels: 'ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing", severity="warning", zone="members_magic_link_per_ip", key="172.32.0.1", host="edge1"}'
+            value: 1
+
   # Both a bridge key and a real key climbing together: exactly one series
   # fires. Exhaustive on purpose, the same reason the BlackboxProbeFailed /
   # MailHostDown mutual-exclusivity case above checks both sides -- a
