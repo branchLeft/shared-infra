@@ -74,3 +74,23 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: 'blackbox-exporter:9115'
+
+  - job_name: blackbox_mail
+    scrape_interval: 60s
+    metrics_path: /probe
+    static_configs:
+      - targets:
+          - mx1.branchleft.co.uk:25
+          - mx1.branchleft.co.uk:587
+        labels: {host: mx1, expected_up: 'true', __param_module: smtp_banner}
+      - targets:
+          - mx1.branchleft.co.uk:465
+          - mx1.branchleft.co.uk:993
+        labels: {host: mx1, expected_up: 'true', __param_module: tls_connect}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'blackbox-exporter:9115'

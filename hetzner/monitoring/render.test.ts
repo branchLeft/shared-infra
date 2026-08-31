@@ -230,6 +230,51 @@ describe('the rendered Prometheus config', () => {
     const blackboxSection = rendered.slice(rendered.indexOf('  - job_name: blackbox_http'));
     expect(blackboxSection).toContain("labels: {host: edge1, expected_up: 'true'}");
   });
+
+  describe('the mx1 mail liveness probe', () => {
+    it('probes mx1 by hostname, on the four ports the mail firewall opens', () => {
+      const rendered = renderPrometheusConfig(sites);
+      expect(rendered).toContain('job_name: blackbox_mail');
+      expect(rendered).toContain('- mx1.branchleft.co.uk:25');
+      expect(rendered).toContain('- mx1.branchleft.co.uk:587');
+      expect(rendered).toContain('- mx1.branchleft.co.uk:465');
+      expect(rendered).toContain('- mx1.branchleft.co.uk:993');
+      // No IP literal for mx1 anywhere in this repo -- it is outside the
+      // estate address plan projectGuard.ts polices.
+      expect(rendered).not.toMatch(/\d+\.\d+\.\d+\.\d+.*mx1/);
+    });
+
+    it('reads the SMTP banner on 25 and 587, and only completes a TLS handshake on 465 and 993', () => {
+      const rendered = renderPrometheusConfig(sites);
+      const mailSection = rendered.slice(rendered.indexOf('  - job_name: blackbox_mail'));
+      expect(mailSection).toContain(
+        "targets:\n          - mx1.branchleft.co.uk:25\n          - mx1.branchleft.co.uk:587\n        labels: {host: mx1, expected_up: 'true', __param_module: smtp_banner}"
+      );
+      expect(mailSection).toContain(
+        "targets:\n          - mx1.branchleft.co.uk:465\n          - mx1.branchleft.co.uk:993\n        labels: {host: mx1, expected_up: 'true', __param_module: tls_connect}"
+      );
+    });
+
+    it('scrapes gently -- probing mail ports on a schedule is exactly what scan-ban watches for', () => {
+      const rendered = renderPrometheusConfig(sites);
+      const mailSection = rendered.slice(rendered.indexOf('  - job_name: blackbox_mail'));
+      expect(mailSection).toContain('scrape_interval: 60s');
+    });
+
+    it('reuses the blackbox relabel pattern -- __param_target then instance, address rewritten to the exporter', () => {
+      const rendered = renderPrometheusConfig(sites);
+      const mailSection = rendered.slice(rendered.indexOf('  - job_name: blackbox_mail'));
+      expect(mailSection).toContain('target_label: __param_target');
+      expect(mailSection).toContain('target_label: instance');
+      expect(mailSection).toContain("replacement: 'blackbox-exporter:9115'");
+    });
+
+    it('marks mx1 expected up, so a dead blackbox_mail target pages', () => {
+      const rendered = renderPrometheusConfig(sites);
+      const mailSection = rendered.slice(rendered.indexOf('  - job_name: blackbox_mail'));
+      expect(mailSection).toContain("host: mx1, expected_up: 'true'");
+    });
+  });
 });
 
 describe('the rendered alert rules', () => {
@@ -265,9 +310,14 @@ describe('the rendered alert rules', () => {
     expect(rendered).toContain('threads_connected');
   });
 
-  it('alerts on a failed public probe', () => {
+  it('alerts on a failed public probe, excluding the mail job so it is not double-alerted with MailHostDown', () => {
     expect(rendered).toContain('alert: BlackboxProbeFailed');
-    expect(rendered).toContain('expr: probe_success == 0');
+    expect(rendered).toContain('expr: probe_success{job!="blackbox_mail"} == 0');
+  });
+
+  it('alerts on a failed mail liveness probe, scoped to the mail job so the alertname names the path', () => {
+    expect(rendered).toContain('alert: MailHostDown');
+    expect(rendered).toContain('expr: probe_success{job="blackbox_mail"} == 0');
   });
 });
 

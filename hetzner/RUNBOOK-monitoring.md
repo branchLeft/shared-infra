@@ -226,9 +226,15 @@ an address off mx1 -- one is the cap, and the reasoning is in
 gap, it is an accepted one:** alert email is submitted _through_ mx1, so when
 mx1 is down no alert mail is sent at all, and no Sieve rule on that host could
 have helped either. `ALERT_RECIPIENT_EMAIL` being off-mx1 covers a different
-case -- mx1 up, the alerting mailbox unreachable or unread. The only thing that
-reports an mx1-down or edge1-down condition is the Healthchecks.io dead-man's
-switch in 11, which is why 12's second proof is not optional.
+case -- mx1 up, the alerting mailbox unreachable or unread. `MailHostDown`
+(§8) now gives Prometheus a rule that _fires_ on an mx1 outage, visible to
+anyone reading `/api/v1/alerts` or the Alertmanager UI directly -- but its
+only configured receiver is still the `email` route through mx1, so the
+circularity is unchanged: the notification for that exact alert cannot be
+delivered while the outage it describes is ongoing. The only thing that
+reports an mx1-down or edge1-down condition _by notifying someone_ is the
+Healthchecks.io dead-man's switch in 11, which is why 12's second proof is not
+optional.
 
 This step, the mailbox decision and the resulting credential are all
 platform-owner-gated -- mx1 is live production mail.
@@ -441,19 +447,21 @@ as though nothing is up. This warm-up window is specific to
 itself is up, with no such delay, so do not apply the same caution there.
 
 Expect `prometheus`, `alertmanager`, `caddy`, `crowdsec`, `website`,
-`cadvisor`, `blackbox_http` (three targets, one per `sites.ts` hostname), the
-`node` target for `edge1` and the `mysqld` target for `db1` all `up`. All of
-those carry `expected_up: 'true'` -- a sustained `down` on any of them pages
-within 5 minutes via `HostOrServiceDown`. `website` is the contact-form
-send-failure counter on `app1` (`render.ts`'s `WEBSITE_METRICS_PORT`).
-`blackbox_http`'s label is what catches the exporter itself being down -- a
-dead exporter runs no probe, so there is no `probe_success` series for
-`BlackboxProbeFailed` to see; that alert instead covers a live exporter
-reporting a failed probe, on `probe_success` rather than `up`. Only `node` for
-`app1` and `node` for `db1` are expected `down`: those two exporters are not
-provisioned (see `render.ts`'s `MONITORED_NODE_HOSTS` docstring). A `down`
-target with `expected_up: 'true'` in its labels is the only one worth
-investigating.
+`cadvisor`, `blackbox_http` (three targets, one per `sites.ts` hostname),
+`blackbox_mail` (four targets on `mx1.branchleft.co.uk`: 25 and 587 read the
+SMTP banner, 465 and 993 complete a TLS handshake), the `node` target for
+`edge1` and the `mysqld` target for `db1` all `up`. All of those carry
+`expected_up: 'true'` -- a sustained `down` on any of them pages within 5
+minutes via `HostOrServiceDown`. `website` is the contact-form send-failure
+counter on `app1` (`render.ts`'s `WEBSITE_METRICS_PORT`). `blackbox_http`'s
+and `blackbox_mail`'s labels are what catch the exporter itself being down --
+a dead exporter runs no probe, so there is no `probe_success` series for
+`BlackboxProbeFailed` or `MailHostDown` to see; those alerts instead cover a
+live exporter reporting a failed probe, on `probe_success` rather than `up`.
+Only `node` for `app1` and `node` for `db1` are expected `down`: those two
+exporters are not provisioned (see `render.ts`'s `MONITORED_NODE_HOSTS`
+docstring). A `down` target with `expected_up: 'true'` in its labels is the
+only one worth investigating.
 
 `mysqld` being `up` is necessary and not sufficient -- the exporter answers
 with a full 200 and `mysql_up 0` when it cannot read MySQL, which is the state
@@ -619,10 +627,13 @@ or the cgroup containment), the same pattern applies to
 
 ## What this stack deliberately does not do
 
-- **It does not scrape mx1.** mx1 is exclusively the SMTP path for alert
-  delivery -- it is in a different hcloud project, off the private network
-  entirely (doc 14 §3.4), and adding it as a scrape target here would be
-  outside this repository's authority over that host in every sense.
+- **It does not scrape mx1's own metrics.** `blackbox_mail` probes mx1's
+  public mail ports for liveness (`MailHostDown`), but mx1 is still in a
+  different hcloud project, off the private network entirely (doc 14 §3.4),
+  and Stalwart's own metrics are not configured anywhere in this repo --
+  scraping them would need a firewalled, authenticated public endpoint on
+  mx1, which is outside this repository's authority over that host and a
+  separate story.
 - **It does not run on its own host.** Doc 14 §3.1's `mon1` split is gated on
   TENANT_1, not on this story; everything here is sized on the assumption
   that it shares `edge1`'s 4 GB with the edge stack.

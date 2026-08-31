@@ -183,4 +183,104 @@ tests:
             exp_annotations:
               summary: 'https://example.branchleft.co.uk failed its external probe for 5 minutes.'
               description: >-
-                The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS.
+                The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below.
+
+  # MailHostDown: mx1's SMTP-banner target failing continuously for over 5m
+  # fires, on the same probe_success metric BlackboxProbeFailed above reads,
+  # scoped to job="blackbox_mail" so the alertname itself names the path.
+  - interval: 30s
+    input_series:
+      - series: 'probe_success{job="blackbox_mail", instance="mx1.branchleft.co.uk:587"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 5m30s
+        alertname: MailHostDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: blackbox_mail
+              instance: mx1.branchleft.co.uk:587
+            exp_annotations:
+              summary: 'mx1.branchleft.co.uk:587 failed its mail liveness probe for 5 minutes.'
+              description: >-
+                smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: a follow-up story routes this one through a path that does not transit mx1, which a generic probe alert cannot be scoped to on its own. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe.
+
+  # MailHostDown does not page on a blip shorter than for: 5m -- one failed
+  # scrape, recovered on the next one, is a transient network hiccup rather
+  # than the outage this alert exists to catch. Checked at the blip itself
+  # (3m, the 0 at index 6) rather than well after it recovers: an
+  # after-the-fact check would read exp_alerts: [] no matter what for: is
+  # set to, because the expression is already false again by then -- it is
+  # only a check on for: if it looks while the condition is still true.
+  - interval: 30s
+    input_series:
+      - series: 'probe_success{job="blackbox_mail", instance="mx1.branchleft.co.uk:993"}'
+        values: '1 1 1 1 1 1 0 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MailHostDown
+        exp_alerts: []
+
+  # The incident's exact signature: every port under test answers its TCP
+  # handshake -- a tcp_connect-style probe would read probe_success as 1
+  # throughout and never fire anything -- but Stalwart serves nothing behind
+  # it, so smtp_banner's regex on the greeting never matches and the exporter
+  # reports probe_success 0 for the whole outage. This is what a
+  # socket-only check would have missed for six days, and why the module
+  # reads the banner rather than just completing connect().
+  - interval: 30s
+    input_series:
+      - series: 'probe_success{job="blackbox_mail", instance="mx1.branchleft.co.uk:25"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 14m30s
+        alertname: MailHostDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: blackbox_mail
+              instance: mx1.branchleft.co.uk:25
+            exp_annotations:
+              summary: 'mx1.branchleft.co.uk:25 failed its mail liveness probe for 5 minutes.'
+              description: >-
+                smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: a follow-up story routes this one through a path that does not transit mx1, which a generic probe alert cannot be scoped to on its own. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe.
+
+  # The mutual-exclusivity invariant BlackboxProbeFailed's job!="blackbox_mail"
+  # exclusion exists for: a mail-probe failure fires MailHostDown alone, and
+  # an unrelated (non-mail) probe failure still falls through to
+  # BlackboxProbeFailed. The second half matters on its own -- a matcher typo
+  # that excluded the wrong job would silently disable the catch-all for
+  # every other probe, and only a case that expects BlackboxProbeFailed to
+  # still fire here would notice.
+  - interval: 30s
+    input_series:
+      - series: 'probe_success{job="blackbox_mail", instance="mx1.branchleft.co.uk:465"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'probe_success{job="blackbox_http", instance="https://other.branchleft.co.uk"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 5m30s
+        alertname: MailHostDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: blackbox_mail
+              instance: mx1.branchleft.co.uk:465
+            exp_annotations:
+              summary: 'mx1.branchleft.co.uk:465 failed its mail liveness probe for 5 minutes.'
+              description: >-
+                smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: a follow-up story routes this one through a path that does not transit mx1, which a generic probe alert cannot be scoped to on its own. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe.
+      # Exhaustive on purpose: if the exclusion matcher above ever admitted
+      # the mx1 instance too, it would show up here as a second, unexpected
+      # alert and fail this assertion.
+      - eval_time: 5m30s
+        alertname: BlackboxProbeFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: blackbox_http
+              instance: https://other.branchleft.co.uk
+            exp_annotations:
+              summary: 'https://other.branchleft.co.uk failed its external probe for 5 minutes.'
+              description: >-
+                The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below.
