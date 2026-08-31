@@ -1,1 +1,0 @@
-{"nodes": [{"id": "hetzner_monitoring_stack_blackbox_blackbox_http_2xx", "label": "Blackbox HTTP 2xx Module", "file_type": "code", "source_file": "hetzner/monitoring/stack/blackbox/blackbox.yml", "source_location": null}], "edges": [], "hyperedges": []}
