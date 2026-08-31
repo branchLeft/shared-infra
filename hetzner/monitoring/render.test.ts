@@ -319,6 +319,23 @@ describe('the rendered alert rules', () => {
     expect(rendered).toContain('alert: MailHostDown');
     expect(rendered).toContain('expr: probe_success{job="blackbox_mail"} == 0');
   });
+
+  it('alerts on Caddy declining a non-bridge, non-aggregate rate-limited request -- see alert_rules_test.yml for the promtool proof of both exclusions and of the general zone working once it is scoped in', () => {
+    expect(rendered).toContain('alert: RateLimitDecliningRealClients');
+    expect(rendered).toContain(
+      'expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\\\.(1[6-9]|2\\\\d|3[01])\\\\..*", key!=""}[15m]) > 0'
+    );
+    // Not scoped to zone -- posture.ts's rateLimit is 'off' today, but the
+    // expression must still cover the general zone the moment it flips.
+    expect(rendered).not.toContain('members_magic_link_per_ip');
+  });
+
+  it('alerts on Alertmanager failing to deliver an email notification -- see alert_rules_test.yml for the promtool proof it is scoped to the email integration', () => {
+    expect(rendered).toContain('alert: AlertEmailDeliveryFailing');
+    expect(rendered).toContain(
+      'expr: increase(alertmanager_notifications_failed_total{integration="email"}[30m]) > 0'
+    );
+  });
 });
 
 describe('the Alertmanager template', () => {
@@ -334,6 +351,7 @@ describe('the Alertmanager template', () => {
     expect(rendered).toContain('__SMTP_PASSWORD__');
     expect(rendered).toContain('__HEALTHCHECKS_PING_URL__');
     expect(rendered).toContain('__ALERT_RECIPIENT_EMAIL__');
+    expect(rendered).toContain('__MAILHOST_PING_URL__');
   });
 
   it('routes the Watchdog alert to the heartbeat receiver and nothing else there', () => {
@@ -345,6 +363,34 @@ describe('the Alertmanager template', () => {
   it('pings a receiver that is not mx1 -- the whole point of the switch (doc 14 §9.2)', () => {
     expect(rendered).toContain('name: heartbeat');
     expect(rendered).toContain('webhook_configs');
+  });
+
+  it('routes MailHostDown and AlertEmailDeliveryFailing to the mx1-independent receiver in addition to email, not instead of it', () => {
+    // Alertmanager's route tree falls back to the root's own receiver only
+    // when no child route matches at all -- a single matching child with
+    // continue: true does not also reach it. Proving that requires two
+    // sibling routes on the same matcher, not just the matcher's presence,
+    // which is why this checks for both rather than one string.
+    const routeSection = rendered.split('receivers:')[0];
+    const matcherLine = 'alertname =~ "^(MailHostDown|AlertEmailDeliveryFailing)$"';
+    const matches = routeSection.split(matcherLine).length - 1;
+    expect(matches).toBe(2);
+    expect(routeSection).toContain('receiver: mailhost-deadman');
+    expect(routeSection).toContain('continue: true');
+    // The mailhost-deadman sibling comes first: continue: true has to sit
+    // on it for the second (email) sibling to ever be reached.
+    expect(routeSection.indexOf('receiver: mailhost-deadman')).toBeLessThan(
+      routeSection.lastIndexOf('receiver: email')
+    );
+  });
+
+  it('does not send a resolved notification to the mailhost-deadman receiver', () => {
+    // The URL is the Healthchecks.io check's /fail endpoint -- there is no
+    // "/fail but resolved" semantic on the receiving end, so a resolved
+    // notification here would just hit /fail again.
+    const receiverSection = rendered.slice(rendered.indexOf('name: mailhost-deadman'));
+    expect(receiverSection).toContain("url: '__MAILHOST_PING_URL__'");
+    expect(receiverSection).toContain('send_resolved: false');
   });
 });
 

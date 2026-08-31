@@ -50,6 +50,23 @@ groups:
             window. Scoped to expected_up="true" for the same reason as
             HostOrServiceDown above.
 
+      - alert: RateLimitDecliningRealClients
+        expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\.(1[6-9]|2\\d|3[01])\\..*", key!=""}[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Caddy declined at least one non-bridge rate-limited request in the last 15 minutes."
+          description: >-
+            key!="" excludes the keyless zone-aggregate series -- an absent
+            label reads as "" in PromQL, and without this exclusion the
+            alert double-counts every decline once under the aggregate and
+            once under its own key. key!~"172\.(1[6-9]|2\d|3[01])\..*"
+            excludes the Docker bridge range: every decline on record today
+            is the loopback smoke test tripping the magic-link limiter at
+            172.18.0.1, and RUNBOOK-edge.md notes the bridge subnet itself
+            varies between 172.17 and 172.18, hence the whole /12 rather
+            than the literal address.
+
       - alert: HostMemoryPressure
         expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.75
         for: 24h
@@ -126,4 +143,22 @@ groups:
           severity: critical
         annotations:
           summary: "{{ $labels.instance }} failed its mail liveness probe for 5 minutes."
-          description: "smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: a follow-up story routes this one through a path that does not transit mx1, which a generic probe alert cannot be scoped to on its own. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe."
+          description: "smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: it is what the mailhost-deadman route in the Alertmanager template matches on, so this alert reaches a receiver that does not transit mx1 in addition to the mx1-routed email receiver. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe."
+
+  - name: alerting-pipeline
+    rules:
+      - alert: AlertEmailDeliveryFailing
+        expr: increase(alertmanager_notifications_failed_total{integration="email"}[30m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Alertmanager failed to deliver at least one email notification in the last 30 minutes."
+          description: >-
+            The alertmanager scrape job above only proves the process
+            answered a scrape, not that mx1 accepted a message it tried to
+            send -- this is the metric that would have caught the six-day
+            outage this repo failed to catch once already, because alert
+            email transits mx1 and "mail is down" is an alert delivered by
+            the thing that is down. Matched by the mailhost-deadman route
+            in the Alertmanager template, so this alert reaches a receiver
+            that does not depend on the path it is reporting as broken.

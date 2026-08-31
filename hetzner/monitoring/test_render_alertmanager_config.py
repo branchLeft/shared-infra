@@ -29,6 +29,7 @@ TEMPLATE = (
     "smtp_auth_password: '__SMTP_PASSWORD__'\n"
     "ping: '__HEALTHCHECKS_PING_URL__'\n"
     "to: '__ALERT_RECIPIENT_EMAIL__'\n"
+    "mailhost_ping: '__MAILHOST_PING_URL__'\n"
 )
 
 FULL_ENV = {
@@ -36,6 +37,7 @@ FULL_ENV = {
     "SMTP_PASSWORD": "correct-horse-battery-staple",
     "HEALTHCHECKS_PING_URL": "https://hc-ping.com/deadbeef",
     "ALERT_RECIPIENT_EMAIL": "ops@branchleft.co.uk",
+    "MAILHOST_PING_URL": "https://hc-ping.com/deadbeef/fail",
 }
 
 
@@ -48,6 +50,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("correct-horse-battery-staple", rendered)
         self.assertIn("https://hc-ping.com/deadbeef", rendered)
         self.assertIn("ops@branchleft.co.uk", rendered)
+        self.assertIn("https://hc-ping.com/deadbeef/fail", rendered)
 
     def test_refuses_each_missing_variable_in_turn(self) -> None:
         for missing in FULL_ENV:

@@ -356,6 +356,29 @@ export function renderAlertRules(): string {
     '            window. Scoped to expected_up="true" for the same reason as',
     '            HostOrServiceDown above.',
     '',
+    // In `estate` rather than a probes-style group: this reads a
+    // Caddy-emitted counter local to edge1, the same class of signal as
+    // ServiceFlapping above, not an external blackbox_exporter result.
+    // Not scoped to members_magic_link_per_ip -- posture.ts's `rateLimit`
+    // is 'off' today, but the expression has no zone label at all, so the
+    // general zone is covered automatically the day that flips.
+    '      - alert: RateLimitDecliningRealClients',
+    '        expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\\\.(1[6-9]|2\\\\d|3[01])\\\\..*", key!=""}[15m]) > 0',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "Caddy declined at least one non-bridge rate-limited request in the last 15 minutes."',
+    '          description: >-',
+    '            key!="" excludes the keyless zone-aggregate series -- an absent',
+    '            label reads as "" in PromQL, and without this exclusion the',
+    '            alert double-counts every decline once under the aggregate and',
+    '            once under its own key. key!~"172\\.(1[6-9]|2\\d|3[01])\\..*"',
+    '            excludes the Docker bridge range: every decline on record today',
+    '            is the loopback smoke test tripping the magic-link limiter at',
+    '            172.18.0.1, and RUNBOOK-edge.md notes the bridge subnet itself',
+    '            varies between 172.17 and 172.18, hence the whole /12 rather',
+    '            than the literal address.',
+    '',
     '      - alert: HostMemoryPressure',
     '        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.75',
     '        for: 24h',
@@ -435,14 +458,39 @@ export function renderAlertRules(): string {
     '          severity: critical',
     '        annotations:',
     '          summary: "{{ $labels.instance }} failed its mail liveness probe for 5 minutes."',
-    '          description: "smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: a follow-up story routes this one through a path that does not transit mx1, which a generic probe alert cannot be scoped to on its own. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe."',
+    '          description: "smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: it is what the mailhost-deadman route in the Alertmanager template matches on, so this alert reaches a receiver that does not transit mx1 in addition to the mx1-routed email receiver. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe."',
+    '',
+    '  - name: alerting-pipeline',
+    // Not folded into `probes` above: those alerts watch probe_success, an
+    // external vantage point on the estate's own services. This one watches
+    // whether Alertmanager's own delivery mechanism is working -- a property
+    // of the pipeline that carries every other alert here, not of anything
+    // it probes -- so it gets a group of its own rather than borrowing one
+    // that means something else.
+    '    rules:',
+    '      - alert: AlertEmailDeliveryFailing',
+    '        expr: increase(alertmanager_notifications_failed_total{integration="email"}[30m]) > 0',
+    '        labels:',
+    '          severity: critical',
+    '        annotations:',
+    '          summary: "Alertmanager failed to deliver at least one email notification in the last 30 minutes."',
+    '          description: >-',
+    '            The alertmanager scrape job above only proves the process',
+    '            answered a scrape, not that mx1 accepted a message it tried to',
+    '            send -- this is the metric that would have caught the six-day',
+    '            outage this repo failed to catch once already, because alert',
+    '            email transits mx1 and "mail is down" is an alert delivered by',
+    '            the thing that is down. Matched by the mailhost-deadman route',
+    '            in the Alertmanager template, so this alert reaches a receiver',
+    '            that does not depend on the path it is reporting as broken.',
   ].join('\n')}\n`;
 }
 
 /**
  * Alertmanager's config template. `__SMTP_USERNAME__`, `__SMTP_PASSWORD__`,
- * `__HEALTHCHECKS_PING_URL__` and `__ALERT_RECIPIENT_EMAIL__` are substituted
- * by `stack/render_alertmanager_config.py` from `/etc/branchleft/monitoring.env`
+ * `__HEALTHCHECKS_PING_URL__`, `__ALERT_RECIPIENT_EMAIL__` and
+ * `__MAILHOST_PING_URL__` are substituted by
+ * `stack/render_alertmanager_config.py` from `/etc/branchleft/monitoring.env`
  * before every start -- see that script's docstring for why this file cannot
  * just read the environment itself.
  */
@@ -471,6 +519,23 @@ export function renderAlertmanagerTemplate(): string {
     '      group_wait: 0s',
     '      group_interval: 1m',
     '      repeat_interval: 1m',
+    // Two sibling routes on the same matcher, not one: Alertmanager's route
+    // tree falls back to the root's own receiver (email) only when *no*
+    // child route matches at all, so a single matching child with
+    // continue: true does not also deliver to email -- continue only
+    // widens the search to later siblings. The second route below is that
+    // later sibling; it is what actually puts email back in the result for
+    // these two alertnames. Order matters: continue: true lives on the
+    // first, and removing it stops the walk before the second is ever
+    // reached, losing email delivery for exactly the two alerts this PR
+    // exists to keep reaching someone.
+    '    - matchers:',
+    '        - alertname =~ "^(MailHostDown|AlertEmailDeliveryFailing)$"',
+    '      receiver: mailhost-deadman',
+    '      continue: true',
+    '    - matchers:',
+    '        - alertname =~ "^(MailHostDown|AlertEmailDeliveryFailing)$"',
+    '      receiver: email',
     '',
     'receivers:',
     '  - name: email',
@@ -481,6 +546,18 @@ export function renderAlertmanagerTemplate(): string {
     '  - name: heartbeat',
     '    webhook_configs:',
     "      - url: '__HEALTHCHECKS_PING_URL__'",
+    '        send_resolved: false',
+    '',
+    '  - name: mailhost-deadman',
+    '    webhook_configs:',
+    "      - url: '__MAILHOST_PING_URL__'",
+    // false, not true: the URL is the check's /fail endpoint, which always
+    // marks it down regardless of payload -- there is no "/fail but
+    // resolved" semantic on the Healthchecks.io side. Sending a resolved
+    // notification here would just hit /fail again; recovery on this check
+    // only ever comes from a plain ping to its base URL, which nothing in
+    // this stack sends, by design -- an operator clears it once the
+    // underlying cause is fixed.
     '        send_resolved: false',
   ].join('\n')}\n`;
 }
