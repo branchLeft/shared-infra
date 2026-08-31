@@ -1,1 +1,0 @@
-{"nodes": [{"id": "mail_runbook_mx1_provision", "label": "RUNBOOK: provisioning Stalwart on mx1", "file_type": "document", "source_file": "mail/RUNBOOK-mx1-provision.md"}, {"id": "mx1", "label": "mx1.branchleft.co.uk", "file_type": "concept", "source_file": "mail/RUNBOOK-mx1-provision.md"}], "edges": [], "hyperedges": []}
