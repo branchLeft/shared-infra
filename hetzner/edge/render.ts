@@ -130,6 +130,21 @@ const PROBE_PORT = 8080;
 const PROBE_HOSTNAME = 'edge-probe.invalid';
 
 /**
+ * Response header naming which probe block answered, and its two values.
+ *
+ * The bare-port probe is a catch-all: it matches every Host, so it answers a
+ * request carrying `Host: edge-probe.invalid` exactly as the host-qualified
+ * block would, whenever that block is absent. Status code alone therefore
+ * cannot tell a delivered config from an undelivered one -- a skipped `rsync`
+ * would produce the documented success signal with no host routing exercised
+ * at all. The marker is the only thing that distinguishes them, and so is what
+ * the verification actually reads.
+ */
+const PROBE_MARKER_HEADER = 'X-Edge-Probe';
+const PROBE_MARKER_HOST = 'host-routed';
+const PROBE_MARKER_BARE = 'bare-port';
+
+/**
  * Port carrying Caddy's own Prometheus metrics, on a listener separate from
  * every public site. Compose publishes it on `edge1`'s private address only
  * (`../monitoring/stack/compose.yml`'s Prometheus scrapes it from there) --
@@ -394,7 +409,12 @@ function redirectBlock(redirect: HostRedirect, zone: string, posture: EdgePostur
  * Rendered twice, at the same port, with and without a host. See
  * `PROBE_HOSTNAME` for why the second one exists.
  */
-function probeBlock(posture: EdgePosture, address: string, generalZone: string): Block {
+function probeBlock(
+  posture: EdgePosture,
+  address: string,
+  generalZone: string,
+  marker: string
+): Block {
   const body: string[] = [...logDirective(PROBE_LOG)];
   // Carries the members magic-link matcher too, same as a real site: this is
   // what lets the throttle be trip-tested with a loopback `curl` before any
@@ -409,6 +429,16 @@ function probeBlock(posture: EdgePosture, address: string, generalZone: string):
       appsec: 'all',
       membersMagicLink: true,
     }).map((line) => `\t${line}`),
+    // Names which block answered. Without it the two probes are
+    // indistinguishable on the wire: a bare `:port` address matches every
+    // Host, so it answers a request for the host-qualified name identically
+    // whenever that block is missing -- and a verification step that passes
+    // with the thing it verifies absent is not a verification step. This is
+    // what makes RUNBOOK-edge.md §8b(4a) discriminating, and it is why the
+    // marker must survive into the committed posture rather than depending on
+    // the separate general zones, which render only under `rateLimit:
+    // 'enforcing'`.
+    `\theader ${PROBE_MARKER_HEADER} ${marker}`,
     '\trespond 204',
     '}'
   );
@@ -502,8 +532,15 @@ export function renderCaddyfile(
   }
   // Host-qualified first, bare port second. Caddy picks the most specific
   // matching site regardless of order, so this is for the reader, not for it.
-  blocks.push(probeBlock(posture, `http://${PROBE_HOSTNAME}:${PROBE_PORT}`, 'probe_host_per_ip'));
-  blocks.push(probeBlock(posture, `:${PROBE_PORT}`, 'probe_per_ip'));
+  blocks.push(
+    probeBlock(
+      posture,
+      `http://${PROBE_HOSTNAME}:${PROBE_PORT}`,
+      'probe_host_per_ip',
+      PROBE_MARKER_HOST
+    )
+  );
+  blocks.push(probeBlock(posture, `:${PROBE_PORT}`, 'probe_per_ip', PROBE_MARKER_BARE));
   blocks.push(metricsBlock());
 
   // No blank line between the banner and the global options block: `caddy fmt`

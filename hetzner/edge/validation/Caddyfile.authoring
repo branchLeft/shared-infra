@@ -78,6 +78,7 @@ http://edge-probe.invalid:8080 {
 		}
 		crowdsec
 		appsec
+		header X-Edge-Probe host-routed
 		respond 204
 	}
 }
@@ -108,6 +109,7 @@ http://edge-probe.invalid:8080 {
 		}
 		crowdsec
 		appsec
+		header X-Edge-Probe bare-port
 		respond 204
 	}
 }

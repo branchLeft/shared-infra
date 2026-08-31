@@ -292,10 +292,12 @@ magic-link zone; the two counters are independent by construction.
 
 **b. The members magic-link throttle is on, and trips.** Five events per 60
 seconds, matching `POST` only, on `/members/api/send-magic-link` and its
-trailing-slash form. **Leave at least 60 seconds between each of the three
-loops below**: they share one counter, so running them back to back exhausts
-the budget once and every later loop reads `429` regardless of what it is
-actually testing.
+trailing-slash form. **Leave at least 60 seconds between each of the four
+checks below** — loop 3 and loop 4b are each a single unbroken sequence
+internally, but the gap goes _between_ them. They all share one counter, so
+running them back to back exhausts the budget once and every later loop reads
+`429` regardless of what it is actually testing. Check 4a is two requests and
+does not need its own window, but it does spend two events.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
@@ -355,8 +357,42 @@ loop is what closes that.
 
 `edge-probe.invalid` is a second probe address on the same port, differing only
 in carrying a host. It is reserved by RFC 2606 and never resolves, so this runs
-entirely on the host and touches no production hostname. Run it as one unbroken
-sequence — the point is that the second half inherits the first half's budget.
+entirely on the host and touches no production hostname.
+
+**4a. Confirm the host-qualified block is actually deployed and selected.** Run
+this first, and do not read 4b's result without it.
+
+The bare `:8080` block is a **catch-all** — it matches every Host, so if
+`hetzner/edge/stack/Caddyfile` was never `rsync`ed onto the host, or the
+restart in step 6 was skipped, the catch-all answers a request for
+`edge-probe.invalid` exactly as the host-qualified block would. Status code
+alone cannot tell those apart, so each block names itself in an
+`X-Edge-Probe` response header, and that header is the thing to read:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+  for h in edge-probe.invalid 127.0.0.1; do
+    curl -s -o /dev/null -D - -X POST -H "Host: $h" \
+      http://127.0.0.1:8080/members/api/send-magic-link |
+      awk -v h="$h" "tolower(\$1) ~ /^x-edge-probe:/ { print h, \$2 }"
+  done'
+```
+
+Expect exactly:
+
+```
+edge-probe.invalid host-routed
+127.0.0.1 bare-port
+```
+
+`edge-probe.invalid bare-port` means the catch-all served it — the
+host-qualified block is not on the host, and **4b below would still print
+`5 204, 3 429`**, proving nothing. Empty output means the config predates this
+header entirely; re-check step 4 and step 6.
+
+**4b. The zone spans hostnames.** Wait a full 60 seconds after 4a, then run
+this as one unbroken sequence — the point is that the second half inherits the
+first half's budget:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
@@ -371,8 +407,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
   done' | sort | uniq -c
 ```
 
-Expect `5 204` then `3 429`. Two distinct facts, and neither is provable
-without the other half of the loop:
+Expect `5 204` then `3 429`. Given 4a passed, this shows two things:
 
 - The host-qualified requests were **routed through a site block** Caddy
   selected by `Host`, and the throttle was reached inside it. A bare-port trip

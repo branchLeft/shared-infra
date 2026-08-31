@@ -140,8 +140,11 @@ describe('the rendered Caddyfile', () => {
   });
 
   it('always carries a loopback probe listener so the posture is observable', () => {
-    expect(render(DETECT_ONLY)).toContain(':8080 {');
-    expect(render(ENFORCING)).toContain(':8080 {');
+    // Anchored on the newline: a bare `toContain(':8080 {')` is satisfied by
+    // `http://edge-probe.invalid:8080 {`, so deleting the catch-all probe
+    // entirely would still pass this.
+    expect(render(DETECT_ONLY)).toContain('\n:8080 {');
+    expect(render(ENFORCING)).toContain('\n:8080 {');
   });
 
   it('always carries a metrics listener, independent of posture', () => {
@@ -285,6 +288,24 @@ describe('the rendered Caddyfile', () => {
     expect(barePort).toContain('zone probe_per_ip {');
   });
 
+  it('marks each probe block with a distinct response header in every posture', () => {
+    // The whole discriminating power of RUNBOOK-edge.md §8b(4a). Without the
+    // marker the catch-all answers a host-qualified request identically when
+    // the host-qualified block is missing, so the check would pass against an
+    // undelivered config. Asserted in the committed posture too, not only the
+    // fully-enforcing one, because that is the config actually on the host.
+    for (const posture of [DETECT_ONLY, ENFORCING]) {
+      const rendered = render(posture);
+      const hostProbe =
+        rendered.split('http://edge-probe.invalid:8080 {')[1]?.split('\n}')[0] ?? '';
+      const barePort = rendered.split('\n:8080 {')[1]?.split('\n}')[0] ?? '';
+      expect(hostProbe).toContain('header X-Edge-Probe host-routed');
+      expect(barePort).toContain('header X-Edge-Probe bare-port');
+      expect(hostProbe).not.toContain('bare-port');
+      expect(barePort).not.toContain('host-routed');
+    }
+  });
+
   it('never renders the probe hostname as a TLS site, so no CA is ever asked to validate an unresolvable name', () => {
     // `.invalid` is RFC 2606 reserved and can never be validated. Without the
     // explicit `http://` scheme Caddy would try ACME for it on every start.
@@ -351,7 +372,7 @@ describe('the rendered Caddyfile', () => {
     });
 
     it('renders the general throttle on the loopback probe when only it is enforcing', () => {
-      const probeBlockText = render(GENERAL_ONLY).split(':8080 {')[1] ?? '';
+      const probeBlockText = render(GENERAL_ONLY).split('\n:8080 {')[1] ?? '';
       expect(probeBlockText).toContain('rate_limit {');
       expect(probeBlockText).not.toContain('members_magic_link');
     });
