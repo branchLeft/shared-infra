@@ -203,7 +203,7 @@ tests:
             exp_annotations:
               summary: 'mx1.branchleft.co.uk:587 failed its mail liveness probe for 5 minutes.'
               description: >-
-                smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: a follow-up story routes this one through a path that does not transit mx1, which a generic probe alert cannot be scoped to on its own. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe.
+                smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: it is what the mailhost-deadman route in the Alertmanager template matches on, so this alert reaches a receiver that does not transit mx1 in addition to the mx1-routed email receiver. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe.
 
   # MailHostDown does not page on a blip shorter than for: 5m -- one failed
   # scrape, recovered on the next one, is a transient network hiccup rather
@@ -243,7 +243,7 @@ tests:
             exp_annotations:
               summary: 'mx1.branchleft.co.uk:25 failed its mail liveness probe for 5 minutes.'
               description: >-
-                smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: a follow-up story routes this one through a path that does not transit mx1, which a generic probe alert cannot be scoped to on its own. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe.
+                smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: it is what the mailhost-deadman route in the Alertmanager template matches on, so this alert reaches a receiver that does not transit mx1 in addition to the mx1-routed email receiver. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe.
 
   # The mutual-exclusivity invariant BlackboxProbeFailed's job!="blackbox_mail"
   # exclusion exists for: a mail-probe failure fires MailHostDown alone, and
@@ -269,7 +269,7 @@ tests:
             exp_annotations:
               summary: 'mx1.branchleft.co.uk:465 failed its mail liveness probe for 5 minutes.'
               description: >-
-                smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: a follow-up story routes this one through a path that does not transit mx1, which a generic probe alert cannot be scoped to on its own. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe.
+                smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: it is what the mailhost-deadman route in the Alertmanager template matches on, so this alert reaches a receiver that does not transit mx1 in addition to the mx1-routed email receiver. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe.
       # Exhaustive on purpose: if the exclusion matcher above ever admitted
       # the mx1 instance too, it would show up here as a second, unexpected
       # alert and fail this assertion.
@@ -284,3 +284,112 @@ tests:
               summary: 'https://other.branchleft.co.uk failed its external probe for 5 minutes.'
               description: >-
                 The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below.
+
+  # RateLimitDecliningRealClients: the exact live label schema on edge1
+  # (verified 2026-08-30) is a keyless zone-aggregate series and a
+  # key="172.18.0.1" series, both flat at 6 -- no new declines since. Neither
+  # should fire: increase() over a flat counter is ~0. This is also the
+  # sanity check that the rule does not page on stale history alone.
+  - interval: 30s
+    input_series:
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", host="edge1"}'
+        values: '6+0x30'
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.18.0.1", host="edge1"}'
+        values: '6+0x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RateLimitDecliningRealClients
+        exp_alerts: []
+
+  # key!="" : the keyless zone-aggregate series climbing on its own must not
+  # fire -- it is not a real client, it is the sum every keyed series is
+  # already counted under. Without this exclusion the alert double-counts
+  # every decline once here and once under its key.
+  - interval: 30s
+    input_series:
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", host="edge1"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RateLimitDecliningRealClients
+        exp_alerts: []
+
+  # key!~"172\.(1[6-9]|2\d|3[01])\..*" : a climbing count from the Docker
+  # bridge address alone -- edge1's own loopback smoke test tripping the
+  # magic-link limiter, the only source of declines on record today -- must
+  # not fire either.
+  - interval: 30s
+    input_series:
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.18.0.1", host="edge1"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RateLimitDecliningRealClients
+        exp_alerts: []
+
+  # A real client's key climbing does fire -- the whole point of the rule.
+  - interval: 30s
+    input_series:
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="203.0.113.5", host="edge1"}'
+        values: '0+1x30'
+    promql_expr_test:
+      - expr: ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing"}
+        eval_time: 15m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing", severity="warning", zone="members_magic_link_per_ip", key="203.0.113.5", host="edge1"}'
+            value: 1
+
+  # Both a bridge key and a real key climbing together: exactly one series
+  # fires. Exhaustive on purpose, the same reason the BlackboxProbeFailed /
+  # MailHostDown mutual-exclusivity case above checks both sides -- a
+  # matcher typo that let 172.18.0.1 back in would show up here as a second,
+  # unexpected sample and fail this assertion.
+  - interval: 30s
+    input_series:
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.18.0.1", host="edge1"}'
+        values: '0+1x30'
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="203.0.113.9", host="edge1"}'
+        values: '0+1x30'
+    promql_expr_test:
+      - expr: ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing"}
+        eval_time: 15m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing", severity="warning", zone="members_magic_link_per_ip", key="203.0.113.9", host="edge1"}'
+            value: 1
+
+  # AlertEmailDeliveryFailing: a climbing failure count on the email
+  # integration fires -- this is the metric that would have caught the
+  # six-day mx1 outage, since it measures delivery, not process liveness.
+  - interval: 30s
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{integration="email", job="alertmanager", instance="alertmanager:9093", host="edge1", expected_up="true"}'
+        values: '0+1x60'
+    promql_expr_test:
+      - expr: ALERTS{alertname="AlertEmailDeliveryFailing", alertstate="firing"}
+        eval_time: 30m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AlertEmailDeliveryFailing", alertstate="firing", severity="critical", integration="email", job="alertmanager", instance="alertmanager:9093", host="edge1", expected_up="true"}'
+            value: 1
+
+  # A flat count -- no new failures in the last 30m -- does not fire.
+  - interval: 30s
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{integration="email", job="alertmanager", instance="alertmanager:9093", host="edge1", expected_up="true"}'
+        values: '3+0x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: AlertEmailDeliveryFailing
+        exp_alerts: []
+
+  # integration="email" : a climbing failure count on a different
+  # integration (e.g. the mailhost-deadman webhook itself failing) must not
+  # fire this alert -- it names the email path specifically, not every
+  # notification pipeline failure.
+  - interval: 30s
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{integration="webhook", job="alertmanager", instance="alertmanager:9093", host="edge1", expected_up="true"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: AlertEmailDeliveryFailing
+        exp_alerts: []

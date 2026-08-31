@@ -450,6 +450,7 @@ jobs:
           SMTP_PASSWORD: validation/pass&word
           HEALTHCHECKS_PING_URL: https://hc-ping.com/validation-only
           ALERT_RECIPIENT_EMAIL: ops@example.invalid
+          MAILHOST_PING_URL: https://hc-ping.com/validation-only/fail
         run: python3 hetzner/monitoring/stack/render_alertmanager_config.py
 
       - name: Validate the Alertmanager config

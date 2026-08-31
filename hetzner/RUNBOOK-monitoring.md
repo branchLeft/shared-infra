@@ -227,14 +227,19 @@ gap, it is an accepted one:** alert email is submitted _through_ mx1, so when
 mx1 is down no alert mail is sent at all, and no Sieve rule on that host could
 have helped either. `ALERT_RECIPIENT_EMAIL` being off-mx1 covers a different
 case -- mx1 up, the alerting mailbox unreachable or unread. `MailHostDown`
-(§8) now gives Prometheus a rule that _fires_ on an mx1 outage, visible to
-anyone reading `/api/v1/alerts` or the Alertmanager UI directly -- but its
-only configured receiver is still the `email` route through mx1, so the
-circularity is unchanged: the notification for that exact alert cannot be
-delivered while the outage it describes is ongoing. The only thing that
-reports an mx1-down or edge1-down condition _by notifying someone_ is the
-Healthchecks.io dead-man's switch in 11, which is why 12's second proof is not
-optional.
+(§8) gives Prometheus a rule that _fires_ on an mx1 outage, visible to anyone
+reading `/api/v1/alerts` or the Alertmanager UI directly, and -- together with
+`AlertEmailDeliveryFailing`, which fires on the delivery failure itself rather
+than on the mx1 probe -- is also routed to the `mailhost-deadman` receiver
+(`renderAlertmanagerTemplate()`), a Healthchecks.io `/fail` ping that does not
+transit mx1, _in addition to_ the mx1-routed `email` receiver. The circularity
+that used to strand exactly these two alertnames is closed: they still submit
+through the `email` route (and still lose that copy while mx1 is down), but
+they also reach somewhere that does not depend on the path they are reporting
+as broken. The Watchdog heartbeat in 11 remains the only thing that catches a
+total loss of the monitoring stack itself -- neither new alert can fire if
+Prometheus is not evaluating rules at all -- which is why 12's second proof is
+still not optional.
 
 This step, the mailbox decision and the resulting credential are all
 platform-owner-gated -- mx1 is live production mail.
@@ -248,13 +253,25 @@ shared unit template), and it is also what
 that script's docstring for why Alertmanager's own config format cannot read
 an environment variable itself, unlike Caddy's `{env.X}`.
 
-| Variable                 | Used by                                       | Where the value comes from                                                                                                                                 |
-| ------------------------ | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SMTP_USERNAME`          | Alertmanager (via the render script)          | Step 2's submission credential                                                                                                                             |
-| `SMTP_PASSWORD`          | Alertmanager (via the render script)          | Step 2's submission credential                                                                                                                             |
-| `HEALTHCHECKS_PING_URL`  | Alertmanager (via the render script)          | The Healthchecks.io check's ping URL (PR's handover steps)                                                                                                 |
-| `ALERT_RECIPIENT_EMAIL`  | Alertmanager (via the render script)          | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too |
-| `GRAFANA_ADMIN_PASSWORD` | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`) | Generated fresh, stored in the password manager                                                                                                            |
+| Variable                 | Used by                                       | Where the value comes from                                                                                                                                                                                                                                                                                |
+| ------------------------ | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SMTP_USERNAME`          | Alertmanager (via the render script)          | Step 2's submission credential                                                                                                                                                                                                                                                                            |
+| `SMTP_PASSWORD`          | Alertmanager (via the render script)          | Step 2's submission credential                                                                                                                                                                                                                                                                            |
+| `HEALTHCHECKS_PING_URL`  | Alertmanager (via the render script)          | The Healthchecks.io check's ping URL (PR's handover steps)                                                                                                                                                                                                                                                |
+| `ALERT_RECIPIENT_EMAIL`  | Alertmanager (via the render script)          | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too                                                                                                                                                |
+| `MAILHOST_PING_URL`      | Alertmanager (via the render script)          | A second, dedicated Healthchecks.io check's `/fail` endpoint -- hitting `/fail` marks it down immediately rather than waiting for a missed heartbeat. Routed to by `MailHostDown` and `AlertEmailDeliveryFailing` only (see `mailhost-deadman` in `renderAlertmanagerTemplate()`), never by anything else |
+| `GRAFANA_ADMIN_PASSWORD` | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`) | Generated fresh, stored in the password manager                                                                                                                                                                                                                                                           |
+
+**This step now writes five secrets, not four -- `MAILHOST_PING_URL` is as
+required as the other three Alertmanager variables.**
+`render_alertmanager_config.py` raises `ValueError` on any missing or blank
+placeholder variable and runs as this stack's systemd `ExecStartPre`, so a
+restart with `MAILHOST_PING_URL` absent from `/etc/branchleft/monitoring.env`
+fails the unit start outright -- the monitoring stack does not come up
+degraded, it does not come up at all. On a host already running the
+pre-this-PR stack, write this variable into the file **before** restarting
+into the new `stack/` contents (step 7b); restarting first and writing the
+secret after leaves the stack down for the gap in between.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
@@ -272,6 +289,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
     printf "SMTP_PASSWORD=%s\n" "<SUBMISSION_PASSWORD>";
     printf "HEALTHCHECKS_PING_URL=%s\n" "<HEALTHCHECKS_PING_URL>";
     printf "ALERT_RECIPIENT_EMAIL=%s\n" "<ALERT_RECIPIENT_EMAIL>";
+    printf "MAILHOST_PING_URL=%s\n" "<MAILHOST_PING_URL>";
     printf "GRAFANA_ADMIN_PASSWORD=%s\n" "$(openssl rand -base64 24)"; } \
     > /etc/branchleft/monitoring.env &&
   chmod 0600 /etc/branchleft/monitoring.env &&
@@ -462,6 +480,19 @@ Only `node` for `app1` and `node` for `db1` are expected `down`: those two
 exporters are not provisioned (see `render.ts`'s `MONITORED_NODE_HOSTS`
 docstring). A `down` target with `expected_up: 'true'` in its labels is the
 only one worth investigating.
+
+Two alert rules read metrics this stack already scrapes rather than a new
+target: `AlertEmailDeliveryFailing` reads `alertmanager_notifications_failed_total`
+from the `alertmanager` job above -- it fires on a failed email delivery
+attempt, not on the process being unreachable, which is exactly what
+`HostOrServiceDown` cannot see. `RateLimitDecliningRealClients` reads Caddy's
+own `caddy_rate_limit_declined_requests_total` from the `caddy` job -- see
+`render.ts`'s comment on the rule for why it excludes the keyless
+zone-aggregate series and the Docker bridge range. Only `AlertEmailDeliveryFailing`
+(and `MailHostDown`) route to the `mailhost-deadman` receiver in addition to
+`email`, per the rewritten circularity note above -- `RateLimitDecliningRealClients`
+is an ordinary `warning` routed through `email` alone, unrelated to the mx1
+circularity this PR closes.
 
 `mysqld` being `up` is necessary and not sufficient -- the exporter answers
 with a full 200 and `mysql_up 0` when it cannot read MySQL, which is the state
