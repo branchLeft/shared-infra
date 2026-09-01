@@ -426,3 +426,155 @@ tests:
       - eval_time: 30m
         alertname: AlertEmailDeliveryFailing
         exp_alerts: []
+
+  # The trap this rule is written around, reproduced. Stalwart has never
+  # incremented `delivery.rcpt-to-rejected` on mx1 -- nothing has bounced -- so
+  # the counter is absent from the exposition entirely rather than exported as
+  # zero. Plain `a + b` vector arithmetic drops every sample when one side has
+  # no series, so a numerator written without `or vector(0)` evaluates to
+  # nothing here and the alert stays silent through a real bounce storm while
+  # reading as coverage. This case asserts it fires with only one of the two
+  # counters present, which is the state the live host is actually in.
+  - interval: 5m
+    input_series:
+      - series: 'delivery_completed{job="stalwart", instance="mx1.branchleft.co.uk:443", host="mx1", expected_up="true"}'
+        values: '0+10x100'
+      - series: 'delivery_dsn_perm_fail{job="stalwart", instance="mx1.branchleft.co.uk:443", host="mx1", expected_up="true"}'
+        values: '0+2x100'
+    alert_rule_test:
+      - eval_time: 8h
+        alertname: MailDeliveryFailureRatioHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: >-
+                Over 10% of mx1 delivery attempts in the last 6 hours failed permanently.
+              description: >-
+                A ratio rather than a threshold on a raw counter: a raw count fires on volume, so it would page on a busy healthy day and stay silent through a quiet poisoned one. Both numerator terms carry `or vector(0)` because a counter Stalwart has never had occasion to increment is absent from the exposition rather than exported as zero -- and plain vector arithmetic drops the whole expression when one side is missing, so without this the alert would evaluate to nothing in exactly the state mx1 is in today. The sum() around each term strips the instance labels so the two terms and the denominator match on an empty label set. The `> 20` floor keeps a two-message morning from paging on a single bounce, where one failure is half the traffic. This is the closest available proxy for sender reputation, not a measure of it: complaint rate is reported by receiving providers out of band and no self-hosted MTA can observe it. See RUNBOOK-monitoring.md for what to do when this fires.
+      # The counters are being published, so nothing is missing.
+      - eval_time: 8h
+        alertname: MailDeliveryMetricsMissing
+        exp_alerts: []
+      # 120 deliveries an hour is ordinary traffic, not a flood.
+      - eval_time: 8h
+        alertname: MailDeliveryVolumeSpike
+        exp_alerts: []
+
+  # Healthy: mail flowing, neither failure counter ever initialised. The
+  # numerator defaults to zero rather than to no-data, so the ratio is a real
+  # 0 and the rule is silent for the right reason.
+  - interval: 5m
+    input_series:
+      - series: 'delivery_completed{job="stalwart", instance="mx1.branchleft.co.uk:443", host="mx1", expected_up="true"}'
+        values: '0+10x100'
+    alert_rule_test:
+      - eval_time: 8h
+        alertname: MailDeliveryFailureRatioHigh
+        exp_alerts: []
+
+  # Every delivery in the window failed, but there were only a dozen of them.
+  # The `> 20` floor is what keeps a quiet morning with one bounce off the
+  # pager: on volume this low the ratio is noise, not reputation.
+  - interval: 30m
+    input_series:
+      - series: 'delivery_completed{job="stalwart", instance="mx1.branchleft.co.uk:443", host="mx1", expected_up="true"}'
+        values: '0+1x20'
+      - series: 'delivery_dsn_perm_fail{job="stalwart", instance="mx1.branchleft.co.uk:443", host="mx1", expected_up="true"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 8h
+        alertname: MailDeliveryFailureRatioHigh
+        exp_alerts: []
+
+  # A signup flood: volume up an order of magnitude with nothing bouncing yet,
+  # because the far side has not started rejecting. This is the case the ratio
+  # alert cannot catch and is the whole reason the volume ceiling exists
+  # alongside it -- asserted here by the ratio rule staying silent on the same
+  # input that fires the ceiling.
+  - interval: 5m
+    input_series:
+      - series: 'delivery_completed{job="stalwart", instance="mx1.branchleft.co.uk:443", host="mx1", expected_up="true"}'
+        values: '0+30x30'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: MailDeliveryVolumeSpike
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: >-
+                mx1 completed over 200 delivery attempts in the last hour.
+              description: >-
+                A ceiling, not a baseline-derived anomaly detector: this estate has no legitimate reason to send at this rate today, and if it ever does that is itself worth knowing. It is the leading indicator the ratio alert above cannot be -- an abusive signup flood inflates volume within the hour, while a bounce ratio only moves once the far side starts rejecting, hours later. The edge rate limiter is the control; this is the detection that says the control was not enough. Re-tune the threshold from observed volume once a fortnight of data exists.
+      - eval_time: 2h
+        alertname: MailDeliveryFailureRatioHigh
+        exp_alerts: []
+
+  # The scrape succeeds and publishes no delivery counters at all -- a Stalwart
+  # rename, or a metrics level reconfigured to exclude delivery. Both rules
+  # above lose their input and go quiet, which is indistinguishable from a
+  # healthy mail host; this is the rule that makes that state visible.
+  - interval: 5m
+    input_series:
+      - series: 'up{job="stalwart", instance="mx1.branchleft.co.uk:443", host="mx1", expected_up="true"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: MailDeliveryMetricsMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: >-
+                mx1 is answering its metrics scrape but publishing no delivery counters.
+              description: >-
+                Both rules above divide by or threshold on delivery_completed. If Stalwart renames it, drops it, or is reconfigured to a metrics level that no longer includes delivery, those rules stop evaluating and a broken rule reads exactly like a healthy mail host -- which is the failure this whole target exists to avoid. Gated on up == 1 so a scrape outage pages once, as HostOrServiceDown, rather than twice here as well.
+
+  # The target is down, so the counters are absent for a reason
+  # HostOrServiceDown already reports. Gating on up == 1 is what stops one
+  # outage producing two pages.
+  - interval: 5m
+    input_series:
+      - series: 'up{job="stalwart", instance="mx1.branchleft.co.uk:443", host="mx1", expected_up="true"}'
+        values: '0+0x20'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: MailDeliveryMetricsMissing
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: HostOrServiceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: stalwart
+              instance: mx1.branchleft.co.uk:443
+              host: mx1
+              expected_up: 'true'
+            exp_annotations:
+              summary: 'stalwart on mx1 has been unreachable for 5 minutes.'
+              description: >-
+                Scoped to expected_up="true" targets only -- app1 and db1 carry expected_up="false" until their node exporters are provisioned, so targets without exporters do not page anyone.
+
+  # The mirror of the case above, and not redundant with it: either counter
+  # can be the one that has never fired, and a numerator defaulted on only one
+  # side is silent in exactly half the possible states. `delivery.rcpt-to-`
+  # `rejected` is the likelier of the two to appear first -- a recipient
+  # rejected at RCPT TO never reaches the point of generating a DSN.
+  - interval: 5m
+    input_series:
+      - series: 'delivery_completed{job="stalwart", instance="mx1.branchleft.co.uk:443", host="mx1", expected_up="true"}'
+        values: '0+10x100'
+      - series: 'delivery_rcpt_to_rejected{job="stalwart", instance="mx1.branchleft.co.uk:443", host="mx1", expected_up="true"}'
+        values: '0+2x100'
+    alert_rule_test:
+      - eval_time: 8h
+        alertname: MailDeliveryFailureRatioHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: >-
+                Over 10% of mx1 delivery attempts in the last 6 hours failed permanently.
+              description: >-
+                A ratio rather than a threshold on a raw counter: a raw count fires on volume, so it would page on a busy healthy day and stay silent through a quiet poisoned one. Both numerator terms carry `or vector(0)` because a counter Stalwart has never had occasion to increment is absent from the exposition rather than exported as zero -- and plain vector arithmetic drops the whole expression when one side is missing, so without this the alert would evaluate to nothing in exactly the state mx1 is in today. The sum() around each term strips the instance labels so the two terms and the denominator match on an empty label set. The `> 20` floor keeps a two-message morning from paging on a single bounce, where one failure is half the traffic. This is the closest available proxy for sender reputation, not a measure of it: complaint rate is reported by receiving providers out of band and no self-hosted MTA can observe it. See RUNBOOK-monitoring.md for what to do when this fires.

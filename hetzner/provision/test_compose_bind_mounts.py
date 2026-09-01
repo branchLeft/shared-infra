@@ -51,8 +51,22 @@ ACQUISITION_DIR = re.compile(r"\A\s*acquisition_dir:\s*(?P<path>\S+)\s*\Z")
 # by `render_alertmanager_config.py`, written 0600 on the host. Committing it
 # would put those secrets in a public repository, which is why the template is
 # what lives here.
+# `prometheus/mx1-metrics-password` is the same shape: the `stalwart` scrape
+# job's `basic_auth` password, written 0600 on the host by the same script from
+# `STALWART_PROMETHEUS_SECRET`. Committing it would put a live credential in a
+# public repository.
+#
+# This exemption is what makes the empty-directory failure this file describes
+# reachable for that one path, so `write_prometheus_password()` clears such a
+# directory before writing -- without that, one hand-run `docker compose up`
+# would wedge every later `ExecStartPre` and take the whole stack down.
+# Prometheus itself tolerates the file being absent: it starts, that one scrape
+# fails, and `up{job="stalwart"} == 0` pages within five minutes.
 DEPLOY_TIME_SOURCES = {
-    "monitoring": {"./alertmanager/alertmanager.yml"},
+    "monitoring": {
+        "./alertmanager/alertmanager.yml",
+        "./prometheus/mx1-metrics-password",
+    },
 }
 
 

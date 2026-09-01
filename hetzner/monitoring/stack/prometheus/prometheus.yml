@@ -94,3 +94,18 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: 'blackbox-exporter:9115'
+
+  - job_name: stalwart
+    scheme: https
+    metrics_path: /metrics/prometheus
+    basic_auth:
+      username: prometheus
+      password_file: /etc/prometheus/mx1-metrics-password
+    tls_config:
+      server_name: mx1.branchleft.co.uk
+    static_configs:
+      - targets: ['167.233.252.240:443']
+        labels: {host: mx1, expected_up: 'true'}
+    relabel_configs:
+      - target_label: instance
+        replacement: 'mx1.branchleft.co.uk:443'

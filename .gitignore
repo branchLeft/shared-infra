@@ -29,3 +29,11 @@ __pycache__/
 # instead.
 /cloud-armor-baseline/*.raw.json
 /cloud-armor-baseline/*.list.json
+
+# Rendered on the host (and in CI's throwaway checkout) by
+# hetzner/monitoring/stack/render_alertmanager_config.py from
+# /etc/branchleft/monitoring.env. Both carry a secret in plaintext; neither is
+# ever committed. The committed inputs are alertmanager.yml.tmpl and
+# prometheus.yml, which carry placeholders and a file path respectively.
+/hetzner/monitoring/stack/alertmanager/alertmanager.yml
+/hetzner/monitoring/stack/prometheus/mx1-metrics-password

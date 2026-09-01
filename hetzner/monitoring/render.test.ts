@@ -231,6 +231,56 @@ describe('the rendered Prometheus config', () => {
     expect(blackboxSection).toContain("labels: {host: edge1, expected_up: 'true'}");
   });
 
+  describe('the mx1 Stalwart exporter, which is what the liveness probe cannot see', () => {
+    const stalwartSection = (rendered: string) =>
+      rendered.slice(rendered.indexOf('  - job_name: stalwart'));
+
+    it('scrapes it over HTTPS on the existing public listener, needing no new firewall rule', () => {
+      const section = stalwartSection(renderPrometheusConfig(sites));
+      expect(section).toContain('scheme: https');
+      expect(section).toContain('metrics_path: /metrics/prometheus');
+    });
+
+    it('targets the IPv4 address rather than the hostname, because the AAAA record is refused', () => {
+      // Not a preference for addresses over names -- blackbox_mail right
+      // above deliberately goes by name. Stalwart's access-control rule
+      // admits edge1's public IPv4 only, so a scrape that resolves
+      // mx1.branchleft.co.uk and reaches for its AAAA record first gets a
+      // 421 from a server that is otherwise answering correctly. That is not
+      // hypothetical: it is what happened to curl during the live
+      // verification that built this endpoint.
+      const section = stalwartSection(renderPrometheusConfig(sites));
+      expect(section).toContain("targets: ['167.233.252.240:443']");
+      expect(section).not.toContain("targets: ['mx1.branchleft.co.uk:443']");
+    });
+
+    it('still verifies the certificate against the hostname, and labels the target by it', () => {
+      // Without server_name the scrape would check the certificate against an
+      // IP literal that is not in it and fail closed on a healthy server --
+      // trading one failure mode for another rather than fixing anything.
+      const section = stalwartSection(renderPrometheusConfig(sites));
+      expect(section).toContain('server_name: mx1.branchleft.co.uk');
+      expect(section).toContain("replacement: 'mx1.branchleft.co.uk:443'");
+    });
+
+    it('reads the credential from a file, never from this config', () => {
+      // stack/prometheus/prometheus.yml is committed to a public repository.
+      const rendered = renderPrometheusConfig(sites);
+      expect(stalwartSection(rendered)).toContain(
+        'password_file: /etc/prometheus/mx1-metrics-password'
+      );
+      expect(rendered).not.toContain('password:');
+    });
+
+    it('marks mx1 expected up, so a missing credential file pages rather than going quiet', () => {
+      // The whole failure mode of a password_file that was never written:
+      // Prometheus starts fine, this one scrape fails, and without this label
+      // nothing would ever say so.
+      const section = stalwartSection(renderPrometheusConfig(sites));
+      expect(section).toContain("labels: {host: mx1, expected_up: 'true'}");
+    });
+  });
+
   describe('the mx1 mail liveness probe', () => {
     it('probes mx1 by hostname, on the four ports the mail firewall opens', () => {
       const rendered = renderPrometheusConfig(sites);
@@ -335,6 +385,35 @@ describe('the rendered alert rules', () => {
     expect(rendered).toContain(
       'expr: increase(alertmanager_notifications_failed_total{integration="email"}[30m]) > 0'
     );
+  });
+});
+
+describe('the mail-delivery alert rules', () => {
+  const rendered = renderAlertRules();
+
+  it('measures failures as a ratio, never as a raw count', () => {
+    // A raw-count threshold fires on volume: it pages on a busy healthy day
+    // and stays silent through a quiet poisoned one, which is the opposite of
+    // what a reputation signal has to do.
+    expect(rendered).toContain('alert: MailDeliveryFailureRatioHigh');
+    expect(rendered).toContain('/ sum(increase(delivery_completed[6h])) > 0.10');
+  });
+
+  it('defaults both failure counters to zero, because an unfired counter is absent rather than zero -- see alert_rules_test.yml for the promtool proof that it fires with only one of the two present', () => {
+    expect(rendered).toContain('(sum(increase(delivery_dsn_perm_fail[6h])) or vector(0))');
+    expect(rendered).toContain('(sum(increase(delivery_rcpt_to_rejected[6h])) or vector(0))');
+  });
+
+  it('watches for its own denominator disappearing, since a rule with no input reads exactly like a healthy mail host', () => {
+    expect(rendered).toContain('alert: MailDeliveryMetricsMissing');
+    expect(rendered).toContain(
+      'expr: absent(delivery_completed) and on() (up{job="stalwart"} == 1)'
+    );
+  });
+
+  it('carries a volume ceiling alongside the ratio, which is the only one of the two that moves inside the hour', () => {
+    expect(rendered).toContain('alert: MailDeliveryVolumeSpike');
+    expect(rendered).toContain('expr: sum(increase(delivery_completed[1h])) > 200');
   });
 });
 

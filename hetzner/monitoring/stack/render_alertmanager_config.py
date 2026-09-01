@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
-"""Writes `alertmanager.yml` from `alertmanager.yml.tmpl` and the four secrets
-in `/etc/branchleft/monitoring.env`.
+"""Writes the monitoring stack's two secret-bearing files from
+`/etc/branchleft/monitoring.env`: `alertmanager.yml`, substituted from
+`alertmanager.yml.tmpl`, and `prometheus/mx1-metrics-password`, the basic-auth
+password Prometheus presents to Stalwart's exporter on mx1.
+
+The filename is narrower than the remit. It stays as it is because
+`../systemd/monitoring.override.conf` names it in an `ExecStartPre` that is
+installed on the host, so a rename is a hand-delivered systemd change plus a
+`daemon-reload` bought for nothing but tidiness.
 
 Alertmanager's config format has no way to read an environment variable from
 inside itself -- unlike Caddy's `{env.X}`, which is what lets the edge stack
@@ -37,6 +44,14 @@ PLACEHOLDERS: dict[str, str] = {
 TEMPLATE_NAME = "alertmanager.yml.tmpl"
 OUTPUT_NAME = "alertmanager.yml"
 
+# Prometheus has no `{env.X}` of its own either, and `prometheus.yml` is
+# committed to a public repository, so the credential reaches it as a
+# `basic_auth.password_file` written here beside the config that names it.
+# `render.ts`'s STALWART_METRICS_PASSWORD_FILE is the container-side path this
+# file is mounted at; these two have to agree.
+PROMETHEUS_PASSWORD_VAR = "STALWART_PROMETHEUS_SECRET"
+PROMETHEUS_PASSWORD_PATH = ("prometheus", "mx1-metrics-password")
+
 
 def render(template: str, env: dict[str, str]) -> str:
     """Pure substitution -- no I/O, so this is what the unit tests exercise."""
@@ -67,10 +82,73 @@ def render(template: str, env: dict[str, str]) -> str:
 # no privilege to chown with.
 ALERTMANAGER_UID = int(os.environ.get("ALERTMANAGER_UID", "65534"))
 
+# Same reasoning and, today, the same uid: prom/prometheus also runs as
+# `nobody`. Kept as its own constant rather than reusing the one above,
+# because the two images are pinned and upgraded independently and a shared
+# constant would silently carry one image's uid onto the other.
+PROMETHEUS_UID = int(os.environ.get("PROMETHEUS_UID", "65534"))
+
+
+def write_prometheus_password(stack_dir: pathlib.Path, env: dict[str, str]) -> pathlib.Path | None:
+    """Writes the mx1 scrape credential, or removes it when there is none.
+
+    Deliberately not fatal when the variable is unset, unlike the Alertmanager
+    substitution above. Alertmanager cannot start at all without its config;
+    Prometheus starts fine without this file and simply fails that one scrape,
+    which `up{job="stalwart"} == 0` turns into a HostOrServiceDown page within
+    five minutes. Refusing to start the stack would trade one dead scrape
+    target for no alerting at all across the estate -- including the alert that
+    would have reported it.
+
+    The removal branch matters as much as the write: `/etc/branchleft/`
+    `monitoring.env` is the single source for this secret, so a value rotated
+    out of it must not leave the previous one readable on disk.
+    """
+    path = stack_dir.joinpath(*PROMETHEUS_PASSWORD_PATH)
+    # Docker creates an empty *directory* at a bind-mount source that does not
+    # exist, so a `docker compose up` run by hand before this script has ever
+    # written the file leaves one here. Clearing it is what keeps that mistake
+    # self-healing: without this, every later run raises IsADirectoryError out
+    # of the systemd ExecStartPre and the monitoring stack stops starting at
+    # all -- turning a missing scrape credential into a total loss of alerting.
+    if path.is_dir() and not path.is_symlink():
+        try:
+            path.rmdir()
+        except OSError as exc:
+            print(
+                f"render_alertmanager_config: {path} is a non-empty directory "
+                f"and was left alone ({exc}) -- the stalwart scrape will report "
+                "down until it is removed by hand",
+                file=sys.stderr,
+            )
+            return None
+
+    secret = env.get(PROMETHEUS_PASSWORD_VAR)
+    if not secret:
+        path.unlink(missing_ok=True)
+        print(
+            f"render_alertmanager_config: {PROMETHEUS_PASSWORD_VAR} is unset -- "
+            f"removed {path}; the stalwart scrape target will report down "
+            "until it is set in /etc/branchleft/monitoring.env",
+            file=sys.stderr,
+        )
+        return None
+
+    # No trailing newline: Prometheus sends the file's bytes verbatim as the
+    # password, so a newline here authenticates as a different string than the
+    # one in monitoring.env and the endpoint answers 401.
+    path.write_text(secret)
+    path.chmod(0o600)
+    if os.geteuid() == 0:
+        os.chown(path, PROMETHEUS_UID, PROMETHEUS_UID)
+    print(f"render_alertmanager_config: wrote {path}")
+    return path
+
 
 def main(argv: list[str]) -> int:
     del argv
-    alertmanager_dir = pathlib.Path(__file__).resolve().parent / "alertmanager"
+    stack_dir = pathlib.Path(__file__).resolve().parent
+    alertmanager_dir = stack_dir / "alertmanager"
     template_path = alertmanager_dir / TEMPLATE_NAME
     output_path = alertmanager_dir / OUTPUT_NAME
 
@@ -88,6 +166,8 @@ def main(argv: list[str]) -> int:
     if os.geteuid() == 0:
         os.chown(output_path, ALERTMANAGER_UID, ALERTMANAGER_UID)
     print(f"render_alertmanager_config: wrote {output_path}")
+
+    write_prometheus_password(stack_dir, dict(os.environ))
     return 0
 
 

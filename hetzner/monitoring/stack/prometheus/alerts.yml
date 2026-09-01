@@ -145,6 +145,72 @@ groups:
           summary: "{{ $labels.instance }} failed its mail liveness probe for 5 minutes."
           description: "smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: it is what the mailhost-deadman route in the Alertmanager template matches on, so this alert reaches a receiver that does not transit mx1 in addition to the mx1-routed email receiver. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe."
 
+  - name: mail-delivery
+    rules:
+      - alert: MailDeliveryFailureRatioHigh
+        expr: >-
+          (
+          (sum(increase(delivery_dsn_perm_fail[6h])) or vector(0))
+          +
+          (sum(increase(delivery_rcpt_to_rejected[6h])) or vector(0))
+          ) / sum(increase(delivery_completed[6h])) > 0.10
+          and sum(increase(delivery_completed[6h])) > 20
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Over 10% of mx1 delivery attempts in the last 6 hours failed permanently."
+          description: >-
+            A ratio rather than a threshold on a raw counter: a raw count
+            fires on volume, so it would page on a busy healthy day and
+            stay silent through a quiet poisoned one. Both numerator terms
+            carry `or vector(0)` because a counter Stalwart has never had
+            occasion to increment is absent from the exposition rather than
+            exported as zero -- and plain vector arithmetic drops the whole
+            expression when one side is missing, so without this the alert
+            would evaluate to nothing in exactly the state mx1 is in today.
+            The sum() around each term strips the instance labels so the
+            two terms and the denominator match on an empty label set. The
+            `> 20` floor keeps a two-message morning from paging on a
+            single bounce, where one failure is half the traffic.
+            This is the closest available proxy for sender reputation, not
+            a measure of it: complaint rate is reported by receiving
+            providers out of band and no self-hosted MTA can observe it.
+            See RUNBOOK-monitoring.md for what to do when this fires.
+
+      - alert: MailDeliveryVolumeSpike
+        expr: sum(increase(delivery_completed[1h])) > 200
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "mx1 completed over 200 delivery attempts in the last hour."
+          description: >-
+            A ceiling, not a baseline-derived anomaly detector: this estate
+            has no legitimate reason to send at this rate today, and if it
+            ever does that is itself worth knowing. It is the leading
+            indicator the ratio alert above cannot be -- an abusive signup
+            flood inflates volume within the hour, while a bounce ratio
+            only moves once the far side starts rejecting, hours later. The
+            edge rate limiter is the control; this is the detection that
+            says the control was not enough. Re-tune the threshold from
+            observed volume once a fortnight of data exists.
+
+      - alert: MailDeliveryMetricsMissing
+        expr: absent(delivery_completed) and on() (up{job="stalwart"} == 1)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "mx1 is answering its metrics scrape but publishing no delivery counters."
+          description: >-
+            Both rules above divide by or threshold on delivery_completed.
+            If Stalwart renames it, drops it, or is reconfigured to a
+            metrics level that no longer includes delivery, those rules stop
+            evaluating and a broken rule reads exactly like a healthy mail
+            host -- which is the failure this whole target exists to avoid.
+            Gated on up == 1 so a scrape outage pages once, as
+            HostOrServiceDown, rather than twice here as well.
   - name: alerting-pipeline
     rules:
       - alert: AlertEmailDeliveryFailing
