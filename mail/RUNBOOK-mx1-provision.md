@@ -1316,6 +1316,15 @@ rather than trying a credential the fresh instance has never seen.
 Ordinary re-runs (checking nothing has drifted, or applying a change to one
 of these scripts) need no manual steps beyond `run-all.sh` itself.
 
+One thing a **rebuild** leaves half-done, by design rather than oversight:
+`30-deploy-stalwart.sh` mints `/opt/stalwart/.env` when it is missing, because
+the compose file requires `STALWART_PROMETHEUS_SECRET` and would otherwise abort
+the run at step 4 of 13. The generated value is not the one `edge1` holds, so
+**Prometheus stops scraping mx1 until an operator copies it across** — the
+endpoint stays authenticated and closed in the meantime, so this is a monitoring
+gap and not an exposure. The script says so on stderr when it mints one.
+Procedure: `mail/RUNBOOK-mx1-prometheus-metrics.md` step 5.
+
 ## What remains owner-gated
 
 Three things this procedure cannot do for itself, in order:

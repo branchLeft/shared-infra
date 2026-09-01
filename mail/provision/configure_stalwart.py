@@ -63,12 +63,90 @@ REMOVED_LISTENER_NAMES = ("pop3s", "sieve")
 
 TRACER_TARGET_TYPE = "Stdout"
 
+# Prometheus scrape path, and the only two source addresses allowed to
+# reach it on the public listener. `edge1` runs the estate's monitoring
+# stack; the addresses are its own, read from the host, because mx1 sits in
+# a separate hcloud project with no private network to scrape across
+# (mail/server.ts, and hetzner/edge/render.ts's NOT_AN_UPSTREAM records the
+# same fact for the edge's own proxying). IPv6 is listed as well as IPv4
+# because mx1 publishes an AAAA record, so a scrape that resolves it would
+# arrive from edge1's v6 address and be refused with only the v4 rule.
+METRICS_PATH = "/metrics/prometheus"
+METRICS_SCRAPE_SOURCES = ("46.225.95.167", "2a01:4f8:1c19:a1a8::1")
+
 # Keeps the webadmin off port 443 without touching ACME eligibility --
 # reasoning and incident history: mail/RUNBOOK-mx1-provision.md's "The
-# ACME decision".
-HTTP_DENY_HTTPS_LISTENER = {
-    "match": {"0": {"if": "listener == 'https'", "then": "421"}},
+# ACME decision" -- while letting exactly one path through for the metrics
+# scrape.
+#
+# Two properties are load-bearing and neither is obvious from the shape:
+#
+# - **The allow rules come first.** Rules are evaluated in key order and
+#   the first match wins, so the blanket 421 has to be last or it would
+#   swallow the metrics path too.
+# - **One rule per source address, rather than one rule with `||`.** `&&`
+#   is confirmed in Stalwart's own expression examples; `||` is not, and a
+#   condition that fails to parse on a live access-control rule is not a
+#   thing to find out by deploying it.
+#
+# Source-address matching is defence in depth, not the control: basic auth
+# on the endpoint is mandatory (see METRICS_TARGET). Opening a path on a
+# listener reachable from 0.0.0.0/0 with only a password in front of it is
+# the weaker posture, and the endpoint serves queue and delivery telemetry.
+# `useXForwarded` is managed here, not merely left alone, because the metrics
+# allowances above match on `remote_ip`. With it enabled and no trusted-proxy
+# allowlist, `X-Forwarded-For: 46.225.95.167` makes any client on the internet
+# match the pin -- the same bypass RUNBOOK-mx1-provision.md already records for
+# the 421 webadmin rule. Nothing fronts mx1, so the correct value is False and
+# the reconciler now holds it there rather than assuming nobody flips it in the
+# admin UI.
+HTTP_USE_X_FORWARDED = False
+
+HTTP_ENDPOINT_POLICY = {
+    "match": {
+        **{
+            str(index): {
+                "if": (
+                    f"listener == 'https' && path == '{METRICS_PATH}' "
+                    f"&& remote_ip == '{source}'"
+                ),
+                "then": "200",
+            }
+            for index, source in enumerate(METRICS_SCRAPE_SOURCES)
+        },
+        str(len(METRICS_SCRAPE_SOURCES)): {"if": "listener == 'https'", "then": "421"},
+    },
     "else": "200",
+}
+
+# Stalwart's Prometheus exporter. Enabled with credentials set, never
+# without: `authUsername` and `authSecret` are both optional in Stalwart's
+# schema and leaving them unset publishes the endpoint unauthenticated,
+# which on a listener bound to [::]:443 means publishing queue depth and
+# delivery outcomes to the internet.
+#
+# The secret is read from the container's environment rather than passed as
+# a `Value`, so the plaintext never enters this repo, this script's API call
+# or the settings store. mail/provision/docker-compose.yml passes it
+# through; the operator writes it once into the env file beside that
+# compose file.
+#
+# `openTelemetry` is absent from the *diff target* deliberately -- it is not
+# a field this platform manages, and naming it there would mean fighting
+# whatever it is set to on every run. It is nonetheless required by the
+# object, so the create path (a singleton that has never materialised) has
+# to supply it; METRICS_CREATE_DEFAULTS is that, and only that.
+METRICS_SECRET_VARIABLE = "STALWART_PROMETHEUS_SECRET"
+METRICS_CREATE_DEFAULTS: dict[str, Any] = {"openTelemetry": {"@type": "Disabled"}}
+METRICS_TARGET: dict[str, Any] = {
+    "prometheus": {
+        "@type": "Enabled",
+        "authUsername": "prometheus",
+        "authSecret": {
+            "@type": "EnvironmentVariable",
+            "variableName": METRICS_SECRET_VARIABLE,
+        },
+    },
 }
 
 # The one ACME provider this platform manages, identified by directory URL
@@ -167,21 +245,64 @@ def plan_listener_changes(listeners: list[dict[str, Any]]) -> dict[str, Any]:
 
 def plan_http_change(http_singletons: list[dict[str, Any]]) -> dict[str, Any]:
     """Pure diff: return the x:Http/set arguments needed so the Http
-    singleton denies the "https" listener at the HTTP layer, or an empty
-    dict if it already does. Only `allowedEndpoints` is managed -- rate
-    limits, CORS, etc. are left at whatever they already are.
+    singleton carries this platform's endpoint policy, or an empty dict if
+    it already does. `allowedEndpoints` and `useXForwarded` are managed --
+    the second because the first matches on `remote_ip`, and a spoofable
+    client address makes the pin decorative. Rate limits and everything
+    else on the object are left as found.
     """
+    target = {
+        "allowedEndpoints": HTTP_ENDPOINT_POLICY,
+        "useXForwarded": HTTP_USE_X_FORWARDED,
+    }
     if not http_singletons:
-        # The singleton has never been materialized (Stalwart's default
-        # applies implicitly, per-request, without a stored object) --
-        # treat that the same as "wrong", since the default lets 443
-        # through unrestricted.
-        return {"create": {"singleton": {"allowedEndpoints": HTTP_DENY_HTTPS_LISTENER}}}
+        return {"create": {"singleton": dict(target)}}
 
     current = http_singletons[0]
-    if current.get("allowedEndpoints") == HTTP_DENY_HTTPS_LISTENER:
+    diff = _field_diff(current, target)
+    if not diff:
         return {}
-    return {"update": {current["id"]: {"allowedEndpoints": HTTP_DENY_HTTPS_LISTENER}}}
+    return {"update": {current["id"]: diff}}
+
+
+def _prometheus_is_reconciled(current: Any) -> bool:
+    """Whether the live `prometheus` value already means "enabled, with our
+    username, authenticated".
+
+    Deliberately does **not** compare `authSecret`. Stalwart may redact a
+    credential field on read, and a target that can never equal what comes
+    back makes every run rewrite the singleton and `docker restart stalwart`
+    -- bouncing production mail on a sequence documented as safe to re-run.
+    So the secret is written on the transitions that need it (create, or
+    prometheus not yet Enabled as us) and not compared thereafter. Rotating
+    it is a deliberate act, not something a reconciler discovers.
+    """
+    if not isinstance(current, dict):
+        return False
+    target = METRICS_TARGET["prometheus"]
+    if current.get("@type") != target["@type"]:
+        return False
+    if current.get("authUsername") != target["authUsername"]:
+        return False
+    live_secret = current.get("authSecret")
+    # A secret explicitly set to None is the one authSecret state that is
+    # unambiguously wrong: it serves the endpoint unauthenticated.
+    return not (isinstance(live_secret, dict) and live_secret.get("@type") == "None")
+
+
+def plan_metrics_change(metrics_singletons: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pure diff: return the x:Metrics/set arguments needed so the Metrics
+    singleton exports Prometheus with authentication, or an empty dict if it
+    already does. Only `prometheus` is managed -- `openTelemetry`,
+    `metrics` and `metricsPolicy` are left as found.
+    """
+    if not metrics_singletons:
+        return {"create": {"singleton": {**METRICS_CREATE_DEFAULTS, **METRICS_TARGET}}}
+
+    current = metrics_singletons[0]
+    if _prometheus_is_reconciled(current.get("prometheus")):
+        return {}
+    return {"update": {current["id"]: dict(METRICS_TARGET)}}
 
 
 def plan_acme_provider(providers: list[dict[str, Any]]) -> tuple[dict[str, Any], str | None]:
@@ -316,6 +437,13 @@ def _jmap_call(auth: tuple[str, str], method: str, args: dict[str, Any]) -> dict
     name, result, _ = response["methodResponses"][0]
     if name == "error":
         raise RuntimeError(f"{method} failed: {result}")
+    # A JMAP /set can reject individual objects while the *call* succeeds --
+    # `notCreated`/`notUpdated`/`notDestroyed` carry the reason. Without this
+    # a rejected change prints its own success message, restarts stalwart and
+    # exits 0, leaving the operator with a green run and no change applied.
+    for rejection in ("notCreated", "notUpdated", "notDestroyed"):
+        if result.get(rejection):
+            raise RuntimeError(f"{method} rejected objects ({rejection}): {result[rejection]}")
     return result
 
 
@@ -424,7 +552,18 @@ def _reconcile_http_access(auth: tuple[str, str]) -> bool:
         print("configure_stalwart: HTTP access-control rule already up to date, no-op")
         return False
     _jmap_call(auth, "x:Http/set", http_args)
-    print("configure_stalwart: set the HTTP access-control rule keeping the webadmin off port 443")
+    print("configure_stalwart: set the HTTP access-control rule (webadmin off 443, metrics path open to edge1 only)")
+    return True
+
+
+def _reconcile_metrics(auth: tuple[str, str]) -> bool:
+    metrics_singletons = _jmap_call(auth, "x:Metrics/get", {"ids": ["singleton"]})["list"]
+    metrics_args = plan_metrics_change(metrics_singletons)
+    if not metrics_args:
+        print("configure_stalwart: Prometheus exporter already enabled with auth, no-op")
+        return False
+    _jmap_call(auth, "x:Metrics/set", metrics_args)
+    print("configure_stalwart: enabled the authenticated Prometheus metrics exporter")
     return True
 
 
@@ -489,6 +628,7 @@ def main() -> int:
             acme_changed,
             _reconcile_domains(auth, acme_provider_id),
             _reconcile_http_access(auth),
+            _reconcile_metrics(auth),
             _reconcile_tracer(auth),
             _reconcile_security(auth),
             _reconcile_allowed_ips(auth),
