@@ -1,1 +1,0 @@
-{"nodes": [{"id": "mail_docker_compose", "label": "mail/provision/docker-compose.yml", "file_type": "code", "source_file": "mail/provision/docker-compose.yml"}], "edges": [{"source": "mail_docker_compose", "target": "stalwart", "relation": "participate_in", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "mail/provision/docker-compose.yml"}], "hyperedges": []}
