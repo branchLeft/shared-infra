@@ -140,8 +140,11 @@ describe('the rendered Caddyfile', () => {
   });
 
   it('always carries a loopback probe listener so the posture is observable', () => {
-    expect(render(DETECT_ONLY)).toContain(':8080 {');
-    expect(render(ENFORCING)).toContain(':8080 {');
+    // Anchored on the newline: a bare `toContain(':8080 {')` is satisfied by
+    // `http://edge-probe.invalid:8080 {`, so deleting the catch-all probe
+    // entirely would still pass this.
+    expect(render(DETECT_ONLY)).toContain('\n:8080 {');
+    expect(render(ENFORCING)).toContain('\n:8080 {');
   });
 
   it('always carries a metrics listener, independent of posture', () => {
@@ -242,19 +245,73 @@ describe('the rendered Caddyfile', () => {
       site({ name: 'one', hostnames: ['one.test'] }),
       site({ name: 'two', hostnames: ['two.test'] }),
     ]);
-    // Three, not two: the loopback probe below carries the same matcher and
+    // Four, not two: both loopback probes below carry the same matcher and
     // zone so the throttle can be trip-tested before any site serves the path.
     const zoneMatches = rendered.match(/zone members_magic_link_per_ip \{/g) ?? [];
-    expect(zoneMatches).toHaveLength(3);
+    expect(zoneMatches).toHaveLength(4);
     expect(rendered).toContain('zone one_per_ip {');
     expect(rendered).toContain('zone two_per_ip {');
   });
 
   it('carries the members magic-link throttle on the loopback probe too, so it can be trip-tested before any site serves the path', () => {
     const rendered = render(ENFORCING);
-    const probeBlockText = rendered.split(':8080 {')[1]?.split('\n}')[0] ?? '';
+    const probeBlockText = rendered.split('\n:8080 {')[1]?.split('\n}')[0] ?? '';
     expect(probeBlockText).toContain('@members_magic_link {');
     expect(probeBlockText).toContain('rate_limit @members_magic_link {');
+  });
+
+  it('renders a host-qualified probe on the same port, so the throttle can be tripped through a site block and not only on a bare port', () => {
+    // A bare `:8080` address matches every Host, so tripping the throttle
+    // there exercises no host routing whatsoever. This second address is the
+    // only way to prove, before a tenant hostname resolves here, that a
+    // request reaches the throttle *through* Caddy's site selection -- the
+    // path a real request actually takes.
+    const rendered = render(ENFORCING);
+    const hostProbe = rendered.split('http://edge-probe.invalid:8080 {')[1]?.split('\n}')[0] ?? '';
+    expect(hostProbe).toContain('@members_magic_link {');
+    expect(hostProbe).toContain('rate_limit @members_magic_link {');
+    expect(hostProbe).toContain('respond 204');
+  });
+
+  it('gives the host-qualified probe the same global magic-link zone but its own general zone', () => {
+    // The shared magic-link zone is the property under test in §8b(4): a
+    // budget spent on the bare port must already be spent when the same client
+    // arrives on the host-qualified address, which is exactly what Ghost's
+    // per-instance limiter cannot do. The *general* throttle keeps separate
+    // zones, matching how real sites treat it.
+    const rendered = render({ ...ENFORCING, rateLimit: 'enforcing' });
+    const hostProbe = rendered.split('http://edge-probe.invalid:8080 {')[1]?.split('\n}')[0] ?? '';
+    const barePort = rendered.split('\n:8080 {')[1]?.split('\n}')[0] ?? '';
+    expect(hostProbe).toContain('zone members_magic_link_per_ip {');
+    expect(barePort).toContain('zone members_magic_link_per_ip {');
+    expect(hostProbe).toContain('zone probe_host_per_ip {');
+    expect(barePort).toContain('zone probe_per_ip {');
+  });
+
+  it('marks each probe block with a distinct response header in every posture', () => {
+    // The whole discriminating power of RUNBOOK-edge.md §8b(4a). Without the
+    // marker the catch-all answers a host-qualified request identically when
+    // the host-qualified block is missing, so the check would pass against an
+    // undelivered config. Asserted in the committed posture too, not only the
+    // fully-enforcing one, because that is the config actually on the host.
+    for (const posture of [DETECT_ONLY, ENFORCING]) {
+      const rendered = render(posture);
+      const hostProbe =
+        rendered.split('http://edge-probe.invalid:8080 {')[1]?.split('\n}')[0] ?? '';
+      const barePort = rendered.split('\n:8080 {')[1]?.split('\n}')[0] ?? '';
+      expect(hostProbe).toContain('header X-Edge-Probe host-routed');
+      expect(barePort).toContain('header X-Edge-Probe bare-port');
+      expect(hostProbe).not.toContain('bare-port');
+      expect(barePort).not.toContain('host-routed');
+    }
+  });
+
+  it('never renders the probe hostname as a TLS site, so no CA is ever asked to validate an unresolvable name', () => {
+    // `.invalid` is RFC 2606 reserved and can never be validated. Without the
+    // explicit `http://` scheme Caddy would try ACME for it on every start.
+    const rendered = render(ENFORCING);
+    expect(rendered).toContain('http://edge-probe.invalid:8080 {');
+    expect(rendered).not.toMatch(/^edge-probe\.invalid/m);
   });
 
   it('renders no members magic-link throttle when both rate limiters are off', () => {
@@ -315,7 +372,7 @@ describe('the rendered Caddyfile', () => {
     });
 
     it('renders the general throttle on the loopback probe when only it is enforcing', () => {
-      const probeBlockText = render(GENERAL_ONLY).split(':8080 {')[1] ?? '';
+      const probeBlockText = render(GENERAL_ONLY).split('\n:8080 {')[1] ?? '';
       expect(probeBlockText).toContain('rate_limit {');
       expect(probeBlockText).not.toContain('members_magic_link');
     });
