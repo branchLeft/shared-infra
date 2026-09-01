@@ -253,14 +253,15 @@ shared unit template), and it is also what
 that script's docstring for why Alertmanager's own config format cannot read
 an environment variable itself, unlike Caddy's `{env.X}`.
 
-| Variable                 | Used by                                       | Where the value comes from                                                                                                                                                                                                                                                                                |
-| ------------------------ | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SMTP_USERNAME`          | Alertmanager (via the render script)          | Step 2's submission credential                                                                                                                                                                                                                                                                            |
-| `SMTP_PASSWORD`          | Alertmanager (via the render script)          | Step 2's submission credential                                                                                                                                                                                                                                                                            |
-| `HEALTHCHECKS_PING_URL`  | Alertmanager (via the render script)          | The Healthchecks.io check's ping URL (PR's handover steps)                                                                                                                                                                                                                                                |
-| `ALERT_RECIPIENT_EMAIL`  | Alertmanager (via the render script)          | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too                                                                                                                                                |
-| `MAILHOST_PING_URL`      | Alertmanager (via the render script)          | A second, dedicated Healthchecks.io check's `/fail` endpoint -- hitting `/fail` marks it down immediately rather than waiting for a missed heartbeat. Routed to by `MailHostDown` and `AlertEmailDeliveryFailing` only (see `mailhost-deadman` in `renderAlertmanagerTemplate()`), never by anything else |
-| `GRAFANA_ADMIN_PASSWORD` | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`) | Generated fresh, stored in the password manager                                                                                                                                                                                                                                                           |
+| Variable                     | Used by                                                                                  | Where the value comes from                                                                                                                                                                                                                                                                                                            |
+| ---------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SMTP_USERNAME`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                        |
+| `SMTP_PASSWORD`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                        |
+| `HEALTHCHECKS_PING_URL`      | Alertmanager (via the render script)                                                     | The Healthchecks.io check's ping URL (PR's handover steps)                                                                                                                                                                                                                                                                            |
+| `ALERT_RECIPIENT_EMAIL`      | Alertmanager (via the render script)                                                     | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too                                                                                                                                                                            |
+| `MAILHOST_PING_URL`          | Alertmanager (via the render script)                                                     | A second, dedicated Healthchecks.io check's `/fail` endpoint -- hitting `/fail` marks it down immediately rather than waiting for a missed heartbeat. Routed to by `MailHostDown` and `AlertEmailDeliveryFailing` only (see `mailhost-deadman` in `renderAlertmanagerTemplate()`), never by anything else                             |
+| `GRAFANA_ADMIN_PASSWORD`     | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`)                                            | Generated fresh, stored in the password manager                                                                                                                                                                                                                                                                                       |
+| `STALWART_PROMETHEUS_SECRET` | Prometheus (via the render script, as the `stalwart` job's `basic_auth` `password_file`) | `/opt/stalwart/.env` on mx1, minted by `mail/provision/30-deploy-stalwart.sh` -- see `mail/RUNBOOK-mx1-prometheus-metrics.md`. **The one row here that is not fatal when absent**: the render script warns on stderr and removes any stale file, Prometheus starts normally, and the `stalwart` target reports `down` until it is set |
 
 **This step now writes five secrets, not four -- `MAILHOST_PING_URL` is as
 required as the other three Alertmanager variables.**
@@ -467,7 +468,8 @@ itself is up, with no such delay, so do not apply the same caution there.
 Expect `prometheus`, `alertmanager`, `caddy`, `crowdsec`, `website`,
 `cadvisor`, `blackbox_http` (three targets, one per `sites.ts` hostname),
 `blackbox_mail` (four targets on `mx1.branchleft.co.uk`: 25 and 587 read the
-SMTP banner, 465 and 993 complete a TLS handshake), the `node` target for
+SMTP banner, 465 and 993 complete a TLS handshake), `stalwart` (Stalwart's own
+Prometheus exporter on `mx1`, over HTTPS on 443), the `node` target for
 `edge1` and the `mysqld` target for `db1` all `up`. All of those carry
 `expected_up: 'true'` -- a sustained `down` on any of them pages within 5
 minutes via `HostOrServiceDown`. `website` is the contact-form send-failure
@@ -480,6 +482,24 @@ Only `node` for `app1` and `node` for `db1` are expected `down`: those two
 exporters are not provisioned (see `render.ts`'s `MONITORED_NODE_HOSTS`
 docstring). A `down` target with `expected_up: 'true'` in its labels is the
 only one worth investigating.
+
+`stalwart` is the one target here whose credential is not in this repo and
+not in the container image. It is `basic_auth` with a `password_file`, written
+onto the host by `render_alertmanager_config.py` from
+`STALWART_PROMETHEUS_SECRET` in `/etc/branchleft/monitoring.env` before every
+start -- so `stalwart` reporting `down` while every other target is `up` is
+almost always that variable, not mx1. Two further things about it are
+deliberate and will look wrong at a glance:
+
+- **The target is an IP address, not `mx1.branchleft.co.uk`.** mx1 publishes
+  an AAAA record and Stalwart's access-control rule admits only edge1's public
+  IPv4, so a scrape that resolves the name and reaches for the AAAA first is
+  refused with a `421`. `tls_config.server_name` carries the hostname so
+  certificate verification is unaffected, and `instance` is relabelled back to
+  the hostname, which is what appears in an alert.
+- **`421` is what a _wrong_ source gets, and `401` a wrong credential.** If
+  this target is down, `curl` from `edge1` itself before suspecting mx1: a
+  `421` from anywhere else proves only that the pin works.
 
 Two alert rules read metrics this stack already scrapes rather than a new
 target: `AlertEmailDeliveryFailing` reads `alertmanager_notifications_failed_total`
@@ -655,6 +675,49 @@ Then `git checkout HEAD -- hetzner/monitoring/stack` on the workstation. If
 the rollback also needs to undo an edge-side change (the metrics endpoints
 or the cgroup containment), the same pattern applies to
 `hetzner/edge/stack`, followed by `systemctl restart branchleft-compose@edge`.
+
+## Responding to the mail-delivery alerts
+
+Three rules read Stalwart's own counters from the `stalwart` job. They answer
+a question the blackbox probes cannot: `MailHostDown` tells you mx1 stopped
+answering, and these tell you it is answering and doing the wrong thing with
+the mail it accepts.
+
+**`MailDeliveryVolumeSpike`** -- over 200 delivery attempts in an hour, held
+for 15 minutes. This is the fast one, and the one to act on: it is what an
+abusive signup flood looks like from the mail host, an hour or more before any
+bounce ratio moves. The edge rate limiter is the control that should have
+stopped it; this alert firing means the control did not. Check Caddy's
+`caddy_rate_limit_declined_requests_total` for the same window --
+`RateLimitDecliningRealClients` reads the same counter -- and confirm the
+traffic is actually transiting the edge before concluding the limiter failed.
+The threshold is a ceiling picked from "this estate has no reason to send at
+this rate", not from observed volume; re-tune it once a fortnight of real data
+exists.
+
+**`MailDeliveryFailureRatioHigh`** -- over 10% of delivery attempts in six
+hours failed permanently, on at least 20 attempts. This is a sender-reputation
+signal and it is slow by construction: a ratio only moves once receiving
+providers start rejecting. Read it as "something we sent is being refused",
+not as an outage. The usual causes, in the order worth checking: a DNS record
+(SPF, DKIM, DMARC) that changed or expired; a list of addresses that were
+never real, which is what a signup flood leaves behind; and a blocklist
+listing, which shows up as rejections concentrated on one provider.
+
+This is the **closest available proxy** for sender reputation, not a measure
+of it. Complaint rate -- the number an ESP would quote -- is reported by
+receiving providers through out-of-band feedback loops, and no self-hosted MTA
+can observe it. If a real complaint rate is ever needed, it comes from Google
+Postmaster Tools and Microsoft SNDS, not from here.
+
+**`MailDeliveryMetricsMissing`** -- the scrape succeeds and publishes no
+`delivery_completed` at all. Nothing is wrong with mail; the two rules above
+have lost their input and have been silently unable to fire. Treat it as a
+broken monitor, not a mail incident: check whether Stalwart was upgraded or
+its metrics level reconfigured, then correct the metric names in
+`monitoring/render.ts` and re-run the deploy. The rules are covered by
+`monitoring/alert_rules_test.yml`, so a name change should be made there
+first and watched to fail.
 
 ## What this stack deliberately does not do
 

@@ -166,5 +166,165 @@ class OutputPermissionsTests(unittest.TestCase):
             self.assertIn(FULL_ENV["SMTP_PASSWORD"], output.read_text(encoding="utf-8"))
 
 
+class PrometheusPasswordTests(unittest.TestCase):
+    """The mx1 scrape credential, written beside the config that names it.
+
+    `basic_auth.password_file` rather than an inline password because
+    `stack/prometheus/prometheus.yml` is committed to a public repository, and
+    a file rather than an environment variable because Prometheus, unlike
+    Caddy, has no way to read one from inside its config.
+    """
+
+    def _write(self, directory: pathlib.Path, env: dict[str, str]) -> pathlib.Path:
+        (directory / "prometheus").mkdir(exist_ok=True)
+        render_alertmanager_config.write_prometheus_password(directory, env)
+        return directory / "prometheus" / "mx1-metrics-password"
+
+    def test_writes_the_secret_verbatim_with_no_trailing_newline(self) -> None:
+        """Prometheus sends the file's bytes as the password. A trailing
+        newline authenticates as a different string and the endpoint answers
+        401 -- with nothing in the config to look wrong."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._write(pathlib.Path(tmp), {"STALWART_PROMETHEUS_SECRET": "s3cr3t"})
+
+            self.assertEqual(path.read_bytes(), b"s3cr3t")
+
+    def test_the_written_file_is_0600_and_never_group_or_world_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._write(pathlib.Path(tmp), {"STALWART_PROMETHEUS_SECRET": "s3cr3t"})
+
+            mode = stat.S_IMODE(path.stat().st_mode)
+            self.assertEqual(mode, 0o600)
+            self.assertEqual(mode & stat.S_IRGRP, 0)
+            self.assertEqual(mode & stat.S_IROTH, 0)
+
+    def test_it_chowns_to_the_prometheus_uid_when_running_as_root(self) -> None:
+        """Same bind-mount reasoning as the Alertmanager render above: the
+        container reads the file as its own user, so a root-owned 0600 file is
+        unreadable to the one process it exists for."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(os, "geteuid", return_value=0), mock.patch.object(
+                os, "chown"
+            ) as chown:
+                path = self._write(pathlib.Path(tmp), {"STALWART_PROMETHEUS_SECRET": "s3cr3t"})
+
+            chown.assert_called_once_with(
+                path,
+                render_alertmanager_config.PROMETHEUS_UID,
+                render_alertmanager_config.PROMETHEUS_UID,
+            )
+
+    def test_the_prometheus_uid_is_nobody(self) -> None:
+        """65534 is `nobody` in the prom/prometheus image. Read from its own
+        constant rather than ALERTMANAGER_UID: the two images are pinned and
+        upgraded independently, so a shared constant would carry one image's
+        user onto the other on the next bump."""
+        self.assertEqual(render_alertmanager_config.PROMETHEUS_UID, 65534)
+
+    def test_an_unset_secret_is_not_fatal(self) -> None:
+        """Alertmanager cannot start without its config; Prometheus starts fine
+        without this file and simply fails one scrape, which up == 0 turns into
+        a page. Refusing to start would trade one dead target for no alerting
+        at all across the estate -- including the alert that reports it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            (directory / "prometheus").mkdir()
+
+            self.assertIsNone(
+                render_alertmanager_config.write_prometheus_password(directory, {})
+            )
+
+    def test_main_still_succeeds_with_no_stalwart_secret_in_the_environment(self) -> None:
+        """The end-to-end shape of the rule above: this runs as an
+        ExecStartPre, so a non-zero exit here is a monitoring stack that does
+        not start."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            (directory / "alertmanager").mkdir()
+            (directory / "alertmanager" / render_alertmanager_config.TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            env = dict(FULL_ENV)
+            env.pop("STALWART_PROMETHEUS_SECRET", None)
+            with mock.patch.object(
+                render_alertmanager_config, "__file__", str(directory / "render.py")
+            ), mock.patch.dict(os.environ, env, clear=True):
+                self.assertEqual(render_alertmanager_config.main([]), 0)
+
+    def test_an_unset_secret_removes_a_previously_written_one(self) -> None:
+        """monitoring.env is the single source for this value, so a secret
+        rotated out of it must not stay readable on disk."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            path = self._write(directory, {"STALWART_PROMETHEUS_SECRET": "old-secret"})
+            self.assertTrue(path.exists())
+
+            self._write(directory, {})
+
+            self.assertFalse(path.exists())
+
+    def test_a_blank_secret_is_treated_as_unset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            path = self._write(directory, {"STALWART_PROMETHEUS_SECRET": "old-secret"})
+
+            self._write(directory, {"STALWART_PROMETHEUS_SECRET": ""})
+
+            self.assertFalse(path.exists())
+
+    def test_it_clears_the_directory_docker_leaves_behind(self) -> None:
+        """Docker creates an empty directory at a bind-mount source that does
+        not exist. Without this, every later run raises IsADirectoryError out of
+        the systemd ExecStartPre and the monitoring stack stops starting at all
+        -- turning a missing scrape credential into a total loss of alerting."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            (directory / "prometheus").mkdir()
+            (directory / "prometheus" / "mx1-metrics-password").mkdir()
+
+            path = self._write(directory, {"STALWART_PROMETHEUS_SECRET": "s3cr3t"})
+
+            self.assertTrue(path.is_file())
+            self.assertEqual(path.read_bytes(), b"s3cr3t")
+
+    def test_it_leaves_a_non_empty_directory_alone_rather_than_deleting_data(self) -> None:
+        """rmdir, never rmtree: whatever is in there was not put there by this
+        script, and a credential writer is the last place to be recursively
+        deleting paths on a production host."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            (directory / "prometheus").mkdir()
+            occupied = directory / "prometheus" / "mx1-metrics-password"
+            occupied.mkdir()
+            (occupied / "something").write_text("do not delete me")
+
+            self.assertIsNone(
+                render_alertmanager_config.write_prometheus_password(
+                    directory, {"STALWART_PROMETHEUS_SECRET": "s3cr3t"}
+                )
+            )
+            self.assertTrue((occupied / "something").exists())
+
+    def test_the_password_path_matches_the_mount_the_compose_file_declares(self) -> None:
+        """render.ts's STALWART_METRICS_PASSWORD_FILE is the container-side
+        path, compose.yml maps this host-side one onto it, and prometheus.yml
+        names the container-side one. All three have to agree; this asserts the
+        two that live in this repo's non-TypeScript half."""
+        stack = pathlib.Path(__file__).resolve().parent / "stack"
+        host_relative = "/".join(render_alertmanager_config.PROMETHEUS_PASSWORD_PATH)
+        compose = (stack / "compose.yml").read_text(encoding="utf-8")
+        prometheus_yml = (stack / "prometheus" / "prometheus.yml").read_text(encoding="utf-8")
+
+        self.assertIn(f"./{host_relative}:/etc/prometheus/mx1-metrics-password:ro", compose)
+        self.assertIn("password_file: /etc/prometheus/mx1-metrics-password", prometheus_yml)
+
+    def test_the_secret_is_never_written_into_the_committed_config(self) -> None:
+        """The reason this file exists at all."""
+        stack = pathlib.Path(__file__).resolve().parent / "stack"
+        prometheus_yml = (stack / "prometheus" / "prometheus.yml").read_text(encoding="utf-8")
+
+        self.assertNotIn("password:", prometheus_yml.replace("password_file:", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

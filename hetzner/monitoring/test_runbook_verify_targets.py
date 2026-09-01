@@ -61,6 +61,7 @@ class RunbookVerifyTargetsTests(unittest.TestCase):
                     "cadvisor",
                     "blackbox_http",
                     "blackbox_mail",
+                    "stalwart",
                 ]
             ),
             "prometheus.yml's job_name list changed shape -- update the "

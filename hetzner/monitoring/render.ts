@@ -59,26 +59,30 @@ export const MONITORED_NODE_HOSTS: readonly MonitoredHost[] = [
 ];
 
 /**
- * `mx1` still is not, and cannot be, a `node`/`mysqld`-style scrape target:
- * it lives in its own hcloud project (`edge/render.ts`'s `NOT_AN_UPSTREAM`
- * carries the same fact for the edge), so it shares no private network with
- * this host, and Stalwart's own metrics are not configured anywhere in this
- * repo either, since `mail/` carries no config-as-code for it. That half of
- * the gap needs a firewalled, authenticated public endpoint on `mx1` and
- * confirmation of what Stalwart can actually export -- neither is a
- * rendering change, so it stays unbuilt.
+ * `mx1` is watched two ways, and the pair is deliberate.
  *
- * A liveness check needs neither. `mail/firewall.ts` already opens 25,
- * 465, 587 and 993 to the whole internet, so a blackbox probe from edge1
- * reaches them the way any other client on the internet does, with no new
- * firewall rule and no metrics endpoint. It cannot be a plain TCP-connect
- * probe, though: a scan-banned or dead-backend connection still completes
- * the handshake and then EOFs, so every one of those ports can read as
- * healthy while Stalwart serves nothing behind them. `smtp_banner` (25,
- * 587) reads the `220` greeting and sends `QUIT`; `tls_connect` (465, 993,
- * both implicit-TLS) requires a completed handshake. Both fail closed the
- * way a socket-only check cannot -- see `mailProbeTargetsFor()` and the
- * `blackbox_mail` job below.
+ * **Liveness, from outside.** `mail/firewall.ts` opens 25, 465, 587 and 993
+ * to the whole internet, so a blackbox probe from edge1 reaches them the way
+ * any other client on the internet does, with no new firewall rule. It
+ * cannot be a plain TCP-connect probe: a scan-banned or dead-backend
+ * connection still completes the handshake and then EOFs, so every one of
+ * those ports can read as healthy while Stalwart serves nothing behind them.
+ * `smtp_banner` (25, 587) reads the `220` greeting and sends `QUIT`;
+ * `tls_connect` (465, 993, both implicit-TLS) requires a completed
+ * handshake. See `mailProbeStaticConfig()` and the `blackbox_mail` job below.
+ *
+ * **Delivery outcomes, from inside.** A liveness probe cannot distinguish a
+ * mail host that is delivering from one that is up and bouncing everything,
+ * and that difference is the whole of the sender-reputation question. That
+ * needs Stalwart's own counters, which is why `mail/provision/`
+ * `configure_stalwart.py` enables its Prometheus exporter on the existing
+ * public 443 listener -- see the `stalwart` job below.
+ *
+ * mx1 is in its own hcloud project (`edge/render.ts`'s `NOT_AN_UPSTREAM`
+ * carries the same fact for the edge), so it shares no private network with
+ * this host and neither of these can be a private-address scrape. Both cross
+ * the public internet, which is why the exporter is authenticated and
+ * source-pinned rather than merely enabled.
  */
 
 /**
@@ -138,6 +142,48 @@ export const BLACKBOX_MODULE_TLS_CONNECT = 'tls_connect';
  * below reaches every sites.ts hostname by name rather than by IP.
  */
 const MX1_HOSTNAME = 'mx1.branchleft.co.uk';
+
+/**
+ * The Stalwart exporter is reached by **address, not by name**, with the
+ * hostname carried in `tls_config.server_name` so certificate verification
+ * still checks the thing it is supposed to check.
+ *
+ * mx1 publishes an AAAA record as well as an A record, and Stalwart's
+ * access-control rule admits only edge1's public IPv4. The IPv6 half of that
+ * rule was dropped when this endpoint was built, because `remote_ip` did not
+ * compare equal to the compressed literal and the rendered form was never
+ * established -- a rule written against a guess reads as coverage while
+ * never matching. A Go dialer handed the hostname resolves both families and
+ * may reach for the AAAA first, exactly as `curl` did during that
+ * verification, and every scrape that does is refused with a 421. Naming the
+ * address removes the choice rather than relying on resolver preference.
+ *
+ * `instance` is relabelled back to the hostname below, so what a human reads
+ * in an alert is still `mx1.branchleft.co.uk`.
+ */
+const MX1_PUBLIC_IPV4 = '167.233.252.240';
+
+/**
+ * Basic auth over TLS, with the password read from a file rather than
+ * written into this config: `stack/prometheus/prometheus.yml` is committed
+ * to a public repository.
+ *
+ * That file is not in the committed tree. `stack/render_alertmanager_config.py`
+ * writes it on the host from `STALWART_PROMETHEUS_SECRET` in
+ * `/etc/branchleft/monitoring.env` before every start, exactly as it writes
+ * `alertmanager.yml`, and every deploy's `rsync --delete` removes it for the
+ * same reason.
+ *
+ * A missing file does not stop Prometheus starting. Neither `promtool check
+ * config` nor the config loader stats it -- it is read per request -- so the
+ * failure mode is `up{job="stalwart"} == 0` and a HostOrServiceDown page.
+ * That is the right way round: one unreachable scrape target must never take
+ * down the alerting path for the whole estate.
+ */
+export const STALWART_METRICS_PORT = 443;
+export const STALWART_METRICS_PATH = '/metrics/prometheus';
+export const STALWART_METRICS_USERNAME = 'prometheus';
+export const STALWART_METRICS_PASSWORD_FILE = '/etc/prometheus/mx1-metrics-password';
 
 /**
  * One static_configs group per probe module: a job's `params:` block can
@@ -300,6 +346,25 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '        target_label: instance',
     '      - target_label: __address__',
     `        replacement: 'blackbox-exporter:${BLACKBOX_EXPORTER_PORT}'`,
+    '',
+    '  - job_name: stalwart',
+    '    scheme: https',
+    `    metrics_path: ${STALWART_METRICS_PATH}`,
+    '    basic_auth:',
+    `      username: ${STALWART_METRICS_USERNAME}`,
+    `      password_file: ${STALWART_METRICS_PASSWORD_FILE}`,
+    // Verification follows the hostname even though the target is an
+    // address: without this the scrape would be checking the certificate
+    // against an IP literal that is not in it, and TLS would fail closed on
+    // a server that is answering correctly.
+    '    tls_config:',
+    `      server_name: ${MX1_HOSTNAME}`,
+    '    static_configs:',
+    `      - targets: ['${MX1_PUBLIC_IPV4}:${STALWART_METRICS_PORT}']`,
+    `        labels: {host: mx1, expected_up: 'true'}`,
+    '    relabel_configs:',
+    '      - target_label: instance',
+    `        replacement: '${MX1_HOSTNAME}:${STALWART_METRICS_PORT}'`,
   ].join('\n')}\n`;
 }
 
@@ -460,6 +525,77 @@ export function renderAlertRules(): string {
     '          summary: "{{ $labels.instance }} failed its mail liveness probe for 5 minutes."',
     '          description: "smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: it is what the mailhost-deadman route in the Alertmanager template matches on, so this alert reaches a receiver that does not transit mx1 in addition to the mx1-routed email receiver. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe."',
     '',
+    // Stalwart's own counters, not a blackbox result: `probes` above watches
+    // whether mx1 answers, this group watches what it does with the mail it
+    // accepts. A host that is up and bouncing everything is indistinguishable
+    // from a healthy one at the socket, and the difference is the whole of
+    // the sender-reputation question.
+    '  - name: mail-delivery',
+    '    rules:',
+    '      - alert: MailDeliveryFailureRatioHigh',
+    '        expr: >-',
+    '          (',
+    '          (sum(increase(delivery_dsn_perm_fail[6h])) or vector(0))',
+    '          +',
+    '          (sum(increase(delivery_rcpt_to_rejected[6h])) or vector(0))',
+    '          ) / sum(increase(delivery_completed[6h])) > 0.10',
+    '          and sum(increase(delivery_completed[6h])) > 20',
+    '        for: 30m',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "Over 10% of mx1 delivery attempts in the last 6 hours failed permanently."',
+    '          description: >-',
+    '            A ratio rather than a threshold on a raw counter: a raw count',
+    '            fires on volume, so it would page on a busy healthy day and',
+    '            stay silent through a quiet poisoned one. Both numerator terms',
+    '            carry `or vector(0)` because a counter Stalwart has never had',
+    '            occasion to increment is absent from the exposition rather than',
+    '            exported as zero -- and plain vector arithmetic drops the whole',
+    '            expression when one side is missing, so without this the alert',
+    '            would evaluate to nothing in exactly the state mx1 is in today.',
+    '            The sum() around each term strips the instance labels so the',
+    '            two terms and the denominator match on an empty label set. The',
+    '            `> 20` floor keeps a two-message morning from paging on a',
+    '            single bounce, where one failure is half the traffic.',
+    '            This is the closest available proxy for sender reputation, not',
+    '            a measure of it: complaint rate is reported by receiving',
+    '            providers out of band and no self-hosted MTA can observe it.',
+    '            See RUNBOOK-monitoring.md for what to do when this fires.',
+    '',
+    '      - alert: MailDeliveryVolumeSpike',
+    '        expr: sum(increase(delivery_completed[1h])) > 200',
+    '        for: 15m',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "mx1 completed over 200 delivery attempts in the last hour."',
+    '          description: >-',
+    '            A ceiling, not a baseline-derived anomaly detector: this estate',
+    '            has no legitimate reason to send at this rate today, and if it',
+    '            ever does that is itself worth knowing. It is the leading',
+    '            indicator the ratio alert above cannot be -- an abusive signup',
+    '            flood inflates volume within the hour, while a bounce ratio',
+    '            only moves once the far side starts rejecting, hours later. The',
+    '            edge rate limiter is the control; this is the detection that',
+    '            says the control was not enough. Re-tune the threshold from',
+    '            observed volume once a fortnight of data exists.',
+    '',
+    '      - alert: MailDeliveryMetricsMissing',
+    '        expr: absent(delivery_completed) and on() (up{job="stalwart"} == 1)',
+    '        for: 30m',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "mx1 is answering its metrics scrape but publishing no delivery counters."',
+    '          description: >-',
+    '            Both rules above divide by or threshold on delivery_completed.',
+    '            If Stalwart renames it, drops it, or is reconfigured to a',
+    '            metrics level that no longer includes delivery, those rules stop',
+    '            evaluating and a broken rule reads exactly like a healthy mail',
+    '            host -- which is the failure this whole target exists to avoid.',
+    '            Gated on up == 1 so a scrape outage pages once, as',
+    '            HostOrServiceDown, rather than twice here as well.',
     '  - name: alerting-pipeline',
     // Not folded into `probes` above: those alerts watch probe_success, an
     // external vantage point on the estate's own services. This one watches

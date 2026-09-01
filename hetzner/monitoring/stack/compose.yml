@@ -46,6 +46,15 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      # The stalwart job's basic_auth password_file. Not in the committed
+      # tree: render_alertmanager_config.py writes it from
+      # /etc/branchleft/monitoring.env before every start, the same way it
+      # writes alertmanager.yml above. If that step has not run, Docker
+      # creates a *directory* here rather than failing, Prometheus reads no
+      # password, and the mx1 scrape reports down -- loudly, as
+      # HostOrServiceDown, which is the intended failure mode. See
+      # RUNBOOK-monitoring.md.
+      - ./prometheus/mx1-metrics-password:/etc/prometheus/mx1-metrics-password:ro
       - prometheus-data:/prometheus
     # Sized from the §3.1 arithmetic in RUNBOOK-monitoring.md: a ceiling well
     # above the ~300-500 MB doc 14 estimates for this host count and series
