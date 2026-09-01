@@ -63,16 +63,27 @@ REMOVED_LISTENER_NAMES = ("pop3s", "sieve")
 
 TRACER_TARGET_TYPE = "Stdout"
 
-# Prometheus scrape path, and the only two source addresses allowed to
-# reach it on the public listener. `edge1` runs the estate's monitoring
-# stack; the addresses are its own, read from the host, because mx1 sits in
-# a separate hcloud project with no private network to scrape across
-# (mail/server.ts, and hetzner/edge/render.ts's NOT_AN_UPSTREAM records the
-# same fact for the edge's own proxying). IPv6 is listed as well as IPv4
-# because mx1 publishes an AAAA record, so a scrape that resolves it would
-# arrive from edge1's v6 address and be refused with only the v4 rule.
+# Prometheus scrape path, and the only source address allowed to reach it on
+# the public listener. `edge1` runs the estate's monitoring stack; the
+# address is its own, because mx1 sits in a separate hcloud project with no
+# private network to scrape across (mail/server.ts, and
+# hetzner/edge/render.ts's NOT_AN_UPSTREAM records the same fact for the
+# edge's own proxying).
+#
+# **IPv4 only, deliberately.** edge1's IPv6 address was listed here at first,
+# because mx1 publishes an AAAA record and curl duly preferred it -- and the
+# rule did not match. Measured against the live server: the same host, same
+# credential and same path returns 200 over IPv4 and 421 over IPv6, so
+# `remote_ip` does not compare equal to the compressed literal
+# `2a01:4f8:1c19:a1a8::1` that this file would naturally spell.
+#
+# The form Stalwart actually renders was not established, and a rule written
+# against a guess is worse than no rule -- it never fires while reading as
+# coverage. So IPv6 is not allowed at all, and the scrape is pinned to IPv4
+# at the Prometheus end to match. Re-adding v6 needs the rendered value
+# observed on the host first, not inferred here.
 METRICS_PATH = "/metrics/prometheus"
-METRICS_SCRAPE_SOURCES = ("46.225.95.167", "2a01:4f8:1c19:a1a8::1")
+METRICS_SCRAPE_SOURCES = ("46.225.95.167",)
 
 # Keeps the webadmin off port 443 without touching ACME eligibility --
 # reasoning and incident history: mail/RUNBOOK-mx1-provision.md's "The
@@ -87,7 +98,9 @@ METRICS_SCRAPE_SOURCES = ("46.225.95.167", "2a01:4f8:1c19:a1a8::1")
 # - **One rule per source address, rather than one rule with `||`.** `&&`
 #   is confirmed in Stalwart's own expression examples; `||` is not, and a
 #   condition that fails to parse on a live access-control rule is not a
-#   thing to find out by deploying it.
+#   thing to find out by deploying it. The comprehension below still
+#   generates one rule per source even though there is a single source
+#   today, so adding one back is a tuple entry rather than a rewrite.
 #
 # Source-address matching is defence in depth, not the control: basic auth
 # on the endpoint is mandatory (see METRICS_TARGET). Opening a path on a
