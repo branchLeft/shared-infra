@@ -38,7 +38,7 @@ rest — on a Prometheus endpoint that is simply switched off.
 
 ## Before you start
 
-1. **[branchLeft/shared-infra#128](https://github.com/branchLeft/shared-infra/pull/128) is merged**, and `main` is pulled locally. Without it the compose
+1. **[branchLeft/shared-infra#129](https://github.com/branchLeft/shared-infra/pull/129) is merged**, and `main` is pulled locally. Without it the compose
    file has no `STALWART_PROMETHEUS_SECRET` and the reconciler has no
    `x:Metrics` step, so nothing here applies.
 2. **You have a generated secret.** Generate it now, on your Mac, and paste it
@@ -205,7 +205,7 @@ and a personal email address. Do not rewrite the file.
 The exporter and the endpoint policy revert together, from the same reconciler:
 
 ```bash
-cd ~/branchLeft/shared-infra && git revert --no-edit <merge commit of #128>
+cd ~/branchLeft/shared-infra && git revert --no-edit <merge commit of #129>
 ```
 
 …then re-run steps 1, 3 and 4. Step 3 will fail on the missing variable if
