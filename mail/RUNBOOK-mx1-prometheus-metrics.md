@@ -7,7 +7,7 @@ which is the last unmet acceptance criterion of
 ## What is wrong
 
 Ghost's members magic-link endpoint is an unauthenticated trigger that makes the
-platform send email. The edge now throttles it (proven on `edge1`, 2026-09-01),
+platform send email. The edge now throttles it on a hostname-routed path,
 but doc 12 §1 is explicit that a flood which stays under the rate limit, or
 arrives from rotating sources, moves **reputation** rather than request rate.
 Reputation is bounce and rejection behaviour, and none of it currently reaches
@@ -97,8 +97,9 @@ Expect `-rw------- 1 root root 6? … /opt/stalwart/.env`. The byte count should
 be `len(secret) + 30`; for a 48-character secret, **78**.
 
 **Check that number.** A `read -rs -p` that received nothing writes a file of
-30 bytes and fails silently — the exact trap that cost a session on the Pulumi
-passphrase (`session-close-2026-08-18`). 30 bytes here means re-run this step.
+30 bytes and fails silently rather than erroring — the same shape that has
+already cost a passphrase write elsewhere in this estate. 30 bytes here means
+re-run this step.
 
 ## Step 3 — recreate the container so it carries the variable
 
