@@ -89,17 +89,21 @@ Otherwise run this and **paste the secret at the prompt**; it is not echoed and
 does not enter your shell history.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@167.233.252.240 \
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@167.233.252.240 \
   'read -rs -p "secret: " S; echo; printf "STALWART_PROMETHEUS_SECRET=%s\n" "$S" > /opt/stalwart/.env; chmod 600 /opt/stalwart/.env; unset S; ls -l /opt/stalwart/.env'
 ```
 
-Expect `-rw------- 1 root root 6? … /opt/stalwart/.env`. The byte count should
-be `len(secret) + 30`; for a 48-character secret, **78**.
+Expect `-rw------- 1 root root 76 … /opt/stalwart/.env`. `STALWART_PROMETHEUS_SECRET=`
+is 27 characters plus a newline, so the count is `len(secret) + 28`; for a
+48-character secret, **76**.
 
 **Check that number.** A `read -rs -p` that received nothing writes a file of
-30 bytes and fails silently rather than erroring — the same shape that has
-already cost a passphrase write elsewhere in this estate. 30 bytes here means
+**28** bytes and fails silently rather than erroring — the same shape that has
+already cost a passphrase write elsewhere in this estate. 28 bytes here means
 re-run this step.
+
+The `-t` is load-bearing: with no TTY allocated, the remote `read -s` cannot
+disable echo and the secret is displayed by your local terminal instead.
 
 ## Step 3 — recreate the container so it carries the variable
 
@@ -151,20 +155,35 @@ re-running.
 Three checks. **All three are required**: the first two each pass identically
 under failures the third one catches.
 
-**V1 — the endpoint answers `edge1`, authenticated.** Run from `edge1`, reading
-the credential from the file rather than the command line:
+**V1 — the endpoint answers `edge1`, authenticated.** Run from `edge1`,
+reading the credential from the file rather than the command line.
+
+**`-4` is required, not tidiness.** `mx1` publishes an AAAA record, so curl
+prefers IPv6 unless told otherwise, and only `edge1`'s IPv4 address is allowed
+through the endpoint policy — see `METRICS_SCRAPE_SOURCES` for why v6 is not
+listed. Without `-4` this returns `421` on a correctly configured server.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
   'S=$(sed -n "s/^STALWART_PROMETHEUS_SECRET=//p" /etc/branchleft/monitoring.env); \
-   curl -sS -o /tmp/m.txt -w "%{http_code}\n" -u "prometheus:$S" \
+   curl -4 -sS -o /tmp/m.txt -w "%{http_code}\n" -u "prometheus:$S" \
      https://mx1.branchleft.co.uk/metrics/prometheus; \
-   grep -c "^delivery_\|^queue_" /tmp/m.txt; rm -f /tmp/m.txt'
+   grep -vc "^#" /tmp/m.txt; rm -f /tmp/m.txt'
 ```
 
-Expect `200`, then a count **greater than 0**. A `200` with a count of `0`
-means the exporter is on but exporting nothing named as expected — report the
-metric names actually present rather than assuming.
+Expect `200`, then a series count **greater than 0**. A `200` with a count of
+`0` means the exporter is on but exporting nothing — report the metric names
+actually present rather than assuming.
+
+**Also run it without the credential**, which must return `401`:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  'curl -4 -sS -o /dev/null -w "%{http_code}\n" https://mx1.branchleft.co.uk/metrics/prometheus'
+```
+
+`401` proves authentication is enforced rather than merely configured. A `200`
+here means the endpoint is open and the credential is decorative.
 
 This step needs **Step 5** below to have run first.
 
@@ -197,9 +216,14 @@ public listener — and roll back before diagnosing further.
 your Mac, with the real credential:
 
 ```bash
-curl -sk -o /dev/null -w "%{http_code}\n" \
+ curl -4 -sk -o /dev/null -w "%{http_code}\n" \
   -u "prometheus:PASTE_THE_SECRET" https://mx1.branchleft.co.uk/metrics/prometheus
 ```
+
+**Use `-4`.** Over IPv6 this returns `421` whatever the pin does, since no v6
+source is allowed — so a v6 run passes for the wrong reason and proves nothing
+about the pin. `-4` puts the request on the one family the allow rule can
+actually match, which is what makes the refusal mean something.
 
 Expect `421`. **A `200` here is the finding that matters**: it means the source
 pin is inert and the endpoint is internet-reachable behind one password. V1 and
@@ -215,7 +239,7 @@ from "open to the world with a password". Clear it afterwards with
 V1 depends on this, so run it before V1. Same prompt-based pattern:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
   'read -rs -p "secret: " S; echo; printf "STALWART_PROMETHEUS_SECRET=%s\n" "$S" >> /etc/branchleft/monitoring.env; unset S; grep -c "^STALWART_PROMETHEUS_SECRET=" /etc/branchleft/monitoring.env'
 ```
 

@@ -388,6 +388,16 @@ class HttpEndpointPolicyShapeTests(unittest.TestCase):
     def test_the_default_is_not_widened(self):
         self.assertEqual(HTTP_ENDPOINT_POLICY["else"], "200")
 
+    def test_no_ipv6_source_is_allowed(self):
+        # Measured against the live server: the same host, credential and
+        # path returns 200 over IPv4 and 421 over IPv6, so `remote_ip` does
+        # not equal the compressed literal this file would spell. A rule
+        # written against a guess at the real form never fires while reading
+        # as coverage, so v6 is not allowed at all and the scrape is pinned
+        # to v4 to match.
+        for source in METRICS_SCRAPE_SOURCES:
+            self.assertNotIn(":", source)
+
     def test_forwarded_headers_are_never_trusted(self):
         # The allowances match on `remote_ip`. With useXForwarded on and no
         # trusted-proxy allowlist, `X-Forwarded-For: 46.225.95.167` makes any
