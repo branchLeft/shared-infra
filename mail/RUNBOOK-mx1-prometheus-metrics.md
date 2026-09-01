@@ -75,8 +75,18 @@ server yet.
 
 ## Step 2 — write the secret into the compose environment file
 
-Run this and **paste the secret at the prompt**; it is not echoed and does not
-enter your shell history.
+**If `/opt/stalwart/.env` already exists, skip to step 3 and take the secret
+from it** — `30-deploy-stalwart.sh` mints one on a rebuilt host and never
+overwrites an existing file, so writing over it here would break a scrape that
+is already working:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@167.233.252.240 \
+  'test -f /opt/stalwart/.env && echo EXISTS || echo ABSENT'
+```
+
+Otherwise run this and **paste the secret at the prompt**; it is not echoed and
+does not enter your shell history.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@167.233.252.240 \
@@ -163,9 +173,24 @@ This step needs **Step 5** below to have run first.
 curl -sk -o /dev/null -w "%{http_code}\n" https://mx1.branchleft.co.uk/
 ```
 
-Expect `421`. Anything else means the new allow rules were ordered ahead of the
-blanket deny and the admin interface is exposed — **treat as an incident and
-roll back immediately.**
+Expect `421`.
+
+Anything else means the endpoint policy is not what this repo says it is —
+`x:Http/set` applied something other than `HTTP_ENDPOINT_POLICY`, or an
+operator has since edited the rule in the admin UI. It is **not** an ordering
+mistake: the allow rules match one exact path, so no ordering of them can let
+`/` through. Read the live rule before doing anything else:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@167.233.252.240 \
+  'curl -sS -u "$(cut -d: -f1 /root/.stalwart-admin-credentials):$(cut -d: -f2 /root/.stalwart-admin-credentials)" \
+     -H "Content-Type: application/json" \
+     -d "{\"using\":[\"urn:ietf:params:jmap:core\"],\"methodCalls\":[[\"x:Http/get\",{\"ids\":[\"singleton\"]},\"0\"]]}" \
+     http://127.0.0.1:8080/jmap'
+```
+
+**Treat a non-421 as an incident** — the admin interface is reachable on a
+public listener — and roll back before diagnosing further.
 
 **V3 — the metrics path is refused from anywhere that is not `edge1`.** From
 your Mac, with the real credential:
@@ -202,28 +227,32 @@ and a personal email address. Do not rewrite the file.
 
 ## Rollback
 
-The exporter and the endpoint policy revert together, from the same reconciler:
+**A plain `git revert` does not undo this, and that is the trap worth stating
+first.** Stalwart's settings live in its database, not in a file this repo
+owns. Reverting deletes `_reconcile_metrics` from the script — so nothing is
+left that would ever turn the exporter _off_, and it stays `Enabled` on the
+running server indefinitely. The revert closes the endpoint policy but leaves
+the exporter running behind it.
 
-```bash
-cd ~/branchLeft/shared-infra && git revert --no-edit <merge commit of #129>
-```
+To actually roll back, **disable through the reconciler first, then revert**:
 
-…then re-run steps 1, 3 and 4. Step 3 will fail on the missing variable if
-`/opt/stalwart/.env` is still present and the reverted compose file no longer
-declares it — that is harmless; remove `/opt/stalwart/.env` and re-run.
+1. On your Mac, in a checkout of the merge commit (not a revert of it), set
+   `METRICS_TARGET["prometheus"]` to `{"@type": "Disabled"}` and delete
+   `METRICS_PATH` from `METRICS_SCRAPE_SOURCES`' allow rules by setting
+   `METRICS_SCRAPE_SOURCES = ()`.
+2. Re-run steps 1 and 4 of this runbook. Expect `enabled the authenticated
+Prometheus metrics exporter` to be replaced by an update, and the
+   access-control line to reapply with the blanket 421 alone.
+3. Verify with V2 (`421` for `/`) and V3 (`421` for the metrics path, now
+   because it is disabled rather than pinned).
+4. Only then `git revert` the merge commit, so the repo and the server agree.
 
-For an **immediate** stop without waiting on a revert, turn the exporter off in
-place; the endpoint policy still refers to a path that then 404s, which is
-inert:
+`/opt/stalwart/.env` can be left in place — `30-deploy-stalwart.sh` never
+overwrites an existing one, and a secret for a disabled exporter is inert.
 
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@167.233.252.240 \
-  'docker exec stalwart /bin/sh -c "true"'   # confirm the container is up first
-```
-
-then re-run step 4 from a checkout with `METRICS_TARGET["prometheus"]` set to
-`{"@type": "Disabled"}`. There is no faster lever — Stalwart has no config file
-to edit and no CLI flag for this.
+There is no faster lever. Stalwart has no config file to edit and no CLI flag
+for this; the API is the only interface, and the reconciler is how this
+platform drives it.
 
 ## After it succeeds
 

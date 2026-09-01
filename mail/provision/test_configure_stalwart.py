@@ -13,7 +13,9 @@ from configure_stalwart import (
     ACME_DIRECTORY,
     ALLOWED_IPS,
     HTTP_ENDPOINT_POLICY,
+    HTTP_USE_X_FORWARDED,
     MANAGED_LISTENERS,
+    METRICS_CREATE_DEFAULTS,
     METRICS_PATH,
     METRICS_SCRAPE_SOURCES,
     METRICS_SECRET_VARIABLE,
@@ -298,9 +300,28 @@ class PlanHttpChangeTests(unittest.TestCase):
         )
 
     def test_correct_rule_is_a_no_op(self):
-        current = [{"id": "singleton", "allowedEndpoints": HTTP_ENDPOINT_POLICY}]
+        current = [
+            {
+                "id": "singleton",
+                "allowedEndpoints": HTTP_ENDPOINT_POLICY,
+                "useXForwarded": HTTP_USE_X_FORWARDED,
+            }
+        ]
 
         self.assertEqual(plan_http_change(current), {})
+
+    def test_trusted_forwarded_headers_are_turned_back_off(self):
+        current = [
+            {
+                "id": "singleton",
+                "allowedEndpoints": HTTP_ENDPOINT_POLICY,
+                "useXForwarded": True,
+            }
+        ]
+
+        plan = plan_http_change(current)
+
+        self.assertEqual(plan["update"]["singleton"], {"useXForwarded": False})
 
 
 class HttpEndpointPolicyShapeTests(unittest.TestCase):
@@ -313,12 +334,20 @@ class HttpEndpointPolicyShapeTests(unittest.TestCase):
         # First match wins, so a 421 ahead of the metrics allowances would
         # swallow the scrape path and the endpoint would never be reachable.
         rules = HTTP_ENDPOINT_POLICY["match"]
-        keys = sorted(rules, key=int)
-        deny_key = keys[-1]
+        numeric_keys = sorted(rules, key=int)
+        deny_key = numeric_keys[-1]
 
         self.assertEqual(rules[deny_key], {"if": "listener == 'https'", "then": "421"})
-        for key in keys[:-1]:
+        for key in numeric_keys[:-1]:
             self.assertEqual(rules[key]["then"], "200")
+
+    def test_key_ordering_is_unambiguous_however_the_evaluator_sorts(self):
+        # This test file sorts by int; Stalwart's evaluator may sort the keys
+        # as strings, where "10" precedes "2". Below ten rules the two orders
+        # agree and the assertion above means what it says. At ten or more it
+        # silently stops meaning it -- so the count is what is guarded, since
+        # nothing here can see how the live evaluator sorts.
+        self.assertLess(len(HTTP_ENDPOINT_POLICY["match"]), 10)
 
     def test_webadmin_on_443_is_still_refused(self):
         # The whole reason this rule exists (mx1-provision's "The ACME
@@ -359,12 +388,66 @@ class HttpEndpointPolicyShapeTests(unittest.TestCase):
     def test_the_default_is_not_widened(self):
         self.assertEqual(HTTP_ENDPOINT_POLICY["else"], "200")
 
+    def test_forwarded_headers_are_never_trusted(self):
+        # The allowances match on `remote_ip`. With useXForwarded on and no
+        # trusted-proxy allowlist, `X-Forwarded-For: 46.225.95.167` makes any
+        # client match the pin -- the bypass RUNBOOK-mx1-provision.md records
+        # for the webadmin rule, applied to this one.
+        self.assertIs(HTTP_USE_X_FORWARDED, False)
+
 
 class PlanMetricsChangeTests(unittest.TestCase):
     def test_unmaterialized_singleton_is_created_with_the_exporter_enabled(self):
         plan = plan_metrics_change([])
+        created = plan["create"]["singleton"]
 
-        self.assertEqual(plan["create"]["singleton"], METRICS_TARGET)
+        self.assertEqual(created["prometheus"], METRICS_TARGET["prometheus"])
+
+    def test_the_create_payload_carries_every_required_field(self):
+        # `openTelemetry` is required by the object. Omitting it makes the
+        # create a `notCreated` rejection rather than an error, which without
+        # the guard in _jmap_call would have printed success.
+        created = plan_metrics_change([])["create"]["singleton"]
+
+        for field in METRICS_CREATE_DEFAULTS:
+            self.assertIn(field, created)
+
+    def test_a_redacted_secret_on_read_does_not_cause_a_rewrite(self):
+        # If Stalwart redacts the credential on GET, a target compared
+        # field-by-field can never equal it, so every run would rewrite the
+        # singleton and restart stalwart -- bouncing production mail on a
+        # sequence documented as safe to re-run.
+        current = [
+            {
+                "id": "singleton",
+                "prometheus": {
+                    "@type": "Enabled",
+                    "authUsername": "prometheus",
+                    "authSecret": {"@type": "EnvironmentVariable"},
+                },
+            }
+        ]
+
+        self.assertEqual(plan_metrics_change(current), {})
+
+    def test_an_unauthenticated_exporter_is_corrected(self):
+        # Enabled, our username, but the secret explicitly None -- the one
+        # authSecret state that is unambiguously wrong, because it serves the
+        # endpoint open.
+        current = [
+            {
+                "id": "singleton",
+                "prometheus": {
+                    "@type": "Enabled",
+                    "authUsername": "prometheus",
+                    "authSecret": {"@type": "None"},
+                },
+            }
+        ]
+
+        plan = plan_metrics_change(current)
+
+        self.assertEqual(plan["update"]["singleton"]["prometheus"], METRICS_TARGET["prometheus"])
 
     def test_disabled_exporter_is_enabled(self):
         current = [{"id": "singleton", "prometheus": {"@type": "Disabled"}}]
@@ -377,6 +460,20 @@ class PlanMetricsChangeTests(unittest.TestCase):
         current = [{"id": "singleton", **copy.deepcopy(METRICS_TARGET)}]
 
         self.assertEqual(plan_metrics_change(current), {})
+
+    def test_a_different_username_is_corrected(self):
+        current = [
+            {
+                "id": "singleton",
+                "prometheus": {
+                    "@type": "Enabled",
+                    "authUsername": "someone-else",
+                    "authSecret": {"@type": "EnvironmentVariable"},
+                },
+            }
+        ]
+
+        self.assertIn("update", plan_metrics_change(current))
 
     def test_unmanaged_fields_are_left_alone(self):
         # `openTelemetry` is a required field of the object but not one this
