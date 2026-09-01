@@ -12,14 +12,19 @@ import configure_stalwart as cs
 from configure_stalwart import (
     ACME_DIRECTORY,
     ALLOWED_IPS,
-    HTTP_DENY_HTTPS_LISTENER,
+    HTTP_ENDPOINT_POLICY,
     MANAGED_LISTENERS,
+    METRICS_PATH,
+    METRICS_SCRAPE_SOURCES,
+    METRICS_SECRET_VARIABLE,
+    METRICS_TARGET,
     SECURITY_TARGET,
     plan_acme_provider,
     plan_allowed_ips,
     plan_domain_sans,
     plan_http_change,
     plan_listener_changes,
+    plan_metrics_change,
     plan_security_change,
     plan_tracer_change,
 )
@@ -276,11 +281,11 @@ class PlanDomainSansTests(unittest.TestCase):
 
 
 class PlanHttpChangeTests(unittest.TestCase):
-    def test_unmaterialized_singleton_is_created_with_the_deny_rule(self):
+    def test_unmaterialized_singleton_is_created_with_the_endpoint_policy(self):
         plan = plan_http_change([])
 
         self.assertEqual(
-            plan["create"]["singleton"]["allowedEndpoints"], HTTP_DENY_HTTPS_LISTENER
+            plan["create"]["singleton"]["allowedEndpoints"], HTTP_ENDPOINT_POLICY
         )
 
     def test_wrong_rule_is_corrected(self):
@@ -289,13 +294,136 @@ class PlanHttpChangeTests(unittest.TestCase):
         plan = plan_http_change(current)
 
         self.assertEqual(
-            plan["update"]["singleton"]["allowedEndpoints"], HTTP_DENY_HTTPS_LISTENER
+            plan["update"]["singleton"]["allowedEndpoints"], HTTP_ENDPOINT_POLICY
         )
 
     def test_correct_rule_is_a_no_op(self):
-        current = [{"id": "singleton", "allowedEndpoints": HTTP_DENY_HTTPS_LISTENER}]
+        current = [{"id": "singleton", "allowedEndpoints": HTTP_ENDPOINT_POLICY}]
 
         self.assertEqual(plan_http_change(current), {})
+
+
+class HttpEndpointPolicyShapeTests(unittest.TestCase):
+    """The rule's *shape* is the security control, so it is asserted directly
+    rather than only through the diff functions -- a policy that still equals
+    itself is a no-op whatever it happens to say.
+    """
+
+    def test_the_blanket_deny_is_evaluated_last(self):
+        # First match wins, so a 421 ahead of the metrics allowances would
+        # swallow the scrape path and the endpoint would never be reachable.
+        rules = HTTP_ENDPOINT_POLICY["match"]
+        keys = sorted(rules, key=int)
+        deny_key = keys[-1]
+
+        self.assertEqual(rules[deny_key], {"if": "listener == 'https'", "then": "421"})
+        for key in keys[:-1]:
+            self.assertEqual(rules[key]["then"], "200")
+
+    def test_webadmin_on_443_is_still_refused(self):
+        # The whole reason this rule exists (mx1-provision's "The ACME
+        # decision"): the listener stays `http` so ACME works, and the
+        # webadmin is kept off 443 by this rule rather than by protocol.
+        denies = [
+            rule
+            for rule in HTTP_ENDPOINT_POLICY["match"].values()
+            if rule["then"] == "421"
+        ]
+
+        self.assertEqual(len(denies), 1)
+        self.assertEqual(denies[0]["if"], "listener == 'https'")
+
+    def test_every_allowance_is_pinned_to_one_path_and_one_source(self):
+        allowances = [
+            rule
+            for rule in HTTP_ENDPOINT_POLICY["match"].values()
+            if rule["then"] == "200"
+        ]
+
+        self.assertEqual(len(allowances), len(METRICS_SCRAPE_SOURCES))
+        for rule, source in zip(
+            sorted(allowances, key=lambda r: r["if"]),
+            sorted(METRICS_SCRAPE_SOURCES),
+        ):
+            self.assertIn(f"path == '{METRICS_PATH}'", rule["if"])
+            self.assertIn(f"remote_ip == '{source}'", rule["if"])
+            self.assertIn("listener == 'https'", rule["if"])
+
+    def test_no_allowance_uses_an_unverified_or_operator(self):
+        # `&&` appears in Stalwart's own expression examples; `||` does not.
+        # One rule per source address avoids betting a live access-control
+        # rule on an operator nobody has seen it parse.
+        for rule in HTTP_ENDPOINT_POLICY["match"].values():
+            self.assertNotIn("||", rule["if"])
+
+    def test_the_default_is_not_widened(self):
+        self.assertEqual(HTTP_ENDPOINT_POLICY["else"], "200")
+
+
+class PlanMetricsChangeTests(unittest.TestCase):
+    def test_unmaterialized_singleton_is_created_with_the_exporter_enabled(self):
+        plan = plan_metrics_change([])
+
+        self.assertEqual(plan["create"]["singleton"], METRICS_TARGET)
+
+    def test_disabled_exporter_is_enabled(self):
+        current = [{"id": "singleton", "prometheus": {"@type": "Disabled"}}]
+
+        plan = plan_metrics_change(current)
+
+        self.assertEqual(plan["update"]["singleton"]["prometheus"], METRICS_TARGET["prometheus"])
+
+    def test_correct_state_is_a_no_op(self):
+        current = [{"id": "singleton", **copy.deepcopy(METRICS_TARGET)}]
+
+        self.assertEqual(plan_metrics_change(current), {})
+
+    def test_unmanaged_fields_are_left_alone(self):
+        # `openTelemetry` is a required field of the object but not one this
+        # platform manages -- naming it in the target would mean this script
+        # fighting whatever it is set to on every run.
+        current = [
+            {
+                "id": "singleton",
+                "openTelemetry": {"@type": "Grpc", "endpoint": "https://example.invalid"},
+                "metricsPolicy": "include",
+                **copy.deepcopy(METRICS_TARGET),
+            }
+        ]
+
+        self.assertEqual(plan_metrics_change(current), {})
+
+
+class MetricsTargetShapeTests(unittest.TestCase):
+    def test_authentication_is_never_left_unset(self):
+        # Both credential fields are optional in Stalwart's schema, and with
+        # both unset the endpoint is served unauthenticated -- on a listener
+        # bound to [::]:443 that publishes queue depth and delivery outcomes
+        # to the internet.
+        prometheus = METRICS_TARGET["prometheus"]
+
+        self.assertEqual(prometheus["@type"], "Enabled")
+        self.assertTrue(prometheus["authUsername"])
+        self.assertNotEqual(prometheus["authSecret"]["@type"], "None")
+
+    def test_the_secret_is_read_from_the_environment_not_embedded(self):
+        # A `Value` secret would put the plaintext into this repo, the API
+        # call and the settings store at once.
+        auth_secret = METRICS_TARGET["prometheus"]["authSecret"]
+
+        self.assertEqual(auth_secret["@type"], "EnvironmentVariable")
+        self.assertEqual(auth_secret["variableName"], METRICS_SECRET_VARIABLE)
+
+    def test_the_value_variants_secret_field_is_absent(self):
+        # `{"@type": "Value", "secret": "..."}` is the one shape that would
+        # commit a plaintext credential to this repo. Asserted structurally
+        # rather than by scanning the serialised target for the word, which
+        # matches `authSecret` and `STALWART_PROMETHEUS_SECRET` and so would
+        # pass or fail for reasons unrelated to the thing under test.
+        auth_secret = METRICS_TARGET["prometheus"]["authSecret"]
+
+        self.assertNotIn("secret", auth_secret)
+        self.assertNotIn("filePath", auth_secret)
 
 
 class PlanAcmeProviderTests(unittest.TestCase):

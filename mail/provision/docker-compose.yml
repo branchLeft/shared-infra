@@ -14,6 +14,14 @@ services:
     restart: unless-stopped
     environment:
       STALWART_HOSTNAME: mx1.branchleft.co.uk
+      # Basic-auth secret for the Prometheus exporter, read by Stalwart via
+      # the `EnvironmentVariable` secret variant so the plaintext never
+      # enters the settings store or this repo. Written once into `.env`
+      # beside this file -- see mail/RUNBOOK-mx1-prometheus-metrics.md. No
+      # default: an unset value makes Stalwart fail the credential rather
+      # than silently serve the endpoint open, which is the failure that
+      # matters on a listener bound to [::]:443.
+      STALWART_PROMETHEUS_SECRET: ${STALWART_PROMETHEUS_SECRET:?set in .env beside this compose file}
     ports:
       - '127.0.0.1:8080:8080'
       - '25:25'

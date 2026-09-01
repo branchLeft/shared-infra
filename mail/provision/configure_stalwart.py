@@ -63,12 +63,78 @@ REMOVED_LISTENER_NAMES = ("pop3s", "sieve")
 
 TRACER_TARGET_TYPE = "Stdout"
 
+# Prometheus scrape path, and the only two source addresses allowed to
+# reach it on the public listener. `edge1` runs the estate's monitoring
+# stack; the addresses are its own, read from the host, because mx1 sits in
+# a separate hcloud project with no private network to scrape across
+# (mail/server.ts, and hetzner/edge/render.ts's NOT_AN_UPSTREAM records the
+# same fact for the edge's own proxying). IPv6 is listed as well as IPv4
+# because mx1 publishes an AAAA record, so a scrape that resolves it would
+# arrive from edge1's v6 address and be refused with only the v4 rule.
+METRICS_PATH = "/metrics/prometheus"
+METRICS_SCRAPE_SOURCES = ("46.225.95.167", "2a01:4f8:1c19:a1a8::1")
+
 # Keeps the webadmin off port 443 without touching ACME eligibility --
 # reasoning and incident history: mail/RUNBOOK-mx1-provision.md's "The
-# ACME decision".
-HTTP_DENY_HTTPS_LISTENER = {
-    "match": {"0": {"if": "listener == 'https'", "then": "421"}},
+# ACME decision" -- while letting exactly one path through for the metrics
+# scrape.
+#
+# Two properties are load-bearing and neither is obvious from the shape:
+#
+# - **The allow rules come first.** Rules are evaluated in key order and
+#   the first match wins, so the blanket 421 has to be last or it would
+#   swallow the metrics path too.
+# - **One rule per source address, rather than one rule with `||`.** `&&`
+#   is confirmed in Stalwart's own expression examples; `||` is not, and a
+#   condition that fails to parse on a live access-control rule is not a
+#   thing to find out by deploying it.
+#
+# Source-address matching is defence in depth, not the control: basic auth
+# on the endpoint is mandatory (see METRICS_TARGET). Opening a path on a
+# listener reachable from 0.0.0.0/0 with only a password in front of it is
+# the weaker posture, and the endpoint serves queue and delivery telemetry.
+HTTP_ENDPOINT_POLICY = {
+    "match": {
+        **{
+            str(index): {
+                "if": (
+                    f"listener == 'https' && path == '{METRICS_PATH}' "
+                    f"&& remote_ip == '{source}'"
+                ),
+                "then": "200",
+            }
+            for index, source in enumerate(METRICS_SCRAPE_SOURCES)
+        },
+        str(len(METRICS_SCRAPE_SOURCES)): {"if": "listener == 'https'", "then": "421"},
+    },
     "else": "200",
+}
+
+# Stalwart's Prometheus exporter. Enabled with credentials set, never
+# without: `authUsername` and `authSecret` are both optional in Stalwart's
+# schema and leaving them unset publishes the endpoint unauthenticated,
+# which on a listener bound to [::]:443 means publishing queue depth and
+# delivery outcomes to the internet.
+#
+# The secret is read from the container's environment rather than passed as
+# a `Value`, so the plaintext never enters this repo, this script's API call
+# or the settings store. mail/provision/docker-compose.yml passes it
+# through; the operator writes it once into the env file beside that
+# compose file.
+#
+# `openTelemetry` is deliberately absent from the target: it is a required
+# field of the object but not one this platform manages, and naming it here
+# would mean this script fighting whatever it is set to.
+METRICS_SECRET_VARIABLE = "STALWART_PROMETHEUS_SECRET"
+METRICS_TARGET: dict[str, Any] = {
+    "prometheus": {
+        "@type": "Enabled",
+        "authUsername": "prometheus",
+        "authSecret": {
+            "@type": "EnvironmentVariable",
+            "variableName": METRICS_SECRET_VARIABLE,
+        },
+    },
 }
 
 # The one ACME provider this platform manages, identified by directory URL
@@ -176,12 +242,28 @@ def plan_http_change(http_singletons: list[dict[str, Any]]) -> dict[str, Any]:
         # applies implicitly, per-request, without a stored object) --
         # treat that the same as "wrong", since the default lets 443
         # through unrestricted.
-        return {"create": {"singleton": {"allowedEndpoints": HTTP_DENY_HTTPS_LISTENER}}}
+        return {"create": {"singleton": {"allowedEndpoints": HTTP_ENDPOINT_POLICY}}}
 
     current = http_singletons[0]
-    if current.get("allowedEndpoints") == HTTP_DENY_HTTPS_LISTENER:
+    if current.get("allowedEndpoints") == HTTP_ENDPOINT_POLICY:
         return {}
-    return {"update": {current["id"]: {"allowedEndpoints": HTTP_DENY_HTTPS_LISTENER}}}
+    return {"update": {current["id"]: {"allowedEndpoints": HTTP_ENDPOINT_POLICY}}}
+
+
+def plan_metrics_change(metrics_singletons: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pure diff: return the x:Metrics/set arguments needed so the Metrics
+    singleton exports Prometheus with authentication, or an empty dict if it
+    already does. Only `prometheus` is managed -- `openTelemetry`,
+    `metrics` and `metricsPolicy` are left as found.
+    """
+    if not metrics_singletons:
+        return {"create": {"singleton": dict(METRICS_TARGET)}}
+
+    current = metrics_singletons[0]
+    diff = _field_diff(current, METRICS_TARGET)
+    if not diff:
+        return {}
+    return {"update": {current["id"]: diff}}
 
 
 def plan_acme_provider(providers: list[dict[str, Any]]) -> tuple[dict[str, Any], str | None]:
@@ -424,7 +506,18 @@ def _reconcile_http_access(auth: tuple[str, str]) -> bool:
         print("configure_stalwart: HTTP access-control rule already up to date, no-op")
         return False
     _jmap_call(auth, "x:Http/set", http_args)
-    print("configure_stalwart: set the HTTP access-control rule keeping the webadmin off port 443")
+    print("configure_stalwart: set the HTTP access-control rule (webadmin off 443, metrics path open to edge1 only)")
+    return True
+
+
+def _reconcile_metrics(auth: tuple[str, str]) -> bool:
+    metrics_singletons = _jmap_call(auth, "x:Metrics/get", {"ids": ["singleton"]})["list"]
+    metrics_args = plan_metrics_change(metrics_singletons)
+    if not metrics_args:
+        print("configure_stalwart: Prometheus exporter already enabled with auth, no-op")
+        return False
+    _jmap_call(auth, "x:Metrics/set", metrics_args)
+    print("configure_stalwart: enabled the authenticated Prometheus metrics exporter")
     return True
 
 
@@ -489,6 +582,7 @@ def main() -> int:
             acme_changed,
             _reconcile_domains(auth, acme_provider_id),
             _reconcile_http_access(auth),
+            _reconcile_metrics(auth),
             _reconcile_tracer(auth),
             _reconcile_security(auth),
             _reconcile_allowed_ips(auth),
