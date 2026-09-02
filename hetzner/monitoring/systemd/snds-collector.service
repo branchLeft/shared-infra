@@ -1,0 +1,19 @@
+# Installed at /etc/systemd/system/snds-collector.service by hand, per
+# RUNBOOK-monitoring.md's SNDS section -- not one of the *.override.conf
+# drop-ins install-systemd-drop-ins.sh installs automatically, and not itself
+# a Compose stack unit like branchleft-compose@monitoring. Triggered by the
+# sibling snds-collector.timer, never enabled to start on its own.
+[Unit]
+Description=Fetch Microsoft SNDS reputation data for edge1's monitoring stack
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Same file the monitoring stack itself reads -- SNDS_BEARER_TOKEN sits
+# beside SMTP_USERNAME and the rest, not in a file of its own. A missing or
+# blank token fails this run and leaves the previous textfile output in
+# place (see collect_snds_metrics.py); it does not fail the monitoring
+# stack itself, which has no ExecStartPre dependency on this unit.
+EnvironmentFile=-/etc/branchleft/monitoring.env
+ExecStart=/usr/bin/python3 /opt/branchleft/monitoring/snds/collect_snds_metrics.py
