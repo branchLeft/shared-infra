@@ -928,6 +928,53 @@ jobs:
       - name: Apply
         run: pulumi up --stack production --yes
 
+      # A clean `pulumi up` is evidence about the checkpoint, not about the
+      # deployed policy -- Cloud Armor writes rules as independent
+      # per-priority API calls, so a partial failure can leave live rules
+      # unchanged while the checkpoint and every Pulumi-side check agree the
+      # write happened (RUNBOOK-edge-state-move.md appendix A; both
+      # instances went undetected for as long as 13 days). The four steps
+      # below are CLOUD-ARMOR-BASELINE.md's "Reproducing this capture"
+      # automated: read the live policy back, normalize it exactly as a
+      # human recapture would, and fail the job by name if it disagrees with
+      # the committed baseline. `google-github-actions/auth` above already
+      # wrote the ADC credential file this step's `gcloud` picks up; no
+      # further authentication is needed.
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Capture the live Cloud Armor policy
+        run: |
+          scratch=$(mktemp -d)
+          echo "LIVE_ARMOR_SCRATCH=$scratch" >> "$GITHUB_ENV"
+          gcloud compute security-policies export branchleft-edge-armor \
+            --project="${{ vars.GCP_PROJECT_ID }}" --global \
+            --file-name="$scratch/live.raw.json" --file-format=json
+
+      # Reuses the same normalizer a human recapture runs, unmodified -- its
+      # IP-redaction refusal therefore still applies to whatever this job
+      # captures: a live rule naming a specific address fails this step
+      # (exit 1) rather than reaching disk or a log line.
+      - name: Normalize the live capture
+        run: |
+          python3 scripts/normalize-cloud-armor-baseline.py \
+            "$LIVE_ARMOR_SCRATCH/live.raw.json" "$LIVE_ARMOR_SCRATCH/live.normalized.json"
+
+      - name: Verify the live policy matches the committed baseline
+        run: |
+          python3 scripts/assert-cloud-armor-live-parity.py --self-test
+          python3 scripts/assert-cloud-armor-live-parity.py \
+            cloud-armor-baseline/branchleft-edge-armor.normalized.json \
+            "$LIVE_ARMOR_SCRATCH/live.normalized.json"
+
+      # The raw export is an unguarded read -- see CLOUD-ARMOR-BASELINE.md's
+      # "Reproducing this capture" step 0 -- so it never belongs in the
+      # workspace or a later cache; `if: always()` clears it whether or not
+      # the checks above passed.
+      - name: Remove the live-capture scratch directory
+        if: always()
+        run: rm -rf "$LIVE_ARMOR_SCRATCH"
+
       - name: Write outcome to job summary
         if: always()
         env:
