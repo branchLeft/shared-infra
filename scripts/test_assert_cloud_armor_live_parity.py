@@ -143,6 +143,23 @@ class DiffNormalizedPoliciesTests(unittest.TestCase):
         self.assertEqual(len(divergences), 1)
         self.assertEqual(divergences[0].field, "match.config.srcIpRanges[0]")
 
+    def test_a_field_present_only_in_the_live_capture_is_named_not_silently_ignored(self):
+        # A compare that only walks the *baseline's* own keys would see zero
+        # fields at this priority and report a clean diff -- exactly the
+        # shape that would miss a live rule gaining a field the baseline
+        # never had, such as an added `redirectOptions` pointing traffic
+        # somewhere the code never declared.
+        baseline = _clean_policy()
+        captured = copy.deepcopy(baseline)
+        captured["rules"][0]["redirectOptions"] = {"type": "EXTERNAL_302", "target": "https://attacker.example/"}
+
+        divergences = live_parity.diff_normalized_policies(baseline, captured)
+
+        self.assertEqual(len(divergences), 1)
+        self.assertIn("priority=1000", divergences[0].label)
+        self.assertEqual(divergences[0].field, "redirectOptions")
+        self.assertEqual(divergences[0].baseline_value, "<absent>")
+
     def test_a_policy_level_field_is_attributed_to_the_policy_not_a_rule(self):
         baseline = _clean_policy()
         captured = copy.deepcopy(baseline)

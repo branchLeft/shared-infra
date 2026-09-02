@@ -933,13 +933,19 @@ jobs:
       # per-priority API calls, so a partial failure can leave live rules
       # unchanged while the checkpoint and every Pulumi-side check agree the
       # write happened (RUNBOOK-edge-state-move.md appendix A; both
-      # instances went undetected for as long as 13 days). The four steps
-      # below are CLOUD-ARMOR-BASELINE.md's "Reproducing this capture"
-      # automated: read the live policy back, normalize it exactly as a
-      # human recapture would, and fail the job by name if it disagrees with
-      # the committed baseline. `google-github-actions/auth` above already
-      # wrote the ADC credential file this step's `gcloud` picks up; no
-      # further authentication is needed.
+      # instances went undetected for as long as 13 days). The steps below
+      # automate two of CLOUD-ARMOR-BASELINE.md's "Reproducing this capture"
+      # steps -- export and normalize -- and fail the job by name if the
+      # result disagrees with the committed baseline. Deliberately not all of
+      # them: the `list` step (confirming exactly one policy exists) and the
+      # independent `describe` cross-read are a one-time proof that `export`
+      # is a trustworthy read for this policy, already recorded in that
+      # file's "Status of this capture"; repeating them on every deploy adds
+      # a second GCP read with no incremental protection against either
+      # incident this gate exists for, both of which `export` alone catches.
+      # `google-github-actions/auth` above already wrote the ADC credential
+      # file this step's `gcloud` picks up; no further authentication is
+      # needed.
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
