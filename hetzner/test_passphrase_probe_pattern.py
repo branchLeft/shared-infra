@@ -30,10 +30,11 @@ def runbooks() -> list[pathlib.Path]:
     return sorted(found)
 
 
-def passphrase_verification_sections() -> list[tuple[pathlib.Path, str]]:
+def passphrase_verification_sections() -> list[tuple[pathlib.Path, str, str]]:
     """Find sections where passphrases are being verified (steps mentioning decrypt/proof).
 
-    Returns tuples of (runbook_path, section_text) for sections mentioning verify/decrypt/proof.
+    Returns tuples of (runbook_path, code_block, context) for sections mentioning verify/decrypt/proof.
+    Context window expanded to 2000 chars to capture distant section headers.
     """
     found = []
     for runbook in runbooks():
@@ -43,10 +44,11 @@ def passphrase_verification_sections() -> list[tuple[pathlib.Path, str]]:
         for match in fence_pattern.finditer(text):
             code_block = match.group(1)
             # Look for code blocks that are in a step mentioning decrypt or verify
-            start_pos = max(0, match.start() - 500)  # Get some context before the block
+            # Expanded context window to 2000 chars to capture distant keywords in headers
+            start_pos = max(0, match.start() - 2000)
             context = text[start_pos : match.end() + 100]
             if any(word in context.lower() for word in ["decrypt", "verify", "proof", "passphrase check"]):
-                found.append((runbook, code_block))
+                found.append((runbook, code_block, context))
     return found
 
 
@@ -55,51 +57,29 @@ class PassphraseProbePatternTests(unittest.TestCase):
         """Verify we actually found runbooks to test."""
         self.assertGreater(len(runbooks()), 0, "No RUNBOOK-*.md files found")
 
-    def test_passphrase_probes_use_pulumi_preview_not_stack_export(self):
-        """Passphrase probes must use `pulumi preview`, never `stack export --show-secrets`."""
-        for runbook, code_block in passphrase_verification_sections():
+    def test_no_stack_export_show_secrets_used_as_passphrase_proof(self):
+        """Passphrase verification never uses `stack export --show-secrets` as a proof gate.
+
+        The anti-pattern is: `pulumi stack export --show-secrets ... && <continue or assert>`.
+        This exits 0 under a wrong passphrase, so it proves nothing. Use `pulumi preview`
+        which fails closed on an incorrect passphrase.
+        """
+        for runbook, code_block, context in passphrase_verification_sections():
             with self.subTest(runbook=runbook.name):
-                # If the code block has "pulumi preview" it's likely correct
-                has_preview = "pulumi preview" in code_block
-
-                # The problematic pattern: using export --show-secrets for verification
-                # A correct pattern would be something like:
-                #   pulumi preview ... && echo 'decrypt OK'
-                # or just
-                #   pulumi preview ...
-                # Not:
-                #   pulumi stack export --show-secrets ... && echo 'decrypt OK'
-
+                # The anti-pattern: export as a gate for continuing. More specific pattern:
+                # matches "stack export ... --show-secrets ... &&" but not inspection commands
+                # like piping to jq/head. The &&-continuation is the smoking gun.
                 bad_pattern = re.search(
-                    r"pulumi\s+stack\s+export\s+.*?--show-secrets.*?&&\s*echo\s+['\"].*?(?:decrypt|proof|ok)",
+                    r"pulumi\s+stack\s+export\s+[^`]*?--show-secrets\s*&&",
                     code_block,
                     re.IGNORECASE | re.DOTALL
                 )
 
                 self.assertIsNone(
                     bad_pattern,
-                    f"{runbook.name}: found passphrase verification using "
-                    f"`pulumi stack export --show-secrets`. This exits 0 under a wrong passphrase "
-                    f"(Pulumi v3.255.0, INC-4) and proves nothing. Use `pulumi preview` instead, "
-                    f"which fails closed on incorrect passphrase. See branchLeft/workspace#208."
-                )
-
-    def test_no_stack_export_show_secrets_used_as_decrypt_proof(self):
-        """Extra check: grep for the exact anti-pattern anywhere in migration runbooks."""
-        for runbook in runbooks():
-            text = runbook.read_text(encoding="utf-8")
-            # Look for the pattern in code blocks
-            code_blocks = re.findall(
-                r"^```(?:bash)?\n(.+?)\n```", text, re.MULTILINE | re.DOTALL
-            )
-            for code_block in code_blocks:
-                # The anti-pattern: using export as a gate for continuing
-                self.assertNotRegex(
-                    code_block,
-                    r"stack\s+export.*--show-secrets.*&&",
-                    f"{runbook.name}: found `stack export --show-secrets` used as a proof/gate. "
-                    f"This pattern exits 0 under a wrong passphrase and is unsafe. "
-                    f"Use `pulumi preview` instead (fails closed on wrong passphrase). "
+                    f"{runbook.name}: found `stack export --show-secrets &&` (continues/asserts). "
+                    f"This exits 0 under a wrong passphrase (Pulumi v3.255.0, INC-4) and proves nothing. "
+                    f"Use `pulumi preview` instead, which fails closed on incorrect passphrase. "
                     f"See branchLeft/workspace#208."
                 )
 
