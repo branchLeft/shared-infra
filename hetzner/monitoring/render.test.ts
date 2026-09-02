@@ -422,8 +422,12 @@ describe('the SNDS complaint-rate alert rules', () => {
 
   it('gates the complaint-rate alert on a volume floor, with a fallback that fires if the floor metric is not being published at all', () => {
     expect(rendered).toContain('alert: SNDSComplaintRateHigh');
-    expect(rendered).toContain('snds_complaint_rate > 0.001');
-    expect(rendered).toContain('(snds_message_volume > 50 or on() absent(snds_message_volume))');
+    expect(rendered).toContain('(snds_complaint_rate > 0.001 and snds_message_volume > 50)');
+    // Matched per IP (`unless on(ip)`), not a blanket `on()` -- a global match
+    // would let one IP's real, present volume satisfy the floor for a
+    // different IP that has none. See alert_rules_test.yml's two-IP case for
+    // the promtool proof.
+    expect(rendered).toContain('(snds_complaint_rate > 0.001 unless on(ip) snds_message_volume)');
   });
 
   it("alerts on Microsoft's own red filter-result status, independent of the computed complaint rate", () => {

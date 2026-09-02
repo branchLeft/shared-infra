@@ -597,7 +597,7 @@ tests:
             exp_annotations:
               summary: 'Microsoft SNDS reported a complaint rate over 0.1% for 203.0.113.5.'
               description: >-
-                SNDS refreshes at most once a day, so this reports yesterday's reputation snapshot, not a live rate -- treat "when did this fire" as "as of Microsoft's last publish", not as the moment of the complaints themselves. The volume floor keeps a handful of complaints against a trickle of mail from paging, the same shape as MailDeliveryFailureRatioHigh's `> 20`, but bypasses itself (`or on() absent(...)`) if snds_message_volume is not being published at all -- a floor that silently disabled the alert it was meant to only quiet would be worse than no floor. Re-tune both numbers from observed volume once real data exists. See RUNBOOK-monitoring.md for what to do when this fires.
+                SNDS refreshes at most once a day, so this reports yesterday's reputation snapshot, not a live rate -- treat "when did this fire" as "as of Microsoft's last publish", not as the moment of the complaints themselves. The volume floor keeps a handful of complaints against a trickle of mail from paging, the same shape as MailDeliveryFailureRatioHigh's `> 20`, but the second branch bypasses it, per IP, for an IP that has no snds_message_volume series of its own (`unless on(ip)` -- matched by ip, not blanket `on()`: a global match would let one IP's real, present volume satisfy the floor for a *different* IP that has none, which is wrong regardless of which way it errs). A floor that silently disabled the alert it was meant to only quiet would be worse than no floor. Re-tune both numbers from observed volume once real data exists. See RUNBOOK-monitoring.md for what to do when this fires.
 
   # The floor doing its job: the same high rate, but on a trickle of mail --
   # exactly the "one complaint against three messages" case the floor exists
@@ -627,10 +627,11 @@ tests:
         exp_alerts: []
 
   # The trap this rule is written around: a high complaint rate on record, but
-  # the volume metric has never been published at all (e.g. the collector's
-  # SNDS feed dropped that column). Without `or on() absent(...)` the `and`
-  # would match zero series and this would stay silent through a real spike --
-  # this case is the assertion that the fallback closes that gap.
+  # the volume metric has never been published at all for any IP (e.g. the
+  # collector's SNDS feed dropped that column entirely). Without the second
+  # (`unless on(ip)`) branch, `and snds_message_volume > 50` alone would match
+  # zero series and this would stay silent through a real spike -- this case
+  # is the assertion that the fallback branch closes that gap.
   - interval: 1h
     input_series:
       - series: 'snds_complaint_rate{ip="203.0.113.5"}'
@@ -645,7 +646,30 @@ tests:
             exp_annotations:
               summary: 'Microsoft SNDS reported a complaint rate over 0.1% for 203.0.113.5.'
               description: >-
-                SNDS refreshes at most once a day, so this reports yesterday's reputation snapshot, not a live rate -- treat "when did this fire" as "as of Microsoft's last publish", not as the moment of the complaints themselves. The volume floor keeps a handful of complaints against a trickle of mail from paging, the same shape as MailDeliveryFailureRatioHigh's `> 20`, but bypasses itself (`or on() absent(...)`) if snds_message_volume is not being published at all -- a floor that silently disabled the alert it was meant to only quiet would be worse than no floor. Re-tune both numbers from observed volume once real data exists. See RUNBOOK-monitoring.md for what to do when this fires.
+                SNDS refreshes at most once a day, so this reports yesterday's reputation snapshot, not a live rate -- treat "when did this fire" as "as of Microsoft's last publish", not as the moment of the complaints themselves. The volume floor keeps a handful of complaints against a trickle of mail from paging, the same shape as MailDeliveryFailureRatioHigh's `> 20`, but the second branch bypasses it, per IP, for an IP that has no snds_message_volume series of its own (`unless on(ip)` -- matched by ip, not blanket `on()`: a global match would let one IP's real, present volume satisfy the floor for a *different* IP that has none, which is wrong regardless of which way it errs). A floor that silently disabled the alert it was meant to only quiet would be worse than no floor. Re-tune both numbers from observed volume once real data exists. See RUNBOOK-monitoring.md for what to do when this fires.
+
+  # The regression case a blanket `on()` (matching with no labels at all,
+  # rather than `unless on(ip)`) would pass silently through: two IPs, only
+  # one of which has a real, below-floor volume series. IP-A's own volume (3)
+  # is genuinely below the floor and must suppress its high complaint rate --
+  # a blanket-`on()` version would instead let IP-B's unrelated, real,
+  # above-floor volume "count" for IP-A too (matching on zero labels pairs
+  # every row on one side with every row on the other), wrongly firing for
+  # IP-A. Exhaustive on both IPs: IP-A must remain silent and IP-B must not
+  # spuriously appear either, since it has no meaningful complaint rate of its
+  # own.
+  - interval: 1h
+    input_series:
+      - series: 'snds_complaint_rate{ip="203.0.113.5"}' # IP-A
+        values: '0.005+0x24'
+      - series: 'snds_message_volume{ip="203.0.113.5"}' # IP-A: real, below floor
+        values: '3+0x24'
+      - series: 'snds_message_volume{ip="198.51.100.9"}' # IP-B: real, above floor
+        values: '500+0x24'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: SNDSComplaintRateHigh
+        exp_alerts: []
 
   # SNDSReputationRed: Microsoft's own red classification fires independent of
   # the complaint-rate figure -- this input carries no snds_complaint_rate
@@ -694,7 +718,7 @@ tests:
             exp_annotations:
               summary: 'The SNDS collector has not published a successful snapshot in over 36 hours.'
               description: >-
-                Both rules above go silent, not critical, if this collector stops running or its bearer token expires -- an absent-or-stale gauge reads exactly like a clean reputation otherwise. 129600s (36h) is half again the collector's own ~24h cadence, wide enough that one missed run does not page. The `or absent(...)` half catches a collector that has never once succeeded, which the time() subtraction alone cannot see -- subtracting from an absent series yields no series at all, not a large number.
+                Both rules above go silent, not critical, if this collector stops running or its bearer token expires -- an absent-or-stale gauge reads exactly like a clean reputation otherwise. 129600s (36h) is half again the collector's own ~24h cadence, wide enough that one missed run does not page. The `or absent(...)` half catches a collector that has never once succeeded, which the time() subtraction alone cannot see -- subtracting from an absent series yields no series at all, not a large number. Two different causes share this one alert, and the response differs: an expired SNDS_BEARER_TOKEN (its ~8h life is well inside this 36h window) is the routine case, cleared by renewing it (RUNBOOK-monitoring.md §14, branchLeft/workspace#538) -- only treat this as a bug if a current, recently-renewed token still fails to produce a fresh snapshot.
 
   # A collector that has never once succeeded: the gauge has never existed,
   # which `time() - <absent>` cannot see on its own (no series to subtract
@@ -710,7 +734,7 @@ tests:
             exp_annotations:
               summary: 'The SNDS collector has not published a successful snapshot in over 36 hours.'
               description: >-
-                Both rules above go silent, not critical, if this collector stops running or its bearer token expires -- an absent-or-stale gauge reads exactly like a clean reputation otherwise. 129600s (36h) is half again the collector's own ~24h cadence, wide enough that one missed run does not page. The `or absent(...)` half catches a collector that has never once succeeded, which the time() subtraction alone cannot see -- subtracting from an absent series yields no series at all, not a large number.
+                Both rules above go silent, not critical, if this collector stops running or its bearer token expires -- an absent-or-stale gauge reads exactly like a clean reputation otherwise. 129600s (36h) is half again the collector's own ~24h cadence, wide enough that one missed run does not page. The `or absent(...)` half catches a collector that has never once succeeded, which the time() subtraction alone cannot see -- subtracting from an absent series yields no series at all, not a large number. Two different causes share this one alert, and the response differs: an expired SNDS_BEARER_TOKEN (its ~8h life is well inside this 36h window) is the routine case, cleared by renewing it (RUNBOOK-monitoring.md §14, branchLeft/workspace#538) -- only treat this as a bug if a current, recently-renewed token still fails to produce a fresh snapshot.
 
   # A healthy, recently-succeeded collector must stay silent.
   - interval: 1h
