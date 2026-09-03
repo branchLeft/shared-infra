@@ -6,24 +6,28 @@ Pulumi v3.255.0, INC-4 in ghost-platform-docs/INCIDENTS.md), so any verification
 on it passes vacuously. `pulumi preview` fails closed on a wrong passphrase with
 "error: getting stack configuration: get stack secrets manager: incorrect passphrase".
 
-DESIGN, after three rounds of a shape-matching heuristic each got bypassed by
-a new rewording (workspace#208): this file does not try to recognise "a
-passphrase-verification section" or "a command shaped like the anti-pattern".
-Both are free prose, and free prose is infinitely reword-able around any
-fixed set of trigger words or regex shapes. Instead it is deny-by-default:
-every literal appearance of `--show-secrets` in any runbook must be on the
-explicit ALLOWLIST below, with a justification. There is no way to use the
-flag while avoiding its own name, so a plain substring scan cannot be
-defeated by paraphrase, a new shell operator, or splitting a command across
-lines -- see the "Known limit" note on ALLOWLIST for the one thing it
-genuinely cannot catch.
+This has been through six review rounds, each of which found a real defect.
+Rounds 1-4 built and repeatedly patched a heuristic that tried to recognise
+"a passphrase-verification section" and "a command shaped like the
+anti-pattern" -- free-prose shape matching, which cannot work: each round
+closed the rewording someone thought to try and left the next one open,
+until a round proved a section could drop every trigger word while wrapping
+the exact anti-pattern and stay green. Round 5 replaced that entirely with
+deny-by-default on the literal flag. Round 6 found the allowlist itself was
+still exploitable (a key with no occurrence count let one allowlisted line
+allowlist every identical copy of itself, including a live one pasted into a
+new code fence) and that the scan's file coverage stopped at RUNBOOK-*.md
+while the same flag already appeared, unallowlisted, in three scripts.
+Whoever next touches this file should not have to rediscover any of that --
+see "Known limits", below the ALLOWLIST, for what is deliberately still open.
 
-See branchLeft/workspace#208 for the incident and the fix's history.
+See branchLeft/workspace#208 for the incident and the fix's full history.
 """
 
 import pathlib
-import re
+import subprocess
 import unittest
+from collections import defaultdict
 
 HETZNER = pathlib.Path(__file__).resolve().parent
 REPO_ROOT = HETZNER.parent
@@ -45,211 +49,140 @@ def runbooks() -> list[pathlib.Path]:
     return sorted(found)
 
 
-# ALLOWLIST keys every current, reviewed appearance of the literal flag by
-# (path relative to the repo root, exact stripped line text) -> justification.
-# Keying on line text rather than line number means an unrelated edit
-# elsewhere in the file can never silently "unlist" or "relist" an entry by
-# shifting its line number; keying per-occurrence rather than per-file means
-# allow-listing one mention never allow-lists the whole file for a later,
-# different, live use of the flag.
-#
-# Seeded from the whole corpus as it exists today: every one of the eight
-# occurrences below is prose warning against the anti-pattern (a `#` shell
-# comment or backticked inline code inside surrounding prose), never a line a
-# shell would actually execute. There are currently zero legitimate live
-# uses of the flag in any runbook -- the two real archive/backup steps in
-# RUNBOOK-existing-stack-migration.md use plain `pulumi stack export`, no
-# `--show-secrets` -- so this list starts as close to empty as the real
-# corpus allows, which is the point of deny-by-default: nothing is on it
-# by convenience, only by review.
-#
-# Known limit (see the module docstring and the PR body): this scan finds
-# the literal string `--show-secrets`. It cannot find the flag built from
-# fragments a shell would still assemble at runtime -- string concatenation,
-# or a variable holding the flag itself (`FLAG=--show-secrets; ... $FLAG`)
-# with the flag's own text moved to a *different* line that itself contains
-# no dashes at all. That is a deliberate non-goal, not an oversight: a
-# runbook is prose meant for a human to read and copy by hand, and
-# constructing a flag from fragments is not a realistic accident for that
-# reader to make -- it would have to be deliberately obfuscated, which is a
-# different threat model than the one workspace#208 is about.
-ALLOWLIST: dict[tuple[str, str], str] = {
-    (
-        "hetzner/RUNBOOK-existing-stack-migration.md",
-        "#    --show-secrets` does not (it exits 0 regardless, observed v3.255.0 --",
-    ): "prose explaining why the anti-pattern is unsafe, wrapped across a shell comment",
-    (
-        "hetzner/RUNBOOK-existing-stack-migration.md",
-        "# --show-secrets` does not)",
-    ): "prose explaining why the anti-pattern is unsafe, wrapped across a shell comment",
-    (
-        "hetzner/RUNBOOK-existing-stack-migration.md",
-        "# `pulumi preview`, not `stack export --show-secrets`: export exits 0 under a",
-    ): "prose explaining why the anti-pattern is unsafe, in a shell comment",
-    (
-        "hetzner/RUNBOOK-existing-stack-migration.md",
-        "around `stack export --show-secrets` on the theory that emitting plaintext",
-    ): "prose explaining why the anti-pattern is unsafe",
-    (
-        "hetzner/RUNBOOK-existing-stack-migration.md",
-        "# export --show-secrets` exits 0 under",
-    ): "prose explaining why the anti-pattern is unsafe, in a shell comment",
-    (
-        "hetzner/RUNBOOK-existing-stack-migration.md",
-        "`pulumi stack export --show-secrets` is deliberately not used — for two",
-    ): "prose explaining why the anti-pattern is unsafe",
-    (
-        "hetzner/RUNBOOK-new-stack.md",
-        "`pulumi stack export --show-secrets` is **not** a decrypt proof — observed on",
-    ): "prose explaining why the anti-pattern is unsafe",
-    (
-        "hetzner/RUNBOOK-new-stack.md",
-        "equally conclusive. Do not use `stack export --show-secrets` for either",
-    ): "prose explaining why the anti-pattern is unsafe",
-}
+_SCAN_EXTENSIONS = (".py", ".sh", ".yml", ".yaml")
+
+# This module's own path, relative to the repo root: excluded from the scan
+# below because a guard whose whole job is discussing the flag necessarily
+# mentions it dozens of times, in docstrings, comments and the ALLOWLIST
+# literal itself -- none of that is a runbook or script that could teach a
+# reader the anti-pattern is safe, which is the harm this scan exists to
+# catch. Excluding it by path, rather than trying to allowlist its own
+# literals, keeps the ALLOWLIST meaningful: every entry in it should describe
+# a real occurrence outside this file, not this file's own vocabulary.
+_SELF_PATH = str(pathlib.Path(__file__).resolve().relative_to(pathlib.Path(__file__).resolve().parent.parent))
+
+
+def _tracked_scan_files() -> list[pathlib.Path]:
+    """Every git-tracked .py/.sh/.yml/.yaml file in the repo, except graphify-out/ and this file.
+
+    Uses `git ls-files` rather than a hand-maintained directory list: the
+    round-6 gap (scripts/*.py and, potentially, .github/workflows/*.yml
+    containing the literal flag while unscanned) was exactly a scan whose
+    file coverage stopped at one glob pattern. This one grows automatically
+    with the tracked tree instead of needing a second edit whenever a new
+    script or workflow is added. graphify-out/ is excluded: it is a
+    generated AST/semantic cache of every source file, so anything findable
+    there is a duplicate of a source file this scan already inspects
+    directly, and it must never be hand-edited regardless (workspace root
+    CLAUDE.md's graphify section).
+    """
+    result = subprocess.run(
+        ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+    )
+    return [
+        REPO_ROOT / rel
+        for rel in result.stdout.splitlines()
+        if not rel.startswith("graphify-out/") and rel != _SELF_PATH and rel.endswith(_SCAN_EXTENSIONS)
+    ]
+
+
+def scanned_files() -> list[pathlib.Path]:
+    """Every file this guard inspects for the literal `--show-secrets` flag."""
+    return runbooks() + _tracked_scan_files()
 
 
 def show_secrets_occurrences() -> list[tuple[pathlib.Path, int, str]]:
-    """Every line in every runbook containing the literal `--show-secrets` flag.
+    """Every line in every scanned file containing the literal `--show-secrets` flag.
 
     Deliberately not scoped to code fences, a preceding `pulumi stack
     export`, or nearby keywords: the anti-pattern is exactly this flag being
     used to prove a stack decrypts, and catching every way of writing that
     needs to key on the one thing every such command has in common -- the
-    flag's own name appearing somewhere in the source a human would type or
-    paste. A per-line scan also gives a useful failure message (file, line
-    number, exact text) without needing any surrounding-context machinery.
+    flag's own name appearing somewhere in the source a human would type,
+    paste, or read as an instruction. A per-line scan also gives a useful
+    failure message (file, line number, exact text) with no surrounding-
+    context machinery needed to produce it.
     """
     found = []
-    for runbook in runbooks():
-        text = runbook.read_text(encoding="utf-8")
+    for path in scanned_files():
+        text = path.read_text(encoding="utf-8")
         for lineno, line in enumerate(text.splitlines(), start=1):
             if "--show-secrets" in line:
-                found.append((runbook, lineno, line.strip()))
+                found.append((path, lineno, line.strip()))
     return found
 
 
-class MalformedFencesError(ValueError):
-    """Raised when a document's code fences don't close in pairs.
-
-    A malformed document must fail the scan loudly, never scan a truncated
-    subset of it and report OK. Not used by the flag scan above (which does
-    not need to know about fences at all) -- kept, fixed and independently
-    tested because it is a correct, load-bearing parser worth having right,
-    and a future check may still want it for a richer error message.
-    """
-
-
-_FENCE_MARKER = re.compile(r"^[ \t]*(`{3,}|~{3,})[^\n]*(?:\n|\Z)", re.MULTILINE)
-
-
-def code_fences(text: str) -> list[tuple[int, int, str]]:
-    """Pair up markdown code fences by character-matched open/close state.
-
-    Recognises both ``` and ~~~ fences, at any indentation -- list items and
-    blockquotes routinely indent a fence, and a regex anchored to column 0
-    misses every one of those (proven against a real indented block in
-    mail/RUNBOOK-mail-history-migration.md). A same-position pairing
-    (1st-2nd marker, 3rd-4th, ...) also silently drops the wrong block
-    whenever a document's marker count is odd or a fence stays open to EOF;
-    tracking open/close state instead makes both cases raise
-    MalformedFencesError rather than truncate. The closing-marker line's
-    trailing `\\n` is optional (`(?:\\n|\\Z)`) so a document whose last byte
-    is the closing fence, with no final newline, still parses as valid --
-    that shape is a normal file, not a malformed one, and treating it as
-    unclosed was a false positive with no bearing on whether the fence
-    actually closed. A marker of a *different* fence character while one is
-    already open is not a fence under CommonMark -- it's literal content
-    inside the open block -- so it is skipped rather than mistaken for a
-    stray opener or closer.
-    """
-    blocks: list[tuple[int, int, str]] = []
-    open_char: str | None = None
-    open_pos = 0
-    for m in _FENCE_MARKER.finditer(text):
-        ch = m.group(1)[0]
-        if open_char is None:
-            open_char, open_pos = ch, m.end()
-        elif ch == open_char:
-            blocks.append((open_pos, m.start(), text[open_pos : m.start()]))
-            open_char = None
-        # else: a different fence character nested inside an open fence is
-        # literal content under CommonMark -- not a marker, skip it.
-    if open_char is not None:
-        raise MalformedFencesError(
-            f"unclosed code fence (opened with {open_char * 3!r}) at byte offset {open_pos}"
-        )
-    return blocks
-
-
-class CodeFencesParserTests(unittest.TestCase):
-    """Direct coverage of code_fences() -- the load-bearing parser.
-
-    Not used by the primary flag scan (see the module docstring), but kept
-    correct and independently tested rather than dropped: each shape that has
-    previously defeated a fence parser here (indentation, an unclosed fence,
-    an odd marker count, a language tag, a tilde fence, no trailing newline
-    at EOF) gets its own minimal, deliberately constructed input.
-    """
-
-    def test_plain_fence(self):
-        text = "prose\n```\ncode line\n```\nmore prose\n"
-        blocks = code_fences(text)
-        self.assertEqual(len(blocks), 1)
-        self.assertEqual(blocks[0][2], "code line\n")
-
-    def test_language_tagged_fence(self):
-        text = "```bash\necho hi\n```\n"
-        blocks = code_fences(text)
-        self.assertEqual(len(blocks), 1)
-        self.assertEqual(blocks[0][2], "echo hi\n")
-
-    def test_indented_fence_inside_list_item(self):
-        """A 3-space-indented fence (the shape a markdown list item produces)."""
-        text = "1. Step one:\n   ```bash\n   echo hi\n   ```\n2. Step two.\n"
-        blocks = code_fences(text)
-        self.assertEqual(
-            len(blocks), 1, "an indented fence must still be recognised, not silently skipped"
-        )
-        self.assertIn("echo hi", blocks[0][2])
-
-    def test_tilde_fence(self):
-        text = "~~~\necho hi\n~~~\n"
-        blocks = code_fences(text)
-        self.assertEqual(len(blocks), 1)
-        self.assertIn("echo hi", blocks[0][2])
-
-    def test_unclosed_fence_raises(self):
-        text = "prose\n```bash\necho hi\n"
-        with self.assertRaises(MalformedFencesError):
-            code_fences(text)
-
-    def test_odd_marker_count_raises_not_truncates(self):
-        """Three markers (open, close, open-again-unclosed) must raise, not drop the third."""
-        text = "```\nblock one\n```\n```\nblock two -- never closed\n"
-        with self.assertRaises(MalformedFencesError):
-            code_fences(text)
-
-    def test_different_fence_characters_do_not_cross_pair(self):
-        """A ~~~ line inside an open ``` block is literal content, not a closer."""
-        text = "```bash\necho '~~~ this is not a fence'\n```\n"
-        blocks = code_fences(text)
-        self.assertEqual(len(blocks), 1)
-        self.assertIn("~~~", blocks[0][2])
-
-    def test_closing_fence_at_eof_with_no_trailing_newline(self):
-        """A document ending exactly at the closing fence's backticks, no final \\n.
-
-        A correctly-closed fence at the very end of a file is a valid
-        document -- the requirement that the closing marker line end with a
-        newline was a parser bug, not a real malformation, and it would
-        raise on an ordinary web-UI edit that happens to save without a
-        trailing newline.
-        """
-        text = "prose\n```bash\necho hi\n```"
-        blocks = code_fences(text)
-        self.assertEqual(len(blocks), 1, "a fence closed at EOF with no trailing newline must still parse")
-        self.assertEqual(blocks[0][2], "echo hi\n")
+# ALLOWLIST keys every current, reviewed appearance of the literal flag by
+# (path relative to the repo root, exact stripped line text) -> (expected
+# occurrence count, justification).
+#
+# The count is load-bearing, not decoration: keying on text alone, with no
+# count, is what round 6 broke -- allowlisting one benign prose line also
+# allowlisted every future identical line in that file, including a live one
+# pasted into a new code fence where the same backticked text becomes a real
+# command. Requiring the *count* of a (file, text) pair to match exactly
+# means a duplicate -- benign copy-paste or a live reintroduction disguised
+# as one -- moves the count from N to N+1 and fails. Line numbers are
+# deliberately not part of the key: they shift under every unrelated edit to
+# the file, which is the too-tight failure mode this design already accepts
+# a *different*, narrower version of (see "Known limits").
+#
+# Seeded from the whole corpus as it exists today, across every file this
+# scan inspects (all RUNBOOK-*.md, plus every tracked .py/.sh/.yml/.yaml).
+# Every entry below is prose warning against the anti-pattern -- a `#`
+# comment or backticked inline text in surrounding prose -- never a line a
+# shell would execute. There are currently zero legitimate live uses of the
+# flag anywhere in the scanned tree.
+ALLOWLIST: dict[tuple[str, str], tuple[int, str]] = {
+    (
+        "hetzner/RUNBOOK-existing-stack-migration.md",
+        "#    --show-secrets` does not (it exits 0 regardless, observed v3.255.0 --",
+    ): (1, "prose explaining why the anti-pattern is unsafe, wrapped across a shell comment"),
+    (
+        "hetzner/RUNBOOK-existing-stack-migration.md",
+        "# --show-secrets` does not)",
+    ): (1, "prose explaining why the anti-pattern is unsafe, wrapped across a shell comment"),
+    (
+        "hetzner/RUNBOOK-existing-stack-migration.md",
+        "# `pulumi preview`, not `stack export --show-secrets`: export exits 0 under a",
+    ): (1, "prose explaining why the anti-pattern is unsafe, in a shell comment"),
+    (
+        "hetzner/RUNBOOK-existing-stack-migration.md",
+        "around `stack export --show-secrets` on the theory that emitting plaintext",
+    ): (1, "prose explaining why the anti-pattern is unsafe"),
+    (
+        "hetzner/RUNBOOK-existing-stack-migration.md",
+        "# export --show-secrets` exits 0 under",
+    ): (1, "prose explaining why the anti-pattern is unsafe, in a shell comment"),
+    (
+        "hetzner/RUNBOOK-existing-stack-migration.md",
+        "`pulumi stack export --show-secrets` is deliberately not used — for two",
+    ): (1, "prose explaining why the anti-pattern is unsafe"),
+    (
+        "hetzner/RUNBOOK-new-stack.md",
+        "`pulumi stack export --show-secrets` is **not** a decrypt proof — observed on",
+    ): (1, "prose explaining why the anti-pattern is unsafe"),
+    (
+        "hetzner/RUNBOOK-new-stack.md",
+        "equally conclusive. Do not use `stack export --show-secrets` for either",
+    ): (1, "prose explaining why the anti-pattern is unsafe"),
+    (
+        "scripts/audit-pulumi-secrets.py",
+        "and this script cannot detect it. `pulumi stack export --show-secrets`",
+    ): (1, "docstring prose describing a detection gap, not an instruction to use the flag"),
+    (
+        "scripts/test_verify_archive_passphrase.py",
+        "# `plaintext` keys mean the export was taken with --show-secrets. It is",
+    ): (1, "comment describing what a fixture's data represents, not a live command"),
+    (
+        "scripts/verify-archive-passphrase.py",
+        "`pulumi stack export --show-secrets` is deliberately *not* used. It is the",
+    ): (1, "docstring prose explaining why the anti-pattern is unsafe"),
+    (
+        "scripts/verify-archive-passphrase.py",
+        "# An export taken with --show-secrets. It is not wrapped at all, so it",
+    ): (1, "comment describing what a fixture's data represents, not a live command"),
+}
 
 
 class ShowSecretsAllowlistTests(unittest.TestCase):
@@ -261,37 +194,56 @@ class ShowSecretsAllowlistTests(unittest.TestCase):
     def test_show_secrets_is_allowlisted_everywhere_it_appears(self):
         """Deny-by-default: every `--show-secrets` occurrence must be on ALLOWLIST.
 
-        Guards the guard itself against scanning nothing: `runbooks()`
-        returning zero files would otherwise make this pass by finding zero
-        unlisted occurrences among zero files scanned, which is the same
-        vacuous-pass failure this whole file exists to prevent -- so a
-        non-zero runbook count is asserted here directly, not left to
-        test_runbooks_found alone.
+        Two ways an occurrence can be wrong, both checked: unlisted entirely
+        (not on ALLOWLIST at all), or listed with the wrong count (the file
+        now has more, or fewer, copies of that exact line than the entry
+        says it should -- the round-6 fix). Also guards the guard itself
+        against scanning nothing: scanned_files() returning zero files would
+        otherwise make this pass by finding zero problems among zero files
+        scanned, the same vacuous-pass failure this file exists to prevent --
+        so a non-zero scanned-file count is asserted here directly.
         """
-        scanned = runbooks()
+        files = scanned_files()
         self.assertGreater(
-            len(scanned),
+            len(files),
             0,
-            "runbooks() returned 0 files -- the --show-secrets scan below would "
+            "scanned_files() returned 0 files -- the --show-secrets scan below would "
             "silently check nothing and pass vacuously",
         )
 
-        unlisted = []
-        for runbook, lineno, line in show_secrets_occurrences():
-            relpath = str(runbook.relative_to(REPO_ROOT))
-            if (relpath, line) not in ALLOWLIST:
-                unlisted.append(f"{relpath}:{lineno}: {line!r}")
+        actual_by_key: dict[tuple[str, str], list[int]] = defaultdict(list)
+        for path, lineno, line in show_secrets_occurrences():
+            relpath = str(path.relative_to(REPO_ROOT))
+            actual_by_key[(relpath, line)].append(lineno)
+
+        problems = []
+        for key in sorted(set(actual_by_key) | set(ALLOWLIST)):
+            relpath, line = key
+            linenos = actual_by_key.get(key, [])
+            actual_count = len(linenos)
+            if key not in ALLOWLIST:
+                problems.append(
+                    f"{relpath}:{linenos}: unlisted occurrence of {line!r} "
+                    f"({actual_count} found) -- add an ALLOWLIST entry with a justification, "
+                    f"or fix the file if this is a live use of the anti-pattern"
+                )
+                continue
+            expected_count, justification = ALLOWLIST[key]
+            if actual_count != expected_count:
+                problems.append(
+                    f"{relpath}:{linenos}: expected {expected_count} occurrence(s) of "
+                    f"{line!r} (allowlisted: {justification!r}), found {actual_count} -- "
+                    f"a count above expected is either a benign duplicate needing its own "
+                    f"ALLOWLIST entry or the anti-pattern reintroduced as a copy of allowlisted "
+                    f"prose; a count below expected means the ALLOWLIST entry is stale and "
+                    f"should be removed"
+                )
 
         self.assertEqual(
-            unlisted,
+            problems,
             [],
-            "Found `--show-secrets` not on hetzner/test_passphrase_probe_pattern.py's "
-            "ALLOWLIST. If this is prose warning against the anti-pattern, add a "
-            "(relative-path, exact-stripped-line-text) entry with a justification. If "
-            "it is a live command using the flag to verify decryption, it is the "
-            "anti-pattern workspace#208 is about -- fix the runbook to use `pulumi "
-            "preview` instead, which fails closed on an incorrect passphrase:\n"
-            + "\n".join(unlisted),
+            "hetzner/test_passphrase_probe_pattern.py's ALLOWLIST no longer matches reality:\n"
+            + "\n".join(problems),
         )
 
 
