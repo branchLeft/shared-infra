@@ -272,6 +272,45 @@ class WriteCredentialAtomicTests(unittest.TestCase):
             # the failed temp file was cleaned up -- only the real file remains
             self.assertEqual(os.listdir(tmp), ["creds"])
 
+    def test_mkstemp_is_created_in_the_same_directory_as_the_target(self):
+        # os.replace is only atomic within a single filesystem. If the temp
+        # file ever landed outside `path`'s own directory (e.g. the system
+        # temp dir), the final replace would silently stop being atomic --
+        # or raise on a system where the two aren't the same filesystem.
+        # Pins the mkstemp call's own `dir` argument, not just where the
+        # file happens to end up.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "creds")
+            real_mkstemp = tempfile.mkstemp
+            observed_dirs = []
+
+            def spying_mkstemp(*args, **kwargs):
+                observed_dirs.append(kwargs.get("dir"))
+                return real_mkstemp(*args, **kwargs)
+
+            with mock.patch("tempfile.mkstemp", side_effect=spying_mkstemp):
+                rac._write_credential_atomic(path, f"{USERNAME}:{NEW_SECRET}\n")
+
+            self.assertEqual(observed_dirs, [os.path.dirname(path)])
+
+    def test_a_chmod_failure_leaves_the_target_completely_untouched(self):
+        # Pins the ordering, not just the end state: chmod must run on the
+        # temp path *before* os.replace, so a chmod failure can never leave
+        # the new secret already live at `path`. If chmod ran after replace
+        # instead, this is exactly the case that would go green even though
+        # the function still raised -- the old credential would already be
+        # gone, replaced by the new one, at the moment of the failure.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "creds")
+            _write_creds_file(path, USERNAME, OLD_SECRET, mode=0o600)
+            with mock.patch("os.chmod", side_effect=OSError("simulated: chmod failed")):
+                with self.assertRaises(OSError):
+                    rac._write_credential_atomic(path, f"{USERNAME}:{NEW_SECRET}\n")
+            self.assertEqual(_read_creds_file(path), f"{USERNAME}:{OLD_SECRET}\n")
+            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+            # the failed temp file was cleaned up -- only the real file remains
+            self.assertEqual(os.listdir(tmp), ["creds"])
+
 
 class TokenNeverLeaksTests(unittest.TestCase):
     def setUp(self):
