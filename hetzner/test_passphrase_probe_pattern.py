@@ -30,6 +30,27 @@ def runbooks() -> list[pathlib.Path]:
     return sorted(found)
 
 
+def code_fences(text: str) -> list[tuple[int, int, str]]:
+    """Pair up markdown code fences by position, alternating open/close.
+
+    A single non-greedy regex from an opening fence to "the next line that
+    starts with backticks" over-matches on a document with more than one
+    code block: a closing fence is itself such a line, so it gets consumed
+    as the *next* block's opener. That drifts the pairing for every fence
+    after the first, silently skipping some real code blocks entirely and
+    fabricating fake ones out of the prose between two real blocks. Markdown
+    fences strictly alternate open/close, so pairing fence-start lines by
+    position (1st-2nd, 3rd-4th, ...) instead of by a single regex match
+    keeps every real block intact.
+    """
+    fence_line = re.compile(r"^```[^\n]*\n", re.MULTILINE)
+    marks = list(fence_line.finditer(text))
+    return [
+        (opener.start(), closer.end(), text[opener.end() : closer.start()])
+        for opener, closer in zip(marks[0::2], marks[1::2])
+    ]
+
+
 def passphrase_verification_sections() -> list[tuple[pathlib.Path, str, str]]:
     """Find sections where passphrases are being verified (steps mentioning decrypt/proof).
 
@@ -39,14 +60,11 @@ def passphrase_verification_sections() -> list[tuple[pathlib.Path, str, str]]:
     found = []
     for runbook in runbooks():
         text = runbook.read_text(encoding="utf-8")
-        # Find code fences and their surrounding context
-        fence_pattern = re.compile(r"^```(?:bash)?\n(.+?)\n```", re.MULTILINE | re.DOTALL)
-        for match in fence_pattern.finditer(text):
-            code_block = match.group(1)
+        for start, end, code_block in code_fences(text):
             # Look for code blocks that are in a step mentioning decrypt or verify
             # Expanded context window to 2000 chars to capture distant keywords in headers
-            start_pos = max(0, match.start() - 2000)
-            context = text[start_pos : match.end() + 100]
+            start_pos = max(0, start - 2000)
+            context = text[start_pos : end + 100]
             if any(word in context.lower() for word in ["decrypt", "verify", "proof", "passphrase check"]):
                 found.append((runbook, code_block, context))
     return found
@@ -66,13 +84,17 @@ class PassphraseProbePatternTests(unittest.TestCase):
         """
         for runbook, code_block, context in passphrase_verification_sections():
             with self.subTest(runbook=runbook.name):
-                # The anti-pattern: export as a gate for continuing. More specific pattern:
-                # matches "stack export ... --show-secrets ... &&" but not inspection commands
-                # like piping to jq/head. The &&-continuation is the smoking gun.
+                # The anti-pattern: export as a gate for continuing. Matches
+                # "stack export ... --show-secrets ... &&" on one logical
+                # command line, but not inspection commands like piping to
+                # jq/head with no following `&&`. `[^\n]*?` (not `\s*?`)
+                # between --show-secrets and && so a redirect in between
+                # (` > /dev/null && echo 'decrypt OK'`, the exact shape the
+                # real anti-pattern took) still matches.
                 bad_pattern = re.search(
-                    r"pulumi\s+stack\s+export\s+[^`]*?--show-secrets\s*&&",
+                    r"pulumi\s+stack\s+export\s+[^\n`]*?--show-secrets[^\n`]*?&&",
                     code_block,
-                    re.IGNORECASE | re.DOTALL
+                    re.IGNORECASE
                 )
 
                 self.assertIsNone(
