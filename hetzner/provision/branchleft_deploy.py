@@ -8,7 +8,7 @@ a sudoers pattern to do it -- a wildcard in a sudoers command matches spaces,
 which makes any pattern-based restriction argument injection waiting to
 happen.
 
-Two rules it exists to enforce:
+Three rules it exists to enforce:
 
 - **Only digest-pinned references.** A tag is a mutable pointer, so a stack
   deployed by tag has no answer to "what is running", and a restart months
@@ -18,10 +18,18 @@ Two rules it exists to enforce:
   /etc/branchleft/<stack>.image.env and nothing else. Stack secrets live in
   /etc/branchleft/<stack>.env, which no automated path may rewrite; both are
   loaded by the systemd unit.
+- **A restarted service has a health signal.** `docker compose up --wait`
+  only reports a rollback-worthy failure for a service that declares a
+  healthcheck; without one a crash loop is transiently `running`, so a bad
+  deploy is not detected below at all. A gap this script does not already
+  know about (`KNOWN_UNHEALTHCHECKED_SERVICES`) refuses the deploy rather
+  than restart into a rollback that cannot fire; a known one only warns.
 
 On a failed restart the previous digest is restored and the unit restarted
 again, so a bad deploy leaves the host on the last image that worked rather
-than on a file describing an image that does not run.
+than on a file describing an image that does not run. The health-signal
+refusal above is the one exception: it fires before either happens, so the
+stack is left running whatever it already was.
 
 Two calling conventions, and the difference between them is which principal
 chooses the stack:
@@ -179,6 +187,178 @@ def has_fail_open_image_reference(compose_text: str) -> bool:
     return bool(IMAGE_FALLBACK_REFERENCE.search(strip_yaml_comments(compose_text)))
 
 
+class ComposeParseError(AssertionError):
+    """A line under `services:` this parser cannot classify.
+
+    The parser below is a regex over indentation, not a YAML parse, so a shape
+    it does not recognise -- a YAML anchor on the service header, an inline
+    mapping, a different nesting depth -- looks identical to "this service has
+    no healthcheck key yet". Raising rather than skipping keeps that ambiguity
+    from being read as a clean bill of health; `deploy()` below treats it as
+    "could not determine" rather than "found a gap", which is the only choice
+    that does not risk refusing a deploy the Compose file itself would start
+    without any trouble.
+    """
+
+
+# The three states a service can be in, kept apart because "no healthcheck key"
+# and "healthcheck key that turns the probe off" mean opposite things for a
+# service whose image ships its own.
+ABSENT, DECLARED, DISABLED = "absent", "declared", "disabled"
+
+# A top-level mapping key: column 0, so `services:` is told from a key nested
+# under it. Quoted and space-before-colon spellings are matched because YAML
+# accepts them and a `services:` this missed would end the section early,
+# leaving the rest of the file unread.
+_TOP_LEVEL_KEY = re.compile(r"""\A(?P<quote>["']?)(?P<key>[A-Za-z0-9_.-]+)(?P=quote)\s*:""")
+
+# A service name under `services:`, at Compose's two-space nesting. Matched at
+# a fixed indent rather than by name so a service added at the wrong depth --
+# which Compose would not read as a service at all -- is not silently counted
+# as one that has a healthcheck.
+_SERVICE_INDENT = 2
+_SERVICE_HEADER = re.compile(rf"\A {{{_SERVICE_INDENT}}}([A-Za-z0-9][A-Za-z0-9_.-]*):\s*\Z")
+
+# The healthcheck key of a service, with whatever follows it on the same line:
+# `healthcheck: {disable: true}` is a declaration that switches the check off,
+# and reads as one that turns it on unless the inline value is looked at.
+_HEALTHCHECK_INDENT = 4
+_HEALTHCHECK_HEADER = re.compile(rf"\A {{{_HEALTHCHECK_INDENT}}}healthcheck:(?P<inline>.*)\Z")
+
+# The two ways Compose switches a healthcheck off. Both leave the `healthcheck:`
+# key in place, so a check for the key alone reads either as a declared probe --
+# and for a service whose image supplies one, `disable: true` is what removes
+# the only probe it has.
+_HEALTHCHECK_DISABLED = re.compile(r"\bdisable:\s*(?:true|yes|on)\b", re.IGNORECASE)
+_HEALTHCHECK_TEST_NONE = re.compile(
+    r"""\btest:\s*(?:\[\s*)?["']?NONE["']?\s*\]?\s*(?=[,}]|\Z)"""
+    r"""|\A\s*-\s*["']?NONE["']?\s*\Z"""
+)
+
+
+def healthcheck_states(compose_text: str) -> dict[str, str]:
+    """Every service in `services:`, mapped to `ABSENT`, `DECLARED` or `DISABLED`.
+
+    Regex rather than a YAML parse to keep this module stdlib-only, matching how
+    the image-pin half above reads the same files. Module-level, like
+    `resolves_image_from_env`, so the repository-wide contract test for the
+    stacks this repository commits and the deploy-time check below for whatever
+    stack is about to be restarted -- committed here or not -- cannot drift into
+    disagreeing about what a health signal is.
+
+    Shapes it cannot classify raise `ComposeParseError`. The one gap it cannot
+    raise on is a top-level key it fails to recognise at all, which would end
+    the `services:` section early and leave the rest of the file unread.
+    """
+    states: dict[str, str] = {}
+    current: str | None = None
+    in_services = False
+    healthcheck_block_of: str | None = None
+    for raw in strip_yaml_comments(compose_text).splitlines():
+        if not raw.strip():
+            continue
+        top_level = _TOP_LEVEL_KEY.match(raw)
+        if top_level:
+            in_services = top_level.group("key") == "services"
+            current = None
+            healthcheck_block_of = None
+            continue
+        if not in_services:
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if indent <= _SERVICE_INDENT:
+            header = _SERVICE_HEADER.match(raw)
+            if header is None:
+                raise ComposeParseError(
+                    f"cannot read {raw!r} as a service header. Every key directly "
+                    "under `services:` must be a bare `  name:` on its own line."
+                )
+            current = header.group(1)
+            states[current] = ABSENT
+            healthcheck_block_of = None
+            continue
+        if current is None:
+            raise ComposeParseError(
+                f"{raw!r} is nested under `services:` at indent {indent} with no "
+                "service header above it. Compose services nest at two spaces; a "
+                "different depth means this parser is reading a shape it was not "
+                "written for."
+            )
+        if healthcheck_block_of is not None and indent <= _HEALTHCHECK_INDENT:
+            healthcheck_block_of = None
+        header = _HEALTHCHECK_HEADER.match(raw)
+        if header:
+            inline = header.group("inline")
+            states[current] = (
+                DISABLED
+                if _HEALTHCHECK_DISABLED.search(inline) or _HEALTHCHECK_TEST_NONE.search(inline)
+                else DECLARED
+            )
+            healthcheck_block_of = current
+            continue
+        if healthcheck_block_of is not None and (
+            _HEALTHCHECK_DISABLED.search(raw) or _HEALTHCHECK_TEST_NONE.search(raw)
+        ):
+            states[healthcheck_block_of] = DISABLED
+    return states
+
+
+# Services whose image carries its own HEALTHCHECK instruction, so Compose
+# already waits for *healthy* without the Compose file restating one -- Docker
+# reports these as `Up (healthy)` exactly as a Compose-declared probe would.
+# Listed rather than detected: reading an image's metadata needs a Docker
+# daemon and a pulled image, which neither this module nor the deploy-time
+# check below has.
+IMAGE_PROVIDED_HEALTHCHECK: dict[tuple[str, str], str] = {
+    ("monitoring", "cadvisor"): (
+        "ghcr.io/google/cadvisor ships HEALTHCHECK CMD-SHELL /usr/bin/healthcheck.sh. "
+        "Left to the image rather than restated here: a Compose-level healthcheck "
+        "replaces the image's outright, so restating it would swap a probe cAdvisor "
+        "maintains for one this repository would have to."
+    ),
+}
+
+# Services already known to have no health signal at all -- reviewed and
+# accepted rather than merely tolerated, so `deploy()` warns for these instead
+# of refusing. A stack/service pair absent from both this table and
+# `IMAGE_PROVIDED_HEALTHCHECK` is refused below: growing this table is a
+# deliberate exemption that costs a diff to shared-infra a reviewer sees, and
+# shrinking it (a service gaining a probe) needs no permission at all.
+KNOWN_UNHEALTHCHECKED_SERVICES: frozenset[tuple[str, str]] = frozenset(
+    {
+        # branchLeft/website, deploy/compose.yml.
+        ("website", "website-metrics"),
+        # branchLeft/ghost-platform, db/stack/compose.yml.
+        ("db", "mysqld-exporter"),
+    }
+)
+
+
+def health_signal_gaps(stack: str, compose_text: str) -> tuple[list[str], list[str]]:
+    """`(refused, warned)` services with no health signal, each `service (state)`.
+
+    `refused` is empty exactly when the deploy should proceed with no gap this
+    script does not already know about; anything in it is new since the last
+    review of `KNOWN_UNHEALTHCHECKED_SERVICES` and stops the deploy. `warned`
+    lists the accepted gaps so a deploy that proceeds still says so, loudly,
+    every time.
+
+    Propagates `ComposeParseError` rather than swallowing it: `deploy()` below
+    is the one that decides a shape this cannot read is reported as "could not
+    determine" rather than as a gap.
+    """
+    refused, warned = [], []
+    for service, state in healthcheck_states(compose_text).items():
+        if state == DECLARED or (stack, service) in IMAGE_PROVIDED_HEALTHCHECK:
+            continue
+        gap = f"{service} ({state})"
+        if (stack, service) in KNOWN_UNHEALTHCHECKED_SERVICES:
+            warned.append(gap)
+        else:
+            refused.append(gap)
+    return refused, warned
+
+
 def write_image_env(path: str, image: str) -> None:
     """Replace the file atomically.
 
@@ -233,6 +413,43 @@ def deploy(
         raise DeployError(
             f"{compose_file} does not resolve its image from ${{IMAGE}}, "
             "so a pin written here would not take effect"
+        )
+
+    # `docker compose up --wait` is a rollback signal only for a service that
+    # declares a healthcheck; without one it waits for *running*, which a
+    # crash-looping container transiently is, so the restart below reports
+    # success in front of the crash loop and never rolls back. Checked here,
+    # ahead of any filesystem or systemd change, for the same reason as the
+    # image-pin check above: a refusal must leave the stack running whatever
+    # it already was.
+    try:
+        refused, warned = health_signal_gaps(stack, compose_text)
+    except ComposeParseError as error:
+        # A parser limitation is not a property of the stack: the regex reads
+        # a narrower shape than Compose's own YAML grammar, so a file this
+        # cannot classify may still start cleanly. Refusing the deploy over
+        # that would be an outage the stack itself never had.
+        print(
+            f"branchleft-deploy: warning: could not determine {stack}'s health "
+            f"signal from {compose_file}: {error}",
+            file=sys.stderr,
+        )
+        refused, warned = [], []
+
+    if refused:
+        raise DeployError(
+            f"{compose_file} has no health signal for: {', '.join(refused)}. "
+            "`docker compose up --wait` cannot report a rollback-worthy failure "
+            "without a healthcheck; give the service one, or add its (stack, "
+            "service) pair to KNOWN_UNHEALTHCHECKED_SERVICES as a reviewed, "
+            "accepted gap"
+        )
+    for gap in warned:
+        print(
+            f"branchleft-deploy: warning: {stack}: {gap} has no health signal; "
+            "a crash loop after this restart will not roll back "
+            "(KNOWN_UNHEALTHCHECKED_SERVICES)",
+            file=sys.stderr,
         )
 
     env_path = image_env_path(stack, config_dir)
