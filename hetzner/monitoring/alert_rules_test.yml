@@ -626,6 +626,36 @@ tests:
         alertname: SNDSComplaintRateHigh
         exp_alerts: []
 
+  # The case that actually discriminates `unless on(ip)` from a blanket
+  # `unless on()`. Two IPs: one with a high complaint rate and NO volume
+  # series of its own, and an unrelated one that does have volume. Matched by
+  # ip, only .5's own (absent) volume is consulted and the alert fires.
+  # Matched blanket, .6's present volume satisfies the `unless` for every
+  # series including .5, and the alert goes silent through a real spike on an
+  # IP Microsoft published no volume for.
+  #
+  # The neighbouring "trap" case cannot tell the two apart: with no volume
+  # series anywhere, a blanket `unless on()` removes nothing either, so it
+  # passes whichever matcher is in place. Reverting `on(ip)` to `on()` left
+  # the whole suite green until this case existed.
+  - interval: 1h
+    input_series:
+      - series: 'snds_complaint_rate{ip="203.0.113.5"}'
+        values: '0.005+0x24'
+      - series: 'snds_message_volume{ip="203.0.113.6"}'
+        values: '500+0x24'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: SNDSComplaintRateHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              ip: 203.0.113.5
+            exp_annotations:
+              summary: 'Microsoft SNDS reported a complaint rate over 0.1% for 203.0.113.5.'
+              description: >-
+                SNDS refreshes at most once a day, so this reports yesterday's reputation snapshot, not a live rate -- treat "when did this fire" as "as of Microsoft's last publish", not as the moment of the complaints themselves. The volume floor keeps a handful of complaints against a trickle of mail from paging, the same shape as MailDeliveryFailureRatioHigh's `> 20`, but the second branch bypasses it, per IP, for an IP that has no snds_message_volume series of its own (`unless on(ip)` -- matched by ip, not blanket `on()`: a global match would let one IP's real, present volume satisfy the floor for a *different* IP that has none, which is wrong regardless of which way it errs). A floor that silently disabled the alert it was meant to only quiet would be worse than no floor. Re-tune both numbers from observed volume once real data exists. See RUNBOOK-monitoring.md for what to do when this fires.
+
   # The trap this rule is written around: a high complaint rate on record, but
   # the volume metric has never been published at all for any IP (e.g. the
   # collector's SNDS feed dropped that column entirely). Without the second
