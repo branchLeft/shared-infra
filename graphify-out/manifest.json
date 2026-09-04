@@ -1,31 +1,31 @@
 {
   "config.ts": {
-    "mtime": 1788514275.568542,
+    "mtime": 1788527278.5718477,
     "ast_hash": "28359109b53c57072da2595275621f7f",
     "semantic_hash": "28359109b53c57072da2595275621f7f"
   },
   "edge.ts": {
-    "mtime": 1788514275.568542,
+    "mtime": 1788527278.5718477,
     "ast_hash": "41381c4fb4e1888102dfec90f6bc8e8a",
     "semantic_hash": "41381c4fb4e1888102dfec90f6bc8e8a"
   },
   "index.ts": {
-    "mtime": 1788514275.6064074,
+    "mtime": 1788527278.6126742,
     "ast_hash": "0b949b0d6e8bfb398bdc78d0bcca24c9",
     "semantic_hash": "0b949b0d6e8bfb398bdc78d0bcca24c9"
   },
   "package.json": {
-    "mtime": 1788514275.6098998,
+    "mtime": 1788527278.6163125,
     "ast_hash": "2bab175a059604648ae8320cbed5888b",
     "semantic_hash": "2bab175a059604648ae8320cbed5888b"
   },
   "sites.ts": {
-    "mtime": 1788514275.611017,
+    "mtime": 1788527278.6183121,
     "ast_hash": "6e89a2c1a975a9adc0997f75ee452e6c",
     "semantic_hash": "6e89a2c1a975a9adc0997f75ee452e6c"
   },
   "tsconfig.json": {
-    "mtime": 1788514275.611017,
+    "mtime": 1788527278.6183121,
     "ast_hash": "c4f66208e2c09c176e4562921913c123",
     "semantic_hash": "c4f66208e2c09c176e4562921913c123"
   },
@@ -75,17 +75,17 @@
     "semantic_hash": ""
   },
   "scripts/assert-no-edge-deletes.py": {
-    "mtime": 1788514275.611017,
+    "mtime": 1788527278.6173449,
     "ast_hash": "ab2a0a07f01bb79846f1ac141ab8bf76",
     "semantic_hash": "ab2a0a07f01bb79846f1ac141ab8bf76"
   },
   "serviceAccounts.ts": {
-    "mtime": 1788514275.611017,
+    "mtime": 1788527278.6183121,
     "ast_hash": "b97c898f535403bb646c6f22d6e68a72",
     "semantic_hash": "b97c898f535403bb646c6f22d6e68a72"
   },
   "workloadIdentity.ts": {
-    "mtime": 1788514275.6118996,
+    "mtime": 1788527278.6183121,
     "ast_hash": "0b45cc9d104bc9eb823e9ba6ef5c14da",
     "semantic_hash": "0b45cc9d104bc9eb823e9ba6ef5c14da"
   },
@@ -95,27 +95,27 @@
     "semantic_hash": "7467c89483aab469b82e7a9c781a9925"
   },
   "mail/firewall.ts": {
-    "mtime": 1788514275.6073282,
+    "mtime": 1788527278.6136127,
     "ast_hash": "51ac788524348a9a890808dceadd16ee",
     "semantic_hash": "51ac788524348a9a890808dceadd16ee"
   },
   "mail/index.ts": {
-    "mtime": 1788514275.6073282,
+    "mtime": 1788527278.6136127,
     "ast_hash": "b03a906f730007166dcb2ffd426a0d51",
     "semantic_hash": "b03a906f730007166dcb2ffd426a0d51"
   },
   "mail/package.json": {
-    "mtime": 1788514275.6073282,
+    "mtime": 1788527278.6136127,
     "ast_hash": "36a2e7039228e503e949b1096c8f466d",
     "semantic_hash": "36a2e7039228e503e949b1096c8f466d"
   },
   "mail/server.ts": {
-    "mtime": 1788514275.6088998,
+    "mtime": 1788527278.6163125,
     "ast_hash": "f2d6209b4ce1f3a2221fb51e4be20492",
     "semantic_hash": "f2d6209b4ce1f3a2221fb51e4be20492"
   },
   "mail/tsconfig.json": {
-    "mtime": 1788514275.6088998,
+    "mtime": 1788527278.6163125,
     "ast_hash": "a179c7c3ccb476345c3b82d3c078d859",
     "semantic_hash": "a179c7c3ccb476345c3b82d3c078d859"
   },
@@ -130,47 +130,47 @@
     "semantic_hash": "774a1dffea2ddc2fbe5eba7c7491b2a6"
   },
   "mail/provision/00-harden-ssh.sh": {
-    "mtime": 1788514275.6073282,
+    "mtime": 1788527278.614313,
     "ast_hash": "5396552b6d01b378274ad4a6f77e503e",
     "semantic_hash": "5396552b6d01b378274ad4a6f77e503e"
   },
   "mail/provision/10-harden-updates-fail2ban.sh": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "6bd1c36f362801a2ca971fc3b1a497a7",
     "semantic_hash": "6bd1c36f362801a2ca971fc3b1a497a7"
   },
   "mail/provision/20-install-docker.sh": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "6873cc8da71a99c9b597ca4a218cc57b",
     "semantic_hash": "6873cc8da71a99c9b597ca4a218cc57b"
   },
   "mail/provision/30-deploy-stalwart.sh": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "39b054d165b33861c477dd5adccc7b6f",
     "semantic_hash": "39b054d165b33861c477dd5adccc7b6f"
   },
   "mail/provision/40-configure-stalwart.sh": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "39ddf914ff081bd6a58063a056b56100",
     "semantic_hash": "39ddf914ff081bd6a58063a056b56100"
   },
   "mail/provision/configure_stalwart.py": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "c9884faa136ebe11866fed4870db734a",
     "semantic_hash": "c9884faa136ebe11866fed4870db734a"
   },
   "mail/provision/rotate_admin_credential.py": {
-    "mtime": 1788514275.6088998,
+    "mtime": 1788527278.6153128,
     "ast_hash": "769951fb93ef131c1ad224f117c6b966",
     "semantic_hash": "769951fb93ef131c1ad224f117c6b966"
   },
   "mail/provision/run-all.sh": {
-    "mtime": 1788514275.6088998,
+    "mtime": 1788527278.6153128,
     "ast_hash": "14a6098380e3866304fd595096decce3",
     "semantic_hash": "14a6098380e3866304fd595096decce3"
   },
   "mail/provision/test_configure_stalwart.py": {
-    "mtime": 1788514275.6088998,
+    "mtime": 1788527278.6153128,
     "ast_hash": "e6ee512cd5a143f92695adf96c81de78",
     "semantic_hash": "e6ee512cd5a143f92695adf96c81de78"
   },
@@ -185,62 +185,62 @@
     "semantic_hash": "be5cd653b4349e0c748236cceefa47f2"
   },
   "mail/provision/list_and_clear_blocked_ips.py": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "f40755066344456df03ab132d570b522",
     "semantic_hash": "f40755066344456df03ab132d570b522"
   },
   "mail/provision/test_list_and_clear_blocked_ips.py": {
-    "mtime": 1788514275.6088998,
+    "mtime": 1788527278.6153128,
     "ast_hash": "99a9ecada6db88ef54e51e1447a81c17",
     "semantic_hash": "99a9ecada6db88ef54e51e1447a81c17"
   },
   "mail/provision/trigger_acme_renewal.py": {
-    "mtime": 1788514275.6088998,
+    "mtime": 1788527278.6163125,
     "ast_hash": "7d09aba52716220e4e3dfd19c9a5f963",
     "semantic_hash": "7d09aba52716220e4e3dfd19c9a5f963"
   },
   "mail/provision/50-provision-mailboxes.sh": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "f77ee9e6ab15b29ee2b16bd8d8b91b0f",
     "semantic_hash": "f77ee9e6ab15b29ee2b16bd8d8b91b0f"
   },
   "mail/provision/provision_mailboxes.py": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.6153128,
     "ast_hash": "1fdaed72cf76caae30203338ace2d0c7",
     "semantic_hash": "1fdaed72cf76caae30203338ace2d0c7"
   },
   "mail/provision/test_provision_mailboxes.py": {
-    "mtime": 1788514275.6088998,
+    "mtime": 1788527278.6153128,
     "ast_hash": "dfaafb62c4fa4124dc41e4b41730675a",
     "semantic_hash": "dfaafb62c4fa4124dc41e4b41730675a"
   },
   "mail/provision/60-provision-website-submission-credential.sh": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "83a3105412631d5cc88460ff8f2bc7f4",
     "semantic_hash": "83a3105412631d5cc88460ff8f2bc7f4"
   },
   "mail/provision/provision_website_submission_credential.py": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.6153128,
     "ast_hash": "c7d1f0460652e67e16b5d915d9bee494",
     "semantic_hash": "c7d1f0460652e67e16b5d915d9bee494"
   },
   "mail/provision/test_provision_website_submission_credential.py": {
-    "mtime": 1788514275.6088998,
+    "mtime": 1788527278.6153128,
     "ast_hash": "723dbba959a87f7f759b0c9f522bf517",
     "semantic_hash": "723dbba959a87f7f759b0c9f522bf517"
   },
   "mail/provision/70-schedule-dnsbl-check.sh": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "5bb26e374173c7083f59f11ca6960a04",
     "semantic_hash": "5bb26e374173c7083f59f11ca6960a04"
   },
   "mail/provision/check_dnsbl_blocklist.py": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "7f4ed5db9944e0235ebd235259ed3db9",
     "semantic_hash": "7f4ed5db9944e0235ebd235259ed3db9"
   },
   "mail/provision/test_check_dnsbl_blocklist.py": {
-    "mtime": 1788514275.6088998,
+    "mtime": 1788527278.6153128,
     "ast_hash": "81a71cfe73eaa618e7446a890894e3c4",
     "semantic_hash": "81a71cfe73eaa618e7446a890894e3c4"
   },
@@ -255,32 +255,32 @@
     "semantic_hash": "78eaa44c217bd7c7bebb9614d25bab36"
   },
   "mail/provision/65-install-local-resolver.sh": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "f37797dcb3af434bd51fc28ad6d58531",
     "semantic_hash": "f37797dcb3af434bd51fc28ad6d58531"
   },
   "mail/provision/61-provision-blog-submission-credential.sh": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "dac41c1a5106b1811eaf7f9ea52c91f0",
     "semantic_hash": "dac41c1a5106b1811eaf7f9ea52c91f0"
   },
   "mail/provision/62-provision-shim-submission-credential.sh": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "2dec9514827e37bb8283d4116409373d",
     "semantic_hash": "2dec9514827e37bb8283d4116409373d"
   },
   "mail/provision/63-deploy-mailgun-shim.sh": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "99a254fa4b9a06f917869d1bcb0c638a",
     "semantic_hash": "99a254fa4b9a06f917869d1bcb0c638a"
   },
   "mail/provision/render_shim_env.py": {
-    "mtime": 1788514275.6088998,
+    "mtime": 1788527278.6153128,
     "ast_hash": "75ffdd562e58963a15c5bad2711207a3",
     "semantic_hash": "75ffdd562e58963a15c5bad2711207a3"
   },
   "mail/provision/test_render_shim_env.py": {
-    "mtime": 1788514275.6088998,
+    "mtime": 1788527278.6153128,
     "ast_hash": "9f97b9b5e54b44ef68a8fc931a77bee7",
     "semantic_hash": "9f97b9b5e54b44ef68a8fc931a77bee7"
   },
@@ -300,57 +300,57 @@
     "semantic_hash": "a3a40d6065349b725b09e50b5f9ef764"
   },
   "hetzner/index.ts": {
-    "mtime": 1788514275.6022122,
+    "mtime": 1788527278.6081557,
     "ast_hash": "d7118ceef8b73c553d5ba534f3935830",
     "semantic_hash": "d7118ceef8b73c553d5ba534f3935830"
   },
   "hetzner/network.ts": {
-    "mtime": 1788514275.6037054,
+    "mtime": 1788527278.6098614,
     "ast_hash": "a010694e6f1081bc910f0b8587a7b5d2",
     "semantic_hash": "a010694e6f1081bc910f0b8587a7b5d2"
   },
   "hetzner/package.json": {
-    "mtime": 1788514275.6037054,
+    "mtime": 1788527278.6098614,
     "ast_hash": "60297a651e0aae1ff352334f6bc30d97",
     "semantic_hash": "60297a651e0aae1ff352334f6bc30d97"
   },
   "hetzner/provision/00-harden-ssh.sh": {
-    "mtime": 1788514275.6037054,
+    "mtime": 1788527278.6098614,
     "ast_hash": "9fabc1de919be9ffe06f63861bd4b9e8",
     "semantic_hash": "9fabc1de919be9ffe06f63861bd4b9e8"
   },
   "hetzner/provision/10-harden-updates-fail2ban.sh": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "1ce3b8233e64c7425a809fb78fad0294",
     "semantic_hash": "1ce3b8233e64c7425a809fb78fad0294"
   },
   "hetzner/provision/20-install-docker.sh": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "4afffc8f0de02167a36597dac4b515b1",
     "semantic_hash": "4afffc8f0de02167a36597dac4b515b1"
   },
   "hetzner/provision/30-install-deploy-tooling.sh": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "e8328968fb2aa99689ba37e80ce35949",
     "semantic_hash": "e8328968fb2aa99689ba37e80ce35949"
   },
   "hetzner/provision/branchleft_deploy.py": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "7c7f97857a5178d66197716a991d3a79",
     "semantic_hash": "7c7f97857a5178d66197716a991d3a79"
   },
   "hetzner/provision/run-all.sh": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "3df9da7ab5ca2b79220597d9bbc02960",
     "semantic_hash": "3df9da7ab5ca2b79220597d9bbc02960"
   },
   "hetzner/provision/test_branchleft_deploy.py": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "7dd61b1737c33b2f978818116f8ffa88",
     "semantic_hash": "7dd61b1737c33b2f978818116f8ffa88"
   },
   "hetzner/tsconfig.json": {
-    "mtime": 1788514275.6064074,
+    "mtime": 1788527278.6126742,
     "ast_hash": "a179c7c3ccb476345c3b82d3c078d859",
     "semantic_hash": "a179c7c3ccb476345c3b82d3c078d859"
   },
@@ -370,12 +370,12 @@
     "semantic_hash": "21a7084622c5f071ab345872c27658b2"
   },
   "hetzner/RUNBOOK-provision-host.md": {
-    "mtime": 1787584857.6028693,
-    "ast_hash": "f91e441e389d8ab252a7ee08f2683b6c",
-    "semantic_hash": "f91e441e389d8ab252a7ee08f2683b6c"
+    "mtime": 1788526822.5632026,
+    "ast_hash": "0a2a66fbf6ffeb9887104b2cd7092bdd",
+    "semantic_hash": "0a2a66fbf6ffeb9887104b2cd7092bdd"
   },
   "scripts/normalize-cloud-armor-baseline.py": {
-    "mtime": 1788514275.611017,
+    "mtime": 1788527278.6173449,
     "ast_hash": "155b76a1bf792427040661791c3fa419",
     "semantic_hash": "155b76a1bf792427040661791c3fa419"
   },
@@ -390,42 +390,42 @@
     "semantic_hash": "2ebdda94813fcb2e2781f41a80276b0e"
   },
   "hetzner/scripts/probe-object-storage.py": {
-    "mtime": 1788514275.6064074,
+    "mtime": 1788527278.6126742,
     "ast_hash": "f8256a99e772e8bf9f84fbb5add4cfc4",
     "semantic_hash": "f8256a99e772e8bf9f84fbb5add4cfc4"
   },
   "hetzner/scripts/test_probe_object_storage.py": {
-    "mtime": 1788514275.6064074,
+    "mtime": 1788527278.6126742,
     "ast_hash": "3651e7ef00043193483287ccbff3965c",
     "semantic_hash": "3651e7ef00043193483287ccbff3965c"
   },
   "mail/provision/test_rotate_admin_credential.py": {
-    "mtime": 1788514275.6088998,
+    "mtime": 1788527278.6163125,
     "ast_hash": "f50c982123cfcf56ec8a0f0fe2707d22",
     "semantic_hash": "f50c982123cfcf56ec8a0f0fe2707d22"
   },
   "scripts/assert-cloud-armor-baseline-parity.py": {
-    "mtime": 1788514275.6098998,
+    "mtime": 1788527278.6163125,
     "ast_hash": "b03271a27863ce77a694a2ff28b7cd74",
     "semantic_hash": "b03271a27863ce77a694a2ff28b7cd74"
   },
   "hetzner/estate.ts": {
-    "mtime": 1788514275.601932,
+    "mtime": 1788527278.6078675,
     "ast_hash": "e5b33475f142427e86be2ce56f145058",
     "semantic_hash": "e5b33475f142427e86be2ce56f145058"
   },
   "hetzner/scripts/check-hetzner-projects.py": {
-    "mtime": 1788514275.6064074,
+    "mtime": 1788527278.6126742,
     "ast_hash": "896186fde96b242ed99ad3afed395654",
     "semantic_hash": "896186fde96b242ed99ad3afed395654"
   },
   "hetzner/scripts/test_check_hetzner_projects.py": {
-    "mtime": 1788514275.6064074,
+    "mtime": 1788527278.6126742,
     "ast_hash": "77e0d6bd4cad1ce41caa7cd707545c19",
     "semantic_hash": "77e0d6bd4cad1ce41caa7cd707545c19"
   },
   "hetzner/vitest.config.ts": {
-    "mtime": 1788514275.6064074,
+    "mtime": 1788527278.6126742,
     "ast_hash": "0c429e8c57cfb0cacf6a0d677802d000",
     "semantic_hash": "0c429e8c57cfb0cacf6a0d677802d000"
   },
@@ -440,72 +440,72 @@
     "semantic_hash": "e5cbec7182cb390447b11755e19ea305"
   },
   "scripts/test_assert_cloud_armor_baseline_parity.py": {
-    "mtime": 1788514275.611017,
+    "mtime": 1788527278.6173449,
     "ast_hash": "a375a96d6a3b930be16d77bb94f6cc5d",
     "semantic_hash": "a375a96d6a3b930be16d77bb94f6cc5d"
   },
   "scripts/assert-no-committed-pulumi-secrets.py": {
-    "mtime": 1788514275.611017,
+    "mtime": 1788527278.6173449,
     "ast_hash": "411db0978769270089922c46a08fa5b2",
     "semantic_hash": "411db0978769270089922c46a08fa5b2"
   },
   "hetzner-host/addressPlan.ts": {
-    "mtime": 1788514275.5983124,
+    "mtime": 1788527278.604162,
     "ast_hash": "68924b3b2afbfd100f68ec3ecd4836fc",
     "semantic_hash": "68924b3b2afbfd100f68ec3ecd4836fc"
   },
   "hetzner-host/cloudInit.test.ts": {
-    "mtime": 1788514275.5983124,
+    "mtime": 1788527278.604162,
     "ast_hash": "fa6115b4dd2fc62926eb4684cf25cd92",
     "semantic_hash": "fa6115b4dd2fc62926eb4684cf25cd92"
   },
   "hetzner-host/cloudInit.ts": {
-    "mtime": 1788514275.5983124,
+    "mtime": 1788527278.604162,
     "ast_hash": "736dad2f0e889b7029145ba634781607",
     "semantic_hash": "736dad2f0e889b7029145ba634781607"
   },
   "hetzner-host/firewalls.ts": {
-    "mtime": 1788514275.5983124,
+    "mtime": 1788527278.604162,
     "ast_hash": "820f9f0a7bcb04bd0a7614515885a5a6",
     "semantic_hash": "820f9f0a7bcb04bd0a7614515885a5a6"
   },
   "hetzner-host/host.test.ts": {
-    "mtime": 1788514275.5983124,
+    "mtime": 1788527278.604162,
     "ast_hash": "d4ebd78d5c35ef2b90589ba0d00cb0fa",
     "semantic_hash": "d4ebd78d5c35ef2b90589ba0d00cb0fa"
   },
   "hetzner-host/host.ts": {
-    "mtime": 1788514275.5983124,
+    "mtime": 1788527278.604162,
     "ast_hash": "630d4e75cec8d3c22ddc45588e28dbaf",
     "semantic_hash": "630d4e75cec8d3c22ddc45588e28dbaf"
   },
   "hetzner-host/index.ts": {
-    "mtime": 1788514275.5983124,
+    "mtime": 1788527278.604162,
     "ast_hash": "2a4795d9bc83c09d94b08b69c31edc9d",
     "semantic_hash": "2a4795d9bc83c09d94b08b69c31edc9d"
   },
   "hetzner-host/package.json": {
-    "mtime": 1788514275.5983124,
+    "mtime": 1788527278.604315,
     "ast_hash": "eb63da96cf4c67eac062ce8fd8f1e3a2",
     "semantic_hash": "eb63da96cf4c67eac062ce8fd8f1e3a2"
   },
   "hetzner-host/tsconfig.build.json": {
-    "mtime": 1788514275.5983124,
+    "mtime": 1788527278.604315,
     "ast_hash": "7649a5c3bfa7de37e61ac2bd55c84328",
     "semantic_hash": "7649a5c3bfa7de37e61ac2bd55c84328"
   },
   "hetzner-host/tsconfig.json": {
-    "mtime": 1788514275.5988996,
+    "mtime": 1788527278.604315,
     "ast_hash": "c514481041bdbe815df3cc1ac7feda6c",
     "semantic_hash": "c514481041bdbe815df3cc1ac7feda6c"
   },
   "hetzner-host/vitest.config.ts": {
-    "mtime": 1788514275.5988996,
+    "mtime": 1788527278.604315,
     "ast_hash": "31bf3921a37c528901c7235944a7be22",
     "semantic_hash": "31bf3921a37c528901c7235944a7be22"
   },
   "hetzner/hetznerHost.test.ts": {
-    "mtime": 1788514275.6022122,
+    "mtime": 1788527278.6081557,
     "ast_hash": "fb5cdc5433528c93f2a3510c04e96870",
     "semantic_hash": "fb5cdc5433528c93f2a3510c04e96870"
   },
@@ -520,22 +520,22 @@
     "semantic_hash": "8425834f2d7491ea04cde399855a3b10"
   },
   "hetzner/edge/posture.ts": {
-    "mtime": 1788514275.6011884,
+    "mtime": 1788527278.6071212,
     "ast_hash": "f3e38ee11a362f2777b25fca2cfc83dc",
     "semantic_hash": "f3e38ee11a362f2777b25fca2cfc83dc"
   },
   "hetzner/edge/render.test.ts": {
-    "mtime": 1788514275.6011884,
+    "mtime": 1788527278.6071212,
     "ast_hash": "15379afe19236f0c01b7abbed6d18444",
     "semantic_hash": "15379afe19236f0c01b7abbed6d18444"
   },
   "hetzner/edge/render.ts": {
-    "mtime": 1788514275.6011884,
+    "mtime": 1788527278.6071212,
     "ast_hash": "03643c2cf8a87df6c5673d492b4a9567",
     "semantic_hash": "03643c2cf8a87df6c5673d492b4a9567"
   },
   "siteTypes.ts": {
-    "mtime": 1788514275.611017,
+    "mtime": 1788527278.6183121,
     "ast_hash": "8123b048b97da139fc0886e5f356e4a8",
     "semantic_hash": "8123b048b97da139fc0886e5f356e4a8"
   },
@@ -565,72 +565,72 @@
     "semantic_hash": "8edf29dfffa0e9136358c06505a922e2"
   },
   "scripts/audit-pulumi-secrets.py": {
-    "mtime": 1788514275.611017,
+    "mtime": 1788527278.6173449,
     "ast_hash": "2e518e69f94ca59ec23ea1c69622c24c",
     "semantic_hash": "2e518e69f94ca59ec23ea1c69622c24c"
   },
   "scripts/test_audit_pulumi_secrets.py": {
-    "mtime": 1788514275.611017,
+    "mtime": 1788527278.6173449,
     "ast_hash": "a6979959fbc0c71d0ad8b6775dde4b61",
     "semantic_hash": "a6979959fbc0c71d0ad8b6775dde4b61"
   },
   "hetzner/provision/test_00_harden_ssh.py": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "768c7d9fc1388ed9d167232bfd0d658f",
     "semantic_hash": "768c7d9fc1388ed9d167232bfd0d658f"
   },
   "scripts/test_verify_archive_passphrase.py": {
-    "mtime": 1788514275.611017,
+    "mtime": 1788527278.6173449,
     "ast_hash": "8a11462b05a328088597c30372bdc569",
     "semantic_hash": "8a11462b05a328088597c30372bdc569"
   },
   "scripts/verify-archive-passphrase.py": {
-    "mtime": 1788514275.611017,
+    "mtime": 1788527278.6183121,
     "ast_hash": "a89ee1838681c69f351c4a6c178744d0",
     "semantic_hash": "a89ee1838681c69f351c4a6c178744d0"
   },
   "hetzner/egress.test.ts": {
-    "mtime": 1788514275.601932,
+    "mtime": 1788527278.6078675,
     "ast_hash": "3ba110c92d3ff9a7b4afb8fb427d43bb",
     "semantic_hash": "3ba110c92d3ff9a7b4afb8fb427d43bb"
   },
   "hetzner/egress.ts": {
-    "mtime": 1788514275.601932,
+    "mtime": 1788527278.6078675,
     "ast_hash": "7fbfa21d2c12276dea609ed2cc676605",
     "semantic_hash": "7fbfa21d2c12276dea609ed2cc676605"
   },
   "hetzner/provision/branchleft_nat.sh": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "5898e76cdad77abde5b03c751917f683",
     "semantic_hash": "5898e76cdad77abde5b03c751917f683"
   },
   "hetzner/provision/nat-gateway.sh": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "c115fc4ee62e24b873d441cec3b60b5c",
     "semantic_hash": "c115fc4ee62e24b873d441cec3b60b5c"
   },
   "hetzner/provision/test_branchleft_nat.py": {
-    "mtime": 1788514275.6048996,
+    "mtime": 1788527278.6113136,
     "ast_hash": "866ae3e47f8f1af71de2a26c92660162",
     "semantic_hash": "866ae3e47f8f1af71de2a26c92660162"
   },
   "hetzner/scripts/check-address-plan-drift.py": {
-    "mtime": 1788514275.6048996,
+    "mtime": 1788527278.6113136,
     "ast_hash": "73610451ca94840a1779dd9ebdf384ef",
     "semantic_hash": "73610451ca94840a1779dd9ebdf384ef"
   },
   "hetzner/scripts/test_check_address_plan_drift.py": {
-    "mtime": 1788514275.6064074,
+    "mtime": 1788527278.6126742,
     "ast_hash": "57730a9cf35c1591ac5fe275e0c6a12f",
     "semantic_hash": "57730a9cf35c1591ac5fe275e0c6a12f"
   },
   "hetzner/projectGuard.test.ts": {
-    "mtime": 1788514275.6037054,
+    "mtime": 1788527278.6098614,
     "ast_hash": "ec8e79a045f5cbda79ddf6836c1e57d4",
     "semantic_hash": "ec8e79a045f5cbda79ddf6836c1e57d4"
   },
   "hetzner/projectGuard.ts": {
-    "mtime": 1788514275.6037054,
+    "mtime": 1788527278.6098614,
     "ast_hash": "dfa9c2cfeccf54431393d338a2f9d2a2",
     "semantic_hash": "dfa9c2cfeccf54431393d338a2f9d2a2"
   },
@@ -640,32 +640,32 @@
     "semantic_hash": "dc75414a13bb6fb1f50fb12eb05531bb"
   },
   "scripts/assert-no-hetzner-deletes.py": {
-    "mtime": 1788514275.611017,
+    "mtime": 1788527278.6173449,
     "ast_hash": "462579ac6e8b630d90aa186cd5b296fb",
     "semantic_hash": "462579ac6e8b630d90aa186cd5b296fb"
   },
   "scripts/test_assert_no_hetzner_deletes.py": {
-    "mtime": 1788514275.611017,
+    "mtime": 1788527278.6173449,
     "ast_hash": "d5b8b2900c854c5b4d46632f42c91929",
     "semantic_hash": "d5b8b2900c854c5b4d46632f42c91929"
   },
   "hetzner/monitoring/render.test.ts": {
-    "mtime": 1788514275.6025412,
+    "mtime": 1788527278.6084938,
     "ast_hash": "a70b3e1b6d81d2662b7f41b7d6e7c3d8",
     "semantic_hash": "a70b3e1b6d81d2662b7f41b7d6e7c3d8"
   },
   "hetzner/monitoring/render.ts": {
-    "mtime": 1788514275.6025412,
+    "mtime": 1788527278.6084938,
     "ast_hash": "3af4d33c979df9cd687d891accd27b21",
     "semantic_hash": "3af4d33c979df9cd687d891accd27b21"
   },
   "hetzner/monitoring/stack/render_alertmanager_config.py": {
-    "mtime": 1788514275.603473,
+    "mtime": 1788527278.609641,
     "ast_hash": "cd202179e9bfc98d3f837a798ea4d8bd",
     "semantic_hash": "cd202179e9bfc98d3f837a798ea4d8bd"
   },
   "hetzner/monitoring/test_render_alertmanager_config.py": {
-    "mtime": 1788514275.6037054,
+    "mtime": 1788527278.6098614,
     "ast_hash": "557218efe30557fe7447fce7a5c6a82b",
     "semantic_hash": "557218efe30557fe7447fce7a5c6a82b"
   },
@@ -700,77 +700,77 @@
     "semantic_hash": "6f417a435b7eb7346bafc295b2c0f7d2"
   },
   "hetzner/provision/05-configure-host-egress.sh": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "930641f61308b6d643a681bd66ecc195",
     "semantic_hash": "930641f61308b6d643a681bd66ecc195"
   },
   "hetzner/provision/branchleft_host_egress.sh": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "f4cbf67e77cbd029ea9c672deb42f9dc",
     "semantic_hash": "f4cbf67e77cbd029ea9c672deb42f9dc"
   },
   "hetzner/provision/test_branchleft_host_egress.py": {
-    "mtime": 1788514275.6048996,
+    "mtime": 1788527278.6113136,
     "ast_hash": "4a28872a671cbeccdd80a801bb5df316",
     "semantic_hash": "4a28872a671cbeccdd80a801bb5df316"
   },
   "hetzner/provision/test_compose_unit_contract.py": {
-    "mtime": 1788514275.6048996,
+    "mtime": 1788527278.6113136,
     "ast_hash": "59bf51a0ecc23fcfa736546bff0313dc",
     "semantic_hash": "59bf51a0ecc23fcfa736546bff0313dc"
   },
   "hetzner/provision/app-host-isolation.sh": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "42740636b4eff11eb97b2015c8e4c5eb",
     "semantic_hash": "42740636b4eff11eb97b2015c8e4c5eb"
   },
   "hetzner/provision/branchleft_docker_user_policy.sh": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "0b6c24c0194c9ac8395cad0450c71f18",
     "semantic_hash": "0b6c24c0194c9ac8395cad0450c71f18"
   },
   "hetzner/provision/test_branchleft_docker_user_policy.py": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "83bcd7b84b0b4e5ea916be2b99ad5e87",
     "semantic_hash": "83bcd7b84b0b4e5ea916be2b99ad5e87"
   },
   "mail/provision/64-provision-alerting-submission-credential.sh": {
-    "mtime": 1788514275.6084654,
+    "mtime": 1788527278.614313,
     "ast_hash": "a599a35ee1708b40a16240187a29142a",
     "semantic_hash": "a599a35ee1708b40a16240187a29142a"
   },
   "hetzner/provision/test_runbook_rsync_commands.py": {
-    "mtime": 1788514275.6048996,
+    "mtime": 1788527278.6113136,
     "ast_hash": "bcd7f79e9661269757f269800db3ab79",
     "semantic_hash": "bcd7f79e9661269757f269800db3ab79"
   },
   "hetzner/provision/provision_deploy_slot.py": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "19e0bb56d3840cbfec5d5c1d2060a419",
     "semantic_hash": "19e0bb56d3840cbfec5d5c1d2060a419"
   },
   "hetzner/provision/test_provision_deploy_slot.py": {
-    "mtime": 1788514275.6048996,
+    "mtime": 1788527278.6113136,
     "ast_hash": "e30e6fae9e4e9d4b43da67e52264122a",
     "semantic_hash": "e30e6fae9e4e9d4b43da67e52264122a"
   },
   "hetzner/monitoring/test_runbook_verify_targets.py": {
-    "mtime": 1788514275.6037054,
+    "mtime": 1788527278.6098614,
     "ast_hash": "253752f9fb6d722aac826fd846855491",
     "semantic_hash": "253752f9fb6d722aac826fd846855491"
   },
   "hetzner/provision/install-systemd-drop-ins.sh": {
-    "mtime": 1788514275.6042871,
+    "mtime": 1788527278.6104484,
     "ast_hash": "be0d6383c4c89b46a9d4eb233e9e05f6",
     "semantic_hash": "be0d6383c4c89b46a9d4eb233e9e05f6"
   },
   "hetzner/provision/test_install_systemd_drop_ins.py": {
-    "mtime": 1788514275.6048996,
-    "ast_hash": "32c5facd094eebfc82d839bb43146c89",
-    "semantic_hash": "32c5facd094eebfc82d839bb43146c89"
+    "mtime": 1788527278.6113136,
+    "ast_hash": "87550781b8b46ef9e2cdd7437fba13bb",
+    "semantic_hash": "87550781b8b46ef9e2cdd7437fba13bb"
   },
   "hetzner/provision/test_compose_bind_mounts.py": {
-    "mtime": 1788514275.6048996,
+    "mtime": 1788527278.6113136,
     "ast_hash": "81742020506e4f099c67f0afa941c2f1",
     "semantic_hash": "81742020506e4f099c67f0afa941c2f1"
   },
@@ -780,12 +780,12 @@
     "semantic_hash": "7a182b3d5f68970aae0ab9855ddfefe7"
   },
   "hetzner/scripts/check-crowdsec-hub-pin.py": {
-    "mtime": 1788514275.6064074,
+    "mtime": 1788527278.6126742,
     "ast_hash": "37fca8fc0e0c7954d6842b72b8025f4e",
     "semantic_hash": "37fca8fc0e0c7954d6842b72b8025f4e"
   },
   "hetzner/scripts/test_check_crowdsec_hub_pin.py": {
-    "mtime": 1788514275.6064074,
+    "mtime": 1788527278.6126742,
     "ast_hash": "07361c5bc43b507e7705b1662eedf5f5",
     "semantic_hash": "07361c5bc43b507e7705b1662eedf5f5"
   },
@@ -795,14 +795,14 @@
     "semantic_hash": "4c1016b359c970fe0b884476793971f3"
   },
   "hetzner/generated-config-prettier-ignore.test.ts": {
-    "mtime": 1788514275.6022122,
+    "mtime": 1788527278.6081557,
     "ast_hash": "cd5fa83e95ad100aaf342351811b8079",
     "semantic_hash": "cd5fa83e95ad100aaf342351811b8079"
   },
   ".github/dependabot.yml": {
-    "mtime": 1787845770.454671,
-    "ast_hash": "d1bf342e414c361dc1d8bfc7d2cca854",
-    "semantic_hash": "d1bf342e414c361dc1d8bfc7d2cca854"
+    "mtime": 1788527278.5702233,
+    "ast_hash": "1256d5fcb91082abb998df2c93e1b903",
+    "semantic_hash": "1256d5fcb91082abb998df2c93e1b903"
   },
   "mail/RUNBOOK-mx1-reboot.md": {
     "mtime": 1788132266.9006336,
@@ -810,7 +810,7 @@
     "semantic_hash": "a4bbb8e2775192cc3db684ad88cf27ee"
   },
   "hetzner/monitoring/blackbox.test.ts": {
-    "mtime": 1788514275.6025412,
+    "mtime": 1788527278.6084938,
     "ast_hash": "7dd3761d96911218f13643b6a0a15d92",
     "semantic_hash": "7dd3761d96911218f13643b6a0a15d92"
   },
@@ -818,5 +818,15 @@
     "mtime": 1788244715.2490335,
     "ast_hash": "fcbd20b3e0dbb310fe3e1a0111f33861",
     "semantic_hash": "fcbd20b3e0dbb310fe3e1a0111f33861"
+  },
+  "hetzner/monitoring/metricCrosscheck.test.ts": {
+    "mtime": 1788527278.6084938,
+    "ast_hash": "e67a3c5f8ce40f956b88a3c165a53a87",
+    "semantic_hash": "e67a3c5f8ce40f956b88a3c165a53a87"
+  },
+  "hetzner/monitoring/metricCrosscheck.ts": {
+    "mtime": 1788527278.6084938,
+    "ast_hash": "22f4a8cf7de37b14615e8cb8a102feb7",
+    "semantic_hash": "22f4a8cf7de37b14615e8cb8a102feb7"
   }
 }
