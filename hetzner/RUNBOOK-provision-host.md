@@ -309,7 +309,37 @@ ran at all. A command that hangs instead of returning means the restart
 wedged rather than completed; `systemctl status branchleft-nat.service
 docker.service` on the host is the first thing to read.
 
-### 4. Provision a host that has no public address
+### 4. Install the systemd cgroup drop-ins
+
+The base sequence above installs `branchleft-compose@.service`, the shared
+template every stack's compose unit instantiates, but no per-stack override.
+Overrides are committed beside the stack that needs one, under
+`hetzner/*/systemd/`, and every `scp` in this runbook carries only
+`hetzner/provision/.` — never a sibling directory — so a freshly rebuilt
+host has the template and no override until something else installs one.
+This is the same shape a fix elsewhere in this runbook set already closed
+one layer later, at the redeploy a rebuild eventually reaches; closing it
+here means a bare rebuild never has a window where it is missing.
+
+Doc 14 §3.1 keeps monitoring co-located on `edge1` until TENANT_1, so
+`edge1` is the only host carrying a committed drop-in today — re-check that
+split before reusing this step once a standalone monitoring host exists.
+
+```bash
+hetzner/provision/install-systemd-drop-ins.sh root@<edge1-ipv4>
+```
+
+The same command `RUNBOOK-monitoring.md`'s drop-in step already runs. It
+walks every committed `*/systemd/*.override.conf` and installs the lot onto
+whichever single host it's pointed at, with no per-stack mapping — safe to
+point at `edge1` here and again from that runbook later, since re-installing
+an unchanged drop-in is a no-op. It is not safe to point at `app1` or `db1`
+today: neither runs a stack with a committed drop-in, and the script would
+install `edge`'s and `monitoring`'s onto a host that starts neither. Neither
+drop-in takes effect until its unit next starts or restarts, which nothing
+has done yet on a freshly provisioned host.
+
+### 5. Provision a host that has no public address
 
 Reached through the gateway, over the private network — no firewall rule
 filters private traffic, so nothing had to be opened for this.
@@ -357,7 +387,7 @@ life of the host. An `edge1` that is down or wedged is an estate whose private
 hosts stop being patched, and nothing reports that today — the failure is
 silent until someone looks. Monitoring it belongs with the monitoring host.
 
-### 5. Confine tenant containers on each app host
+### 6. Confine tenant containers on each app host
 
 A tenant container's published port makes it reachable from `edge1` and from
 a Prometheus scrape, and `DOCKER-USER` — the chain Docker inserts its own
@@ -404,7 +434,7 @@ that needs an `INPUT` rule with a different blast radius and is out of scope
 here. Traffic to `169.254.169.254` _is_ forwarded, so that half of the drop
 is real.
 
-Run it the same way as step 4, on each app host. `app1`, at `10.20.1.100`, is
+Run it the same way as step 5, on each app host. `app1`, at `10.20.1.100`, is
 the only one that exists today; the command is otherwise unchanged for a
 future `app2`/`app3`, substituting that host's own private IP:
 
@@ -449,7 +479,7 @@ piece of work rather than claimed here.
 ## Run the whole set
 
 Substituting the host's own name and public address. A host with no public
-address is provisioned through the gateway instead — step 4 above carries the
+address is provisioned through the gateway instead — step 5 above carries the
 same two commands with the jump added:
 
 ```bash
