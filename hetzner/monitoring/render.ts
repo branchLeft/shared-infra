@@ -421,6 +421,29 @@ export function renderAlertRules(): string {
     '            window. Scoped to expected_up="true" for the same reason as',
     '            HostOrServiceDown above.',
     '',
+    // The mirror of the two rules above: they are both scoped to
+    // expected_up="true" by design, so neither one re-evaluates whether that
+    // scoping is still correct. A target shipped and left at "false" is
+    // invisible to both, indefinitely.
+    '      - alert: ExpectedDownTargetAnswering',
+    '        expr: max_over_time(up{expected_up="false"}[15m]) == 1',
+    '        for: 5m',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "{{ $labels.job }} on {{ $labels.host }} is answering while labeled not expected to."',
+    '          description: >-',
+    '            HostOrServiceDown and ServiceFlapping both read',
+    '            up{expected_up="true"}, so a target still carrying "false" gets',
+    '            no coverage from either -- correct while the target genuinely',
+    '            does not exist yet, silently wrong from the moment it ships.',
+    '            max_over_time over a 15m window catches a target that answers',
+    '            even once, crash-looping or clean, so this rule sees the same',
+    '            shape a forgotten label hides from the other two. Warning, not',
+    '            critical: the label itself says nobody depends on this target',
+    '            today. Flip expected_up to true once the target is confirmed',
+    '            live.',
+    '',
     // In `estate` rather than a probes-style group: this reads a
     // Caddy-emitted counter local to edge1, the same class of signal as
     // ServiceFlapping above, not an external blackbox_exporter result.

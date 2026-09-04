@@ -481,7 +481,11 @@ live exporter reporting a failed probe, on `probe_success` rather than `up`.
 Only `node` for `app1` and `node` for `db1` are expected `down`: those two
 exporters are not provisioned (see `render.ts`'s `MONITORED_NODE_HOSTS`
 docstring). A `down` target with `expected_up: 'true'` in its labels is the
-only one worth investigating.
+only one worth investigating -- but an `up` target with `expected_up: 'false'`
+is worth one too: `ExpectedDownTargetAnswering` pages on exactly that, because
+it is the label going stale in the other direction (a target shipped and
+nobody flipped it), the shape that hid the `db1` `mysqld_exporter` crash loop
+for four days.
 
 `stalwart` is the one target here whose credential is not in this repo and
 not in the container image. It is `basic_auth` with a `password_file`, written
