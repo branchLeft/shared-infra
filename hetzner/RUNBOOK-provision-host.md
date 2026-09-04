@@ -341,7 +341,7 @@ Doc 14 §3.1 keeps monitoring co-located on `edge1` until TENANT_1, so
 split before reusing this step once a standalone monitoring host exists.
 
 ```bash
-hetzner/provision/install-systemd-drop-ins.sh root@<edge1-ipv4>
+hetzner/provision/install-systemd-drop-ins.sh root@46.225.95.167
 ```
 
 The same command `RUNBOOK-monitoring.md`'s drop-in step already runs. It

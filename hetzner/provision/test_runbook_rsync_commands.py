@@ -39,9 +39,80 @@ REQUIRED_FLAGS = ("--no-owner", "--no-group", "--chmod=u=rwX,go=rX")
 # A fenced command may be wrapped over several lines with trailing backslashes.
 RSYNC_COMMAND = re.compile(r"^rsync .*?(?:\\\n.*?)*$", re.MULTILINE)
 
+# An address-shaped placeholder standing in for a permanently fixed host
+# (e.g. `<edge1-ipv4>`) pasted into a fenced command silently breaks every
+# command that reaches it: `db1` is private-only, so any command reaching it
+# is proxied through `edge1`, and an unresolved placeholder fails each hop
+# identically rather than loudly on the first.
+#
+# Deliberately narrower than "no `<...>` anywhere in a fenced block":
+# - Only a `bash` fence counts as a command block in these runbooks — `json`
+#   and `text` fences here hold illustrative sample output, never something
+#   pasted and run.
+# - Only a token that both reads as an *address* (`ip`/`ipv4`/`address`/
+#   `addr` as the placeholder's trailing word) and names a known,
+#   single-valued, permanently fixed host is flagged: `edge1` (its address is
+#   in `RUNBOOK-edge.md`'s own opening line) and `db1` (this runbook's own
+#   gateway section names its address directly). `app1`'s private address is
+#   fixed too, but its public one is assigned at server creation and
+#   resolved fresh each run — "Run the whole set" below sets it from
+#   `hcloud server list` rather than substituting a literal — so `app1` is
+#   excluded.
+# - The address word must be *trailing*, not merely present, so a resource
+#   id such as `<edge1-ipv4-id>` is left alone: `RUNBOOK-estate-project-move
+#   .md` deliberately works those by id rather than a hardcoded literal, to
+#   keep a destructive deletion from ever running against the wrong project's
+#   resource by a typo'd guess.
+# - A token that legitimately varies per invocation (`<stack>`, `<host>`,
+#   `<repo>`, `<image>`, `<digest>`) is not this bug and is left alone.
+FIXED_HOSTS = ("edge1", "db1")
+COMMAND_FENCE_LANGS = {"bash"}
+FENCE_LANG = re.compile(r"^```([a-zA-Z0-9_-]*)\s*$")
+PLACEHOLDER = re.compile(r"<[^<>\n]+>")
+ADDRESS_WORD = re.compile(r"(?:^|[^a-z])(?:ip|ipv4|address|addr)$", re.IGNORECASE)
+
 
 def runbooks() -> list[pathlib.Path]:
     return sorted(p for p in HETZNER.glob("RUNBOOK-*.md"))
+
+
+def command_blocks(text: str) -> list[str]:
+    """The bodies of every fenced block whose language is a command language
+    this repo's runbooks use. An unterminated fence is still scanned — a
+    runbook malformed enough to lose its closing fence is exactly when a
+    placeholder needs catching most, not a reason to skip it."""
+    blocks: list[str] = []
+    current: list[str] | None = None
+    lang = ""
+    for line in text.split("\n"):
+        match = FENCE_LANG.match(line)
+        if match:
+            if current is None:
+                lang = match.group(1).lower()
+                current = []
+            else:
+                if lang in COMMAND_FENCE_LANGS:
+                    blocks.append("\n".join(current))
+                current = None
+            continue
+        if current is not None:
+            current.append(line)
+    if current is not None and lang in COMMAND_FENCE_LANGS:
+        blocks.append("\n".join(current))
+    return blocks
+
+
+def fixed_host_placeholders(block_text: str) -> list[str]:
+    """Address-shaped placeholder tokens in `block_text` that name a fixed host."""
+    found = []
+    for match in PLACEHOLDER.finditer(block_text):
+        token = match.group(0)
+        inner = token[1:-1].lower()  # strip the angle brackets before anchoring on the end
+        if not ADDRESS_WORD.search(inner):
+            continue
+        if any(host in inner for host in FIXED_HOSTS):
+            found.append(token)
+    return found
 
 
 def rsync_commands_with_following_context() -> list[tuple[pathlib.Path, str, str]]:
@@ -217,6 +288,67 @@ class RunbookRsyncCommandTests(unittest.TestCase):
             "the copy step must state that an un-restarted copy leaves no "
             "alertmanager.yml on disk at all, not just that it gets deleted",
         )
+
+
+class RunbookFixedHostPlaceholderTests(unittest.TestCase):
+    def test_no_bash_fence_contains_a_fixed_host_address_placeholder(self):
+        violations = []
+        for runbook in runbooks():
+            text = runbook.read_text(encoding="utf-8")
+            for block in command_blocks(text):
+                for token in fixed_host_placeholders(block):
+                    violations.append(f"{runbook.name}: {token}")
+        self.assertEqual(
+            violations,
+            [],
+            "found unresolved fixed-host placeholder(s) in a fenced bash "
+            "command block:\n" + "\n".join(violations),
+        )
+
+    # Self-tests: prove the scanner still draws the distinction it exists
+    # for, against synthetic input rather than today's tree, so a
+    # coincidentally clean tree can't hide a scanner that quietly stopped
+    # matching.
+
+    def test_self_scanner_catches_a_fixed_host_placeholder_in_a_bash_fence(self):
+        sample = (
+            "Some prose that never mentions a fence.\n\n"
+            "```bash\n"
+            'JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@<edge1-ipv4>"\n'
+            "```\n"
+        )
+        blocks = command_blocks(sample)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(fixed_host_placeholders(blocks[0]), ["<edge1-ipv4>"])
+
+    def test_self_scanner_ignores_the_same_placeholder_mentioned_in_prose(self):
+        sample = (
+            "`<edge1-ipv4>` is edge1's public address, substitute it below.\n\n"
+            "```bash\n"
+            'echo "no placeholder in this command"\n'
+            "```\n"
+        )
+        blocks = command_blocks(sample)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(fixed_host_placeholders(blocks[0]), [])
+
+    def test_self_scanner_leaves_a_per_invocation_placeholder_alone(self):
+        sample = (
+            "```bash\n"
+            "git clone https://github.com/branchLeft/ghost-tenant-<slug>.git\n"
+            "```\n"
+        )
+        blocks = command_blocks(sample)
+        self.assertEqual(fixed_host_placeholders(blocks[0]), [])
+
+    def test_self_scanner_does_not_scan_a_non_bash_fence(self):
+        sample = "```text\nroot@<edge1-ipv4>\n```\n"
+        self.assertEqual(command_blocks(sample), [])
+
+    def test_self_scanner_leaves_a_non_address_placeholder_naming_a_fixed_host_alone(self):
+        sample = "```bash\nssh -i \"<db1 host key fingerprint>\" root@localhost\n```\n"
+        blocks = command_blocks(sample)
+        self.assertEqual(fixed_host_placeholders(blocks[0]), [])
 
 
 if __name__ == "__main__":
