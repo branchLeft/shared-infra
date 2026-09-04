@@ -32,6 +32,7 @@ import unittest
 HETZNER = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = HETZNER / "provision" / "install-systemd-drop-ins.sh"
 RUNBOOK = HETZNER / "RUNBOOK-monitoring.md"
+PROVISION_RUNBOOK = HETZNER / "RUNBOOK-provision-host.md"
 
 FAKE_SSH = """#!/usr/bin/env bash
 printf 'ssh %s\\n' "$*" >> "$CAPTURE"
@@ -256,6 +257,36 @@ class RunbookInvokesTheScriptTests(unittest.TestCase):
         body = self._step_5_body()
         self.assertNotIn("scp -i", body)
         self.assertNotIn("ssh -i", body)
+
+
+class ProvisionHostRunbookInvokesTheScriptTests(unittest.TestCase):
+    """A bare host rebuild goes through RUNBOOK-provision-host.md, never
+    RUNBOOK-monitoring.md, until whatever redeploys `edge`/`monitoring` next
+    runs -- so the provisioning runbook needs its own call to this script,
+    not just a cross-reference to the redeploy runbook's. It must call the
+    same script rather than carry a second copy of the ssh/scp sequence:
+    a divergent second installer is the exact shape that let the original
+    gap this closes appear one layer later, in RUNBOOK-monitoring.md."""
+
+    @staticmethod
+    def _step_body() -> str:
+        text = PROVISION_RUNBOOK.read_text(encoding="utf-8")
+        section = text.split("### 4. Install the systemd cgroup drop-ins", 1)[1]
+        return section.split("### 5.", 1)[0]
+
+    def test_step_invokes_install_systemd_drop_ins(self):
+        body = self._step_body()
+        self.assertIn("hetzner/provision/install-systemd-drop-ins.sh", body)
+
+    def test_step_does_not_reimplement_the_copy(self):
+        body = self._step_body()
+        self.assertNotIn("scp -i", body)
+        self.assertNotIn("ssh -i", body)
+
+    def test_the_script_actually_exists_at_the_path_the_runbook_names(self):
+        """A doc that names a path with nothing behind it would still pass
+        the two assertions above."""
+        self.assertTrue(SCRIPT.exists())
 
 
 if __name__ == "__main__":
