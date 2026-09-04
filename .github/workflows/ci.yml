@@ -1209,8 +1209,8 @@ jobs:
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_NETWORK }}
       PULUMI_SALT_HETZNER_NETWORK: ${{ secrets.PULUMI_SALT_HETZNER_NETWORK }}
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_ESTATE }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ESTATE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_ESTATE_SECRET_ACCESS_KEY }}
       AWS_REGION: hel1
 
     steps:
@@ -1240,8 +1240,8 @@ jobs:
           fail=0
           [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_NETWORK is empty or unset" ; fail=1; }
           [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_ESTATE is empty or unset" ; fail=1; }
-          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
-          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ESTATE_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_ESTATE_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
           case "$PULUMI_SALT_HETZNER_NETWORK" in
             v1:*) ;;
             *) echo "::error::PULUMI_SALT_HETZNER_NETWORK is empty or does not start with 'v1:'" ; fail=1;;
@@ -1305,8 +1305,8 @@ jobs:
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_NETWORK }}
       PULUMI_SALT_HETZNER_NETWORK: ${{ secrets.PULUMI_SALT_HETZNER_NETWORK }}
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_ESTATE }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ESTATE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_ESTATE_SECRET_ACCESS_KEY }}
       AWS_REGION: hel1
 
     steps:
@@ -1351,8 +1351,8 @@ jobs:
           fail=0
           [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_NETWORK is empty or unset" ; fail=1; }
           [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_ESTATE is empty or unset" ; fail=1; }
-          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
-          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ESTATE_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_ESTATE_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
           case "$PULUMI_SALT_HETZNER_NETWORK" in
             v1:*) ;;
             *) echo "::error::PULUMI_SALT_HETZNER_NETWORK is empty or does not start with 'v1:'" ; fail=1;;
@@ -1443,8 +1443,8 @@ jobs:
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_ESTATE }}
       PULUMI_SALT_HETZNER_ESTATE: ${{ secrets.PULUMI_SALT_HETZNER_ESTATE }}
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_ESTATE }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ESTATE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_ESTATE_SECRET_ACCESS_KEY }}
       AWS_REGION: hel1
 
     steps:
@@ -1478,8 +1478,8 @@ jobs:
           fail=0
           [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_ESTATE is empty or unset" ; fail=1; }
           [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_ESTATE is empty or unset" ; fail=1; }
-          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
-          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ESTATE_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_ESTATE_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
           case "$PULUMI_SALT_HETZNER_ESTATE" in
             v1:*) ;;
             *) echo "::error::PULUMI_SALT_HETZNER_ESTATE is empty or does not start with 'v1:'" ; fail=1;;
@@ -1541,8 +1541,8 @@ jobs:
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_ESTATE }}
       PULUMI_SALT_HETZNER_ESTATE: ${{ secrets.PULUMI_SALT_HETZNER_ESTATE }}
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_ESTATE }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ESTATE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_ESTATE_SECRET_ACCESS_KEY }}
       AWS_REGION: hel1
 
     steps:
@@ -1585,8 +1585,8 @@ jobs:
           fail=0
           [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_ESTATE is empty or unset" ; fail=1; }
           [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_ESTATE is empty or unset" ; fail=1; }
-          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
-          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ESTATE_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_ESTATE_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
           case "$PULUMI_SALT_HETZNER_ESTATE" in
             v1:*) ;;
             *) echo "::error::PULUMI_SALT_HETZNER_ESTATE is empty or does not start with 'v1:'" ; fail=1;;

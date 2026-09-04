@@ -27,6 +27,11 @@ main: ../estate.ts
 # are ordered independently. Both the endpoint host and `region` must name the
 # bucket's location — a mismatch is an opaque 403 that reads as a credential
 # problem.
+#
+# Must stay identical to hetzner/Pulumi.yaml's backend: this program resolves
+# a StackReference to the network stack, and a stack reference only resolves
+# inside one backend. Moved out of the mail project's `branchleft-pulumi-state`
+# alongside it — see RUNBOOK-estate-state-bucket-split.md.
 backend:
-  url: 's3://branchleft-pulumi-state?endpoint=hel1.your-objectstorage.com&s3ForcePathStyle=true&region=hel1'
+  url: 's3://branchleft-estate-pulumi-state?endpoint=hel1.your-objectstorage.com&s3ForcePathStyle=true&region=hel1'
 description: The Hetzner hosts this repository owns, created from the shared Host pattern — edge1 today, and the monitoring host when it splits off it. The application and database hosts are homed in ghost-platform and are not created here. Separate from branchleft-hetzner-network because the network is replaced approximately never and replacing it detaches every host at once; separate from the per-role service stacks because those deliver containers over SSH rather than through Pulumi.

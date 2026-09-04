@@ -85,13 +85,19 @@ THIS_REPO = "shared-infra"
 # reasoning, as assert-no-committed-pulumi-secrets.py next door.
 BOM = "\ufeff"
 
-# Matches a state-backend URL for either GCS bucket, and the pinned Hetzner
+# Matches a state-backend URL for either GCS bucket, and any pinned Hetzner
 # one. Deliberately not a general URL matcher: the point is to notice the
 # specific strings this estate uses, and a broad pattern would drown the
-# report in unrelated `gs://` media-bucket references.
+# report in unrelated `gs://` media-bucket references. The `s3://` branch is
+# wildcarded the same way the `gs://` one already is: two Hetzner buckets
+# exist today (`branchleft-pulumi-state` for mail, `branchleft-estate-pulumi-
+# state` for the network and estate stacks), and a literal match on only the
+# first name would read a real backend reference in the second bucket's
+# pinned `Pulumi.yaml` as "no backend named here" -- silently turning that
+# file "stale" in the inventory the moment its bucket name differs.
 BACKEND_REFERENCE = re.compile(
     r"gs://branchleft-[a-z0-9-]*pulumi-state"
-    r"|s3://branchleft-pulumi-state"
+    r"|s3://branchleft-[a-z0-9-]*pulumi-state"
     r"|pulumi login \"?gs://\$"
 )
 

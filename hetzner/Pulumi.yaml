@@ -17,6 +17,13 @@ runtime: nodejs
 # opaque 403, which reads as a credential problem and sends you to the wrong
 # place entirely. Verify with a plain unauthenticated request before changing
 # it — the bucket answers 403 on its own location and 404 on every other.
+#
+# This bucket lives in the estate hcloud project, not the mail one. It moved
+# out of `branchleft-pulumi-state` (mail project) per
+# RUNBOOK-estate-state-bucket-split.md — a Hetzner S3 credential is valid for
+# every bucket in its own project, so leaving this stack's state in the mail
+# project's bucket gave that project's credential read access to the whole
+# estate's resource inventory.
 backend:
-  url: 's3://branchleft-pulumi-state?endpoint=hel1.your-objectstorage.com&s3ForcePathStyle=true&region=hel1'
+  url: 's3://branchleft-estate-pulumi-state?endpoint=hel1.your-objectstorage.com&s3ForcePathStyle=true&region=hel1'
 description: The Hetzner private network every platform host attaches to, plus the reusable host/firewall/cloud-init modules the per-role host stacks import. A separate Pulumi project from branchleft-shared-infra and branchleft-mail — the network is the one resource whose replacement would detach every host at once, so it is never colocated with a stack that applies on a normal delivery cadence.
