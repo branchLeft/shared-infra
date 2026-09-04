@@ -1,1 +1,0 @@
-{"nodes": [{"id": "mail_shim_compose", "label": "mail/provision/shim-compose.yml", "file_type": "code", "source_file": "mail/provision/shim-compose.yml"}], "edges": [{"source": "mail_shim_compose", "target": "mailgun_shim", "relation": "participate_in", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "mail/provision/shim-compose.yml"}], "hyperedges": []}
