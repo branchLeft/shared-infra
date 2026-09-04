@@ -10,8 +10,8 @@
   },
   "comment": "@pulumi/gcp is pinned exactly, not caret-ranged. The default provider's version is part of its URN (`pulumi:providers:gcp::default_9_32_1`), and `pulumi state move` carries the moved resources' provider reference with them. Resolving a different patch here would make the migration's zero-diff preview gate fail on a provider change against every resource. Bump it deliberately, after the state move has landed, and read the preview.",
   "dependencies": {
-    "@pulumi/gcp": "9.32.1",
-    "@pulumi/pulumi": "^3.255.0"
+    "@pulumi/gcp": "9.35.1",
+    "@pulumi/pulumi": "^3.260.0"
   },
   "devDependencies": {
     "@branchleft/prettier-config": "^0.3.1",
