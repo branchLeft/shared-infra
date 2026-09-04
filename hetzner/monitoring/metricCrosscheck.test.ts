@@ -140,6 +140,33 @@ describe('extractEmittedMetrics', () => {
       { name: 'fixture_widget_count', labelKeys: new Set() },
     ]);
   });
+
+  it('does not read a # TYPE line quoted inside a docstring as something this file emits', () => {
+    // A module or function docstring documenting example output is never
+    // executed as exposition text -- unlike the list-literal shape above,
+    // this is text a reader sees, not text node_exporter ever scrapes. The
+    // real declaration below is on its own line, the shape this codebase's
+    // collectors actually use (see collect_snds_metrics.py).
+    const source = [
+      'def render_prometheus_text(records):',
+      '    """Formats records as Prometheus text. Example output:',
+      '',
+      '    # TYPE foo_doc gauge',
+      '    foo_doc 1.0',
+      '    """',
+      '    lines = [',
+      '        "# TYPE real_metric gauge",',
+      '    ]',
+      '    return "\\n".join(lines)',
+      '',
+    ].join('\n');
+    expect(extractEmittedMetrics(source)).toEqual([{ name: 'real_metric', labelKeys: new Set() }]);
+  });
+
+  it("does not read a # TYPE line quoted inside a single-quoted (''') docstring either", () => {
+    const source = ["    '''Example: # TYPE foo_doc gauge'''", '    lines = []'].join('\n');
+    expect(extractEmittedMetrics(source)).toEqual([]);
+  });
 });
 
 /**

@@ -21,8 +21,36 @@ import { join } from 'node:path';
  * `# TYPE <name> <type>` line -- the format's own metric-name declaration,
  * never a name this module invents. A queried name with no such declaration
  * is assumed to belong to a third-party binary this repo does not author;
- * `EXTERNAL_METRICS` is the reasoned, per-entry account of which one, so the
- * allowlist cannot silently grow to hide a real gap.
+ * `EXTERNAL_METRICS` is the reasoned, per-entry account of which one.
+ *
+ * Known limitations, disclosed rather than silently accepted:
+ *
+ * - **Label-value matching is out of scope.** `findUnemittedLabelKeys` only
+ *   ever checks that a selected label KEY is one the collector emits for
+ *   that metric, never that the VALUES on either side can actually meet --
+ *   a selector whose pattern never matches a real emitted value (the
+ *   `remote_ip`/IPv6 shape) is a live failure mode this cannot see, since
+ *   values are only known at scrape time.
+ * - **No control-flow or reachability analysis.** A `# TYPE` line is read
+ *   as text, not as a statement proven to execute. `extractEmittedMetrics`
+ *   strips triple-quoted (`"""..."""`/`'''...'''`) spans before scanning,
+ *   specifically because this codebase's docstrings are exclusively
+ *   triple-quoted (see `collect_snds_metrics.py`, `configure_stalwart.py`)
+ *   and a documentation example quoting `# TYPE foo gauge` must not count
+ *   as this file emitting `foo`. That removes the demonstrated failure
+ *   shape, not every one: a bare, non-string Python `#` comment that
+ *   happens to read exactly `# TYPE name gauge` on its own line, or a real
+ *   single-quoted exposition string sitting in a genuinely dead branch
+ *   (behind an `if False:`, or otherwise never reached), still reads as
+ *   emitted. Closing that fully needs a real Python parse (AST/tokenize)
+ *   this module does not perform. Prefer deleting dead exposition code
+ *   over leaving it -- this check cannot tell the difference.
+ * - **The allowlist is reviewed, not verified.** `EXTERNAL_METRICS` is
+ *   reasoned per entry so it is not a wholesale copy of `alerts.yml`'s
+ *   query list, and one test asserts no entry in it names a metric a local
+ *   collector already emits -- but nothing stops a plausible-sounding
+ *   reason being written for a metric that is, in fact, local. It narrows
+ *   the risk; it does not eliminate it.
  */
 
 export interface NamedSeries {
@@ -168,6 +196,20 @@ function labelKeysAdjacentTo(name: string, sourceText: string): Set<string> {
 }
 
 /**
+ * Removes every triple-quoted string span (`"""..."""` / `'''...'''`) before
+ * `# TYPE` scanning. This codebase's docstrings are exclusively
+ * triple-quoted -- a collector's real exposition text lives in
+ * single-quoted string literals inside a list that gets joined and written
+ * (see `render_prometheus_text` in `collect_snds_metrics.py`) -- so this
+ * removes documentation examples without touching any real declaration. It
+ * does not remove a single-quoted string sitting in genuinely dead code;
+ * see this module's docstring for that residual limitation.
+ */
+function stripDocstrings(sourceText: string): string {
+  return sourceText.replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, '');
+}
+
+/**
  * The metric names a single collector script's source declares, each with
  * the label keys it emits that name under. Reads only `# TYPE` lines to
  * decide which names this file emits -- deliberately not the value-emitting
@@ -176,12 +218,16 @@ function labelKeysAdjacentTo(name: string, sourceText: string): Set<string> {
  * document, not something this function needs to special-case.
  */
 export function extractEmittedMetrics(sourceText: string): NamedSeries[] {
+  const withoutDocstrings = stripDocstrings(sourceText);
   const names = new Set<string>();
-  for (const line of sourceText.split('\n')) {
+  for (const line of withoutDocstrings.split('\n')) {
     const match = TYPE_DECLARATION.exec(line);
     if (match) names.add(match[1]);
   }
-  return [...names].map((name) => ({ name, labelKeys: labelKeysAdjacentTo(name, sourceText) }));
+  return [...names].map((name) => ({
+    name,
+    labelKeys: labelKeysAdjacentTo(name, withoutDocstrings),
+  }));
 }
 
 /** Every non-test `.py` file beneath `rootDir` -- the convention this module
@@ -227,8 +273,13 @@ export function emittedMetricsUnder(rootDir: string): Map<string, Set<string>> {
  * Alertmanager themselves, so a rename can only originate upstream, never in
  * a commit to this repo. Listed and reasoned individually -- copying
  * `alerts.yml`'s query list wholesale here would recreate exactly the
- * incidental, self-referential catch branchLeft/shared-infra#137 replaces;
- * an unrecognised name must be added with its own reason, never assumed.
+ * incidental, self-referential catch this module exists to replace; an
+ * unrecognised name must be added with its own reason, never assumed.
+ *
+ * This list is reviewed, not verified: a plausible-sounding reason can still
+ * be written for a metric that is, in fact, local. The one automated guard
+ * is narrow -- a test asserts no entry here names a metric a local collector
+ * already emits -- and does not by itself prove every reason given is true.
  */
 export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   up: 'built into Prometheus itself, for every scrape target',
