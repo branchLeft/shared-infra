@@ -949,12 +949,19 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
+      # CI-2: the project id is bound to an env var rather than interpolated
+      # into the body. `vars.` is repo configuration rather than attacker
+      # input, but the clause is blanket on purpose -- the distinction is a
+      # judgement about the source, and the substitution happens before the
+      # shell sees the line either way.
       - name: Capture the live Cloud Armor policy
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
         run: |
           scratch=$(mktemp -d)
           echo "LIVE_ARMOR_SCRATCH=$scratch" >> "$GITHUB_ENV"
           gcloud compute security-policies export branchleft-edge-armor \
-            --project="${{ vars.GCP_PROJECT_ID }}" --global \
+            --project="$GCP_PROJECT_ID" --global \
             --file-name="$scratch/live.raw.json" --file-format=json
 
       # Reuses the same normalizer a human recapture runs, unmodified -- its
