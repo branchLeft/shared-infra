@@ -6,22 +6,27 @@ Pulumi v3.255.0, INC-4 in ghost-platform-docs/INCIDENTS.md), so any verification
 on it passes vacuously. `pulumi preview` fails closed on a wrong passphrase with
 "error: getting stack configuration: get stack secrets manager: incorrect passphrase".
 
-This has been through six review rounds, each of which found a real defect.
-Rounds 1-4 built and repeatedly patched a heuristic that tried to recognise
-"a passphrase-verification section" and "a command shaped like the
-anti-pattern" -- free-prose shape matching, which cannot work: each round
-closed the rewording someone thought to try and left the next one open,
-until a round proved a section could drop every trigger word while wrapping
-the exact anti-pattern and stay green. Round 5 replaced that entirely with
-deny-by-default on the literal flag. Round 6 found the allowlist itself was
-still exploitable (a key with no occurrence count let one allowlisted line
-allowlist every identical copy of itself, including a live one pasted into a
-new code fence) and that the scan's file coverage stopped at RUNBOOK-*.md
-while the same flag already appeared, unallowlisted, in three scripts.
-Whoever next touches this file should not have to rediscover any of that --
-see "Known limits", below the ALLOWLIST, for what is deliberately still open.
+Detection here is deny-by-default on the literal `--show-secrets` flag,
+never on recognising "a passphrase-verification section" or "a command
+shaped like the anti-pattern": free-prose shape matching cannot distinguish
+a reworded anti-pattern from a legitimate warning against one, so any
+rewording it doesn't already know about passes silently -- keying on the
+literal flag text has no such blind spot. The ALLOWLIST below keys each
+accepted occurrence on its exact line text *and* its occurrence count
+together, not text alone: keying on text alone would let a verbatim copy of
+an allowlisted line, pasted into a new location, pass unnoticed even though
+it is a second, unreviewed occurrence there.
 
-See branchLeft/workspace#208 for the incident and the fix's full history.
+Known, deliberate limits of this design: a flag built from string
+fragments that no single scanned line contains in full (e.g. concatenated
+shell variables) is invisible to a per-line literal scan; the allowlist's
+exact-text keying means reformatting an allowlisted line for any reason --
+punctuation, a typo fix, a rewrap -- fails the check even though nothing
+security-relevant changed, which is an accepted trade against fuzzy matching
+that could hide a real reintroduction; and `scripts/pulumi-stack-inventory.json`
+is deliberately out of scope, since it is a data file recording completed
+operations rather than prose or code a future reader could learn the
+anti-pattern from.
 """
 
 import pathlib
@@ -65,12 +70,12 @@ _SELF_PATH = str(pathlib.Path(__file__).resolve().relative_to(pathlib.Path(__fil
 def _tracked_scan_files() -> list[pathlib.Path]:
     """Every git-tracked .py/.sh/.yml/.yaml file in the repo, except graphify-out/ and this file.
 
-    Uses `git ls-files` rather than a hand-maintained directory list: the
-    round-6 gap (scripts/*.py and, potentially, .github/workflows/*.yml
-    containing the literal flag while unscanned) was exactly a scan whose
-    file coverage stopped at one glob pattern. This one grows automatically
-    with the tracked tree instead of needing a second edit whenever a new
-    script or workflow is added. graphify-out/ is excluded: it is a
+    Uses `git ls-files` rather than a hand-maintained directory list: a
+    fixed glob can leave a whole class of tracked files unscanned -- scripts
+    and workflow files outside a runbook-only glob, for instance, while the
+    literal flag still appears in them. This one grows automatically with
+    the tracked tree instead of needing a second edit whenever a new script
+    or workflow is added. graphify-out/ is excluded: it is a
     generated AST/semantic cache of every source file, so anything findable
     there is a duplicate of a source file this scan already inspects
     directly, and it must never be hand-edited regardless (workspace root
@@ -117,15 +122,15 @@ def show_secrets_occurrences() -> list[tuple[pathlib.Path, int, str]]:
 # occurrence count, justification).
 #
 # The count is load-bearing, not decoration: keying on text alone, with no
-# count, is what round 6 broke -- allowlisting one benign prose line also
-# allowlisted every future identical line in that file, including a live one
-# pasted into a new code fence where the same backticked text becomes a real
-# command. Requiring the *count* of a (file, text) pair to match exactly
-# means a duplicate -- benign copy-paste or a live reintroduction disguised
-# as one -- moves the count from N to N+1 and fails. Line numbers are
-# deliberately not part of the key: they shift under every unrelated edit to
-# the file, which is the too-tight failure mode this design already accepts
-# a *different*, narrower version of (see "Known limits").
+# count, lets one allowlisted prose line also allowlist every future
+# identical line in that file, including a live one pasted into a new code
+# fence where the same backticked text becomes a real command. Requiring the
+# *count* of a (file, text) pair to match exactly means a duplicate --
+# benign copy-paste or a live reintroduction disguised as one -- moves the
+# count from N to N+1 and fails. Line numbers are deliberately not part of
+# the key: they shift under every unrelated edit to the file, and keying on
+# them too would fail the check on an edit that made no security-relevant
+# change to this line at all.
 #
 # Seeded from the whole corpus as it exists today, across every file this
 # scan inspects (all RUNBOOK-*.md, plus every tracked .py/.sh/.yml/.yaml).
@@ -197,11 +202,11 @@ class ShowSecretsAllowlistTests(unittest.TestCase):
         Two ways an occurrence can be wrong, both checked: unlisted entirely
         (not on ALLOWLIST at all), or listed with the wrong count (the file
         now has more, or fewer, copies of that exact line than the entry
-        says it should -- the round-6 fix). Also guards the guard itself
-        against scanning nothing: scanned_files() returning zero files would
-        otherwise make this pass by finding zero problems among zero files
-        scanned, the same vacuous-pass failure this file exists to prevent --
-        so a non-zero scanned-file count is asserted here directly.
+        says it should). Also guards the guard itself against scanning
+        nothing: scanned_files() returning zero files would otherwise make
+        this pass by finding zero problems among zero files scanned, the
+        same vacuous-pass failure this file exists to prevent -- so a
+        non-zero scanned-file count is asserted here directly.
         """
         files = scanned_files()
         self.assertGreater(
