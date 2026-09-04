@@ -24,16 +24,23 @@ VALID_IMAGE = f"ghcr.io/branchleft/example@sha256:{DIGEST}"
 
 class FakeRun:
     """Stands in for subprocess.run, recording calls and returning a queue of
-    exit codes."""
+    canned responses.
 
-    def __init__(self, return_codes):
-        self.return_codes = list(return_codes)
+    Each queued response is either a bare int (an exit code, empty stdout --
+    what every call except the `docker ps` discriminator check needs) or a
+    `(code, stdout)` pair, for the one call that reads its output rather than
+    only its exit code.
+    """
+
+    def __init__(self, responses):
+        self.responses = list(responses)
         self.calls = []
 
-    def __call__(self, argv, check=False):
+    def __call__(self, argv, check=False, capture_output=False, text=False):
         self.calls.append(list(argv))
-        code = self.return_codes.pop(0) if self.return_codes else 0
-        return subprocess.CompletedProcess(argv, code)
+        response = self.responses.pop(0) if self.responses else 0
+        code, stdout = response if isinstance(response, tuple) else (response, "")
+        return subprocess.CompletedProcess(argv, code, stdout=stdout)
 
 
 class StackNameTests(unittest.TestCase):
@@ -148,6 +155,69 @@ class ReadCurrentImageTests(unittest.TestCase):
             self.assertEqual(bd.read_current_image(path), VALID_IMAGE)
 
 
+class PinnedImageIsUpTests(unittest.TestCase):
+    """The discriminator that decides whether a restart failure implicates
+    the image this call just pinned, as opposed to some other service in the
+    same stack. This is the fact the MySQL data-dictionary-downgrade case
+    turns on: mysqld starting cleanly on the new image while an unrelated
+    exporter fails its healthcheck must read as "the image is fine.\""""
+
+    def test_a_healthy_container_reads_as_up(self):
+        run = FakeRun([(0, "Up 5 seconds (healthy)")])
+        self.assertTrue(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_a_container_with_no_healthcheck_reads_as_up(self):
+        run = FakeRun([(0, "Up 12 seconds")])
+        self.assertTrue(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_an_unhealthy_container_reads_as_not_up(self):
+        run = FakeRun([(0, "Up 5 seconds (unhealthy)")])
+        self.assertFalse(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_an_exited_container_reads_as_not_up(self):
+        run = FakeRun([(0, "Exited (1) 3 seconds ago")])
+        self.assertFalse(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_a_restart_looping_container_reads_as_not_up(self):
+        run = FakeRun([(0, "Restarting (1) 2 seconds ago")])
+        self.assertFalse(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_no_matching_container_reads_as_not_up(self):
+        run = FakeRun([(0, "")])
+        self.assertFalse(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_a_failing_docker_ps_is_unknown_not_not_up(self):
+        # `None`, distinct from `False`: an inconclusive check must not read
+        # as evidence the image is at fault, or a caller could roll back on
+        # a guess exactly when it has the least information to do so safely.
+        run = FakeRun([(1, "")])
+        self.assertIsNone(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_one_bad_container_among_several_reads_as_not_up(self):
+        run = FakeRun([(0, "Up 5 seconds (healthy)\nExited (1) 1 second ago")])
+        self.assertFalse(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_filters_by_project_label_and_the_exact_image_reference(self):
+        run = FakeRun([(0, "Up 1 second")])
+        bd.pinned_image_is_up("edge", VALID_IMAGE, run=run)
+        self.assertEqual(
+            run.calls,
+            [
+                [
+                    "docker",
+                    "ps",
+                    "--all",
+                    "--filter",
+                    "label=com.docker.compose.project=edge",
+                    "--filter",
+                    f"ancestor={VALID_IMAGE}",
+                    "--format",
+                    "{{.Status}}",
+                ]
+            ],
+        )
+
+
 class DeployTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -214,7 +284,10 @@ class DeployTests(unittest.TestCase):
         previous = f"ghcr.io/branchleft/example@sha256:{'c' * 64}"
         self.deploy(previous, FakeRun([0]))
 
-        run = FakeRun([1, 1])
+        # [restart, discriminator docker ps, logger, rollback restart]. The
+        # discriminator reports the pinned image itself down, so the
+        # rollback proceeds -- and then that rollback restart also fails.
+        run = FakeRun([1, (0, "Exited (1) 2 seconds ago"), 0, 1])
         with self.assertRaises(bd.DeployError) as caught:
             self.deploy(VALID_IMAGE, run)
 
@@ -229,17 +302,78 @@ class DeployTests(unittest.TestCase):
         )
         self.assertNotIn("the stack is down", message)
         self.assertNotIn("needs an operator", message)
-        self.assertEqual(len(run.calls), 2)
+        self.assertEqual(len(run.calls), 4)
+        self.assertEqual(run.calls[3], ["systemctl", "restart", "branchleft-compose@edge"])
 
-    def test_failed_restart_rolls_back_to_previous_image(self):
+    def test_failed_restart_rolls_back_to_previous_image_when_the_pinned_image_is_down(
+        self,
+    ):
         previous = f"ghcr.io/branchleft/example@sha256:{'c' * 64}"
         self.deploy(previous, FakeRun([0]))
 
-        run = FakeRun([1, 0])
+        run = FakeRun([1, (0, "Exited (1) 2 seconds ago"), 0, 0])
         with self.assertRaises(bd.DeployError):
             self.deploy(VALID_IMAGE, run)
 
         self.assertEqual(bd.read_current_image(self.env_path()), previous)
+        self.assertEqual(len(run.calls), 4)
+        # Recorded to the host's own journal, independent of whoever is
+        # watching this process's stdout/stderr.
+        logger_calls = [call for call in run.calls if call[:2] == ["logger", "-t"]]
+        self.assertEqual(len(logger_calls), 1)
+        self.assertIn("edge", logger_calls[0][3])
+        self.assertIn(previous, logger_calls[0][3])
+
+    def test_failed_restart_leaves_the_pin_in_place_when_the_pinned_image_is_up(self):
+        previous = f"ghcr.io/branchleft/example@sha256:{'c' * 64}"
+        self.deploy(previous, FakeRun([0]))
+
+        # The stack-wide restart/wait failed, but a container running the
+        # image this call just pinned is up and not unhealthy -- the classic
+        # "MySQL came up fine, the exporter's healthcheck did not" case. The
+        # image is not what failed, so nothing here may rewrite the pin.
+        run = FakeRun([1, (0, "Up 5 seconds (healthy)")])
+        with self.assertRaises(bd.DeployError) as caught:
+            self.deploy(VALID_IMAGE, run)
+
+        message = str(caught.exception)
+        self.assertIn("left in place", message)
+        self.assertIn(VALID_IMAGE, message)
+        # No rollback: the pin this call wrote is still what is on disk, and
+        # there is no third (rollback restart) or `logger` call.
+        self.assertEqual(bd.read_current_image(self.env_path()), VALID_IMAGE)
+        self.assertEqual(len(run.calls), 2)
+        self.assertEqual(
+            run.calls[1],
+            [
+                "docker",
+                "ps",
+                "--all",
+                "--filter",
+                "label=com.docker.compose.project=edge",
+                "--filter",
+                f"ancestor={VALID_IMAGE}",
+                "--format",
+                "{{.Status}}",
+            ],
+        )
+
+    def test_failed_restart_leaves_the_pin_in_place_when_the_discriminator_is_inconclusive(
+        self,
+    ):
+        previous = f"ghcr.io/branchleft/example@sha256:{'c' * 64}"
+        self.deploy(previous, FakeRun([0]))
+
+        # `docker ps` itself errors (docker missing, daemon unreachable). No
+        # positive evidence the image is fine, but also none that it is at
+        # fault -- the safe default is to leave the pin and fail loud, not
+        # to guess by rolling back anyway.
+        run = FakeRun([1, 2])
+        with self.assertRaises(bd.DeployError) as caught:
+            self.deploy(VALID_IMAGE, run)
+
+        self.assertIn("could not be", str(caught.exception))
+        self.assertEqual(bd.read_current_image(self.env_path()), VALID_IMAGE)
         self.assertEqual(len(run.calls), 2)
 
     def test_failed_first_ever_deploy_removes_the_file_and_does_not_restart_again(self):
@@ -249,8 +383,14 @@ class DeployTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.env_path()))
         # A second restart would fail by construction with no pin file, so
         # the failure must be reported rather than dressed up as a rollback.
+        # The discriminator check does not run here either: there is no
+        # previous pin for it to protect.
         self.assertEqual(len(run.calls), 1)
-        self.assertIn("has never run", str(caught.exception))
+        message = str(caught.exception)
+        self.assertIn("does not mean the stack has never run", message)
+        self.assertIn(
+            "docker ps --filter label=com.docker.compose.project=edge", message
+        )
 
     def test_a_comment_mentioning_the_variable_does_not_satisfy_the_check(self):
         with open(

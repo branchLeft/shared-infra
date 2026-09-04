@@ -25,10 +25,16 @@ Three rules it exists to enforce:
   know about (`KNOWN_UNHEALTHCHECKED_SERVICES`) refuses the deploy rather
   than restart into a rollback that cannot fire; a known one only warns.
 
-On a failed restart the previous digest is restored and the unit restarted
-again, so a bad deploy leaves the host on the last image that worked rather
-than on a file describing an image that does not run. The health-signal
-refusal above is the one exception: it fires before either happens, so the
+On a failed restart, the previous digest is restored and the unit restarted
+again only when the pinned image's own container did not come up -- so a
+deploy whose image genuinely will not run leaves the host on the last image
+that worked rather than on a file describing one that does not. A failed
+restart whose pinned image *did* come up (some other service's healthcheck
+is what tripped `--wait`) leaves the pin alone and fails loudly instead:
+rewriting it would restart the whole stack onto an older image over a
+failure the image was not responsible for, which is not reversible for a
+stack whose data does not survive that cleanly. The health-signal refusal
+above is a separate, earlier exception: it fires before any of this, so the
 stack is left running whatever it already was.
 
 Two calling conventions, and the difference between them is which principal
@@ -382,6 +388,63 @@ def write_image_env(path: str, image: str) -> None:
         raise
 
 
+# Statuses `docker ps` reports for a container that is not usably up:
+# exited, restart-looping, never started, mid-removal, or failing its own
+# healthcheck. Matched against the whole status string rather than its
+# prefix alone because "(unhealthy)" is a suffix on an otherwise-"Up" line.
+_CONTAINER_NOT_UP = re.compile(r"^(?:Exited|Restarting|Created|Removal)|\(unhealthy\)")
+
+
+def pinned_image_is_up(stack: str, image: str, *, run=subprocess.run) -> bool | None:
+    """Whether a container running the image just pinned is up and not unhealthy.
+
+    This is the discriminator a rollback decision needs and the restart's exit
+    code alone cannot give: `systemctl restart` reports one bit for the whole
+    stack, so a `docker compose up -d --wait` that times out on one service's
+    healthcheck looks identical to one where the pinned image itself never
+    started. Filtering `docker ps` by the compose project label and the exact
+    image reference finds the specific container this pin is responsible for
+    without needing to parse the compose file for which service name owns
+    it -- the same reference this script already validated and wrote is what
+    Compose reports back verbatim as that container's image.
+
+    `--all` is required, not cosmetic: a container whose image never came up
+    at all -- the case that should still trigger a rollback -- exited before
+    this runs and would otherwise not appear, reading as "no evidence against
+    the image" instead of the evidence it actually is.
+
+    Returns `None`, not `False`, when the check itself could not be run --
+    `docker` missing, the daemon unreachable, an unexpected filter error.
+    Callers must not treat the two the same: `False` is positive evidence the
+    image is at fault, grounds to roll back a pin nothing else can safely
+    undo; `None` is no evidence at all, and guessing "at fault" from an
+    absence of information is exactly the conflation this function exists to
+    remove.
+    """
+    result = run(
+        [
+            "docker",
+            "ps",
+            "--all",
+            "--filter",
+            f"label=com.docker.compose.project={stack}",
+            "--filter",
+            f"ancestor={image}",
+            "--format",
+            "{{.Status}}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    statuses = [line for line in result.stdout.splitlines() if line.strip()]
+    if not statuses:
+        return False
+    return not any(_CONTAINER_NOT_UP.search(status) for status in statuses)
+
+
 def deploy(
     stack: str,
     image: str,
@@ -463,15 +526,71 @@ def deploy(
     if previous is None:
         # Nothing to roll back to. The unit's EnvironmentFile for the pin
         # carries no leading dash, so it cannot start without one at all --
-        # restarting here would fail by construction and turn a first-deploy
-        # failure into a misleading report about a stack that was never up.
+        # restarting here would fail by construction, so this does not retry.
+        # It also must not assert what that failure means: a failed oneshot
+        # restart runs ExecStopPost, never ExecStop, so containers from an
+        # earlier successful start can still be up with initialised data
+        # regardless of what this restart's exit code says about the unit.
         os.unlink(env_path)
         raise DeployError(
             f"branchleft-compose@{stack} failed to start on {image}, and there "
-            "was no previous pin to fall back to; the stack has never run"
+            "was no previous pin to fall back to. This does not mean the stack "
+            "has never run or is down now -- check `docker ps --filter "
+            f"label=com.docker.compose.project={stack}` before running "
+            "anything destructive against it"
+        )
+
+    # "The restart failed" and "the new image is why" are not the same fact:
+    # `docker compose up -d --wait` fails the whole restart if any service's
+    # healthcheck does not pass in time, including one that has nothing to do
+    # with the image this call pinned. Rewriting the pin back to `previous`
+    # restarts every container in the stack onto an older image, which is not
+    # reversible for one whose data survives no such restart cleanly -- a
+    # database that already upgraded its on-disk format under the new image
+    # cannot be talked back down. So a rollback only happens on positive
+    # evidence the pinned image itself is the problem; anything else fails
+    # loudly with the pin left exactly as this call wrote it, for an operator
+    # to resolve deliberately rather than have it guessed at.
+    image_status = pinned_image_is_up(stack, image, run=run)
+    if image_status is None:
+        raise DeployError(
+            f"branchleft-compose@{stack} restart reported failure, and "
+            "whether the newly pinned image itself came up could not be "
+            "checked (`docker ps` failed); the pin was left in place rather "
+            "than rolled back on a guess. Check `docker compose -p "
+            f"{stack} ps` by hand before deciding anything"
+        )
+    if image_status:
+        raise DeployError(
+            f"branchleft-compose@{stack} restart reported failure, but a "
+            f"container running the newly pinned {image} is up and not "
+            "unhealthy; the failure does not implicate that image, so the "
+            "pin was left in place rather than rolled back. Check `docker "
+            f"compose -p {stack} ps` for which service actually failed its "
+            "wait"
         )
 
     write_image_env(env_path, previous)
+    # A rollback rewrites host state that nothing else records: the image
+    # pin file is overwritten with no history, and the restart that follows
+    # looks like any other unit start in `journalctl -u
+    # branchleft-compose@<stack>`. Without this, the only evidence a
+    # rollback happened at all is this process's own stdout/stderr, visible
+    # only to whoever ran the deploy and only for as long as that log is
+    # kept -- an operator checking the host later, or a monitor watching
+    # only whether the unit is active, would see a healthy restart and
+    # nothing else. `logger` puts the same fact in the host's own journal,
+    # independent of the calling channel.
+    run(
+        [
+            "logger",
+            "-t",
+            "branchleft-deploy",
+            f"{stack}: automatic rollback from {image} to {previous} -- "
+            "restart failed and the pinned image's own container was not up",
+        ],
+        check=False,
+    )
 
     # The rollback's own outcome decides what this reports. Asserting a
     # recovery that did not happen is worse than reporting the original
