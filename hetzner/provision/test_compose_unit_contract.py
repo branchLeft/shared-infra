@@ -185,6 +185,7 @@ SCANNED_SUFFIXES = frozenset(
         ".py",
         ".service",
         ".sh",
+        ".timer",
         ".tmpl",
         ".ts",
         ".yaml",

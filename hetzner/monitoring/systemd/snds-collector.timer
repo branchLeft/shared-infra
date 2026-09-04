@@ -1,0 +1,21 @@
+# Installed at /etc/systemd/system/snds-collector.timer alongside
+# snds-collector.service -- see that file's header for why this pair is not
+# handled by install-systemd-drop-ins.sh.
+[Unit]
+Description=Run the SNDS reputation collector on a schedule
+
+[Timer]
+OnBootSec=10min
+# SNDS itself refreshes at most once a day, at a time Microsoft does not
+# document -- 6h gives several chances to catch a fresh day's data soon
+# after it publishes, and several chances to succeed against a bearer token
+# that Rob refreshes by hand (see RUNBOOK-monitoring.md): a token minted once
+# near the start of a working day, then expired for the day's later runs, is
+# not indistinguishable from every run failing. Persistent=true covers a
+# missed run across a host reboot; SNDSCollectorStale (render.ts) is the
+# backstop if every run in a 36h window fails regardless of cause.
+OnUnitActiveSec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

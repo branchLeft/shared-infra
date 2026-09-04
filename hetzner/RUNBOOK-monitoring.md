@@ -253,15 +253,16 @@ shared unit template), and it is also what
 that script's docstring for why Alertmanager's own config format cannot read
 an environment variable itself, unlike Caddy's `{env.X}`.
 
-| Variable                     | Used by                                                                                  | Where the value comes from                                                                                                                                                                                                                                                                                                            |
-| ---------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SMTP_USERNAME`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                        |
-| `SMTP_PASSWORD`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                        |
-| `HEALTHCHECKS_PING_URL`      | Alertmanager (via the render script)                                                     | The Healthchecks.io check's ping URL (PR's handover steps)                                                                                                                                                                                                                                                                            |
-| `ALERT_RECIPIENT_EMAIL`      | Alertmanager (via the render script)                                                     | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too                                                                                                                                                                            |
-| `MAILHOST_PING_URL`          | Alertmanager (via the render script)                                                     | A second, dedicated Healthchecks.io check's `/fail` endpoint -- hitting `/fail` marks it down immediately rather than waiting for a missed heartbeat. Routed to by `MailHostDown` and `AlertEmailDeliveryFailing` only (see `mailhost-deadman` in `renderAlertmanagerTemplate()`), never by anything else                             |
-| `GRAFANA_ADMIN_PASSWORD`     | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`)                                            | Generated fresh, stored in the password manager                                                                                                                                                                                                                                                                                       |
-| `STALWART_PROMETHEUS_SECRET` | Prometheus (via the render script, as the `stalwart` job's `basic_auth` `password_file`) | `/opt/stalwart/.env` on mx1, minted by `mail/provision/30-deploy-stalwart.sh` -- see `mail/RUNBOOK-mx1-prometheus-metrics.md`. **The one row here that is not fatal when absent**: the render script warns on stderr and removes any stale file, Prometheus starts normally, and the `stalwart` target reports `down` until it is set |
+| Variable                     | Used by                                                                                  | Where the value comes from                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SMTP_USERNAME`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `SMTP_PASSWORD`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `HEALTHCHECKS_PING_URL`      | Alertmanager (via the render script)                                                     | The Healthchecks.io check's ping URL (PR's handover steps)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `ALERT_RECIPIENT_EMAIL`      | Alertmanager (via the render script)                                                     | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `MAILHOST_PING_URL`          | Alertmanager (via the render script)                                                     | A second, dedicated Healthchecks.io check's `/fail` endpoint -- hitting `/fail` marks it down immediately rather than waiting for a missed heartbeat. Routed to by `MailHostDown` and `AlertEmailDeliveryFailing` only (see `mailhost-deadman` in `renderAlertmanagerTemplate()`), never by anything else                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `GRAFANA_ADMIN_PASSWORD`     | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`)                                            | Generated fresh, stored in the password manager                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `STALWART_PROMETHEUS_SECRET` | Prometheus (via the render script, as the `stalwart` job's `basic_auth` `password_file`) | `/opt/stalwart/.env` on mx1, minted by `mail/provision/30-deploy-stalwart.sh` -- see `mail/RUNBOOK-mx1-prometheus-metrics.md`. **The one row here that is not fatal when absent**: the render script warns on stderr and removes any stale file, Prometheus starts normally, and the `stalwart` target reports `down` until it is set                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `SNDS_BEARER_TOKEN`          | `snds/collect_snds_metrics.py`, run by `snds-collector.timer` (§14)                      | The SNDS portal at `sendersupport.olc.protection.outlook.com`, signed in as the registered sender. **Not a long-lived key**: Microsoft retired the static `?key=` automated-access URL in June 2026: the replacement is an OAuth bearer token tied to the portal login, observed to last on the order of hours, with no `refresh_token` Microsoft issues for unattended renewal. There is no automation for this repo to run: the operator re-generates it from the portal by hand and pastes the new value in here. A stale or absent token fails only the collector's own run (leaves the previous textfile output in place, per that script's docstring); `SNDSCollectorStale` (`render.ts`) pages once 36 hours pass with no successful refresh |
 
 **This step now writes five secrets, not four -- `MAILHOST_PING_URL` is as
 required as the other three Alertmanager variables.**
@@ -676,6 +677,94 @@ the rollback also needs to undo an edge-side change (the metrics endpoints
 or the cgroup containment), the same pattern applies to
 `hetzner/edge/stack`, followed by `systemctl restart branchleft-compose@edge`.
 
+## 14. Deploy the SNDS complaint-rate collector
+
+`snds/collect_snds_metrics.py` is copied to the host as part of step 4's
+`hetzner/monitoring/stack/` rsync (it lives under that directory). This
+section is everything specific to it on top of that: the bearer token,
+node-exporter's textfile-collector mount, and the systemd timer that actually
+runs it.
+
+**First, get a bearer token.** Sign in to the SNDS portal at
+`https://sendersupport.olc.protection.outlook.com/snds/` as the registered
+sender and generate an API token for the IP status/data endpoint. This is a
+manual, recurring step, not a one-time credential: Microsoft's current API has
+no `refresh_token`, and community reports put the token's life at roughly 8
+hours, so a token minted once will go stale well inside the collector's own
+24-36h alerting window. Write it into `/etc/branchleft/monitoring.env` as
+`SNDS_BEARER_TOKEN` (§3's table), the same file every other stack secret
+lives in -- there is no separate credential file for this one.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+  grep -q "^SNDS_BEARER_TOKEN=" /etc/branchleft/monitoring.env &&
+  sed -i "s|^SNDS_BEARER_TOKEN=.*|SNDS_BEARER_TOKEN=<TOKEN>|" /etc/branchleft/monitoring.env ||
+  printf "SNDS_BEARER_TOKEN=%s\n" "<TOKEN>" >> /etc/branchleft/monitoring.env'
+```
+
+This does not restart anything -- `snds-collector.service` reads the file
+fresh on its next scheduled run, unlike Alertmanager's secrets, which need a
+stack restart. A stale or absent token fails only that one run;
+`SNDSCollectorStale` (§8's target-verification list has no matching entry
+for this one, since it does not run as a Prometheus scrape target -- see
+"What this stack deliberately does not do" below) pages once 36 hours pass
+with no successful fetch.
+
+**Then install the timer.** Not covered by step 5's
+`install-systemd-drop-ins.sh` -- that script only installs `*.override.conf`
+drop-ins for units this stack's template already defines, and
+`snds-collector.service`/`.timer` are standalone units of their own.
+
+```bash
+scp -i ~/.ssh/id_ed25519_hetzner \
+  hetzner/monitoring/systemd/snds-collector.service \
+  hetzner/monitoring/systemd/snds-collector.timer \
+  root@46.225.95.167:/etc/systemd/system/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+  systemctl daemon-reload &&
+  systemctl enable --now snds-collector.timer'
+```
+
+**Node-exporter needs its textfile-collector directory to exist before it
+next starts**, or the mount is empty and the metric families below simply do
+not appear -- not an error, just silent absence, indistinguishable at a
+glance from a collector that has not run yet.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+  install -d -m 0755 -o root -g root /var/lib/branchleft/snds-exporter'
+```
+
+Do this before step 7's restart of the monitoring stack, so node-exporter's
+bind mount (`compose.yml`) resolves against a real directory on first start
+rather than Docker creating an empty one that then needs a container
+recreation to pick up.
+
+**Verify.**
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+  systemctl start snds-collector.service &&
+  systemctl status snds-collector.service --no-pager &&
+  cat /var/lib/branchleft/snds-exporter/snds.prom'
+```
+
+A successful run prints `collect_snds_metrics: wrote N IP record(s)` and the
+file carries `snds_collector_last_success_timestamp_seconds` at or near the
+current time. Then confirm Prometheus is reading it back through
+node-exporter, over the tunnel from step 8:
+
+```bash
+curl -s --get http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=snds_collector_last_success_timestamp_seconds'
+```
+
+Expect one series with a recent value. `snds_complaint_rate` and
+`snds_reputation_status` only appear once SNDS has actually listed an IP with
+that data -- an empty result for either on a freshly-registered sender is not
+a fault, `time() - snds_collector_last_success_timestamp_seconds` moving is
+the proof the pipeline itself works end to end.
+
 ## Responding to the mail-delivery alerts
 
 Three rules read Stalwart's own counters from the `stalwart` job. They answer
@@ -707,8 +796,10 @@ listing, which shows up as rejections concentrated on one provider.
 This is the **closest available proxy** for sender reputation, not a measure
 of it. Complaint rate -- the number an ESP would quote -- is reported by
 receiving providers through out-of-band feedback loops, and no self-hosted MTA
-can observe it. If a real complaint rate is ever needed, it comes from Google
-Postmaster Tools and Microsoft SNDS, not from here.
+can observe it. The real complaint rate for Outlook.com/Hotmail recipients is
+Microsoft's own Smart Network Data Services (SNDS) feed, covered below. Gmail's
+equivalent, Google Postmaster Tools, is a separate, deliberately deferred story
+(branchLeft/workspace#494).
 
 **`MailDeliveryMetricsMissing`** -- the scrape succeeds and publishes no
 `delivery_completed` at all. Nothing is wrong with mail; the two rules above
@@ -718,6 +809,45 @@ its metrics level reconfigured, then correct the metric names in
 `monitoring/render.ts` and re-run the deploy. The rules are covered by
 `monitoring/alert_rules_test.yml`, so a name change should be made there
 first and watched to fail.
+
+## Responding to the SNDS complaint-rate alerts
+
+Unlike every alert above, these three read a value Microsoft computed, not a
+counter this platform emits -- and Microsoft refreshes it at most once a day.
+Treat every timestamp on these as "as of Microsoft's last publish", not "as
+of now".
+
+**`SNDSComplaintRateHigh`** -- over 0.1% of mail from an IP was marked as
+junk by an Outlook.com/Hotmail recipient, on at least 50 messages. This is
+the signal `MailDeliveryFailureRatioHigh` structurally cannot be: a message
+that is accepted, delivered, and then marked as junk by its recipient never
+touches any of Stalwart's own delivery counters, which is exactly the shape
+of a magic-link signup flood landing on real, harvested addresses
+(branchLeft/workspace#222). Check the volume alerts
+(`MailDeliveryVolumeSpike`, `RateLimitDecliningRealClients`) for the same
+period first -- a real complaint spike from a flood usually arrives a day
+after the volume spike that caused it, not alongside it.
+
+**`SNDSReputationRed`** -- Microsoft's own filter-result classification for
+an IP is red: most or all mail from it is being routed straight to Junk,
+independent of whatever numeric complaint rate is also on record. Read this
+one first if both fire together -- a red status is Microsoft's own summary
+judgement, and the complaint-rate figure is one input to it among others
+this platform cannot see (spam-trap hits, volume trends, complaint history).
+
+**`SNDSCollectorStale`** -- the two rules above have gone quiet, and not
+because reputation is clean: the collector has not published a fresh
+snapshot in 36 hours, or has never once succeeded. Almost always the bearer
+token (§14) -- re-generate it from the SNDS portal and update
+`SNDS_BEARER_TOKEN` in `/etc/branchleft/monitoring.env`, then confirm with
+`systemctl start snds-collector.service` and `systemctl status
+snds-collector.service --no-pager`. If the token is current and the run
+still fails, check whether Microsoft has changed the response format again
+-- `snds/collect_snds_metrics.py`'s `parse_snds_response` is deliberately
+defensive (skips a malformed line rather than raising) but a wholesale
+schema change still yields zero parsed records, which reads as "no
+reputation data available", not as a fault of its own; watch the run's own
+stderr for skipped-line warnings.
 
 ## What this stack deliberately does not do
 
@@ -738,6 +868,15 @@ first and watched to fail.
   per-tenant p95 latency, shim queue drain time). Doc 14 §9.2 and §4 name
   these as later, separately-scoped additions; this story covers the host
   and platform-component layer only.
+- **It does not collect Google Postmaster Tools data.** Gmail's equivalent of
+  SNDS needs per-domain OAuth against a separate Google API, approved in
+  principle but deliberately deferred until a second tenant domain or
+  load-bearing Gmail volume makes it worth building -- branchLeft/workspace#494.
+- **It does not automate SNDS bearer-token renewal.** Microsoft's current API
+  issues no `refresh_token`, so there is nothing this repo could poll or
+  rotate on a schedule; §14's manual re-generation is the only mechanism that
+  exists today, and `SNDSCollectorStale` is what makes a lapsed renewal
+  visible rather than silently indistinguishable from a clean reputation.
 - **It does not rely on `--cgroup-parent`/`Delegate=yes` to nest containers
   under either systemd unit.** That would make the unit-level `MemoryMax`
   genuinely bound the containers, but it depends on the host's configured
