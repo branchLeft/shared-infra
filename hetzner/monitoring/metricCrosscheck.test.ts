@@ -129,6 +129,17 @@ describe('extractEmittedMetrics', () => {
       { name: 'fixture_last_run_seconds', labelKeys: new Set() },
     ]);
   });
+
+  it('reads a # TYPE line one quote character short of the line start, the shape a Python string-literal list produces', () => {
+    // A collector builds its exposition lines as
+    // `lines = ["# TYPE name gauge"]`, so the `#` a real scrape would see
+    // sits one quote character in from where a bare source-code comment
+    // would start -- a pattern requiring `#` at the line start misses it.
+    const source = ['        "# TYPE fixture_widget_count gauge",'].join('\n');
+    expect(extractEmittedMetrics(source)).toEqual([
+      { name: 'fixture_widget_count', labelKeys: new Set() },
+    ]);
+  });
 });
 
 /**

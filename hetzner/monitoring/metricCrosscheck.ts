@@ -139,7 +139,11 @@ export function extractAllQueriedMetrics(rulesYamlText: string): Map<string, Set
   return result;
 }
 
-const TYPE_DECLARATION = /^\s*#\s*TYPE\s+([a-zA-Z_:][a-zA-Z0-9_:]*)\s+\S+/;
+// An optional leading quote: the `# TYPE` marker is not a Python comment in
+// a collector like this -- it is exposition-format text the script writes,
+// so in the source it sits inside a string literal (`"# TYPE name gauge"`),
+// one quote character ahead of the `#` a real Prometheus scrape would see.
+const TYPE_DECLARATION = /^\s*['"]?#\s*TYPE\s+([a-zA-Z_:][a-zA-Z0-9_:]*)\s+\S+/;
 
 /** The label keys a collector's own source uses on a value-emitting line for
  * `name` -- matched on `name{{...}}`, the doubled-brace shape an f-string
