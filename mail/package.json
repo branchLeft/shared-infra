@@ -8,10 +8,10 @@
   "comment": "@pulumi/hcloud is pinned exactly, not caret-ranged, for the same reason branchleft-shared-infra pins @pulumi/gcp: the default provider's version is part of every resource's URN, and this stack's first `pulumi import` needs the provider version stable across that operation and every preview afterwards. Bump deliberately, after an import has landed, and read the preview.",
   "dependencies": {
     "@pulumi/hcloud": "1.41.0",
-    "@pulumi/pulumi": "^3.255.0"
+    "@pulumi/pulumi": "^3.260.0"
   },
   "devDependencies": {
-    "@branchleft/tsconfig": "^0.3.1",
+    "@branchleft/tsconfig": "^0.4.0",
     "@types/node": "^26",
     "typescript": "^5.9.0"
   }
