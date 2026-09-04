@@ -27,13 +27,20 @@ which fires on a non-zero `systemctl restart` and nothing else -- never runs.
 That is invisible to `docker compose config` and to the config-validation jobs,
 because none of them start a container.
 
-Nothing else backs that up. There is no post-start assertion in the unit to
-fall back on, so a service with no health signal has none at all -- which is
-why there is no exemption table here at all, empty or otherwise. The only way
-past the assertion is `IMAGE_PROVIDED_HEALTHCHECK`, which claims the image
-carries a probe rather than that none is needed. Excusing a service outright
-would mean writing a second register and the tests that police it, which is a
-visible decision rather than one more key in a dict somebody already trusts.
+The only way past the assertion below is `IMAGE_PROVIDED_HEALTHCHECK`, which
+claims the image carries a probe rather than that none is needed. Excusing a
+service outright would mean writing a second register and the tests that
+police it, which is a visible decision rather than one more key in a dict
+somebody already trusts.
+
+This module's assertion only reaches a stack whose Compose file is committed
+in this repository, at test time. `branchleft_deploy.py`'s `deploy()` reads
+the same `healthcheck_states()` a second time, at deploy time, for whatever
+stack is about to be restarted -- committed here or not, including a stack
+this module has never heard of. Its own exemption table,
+`KNOWN_UNHEALTHCHECKED_SERVICES`, is what backs a gap this module finds; it
+lives beside `deploy()` rather than here because a gap this module cannot see
+at all still has to be decided by something that can.
 
 The third contract is the reach of the first two, and it is the one a glob
 cannot state. `branchleft-compose@.service` is installed by
@@ -57,6 +64,14 @@ import re
 import unittest
 
 import branchleft_deploy as bd
+from branchleft_deploy import (
+    ABSENT,
+    DECLARED,
+    DISABLED,
+    IMAGE_PROVIDED_HEALTHCHECK,
+    ComposeParseError,
+    healthcheck_states,
+)
 
 HETZNER = pathlib.Path(__file__).resolve().parent.parent
 
@@ -70,58 +85,6 @@ RESET_DIRECTIVE = "EnvironmentFile="
 # position so a stack whose only variable is the pin is correctly read as
 # needing no secrets.
 COMPOSE_VARIABLE = re.compile(r"\$\{(?!IMAGE[}:])([A-Za-z_][A-Za-z0-9_]*)")
-
-# A top-level mapping key: column 0, so `services:` is told from a key nested
-# under it. Quoted and space-before-colon spellings are matched because YAML
-# accepts them and a `services:` this missed would end the section early,
-# leaving the rest of the file unread.
-TOP_LEVEL_KEY = re.compile(r"""\A(?P<quote>["']?)(?P<key>[A-Za-z0-9_.-]+)(?P=quote)\s*:""")
-
-# A service name under `services:`, at Compose's two-space nesting. Matched at
-# a fixed indent rather than by name so a service added at the wrong depth --
-# which Compose would not read as a service at all -- is not silently counted
-# as one that has a healthcheck.
-SERVICE_INDENT = 2
-SERVICE_HEADER = re.compile(rf"\A {{{SERVICE_INDENT}}}([A-Za-z0-9][A-Za-z0-9_.-]*):\s*\Z")
-
-# The healthcheck key of a service, with whatever follows it on the same line:
-# `healthcheck: {disable: true}` is a declaration that switches the check off,
-# and reads as one that turns it on unless the inline value is looked at.
-HEALTHCHECK_INDENT = 4
-HEALTHCHECK_HEADER = re.compile(rf"\A {{{HEALTHCHECK_INDENT}}}healthcheck:(?P<inline>.*)\Z")
-
-# The two ways Compose switches a healthcheck off. Both leave the `healthcheck:`
-# key in place, so a check for the key alone reads either as a declared probe --
-# and for a service whose image supplies one, `disable: true` is what removes
-# the only probe it has.
-HEALTHCHECK_DISABLED = re.compile(r"\bdisable:\s*(?:true|yes|on)\b", re.IGNORECASE)
-HEALTHCHECK_TEST_NONE = re.compile(
-    r"""\btest:\s*(?:\[\s*)?["']?NONE["']?\s*\]?\s*(?=[,}]|\Z)"""
-    r"""|\A\s*-\s*["']?NONE["']?\s*\Z"""
-)
-
-# The three states a service can be in, kept apart because "no healthcheck key"
-# and "healthcheck key that turns the probe off" mean opposite things for a
-# service whose image ships its own.
-ABSENT, DECLARED, DISABLED = "absent", "declared", "disabled"
-
-# Services whose image carries its own `HEALTHCHECK` instruction, so Compose
-# already waits for *healthy* without the Compose file restating it. Docker
-# reports these as `Up (healthy)` exactly as a Compose-declared one does, which
-# is why a stack can look uniformly healthy while most of it is not covered.
-#
-# Listed rather than detected: reading an image's metadata needs a Docker
-# daemon and a pulled image, which this suite deliberately has neither of. The
-# cost of that is a stale entry here if an image drops its healthcheck, which is
-# what `test_every_named_service_still_exists` bounds.
-IMAGE_PROVIDED_HEALTHCHECK: dict[tuple[str, str], str] = {
-    ("monitoring", "cadvisor"): (
-        "ghcr.io/google/cadvisor ships HEALTHCHECK CMD-SHELL /usr/bin/healthcheck.sh. "
-        "Left to the image rather than restated here: a Compose-level healthcheck "
-        "replaces the image's outright, so restating it would swap a probe cAdvisor "
-        "maintains for one this repository would have to."
-    ),
-}
 
 # Every service the parser must find, per stack. An exact set rather than a
 # sample: a parser that quietly skipped one would otherwise leave that service
@@ -337,82 +300,6 @@ def stacks_named_in_this_repository() -> dict[str, set[str]]:
         stack = drop_in.name.removesuffix(".override.conf")
         found.setdefault(stack, set()).add(str(drop_in.relative_to(REPOSITORY)))
     return found
-
-
-class ComposeParseError(AssertionError):
-    """A line under `services:` the parser cannot classify.
-
-    Raised rather than skipped. The parser is a regex over indentation, so the
-    forms it does not understand -- a YAML anchor on the service header, an
-    inline mapping, a different nesting depth -- all look identical to "this
-    service has no healthcheck key yet". Skipping them silently empties the
-    result, and an empty result passes every assertion below.
-    """
-
-
-def healthcheck_states(compose_text: str) -> dict[str, str]:
-    """Every service in `services:`, mapped to `ABSENT`, `DECLARED` or `DISABLED`.
-
-    Regex rather than a YAML parse to keep this module stdlib-only, matching how
-    the image-pin half above reads the same files. Takes text rather than a path
-    so the shapes it must reject can be tested against fixtures.
-
-    Shapes it cannot classify raise. The one gap it cannot raise on is a
-    top-level key it fails to recognise at all, which would end the `services:`
-    section early and leave the rest of the file unread -- `EXPECTED_SERVICES`
-    is the backstop for that, because the services after it would go missing.
-    """
-    states: dict[str, str] = {}
-    current: str | None = None
-    in_services = False
-    healthcheck_block_of: str | None = None
-    for raw in bd.strip_yaml_comments(compose_text).splitlines():
-        if not raw.strip():
-            continue
-        top_level = TOP_LEVEL_KEY.match(raw)
-        if top_level:
-            in_services = top_level.group("key") == "services"
-            current = None
-            healthcheck_block_of = None
-            continue
-        if not in_services:
-            continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        if indent <= SERVICE_INDENT:
-            header = SERVICE_HEADER.match(raw)
-            if header is None:
-                raise ComposeParseError(
-                    f"cannot read {raw!r} as a service header. Every key directly "
-                    "under `services:` must be a bare `  name:` on its own line."
-                )
-            current = header.group(1)
-            states[current] = ABSENT
-            healthcheck_block_of = None
-            continue
-        if current is None:
-            raise ComposeParseError(
-                f"{raw!r} is nested under `services:` at indent {indent} with no "
-                "service header above it. Compose services nest at two spaces; a "
-                "different depth means this parser is reading a shape it was not "
-                "written for."
-            )
-        if healthcheck_block_of is not None and indent <= HEALTHCHECK_INDENT:
-            healthcheck_block_of = None
-        header = HEALTHCHECK_HEADER.match(raw)
-        if header:
-            inline = header.group("inline")
-            states[current] = (
-                DISABLED
-                if HEALTHCHECK_DISABLED.search(inline) or HEALTHCHECK_TEST_NONE.search(inline)
-                else DECLARED
-            )
-            healthcheck_block_of = current
-            continue
-        if healthcheck_block_of is not None and (
-            HEALTHCHECK_DISABLED.search(raw) or HEALTHCHECK_TEST_NONE.search(raw)
-        ):
-            states[healthcheck_block_of] = DISABLED
-    return states
 
 
 def stack_states() -> dict[str, dict[str, str]]:

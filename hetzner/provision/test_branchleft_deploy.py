@@ -7,6 +7,7 @@ convenience behaviour, and both are covered here rather than left to a live
 deploy to discover.
 """
 
+import contextlib
 import io
 import os
 import stat
@@ -158,7 +159,13 @@ class DeployTests(unittest.TestCase):
         with open(
             os.path.join(self.stack_dir, "edge", "compose.yml"), "w", encoding="utf-8"
         ) as handle:
-            handle.write("services:\n  app:\n    image: ${IMAGE}\n")
+            handle.write(
+                "services:\n"
+                "  app:\n"
+                "    image: ${IMAGE}\n"
+                "    healthcheck:\n"
+                "      test: ['CMD', 'true']\n"
+            )
 
     def deploy(self, image, run):
         bd.deploy(
@@ -487,6 +494,191 @@ class FailOpenImageReferenceTests(unittest.TestCase):
                     )
                 self.assertIn("survives an empty pin", str(raised.exception))
                 self.assertEqual(os.listdir(config_dir), [])
+
+
+class HealthSignalGapsTests(unittest.TestCase):
+    """`deploy()`'s judgement call: refuse a gap nobody has reviewed, warn on
+    one that has (`KNOWN_UNHEALTHCHECKED_SERVICES`), and leave an
+    image-provided probe alone."""
+
+    def test_a_fully_probed_stack_has_no_gaps(self):
+        text = (
+            "services:\n"
+            "  app:\n"
+            "    image: ${IMAGE}\n"
+            "    healthcheck:\n"
+            "      test: ['CMD', 'true']\n"
+        )
+        self.assertEqual(bd.health_signal_gaps("edge", text), ([], []))
+
+    def test_an_unreviewed_absent_healthcheck_is_refused(self):
+        text = "services:\n  app:\n    image: ${IMAGE}\n"
+        self.assertEqual(bd.health_signal_gaps("edge", text), (["app (absent)"], []))
+
+    def test_a_disabled_healthcheck_is_refused_the_same_as_absent(self):
+        text = (
+            "services:\n"
+            "  app:\n"
+            "    image: ${IMAGE}\n"
+            "    healthcheck:\n"
+            "      disable: true\n"
+        )
+        self.assertEqual(bd.health_signal_gaps("edge", text), (["app (disabled)"], []))
+
+    def test_a_reviewed_gap_warns_rather_than_refuses(self):
+        text = "services:\n  website-metrics:\n    image: ${IMAGE}\n"
+        self.assertEqual(
+            bd.health_signal_gaps("website", text), ([], ["website-metrics (absent)"])
+        )
+
+    def test_the_db_stack_gap_is_also_reviewed(self):
+        text = "services:\n  mysqld-exporter:\n    image: ${IMAGE}\n"
+        self.assertEqual(
+            bd.health_signal_gaps("db", text), ([], ["mysqld-exporter (absent)"])
+        )
+
+    def test_an_image_provided_healthcheck_is_neither_refused_nor_warned(self):
+        text = "services:\n  cadvisor:\n    image: ${IMAGE}\n"
+        self.assertEqual(bd.health_signal_gaps("monitoring", text), ([], []))
+
+    def test_the_exemption_is_a_stack_service_pair_not_a_bare_service_name(self):
+        """`website-metrics` is only reviewed for the `website` stack -- the
+        same service name under a different stack is an unreviewed gap."""
+        text = "services:\n  website-metrics:\n    image: ${IMAGE}\n"
+        self.assertEqual(
+            bd.health_signal_gaps("blog", text), (["website-metrics (absent)"], [])
+        )
+
+    def test_one_unprobed_service_among_several_probed_ones_is_still_caught(self):
+        text = (
+            "services:\n"
+            "  probed:\n"
+            "    image: a\n"
+            "    healthcheck:\n"
+            "      test: ['CMD', 'true']\n"
+            "  bare:\n"
+            "    image: b\n"
+        )
+        self.assertEqual(bd.health_signal_gaps("edge", text), (["bare (absent)"], []))
+
+    def test_a_shape_the_parser_cannot_read_raises_rather_than_reporting_no_gaps(self):
+        """An anchored service header is invalid input to `healthcheck_states`,
+        not a stack with a clean bill of health -- `deploy()` is the layer that
+        decides what an unreadable file means for the check as a whole."""
+        text = "services:\n  app: &app\n    image: ${IMAGE}\n"
+        with self.assertRaises(bd.ComposeParseError):
+            bd.health_signal_gaps("edge", text)
+
+
+class DeployHealthSignalTests(unittest.TestCase):
+    """The behaviour `deploy()` wraps `health_signal_gaps` in: refuse before
+    any filesystem or systemd change, warn to stderr and proceed for a
+    reviewed gap, and never crash on a file the parser cannot read."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.config_dir = os.path.join(self.directory.name, "etc")
+        self.stack_dir = os.path.join(self.directory.name, "opt")
+        os.makedirs(self.config_dir)
+
+    def write_compose(self, stack, text):
+        directory = os.path.join(self.stack_dir, stack)
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "compose.yml"), "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def deploy(self, stack, run):
+        bd.deploy(
+            stack, VALID_IMAGE, config_dir=self.config_dir, stack_dir=self.stack_dir, run=run
+        )
+
+    def test_refuses_an_unreviewed_gap_before_writing_the_pin_or_restarting(self):
+        self.write_compose("edge", "services:\n  app:\n    image: ${IMAGE}\n")
+        run = FakeRun([0])
+        with self.assertRaises(bd.DeployError) as caught:
+            self.deploy("edge", run)
+        self.assertIn("app (absent)", str(caught.exception))
+        self.assertFalse(os.path.exists(bd.image_env_path("edge", self.config_dir)))
+        self.assertEqual(run.calls, [])
+
+    def test_refuses_when_only_one_of_several_services_lacks_a_probe(self):
+        self.write_compose(
+            "edge",
+            "services:\n"
+            "  probed:\n"
+            "    image: a\n"
+            "    healthcheck:\n"
+            "      test: ['CMD', 'true']\n"
+            "  bare:\n"
+            "    image: ${IMAGE}\n",
+        )
+        run = FakeRun([0])
+        with self.assertRaises(bd.DeployError) as caught:
+            self.deploy("edge", run)
+        self.assertIn("bare (absent)", str(caught.exception))
+        self.assertNotIn("probed", str(caught.exception))
+        self.assertEqual(run.calls, [])
+
+    def test_a_reviewed_gap_warns_and_still_deploys(self):
+        self.write_compose("website", "services:\n  website-metrics:\n    image: ${IMAGE}\n")
+        run = FakeRun([0])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.deploy("website", run)
+        self.assertEqual(len(run.calls), 1)
+        self.assertEqual(
+            bd.read_current_image(bd.image_env_path("website", self.config_dir)), VALID_IMAGE
+        )
+        message = stderr.getvalue()
+        self.assertIn("website-metrics", message)
+        self.assertIn("KNOWN_UNHEALTHCHECKED_SERVICES", message)
+
+    def test_an_image_provided_healthcheck_deploys_with_no_warning_at_all(self):
+        self.write_compose("monitoring", "services:\n  cadvisor:\n    image: ${IMAGE}\n")
+        run = FakeRun([0])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.deploy("monitoring", run)
+        self.assertEqual(len(run.calls), 1)
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_a_stack_with_every_service_probed_deploys_with_no_warning_at_all(self):
+        self.write_compose(
+            "edge",
+            "services:\n"
+            "  app:\n"
+            "    image: ${IMAGE}\n"
+            "    healthcheck:\n"
+            "      test: ['CMD', 'true']\n",
+        )
+        run = FakeRun([0])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.deploy("edge", run)
+        self.assertEqual(len(run.calls), 1)
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_a_shape_the_parser_cannot_read_warns_and_still_deploys(self):
+        """A parser limitation is not a property of the stack: refusing a
+        deploy over a shape this regex-based reader cannot classify would be
+        an outage the Compose file itself never had."""
+        self.write_compose("edge", "services:\n  app: &app\n    image: ${IMAGE}\n")
+        run = FakeRun([0])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.deploy("edge", run)
+        self.assertEqual(len(run.calls), 1)
+        self.assertIn("could not determine", stderr.getvalue())
+
+    def test_an_absent_compose_file_is_still_the_pre_existing_refusal(self):
+        """No health-signal check should ever run against a file that is not
+        there -- the existing `no compose file` refusal must still be first."""
+        run = FakeRun([0])
+        with self.assertRaises(bd.DeployError) as caught:
+            self.deploy("missing", run)
+        self.assertIn("no compose file", str(caught.exception))
+        self.assertEqual(run.calls, [])
 
 
 if __name__ == "__main__":
