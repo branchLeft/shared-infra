@@ -207,12 +207,13 @@ that worked — except on the very first deploy, where there is nothing to fall
 back to and it says so.
 
 If that rollback restart also fails, `branchleft-compose@edge` ends up
-`failed` on both pins — but a failed oneshot restart never runs `ExecStop`, so
-`docker compose down` does not fire, and whatever the most recent `up -d`
-attempt started is still running, healthy or not. `systemctl is-active
-branchleft-compose@edge` reading `failed` here is not proof the stack is
-down; use the `docker ps` check in step 7 below to see what is actually
-running before treating it as an outage.
+`failed` on both pins — but the unit carries no `ExecStop`, so `docker
+compose down` never fires regardless of whether that restart succeeded or
+failed, and whatever the most recent `up -d` attempt started is still
+running, healthy or not. `systemctl is-active branchleft-compose@edge`
+reading `failed` here is not proof the stack is down; use the `docker ps`
+check in step 7 below to see what is actually running before treating it as
+an outage.
 
 CrowdSec downloads its hub items on first start, so allow a couple of minutes
 before the checks below.

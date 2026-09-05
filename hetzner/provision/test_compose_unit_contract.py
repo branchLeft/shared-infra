@@ -678,6 +678,39 @@ class UnitTemplateAssumptionTests(unittest.TestCase):
             self.lines,
         )
 
+    def test_a_restart_reruns_start_unconditionally(self):
+        """`systemctl restart` always reruns ExecStart, whatever RemainAfterExit says.
+
+        The rolling-replace property below depends on this: `restart` still
+        runs a stop transition ahead of ExecStart, but it is `Type=oneshot`
+        with `RemainAfterExit=yes` that makes systemd treat a start after
+        that stop as unconditional rather than a no-op against a unit it
+        already considers active.
+        """
+        self.assertIn("Type=oneshot", self.lines)
+        self.assertIn("RemainAfterExit=yes", self.lines)
+
+    def test_a_restart_never_tears_the_stack_down_first(self):
+        """No `ExecStop`, so a restart's stop transition executes nothing.
+
+        A `Type=oneshot` unit with no `ExecStop` treats `stop` as marking
+        itself inactive and running no command. `branchleft-deploy` restarts
+        this unit for every image bump; with an `ExecStop` present, that
+        restart's stop half would run `docker compose down` ahead of every
+        `ExecStart`, tearing down every container in the stack -- including
+        ones the pinned image never touched -- to change one. Its absence is
+        what makes a restart a Compose-level rolling replace of only the
+        service whose config changed, rather than a full stop/start of the
+        whole stack.
+        """
+        self.assertEqual(
+            [line for line in self.lines if line.startswith("ExecStop=")],
+            [],
+            "the unit has an ExecStop. `systemctl restart` runs it before "
+            "every ExecStart, so its return turns every restart back into a "
+            "full stop-then-start of the whole stack.",
+        )
+
     def test_the_wait_is_the_only_post_start_signal(self):
         """No `ExecStartPost` stands behind `--wait`, and adding one is a decision.
 
