@@ -294,6 +294,16 @@ jobs:
       - name: Shellcheck
         run: shellcheck -x hetzner/provision/*.sh
 
+      # test_compose_unit_contract.py and test_runbook_rsync_commands.py use
+      # `X | None` annotations with no `from __future__ import annotations`
+      # guard, so under Python 3.9 `unittest discover` doesn't refuse to run
+      # -- it swallows the TypeError as a single synthetic failing test and
+      # keeps collecting, reporting a smaller count that reads like an
+      # unrelated pre-existing failure (branchLeft/workspace#621). This
+      # fails loudly and specifically before that can happen.
+      - name: Python version floor (hetzner/provision needs >= 3.10)
+        run: python3 scripts/assert-min-python-version.py 3.10 --suite hetzner/provision
+
       - name: Python unit tests
         run: python3 -m unittest discover -s hetzner/provision -p 'test_*.py' -v
 
