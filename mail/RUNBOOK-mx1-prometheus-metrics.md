@@ -64,9 +64,10 @@ message.** It reaches its two files by the commands below and nowhere else.
 ## Step 1 — stage the updated provisioning scripts on mx1
 
 ```bash
+read -r "MX1_IPV4?mx1 public IPv4 (hcloud server describe mx1, branchleft-mail project token): " && export MX1_IPV4
 cd ~/branchLeft/shared-infra && git checkout main && git pull --ff-only
 rsync -av -e "ssh -i ~/.ssh/id_ed25519_hetzner" \
-  mail/provision/ root@167.233.252.240:/root/mail-provision/
+  mail/provision/ root@"$MX1_IPV4":/root/mail-provision/
 ```
 
 Expect a file list including `configure_stalwart.py` and `docker-compose.yml`,
@@ -81,7 +82,7 @@ overwrites an existing file, so writing over it here would break a scrape that
 is already working:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@167.233.252.240 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$MX1_IPV4" \
   'test -f /opt/stalwart/.env && echo EXISTS || echo ABSENT'
 ```
 
@@ -89,7 +90,7 @@ Otherwise run this and **paste the secret at the prompt**; it is not echoed and
 does not enter your shell history.
 
 ```bash
-ssh -t -i ~/.ssh/id_ed25519_hetzner root@167.233.252.240 \
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$MX1_IPV4" \
   'read -rs -p "secret: " S; echo; printf "STALWART_PROMETHEUS_SECRET=%s\n" "$S" > /opt/stalwart/.env; chmod 600 /opt/stalwart/.env; unset S; ls -l /opt/stalwart/.env'
 ```
 
@@ -108,7 +109,7 @@ disable echo and the secret is displayed by your local terminal instead.
 ## Step 3 — recreate the container so it carries the variable
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@167.233.252.240 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$MX1_IPV4" \
   'bash /root/mail-provision/30-deploy-stalwart.sh'
 ```
 
@@ -122,7 +123,7 @@ fail-closed path working — fix step 2 rather than working around it.
 Confirm the variable actually reached the process:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@167.233.252.240 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$MX1_IPV4" \
   'docker inspect stalwart --format "{{range .Config.Env}}{{println .}}{{end}}" | cut -d= -f1 | grep STALWART'
 ```
 
@@ -132,7 +133,7 @@ Expect `STALWART_HOSTNAME` and `STALWART_PROMETHEUS_SECRET`. **Names only** —
 ## Step 4 — apply the settings
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@167.233.252.240 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$MX1_IPV4" \
   'bash /root/mail-provision/40-configure-stalwart.sh'
 ```
 
@@ -164,7 +165,8 @@ through the endpoint policy — see `METRICS_SCRAPE_SOURCES` for why v6 is not
 listed. Without `-4` this returns `421` on a correctly configured server.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'S=$(sed -n "s/^STALWART_PROMETHEUS_SECRET=//p" /etc/branchleft/monitoring.env); \
    curl -4 -sS -o /tmp/m.txt -w "%{http_code}\n" -u "prometheus:$S" \
      https://mx1.branchleft.co.uk/metrics/prometheus; \
@@ -178,7 +180,7 @@ actually present rather than assuming.
 **Also run it without the credential**, which must return `401`:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'curl -4 -sS -o /dev/null -w "%{http_code}\n" https://mx1.branchleft.co.uk/metrics/prometheus'
 ```
 
@@ -202,7 +204,7 @@ mistake: the allow rules match one exact path, so no ordering of them can let
 `/` through. Read the live rule before doing anything else:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@167.233.252.240 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$MX1_IPV4" \
   'curl -sS -u "$(cut -d: -f1 /root/.stalwart-admin-credentials):$(cut -d: -f2 /root/.stalwart-admin-credentials)" \
      -H "Content-Type: application/json" \
      -d "{\"using\":[\"urn:ietf:params:jmap:core\"],\"methodCalls\":[[\"x:Http/get\",{\"ids\":[\"singleton\"]},\"0\"]]}" \
@@ -216,8 +218,9 @@ public listener — and roll back before diagnosing further.
 your Mac, with the real credential:
 
 ```bash
+read -rs "PROMETHEUS_METRICS_SECRET?paste the mx1 Stalwart Prometheus exporter secret from ProtonPass: " && export PROMETHEUS_METRICS_SECRET
  curl -4 -sk -o /dev/null -w "%{http_code}\n" \
-  -u "prometheus:PASTE_THE_SECRET" https://mx1.branchleft.co.uk/metrics/prometheus
+  -u "prometheus:$PROMETHEUS_METRICS_SECRET" https://mx1.branchleft.co.uk/metrics/prometheus
 ```
 
 **Use `-4`.** Over IPv6 this returns `421` whatever the pin does, since no v6
@@ -239,7 +242,7 @@ from "open to the world with a password". Clear it afterwards with
 V1 depends on this, so run it before V1. Same prompt-based pattern:
 
 ```bash
-ssh -t -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'read -rs -p "secret: " S; echo; printf "STALWART_PROMETHEUS_SECRET=%s\n" "$S" >> /etc/branchleft/monitoring.env; unset S; grep -c "^STALWART_PROMETHEUS_SECRET=" /etc/branchleft/monitoring.env'
 ```
 

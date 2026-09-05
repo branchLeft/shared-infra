@@ -20,7 +20,8 @@ second Compose stack beside it, does not create the host, and assumes
 are already installed.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl is-active branchleft-compose@edge &&
   test -x /usr/bin/python3 &&
   echo ready'
@@ -175,8 +176,8 @@ twice.
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  hetzner/edge/stack/ root@"$EDGE1_IPV4":/opt/branchleft/edge/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'chown -R root:root /opt/branchleft/edge/'
 ```
 
@@ -277,7 +278,7 @@ into the new `stack/` contents (step 7b); restarting first and writing the
 secret after leaves the stack down for the gap in between.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   test -f /etc/branchleft/monitoring.env && grep -c . /etc/branchleft/monitoring.env || echo "absent"'
 ```
 
@@ -285,7 +286,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
 place rather than overwriting it.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   install -d -m 0755 -o root -g root /etc/branchleft &&
   umask 077 &&
   { printf "SMTP_USERNAME=%s\n" "<SUBMISSION_USERNAME>";
@@ -306,8 +307,8 @@ Expect `-rw------- 1 root root`. Do not print the file.
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  hetzner/monitoring/stack/ root@"$EDGE1_IPV4":/opt/branchleft/monitoring/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'chown -R root:root /opt/branchleft/monitoring/'
 ```
 
@@ -348,7 +349,7 @@ is read as the container-side user, so a root-owned file becomes unreadable.
 ## 5. Install the systemd cgroup drop-ins
 
 ```bash
-hetzner/provision/install-systemd-drop-ins.sh root@46.225.95.167
+hetzner/provision/install-systemd-drop-ins.sh root@"$EDGE1_IPV4"
 ```
 
 The script walks every committed `*/systemd/*.override.conf` under
@@ -369,7 +370,7 @@ the `mem_limit`/`cpu_shares` containment, and the systemd drop-in installed
 in step 5.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'systemctl restart branchleft-compose@edge'
 ```
 
@@ -389,7 +390,7 @@ then restart, nothing else. The unit is already enabled, so 7b never runs
 ### 7a. First-time bring-up
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl enable branchleft-compose@monitoring &&
   systemctl start branchleft-compose@monitoring'
 ```
@@ -428,7 +429,7 @@ Run this immediately after step 4's copy -- the copy on its own has changed
 nothing, per step 4's note above.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'systemctl restart branchleft-compose@monitoring'
 ```
 
@@ -447,7 +448,7 @@ trusting the first response: immediately after any restart it reads
 ## 8. Verify the stack is up
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   docker ps --filter label=com.docker.compose.project=monitoring'
 ```
 
@@ -455,7 +456,7 @@ Expect six containers, all `Up`: `prometheus`, `alertmanager`, `grafana`,
 `node-exporter`, `blackbox-exporter`, `cadvisor`.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -L 9090:127.0.0.1:9090 root@46.225.95.167 -N &
+ssh -i ~/.ssh/id_ed25519_hetzner -L 9090:127.0.0.1:9090 root@"$EDGE1_IPV4" -N &
 curl -s http://127.0.0.1:9090/api/v1/targets | python3 -m json.tool | grep -E '"job"|"health"'
 ```
 
@@ -521,7 +522,7 @@ with a full 200 and `mysql_up 0` when it cannot read MySQL, which is the state
 `db1` was in for four days. Check the metric, not the target:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'curl -s --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=mysql_up"'
 ```
 
@@ -537,7 +538,7 @@ case, the `Watchdog` heartbeat's external dead-man's switch.
 ## 9. Verify Grafana is private-only
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' http://46.225.95.167:3000/  # from the workstation, over the public address
+curl -s -o /dev/null -w '%{http_code}\n' http://"$EDGE1_IPV4":3000/  # from the workstation, over the public address
 ```
 
 Expect a connection failure or timeout, never an HTTP response -- Compose
@@ -545,14 +546,15 @@ publishes Grafana on `10.20.1.10:3000` only, and `10.20.1.10` does not route
 from the public internet.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -L 3000:10.20.1.10:3000 root@46.225.95.167 -N &
+EDGE1_PRIVATE_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")
+ssh -i ~/.ssh/id_ed25519_hetzner -L 3000:"$EDGE1_PRIVATE_IPV4":3000 root@"$EDGE1_IPV4" -N &
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/login
 ```
 
 Expect `200`, reached only through the tunnel. Confirm the registry side too:
 
 ```bash
-grep -R 'grafana\|10.20.1.10' sites.ts hetzner/edge/stack/Caddyfile
+grep -R "grafana\|$EDGE1_PRIVATE_IPV4" sites.ts hetzner/edge/stack/Caddyfile
 ```
 
 Expect no match in either file -- Grafana carries no hostname, no Caddy
@@ -564,7 +566,7 @@ route and no public listener anywhere in this repository.
 nothing about the containers** (see "Colocation cgroup bounds" above):
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl show -p MemoryMax -p CPUWeight branchleft-compose@edge.service &&
   systemctl show -p MemoryMax -p CPUWeight branchleft-compose@monitoring.service'
 ```
@@ -579,7 +581,7 @@ mitigation reached anything -- it only confirms the drop-in loaded.
 `HostConfig`:**
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   for c in $(docker ps --filter label=com.docker.compose.project=edge -q) \
            $(docker ps --filter label=com.docker.compose.project=monitoring -q); do
     docker inspect "$c" --format \
@@ -600,7 +602,7 @@ unit's cgroup** (the reason the check above is necessary at all, not just
 belt-and-braces):
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   CADDY_PID=$(docker inspect --format "{{.State.Pid}}" \
     $(docker ps --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy -q)) &&
   cat /proc/$CADDY_PID/cgroup &&
@@ -619,7 +621,7 @@ version bump alone; re-run this check.
 ## 11. Verify the heartbeat is wired to the dead-man's switch
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -L 9093:127.0.0.1:9093 root@46.225.95.167 -N &
+ssh -i ~/.ssh/id_ed25519_hetzner -L 9093:127.0.0.1:9093 root@"$EDGE1_IPV4" -N &
 curl -s http://127.0.0.1:9093/api/v2/alerts | python3 -m json.tool | grep -A3 '"alertname": "Watchdog"'
 ```
 
@@ -671,8 +673,8 @@ re-copy, restart.
 git checkout <PREVIOUS_MERGED_SHA> -- hetzner/monitoring/stack
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  hetzner/monitoring/stack/ root@"$EDGE1_IPV4":/opt/branchleft/monitoring/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'chown -R root:root /opt/branchleft/monitoring/ &&
    systemctl restart branchleft-compose@monitoring'
 ```
@@ -701,7 +703,7 @@ hours, so a token minted once will go stale well inside the collector's own
 lives in -- there is no separate credential file for this one.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   grep -q "^SNDS_BEARER_TOKEN=" /etc/branchleft/monitoring.env &&
   sed -i "s|^SNDS_BEARER_TOKEN=.*|SNDS_BEARER_TOKEN=<TOKEN>|" /etc/branchleft/monitoring.env ||
   printf "SNDS_BEARER_TOKEN=%s\n" "<TOKEN>" >> /etc/branchleft/monitoring.env'
@@ -724,8 +726,8 @@ drop-ins for units this stack's template already defines, and
 scp -i ~/.ssh/id_ed25519_hetzner \
   hetzner/monitoring/systemd/snds-collector.service \
   hetzner/monitoring/systemd/snds-collector.timer \
-  root@46.225.95.167:/etc/systemd/system/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+  root@"$EDGE1_IPV4":/etc/systemd/system/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl daemon-reload &&
   systemctl enable --now snds-collector.timer'
 ```
@@ -736,7 +738,7 @@ not appear -- not an error, just silent absence, indistinguishable at a
 glance from a collector that has not run yet.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   install -d -m 0755 -o root -g root /var/lib/branchleft/snds-exporter'
 ```
 
@@ -748,7 +750,7 @@ recreation to pick up.
 **Verify.**
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl start snds-collector.service &&
   systemctl status snds-collector.service --no-pager &&
   cat /var/lib/branchleft/snds-exporter/snds.prom'

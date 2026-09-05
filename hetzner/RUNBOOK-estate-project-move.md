@@ -158,13 +158,17 @@ declaring them merged without an apply path). Read the ids from
 never type an id belonging to mx1.
 
 ```bash
-hcloud server disable-protection <edge1-server-id> delete rebuild
-hcloud server delete <edge1-server-id>
-hcloud primary-ip disable-protection <edge1-ipv4-id> delete
-hcloud primary-ip delete <edge1-ipv4-id>
-hcloud primary-ip disable-protection <edge1-ipv6-id> delete
-hcloud primary-ip delete <edge1-ipv6-id>
-hcloud firewall delete <edge1-firewall-id>
+EDGE1_SERVER_ID=$(hcloud server list -o json | python3 -c "import json, sys; print([s['id'] for s in json.load(sys.stdin) if s['name'] == 'edge1'][0])")
+EDGE1_IPV4_ID=$(hcloud primary-ip list -o json | python3 -c "import json, sys; print([p['id'] for p in json.load(sys.stdin) if p['name'] == 'edge1-ipv4'][0])")
+EDGE1_IPV6_ID=$(hcloud primary-ip list -o json | python3 -c "import json, sys; print([p['id'] for p in json.load(sys.stdin) if p['name'] == 'edge1-ipv6'][0])")
+EDGE1_FIREWALL_ID=$(hcloud firewall list -o json | python3 -c "import json, sys; print([f['id'] for f in json.load(sys.stdin) if f['name'] == 'edge1'][0])")
+hcloud server disable-protection "$EDGE1_SERVER_ID" delete rebuild
+hcloud server delete "$EDGE1_SERVER_ID"
+hcloud primary-ip disable-protection "$EDGE1_IPV4_ID" delete
+hcloud primary-ip delete "$EDGE1_IPV4_ID"
+hcloud primary-ip disable-protection "$EDGE1_IPV6_ID" delete
+hcloud primary-ip delete "$EDGE1_IPV6_ID"
+hcloud firewall delete "$EDGE1_FIREWALL_ID"
 ```
 
 Deleting the server first is load-bearing: it releases the network
