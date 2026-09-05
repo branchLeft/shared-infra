@@ -6,10 +6,10 @@ provider and the Object Storage backend and never touches any of this.
 
 Two independent migrations, deliberately written as two parts:
 
-|            | What moves                                                     | When it has to happen                                                                   | What blocks it                                                                                                                                      |
-| ---------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Part A** | Secrets: the shared GCP KMS key → Pulumi's passphrase provider | **Before the GCP wind-down destroys the key.** Nothing else gates it — it can run today | Nothing. Every input exists                                                                                                                         |
-| **Part B** | State: `gs://` → Hetzner Object Storage                        | Any time before the state buckets are retired, which is after cutover                   | Object Storage's own backend behaviour, which is unverified. Its destination bucket exists; its rehearsal needs a separate lab bucket that does not |
+|            | What moves                                                     | When it has to happen                                                                   | What blocks it                                                                                                                                                                                                                                                                                                                                           |
+| ---------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Part A** | Secrets: the shared GCP KMS key → Pulumi's passphrase provider | **Before the GCP wind-down destroys the key.** Nothing else gates it — it can run today | Nothing. Every input exists                                                                                                                                                                                                                                                                                                                              |
+| **Part B** | State: `gs://` → Hetzner Object Storage                        | Any time before the state buckets are retired, which is after cutover                   | Object Storage's own backend behaviour, narrower than fully proven — CI credential sourcing and two concurrent reads are confirmed; a concurrent write contending for the same lock, and lock recovery after an interrupted apply, are not. Its destination bucket exists; whether the lab bucket the rehearsal below used is still there is unconfirmed |
 
 **Do not wait for Part B to run Part A.** They share a stack but not a
 deadline, and Part A's deadline is the one that cannot be missed. Part A
@@ -697,11 +697,13 @@ from an archive. After it, nothing is.
 # Part B — move state to Hetzner Object Storage
 
 **Not urgent.** The destination this part migrates _to_ exists: the production
-Object Storage bucket `branchleft-pulumi-state`. What is still open is the
-backend's own behaviour — login string, path-style addressing, locking
-behaviour, credential sourcing — which the rehearsal below closes, and the
-rehearsal needs a **lab** bucket that does not exist yet. The state buckets
-are not retired until after cutover, so nothing here races the KMS gate.
+Object Storage bucket `branchleft-pulumi-state`. The backend's own behaviour —
+login string, path-style addressing, locking behaviour, credential sourcing —
+has been rehearsed once already, in the lab hcloud project (see the Lab
+rehearsal section below). What that rehearsal left open is narrower: a
+concurrent write contending for the same lock, and lock recovery after an
+interrupted apply. The state buckets are not retired until after cutover, so
+nothing here races the KMS gate.
 
 Two buckets are involved and they are never interchangeable: the **production**
 bucket is where real state lands, and a **lab** bucket in the lab hcloud
@@ -1020,21 +1022,25 @@ nobody kept the result of is not.
 
 ## Lab rehearsal
 
-This must be rehearsed before it is run for real, and it has **not been
-rehearsed**. What follows is the procedure, and its two
-halves have different prerequisites.
+Part B has been rehearsed once, in the lab hcloud project, immediately before
+the production mail move (ghost-platform-docs doc 14 §16 item 1 records it).
+What follows is the same procedure, kept here to rehearse again against any
+stack still to move. Its two halves have different prerequisites.
 
 **Part A's rehearsal is unblocked and needs no Hetzner resource at all.**
 Part A is entirely GCP-side, and a scratch stack in the existing shared bucket
 exercises all of it. This is the half worth doing first regardless, because
 Part A is the deadline-bound one.
 
-**Part B's rehearsal is blocked on one specific thing.** The lab hcloud
-project exists. What does not exist is a **lab** Object Storage bucket inside
-it, and an S3 credential pair for that bucket — both console-only,
-platform-owner work, and both small. The production bucket is not a substitute:
-rehearsing against it would exercise the procedure on live state, which is the
-one thing a rehearsal exists to avoid.
+**Part B's rehearsal needs a lab Object Storage bucket and an S3 credential
+pair for it** — both console-only, platform-owner work. Doc 14 §16 item 1
+names the bucket the first rehearsal used, `branchleft-lab-pulumi-state`;
+whether it and its credential pair are still there is not established here —
+`PULUMI-BACKEND-INVENTORY.md` §8 lists this among what needs a live,
+credentialed check before relying on either. Recreate them, both small
+console-only tasks, if they are not. The production bucket is not a
+substitute: rehearsing against it would exercise the procedure on live state,
+which is the one thing a rehearsal exists to avoid.
 
 **Rehearsing Part A** — no dependency, runnable now:
 
@@ -1054,14 +1060,14 @@ rehearsal --secrets-provider=gcpkms://projects/branchleft-prod/locations/europe-
    rollback nobody has.
 5. `pulumi stack rm rehearsal --yes`.
 
-**Rehearsing Part B** — once the lab bucket and its credential pair exist,
-runs in the lab hcloud project against that lab bucket, never against
-production. Same scratch stack, run B.1 against the lab bucket, and check
-specifically for what is still unverified about the backend:
-whether path-style addressing works with the real bucket name, and whether two
-concurrent clients take and release the state lock. Record what is observed,
-with a date, and correct `RUNBOOK-new-stack.md`'s unverified banner from the
-same observation.
+**Rehearsing Part B** — confirm the lab bucket and its credential pair are in
+place first (above), then run in the lab hcloud project against that lab
+bucket, never against production. Same scratch stack, run B.1 against the lab
+bucket, and check specifically for what the first rehearsal left open:
+whether a concurrent write contends cleanly for the same lock, and what
+happens to a lock left behind by an interrupted apply. Record what is
+observed, with a date, and correct `RUNBOOK-new-stack.md`'s unverified banner
+from the same observation.
 
 ## What this runbook deliberately does not cover
 
