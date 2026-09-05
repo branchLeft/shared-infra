@@ -433,11 +433,18 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
 ```
 
 A plain restart reruns `ExecStartPre`, so `alertmanager.yml` is regenerated
-from the current template and secrets, and recreates every container, so
-`prometheus.yml` and `alerts.yml` are read fresh from what step 4 just wrote.
-`enable` is not repeated -- it is idempotent but pointless once the unit is
-already enabled -- and the systemd drop-in install (step 5) only needs
-re-running when a drop-in file itself changes, not for an ordinary config
+from the current template and secrets. It also recreates every container --
+but only because `monitoring.override.conf` overrides the template's
+`ExecStart` to add `--force-recreate`; the shared unit template on its own
+recreates only the service whose _resolved_ Compose definition changed
+(branchLeft/shared-infra#171), which a bind-mounted file's contents never
+are. Without that override this restart would regenerate `alertmanager.yml`
+on disk and leave every running container, `alertmanager` included, still
+serving what it read at its last start -- `prometheus.yml` and `alerts.yml`
+are read fresh from what step 4 just wrote only because `--force-recreate` is
+there to force it. `enable` is not repeated -- it is idempotent but pointless
+once the unit is already enabled -- and the systemd drop-in install (step 5)
+only needs re-running when a drop-in file itself changes, not for an ordinary config
 update.
 
 Then verify with step 8, and read its note on `/api/v1/targets` before
