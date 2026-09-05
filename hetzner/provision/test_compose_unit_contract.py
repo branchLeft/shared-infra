@@ -731,6 +731,102 @@ class UnitTemplateAssumptionTests(unittest.TestCase):
         )
 
 
+EXEC_START_RESET = "ExecStart="
+FORCE_RECREATE_START = "ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait --force-recreate"
+
+
+class MonitoringForceRecreateTests(unittest.TestCase):
+    """`branchLeft/workspace#666`: a bind-mounted config change is invisible to
+    Compose's own per-service hash, so the template's selective ExecStart
+    (relied on by `edge`, per branchLeft/shared-infra#171) silently does not
+    redeploy a rules or scrape-config edit to `monitoring`. `monitoring` has
+    none of `edge`'s multi-tenant reason to stay selective -- one stack, one
+    reason to restart -- so its own drop-in overrides ExecStart to force a
+    recreate every time, the same way it already resets EnvironmentFile= for
+    a reason specific to this instance.
+
+    This only pins the unit files' *shape*: whether `docker compose up`
+    actually gets asked to recreate an unchanged container is systemd and
+    Compose runtime behaviour this module cannot exercise without a host,
+    same limitation `UnitTemplateAssumptionTests` above already carries for
+    `ExecStop`.
+    """
+
+    def test_monitoring_overrides_exec_start_to_force_recreate(self):
+        drop_in = drop_in_for("monitoring")
+        self.assertIsNotNone(drop_in, "monitoring has no override.conf to check")
+        lines = service_lines(drop_in)
+        self.assertIn(
+            FORCE_RECREATE_START,
+            lines,
+            f"{drop_in} must set `{FORCE_RECREATE_START}` under [Service]: "
+            "without --force-recreate, a restart of this stack only picks up "
+            "a bind-mounted config change (alerts.yml, prometheus.yml, the "
+            "Alertmanager template) when Compose's own config hash also "
+            "changed for an unrelated reason, which a config-only edit never "
+            "does.",
+        )
+
+    def test_the_exec_start_override_resets_before_it_sets(self):
+        """A reset-then-set pair, same shape as the `EnvironmentFile=` one above.
+
+        Without the leading bare `ExecStart=`, systemd appends this drop-in's
+        ExecStart to the template's rather than replacing it -- `ExecStart=`
+        may be given more than once, and each one runs in sequence, so a
+        missing reset here runs `docker compose up` twice on every restart
+        instead of once with `--force-recreate`.
+        """
+        drop_in = drop_in_for("monitoring")
+        lines = service_lines(drop_in)
+        resets = [index for index, line in enumerate(lines) if line == EXEC_START_RESET]
+        forced = [index for index, line in enumerate(lines) if line == FORCE_RECREATE_START]
+        self.assertTrue(resets, f"{drop_in} sets ExecStart without a preceding bare reset")
+        self.assertTrue(forced, f"{drop_in} never sets the force-recreate ExecStart")
+        self.assertLess(
+            max(resets),
+            max(forced),
+            f"{drop_in} has the ExecStart reset after the force-recreate line -- "
+            "systemd applies directives in file order, so the later reset "
+            "clears it again and the unit falls back to no ExecStart at all.",
+        )
+
+    def test_edge_stays_selective(self):
+        """`edge` keeps the template's default: no ExecStart override at all.
+
+        It restarts on every per-tenant image bump (branchLeft/shared-infra#171),
+        and force-recreating the whole stack on each one is exactly the
+        every-tenant-offline-to-change-one regression that PR fixed -- so
+        `edge.override.conf` must not pick up `monitoring`'s override by
+        copy-paste.
+        """
+        drop_in = drop_in_for("edge")
+        self.assertIsNotNone(drop_in, "edge has no override.conf to check")
+        lines = service_lines(drop_in)
+        self.assertNotIn(
+            EXEC_START_RESET,
+            lines,
+            f"{drop_in} resets ExecStart. `edge` is restarted per-tenant by "
+            "branchleft-deploy and must keep the template's selective, "
+            "hash-based recreate -- a force-recreate here takes every tenant "
+            "offline to change one, the regression branchLeft/shared-infra#171 fixed.",
+        )
+
+    def test_the_template_itself_stays_selective(self):
+        """The shared template's own ExecStart carries no --force-recreate.
+
+        Any future stack that does not commit its own override inherits the
+        template as-is, and that default must stay the selective, per-service
+        recreate `edge` (and every other multi-tenant instance) depends on --
+        `monitoring`'s override is the exception, not a template-wide change.
+        """
+        template_lines = service_lines(HETZNER / "provision" / "branchleft-compose@.service")
+        self.assertIn(
+            "ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait",
+            template_lines,
+        )
+        self.assertNotIn(FORCE_RECREATE_START, template_lines)
+
+
 class StackNameScanTests(unittest.TestCase):
     """The scan's failure direction, against shapes this repository does not hold.
 
