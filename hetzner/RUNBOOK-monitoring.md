@@ -30,11 +30,12 @@ Expect `active` then `ready`. `python3` is what
 `stack/render_alertmanager_config.py` runs under -- see "Colocation cgroup
 bounds" below for why that script exists at all.
 
-A `failed` reading here is not proof the edge stack is down. The unit is
-`Type=oneshot`, and a failed restart never runs `ExecStop`, so whatever the
-most recent `docker compose up -d` attempt started is still running, healthy
-or not. Check `docker ps --filter label=com.docker.compose.project=edge` on
-the host before treating `failed` as an outage.
+A `failed` reading here is not proof the edge stack is down. The unit carries
+no `ExecStop`, so a restart -- whether it succeeds or fails -- never runs
+`docker compose down`; whatever the most recent `docker compose up -d`
+attempt started is still running, healthy or not. Check `docker ps --filter
+label=com.docker.compose.project=edge` on the host before treating `failed`
+as an outage.
 
 ## Colocation cgroup bounds -- the sizing arithmetic and where it actually lives
 
@@ -646,13 +647,17 @@ alarm:
    over the tunnel from step 11) and confirm an email actually arrives at
    `ALERT_RECIPIENT_EMAIL`, not only that Alertmanager's API reports it
    dispatched.
-2. **A real dead-man alarm.** Stop the monitoring stack
-   (`systemctl stop branchleft-compose@monitoring`) and confirm Healthchecks.io
-   moves the check to "Late" and then "Down" and sends its own alert --
-   without that, the amendment's heartbeat requirement is unverified, not
-   satisfied. Restart the stack afterwards
-   (`systemctl start branchleft-compose@monitoring`) and confirm the check
-   recovers.
+2. **A real dead-man alarm.** `systemctl stop branchleft-compose@monitoring`
+   no longer stops anything -- the unit carries no `ExecStop`, so a stop
+   marks it inactive and leaves every container running. Take the stack
+   itself down with Compose directly
+   (`docker compose --project-directory /opt/branchleft/monitoring -p monitoring down`)
+   and confirm Healthchecks.io moves the check to "Late" and then "Down"
+   and sends its own alert -- without that, the amendment's heartbeat
+   requirement is unverified, not satisfied. Bring it back with `systemctl
+restart branchleft-compose@monitoring`, not `systemctl start`: systemd
+   still considers the unit active, so `start` would no-op, while `restart`
+   always reruns `ExecStart` regardless. Confirm the check recovers.
 
 Both are owner-executed, one-time, real-world proofs -- listed in the PR's
 handover steps rather than performed by CI or by an agent.

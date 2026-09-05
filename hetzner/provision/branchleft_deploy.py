@@ -527,10 +527,11 @@ def deploy(
         # Nothing to roll back to. The unit's EnvironmentFile for the pin
         # carries no leading dash, so it cannot start without one at all --
         # restarting here would fail by construction, so this does not retry.
-        # It also must not assert what that failure means: a failed oneshot
-        # restart runs ExecStopPost, never ExecStop, so containers from an
-        # earlier successful start can still be up with initialised data
-        # regardless of what this restart's exit code says about the unit.
+        # It also must not assert what that failure means: the unit carries
+        # no ExecStop, so nothing here ever runs `docker compose down` --
+        # containers from an earlier successful start can still be up with
+        # initialised data regardless of what this restart's exit code says
+        # about the unit.
         os.unlink(env_path)
         raise DeployError(
             f"branchleft-compose@{stack} failed to start on {image}, and there "
@@ -598,10 +599,10 @@ def deploy(
     # while it is down, which is the state nobody investigates.
     rollback = run(["systemctl", "restart", f"branchleft-compose@{stack}"], check=False)
     if rollback.returncode != 0:
-        # A failed oneshot restart runs ExecStopPost, never ExecStop, so
-        # `docker compose down` does not fire here -- whatever the most
+        # The unit carries no ExecStop, so `docker compose down` never fires
+        # here regardless of this restart's exit code -- whatever the most
         # recent `up -d --wait` attempt started is still running, healthy or
-        # not, whatever this restart's own exit code says about the unit.
+        # not.
         raise DeployError(
             f"restart of branchleft-compose@{stack} failed AND the rollback to "
             f"{previous} also failed to start; branchleft-compose@{stack} is "
