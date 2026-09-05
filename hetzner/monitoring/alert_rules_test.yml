@@ -79,6 +79,72 @@ tests:
         alertname: HostOrServiceDown
         exp_alerts: []
 
+  # ExpectedDownTargetAnswering: the crash loop that actually happened, on the
+  # target it happened to, reproduced BEFORE the label flip. Same values as
+  # the case above -- db1's mysqld_exporter restarting roughly once a minute
+  # -- but still carrying expected_up="false", which is the state that
+  # produced four days of silence. ServiceFlapping cannot see it (wrong
+  # selector); this rule is the one built to.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="mysqld", instance="10.20.1.20:9104", host="db1", expected_up="false"}'
+        values: '1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ExpectedDownTargetAnswering", alertstate="firing", job="mysqld"}
+        eval_time: 14m30s
+        exp_samples:
+          - labels: 'ALERTS{alertname="ExpectedDownTargetAnswering", alertstate="firing", severity="warning", job="mysqld", instance="10.20.1.20:9104", host="db1", expected_up="false"}'
+            value: 1
+    alert_rule_test:
+      # Neither of the two rules this one mirrors sees it -- both are scoped
+      # to expected_up="true" and this target still carries "false".
+      - eval_time: 14m30s
+        alertname: ServiceFlapping
+        exp_alerts: []
+      - eval_time: 14m30s
+        alertname: HostOrServiceDown
+        exp_alerts: []
+
+  # The same rule catching the other shape the issue's checklist named: not a
+  # crash loop at all, just a target that shipped clean and nobody flipped
+  # the label. up sits at a stable 1 throughout.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node", instance="10.20.1.100:9100", host="app1", expected_up="false"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ExpectedDownTargetAnswering", alertstate="firing"}
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ExpectedDownTargetAnswering", alertstate="firing", severity="warning", job="node", instance="10.20.1.100:9100", host="app1", expected_up="false"}'
+            value: 1
+
+  # The quiet case this rule must not disturb: a target correctly marked
+  # expected_up="false" because it genuinely has never answered a scrape --
+  # the same input the false-selector case above uses for HostOrServiceDown.
+  # A target that has never come up must stay silent here too, or every
+  # not-yet-provisioned host would page from the day this rule shipped.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node", instance="10.20.1.100:9100", host="app1", expected_up="false"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ExpectedDownTargetAnswering
+        exp_alerts: []
+
+  # An expected_up="true" target is out of this rule's selector entirely --
+  # HostOrServiceDown/ServiceFlapping own that half, and this rule staying
+  # silent here is what keeps the two from double-paging on the same target.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="crowdsec", instance="10.20.1.10:6060", host="edge1", expected_up="true"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ExpectedDownTargetAnswering
+        exp_alerts: []
+
   # The exporter down continuously rather than flapping -- now in range of
   # HostOrServiceDown too, which it was not before the flip.
   - interval: 30s

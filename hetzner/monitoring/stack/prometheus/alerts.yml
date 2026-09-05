@@ -50,6 +50,25 @@ groups:
             window. Scoped to expected_up="true" for the same reason as
             HostOrServiceDown above.
 
+      - alert: ExpectedDownTargetAnswering
+        expr: max_over_time(up{expected_up="false"}[15m]) == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} on {{ $labels.host }} is answering while labeled not expected to."
+          description: >-
+            HostOrServiceDown and ServiceFlapping both read
+            up{expected_up="true"}, so a target still carrying "false" gets
+            no coverage from either -- correct while the target genuinely
+            does not exist yet, silently wrong from the moment it ships.
+            max_over_time over a 15m window catches a target that answers
+            even once, crash-looping or clean, so this rule sees the same
+            shape a forgotten label hides from the other two. Warning, not
+            critical: the label itself says nobody depends on this target
+            today. Flip expected_up to true once the target is confirmed
+            live.
+
       - alert: RateLimitDecliningRealClients
         expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\.(1[6-9]|2\\d|3[01])\\..*", key!=""}[15m]) > 0
         labels:
