@@ -24,13 +24,12 @@ sitting beside it on disk — that runbook lives under `hetzner/`.
 
 ## 1. Every Pulumi stack in the estate
 
-Nine stacks, not the eight `RUNBOOK-existing-stack-migration.md`'s own count
-implies ("Six stacks exist today across two state backends", plus "two
-Hetzner stacks that do not exist yet" in a third) or the eight
-`scripts/pulumi-stack-inventory.json` currently lists. The ninth —
-`branchleft-ghost-platform-hosts` — is real, committed, and CI-applied; it
-is simply missing from the inventory JSON (§7), and post-dates the
-runbook's "not yet created" wording for the third backend.
+Nine stacks in the estate today. Both `RUNBOOK-existing-stack-migration.md`'s
+own stack count and `scripts/pulumi-stack-inventory.json` put the total at
+eight; `branchleft-ghost-platform-hosts` is the ninth. It is real,
+committed, and CI-applied, and is missing from the inventory JSON (§7.2).
+The runbook's own staleness is tracked at
+[branchLeft/shared-infra#172](https://github.com/branchLeft/shared-infra/issues/172).
 
 | Project / stack                                                      | Repo                | Definition path                                           | Committed backend today                                | Born there or moved? |
 | -------------------------------------------------------------------- | ------------------- | --------------------------------------------------------- | ------------------------------------------------------ | -------------------- |
@@ -207,19 +206,19 @@ finding.
 
 ## 4. CI apply-path audit
 
-| Stack                                   | Has a CI apply path today?                           | Evidence                                                                                                                                                                                                                                                                                                                  |
-| --------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `branchleft-shared-infra/production`    | Yes                                                  | `deploy-plan`/`deploy-apply`, `.github/workflows/ci.yml`                                                                                                                                                                                                                                                                  |
-| `branchleft-mail/production`            | **Yes — this is a material correction to the issue** | `mail-plan`/`mail-apply`, same file. Added by `branchLeft/shared-infra#29` (merged 2026-08-22), which explicitly retires "no CI apply path" as mail's steady state. The issue's framing — "nothing exercises \[mail\] until someone genuinely needs it" — was accurate when filed (2026-08-17) and is no longer accurate. |
-| `branchleft-website-infra/production`   | Yes                                                  | `pulumi-preview`/`deploy`, `website/.github/workflows/ci.yml`                                                                                                                                                                                                                                                             |
-| `branchleft-ghost-platform/platform`    | Yes                                                  | `Deploy (pulumi up)`, `ghost-platform/.github/workflows/infra-platform-ci.yml`                                                                                                                                                                                                                                            |
-| `branchleft-ghost-provisioning/blog`    | **No**                                               | See §4.1                                                                                                                                                                                                                                                                                                                  |
-| `blog-infra/blog`                       | Yes                                                  | `Deploy (pulumi up)`, `ghost-tenant-blog/.github/workflows/infra-ci.yml`                                                                                                                                                                                                                                                  |
-| `branchleft-hetzner-network/production` | Yes                                                  | `hetzner-network-plan`/`-apply`, `shared-infra/.github/workflows/ci.yml`                                                                                                                                                                                                                                                  |
-| `branchleft-hetzner-estate/production`  | Yes                                                  | `hetzner-estate-plan`/`-apply`, same file                                                                                                                                                                                                                                                                                 |
-| `branchleft-ghost-platform-hosts`       | Yes                                                  | `Apply (hosts, pulumi up)`, `ghost-platform/.github/workflows/infra-hosts-ci.yml`                                                                                                                                                                                                                                         |
+| Stack                                   | Has a CI apply path today? | Evidence                                                                          |
+| --------------------------------------- | -------------------------- | --------------------------------------------------------------------------------- |
+| `branchleft-shared-infra/production`    | Yes                        | `deploy-plan`/`deploy-apply`, `.github/workflows/ci.yml`                          |
+| `branchleft-mail/production`            | Yes                        | `mail-plan`/`mail-apply`, same file.                                              |
+| `branchleft-website-infra/production`   | Yes                        | `pulumi-preview`/`deploy`, `website/.github/workflows/ci.yml`                     |
+| `branchleft-ghost-platform/platform`    | Yes                        | `Deploy (pulumi up)`, `ghost-platform/.github/workflows/infra-platform-ci.yml`    |
+| `branchleft-ghost-provisioning/blog`    | **No**                     | See §4.1                                                                          |
+| `blog-infra/blog`                       | Yes                        | `Deploy (pulumi up)`, `ghost-tenant-blog/.github/workflows/infra-ci.yml`          |
+| `branchleft-hetzner-network/production` | Yes                        | `hetzner-network-plan`/`-apply`, `shared-infra/.github/workflows/ci.yml`          |
+| `branchleft-hetzner-estate/production`  | Yes                        | `hetzner-estate-plan`/`-apply`, same file                                         |
+| `branchleft-ghost-platform-hosts`       | Yes                        | `Apply (hosts, pulumi up)`, `ghost-platform/.github/workflows/infra-hosts-ci.yml` |
 
-### 4.1 The stack that now carries mail's old risk: `branchleft-ghost-provisioning/blog`
+### 4.1 The one stack with no CI apply path anywhere: `branchleft-ghost-provisioning/blog`
 
 This is the headline finding of the CI-apply audit. `branchleft-ghost-provisioning/blog`
 creates tenant zero's GCP deploy identity (service account + Workload
@@ -237,12 +236,11 @@ Identity Federation pool) for blog's still-GCP-based CI/CD pipeline. It is:
   typecheck, not an apply; `provision-tenant.yml` only initialises a
   **new** tenant's own Hetzner-native stack, never this one.
 
-So the exact reasoning the issue used to justify moving `mail` first —
-"the one with no CI to catch a mistake" — now applies to this stack
-instead. It has the added complication that its config file does not
-exist to pin a backend into without first reconstructing it by hand. Any
-Part B sequencing for this stack should treat it with at least the care
-`mail` got, not less, precisely because nothing exercises it.
+This is the one stack in §4's table whose Part B move would happen with no
+CI to catch a mistake. It has the added complication that its config file
+does not exist to pin a backend into without first reconstructing it by
+hand. Any Part B sequencing should treat it with at least as much care as
+a CI-applied stack gets, not less, precisely because nothing exercises it.
 
 ## 5. What breaks if the GCS buckets were deleted today
 
@@ -262,53 +260,45 @@ become permanently unmanageable by Pulumi, not merely un-previewable.
 ## 6. Blockers: verified vs inherited
 
 **The lab Object Storage bucket and credential pair (Part B rehearsal).**
-The issue's premise — that these do not exist — was true when filed
-(2026-08-17) and **is contradicted by later evidence I read, not
-reproduced live**: `branchLeft/ghost-platform-docs` doc 14 §16 item 1
-records that `branchleft-lab-pulumi-state` (`hel1`) was created and used
-for a rehearsal on 2026-08-22, immediately before the real mail move. This
-session did not confirm the bucket or its credentials still exist
-**today** — that needs a live, credentialed check (§8). The repo's own
-committed runbook, `hetzner/RUNBOOK-existing-stack-migration.md`, is
-**stale** on this point: its "Lab rehearsal" section still reads "this must
-be rehearsed before it is run for real, and it has **not** been rehearsed"
-and "What does not exist is a lab Object Storage bucket" — both contradicted
-by the 2026-08-22 record. Filed as discovered work (§7.1); not fixed here.
+`branchLeft/ghost-platform-docs` doc 14 §16 item 1 records that
+`branchleft-lab-pulumi-state` (`hel1`) was created and used for a
+rehearsal immediately before the production mail move. This session did
+not confirm the bucket or its credentials still exist today — that needs
+a live, credentialed check (§8). The repo's own committed runbook,
+`hetzner/RUNBOOK-existing-stack-migration.md`, does not reflect this: its
+"Lab rehearsal" section still describes the rehearsal as not yet run and
+the lab bucket as not yet created. Tracked at
+[branchLeft/shared-infra#172](https://github.com/branchLeft/shared-infra/issues/172).
 
-**Doc 14 §16 item 1 (Pulumi's S3-compatible backend behaviour).** The
-issue's summary — "locking behaviour and credential sourcing in CI are
-still open" — is also stale. Reading doc 14 directly: CI credential
-sourcing is now **closed** ("exercised" against production by the mail
-apply jobs). Locking is **narrower than open**, not closed: two concurrent
+**Doc 14 §16 item 1 (Pulumi's S3-compatible backend behaviour).** CI
+credential sourcing is closed — exercised against production by the mail
+apply jobs. Locking is narrower-but-not-fully-open: two concurrent
 `pulumi preview` runs completed with no contention (consistent with an
 advisory per-operation lock), but two clients contending for one lock
-during a concurrent **update**, and what happens to a lock left behind by
-an interrupted apply, remain genuinely unverified. Read directly from the
-doc, not reproduced.
+during a concurrent update, and what happens to a lock left behind by an
+interrupted apply, remain unverified. Read directly from doc 14, not
+reproduced.
 
-**Doc 14 §15 step 4 (retiring the GCS buckets).** Read directly: the step's
-own precondition is "per-stack archives verified restorable" plus (per
-§15.1, added since) each archive's escrowed passphrase proven, from
-escrow, to still open it — a live roundtrip against a lab copy, not a
-listing of the escrow entry. §15.1 records that check as done for the six
-post-wrap archives on 2026-08-18. Whether it has been re-run for any stack
-that moved since (mail, 2026-08-22) is not stated in the doc and is not
-something this session can check without escrow access (§8).
+**Doc 14 §15 step 4 (retiring the GCS buckets).** The step's own
+precondition is "per-stack archives verified restorable" plus (per §15.1)
+each archive's escrowed passphrase proven, from escrow, to still open it —
+a live roundtrip against a lab copy, not a listing of the escrow entry.
+§15.1 records that check as done for the six post-wrap archives, dated
+2026-08-18. Whether it has been re-run for `branchleft-mail/production`,
+which moved to Hetzner after that check ran, is not stated in the doc and
+is not something this session can check without escrow access (§8).
 
 ## 7. Discovered discrepancies
 
 Filed as issues rather than fixed here, per the instruction not to widen
 this branch.
 
-### 7.1 `RUNBOOK-existing-stack-migration.md` and `mail/RUNBOOK-import-mail-host.md` describe a state the mail move already superseded — [branchLeft/shared-infra#172](https://github.com/branchLeft/shared-infra/issues/172)
+### 7.1 Two runbooks are stale against mail's current backend — [branchLeft/shared-infra#172](https://github.com/branchLeft/shared-infra/issues/172)
 
-The Part B "Lab rehearsal" section (§6 above) reads as unrehearsed and
-lab-bucket-blocked; `mail/RUNBOOK-import-mail-host.md:76` still instructs
-`pulumi login gs://branchleft-pulumi-state` for a stack whose backend is
-now pinned in `mail/Pulumi.yaml` (no login step applies, and the command as
-written would operate on the wrong backend entirely). Both are stale
-against the 2026-08-22 move recorded in the issue thread and in doc 14
-§16 item 1.
+`hetzner/RUNBOOK-existing-stack-migration.md`'s Part B rehearsal guidance
+(§6 above) and `mail/RUNBOOK-import-mail-host.md:76`'s login instructions
+do not reflect `mail`'s current Hetzner-pinned backend. Tracked at
+branchLeft/shared-infra#172.
 
 ### 7.2 `scripts/pulumi-stack-inventory.json` is incomplete and one entry is stale — [branchLeft/shared-infra#173](https://github.com/branchLeft/shared-infra/issues/173)
 
