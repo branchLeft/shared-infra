@@ -148,6 +148,18 @@
       "terminal_state": "never-kms",
       "note": "Born on the passphrase provider, same as the network stack -- never-kms, satisfied without an attestation. Live since the 2026-08-22 project move, when the stack was initialised fresh with a new passphrase and salt (branchLeft/workspace#207 records why); CI applies it on merge, after the network stack, and appends the salt from PULUMI_SALT_HETZNER_ESTATE. hetzner/estate/Pulumi.production.yaml holds non-secret configuration only: the file reads `absent` (no secretsprovider, encryptedkey or encryptionsalt), which reports `needs-attestation` -- not drift -- and never-kms accepts that on its own.",
       "attestation": null
+    },
+    {
+      "project": "branchleft-ghost-platform-hosts",
+      "stack": "production",
+      "repo": "ghost-platform",
+      "project_path": "infra/hosts/Pulumi.yaml",
+      "config_path": "infra/hosts/Pulumi.production.yaml",
+      "state_backend": "hetzner",
+      "expected_secrets_provider": "passphrase",
+      "terminal_state": "never-kms",
+      "note": "Born pinned to the Hetzner backend in its first commit -- never wrapped by the KMS key, same shape as the two hetzner/ entries above. CI (infra-hosts-ci.yml) applies it on merge and appends the salt from PULUMI_SALT_PLATFORM_HOSTS. infra/hosts/Pulumi.production.yaml holds non-secret configuration only -- no `encryptionsalt`, so the file reads `absent`, which reports `needs-attestation` -- not drift -- and never-kms accepts that on its own.",
+      "attestation": null
     }
   ],
   "backend_reference_sites": [
@@ -267,7 +279,7 @@
       "path": ".github/workflows/infra-ci.yml",
       "kind": "ci",
       "backend": "tenant",
-      "note": "`pulumi login gs://$PULUMI_STATE_BUCKET`, from a repository variable set per tenant at provisioning time. Generated into every tenant repo, so changing it here does not change any repo already generated."
+      "note": "`pulumi login \"$PULUMI_BACKEND_URL\"`, an s3:// backend from a repository variable set per tenant at provisioning time; the workflow refuses a gs:// value outright. Generated into every tenant repo, so changing it here does not change any repo already generated."
     },
     {
       "repo": "ghost-platform-tenant-template",
@@ -294,7 +306,7 @@
       "path": "Pulumi.yaml",
       "kind": "doc",
       "backend": "tenant",
-      "note": "Comment documents the PULUMI_STATE_BUCKET contract; generated into every tenant repo."
+      "note": "Comment documents the PULUMI_BACKEND_URL contract (an s3:// backend URL, not a bucket name); generated into every tenant repo."
     }
   ],
   "provider_selection_sites": [
