@@ -201,7 +201,9 @@ Anything else means the endpoint policy is not what this repo says it is —
 `x:Http/set` applied something other than `HTTP_ENDPOINT_POLICY`, or an
 operator has since edited the rule in the admin UI. It is **not** an ordering
 mistake: the allow rules match one exact path, so no ordering of them can let
-`/` through. Read the live rule before doing anything else:
+`/` through. Read the live rule before doing anything else. `$MX1_IPV4` is
+set under Step 1 above; re-set it first if you are entering this section
+independently:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$MX1_IPV4" \
@@ -239,9 +241,12 @@ from "open to the world with a password". Clear it afterwards with
 
 ## Step 5 — write the credential on edge1
 
-V1 depends on this, so run it before V1. Same prompt-based pattern:
+V1 depends on this, so run it before V1 — before "Verify" has derived
+`$EDGE1_IPV4` for its own use, so this step derives its own copy rather than
+pointing back at a section that has not run yet. Same prompt-based pattern:
 
 ```bash
+EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
 ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'read -rs -p "secret: " S; echo; printf "STALWART_PROMETHEUS_SECRET=%s\n" "$S" >> /etc/branchleft/monitoring.env; unset S; grep -c "^STALWART_PROMETHEUS_SECRET=" /etc/branchleft/monitoring.env'
 ```

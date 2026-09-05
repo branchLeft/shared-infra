@@ -11,9 +11,11 @@ creation. The CI deploy account cannot run any of this and is not meant to.
 Run every workstation command from the root of a `branchLeft/shared-infra`
 checkout.
 
-Addresses are threaded through variables populated by a lookup command at the
-top of each step, the same convention `RUNBOOK-provision-host.md` uses, rather
-than written out or left as a placeholder to resolve by hand. The old
+Addresses are threaded through a variable, `$EDGE1_IPV4`, derived once under
+"What has to be true first" below, rather than written out or left as a
+placeholder to resolve by hand — the same convention `RUNBOOK-provision-host.md`
+uses, reminder sentences included: a section a reader might enter on its own
+says where the variable comes from and to re-derive it first. The old
 convention's goal — nothing to resolve, every command runnable as read — was
 right; a threaded variable serves that goal better than a committed literal,
 because it survives `edge1` being rebuilt on a new address and the literal
@@ -136,7 +138,9 @@ secrets, and nothing automated ever writes it — the deploy wrapper writes
   mode this exists to prevent.
 
 **This command writes the file whole and discards anything already in it.**
-Nothing else belongs there today, but check before running it a second time:
+Nothing else belongs there today, but check before running it a second time.
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it first
+if you are entering here independently:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
@@ -168,7 +172,8 @@ so a rotation is followed by step 6's restart and nothing else.
 
 `hetzner/edge/stack/` is the deployment: a Compose file, the generated Caddy
 configuration, and the generated CrowdSec acquisition files. It is copied
-verbatim.
+verbatim. `$EDGE1_IPV4` is set under "What has to be true first" above;
+re-set it first if you are entering here independently.
 
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
@@ -187,7 +192,9 @@ from a previous deployment.
 
 ## 5. Enable the unit
 
-Once, so the stack comes back after a reboot:
+Once, so the stack comes back after a reboot. `$EDGE1_IPV4` is set under
+"What has to be true first" above; re-set it first if you are entering here
+independently:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
@@ -195,6 +202,9 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
 ```
 
 ## 6. Deploy
+
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering here independently.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
@@ -231,7 +241,8 @@ at the running containers with `docker ps`/`docker exec` instead, found by
 Compose's own labels rather than by name — `compose.yml` pins no
 `container_name`, so the container Compose v2 would create by default,
 `edge-crowdsec-1`, is not a contract. Reading a container's labels needs
-neither secret.
+neither secret. `$EDGE1_IPV4` is set under "What has to be true first"
+above; re-set it first if you are entering here independently.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
@@ -278,6 +289,10 @@ the general throttle is absent, (b) proves the magic-link throttle is present
 and actually fires. Running only the negative one would pass identically if the
 whole `rate_limit` module had silently failed to load, which is the failure this
 pair exists to distinguish (`branchLeft/workspace#209`).
+
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering this section independently — every check below
+reuses it.
 
 **a. The general throttle is off.** 250 requests inside the 60-second window
 that would trip a 200-request limit:
@@ -465,7 +480,9 @@ Leave the edge in this posture until it has carried real traffic, which means
 until at least one site has a `privateUpstream` and its hostname resolves here.
 Detect-only over no traffic proves nothing.
 
-What the review is looking for, on the host:
+What the review is looking for, on the host. `$EDGE1_IPV4` is set under
+"What has to be true first" above; re-set it first if you are entering here
+independently:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
@@ -513,7 +530,9 @@ inherited number picks one of those on faith.
 Derive it first, from the access log — which `posture.ts` names as this
 throttle's observation instrument, and which is enabled in every posture. The
 command below prints the distribution of requests per client address per minute
-and **no addresses**, so client IPs stay on the host:
+and **no addresses**, so client IPs stay on the host. `$EDGE1_IPV4` is set
+under "What has to be true first" above; re-set it first if you are entering
+this section independently:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
@@ -575,7 +594,8 @@ above, performed by whoever holds `~/.ssh/id_ed25519_hetzner`.
 Same four steps with `crowdsec: 'enforcing'`, which changes both the Caddy
 route chain and `crowdsec/acquis.d/appsec.yaml`.
 
-Confirm it took:
+Confirm it took. `$EDGE1_IPV4` is set under "What has to be true first"
+above; re-set it first if you are entering this section independently:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
@@ -623,7 +643,8 @@ One registry entry, then a re-render. Nothing else.
    is forced: Caddy issues its certificate over HTTP-01, which cannot succeed
    until the hostname resolves here, and it will not attempt issuance at all
    until the site block exists.
-5. Watch issuance:
+5. Watch issuance. `$EDGE1_IPV4` is set under "What has to be true first"
+   above; re-set it first if you are entering this section independently:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
@@ -632,7 +653,10 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
 
 ## 12. Rolling back
 
-A bad configuration and a bad image roll back differently.
+A bad configuration and a bad image roll back differently. `$EDGE1_IPV4` is
+set under "What has to be true first" above; re-set it first if you are
+entering here independently — this is the section most likely to be entered
+mid-incident, days after the deploy.
 
 **Configuration** — restore the previous `hetzner/edge/stack/` from git and
 re-copy:

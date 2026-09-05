@@ -171,7 +171,8 @@ CrowdSec's built-in metrics moved off its default `127.0.0.1` via
 `10.20.1.10:<port>` only, and the `mem_limit`/`cpu_shares` from the section
 above. Copy it, but **do not restart yet** -- step 6 restarts once, after the
 cgroup drop-in below is also in place, so `edge` does not need reloading
-twice.
+twice. `$EDGE1_IPV4` is set under "What has to be true first" above; re-set
+it first if you are entering here independently.
 
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
@@ -275,7 +276,9 @@ fails the unit start outright -- the monitoring stack does not come up
 degraded, it does not come up at all. On a host already running the
 pre-this-PR stack, write this variable into the file **before** restarting
 into the new `stack/` contents (step 7b); restarting first and writing the
-secret after leaves the stack down for the gap in between.
+secret after leaves the stack down for the gap in between. `$EDGE1_IPV4` is
+set under "What has to be true first" above; re-set it first if you are
+entering here independently.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
@@ -303,6 +306,9 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 Expect `-rw------- 1 root root`. Do not print the file.
 
 ## 4. Copy the monitoring stack directory onto the host
+
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering here independently.
 
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
@@ -348,6 +354,9 @@ is read as the container-side user, so a root-owned file becomes unreadable.
 
 ## 5. Install the systemd cgroup drop-ins
 
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering here independently.
+
 ```bash
 hetzner/provision/install-systemd-drop-ins.sh root@"$EDGE1_IPV4"
 ```
@@ -367,7 +376,8 @@ it for `monitoring`.
 
 One restart picks up everything queued since step 1: the metrics endpoints,
 the `mem_limit`/`cpu_shares` containment, and the systemd drop-in installed
-in step 5.
+in step 5. `$EDGE1_IPV4` is set under "What has to be true first" above;
+re-set it first if you are entering here independently.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
@@ -388,6 +398,9 @@ then restart, nothing else. The unit is already enabled, so 7b never runs
 `enable` again.
 
 ### 7a. First-time bring-up
+
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering here independently.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
@@ -426,7 +439,8 @@ re-adds that file with a leading dash precisely so the failure comes from
 ### 7b. Updating an already-running stack
 
 Run this immediately after step 4's copy -- the copy on its own has changed
-nothing, per step 4's note above.
+nothing, per step 4's note above. `$EDGE1_IPV4` is set under "What has to be
+true first" above; re-set it first if you are entering here independently.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
@@ -446,6 +460,10 @@ trusting the first response: immediately after any restart it reads
 `health: "unknown"` for every target, because no scrape has completed yet.
 
 ## 8. Verify the stack is up
+
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering this section independently -- every check below
+reuses it.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
@@ -537,6 +555,9 @@ case, the `Watchdog` heartbeat's external dead-man's switch.
 
 ## 9. Verify Grafana is private-only
 
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering this section independently.
+
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://"$EDGE1_IPV4":3000/  # from the workstation, over the public address
 ```
@@ -561,6 +582,9 @@ Expect no match in either file -- Grafana carries no hostname, no Caddy
 route and no public listener anywhere in this repository.
 
 ## 10. Verify the cgroup containment reaches the containers
+
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering this section independently.
 
 **The systemd unit properties, for completeness -- but this alone proves
 nothing about the containers** (see "Colocation cgroup bounds" above):
@@ -620,6 +644,9 @@ version bump alone; re-run this check.
 
 ## 11. Verify the heartbeat is wired to the dead-man's switch
 
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering here independently.
+
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner -L 9093:127.0.0.1:9093 root@"$EDGE1_IPV4" -N &
 curl -s http://127.0.0.1:9093/api/v2/alerts | python3 -m json.tool | grep -A3 '"alertname": "Watchdog"'
@@ -667,7 +694,9 @@ handover steps rather than performed by CI or by an agent.
 ## 13. Rolling back
 
 Same shape as `RUNBOOK-edge.md` §12: restore the previous `stack/` from git,
-re-copy, restart.
+re-copy, restart. `$EDGE1_IPV4` is set under "What has to be true first"
+above; re-set it first if you are entering here independently -- this is
+the section most likely to be entered mid-incident, days after the deploy.
 
 ```bash
 git checkout <PREVIOUS_MERGED_SHA> -- hetzner/monitoring/stack
@@ -700,7 +729,9 @@ no `refresh_token`, and community reports put the token's life at roughly 8
 hours, so a token minted once will go stale well inside the collector's own
 24-36h alerting window. Write it into `/etc/branchleft/monitoring.env` as
 `SNDS_BEARER_TOKEN` (§3's table), the same file every other stack secret
-lives in -- there is no separate credential file for this one.
+lives in -- there is no separate credential file for this one. `$EDGE1_IPV4`
+is set under "What has to be true first" above; re-set it first if you are
+entering this section independently -- every command below reuses it.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
