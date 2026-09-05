@@ -8,6 +8,7 @@ deploy to discover.
 """
 
 import contextlib
+import fcntl
 import io
 import os
 import stat
@@ -218,6 +219,108 @@ class PinnedImageIsUpTests(unittest.TestCase):
         )
 
 
+class DeployLockTests(unittest.TestCase):
+    """The concurrency guard itself, exercised without a real second process.
+
+    A second `flock` attempt against a *different* open file description on
+    the same path genuinely contends, even from within a single test process
+    -- the lock is attached to the open file description, not to the process
+    or to the file's bytes, so opening the lock path a second time here and
+    holding it is a faithful stand-in for a second `branchleft-deploy`
+    invocation, with no subprocess needed.
+    """
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+
+    def hold(self, stack):
+        """Open and exclusively lock `stack`'s lock file, as a second holder would."""
+        path = bd.deploy_lock_path(stack, self.directory.name)
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return fd
+
+    def test_a_second_deploy_polls_then_fails_while_the_first_still_holds_it(self):
+        holder_fd = self.hold("edge")
+        self.addCleanup(os.close, holder_fd)
+
+        clock = [0.0]
+        sleeps = []
+
+        def fake_now():
+            return clock[0]
+
+        def fake_sleep(interval):
+            sleeps.append(interval)
+            clock[0] += interval
+
+        entered = False
+        with self.assertRaises(bd.DeployError) as caught:
+            with bd.stack_deploy_lock(
+                "edge",
+                self.directory.name,
+                timeout=1.0,
+                poll_interval=0.25,
+                now=fake_now,
+                sleep=fake_sleep,
+            ):
+                entered = True  # pragma: no cover -- must never run
+
+        self.assertFalse(entered)
+        message = str(caught.exception)
+        self.assertIn("edge", message)
+        self.assertIn("could not acquire", message)
+        # Polled rather than failing on the very first attempt or blocking
+        # forever: several bounded waits, not zero and not open-ended.
+        self.assertGreaterEqual(len(sleeps), 3)
+        self.assertAlmostEqual(sum(sleeps), 1.0, delta=0.25)
+
+    def test_a_free_lock_is_acquired_on_the_first_attempt_with_no_wait(self):
+        sleeps = []
+        with bd.stack_deploy_lock(
+            "edge", self.directory.name, sleep=lambda interval: sleeps.append(interval)
+        ):
+            pass
+        self.assertEqual(sleeps, [])
+
+    def test_the_lock_releases_the_instant_the_holder_process_exits(self):
+        holder_fd = self.hold("edge")
+        # Closing every fd on an open file description is exactly what
+        # process exit does to a flock it holds -- clean exit, an uncaught
+        # exception, or SIGKILL all close the process's file descriptors the
+        # same way, and the kernel drops the lock the moment that happens.
+        # Nothing here writes to or reads from the lock file's contents to
+        # simulate that: the guarantee is that flock is not the file.
+        os.close(holder_fd)
+
+        sleeps = []
+        with bd.stack_deploy_lock(
+            "edge",
+            self.directory.name,
+            timeout=1.0,
+            sleep=lambda interval: sleeps.append(interval),
+        ):
+            pass
+        self.assertEqual(sleeps, [])
+
+    def test_two_different_stacks_on_the_same_host_never_contend(self):
+        holder_fd = self.hold("edge")
+        self.addCleanup(os.close, holder_fd)
+
+        sleeps = []
+        # "monitoring" is a different lock file under the same config_dir --
+        # scoped per stack, not per host, so holding edge's lock must not
+        # block a deploy of an unrelated stack on the same box.
+        with bd.stack_deploy_lock(
+            "monitoring",
+            self.directory.name,
+            sleep=lambda interval: sleeps.append(interval),
+        ):
+            pass
+        self.assertEqual(sleeps, [])
+
+
 class DeployTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -412,6 +515,66 @@ class DeployTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.env_path()))
         self.assertEqual(run.calls, [])
 
+    def test_refuses_to_proceed_while_another_deploy_holds_this_stacks_lock(self):
+        # A real second holder, exclusively locking the exact path deploy()
+        # itself will try to lock -- not a mock of the locking call, so this
+        # proves the wiring into deploy(), not just the context manager in
+        # isolation (DeployLockTests covers that half).
+        lock_path = bd.deploy_lock_path("edge", self.config_dir)
+        holder_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(holder_fd, fcntl.LOCK_EX)
+        self.addCleanup(os.close, holder_fd)
+
+        run = FakeRun([0])
+        with self.assertRaises(bd.DeployError) as caught:
+            bd.deploy(
+                "edge",
+                VALID_IMAGE,
+                config_dir=self.config_dir,
+                stack_dir=self.stack_dir,
+                run=run,
+                lock_timeout=0.2,
+                lock_poll_interval=0.05,
+            )
+        self.assertIn("could not acquire", str(caught.exception))
+        # Neither half of the guarded sequence ran: the pin is untouched and
+        # systemctl was never invoked -- a second deploy that cannot get the
+        # lock must not have interleaved any part of it.
+        self.assertFalse(os.path.exists(self.env_path()))
+        self.assertEqual(run.calls, [])
+
+    def test_a_deploy_to_a_different_stack_is_unaffected_by_this_stacks_lock(self):
+        os.makedirs(os.path.join(self.stack_dir, "monitoring"))
+        with open(
+            os.path.join(self.stack_dir, "monitoring", "compose.yml"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            handle.write(
+                "services:\n"
+                "  app:\n"
+                "    image: ${IMAGE}\n"
+                "    healthcheck:\n"
+                "      test: ['CMD', 'true']\n"
+            )
+        lock_path = bd.deploy_lock_path("edge", self.config_dir)
+        holder_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(holder_fd, fcntl.LOCK_EX)
+        self.addCleanup(os.close, holder_fd)
+
+        run = FakeRun([0])
+        bd.deploy(
+            "monitoring",
+            VALID_IMAGE,
+            config_dir=self.config_dir,
+            stack_dir=self.stack_dir,
+            run=run,
+        )
+        self.assertEqual(
+            bd.read_current_image(bd.image_env_path("monitoring", self.config_dir)),
+            VALID_IMAGE,
+        )
+
 
 class SlotStdinTests(unittest.TestCase):
     """The only value a slot key supplies.
@@ -540,6 +703,46 @@ class MainTests(unittest.TestCase):
             bd.main(["branchleft-deploy", "no-such-stack", VALID_IMAGE], stdin=stdin), 1
         )
         self.assertEqual(stdin.tell(), 0)
+
+    def _with_lock_timeout_env(self, value, argv, **kwargs):
+        old = os.environ.get(bd.LOCK_TIMEOUT_ENV_VAR)
+        os.environ[bd.LOCK_TIMEOUT_ENV_VAR] = value
+        try:
+            return bd.main(argv, **kwargs)
+        finally:
+            if old is None:
+                del os.environ[bd.LOCK_TIMEOUT_ENV_VAR]
+            else:
+                os.environ[bd.LOCK_TIMEOUT_ENV_VAR] = old
+
+    def test_lock_timeout_env_var_reaches_deploy_as_a_keyword(self):
+        # Not argv -- a new flag would widen the exact-length shape the
+        # sudoers grant depends on (see the constant's own comment). An
+        # operator invoking this binary directly can still reach the knob.
+        received = {}
+        code = self._with_lock_timeout_env(
+            "5",
+            ["branchleft-deploy", "edge", VALID_IMAGE],
+            deploy=lambda stack, image, **kw: received.update(kw),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(received, {"lock_timeout": 5.0})
+
+    def test_an_invalid_lock_timeout_env_var_is_reported_and_ignored(self):
+        calls = []
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = self._with_lock_timeout_env(
+                "not-a-number",
+                ["branchleft-deploy", "edge", VALID_IMAGE],
+                deploy=lambda stack, image, **kw: calls.append(kw),
+            )
+        self.assertEqual(code, 0)
+        # Falls back to the default rather than crashing or silently using a
+        # nonsense value -- the deploy proceeds with no override at all.
+        self.assertEqual(calls, [{}])
+        self.assertIn(bd.LOCK_TIMEOUT_ENV_VAR, stderr.getvalue())
+        self.assertIn("not-a-number", stderr.getvalue())
 
 
 class ResolvesImageFromEnvTests(unittest.TestCase):
