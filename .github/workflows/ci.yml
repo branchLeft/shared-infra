@@ -291,6 +291,12 @@ jobs:
       - name: Python unit tests (hetzner/scripts)
         run: python3 -m unittest discover -s hetzner/scripts -p 'test_*.py' -v
 
+      # test_passphrase_probe_pattern.py lives at hetzner/ root, not under
+      # provision/ or scripts/, so neither discover invocation above ever
+      # collects it -- an unwired regression test guards nothing.
+      - name: Python unit tests (hetzner root)
+        run: python3 -m unittest hetzner.test_passphrase_probe_pattern -v
+
       # Run the checker itself, not only its tests. Its whole subject is the
       # committed layout, and the failure it exists for -- a Pulumi project in
       # a subdirectory that silently runs the package root's program instead of
