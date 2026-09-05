@@ -590,5 +590,70 @@ class RunbookScpCommandTests(unittest.TestCase):
             )
 
 
+PYCACHE_CLEANUP = (
+    "find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} +"
+)
+
+
+def _scp_sites_with_following_context():
+    """Pair each provisioning `scp` line with the text between it and the
+    closing ``` of its code fence -- the same technique
+    `rsync_commands_with_following_context` uses in
+    test_runbook_rsync_commands.py, reused here because `scp` carries no
+    exclude flag either, so a `__pycache__/` this workstation's own test
+    runs left under `hetzner/provision/` travels in the same copy."""
+    with open(RUNBOOK, encoding="utf-8") as handle:
+        lines = handle.readlines()
+    sites = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("scp "):
+            continue
+        following = []
+        for later in lines[index + 1 :]:
+            if later.strip() == "```":
+                break
+            following.append(later)
+        sites.append((stripped, "".join(following)))
+    return sites
+
+
+class RunbookPycacheCleanupTests(unittest.TestCase):
+    """CPython recompiles a `.pyc` on a source size/mtime mismatch rather
+    than trusting a foreign one, so a workstation-built `__pycache__/`
+    reaching a host is hygiene, not a live defect -- but nothing available
+    to CI can observe whether one reaches a host, so the cleanup command's
+    presence and position after every `scp -r hetzner/provision/.` site is
+    the only thing a test can pin, the same reasoning `RunbookScpCommandTests`
+    already applies to the `scp` lines themselves.
+    """
+
+    def test_every_scp_site_is_followed_by_the_pycache_cleanup(self):
+        sites = _scp_sites_with_following_context()
+        self.assertEqual(len(sites), 5, [command for command, _ in sites])
+        for command, context in sites:
+            with self.subTest(command=command):
+                self.assertIn(
+                    PYCACHE_CLEANUP,
+                    context,
+                    f"no __pycache__ cleanup found after: {command}",
+                )
+
+    def test_the_cleanup_runs_before_anything_else_touches_the_copy(self):
+        for command, context in _scp_sites_with_following_context():
+            with self.subTest(command=command):
+                cleanup_pos = context.find(PYCACHE_CLEANUP)
+                self.assertNotEqual(
+                    cleanup_pos, -1, f"no __pycache__ cleanup found after: {command}"
+                )
+                chmod_pos = context.find("chmod +x")
+                if chmod_pos != -1:
+                    self.assertLess(
+                        cleanup_pos,
+                        chmod_pos,
+                        f"chmod +x runs before the __pycache__ cleanup after: {command}",
+                    )
+
+
 if __name__ == "__main__":
     unittest.main()

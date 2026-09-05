@@ -219,7 +219,7 @@ repo-root-relative, and step 1 left the shell one directory down:
 ```bash
 cd ~/branchLeft/shared-infra
 scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@<edge1-ipv4>:/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/nat-gateway.sh'
+ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/nat-gateway.sh'
 ```
 
 Idempotent, and the right response to "is that host still the gateway". Re-run
@@ -232,6 +232,17 @@ exists, nesting a stale copy under a fresh one on any re-run. The destination
 itself must carry **no** trailing slash — `scp` in SFTP mode fails outright on
 a destination with one if the destination does not yet exist, which is
 exactly the first-provision case.
+
+`scp -r` has no exclude flag, so every `__pycache__/` this workstation's own
+test runs left under `hetzner/provision/` travels in the same copy — a `.pyc`
+built by whichever Python happens to be on the workstation, for a host that
+may run a different one. CPython recompiles on a source size/mtime mismatch
+rather than trusting a foreign `.pyc`, so this is not a live defect, but a
+stray bytecode file is still confusing to find mid-incident and has no
+business being the host's copy of anything the repository doesn't itself
+contain. The `find … -prune -exec rm -rf` above runs before anything else on
+the host reads the directory, and is repeated at every other `scp -r
+hetzner/provision/.` below for the same reason.
 
 ### 3. Confirm the gateway is forwarding
 
@@ -368,7 +379,7 @@ from the repository root:
 ```bash
 cd ~/branchLeft/shared-infra
 scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@<host-private-ip>:/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<host-private-ip> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<host-private-ip> 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
 ```
 
 That `scp -r` copies the whole of `provision/` — `nat-gateway.sh`,
@@ -442,7 +453,7 @@ future `app2`/`app3`, substituting that host's own private IP:
 cd ~/branchLeft/shared-infra
 JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@46.225.95.167"
 scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@10.20.1.100:/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@10.20.1.100 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/app-host-isolation.sh'
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@10.20.1.100 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/app-host-isolation.sh'
 ```
 
 Confirm it:
@@ -484,7 +495,7 @@ same two commands with the jump added:
 
 ```bash
 scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@<host-ipv4>:/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> 'chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
+ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
 ```
 
 The key is the platform owner's — the one registered in the hcloud project and
@@ -536,8 +547,12 @@ credential into a repository.
 #    that means never meeting the refusal.
 ssh-keygen -t ed25519 -N '' -C 'unused' -f ~/.ssh/id_ed25519_slot_<stack>
 
-# 2. Refresh the provisioning scripts on the host.
+# 2. Refresh the provisioning scripts on the host, then drop any __pycache__
+#    this workstation's own test runs left under provision/ before anything
+#    else reads the directory.
 scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@<host-ipv4>:/root/platform-provision
+ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+  'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} +'
 
 # 3. Install the wrapper that understands --slot. NOT optional on a host
 #    provisioned before slot keys existed: the grant would succeed, the key
