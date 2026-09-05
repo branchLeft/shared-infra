@@ -112,11 +112,13 @@ These apply to every path below:
    path has been confirmed end-to-end.** The shim is higher volume and a
    bigger reputation swing if something is still wrong.
 4. **DNS changes are the slow path, and every one of them queues behind the
-   previous record's TTL.** Start correcting DNS as early as the target state
-   is known (i.e., as soon as Path A/B/C/D is decided and, for a new host, the
-   new address is known) rather than waiting until the host is fully
-   provisioned — the TTL clock should be running in parallel with the
-   provisioning work, not after it.
+   previous record's TTL.** Start correcting the records that carry no
+   ordering risk — the new host's A/AAAA (needed for ACME to issue against
+   it) and PTR/rDNS — as early as the target state is known (i.e., as soon
+   as Path A/B/C/D is decided and, for a new host, the new address is known)
+   rather than waiting until the host is fully provisioned. **This does not
+   extend to MX, SPF or DKIM** — those stay gated by items 1 and 2 above,
+   regardless of how early the address is known.
 
 ## DNS records that matter, and what breaks while each is wrong
 
@@ -227,9 +229,13 @@ first-time provisioning — is called out explicitly below.
    band, before that runbook was ever written. Match `mail/server.ts`'s
    declared shape (server type, image, location) so the later Pulumi import
    is a clean diff rather than fighting a mismatch.
-2. **Run base hardening and the Stalwart deploy.** **[transcribed]** — exactly
-   `mail/RUNBOOK-mx1-provision.md`'s "What the scripts do" sequence,
-   `00` through `40`:
+2. **Run the full provisioning sequence.** **[transcribed]** — this invokes
+   `run-all.sh`, which runs the entire `00` through `70` sequence in one
+   pass, not just `00`–`40`. `run-all.sh`'s own header documents a
+   deliberate reordering within that sequence — `64` (the alerting
+   credential) runs before `63` (the shim deploy), specifically so a
+   rebuilt host has `alerts@` and a working Alertmanager credential even if
+   the shim's own deploy step fails partway through. See step 5 below.
 
    ```bash
    MX1_IPV4=$(hcloud server describe mx1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
@@ -257,10 +263,15 @@ first-time provisioning — is called out explicitly below.
    validation" table. **This creates empty mailboxes.** There is no mail in
    any of them until senders resend or forward — see "What is genuinely
    unrecoverable" below.
-5. **Submission credentials** (`60`–`64`). **[transcribed]** — run all five;
+5. **Submission credentials** (`60`–`64`). **[transcribed]** — all five run;
    each is independently revocable and none can be recovered from the old
    host, so all must be regenerated and redistributed to their consumers
    (website, blog, shim, Alertmanager) per the credentials table above.
+   **`run-all.sh` runs `64` before `63`, not in numeric order** — the
+   alerting credential is provisioned before the shim deploy specifically so
+   a shim-deploy failure never leaves a rebuilt host unable to alert that it
+   failed. If ever provisioning these by hand rather than through
+   `run-all.sh`, keep that order: `60`, `61`, `62`, `64`, then `63`.
 6. **DKIM.** New keys are generated the moment Stalwart bootstraps. Retrieve
    and publish them per `mail/RUNBOOK-mx1-provision.md`'s "DKIM records to
    publish" section **before** resuming any outbound send (see "Ordering and
@@ -298,8 +309,13 @@ The inferred correction, modelled on `mail/RUNBOOK-import-mail-host.md`'s own
 
 ```bash
 cd mail
-pulumi state delete 'urn:pulumi:production::branchleft-mail::hcloud:index/server:Server::mx1'
-pulumi state delete 'urn:pulumi:production::branchleft-mail::hcloud:index/firewall:Firewall::mail-firewall'
+# --force is required: both resources carry `protect: true`, and Pulumi's
+# own CLI help is explicit that a protected resource is not deleted from
+# state without it. This check is a pre-flight, atomic refusal, not a
+# partial delete -- confirmed against the installed CLI's help text before
+# writing this, not merely assumed.
+pulumi state delete --force 'urn:pulumi:production::branchleft-mail::hcloud:index/server:Server::mx1'
+pulumi state delete --force 'urn:pulumi:production::branchleft-mail::hcloud:index/firewall:Firewall::mail-firewall'
 ```
 
 then re-run `mail/RUNBOOK-import-mail-host.md`'s import steps 1–7 against the
