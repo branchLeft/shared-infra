@@ -295,7 +295,13 @@ class FetchSndsDataTests(unittest.TestCase):
     def test_sends_the_bearer_token_as_an_authorization_header(self) -> None:
         captured: dict[str, object] = {}
 
+        class FakeHeaders:
+            def get_content_type(self) -> str:
+                return "text/plain"
+
         class FakeResponse:
+            headers = FakeHeaders()
+
             def __enter__(self) -> "FakeResponse":
                 return self
 
@@ -316,6 +322,147 @@ class FetchSndsDataTests(unittest.TestCase):
         self.assertEqual(body, "203.0.113.5,green,0.05%,12000")
         self.assertEqual(captured["headers"].get("Authorization"), "Bearer s3cr3t")
         self.assertEqual(captured["url"], "https://example.test/ipstatus")
+
+
+def _fake_response(body: bytes, content_type: str = "text/plain") -> "mock.Mock":
+    """A minimal stand-in for `http.client.HTTPResponse`: a context manager
+    whose `.headers.get_content_type()` and `.read()` are what
+    `fetch_snds_data` actually calls.
+    """
+    response = mock.MagicMock()
+    response.__enter__.return_value = response
+    response.headers.get_content_type.return_value = content_type
+    response.read.return_value = body
+    return response
+
+
+class FetchSndsDataShapeValidationTests(unittest.TestCase):
+    """SNDS can answer HTTP 200 with an HTML page (a login, consent, or
+    portal-side error screen), which `urlopen` does not treat as an error --
+    and the per-line-tolerant parser turns every line of markup into a
+    silently skipped row rather than a raised fault. These prove
+    `fetch_snds_data` itself refuses that shape before it ever reaches the
+    parser -- both by the header SNDS is expected to send, and by the bytes
+    themselves, since a header cannot be relied on alone.
+    """
+
+    def test_an_html_content_type_is_rejected_even_with_a_200(self) -> None:
+        html = "<!DOCTYPE html><html><body>Sign in</body></html>"
+        with mock.patch.object(
+            collect_snds_metrics.urllib.request,
+            "urlopen",
+            return_value=_fake_response(html.encode("utf-8"), content_type="text/html"),
+        ):
+            with self.assertRaises(collect_snds_metrics.UnexpectedResponseShapeError) as ctx:
+                collect_snds_metrics.fetch_snds_data("https://example.test/ipstatus", "s3cr3t")
+        self.assertIn("text/html", str(ctx.exception))
+
+    def test_html_shaped_bytes_are_rejected_even_under_a_misleading_content_type(self) -> None:
+        # A portal-side proxy that mislabels its error page -- the header
+        # says text/plain, but the body is still markup. The shape check on
+        # the bytes themselves is what still catches this.
+        html = "<html><head></head><body>Please sign in again</body></html>"
+        with mock.patch.object(
+            collect_snds_metrics.urllib.request,
+            "urlopen",
+            return_value=_fake_response(html.encode("utf-8"), content_type="text/plain"),
+        ):
+            with self.assertRaises(collect_snds_metrics.UnexpectedResponseShapeError):
+                collect_snds_metrics.fetch_snds_data("https://example.test/ipstatus", "s3cr3t")
+
+    def test_a_well_formed_csv_response_with_rows_passes_through_unchanged(self) -> None:
+        body = "203.0.113.5,green,0.05%,12000\n198.51.100.9,red,1.2%,300\n"
+        with mock.patch.object(
+            collect_snds_metrics.urllib.request,
+            "urlopen",
+            return_value=_fake_response(body.encode("utf-8"), content_type="text/plain"),
+        ):
+            fetched = collect_snds_metrics.fetch_snds_data("https://example.test/ipstatus", "s3cr3t")
+        self.assertEqual(fetched, body)
+
+    def test_a_well_formed_empty_response_passes_through_unchanged(self) -> None:
+        # A legitimately quiet day -- zero rows, but the right shape. This
+        # must not be rejected: only a wrong *shape* is a fetch failure,
+        # never a right-shaped response that happens to carry no data.
+        with mock.patch.object(
+            collect_snds_metrics.urllib.request,
+            "urlopen",
+            return_value=_fake_response(b"", content_type="text/plain"),
+        ):
+            fetched = collect_snds_metrics.fetch_snds_data("https://example.test/ipstatus", "s3cr3t")
+        self.assertEqual(fetched, "")
+
+
+class MainShapeFailureIsNotSuccessTests(unittest.TestCase):
+    """The exact regression this fixes: an HTML response must not stamp
+    `snds_collector_last_success_timestamp_seconds`, or `SNDSCollectorStale`
+    (`(time() - snds_collector_last_success_timestamp_seconds > 129600) or
+    absent(...)`, `hetzner/monitoring/stack/prometheus/alerts.yml`) can never
+    see the gap it exists to detect.
+    """
+
+    def test_an_html_response_leaves_the_existing_textfile_untouched_and_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = pathlib.Path(tmp) / "snds.prom"
+            output_path.write_text("previous-content\n")
+
+            with mock.patch.dict(
+                collect_snds_metrics.os.environ,
+                {"SNDS_BEARER_TOKEN": "token", "SNDS_OUTPUT_PATH": str(output_path)},
+                clear=False,
+            ), mock.patch.object(
+                collect_snds_metrics,
+                "fetch_snds_data",
+                side_effect=collect_snds_metrics.UnexpectedResponseShapeError(
+                    "expected the SNDS CSV/plain-text feed, got what looks like an HTML page"
+                ),
+            ):
+                exit_code = collect_snds_metrics.main([])
+
+            self.assertEqual(exit_code, 1)
+            # The prior good snapshot survives byte-for-byte, same guarantee
+            # as a network failure -- a bad-shape response is not a
+            # successful fetch, so it must not overwrite last-known-good.
+            self.assertEqual(output_path.read_text(), "previous-content\n")
+
+
+class MainZeroRecordsIsStillSuccessTests(unittest.TestCase):
+    """The case the fix must not overcorrect into: a well-formed response
+    that legitimately parses to zero rows (a freshly-registered sender with
+    no SNDS history yet, or a genuinely quiet day) is a successful fetch and
+    must still advance `snds_collector_last_success_timestamp_seconds` --
+    otherwise a normal quiet day pages `SNDSCollectorStale` exactly as
+    wrongly as the HTML case previously suppressed it.
+    """
+
+    def test_a_well_formed_empty_response_stamps_success_and_writes_zero_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = pathlib.Path(tmp) / "snds.prom"
+            output_path.write_text("stale-content\n")
+
+            with mock.patch.dict(
+                collect_snds_metrics.os.environ,
+                {"SNDS_BEARER_TOKEN": "token", "SNDS_OUTPUT_PATH": str(output_path)},
+                clear=False,
+            ), mock.patch.object(
+                collect_snds_metrics,
+                "fetch_snds_data",
+                return_value="",
+            ):
+                before = time.time()
+                exit_code = collect_snds_metrics.main([])
+
+            self.assertEqual(exit_code, 0)
+            content = output_path.read_text()
+            self.assertNotIn("stale-content", content)
+            written_ts = float(
+                [
+                    line
+                    for line in content.splitlines()
+                    if line.startswith("snds_collector_last_success_timestamp_seconds ")
+                ][0].split()[-1]
+            )
+            self.assertGreaterEqual(written_ts, before)
 
 
 if __name__ == "__main__":

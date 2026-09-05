@@ -176,14 +176,58 @@ def render_prometheus_text(records: list[IpReputation], now: float) -> str:
     return "\n".join(lines) + "\n"
 
 
+class UnexpectedResponseShapeError(RuntimeError):
+    """Raised when SNDS answers HTTP 200 with a body that is not the
+    plain-text/CSV feed this collector parses -- a login page, a consent
+    screen, or a portal-side error rendered as HTML. `urlopen` raises
+    `HTTPError` on 4xx/5xx, but a 200 status says nothing about payload
+    shape: an HTML body parsed line-by-line as CSV yields zero records, not
+    an error, so the caller cannot tell "no data today" from "wrong page"
+    without this check. Raising here -- rather than letting the caller
+    discover an empty record list downstream -- lets `main` treat this
+    exactly like a fetch failure: no textfile write, no advanced timestamp.
+    """
+
+
+_UNEXPECTED_CONTENT_TYPES = frozenset({"text/html", "application/xhtml+xml"})
+
+
+def _looks_like_markup(text: str) -> bool:
+    """A body-shape fallback for when `Content-Type` is missing, wrong, or
+    stripped by a proxy in front of the real response -- SNDS's HTML failure
+    pages open with a doctype or an `<html>` tag, which its CSV feed never
+    does. This runs in addition to, not instead of, the `Content-Type`
+    check: a header is the cheaper and more precise signal when the server
+    sets it correctly, but a shape check on the actual bytes is what still
+    catches the case where it doesn't.
+    """
+    stripped = text.lstrip()
+    return stripped[:15].lower().startswith(("<!doctype html", "<html"))
+
+
 def fetch_snds_data(url: str, token: str, timeout: float = REQUEST_TIMEOUT_SECONDS) -> str:
     """The only network call in this module, kept separate from parsing so the
     parser (the security-sensitive half -- untrusted response text) is
     testable with no network at all.
+
+    Validates the response's shape before returning it: an HTTP 200 with an
+    HTML body (`_UNEXPECTED_CONTENT_TYPES`, `_looks_like_markup`) is not a
+    successful fetch of the feed this collector expects, even though
+    `urlopen` raises nothing for it. See `UnexpectedResponseShapeError`.
     """
     request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8", errors="replace")
+        content_type = response.headers.get_content_type()
+        body = response.read().decode("utf-8", errors="replace")
+
+    if content_type in _UNEXPECTED_CONTENT_TYPES or _looks_like_markup(body):
+        raise UnexpectedResponseShapeError(
+            f"expected the SNDS CSV/plain-text feed, got what looks like an "
+            f"HTML page (Content-Type: {content_type!r}) -- a login, "
+            "consent, or portal-side error page served as HTTP 200"
+        )
+
+    return body
 
 
 def write_textfile_atomically(path: pathlib.Path, content: str) -> None:
@@ -221,7 +265,7 @@ def main(argv: list[str]) -> int:
 
     try:
         raw = fetch_snds_data(url, token)
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, UnexpectedResponseShapeError) as exc:
         print(f"collect_snds_metrics: fetch failed: {exc}", file=sys.stderr)
         return 1
 
