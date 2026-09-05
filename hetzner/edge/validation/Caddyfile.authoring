@@ -32,6 +32,9 @@ authoring.invalid {
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
 	route {
+		request_body {
+			max_size 64MiB
+		}
 		rate_limit {
 			zone authoring_per_ip {
 				key {http.request.remote.host}

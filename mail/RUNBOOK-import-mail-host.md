@@ -59,13 +59,15 @@ You need:
   today) — the secrets provider below is the same GCP KMS key ring the root
   stack uses, just a different per-stack wrapped data key.
 
-## 1. Create the stack
+## 1. How the stack was originally created
 
 > **Do not run the commands below against the live stack.** They are the
 > original bootstrap record only. The live stack uses the passphrase secrets
 > provider (Part A of `hetzner/RUNBOOK-existing-stack-migration.md`) and the
 > Hetzner Object Storage backend pinned in `mail/Pulumi.yaml` (Part B) — not
-> the GCS bucket or the KMS key ring named here.
+> the GCS bucket or the KMS key ring named here, and it takes no
+> `pulumi login` step at all: the backend is pinned in the config file
+> instead.
 
 This is a brand-new Pulumi project (`branchleft-mail`), so it has no stack
 yet. Initialize one against the same state bucket and KMS key ring the root
@@ -73,6 +75,7 @@ yet. Initialize one against the same state bucket and KMS key ring the root
 once rather than per-stack:
 
 ```bash
+# Historical record only -- do not run this against the live stack (see above).
 pulumi login gs://branchleft-pulumi-state
 pulumi stack init production \
   --secrets-provider gcpkms://projects/branchleft-prod/locations/europe-west1/keyRings/pulumi/cryptoKeys/pulumi-secrets

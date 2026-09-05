@@ -17,13 +17,16 @@ independent of each other:
 
 > **Partly verified.** The endpoint form, and why path style is the safe
 > setting, are confirmed against the live endpoint — step 1 states what was
-> actually seen. Two things are still unverified because they need a bucket
-> this account does not yet have: locking behaviour under contention, and CI
-> credential sourcing. Neither is closed by `scripts/probe-object-storage.py`,
-> which exercises storage semantics rather than Pulumi; the lock questions are
-> closed by step 5's two-client check, and nothing has run it. Correct this
-> file from whatever the first real run observes — do not assume it was
-> right.
+> actually seen. CI credential sourcing is confirmed too, exercised in
+> production by the mail stack's `mail-plan`/`mail-apply` jobs. Locking is
+> narrower than fully proven: two concurrent `pulumi preview` runs against the
+> same stack completed with no contention, consistent with an advisory
+> per-operation lock — but a concurrent `pulumi up` contending for that same
+> lock, and what happens to a lock stranded by an interrupted apply, are not
+> exercised by that observation. `scripts/probe-object-storage.py` still only
+> exercises storage semantics, never Pulumi's own locking; step 5's two-client
+> check is what narrows the remaining gap. Correct this file from whatever the
+> next real run observes — do not assume it was right.
 
 ## Before you start
 

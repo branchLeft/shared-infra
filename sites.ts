@@ -75,6 +75,12 @@ export const sites: EdgeSite[] = [
     // Port matches deploy/compose.yml's `website` service in
     // branchLeft/website -- the two must move together, and each states so.
     privateUpstream: { host: 'app1', port: 8080 },
+    // Not derived from a tenant stack -- this site has none. An SSR marketing
+    // site whose only request bodies are contact-form posts; 1MiB is orders of
+    // magnitude above anything legitimate and replaces no ceiling at all,
+    // which is what this site had. Raise it deliberately if a real upload
+    // surface is ever added here.
+    requestBodyMaxSize: '1MiB',
   },
 
   {
@@ -84,6 +90,34 @@ export const sites: EdgeSite[] = [
     // Ghost-backed: its admin API carries author-written HTML and code, which
     // trips the injection signatures. Every Ghost tenant added here needs this
     // until there is enough admin-API traffic to prove otherwise.
+    injectionWafPreviewOnly: true,
+  },
+
+  {
+    name: 'blog2',
+    hostnames: ['blog2.branchleft.co.uk'],
+    // No `cloudRunService`: born on Hetzner, never served from GCP, so
+    // `edge.ts` skips it. See that field in siteTypes.ts.
+    //
+    // Both values belong to this tenant's own stack, and neither is chosen
+    // here. They are read differently, which matters when copying them:
+    //
+    //   port    -- `blog2-infra:hostPort` in that repo's Pulumi.<slug>.yaml.
+    //              It is NOT a stack output; `pulumi stack output hostPort`
+    //              returns nothing. Read the config. This is the value that
+    //              was nearly taken from `ss -ltnp` on app1 instead, which
+    //              gave 8081 -- free, plausible, and wrong.
+    //   ceiling -- `pulumi stack output edgeRequestBodyMaxSize`, derived in
+    //              the tenant component as half the container's tmpfs ceiling.
+    //
+    // Inside that stack the ceiling and the tmpfs limit cannot disagree. The
+    // copy into this file is an unchecked transcription, so they can: if this
+    // tenant ever sets `uploadCeilingMib`, the output moves and this line does
+    // not, and the edge then admits more than the container can hold. Nothing
+    // compares them -- re-read both on any change to either.
+    privateUpstream: { host: 'app1', port: 8100 },
+    requestBodyMaxSize: '64MiB',
+    // Ghost-backed, same reasoning as the `blog` entry above.
     injectionWafPreviewOnly: true,
   },
 ];

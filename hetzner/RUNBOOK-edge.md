@@ -574,8 +574,38 @@ Then:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
-  'systemctl restart branchleft-compose@edge'
+  'docker restart $(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy)'
 ```
+
+**Not `systemctl restart branchleft-compose@edge`.** That unit carries no
+`ExecStop` since `hetzner/provision/branchleft-compose@.service` changed, so a
+restart runs `docker compose up -d` and Compose recreates only services whose
+_config hash_ moved. A bind-mounted file's **contents** are not part of that
+hash, so a Caddyfile-only change is a silent no-op: the command exits 0,
+`--wait` passes because the unchanged containers are already healthy, and Caddy
+goes on serving the configuration it loaded at container start. This was
+observed on the monitoring stack the same day it landed
+(branchLeft/workspace#666) and again here.
+
+The `edge` instance is deliberately **not** given the blanket
+`--force-recreate` that the monitoring instance gets: recreating this stack
+wholesale on every unit restart would also recreate CrowdSec, and
+`branchleft-deploy` restarts this unit for image bumps where a selective
+recreate is the correct behaviour. So the recreate is explicit here, at the one
+step that needs it.
+
+**Validate before restarting.** The copy is already on disk at this point, so
+the running container can parse it without adopting it:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  'docker exec $(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy) caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile'
+```
+
+Expect `Valid configuration`. CI validates the file in the repository; this
+validates the bytes that survived the `rsync`, in the pinned binary, with the
+file where Caddy will actually read it. Caddy terminates TLS for every hostname
+this edge serves, so restarting onto a config it cannot parse is an outage.
 
 5. Confirm it took, with §8a's loop. Expect roughly `200 204` followed by
    `50 429` rather than `250 204` — the inverse of what §8a asserts today, and
@@ -668,8 +698,15 @@ rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   hetzner/edge/stack/ root@"$EDGE1_IPV4":/opt/branchleft/edge/ &&
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'chown -R root:root /opt/branchleft/edge/ &&
-   systemctl restart branchleft-compose@edge'
+   docker restart $(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy)'
 ```
+
+**The recreate matters more here than on the forward path.** A rollback is
+reached for during an outage, and `systemctl restart branchleft-compose@edge`
+would restore the previous file to disk and leave the broken configuration
+running in memory — exit 0, containers healthy, nothing fixed, and the one
+signal saying the rollback worked pointing the wrong way. See §10a.4 for why
+the unit no longer recreates on a bind-mount content change.
 
 Then `git checkout HEAD -- hetzner/edge/stack` on the workstation, so the
 checkout stops describing a state the repository does not hold.

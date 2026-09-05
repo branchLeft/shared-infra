@@ -1,1 +1,0 @@
-{"nodes": [{"id": "hetzner_monitoring_stack_prometheus_prometheus", "label": "Prometheus Configuration", "file_type": "code", "source_file": "hetzner/monitoring/stack/prometheus/prometheus.yml"}], "edges": [], "hyperedges": []}
