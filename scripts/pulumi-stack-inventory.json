@@ -221,6 +221,12 @@
       "kind": "tooling",
       "backend": "shared",
       "note": "Fixtures name the backends."
+    },
+    {
+      "path": "PULUMI-BACKEND-INVENTORY.md",
+      "kind": "doc",
+      "backend": "shared",
+      "note": "Cross-repo enumeration for branchLeft/workspace#130's state-backend migration; names every backend in the estate, not only this one."
     }
   ],
   "external_backend_reference_sites": [
