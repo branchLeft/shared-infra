@@ -12,8 +12,7 @@ synthetic failing test named after that module, and keeps collecting
 everything else. The summary line then reads `FAILED (errors=1)` with a
 smaller test count instead of naming the real cause -- indistinguishable, at
 a glance, from any other lone pre-existing failure, and the tests inside that
-module are gone from the count with nothing to compare it against
-(branchLeft/workspace#621).
+module are gone from the count with nothing to compare it against.
 
 This script makes that failure loud and specific instead: run it before
 `unittest discover` and it names the actual interpreter, the actual
