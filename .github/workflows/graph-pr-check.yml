@@ -1,0 +1,15 @@
+name: graph-pr-check
+
+on:
+  workflow_run:
+    workflows: ['graphify']
+    types: [completed]
+
+jobs:
+  graph-pr-check:
+    permissions:
+      pull-requests: read
+      statuses: write
+    uses: branchLeft/github-workflows/.github/workflows/graph-pr-check.yml@v1.0.8
+    with:
+      head-sha: ${{ github.event.workflow_run.head_sha }}
