@@ -456,7 +456,7 @@ def _extract_restart_check_script():
             f"expected 2 bash blocks in section 3, found {len(blocks)}"
         )
     restart_block = blocks[1].split("```", 1)[0]
-    body = restart_block.split("root@<edge1-ipv4> '", 1)[1]
+    body = restart_block.split('root@"$EDGE1_IPV4" \'', 1)[1]
     return body.rsplit("'", 1)[0]
 
 

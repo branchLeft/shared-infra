@@ -39,9 +39,128 @@ REQUIRED_FLAGS = ("--no-owner", "--no-group", "--chmod=u=rwX,go=rX")
 # A fenced command may be wrapped over several lines with trailing backslashes.
 RSYNC_COMMAND = re.compile(r"^rsync .*?(?:\\\n.*?)*$", re.MULTILINE)
 
+# A command that looks copy-pasteable but silently is not breaks every
+# command that reaches it, in either of two ways: an unresolved placeholder
+# standing in for an address, or the real address pasted in its place. Both
+# are checked below, over the same fenced blocks: a committed file must not
+# carry a concrete operational value, and a pasteable command must not carry
+# an unsubstituted placeholder either. The fix in both directions is
+# threading the value through an environment variable, populated by a lookup
+# the operator runs.
+#
+# The placeholder check does not scope by hostname or by where in the line
+# the placeholder sits. Both restrictions were tried and each left a gap: a
+# host-name scope misses a placeholder for a host it does not name, and an
+# assignment-shaped scope misses the identical placeholder used inline, or
+# assigned via `export`/`local`, or quoted. The property that actually makes
+# a placeholder wrong is simpler than either restriction: it reads as an
+# address (see `ADDRESS_WORD`) and nothing has substituted it. That is what
+# `address_placeholders` checks, independent of host, variable name, quoting
+# or position in the line.
+#
+# Deliberately narrower than "no `<...>` anywhere in a fenced block" or "no
+# IPv4-shaped token anywhere in a fenced block":
+# - Only a `bash` fence counts as a command block in these runbooks — `json`
+#   and `text` fences here hold illustrative sample output, never something
+#   pasted and run.
+# - The address word must be *trailing*, not merely present, so a resource
+#   id such as `<edge1-ipv4-id>` is left alone: a destructive deletion is
+#   deliberately worked by id, looked up fresh, rather than by a hardcoded
+#   literal that could be stale or simply mistyped.
+# - A token that legitimately varies per invocation (`<stack>`, `<host>`,
+#   `<repo>`, `<image>`, `<digest>`) is not address-shaped and never matches,
+#   whether it is an assignment's whole value or an argument inside a larger
+#   command (`hcloud server describe <host> -o json | ...` is the corrected
+#   form of the anti-pattern this file used to carry).
+# - The literal check below (`fixed_host_literals`) is a genuinely different
+#   property from the placeholder check, and stays separate: it matches only
+#   the *bare* form of a specific, known address, never a `/32` (a
+#   verification block reading real remote state renders one back that way)
+#   and never a CIDR. A threaded `$VARIABLE` reference holds no such literal
+#   and is never flagged, by construction.
+COMMAND_FENCE_LANGS = {"bash"}
+FENCE_LANG = re.compile(r"^```([a-zA-Z0-9_-]*)\s*$")
+PLACEHOLDER = re.compile(r"<[^<>\n]+>")
+ADDRESS_WORD = re.compile(r"(?:^|[^a-z])(?:ip|ipv4|address|addr)$", re.IGNORECASE)
+# Excludes the base address of a CIDR or a `/32` (the lookahead), so this is
+# disjoint from anything shaped like a subnet or a single-host mask.
+BARE_IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b(?!/)")
+# The specific, known literal values a committed file must not carry --
+# genuinely different from the placeholder check above, so it stays a
+# separate function and a separate regex rather than folded in. Pinning a
+# real value here is not the anti-pattern this file guards against: this is
+# a test recognising a regression, not a runbook pasted into an operator's
+# terminal.
+FIXED_HOST_LITERALS = {
+    "edge1": "46.225.95.167",
+    "db1": "10.20.1.20",
+}
+# A repo-wide sweep for the literal check is separate work from this fix,
+# which corrects one runbook; scoping the check to that runbook is what
+# keeps it from failing CI on files this fix does not touch.
+LITERAL_CHECK_RUNBOOKS = ("RUNBOOK-provision-host.md",)
+
 
 def runbooks() -> list[pathlib.Path]:
     return sorted(p for p in HETZNER.glob("RUNBOOK-*.md"))
+
+
+def command_blocks(text: str) -> list[str]:
+    """The bodies of every fenced block whose language is a command language
+    this repo's runbooks use. An unterminated fence is still scanned — a
+    runbook malformed enough to lose its closing fence is exactly when a
+    placeholder needs catching most, not a reason to skip it."""
+    blocks: list[str] = []
+    current: list[str] | None = None
+    lang = ""
+    for line in text.split("\n"):
+        match = FENCE_LANG.match(line)
+        if match:
+            if current is None:
+                lang = match.group(1).lower()
+                current = []
+            else:
+                if lang in COMMAND_FENCE_LANGS:
+                    blocks.append("\n".join(current))
+                current = None
+            continue
+        if current is not None:
+            current.append(line)
+    if current is not None and lang in COMMAND_FENCE_LANGS:
+        blocks.append("\n".join(current))
+    return blocks
+
+
+def address_placeholders(block_text: str) -> list[str]:
+    """Every unresolved, address-shaped placeholder token in `block_text`,
+    wherever it sits -- an assignment's entire value, `export`ed, `local`,
+    quoted, or an argument inside a larger command. Hostname and position
+    are not the property that makes one of these wrong: it reads as an
+    address (`ADDRESS_WORD` matches its trailing word) and nothing has
+    substituted it, and that is true independent of where in the line, or
+    for which host, it appears."""
+    found = []
+    for match in PLACEHOLDER.finditer(block_text):
+        token = match.group(0)
+        inner = token[1:-1].lower()  # strip the angle brackets before anchoring on the end
+        if ADDRESS_WORD.search(inner):
+            found.append(token)
+    return found
+
+
+def fixed_host_literals(block_text: str) -> list[str]:
+    """Bare IPv4 literals in `block_text` equal to a specific, known
+    address this file pins in `FIXED_HOST_LITERALS` -- the anti-pattern the
+    placeholder check above exists to catch, committed instead of left
+    unresolved. A threaded `$VARIABLE` holds no such literal and never
+    matches; the `/32` form a verification block greps real `iptables -S`
+    output for is excluded by `BARE_IPV4` itself, not filtered out here."""
+    found = []
+    for match in BARE_IPV4.finditer(block_text):
+        value = match.group(0)
+        if value in FIXED_HOST_LITERALS.values():
+            found.append(value)
+    return found
 
 
 def rsync_commands_with_following_context() -> list[tuple[pathlib.Path, str, str]]:
@@ -217,6 +336,206 @@ class RunbookRsyncCommandTests(unittest.TestCase):
             "the copy step must state that an un-restarted copy leaves no "
             "alertmanager.yml on disk at all, not just that it gets deleted",
         )
+
+
+class RunbookFixedHostPlaceholderTests(unittest.TestCase):
+    """Two checks against the same defect, deliberately not three: a fenced
+    bash command must carry no unresolved address placeholder, anywhere in
+    the line and regardless of which host it names or whether it names one,
+    and must carry no specific, known address as a committed literal
+    either. Either one silently breaks every command that reaches it; the
+    fix threads the value through a `$VARIABLE` populated by a lookup,
+    which trips neither check."""
+
+    def test_no_bash_fence_contains_an_address_placeholder_or_a_fixed_host_literal(self):
+        violations = []
+        for runbook in runbooks():
+            text = runbook.read_text(encoding="utf-8")
+            for block in command_blocks(text):
+                for token in address_placeholders(block):
+                    violations.append(f"{runbook.name}: unresolved placeholder {token}")
+                # The literal check is scoped to the one runbook this fix
+                # corrects. A repo-wide sweep for the same literal is
+                # separate work, tracked outside this file.
+                if runbook.name not in LITERAL_CHECK_RUNBOOKS:
+                    continue
+                for literal in fixed_host_literals(block):
+                    violations.append(f"{runbook.name}: committed literal address {literal}")
+        self.assertEqual(
+            violations,
+            [],
+            "found an unresolved address placeholder or a committed fixed-host "
+            "literal address in a fenced bash command block -- thread the value "
+            "through a $VARIABLE populated by a lookup instead:\n" + "\n".join(violations),
+        )
+
+    # Self-tests: prove the scanner still draws the distinction it exists
+    # for, against synthetic input rather than today's tree, so a
+    # coincidentally clean tree can't hide a scanner that quietly stopped
+    # matching.
+
+    def test_self_scanner_catches_a_placeholder_naming_a_fixed_host(self):
+        sample = (
+            "Some prose that never mentions a fence.\n\n"
+            "```bash\n"
+            'JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@<edge1-ipv4>"\n'
+            "```\n"
+        )
+        blocks = command_blocks(sample)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(address_placeholders(blocks[0]), ["<edge1-ipv4>"])
+
+    def test_self_scanner_catches_an_inline_placeholder_naming_no_host(self):
+        # The round-3 finding: <host-ipv4> is established vocabulary in this
+        # very file (as $HOST_IPV4), inline as an ssh target rather than an
+        # assignment's whole value, and names no fixed host by name.
+        sample = "```bash\nssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4>\n```\n"
+        blocks = command_blocks(sample)
+        self.assertEqual(address_placeholders(blocks[0]), ["<host-ipv4>"])
+
+    def test_self_scanner_catches_an_export_assignment(self):
+        sample = "```bash\nexport HOST_IPV4=<this host's public address>\n```\n"
+        blocks = command_blocks(sample)
+        self.assertEqual(address_placeholders(blocks[0]), ["<this host's public address>"])
+
+    def test_self_scanner_catches_a_local_assignment(self):
+        sample = "```bash\nlocal HOST_IPV4=<this host's public address>\n```\n"
+        blocks = command_blocks(sample)
+        self.assertEqual(address_placeholders(blocks[0]), ["<this host's public address>"])
+
+    def test_self_scanner_catches_a_quoted_assignment(self):
+        # The one the brittle assignment-only regex missed: the apostrophe
+        # and spaces in the placeholder text are exactly what would push an
+        # author to quote it.
+        sample = '```bash\nHOST_IPV4="<this host\'s public address>"\n```\n'
+        blocks = command_blocks(sample)
+        self.assertEqual(address_placeholders(blocks[0]), ["<this host's public address>"])
+
+    def test_self_scanner_catches_a_placeholder_after_a_line_continuation(self):
+        sample = "```bash\nHOST_IPV4=\\\n  <this host's public address>\n```\n"
+        blocks = command_blocks(sample)
+        self.assertEqual(address_placeholders(blocks[0]), ["<this host's public address>"])
+
+    def test_self_scanner_ignores_the_same_placeholder_mentioned_in_prose(self):
+        sample = (
+            "`<edge1-ipv4>` is edge1's public address, substitute it below.\n\n"
+            "```bash\n"
+            'echo "no placeholder in this command"\n'
+            "```\n"
+        )
+        blocks = command_blocks(sample)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(address_placeholders(blocks[0]), [])
+
+    def test_self_scanner_leaves_a_per_invocation_placeholder_alone(self):
+        sample = (
+            "```bash\n"
+            "git clone https://github.com/branchLeft/ghost-tenant-<slug>.git\n"
+            "```\n"
+        )
+        blocks = command_blocks(sample)
+        self.assertEqual(address_placeholders(blocks[0]), [])
+
+    def test_self_scanner_leaves_a_bare_per_invocation_assignment_alone(self):
+        # <host> is the entire value here, but it is not address-shaped --
+        # must not be confused with the HOST_IPV4 regression above.
+        sample = "```bash\nHOST=<host>\n```\n"
+        blocks = command_blocks(sample)
+        self.assertEqual(address_placeholders(blocks[0]), [])
+
+    def test_self_scanner_leaves_a_placeholder_that_is_only_part_of_the_value_alone(self):
+        sample = "```bash\nKEY_FILE=~/.ssh/id_ed25519_slot_<stack>\n```\n"
+        blocks = command_blocks(sample)
+        self.assertEqual(address_placeholders(blocks[0]), [])
+
+    def test_self_scanner_leaves_the_corrected_lookup_form_alone(self):
+        # The form this fix actually uses -- <host> is an argument to
+        # hcloud, not the assignment's value, and is not itself an address.
+        # Must not self-trip.
+        sample = (
+            "```bash\n"
+            "HOST_IPV4=$(hcloud server describe <host> -o json | "
+            "python3 -c \"import json, sys; print(json.load(sys.stdin)"
+            "['public_net']['ipv4']['ip'])\")\n"
+            "```\n"
+        )
+        blocks = command_blocks(sample)
+        self.assertEqual(address_placeholders(blocks[0]), [])
+
+    def test_self_scanner_does_not_scan_a_non_bash_fence(self):
+        sample = "```text\nroot@<edge1-ipv4>\n```\n"
+        self.assertEqual(command_blocks(sample), [])
+
+    def test_self_scanner_leaves_a_non_address_placeholder_naming_a_fixed_host_alone(self):
+        sample = "```bash\nssh -i \"<db1 host key fingerprint>\" root@localhost\n```\n"
+        blocks = command_blocks(sample)
+        self.assertEqual(address_placeholders(blocks[0]), [])
+
+    def test_self_scanner_leaves_a_resource_id_placeholder_alone(self):
+        # <edge1-ipv4-id> is a Hetzner resource id, looked up fresh so a
+        # destructive delete never runs against a guess -- ends in "-id",
+        # not an address word, so it is not this bug.
+        sample = "```bash\nhcloud primary-ip delete <edge1-ipv4-id>\n```\n"
+        blocks = command_blocks(sample)
+        self.assertEqual(address_placeholders(blocks[0]), [])
+
+    def test_self_scanner_leaves_a_cidr_placeholder_alone(self):
+        sample = "```bash\nip route add <subnet-cidr> via <gateway>\n```\n"
+        blocks = command_blocks(sample)
+        self.assertEqual(address_placeholders(blocks[0]), [])
+
+    def test_self_scanner_catches_a_fixed_host_literal_in_a_bash_fence(self):
+        sample = (
+            "```bash\n"
+            'JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@46.225.95.167"\n'
+            "```\n"
+        )
+        blocks = command_blocks(sample)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(fixed_host_literals(blocks[0]), ["46.225.95.167"])
+
+    def test_self_scanner_ignores_the_same_literal_mentioned_in_prose(self):
+        sample = (
+            "`edge1` is reachable at `46.225.95.167`.\n\n"
+            "```bash\n"
+            'echo "no literal in this command"\n'
+            "```\n"
+        )
+        blocks = command_blocks(sample)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(fixed_host_literals(blocks[0]), [])
+
+    def test_self_scanner_ignores_a_threaded_variable_for_the_same_host(self):
+        sample = (
+            "```bash\n"
+            'EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c '
+            '"import json, sys; print(json.load(sys.stdin)[\'public_net\'][\'ipv4\'][\'ip\'])")\n'
+            'JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"\n'
+            "```\n"
+        )
+        blocks = command_blocks(sample)
+        self.assertEqual(fixed_host_literals(blocks[0]), [])
+
+    def test_self_scanner_leaves_a_different_hosts_real_address_alone(self):
+        # app1's real, current address -- not a fixed host this scanner
+        # tracks, and genuinely a different literal from edge1's or db1's.
+        sample = "```bash\nssh -i ~/.ssh/id_ed25519_hetzner root@10.20.1.100 'true'\n```\n"
+        blocks = command_blocks(sample)
+        self.assertEqual(fixed_host_literals(blocks[0]), [])
+
+    def test_self_scanner_leaves_the_verification_slash_32_form_alone(self):
+        # iptables -S renders an unmasked -d <addr> back with a /32 -- a
+        # verification block reading real remote state, not a connection
+        # target pasted into the command, and the drift gate in
+        # hetzner/scripts/check-address-plan-drift.py is what keeps this
+        # one honest against the address plan instead.
+        sample = (
+            "```bash\n"
+            'iptables -t filter -S DOCKER-USER | grep -- "-d 10.20.1.20/32 -j ACCEPT"\n'
+            "```\n"
+        )
+        blocks = command_blocks(sample)
+        self.assertEqual(fixed_host_literals(blocks[0]), [])
 
 
 if __name__ == "__main__":

@@ -84,10 +84,17 @@ installation had already failed. `bootcmd` is the one placement early enough
 re-runs on every boot rather than once, it also covers every reboot between
 first boot and `run-all.sh` actually taking over the same job permanently.
 
-Verify it on a host that has already had `run-all.sh` run:
+Verify it on a host that has already had `run-all.sh` run — this has no
+public address of its own, so it needs the same gateway jump as every other
+command reaching it (`db1` is the only such host today). Neither address is
+typed in: each comes from a lookup run once, in the same session, ahead of
+the command that consumes it.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<host-private-ip> '
+EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # the host being checked; db1 is the only one today
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
   ip route show default
   systemctl is-enabled branchleft-host-egress.service
   cat /etc/resolvconf/resolv.conf.d/head
@@ -214,12 +221,16 @@ ciphertext, and neither may be committed.
 ### 2. Make the gateway forward
 
 From the repository root, not from `hetzner/` — the paths below are
-repo-root-relative, and step 1 left the shell one directory down:
+repo-root-relative, and step 1 left the shell one directory down. Set
+`edge1`'s address once, from a lookup rather than a literal — every command
+in steps 2 through 6 below reuses it; re-set it first if you return to one of
+those steps independently, later:
 
 ```bash
 cd ~/branchLeft/shared-infra
-scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@<edge1-ipv4>:/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/nat-gateway.sh'
+EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@"$EDGE1_IPV4":/root/platform-provision
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/nat-gateway.sh'
 ```
 
 Idempotent, and the right response to "is that host still the gateway". Re-run
@@ -246,8 +257,11 @@ hetzner/provision/.` below for the same reason.
 
 ### 3. Confirm the gateway is forwarding
 
+`$EDGE1_IPV4` is set under step 2 above; re-set it first if you are entering
+here independently.
+
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   set -e
   test "$(sysctl -n net.ipv4.ip_forward)" = 1
   iptables -t nat -S POSTROUTING | grep -- "-s 10.20.1.0/24 .*-j MASQUERADE"
@@ -296,7 +310,7 @@ a second signal: `branchleft-nat.service`'s own activation timestamp,
 captured before and after the restart. Prove both, once, after provisioning:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@<edge1-ipv4> '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   set -e
   BEFORE="$(systemctl show -p ActiveEnterTimestamp --value branchleft-nat.service)"
   systemctl restart docker.service
@@ -335,9 +349,11 @@ here means a bare rebuild never has a window where it is missing.
 Doc 14 §3.1 keeps monitoring co-located on `edge1` until TENANT_1, so
 `edge1` is the only host carrying a committed drop-in today — re-check that
 split before reusing this step once a standalone monitoring host exists.
+`$EDGE1_IPV4` is set under step 2 above; re-set it first if you are entering
+here independently.
 
 ```bash
-hetzner/provision/install-systemd-drop-ins.sh root@<edge1-ipv4>
+hetzner/provision/install-systemd-drop-ins.sh root@"$EDGE1_IPV4"
 ```
 
 The same command `RUNBOOK-monitoring.md`'s drop-in step already runs. It
@@ -353,11 +369,14 @@ has done yet on a freshly provisioned host.
 ### 5. Provision a host that has no public address
 
 Reached through the gateway, over the private network — no firewall rule
-filters private traffic, so nothing had to be opened for this.
+filters private traffic, so nothing had to be opened for this. `$EDGE1_IPV4`
+is set under step 2 above; re-set it first if you are entering here
+independently.
 
 ```bash
-JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@<edge1-ipv4>"
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<host-private-ip> '
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
+HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # the host being provisioned; db1 is the only one today
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
   getent hosts deb.debian.org &&
   curl -fsS -o /dev/null https://download.docker.com/linux/debian/gpg &&
   echo "egress ok"
@@ -378,8 +397,8 @@ from the repository root:
 
 ```bash
 cd ~/branchLeft/shared-infra
-scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@<host-private-ip>:/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@<host-private-ip> 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
+scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@"$HOST_PRIVATE_IP":/root/platform-provision
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
 ```
 
 That `scp -r` copies the whole of `provision/` — `nat-gateway.sh`,
@@ -447,11 +466,13 @@ is real.
 
 Run it the same way as step 5, on each app host. `app1`, at `10.20.1.100`, is
 the only one that exists today; the command is otherwise unchanged for a
-future `app2`/`app3`, substituting that host's own private IP:
+future `app2`/`app3`, substituting that host's own private IP. `$EDGE1_IPV4`
+is set under step 2 above; re-set it first if you are entering here
+independently:
 
 ```bash
 cd ~/branchLeft/shared-infra
-JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@46.225.95.167"
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
 scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@10.20.1.100:/root/platform-provision
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@10.20.1.100 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/app-host-isolation.sh'
 ```
@@ -459,7 +480,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@10.20.1.100 'find 
 Confirm it:
 
 ```bash
-JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@46.225.95.167"
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@10.20.1.100 '
   set -e
   iptables -t filter -S DOCKER-USER | grep -E -- "-m conntrack --ctstate (ESTABLISHED,RELATED|RELATED,ESTABLISHED) -j ACCEPT"
@@ -489,13 +510,26 @@ piece of work rather than claimed here.
 
 ## Run the whole set
 
-Substituting the host's own name and public address. A host with no public
-address is provisioned through the gateway instead — step 5 above carries the
-same two commands with the jump added:
+Set the host's own public address once, from a lookup — `<host>` is the
+host's own name (`app1`, say), the same per-invocation identifier every
+other section below substitutes by hand. The address itself is not: it is
+assigned by Hetzner at server creation, the same way `edge1`'s own address
+is looked up above rather than pasted as a literal. Every command below and
+in "Confirm it took", "Granting a stack its own deploy slot", "Auditing and
+revoking slots" and "Rotating the deploy key" reuses it; re-set it first if
+you are returning to one of those sections independently, for a different
+host, later:
 
 ```bash
-scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@<host-ipv4>:/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
+HOST_IPV4=$(hcloud server describe <host> -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+```
+
+A host with no public address is provisioned through the gateway instead —
+step 5 above carries the same two commands with the jump added:
+
+```bash
+scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@"$HOST_IPV4":/root/platform-provision
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$HOST_IPV4" 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/run-all.sh'
 ```
 
 The key is the platform owner's — the one registered in the hcloud project and
@@ -506,7 +540,7 @@ being performed here.
 ## Confirm it took
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$HOST_IPV4" '
   systemctl is-active fail2ban unattended-upgrades docker &&
   test -x /usr/local/sbin/branchleft-deploy &&
   systemctl cat branchleft-compose@.service >/dev/null &&
@@ -549,9 +583,11 @@ ssh-keygen -t ed25519 -N '' -C 'unused' -f ~/.ssh/id_ed25519_slot_<stack>
 
 # 2. Refresh the provisioning scripts on the host, then drop any __pycache__
 #    this workstation's own test runs left under provision/ before anything
-#    else reads the directory.
-scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@<host-ipv4>:/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+#    else reads the directory. ($HOST_IPV4 is set under "Run the whole set"
+#    above; re-set it here if returning to this section independently, for
+#    whichever host is granting a slot.)
+scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@"$HOST_IPV4":/root/platform-provision
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$HOST_IPV4" \
   'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} +'
 
 # 3. Install the wrapper that understands --slot. NOT optional on a host
@@ -560,12 +596,12 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
 #    `invalid stack name: '--slot'` because the forced command's argv means
 #    nothing to the older wrapper. This is a provisioning script, so unlike
 #    cloud-init it does reach an already-running host.
-ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$HOST_IPV4" \
   '/root/platform-provision/30-install-deploy-tooling.sh'
 
 # 4. Install the public half. It travels on stdin, so the run leaves no copy
 #    of it on the host to remember to delete.
-ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$HOST_IPV4" \
   '/root/platform-provision/provision_deploy_slot.py --public-key-file /dev/stdin <stack>' \
   < ~/.ssh/id_ed25519_slot_<stack>.pub
 ```
@@ -594,12 +630,12 @@ failed production deploy.
 
 ```bash
 # 5a. The host-level key still authenticates and still reaches sudo.
-ssh -i ~/.ssh/id_ed25519_deploy_<host> deploy@<host-ipv4> \
+ssh -i ~/.ssh/id_ed25519_deploy_<host> deploy@"$HOST_IPV4" \
   'sudo -n /usr/local/sbin/branchleft-deploy 2>&1 | head -2'
 
 # 5b. The new slot key authenticates, and reaches its own stack only.
 printf '%s\n' 'not-an-image' \
-  | ssh -T -i ~/.ssh/id_ed25519_slot_<stack> deploy@<host-ipv4>
+  | ssh -T -i ~/.ssh/id_ed25519_slot_<stack> deploy@"$HOST_IPV4"
 ```
 
 Expect the wrapper's two usage lines from 5a, and from 5b
@@ -620,7 +656,7 @@ usually not the cause. Read the actual reason first:
 
 ```bash
 # What sshd rejected, and what the paths actually look like.
-ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$HOST_IPV4" \
   'journalctl -u ssh -n 40 --no-pager | grep -iE "authorized|bad ownership|refus"; \
    ls -lan /home/deploy /home/deploy/.ssh; \
    sshd -T | grep -iE "authorizedkeysfile|strictmodes|pubkeyauth"'
@@ -630,7 +666,7 @@ If a rollback is genuinely the answer, **revoke every slot first** — otherwise
 the host is left advertising scoped keys it is no longer enforcing:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$HOST_IPV4" \
   'for s in $(/root/platform-provision/provision_deploy_slot.py --list-slots | cut -d= -f1); do \
      /root/platform-provision/provision_deploy_slot.py --revoke "$s"; done; \
    chown -R deploy:deploy /home/deploy'
@@ -654,13 +690,13 @@ stdin because the forced command discards its argv:
 ```bash
 printf '%s\n' "ghcr.io/branchleft/<image>@sha256:<digest>" \
   | ssh -T -i "$KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-        -o UserKnownHostsFile=known_hosts deploy@<host-ipv4>
+        -o UserKnownHostsFile=known_hosts deploy@"$HOST_IPV4"
 ```
 
 ### Auditing and revoking slots
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$HOST_IPV4" \
   '/root/platform-provision/provision_deploy_slot.py --list-slots'
 ```
 
@@ -688,11 +724,18 @@ Do not rotate a slot during an incident on that stack.
 
 ```bash
 # Revoking. Immediate: the stack keeps running, and nothing can redeploy it.
-ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$HOST_IPV4" \
   '/root/platform-provision/provision_deploy_slot.py --revoke <stack>'
 ```
 
 ## Rotating the deploy key
+
+Set `HOST_IPV4` fresh, for whichever host's key is being rotated, if you are
+not continuing directly from a section above:
+
+```bash
+HOST_IPV4=$(hcloud server describe <host> -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+```
 
 This is the **unscoped, host-level** key — the one whose holder can name any
 stack on the host. A slot key rotates by re-running the grant above instead,
@@ -722,12 +765,12 @@ ssh-keygen -t ed25519 -N '' -C 'deploy@<host>' -f ~/.ssh/id_ed25519_deploy_<host
 # 2. Append the public half, as root. The deploy account cannot edit its own
 #    authorized_keys -- that is deliberate, and it is why this needs the
 #    owner key.
-ssh -i ~/.ssh/id_ed25519_hetzner root@<host-ipv4> \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$HOST_IPV4" \
   "printf 'restrict %s\n' \"$(cat ~/.ssh/id_ed25519_deploy_<host>_new.pub)\" \
    >> /home/deploy/.ssh/authorized_keys"
 
 # 3. Prove the new key works before anything is removed.
-ssh -i ~/.ssh/id_ed25519_deploy_<host>_new deploy@<host-ipv4> \
+ssh -i ~/.ssh/id_ed25519_deploy_<host>_new deploy@"$HOST_IPV4" \
   'sudo -n /usr/local/sbin/branchleft-deploy 2>&1 | head -1'
 ```
 
