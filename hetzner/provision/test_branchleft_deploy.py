@@ -704,6 +704,46 @@ class MainTests(unittest.TestCase):
         )
         self.assertEqual(stdin.tell(), 0)
 
+    def _with_lock_timeout_env(self, value, argv, **kwargs):
+        old = os.environ.get(bd.LOCK_TIMEOUT_ENV_VAR)
+        os.environ[bd.LOCK_TIMEOUT_ENV_VAR] = value
+        try:
+            return bd.main(argv, **kwargs)
+        finally:
+            if old is None:
+                del os.environ[bd.LOCK_TIMEOUT_ENV_VAR]
+            else:
+                os.environ[bd.LOCK_TIMEOUT_ENV_VAR] = old
+
+    def test_lock_timeout_env_var_reaches_deploy_as_a_keyword(self):
+        # Not argv -- a new flag would widen the exact-length shape the
+        # sudoers grant depends on (see the constant's own comment). An
+        # operator invoking this binary directly can still reach the knob.
+        received = {}
+        code = self._with_lock_timeout_env(
+            "5",
+            ["branchleft-deploy", "edge", VALID_IMAGE],
+            deploy=lambda stack, image, **kw: received.update(kw),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(received, {"lock_timeout": 5.0})
+
+    def test_an_invalid_lock_timeout_env_var_is_reported_and_ignored(self):
+        calls = []
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = self._with_lock_timeout_env(
+                "not-a-number",
+                ["branchleft-deploy", "edge", VALID_IMAGE],
+                deploy=lambda stack, image, **kw: calls.append(kw),
+            )
+        self.assertEqual(code, 0)
+        # Falls back to the default rather than crashing or silently using a
+        # nonsense value -- the deploy proceeds with no override at all.
+        self.assertEqual(calls, [{}])
+        self.assertIn(bd.LOCK_TIMEOUT_ENV_VAR, stderr.getvalue())
+        self.assertIn("not-a-number", stderr.getvalue())
+
 
 class ResolvesImageFromEnvTests(unittest.TestCase):
     """The predicate is the sole arbiter of whether a stack's pin is enforced.

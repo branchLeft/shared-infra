@@ -80,12 +80,18 @@ import time
 CONFIG_DIR = "/etc/branchleft"
 STACK_DIR = "/opt/branchleft"
 
-# Bounded, not indefinite: a wait long enough to ride out two ordinary
-# deploys landing moments apart (the routine per-tenant bump case this repo
-# expects on the edge host), short enough that a genuinely stuck holder is
-# reported inside a single CI job rather than left to time the job out itself
-# with a far less specific error.
-DEPLOY_LOCK_TIMEOUT = 30.0
+# Bounded against what the lock actually wraps, not a round number: the
+# guarded sequence runs `systemctl restart` on a `Type=oneshot` unit whose
+# `TimeoutStartSec=600` (branchleft-compose@.service) makes that single call
+# block for up to ten minutes on a legitimate slow pull-plus-health-wait, and
+# a failed restart's rollback path runs a *second* such restart under the
+# same lock acquisition -- so a single ordinary (non-buggy) deploy that fails
+# once and rolls back can legitimately hold this lock for close to 2x600s.
+# 1260s is that worst case (1200s) plus a margin for the discriminator
+# `docker ps` call and the `logger` call that sit between the two restarts.
+# Anything shorter would report a slow-but-healthy holder as if it had hung,
+# which is the false-positive this timeout exists to avoid, not to produce.
+DEPLOY_LOCK_TIMEOUT = 1260.0
 DEPLOY_LOCK_POLL_INTERVAL = 0.2
 
 # Deliberately narrower than the character set systemd would accept in an
@@ -172,12 +178,17 @@ def stack_deploy_lock(
 
     Held-lock behaviour is a bounded wait, not an immediate failure or an
     indefinite block: polls for up to `timeout` seconds (default
-    `DEPLOY_LOCK_TIMEOUT`) using non-blocking `flock` attempts rather than a
-    single blocking call, so the caller sees the reason precisely instead of
-    the wait itself, and can still be given a deterministic clock and sleep
-    for testing. An ordinary overlap (two deploys landing moments apart)
-    quietly clears within that window; the operator only sees a message at
-    all once something has genuinely stayed wrong for the whole of it.
+    `DEPLOY_LOCK_TIMEOUT`, sized against the restart unit's own
+    `TimeoutStartSec` -- see that constant's comment) using non-blocking
+    `flock` attempts rather than a single blocking call, so the caller sees
+    the reason precisely instead of the wait itself, and can still be given a
+    deterministic clock and sleep for testing. An ordinary overlap (two
+    deploys landing moments apart, or one deploy's own legitimate slow pull
+    and health-wait) quietly clears within that window; the operator only
+    sees a message at all once contention has outlasted the whole of it --
+    which the message below does not read as evidence of a hang, because at
+    a timeout sized for the slowest legitimate case, an alive-but-slow holder
+    is at least as likely as a genuinely stuck one.
     """
     path = deploy_lock_path(stack, config_dir)
     lock_fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -193,13 +204,20 @@ def stack_deploy_lock(
                 if now() >= deadline:
                     raise DeployError(
                         f"could not acquire the deploy lock for {stack!r} "
-                        f"within {timeout:g}s ({path}); another "
+                        f"within {timeout:g}s ({path}). Another "
                         "branchleft-deploy invocation for this stack is still "
-                        "running. If none actually is, its process has hung "
-                        "rather than exited -- flock releases automatically "
-                        "on exit, so a lock that outlives its holder's exit "
-                        "is not possible; find and clear that process rather "
-                        "than the lock file"
+                        "holding it and is alive right now -- flock releases "
+                        "the instant its holder's process exits (clean exit, "
+                        "crash, or kill), so this is not a stale lock file to "
+                        "delete. This does not mean that process has hung: "
+                        f"{timeout:g}s is sized for the slowest legitimate "
+                        "restart this lock guards, so a holder still running "
+                        "is at least as likely to be a normal slow pull or "
+                        "health-check wait as a stuck one. Check what it is "
+                        "doing -- `journalctl -u "
+                        f"branchleft-compose@{stack}` and `docker compose -p "
+                        f"{stack} ps` -- before deciding whether to wait "
+                        "longer or intervene"
                     ) from None
                 sleep(poll_interval)
         try:
@@ -749,6 +767,20 @@ def read_slot_image(stream, *, limit: int = SLOT_STDIN_LIMIT) -> str:
     return validate_image_ref(lines[0])
 
 
+# Not a new argv flag: the two calling conventions above are validated by
+# exact argv length precisely so the sudoers grant can name this binary with
+# no wildcard (see the module docstring) -- adding a `--lock-timeout` flag
+# would widen that shape for every caller, including the CI deploy account,
+# for a knob only an operator diagnosing contention needs. An environment
+# variable read here instead reaches a direct invocation (an operator running
+# this script by hand, as the RUNBOOK does) with zero change to argv parsing.
+# It does NOT reach the CI deploy account's sudo invocation: sudo's env_reset
+# strips it unless the sudoers drop-in adds it to env_keep, which is a
+# separate, deliberate change to a privileged file, not a side effect of
+# this one.
+LOCK_TIMEOUT_ENV_VAR = "BRANCHLEFT_DEPLOY_LOCK_TIMEOUT"
+
+
 def main(argv: list[str], *, stdin=None, deploy=deploy) -> int:
     usage = (
         "usage: branchleft-deploy <stack> <image@sha256:...>\n"
@@ -760,6 +792,17 @@ def main(argv: list[str], *, stdin=None, deploy=deploy) -> int:
 
     slot_mode = argv[1] == SLOT_FLAG
     stack = argv[2] if slot_mode else argv[1]
+    deploy_kwargs = {}
+    override = os.environ.get(LOCK_TIMEOUT_ENV_VAR)
+    if override is not None:
+        try:
+            deploy_kwargs["lock_timeout"] = float(override)
+        except ValueError:
+            print(
+                f"branchleft-deploy: ignoring invalid {LOCK_TIMEOUT_ENV_VAR}="
+                f"{override!r} (not a number); using the default",
+                file=sys.stderr,
+            )
     try:
         if slot_mode:
             # Ahead of the read, which blocks until the caller closes the
@@ -769,7 +812,7 @@ def main(argv: list[str], *, stdin=None, deploy=deploy) -> int:
             image = read_slot_image(stdin or sys.stdin)
         else:
             image = argv[2]
-        deploy(stack, image)
+        deploy(stack, image, **deploy_kwargs)
     except DeployError as error:
         print(f"branchleft-deploy: {error}", file=sys.stderr)
         return 1
