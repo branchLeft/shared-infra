@@ -75,6 +75,12 @@ export const sites: EdgeSite[] = [
     // Port matches deploy/compose.yml's `website` service in
     // branchLeft/website -- the two must move together, and each states so.
     privateUpstream: { host: 'app1', port: 8080 },
+    // Not derived from a tenant stack -- this site has none. An SSR marketing
+    // site whose only request bodies are contact-form posts; 1MiB is orders of
+    // magnitude above anything legitimate and replaces no ceiling at all,
+    // which is what this site had. Raise it deliberately if a real upload
+    // surface is ever added here.
+    requestBodyMaxSize: '1MiB',
   },
 
   {
