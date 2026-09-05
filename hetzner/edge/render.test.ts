@@ -46,6 +46,11 @@ const site = (overrides: Partial<EdgeSite> = {}): EdgeSite => ({
   hostnames: ['example.test'],
   cloudRunService: 'example-service',
   privateUpstream: { host: 'app1', port: 2368 },
+  // Defaulted so a test that sets `injectionWafPreviewOnly` to exercise
+  // something else does not trip the Ghost-backed refusal in
+  // `requestBodyDirective`. Cases that are *about* the ceiling override it
+  // explicitly, `undefined` included.
+  requestBodyMaxSize: '64MiB',
   ...overrides,
 });
 
@@ -151,6 +156,101 @@ describe('the registry serves two edges, and an entry must reach at least one', 
     });
     expect(render(ENFORCING, [hetznerOnly])).toBe(render(ENFORCING, [dualEdge]));
     expect(render(ENFORCING, [hetznerOnly])).toContain('both.test');
+  });
+});
+
+describe('the request-body ceiling', () => {
+  // The value's source is a tenant stack output derived alongside the
+  // container's tmpfs ceiling; see `requestBodyMaxSize` in siteTypes.ts.
+  it('emits the directive first in the route -- textual position only, see the note', () => {
+    // Ghost-backed on purpose: that is the case the ceiling exists for, and it
+    // is what renders `appsec @inspected` rather than the bare `appsec` a
+    // non-authoring site gets.
+    const rendered = render(ENFORCING, [
+      site({
+        hostnames: ['bounded.test'],
+        injectionWafPreviewOnly: true,
+        requestBodyMaxSize: '64MiB',
+      }),
+    ]);
+    expect(rendered).toContain('max_size 64MiB');
+
+    // Scoped to the route block. Searching the whole document finds `appsec_url`
+    // in the global CrowdSec options long before any site directive, which makes
+    // a document-wide index comparison assert the opposite of what it reads as.
+    const route = rendered.slice(rendered.indexOf('route {'));
+    const body = route.indexOf('request_body {');
+    expect(body).toBeGreaterThanOrEqual(0);
+
+    // This asserts TEXTUAL position and nothing about runtime behaviour.
+    // Measured against Caddy v2.11.4, `request_body` does not short-circuit
+    // the handler chain: the rate limiter, AppSec and the upstream connection
+    // all still run. Ordering is convention here, not a boundary -- do not
+    // cite this test as evidence that an oversized body is cheap to reject.
+    //
+    // It still earns its place: asserting only `< reverse_proxy` stayed green
+    // with the directive moved after the chain, so the weaker form proved
+    // nothing at all, not even about position.
+    for (const later of ['rate_limit', 'appsec @inspected', 'reverse_proxy']) {
+      const at = route.indexOf(later);
+      expect(at, `${later} must appear in the route`).toBeGreaterThanOrEqual(0);
+      expect(at, `request_body must precede ${later}`).toBeGreaterThan(body);
+    }
+  });
+
+  it.each([true, false])(
+    'refuses any served site that declares none, injectionWafPreviewOnly=%s',
+    (ghostBacked) => {
+      // Both cases on purpose. Keying the refusal on `injectionWafPreviewOnly`
+      // was tried and is unsound -- that flag's own docstring records the
+      // condition for removing it, and removing it would have taken the body
+      // ceiling with it silently.
+      const noLimit = site({
+        hostnames: ['unbounded.test'],
+        injectionWafPreviewOnly: ghostBacked,
+        requestBodyMaxSize: undefined,
+      });
+      expect(() => render(ENFORCING, [noLimit])).toThrow(/declares no requestBodyMaxSize/);
+    }
+  );
+
+  it('refuses MB, which Caddy reads as a power of ten', () => {
+    // The trap this exists for: 64MB renders cleanly, looks right in review,
+    // and is 4.4% larger than the tmpfs ceiling it is meant to match.
+    const decimal = site({ hostnames: ['decimal.test'], requestBodyMaxSize: '64MB' });
+    expect(() => render(ENFORCING, [decimal])).toThrow(/powers of ten/);
+  });
+
+  it.each(['64', '64 MiB', '0MiB', '64mib', '64MiBB', ''])(
+    'refuses %o, which is not a binary size string',
+    (value) => {
+      const bad = site({ hostnames: ['bad.test'], requestBodyMaxSize: value });
+      expect(() => render(ENFORCING, [bad])).toThrow(/not a binary size/);
+    }
+  );
+
+  it.each(['512KiB', '64MiB', '2GiB'])('accepts %o', (value) => {
+    const ok = site({ hostnames: ['ok.test'], requestBodyMaxSize: value });
+    expect(render(ENFORCING, [ok])).toContain(`max_size ${value}`);
+  });
+
+  it('every site the real registry renders declares one, and at least one does', () => {
+    // The `served` count is asserted because the earlier form of this test
+    // guarded on `injectionWafPreviewOnly && privateUpstream`, which matched
+    // ZERO entries -- website has the upstream but not the flag, blog has the
+    // flag but no upstream. The loop body never ran, and removing the
+    // renderer's refusal left it green. A registry guard that cannot fail is
+    // worse than none: it reads as coverage.
+    let served = 0;
+    for (const entry of sites) {
+      if (entry.privateUpstream === undefined) continue;
+      served += 1;
+      expect(
+        entry.requestBodyMaxSize,
+        `site ${entry.name} is served by this edge and must declare requestBodyMaxSize`
+      ).toBeDefined();
+    }
+    expect(served, 'this guard matched no site and proves nothing').toBeGreaterThan(0);
   });
 });
 
@@ -665,6 +765,7 @@ describe('the fully enforcing posture', () => {
       cloudRunService: 'unused',
       injectionWafPreviewOnly: true,
       privateUpstream: { host: 'app1', port: 2368 },
+      requestBodyMaxSize: '64MiB',
     };
     await expect(renderCaddyfile([authoring], [], ENFORCING)).toMatchFileSnapshot(
       './validation/Caddyfile.authoring'

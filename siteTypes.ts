@@ -78,6 +78,30 @@ export interface EdgeSite {
    */
   injectionWafPreviewOnly?: boolean;
   /**
+   * Maximum request body this edge will accept for the site, as a Caddy size
+   * string — the tenant stack's `edgeRequestBodyMaxSize` output, copied
+   * verbatim. `RUNBOOK-tenant-onboarding.md` §9 in `branchLeft/ghost-platform`
+   * is where it comes from; it is derived there from the same input as the
+   * container's `/tmp` ceiling so the two cannot disagree, and setting a
+   * different number here by hand defeats that.
+   *
+   * **Binary units only — `MiB`, never `MB`.** Caddy reads `MB` as a power of
+   * ten while every other number in that derivation is a power of two, and a
+   * ~4.4% disagreement in a set of values whose whole purpose is that they
+   * cannot disagree is still a disagreement. The renderer rejects `MB`.
+   *
+   * **Required for every site this edge serves**, and the renderer refuses to
+   * emit a site block without it. For a Ghost tenant it is the only bound that
+   * exists on the image, media, file and content-import paths — Ghost's
+   * generic upload middleware sets none, and the tmpfs `size=` is a backstop
+   * that fails one upload with `ENOSPC` rather than a control. For a
+   * non-tenant site it is a bound chosen from that site's own request shapes.
+   *
+   * Optional in the type because a site with no `privateUpstream` is not
+   * rendered by this edge at all and needs none.
+   */
+  requestBodyMaxSize?: string;
+  /**
    * Where the Hetzner edge proxies this site. Absent means the site has no
    * private-network backend yet: it is skipped entirely by the Caddy renderer,
    * which is what keeps the edge from requesting a certificate for a hostname

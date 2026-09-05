@@ -31,6 +31,9 @@ branchleft.co.uk {
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
 	route {
+		request_body {
+			max_size 1MiB
+		}
 		rate_limit {
 			zone website_per_ip {
 				key {http.request.remote.host}
