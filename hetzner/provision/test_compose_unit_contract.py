@@ -58,10 +58,26 @@ lines. systemd ignores assignments before a section header, so a directive
 found anywhere in the file is not a directive systemd applies.
 """
 
-import os
 import pathlib
 import re
+import subprocess
+import sys
 import unittest
+
+# `drop_in_for` below returns `pathlib.Path | None`: PEP 604 syntax that a
+# function-signature annotation evaluates eagerly, before Python 3.10. Under
+# an older interpreter that eager evaluation is a `TypeError` on a line deep
+# in the file, which unittest reports as a bare import error -- a reader has
+# no way to tell "this module needs a newer Python" from "this module is
+# broken". Checking the version first turns that into a message that names
+# the actual requirement, before the incompatible syntax is ever reached.
+if sys.version_info < (3, 10):
+    raise RuntimeError(
+        "test_compose_unit_contract.py requires Python 3.10 or newer (drop_in_for's "
+        f"`pathlib.Path | None` return annotation is PEP 604 syntax); running under "
+        f"{sys.version.split()[0]}. On macOS, `/usr/bin/python3` is the system 3.9 -- "
+        "run this suite with `python3` from PATH instead."
+    )
 
 import branchleft_deploy as bd
 from branchleft_deploy import (
@@ -233,12 +249,43 @@ def scanned_files() -> list[pathlib.Path]:
 
 
 def walked_files() -> list[pathlib.Path]:
-    """Every file under the tree the scan is allowed to see, before filtering."""
-    paths = []
-    for directory, subdirectories, filenames in os.walk(REPOSITORY):
-        subdirectories[:] = [name for name in subdirectories if name not in UNSCANNED_DIRECTORIES]
-        paths.extend(pathlib.Path(directory, filename) for filename in filenames)
-    return paths
+    """Every git-tracked file under the tree the scan is allowed to see, before filtering.
+
+    Was an `os.walk`, pruning UNSCANNED_DIRECTORIES as it descended. A
+    filesystem walk cannot tell an authored file from one nobody committed:
+    `hetzner-host/dist/` is gitignored build output, `git status` stays
+    clean after an ordinary `npm run build` fills it with generated
+    `.js`/`.map` files, and the walk reported them as native to the tree it
+    audits -- there is no suffix that could excuse them here without also
+    excusing a hand-authored file of the same suffix.
+
+    `git ls-files` reports exactly what this repository commits, so build
+    output -- or any other untracked file -- never reaches the scan.
+    `hetzner/test_passphrase_probe_pattern.py`'s `_tracked_scan_files()`
+    already made this same choice for the same reason. UNSCANNED_DIRECTORIES
+    still applies, filtered by path instead of pruned mid-walk: three of its
+    four names are never tracked in the first place, so the filter is a
+    no-op for them, but `graphify-out/` is committed by CI and needs the
+    explicit exclusion regardless of how the tree is walked.
+
+    Accepted risk: a file that ought to be scanned but has not yet been
+    `git add`ed is invisible here until it is -- the same trade
+    `_tracked_scan_files()` already made, preferred over parsing
+    `.gitignore` or hand-listing excused suffixes, either of which
+    reintroduces the exact drift this test exists to catch.
+    """
+    tracked = subprocess.run(
+        ["git", "ls-files"],
+        cwd=REPOSITORY,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    return [
+        path
+        for path in (REPOSITORY / relative for relative in tracked)
+        if not any(part in UNSCANNED_DIRECTORIES for part in path.relative_to(REPOSITORY).parts)
+    ]
 
 
 # One row of the reach table: the instance it names, and whether the row claims
