@@ -29,8 +29,27 @@ export interface EdgeSite {
   /**
    * The *name* of the Cloud Run service to route to — a plain string, not a
    * resource reference. See "No dependency on any product stack" in `edge.ts`.
+   *
+   * Absent means the site has no GCP backend: it is skipped entirely by
+   * `edge.ts`, the mirror of what an absent `privateUpstream` does on the
+   * Hetzner side. Without the option, a site born on Hetzner cannot be
+   * registered at all — adding one derives a serverless NEG, a backend
+   * service, a DNS authorization, a managed certificate and a URL-map rule
+   * for a Cloud Run service that does not exist, and the certificate then
+   * sits in AUTHORIZING forever because the hostname's A record points at the
+   * Hetzner edge and no `_acme-challenge` CNAME is ever published for it.
+   *
+   * **This is for a site that never had a GCP backend, not for retiring one.**
+   * Dropping the field from an existing GCP-served site makes `edge.ts` stop
+   * declaring its NEG, backend service, DNS authorization, certificate and
+   * certificate-map entry — all five are in `PROTECTED_TYPES` in
+   * `scripts/assert-no-edge-deletes.py`, so `deploy-plan` refuses the plan and
+   * the apply never runs. If that site is the *first* registry entry, the
+   * assertion in `edge.ts` fails the stack outright instead. Retiring a site
+   * from the GCP edge is its own procedure and needs the delete guard consulted
+   * deliberately; it is not this field.
    */
-  cloudRunService: string;
+  cloudRunService?: string;
   /**
    * Region the Cloud Run service lives in — the serverless NEG must match.
    * Omitted means the edge stack's own `region` config value.

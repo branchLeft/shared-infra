@@ -105,6 +105,55 @@ describe('sites without a private upstream', () => {
   });
 });
 
+describe('the registry serves two edges, and an entry must reach at least one', () => {
+  // `edge.ts` skips a site with no `cloudRunService`; `servableSites` here
+  // skips a site with no `privateUpstream`. Each skip is correct on its own,
+  // and together they mean an entry declaring neither renders nothing on
+  // either edge while looking exactly like a configured site in the registry.
+  // No single edge's code can catch that -- each one's skip is indistinguishable
+  // from the legitimate case -- so the invariant is asserted over the registry
+  // itself.
+  it('every real entry declares a cloudRunService, a privateUpstream, or both', () => {
+    for (const entry of sites) {
+      const reachable = entry.cloudRunService !== undefined || entry.privateUpstream !== undefined;
+      expect(
+        reachable,
+        `site ${entry.name} declares neither cloudRunService nor privateUpstream, so it is ` +
+          'skipped by both edges and serves nothing'
+      ).toBe(true);
+    }
+  });
+
+  it('keeps a GCP-backed site first, because it is the URL map default service', () => {
+    // Mirrors the assertion in edge.ts. `sites.ts`'s "Ordering" section
+    // requires the fallback for an unmatched Host never be a tenant's service,
+    // and a Hetzner-only first entry would silently move that role.
+    expect(sites.length).toBeGreaterThan(0);
+    expect(
+      sites[0].cloudRunService,
+      `the first sites.ts entry (${sites[0].name}) has no cloudRunService, so edge.ts skips it ` +
+        "and the URL map's defaultService falls to a later entry -- see 'Ordering' in sites.ts"
+    ).toBeDefined();
+  });
+
+  it('renders a Hetzner-only site identically to a dual-edge one, since only the GCP side skips', () => {
+    // `servableSites` keys on `privateUpstream` alone and always did, so
+    // "it renders" would have passed before this change too and proves nothing
+    // about it. What is new is that the entry is now *constructible* without a
+    // cloudRunService, and that dropping the field changes nothing this
+    // renderer emits -- the asymmetry lives entirely in edge.ts.
+    const upstream = { host: 'app1', port: 8099 };
+    const dualEdge = site({ hostnames: ['both.test'], privateUpstream: upstream });
+    const hetznerOnly = site({
+      hostnames: ['both.test'],
+      cloudRunService: undefined,
+      privateUpstream: upstream,
+    });
+    expect(render(ENFORCING, [hetznerOnly])).toBe(render(ENFORCING, [dualEdge]));
+    expect(render(ENFORCING, [hetznerOnly])).toContain('both.test');
+  });
+});
+
 describe('the rendered Caddyfile', () => {
   it('serves a site at its hostnames over its private upstream', () => {
     const rendered = render(ENFORCING, [

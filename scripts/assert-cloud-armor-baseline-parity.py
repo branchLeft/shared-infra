@@ -282,6 +282,15 @@ def extract_preview_only_hosts(sites_ts: str) -> list[str]:
     `injectionWafPreviewOnly`. This does not strip comments, so a flag
     commented out *within its own site's object* is still matched -- only
     cross-object misattribution is what this guards against.
+
+    A site with no `cloudRunService` is skipped, mirroring `previewOnlyHosts`
+    in edge.ts. This function re-implements that derivation rather than reading
+    it, so the two can silently diverge -- and would have: when
+    `cloudRunService` became optional, edge.ts stopped exempting Hetzner-only
+    hosts while this script went on including them, turning the production
+    edge's deploy gate red against a model of a program that no longer existed.
+    The mirroring is asserted by this module's own self-test rather than left
+    to review.
     """
     body = _extract(
         r"export const sites:\s*EdgeSite\[\]\s*=\s*\[(.*?)\n\];",
@@ -293,6 +302,10 @@ def extract_preview_only_hosts(sites_ts: str) -> list[str]:
     hosts: list[str] = []
     for site_text in _split_top_level_objects(body):
         if not re.search(r"injectionWafPreviewOnly\s*:\s*true", site_text):
+            continue
+        # No cloudRunService means edge.ts skips the site entirely, so it has
+        # no rule here to be exempted from. See `previewOnlyHosts` in edge.ts.
+        if not re.search(r"cloudRunService\s*:", site_text):
             continue
         hostnames_match = re.search(r"hostnames\s*:\s*\[(.*?)\]", site_text, re.DOTALL)
         if not hostnames_match:
@@ -1140,6 +1153,42 @@ def self_test() -> int:
     )
     hosts_none = extract_preview_only_hosts(_FIXTURE_SITES_TS_NO_PREVIEW_HOSTS)
     check(hosts_none == [], f"a site with no injectionWafPreviewOnly leaked a host: {hosts_none}")
+
+    # A Hetzner-only site -- `injectionWafPreviewOnly: true` but no
+    # `cloudRunService` -- is skipped by edge.ts and must be skipped here too.
+    # Including it makes this gate red against rules edge.ts never declares,
+    # and the fix that suggests itself (widening accepted-parity-failures.json)
+    # would silence a real divergence. The `cloudRunService` on the third site
+    # is what proves this case discriminates rather than matching nothing.
+    sites_ts_hetzner_only = """
+export const sites: EdgeSite[] = [
+  {
+    name: 'website',
+    hostnames: ['example.test'],
+    cloudRunService: 'svc',
+  },
+
+  {
+    name: 'hetzner-only',
+    hostnames: ['hetzner-only.example.test'],
+    privateUpstream: { host: 'app1', port: 8081 },
+    injectionWafPreviewOnly: true,
+  },
+
+  {
+    name: 'gcp-blog',
+    hostnames: ['blog.example.test'],
+    cloudRunService: 'blog-svc',
+    injectionWafPreviewOnly: true,
+  },
+];
+"""
+    hosts_hetzner_only = extract_preview_only_hosts(sites_ts_hetzner_only)
+    check(
+        hosts_hetzner_only == ["blog.example.test"],
+        "a site with injectionWafPreviewOnly but no cloudRunService must not be exempted "
+        f"-- edge.ts skips it entirely: {hosts_hetzner_only}",
+    )
 
     # A nested `{}` inside one site object must not truncate the object early
     # and silently drop a later injectionWafPreviewOnly in it. The nesting is
