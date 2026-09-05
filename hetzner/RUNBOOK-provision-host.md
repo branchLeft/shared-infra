@@ -257,6 +257,9 @@ hetzner/provision/.` below for the same reason.
 
 ### 3. Confirm the gateway is forwarding
 
+`$EDGE1_IPV4` is set under step 2 above; re-set it first if you are entering
+here independently.
+
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   set -e
@@ -346,6 +349,8 @@ here means a bare rebuild never has a window where it is missing.
 Doc 14 §3.1 keeps monitoring co-located on `edge1` until TENANT_1, so
 `edge1` is the only host carrying a committed drop-in today — re-check that
 split before reusing this step once a standalone monitoring host exists.
+`$EDGE1_IPV4` is set under step 2 above; re-set it first if you are entering
+here independently.
 
 ```bash
 hetzner/provision/install-systemd-drop-ins.sh root@"$EDGE1_IPV4"
@@ -364,7 +369,9 @@ has done yet on a freshly provisioned host.
 ### 5. Provision a host that has no public address
 
 Reached through the gateway, over the private network — no firewall rule
-filters private traffic, so nothing had to be opened for this.
+filters private traffic, so nothing had to be opened for this. `$EDGE1_IPV4`
+is set under step 2 above; re-set it first if you are entering here
+independently.
 
 ```bash
 JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
@@ -459,7 +466,9 @@ is real.
 
 Run it the same way as step 5, on each app host. `app1`, at `10.20.1.100`, is
 the only one that exists today; the command is otherwise unchanged for a
-future `app2`/`app3`, substituting that host's own private IP:
+future `app2`/`app3`, substituting that host's own private IP. `$EDGE1_IPV4`
+is set under step 2 above; re-set it first if you are entering here
+independently:
 
 ```bash
 cd ~/branchLeft/shared-infra
@@ -501,16 +510,18 @@ piece of work rather than claimed here.
 
 ## Run the whole set
 
-Set the host's own public address once, from `hcloud server list` or the
-owning stack's own `pulumi stack output` — it is assigned by Hetzner at
-server creation, the same way `edge1`'s own address is looked up above rather
-than pasted as a literal. Every command below and in "Confirm it took",
-"Granting a stack its own deploy slot", "Auditing and revoking slots" and
-"Rotating the deploy key" reuses it; re-set it first if you are returning to
-one of those sections independently, for a different host, later:
+Set the host's own public address once, from a lookup — `<host>` is the
+host's own name (`app1`, say), the same per-invocation identifier every
+other section below substitutes by hand. The address itself is not: it is
+assigned by Hetzner at server creation, the same way `edge1`'s own address
+is looked up above rather than pasted as a literal. Every command below and
+in "Confirm it took", "Granting a stack its own deploy slot", "Auditing and
+revoking slots" and "Rotating the deploy key" reuses it; re-set it first if
+you are returning to one of those sections independently, for a different
+host, later:
 
 ```bash
-HOST_IPV4=<this host's public address>
+HOST_IPV4=$(hcloud server describe <host> -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
 ```
 
 A host with no public address is provisioned through the gateway instead —
@@ -723,7 +734,7 @@ Set `HOST_IPV4` fresh, for whichever host's key is being rotated, if you are
 not continuing directly from a section above:
 
 ```bash
-HOST_IPV4=<this host's public address>
+HOST_IPV4=$(hcloud server describe <host> -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
 ```
 
 This is the **unscoped, host-level** key — the one whose holder can name any

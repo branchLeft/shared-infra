@@ -43,14 +43,12 @@ RSYNC_COMMAND = re.compile(r"^rsync .*?(?:\\\n.*?)*$", re.MULTILINE)
 # command that reaches it the same way regardless of which of two shapes
 # that takes: an unresolved placeholder (e.g. `<edge1-ipv4>`) standing in for
 # a permanently fixed host, or the real address pasted in its place. Both are
-# checked below, over the same fenced blocks, because a runbook that traded
-# one for the other for `RUNBOOK-provision-host.md` is trading the original
-# defect for the one the platform owner's principle (2026-09-05) rules out
-# instead: committed files do not carry concrete operational values, and a
-# pasteable command does not carry an unsubstituted placeholder either. The
-# fix is threading the value through an environment variable, populated by a
-# lookup the operator runs — `db1` is private-only, so any command reaching
-# it is proxied through `edge1`, and either failure mode fails each hop
+# checked below, over the same fenced blocks: a committed file must not
+# carry a concrete operational value, and a pasteable command must not carry
+# an unsubstituted placeholder either. The fix in both directions is
+# threading the value through an environment variable, populated by a lookup
+# the operator runs — `db1` is private-only, so any command reaching it is
+# proxied through `edge1`, and either failure mode fails each hop
 # identically rather than loudly on the first.
 #
 # Deliberately narrower than "no `<...>` anywhere in a fenced block" or "no
@@ -58,22 +56,28 @@ RSYNC_COMMAND = re.compile(r"^rsync .*?(?:\\\n.*?)*$", re.MULTILINE)
 # - Only a `bash` fence counts as a command block in these runbooks — `json`
 #   and `text` fences here hold illustrative sample output, never something
 #   pasted and run.
-# - Only a token that both reads as an *address* (`ip`/`ipv4`/`address`/
-#   `addr` as the placeholder's trailing word) and names a known,
-#   single-valued, permanently fixed host is flagged as a placeholder:
-#   `edge1` (its address is in `RUNBOOK-edge.md`'s own opening line) and
-#   `db1` (this runbook's own gateway section names its address directly).
-#   `app1`'s private address is fixed too, but its public one is assigned at
-#   server creation and resolved fresh each run — "Run the whole set" below
-#   sets it from `hcloud server list` rather than substituting a literal —
-#   so `app1` is excluded.
+# - `fixed_host_placeholders` flags a token that both reads as an *address*
+#   (`ip`/`ipv4`/`address`/`addr` as the placeholder's trailing word) and
+#   names a known, single-valued, permanently fixed host: `edge1` (its
+#   address is in `RUNBOOK-edge.md`'s own opening line) and `db1` (this
+#   runbook's own gateway section names its address directly).
+# - `unresolved_address_assignments` below does not name-scope at all: it
+#   flags a bash assignment whose entire value is an address-shaped
+#   placeholder, whichever host it is for or whether it names one at all.
+#   `HOST_IPV4=<this host's public address>` under "Run the whole set" is
+#   exactly this shape and names no fixed host, which is why the name-scoped
+#   check alone missed it — a placeholder that reads as an address in an
+#   assignment is wrong regardless of which host's address it stands in for.
 # - The address word must be *trailing*, not merely present, so a resource
 #   id such as `<edge1-ipv4-id>` is left alone: `RUNBOOK-estate-project-move
 #   .md` deliberately works those by id rather than a hardcoded literal, to
 #   keep a destructive deletion from ever running against the wrong project's
 #   resource by a typo'd guess.
 # - A token that legitimately varies per invocation (`<stack>`, `<host>`,
-#   `<repo>`, `<image>`, `<digest>`) is not this bug and is left alone.
+#   `<repo>`, `<image>`, `<digest>`) is not address-shaped and matches
+#   neither check — `HOST_IPV4=$(hcloud server describe <host> -o json | ...)`
+#   is the corrected form: `<host>` there is an argument, not the assignment's
+#   entire value, and is not itself an address.
 # - The literal check matches only the *bare* form of a fixed host's real,
 #   known address, never a `/32` (`iptables -S` renders an unmasked `-d
 #   <addr>` back that way, and that is a verification block reading real
@@ -104,6 +108,12 @@ ADDRESS_WORD = re.compile(r"(?:^|[^a-z])(?:ip|ipv4|address|addr)$", re.IGNORECAS
 # Excludes the base address of a CIDR or a `/32` (the lookahead), so this is
 # disjoint from anything shaped like a subnet or a single-host mask.
 BARE_IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b(?!/)")
+# A shell assignment whose entire value is a single `<...>` placeholder --
+# `HOST_IPV4=<this host's public address>`, not `KEY_FILE=~/.ssh/id_slot_
+# <stack>`, where the placeholder is only part of the value. The address
+# check below applies to the placeholder's own text, independent of which
+# variable name or host, if any, it is for.
+ASSIGNMENT_PLACEHOLDER = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*=(<[^<>\n]+>)\s*$", re.MULTILINE)
 
 
 def runbooks() -> list[pathlib.Path]:
@@ -161,6 +171,23 @@ def fixed_host_literals(block_text: str) -> list[str]:
         value = match.group(0)
         if value in FIXED_HOST_LITERALS.values():
             found.append(value)
+    return found
+
+
+def unresolved_address_assignments(block_text: str) -> list[str]:
+    """Placeholder tokens in `block_text` that are the *entire* value of a
+    shell assignment and read as an address -- independent of `FIXED_HOSTS`,
+    so this catches the same anti-pattern for a host `fixed_host_placeholders`
+    has no name for. A per-invocation identifier such as `<host>` is not
+    address-shaped and never matches, whether it is the whole value
+    (`HOST=<host>`) or an argument inside a larger one
+    (`... describe <host> -o json ...`)."""
+    found = []
+    for match in ASSIGNMENT_PLACEHOLDER.finditer(block_text):
+        token = match.group(1)
+        inner = token[1:-1].lower()
+        if ADDRESS_WORD.search(inner):
+            found.append(token)
     return found
 
 
@@ -340,19 +367,22 @@ class RunbookRsyncCommandTests(unittest.TestCase):
 
 
 class RunbookFixedHostPlaceholderTests(unittest.TestCase):
-    """Both directions of the same defect: a fenced bash command must carry
-    neither an unresolved fixed-host placeholder nor that host's real,
-    concrete address as a literal. Either one silently breaks every command
-    that reaches it; the fix threads the value through a `$VARIABLE`
-    populated by a lookup, which trips neither check."""
+    """Three checks against the same defect: a fenced bash command must
+    carry neither an unresolved address placeholder -- whether or not it
+    names a fixed host -- nor a fixed host's real, concrete address as a
+    literal. Any of the three silently breaks every command that reaches
+    it; the fix threads the value through a `$VARIABLE` populated by a
+    lookup, which trips none of them."""
 
-    def test_no_bash_fence_contains_a_fixed_host_address_placeholder_or_literal(self):
+    def test_no_bash_fence_contains_an_address_placeholder_or_a_fixed_host_literal(self):
         violations = []
         for runbook in runbooks():
             text = runbook.read_text(encoding="utf-8")
             for block in command_blocks(text):
                 for token in fixed_host_placeholders(block):
                     violations.append(f"{runbook.name}: unresolved placeholder {token}")
+                for token in unresolved_address_assignments(block):
+                    violations.append(f"{runbook.name}: unresolved assignment {token}")
                 # The literal check is scoped to the one runbook this fix
                 # threads through a variable. RUNBOOK-edge.md,
                 # RUNBOOK-monitoring.md and hetzner/README.md still commit
@@ -367,7 +397,7 @@ class RunbookFixedHostPlaceholderTests(unittest.TestCase):
         self.assertEqual(
             violations,
             [],
-            "found an unresolved fixed-host placeholder or a committed fixed-host "
+            "found an unresolved address placeholder or a committed fixed-host "
             "literal address in a fenced bash command block -- thread the value "
             "through a $VARIABLE populated by a lookup instead:\n" + "\n".join(violations),
         )
@@ -469,6 +499,41 @@ class RunbookFixedHostPlaceholderTests(unittest.TestCase):
         )
         blocks = command_blocks(sample)
         self.assertEqual(fixed_host_literals(blocks[0]), [])
+
+    def test_self_scanner_catches_an_address_assignment_placeholder_naming_no_fixed_host(self):
+        # The regression this guards: HOST_IPV4=<this host's public address>
+        # names no fixed host, so fixed_host_placeholders alone would miss
+        # it. This is the check that does not need a name to catch it.
+        sample = '```bash\nHOST_IPV4=<this host'"'"'s public address>\n```\n'
+        blocks = command_blocks(sample)
+        self.assertEqual(fixed_host_placeholders(blocks[0]), [])
+        self.assertEqual(
+            unresolved_address_assignments(blocks[0]),
+            ["<this host's public address>"],
+        )
+
+    def test_self_scanner_leaves_a_threaded_assignment_alone(self):
+        sample = (
+            "```bash\n"
+            "HOST_IPV4=$(hcloud server describe <host> -o json | "
+            "python3 -c \"import json, sys; print(json.load(sys.stdin)"
+            "['public_net']['ipv4']['ip'])\")\n"
+            "```\n"
+        )
+        blocks = command_blocks(sample)
+        self.assertEqual(unresolved_address_assignments(blocks[0]), [])
+
+    def test_self_scanner_leaves_a_per_invocation_assignment_alone(self):
+        # <host> is the entire value here too, but it is not address-shaped,
+        # so this must not be confused with the HOST_IPV4 regression above.
+        sample = "```bash\nHOST=<host>\n```\n"
+        blocks = command_blocks(sample)
+        self.assertEqual(unresolved_address_assignments(blocks[0]), [])
+
+    def test_self_scanner_leaves_a_placeholder_that_is_only_part_of_the_value_alone(self):
+        sample = "```bash\nKEY_FILE=~/.ssh/id_ed25519_slot_<stack>\n```\n"
+        blocks = command_blocks(sample)
+        self.assertEqual(unresolved_address_assignments(blocks[0]), [])
 
 
 if __name__ == "__main__":
