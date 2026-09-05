@@ -22,6 +22,16 @@ Pulumi.*.yaml.bak
 .env
 __pycache__/
 
+# Written by every local `graphify query`. CI's own extract step never reads
+# or writes it, so a fresh query here is disposable state, not part of the
+# graph CI commits.
+graphify-out/cache/last_query_stamp
+
+# This repo tracks package-lock.json and CI runs `npm ci`; a pnpm install
+# here is a mistake, and its lockfile must not get committed.
+pnpm-lock.yaml
+pnpm-workspace.yaml
+
 # Unguarded intermediates from CLOUD-ARMOR-BASELINE.md's reproduction steps
 # -- a raw `gcloud` read, before the normalizer's redaction guard has run.
 # The documented steps write these to a scratch directory outside the repo;

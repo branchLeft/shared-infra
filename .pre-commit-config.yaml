@@ -220,3 +220,15 @@ repos:
         language: system
         files: ^cloud-armor-baseline/.*\.json$
         pass_filenames: false
+
+      # No local "real check" counterpart: unlike the parity checker above,
+      # this comparison's other input is a live GCP capture, which only
+      # exists inside the deploy job (.github/workflows/ci.yml) that runs
+      # `gcloud` right after `pulumi up`. The self-test is still hermetic
+      # and runs on every edit to the script.
+      - id: cloud-armor-live-parity-selftest
+        name: Cloud Armor live parity checker self-test
+        entry: python3 scripts/assert-cloud-armor-live-parity.py --self-test
+        language: system
+        files: ^scripts/assert-cloud-armor-live-parity\.py$
+        pass_filenames: false

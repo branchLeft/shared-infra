@@ -29,8 +29,27 @@ export interface EdgeSite {
   /**
    * The *name* of the Cloud Run service to route to — a plain string, not a
    * resource reference. See "No dependency on any product stack" in `edge.ts`.
+   *
+   * Absent means the site has no GCP backend: it is skipped entirely by
+   * `edge.ts`, the mirror of what an absent `privateUpstream` does on the
+   * Hetzner side. Without the option, a site born on Hetzner cannot be
+   * registered at all — adding one derives a serverless NEG, a backend
+   * service, a DNS authorization, a managed certificate and a URL-map rule
+   * for a Cloud Run service that does not exist, and the certificate then
+   * sits in AUTHORIZING forever because the hostname's A record points at the
+   * Hetzner edge and no `_acme-challenge` CNAME is ever published for it.
+   *
+   * **This is for a site that never had a GCP backend, not for retiring one.**
+   * Dropping the field from an existing GCP-served site makes `edge.ts` stop
+   * declaring its NEG, backend service, DNS authorization, certificate and
+   * certificate-map entry — all five are in `PROTECTED_TYPES` in
+   * `scripts/assert-no-edge-deletes.py`, so `deploy-plan` refuses the plan and
+   * the apply never runs. If that site is the *first* registry entry, the
+   * assertion in `edge.ts` fails the stack outright instead. Retiring a site
+   * from the GCP edge is its own procedure and needs the delete guard consulted
+   * deliberately; it is not this field.
    */
-  cloudRunService: string;
+  cloudRunService?: string;
   /**
    * Region the Cloud Run service lives in — the serverless NEG must match.
    * Omitted means the edge stack's own `region` config value.
@@ -58,6 +77,30 @@ export interface EdgeSite {
    *   in `CLOUD-ARMOR-BASELINE.md`'s named differences.
    */
   injectionWafPreviewOnly?: boolean;
+  /**
+   * Maximum request body this edge will accept for the site, as a Caddy size
+   * string — the tenant stack's `edgeRequestBodyMaxSize` output, copied
+   * verbatim. `RUNBOOK-tenant-onboarding.md` §9 in `branchLeft/ghost-platform`
+   * is where it comes from; it is derived there from the same input as the
+   * container's `/tmp` ceiling so the two cannot disagree, and setting a
+   * different number here by hand defeats that.
+   *
+   * **Binary units only — `MiB`, never `MB`.** Caddy reads `MB` as a power of
+   * ten while every other number in that derivation is a power of two, and a
+   * ~4.4% disagreement in a set of values whose whole purpose is that they
+   * cannot disagree is still a disagreement. The renderer rejects `MB`.
+   *
+   * **Required for every site this edge serves**, and the renderer refuses to
+   * emit a site block without it. For a Ghost tenant it is the only bound that
+   * exists on the image, media, file and content-import paths — Ghost's
+   * generic upload middleware sets none, and the tmpfs `size=` is a backstop
+   * that fails one upload with `ENOSPC` rather than a control. For a
+   * non-tenant site it is a bound chosen from that site's own request shapes.
+   *
+   * Optional in the type because a site with no `privateUpstream` is not
+   * rendered by this edge at all and needs none.
+   */
+  requestBodyMaxSize?: string;
   /**
    * Where the Hetzner edge proxies this site. Absent means the site has no
    * private-network backend yet: it is skipped entirely by the Caddy renderer,

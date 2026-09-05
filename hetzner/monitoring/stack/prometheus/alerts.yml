@@ -228,3 +228,68 @@ groups:
             the thing that is down. Matched by the mailhost-deadman route
             in the Alertmanager template, so this alert reaches a receiver
             that does not depend on the path it is reporting as broken.
+
+  - name: snds-reputation
+    rules:
+      - alert: SNDSComplaintRateHigh
+        expr: >-
+          (snds_complaint_rate > 0.001 and snds_message_volume > 50)
+          or
+          (snds_complaint_rate > 0.001 unless on(ip) snds_message_volume)
+        labels:
+          severity: warning
+        annotations:
+          summary: "Microsoft SNDS reported a complaint rate over 0.1% for {{ $labels.ip }}."
+          description: >-
+            SNDS refreshes at most once a day, so this reports yesterday's
+            reputation snapshot, not a live rate -- treat "when did this fire"
+            as "as of Microsoft's last publish", not as the moment of the
+            complaints themselves. The volume floor keeps a handful of
+            complaints against a trickle of mail from paging, the same shape
+            as MailDeliveryFailureRatioHigh's `> 20`, but the second branch
+            bypasses it, per IP, for an IP that has no snds_message_volume
+            series of its own (`unless on(ip)` -- matched by ip, not blanket
+            `on()`: a global match would let one IP's real, present volume
+            satisfy the floor for a *different* IP that has none, which is
+            wrong regardless of which way it errs). A floor that silently
+            disabled the alert it was meant to only quiet would be worse
+            than no floor. Re-tune both numbers from observed volume once
+            real data exists. See RUNBOOK-monitoring.md for what to do when
+            this fires.
+
+      - alert: SNDSReputationRed
+        expr: snds_reputation_status{status="red"} == 1
+        labels:
+          severity: warning
+        annotations:
+          summary: "Microsoft SNDS filter-result status for {{ $labels.ip }} is red."
+          description: >-
+            Microsoft's own red/yellow/green classification: red means most
+            or all mail from this IP is being routed to Junk, independent of
+            the complaint-rate figure above. Same daily-snapshot caveat as
+            SNDSComplaintRateHigh -- this is yesterday's status, not a live
+            reading.
+
+      - alert: SNDSCollectorStale
+        expr: >-
+          (time() - snds_collector_last_success_timestamp_seconds > 129600)
+          or absent(snds_collector_last_success_timestamp_seconds)
+        labels:
+          severity: warning
+        annotations:
+          summary: "The SNDS collector has not published a successful snapshot in over 36 hours."
+          description: >-
+            Both rules above go silent, not critical, if this collector stops
+            running or its bearer token expires -- an absent-or-stale gauge
+            reads exactly like a clean reputation otherwise. 129600s (36h) is
+            half again the collector's own ~24h cadence, wide enough that one
+            missed run does not page. The `or absent(...)` half catches a
+            collector that has never once succeeded, which the time()
+            subtraction alone cannot see -- subtracting from an absent series
+            yields no series at all, not a large number. Two different causes
+            share this one alert, and the response differs: an expired
+            SNDS_BEARER_TOKEN (its ~8h life is well inside this 36h window) is
+            the routine case, cleared by renewing it (RUNBOOK-monitoring.md
+            §14, branchLeft/workspace#538) -- only treat this as a bug if a
+            current, recently-renewed token still fails to produce a fresh
+            snapshot.

@@ -348,6 +348,61 @@ function protectionChain(
   return lines;
 }
 
+/**
+ * Caddy size strings this renderer will emit, restricted to powers of two.
+ *
+ * `MB`/`GB` are deliberately absent rather than merely unused. Caddy reads
+ * them as powers of ten -- measured against the pinned binary, `64MiB` is
+ * 67,108,864 and `64MB` is 64,000,000, so `MB` is ~4.6% *smaller*. It is the
+ * restrictive direction, not the permissive one, and rejecting it is unit
+ * hygiene rather than a safety control: the value's source derives it in MiB,
+ * and a registry that silently accepts a different base makes the two
+ * incommensurable for anyone reasoning about them together.
+ *
+ * Do not restate this as "MB would be dangerously large". It would not, and a
+ * maintainer who believes it will draw the wrong conclusion under pressure.
+ */
+const BINARY_SIZE = /^[1-9][0-9]*(KiB|MiB|GiB)$/;
+
+function requestBodyDirective(site: EdgeSite): string[] {
+  const size = site.requestBodyMaxSize;
+
+  if (size === undefined) {
+    // Required of every site this edge serves, not only Ghost-backed ones.
+    //
+    // Keying this on `injectionWafPreviewOnly` was tried and is unsound: that
+    // flag is a WAF-preview switch whose own docstring in sites.ts records the
+    // condition for removing it ("until there is enough admin-API traffic to
+    // prove otherwise"). Meeting that condition and dropping the flag would
+    // have silently dropped the body ceiling with it -- no error, no failing
+    // test -- and for a Ghost tenant this directive is the only bound that
+    // exists: verified in Ghost's core/server/web/api/middleware/upload.js,
+    // where the generic multer instance carries no `limits` and only
+    // `themeUpload` sets `fileSize`. A control must not hang off a flag
+    // documented as temporary.
+    //
+    // Requiring it of everything also removes the "which sites are Ghost?"
+    // question entirely, and bounds the marketing site, which had no ceiling
+    // at all and would stream an arbitrarily large POST to app1.
+    throw new Error(
+      `site ${site.name} declares no requestBodyMaxSize. Every site this edge serves needs one: ` +
+        "for a tenant take it from that stack's `pulumi stack output edgeRequestBodyMaxSize` " +
+        '(RUNBOOK-tenant-onboarding.md section 9); for a non-tenant site choose a bound its own ' +
+        'request shapes justify.'
+    );
+  }
+
+  if (!BINARY_SIZE.test(size)) {
+    throw new Error(
+      `site ${site.name} has requestBodyMaxSize ${size}, which is not a binary size this ` +
+        'renderer will emit (KiB, MiB or GiB) -- Caddy reads MB and GB as powers of ten, and ' +
+        'this value must stay commensurable with the tmpfs ceiling it is derived alongside'
+    );
+  }
+
+  return ['request_body {', `\tmax_size ${size}`, '}'];
+}
+
 function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): Block {
   const upstream = site.privateUpstream;
   if (upstream === undefined) {
@@ -372,6 +427,16 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   }
   body.push(
     'route {',
+    // First in the route by convention, not as a security boundary. Measured
+    // against Caddy v2.11.4: `request_body` wraps the body in a
+    // MaxBytesReader and returns 413 once the limit is passed, which does
+    // bound what is ingested -- but it does NOT terminate the handler chain.
+    // The rate-limit token, the AppSec inspection and the upstream connection
+    // are all still spent, and up to `max_size` bytes still reach the origin.
+    // Ordering it first therefore buys tidiness and nothing else; AppSec in
+    // particular already caps its own inspection at `appsec_max_body_bytes`
+    // (64 KiB, global block), so it was never reading the whole body anyway.
+    ...requestBodyDirective(site).map((line) => `\t${line}`),
     ...protectionChain(posture, `${site.name}_per_ip`, {
       appsec: site.injectionWafPreviewOnly ? 'except-authoring' : 'all',
       membersMagicLink: true,
@@ -501,12 +566,48 @@ function renderBlock(block: Block): string[] {
   return [`${block.addresses.join(', ')} {`, ...block.body.map((line) => `\t${line}`), '}'];
 }
 
+/**
+ * No two sites may proxy to the same private address.
+ *
+ * Caddy accepts it happily -- two site blocks reverse-proxying one backend is
+ * valid configuration -- and a snapshot test cannot see it either, because the
+ * rendered file is exactly what the registry asked for. What it means on the
+ * wire is that one tenant's hostname serves another tenant's Ghost: their
+ * content, and their members' sessions.
+ *
+ * `resolvePrivateAddress` already rejects an unknown host name and an
+ * out-of-range port, so a typo in either is caught. A port that is merely
+ * *another site's* is not: it is well-formed, in range, and wrong. The near
+ * miss is on the record -- `blog2` was almost registered on 8081, read off
+ * `ss -ltnp` on app1, before its own stack config was consulted and gave 8100.
+ * 8081 was free; had it been the website's 8080, nothing here or in CI would
+ * have said so.
+ */
+function assertUpstreamsAreDistinct(servable: readonly EdgeSite[]): void {
+  const seen = new Map<string, string>();
+  for (const site of servable) {
+    const upstream = site.privateUpstream;
+    if (upstream === undefined) continue;
+    const address = `${upstream.host}:${upstream.port}`;
+    const owner = seen.get(address);
+    if (owner !== undefined) {
+      throw new Error(
+        `sites ${owner} and ${site.name} both proxy to ${address}. Two hostnames sharing one ` +
+          "backend means each serves the other's content and sessions -- take each site's port " +
+          'from its own stack rather than from what is free on the host.'
+      );
+    }
+    seen.set(address, site.name);
+  }
+}
+
 export function renderCaddyfile(
   sites: readonly EdgeSite[],
   hostRedirects: readonly HostRedirect[],
   posture: EdgePosture
 ): string {
   const servable = servableSites(sites);
+  assertUpstreamsAreDistinct(servable);
   const servableHostnames = new Set(servable.flatMap((site) => site.hostnames));
 
   // A redirect source needs its own certificate before it can redirect

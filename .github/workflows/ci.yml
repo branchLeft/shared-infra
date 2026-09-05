@@ -71,6 +71,8 @@ jobs:
   typecheck:
     name: Type check
     runs-on: ubuntu-latest
+    # Observed 0.25-0.4min over the last 20 successful runs (p95 0.4min).
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -107,6 +109,8 @@ jobs:
   mail-typecheck:
     name: Type check (mail)
     runs-on: ubuntu-latest
+    # Observed 0.2-0.32min over the last 20 successful runs (p95 0.32min).
+    timeout-minutes: 10
     # Separate project (mail/, own package.json and Pulumi.yaml), separate
     # job: `hcloud` and `gcp` are different providers with independent
     # dependency trees, and a failure or credential need in one must never
@@ -141,6 +145,8 @@ jobs:
   mail-provision-checks:
     name: Lint + test (mail/provision)
     runs-on: ubuntu-latest
+    # Observed 0.07-0.13min over the last 20 successful runs (p95 0.13min).
+    timeout-minutes: 10
     # Credential-free, same reasoning as mail-typecheck above: these scripts
     # only ever run by hand against mx1 (mail/RUNBOOK-mx1-provision.md), so
     # there is nothing for this job to apply -- it only proves the shell
@@ -163,6 +169,8 @@ jobs:
   hetzner-typecheck:
     name: Type check (hetzner)
     runs-on: ubuntu-latest
+    # Observed 0.4-0.6min over the last 20 successful runs (p95 0.6min).
+    timeout-minutes: 10
     # Third project, third job, for the same reason mail has its own: separate
     # package.json, separate provider tree. This job stays credential-free;
     # the stacks this directory declares are applied by the
@@ -225,6 +233,8 @@ jobs:
   hetzner-host-typecheck:
     name: Type check + test (hetzner-host)
     runs-on: ubuntu-latest
+    # Observed 0.27-0.37min over the last 20 successful runs (p95 0.37min).
+    timeout-minutes: 10
     # The published-package half of the split documented in
     # hetzner/README.md: host.ts, firewalls.ts, cloudInit.ts and
     # addressPlan.ts live here, in their own package.json, so that
@@ -269,6 +279,8 @@ jobs:
   hetzner-provision-checks:
     name: Lint + test (hetzner/provision)
     runs-on: ubuntu-latest
+    # Observed 0.1-0.17min over the last 20 successful runs (p95 0.17min).
+    timeout-minutes: 10
     # branchleft_deploy.py is the only command the CI deploy account may run
     # as root on a platform host, so its argument validation is the boundary
     # between a scoped deploy key and a root shell. These tests are the proof
@@ -291,6 +303,12 @@ jobs:
       - name: Python unit tests (hetzner/scripts)
         run: python3 -m unittest discover -s hetzner/scripts -p 'test_*.py' -v
 
+      # test_passphrase_probe_pattern.py lives at hetzner/ root, not under
+      # provision/ or scripts/, so neither discover invocation above ever
+      # collects it -- an unwired regression test guards nothing.
+      - name: Python unit tests (hetzner root)
+        run: python3 -m unittest hetzner.test_passphrase_probe_pattern -v
+
       # Run the checker itself, not only its tests. Its whole subject is the
       # committed layout, and the failure it exists for -- a Pulumi project in
       # a subdirectory that silently runs the package root's program instead of
@@ -311,6 +329,9 @@ jobs:
   edge-config-validate:
     name: Validate (edge Caddy config)
     runs-on: ubuntu-latest
+    # Observed 1.45-1.9min over the last 20 successful runs (p95 1.88min) --
+    # the slowest of ci.yml's non-apply jobs, it builds a real Caddy image.
+    timeout-minutes: 15
     # Loads every rendered Caddy configuration through a real Caddy binary
     # carrying the real modules. The renderer's unit tests are string assertions
     # over their own output, so they cannot tell a directive Caddy accepts from
@@ -379,6 +400,8 @@ jobs:
   monitoring-config-validate:
     name: Validate (monitoring stack config)
     runs-on: ubuntu-latest
+    # Observed 0.3-0.62min over the last 20 successful runs (p95 0.5min).
+    timeout-minutes: 10
     # Same reasoning as edge-config-validate above and deliberately not in
     # `deploy`'s `needs` for the same reason: monitoring/ is not a Pulumi
     # program, it renders config for a Compose stack colocated on edge1, so
@@ -489,6 +512,8 @@ jobs:
   scripts-tests:
     name: Test (scripts)
     runs-on: ubuntu-latest
+    # Observed 0.07-0.12min over the last 20 successful runs (p95 0.12min).
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -512,6 +537,8 @@ jobs:
   pulumi-inventory-audit:
     name: Audit (Pulumi secrets + state backends)
     runs-on: ubuntu-latest
+    # Observed 0.07-0.12min over the last 20 successful runs (p95 0.12min).
+    timeout-minutes: 10
     # Credential-free by construction: the audit reads committed files only and
     # never contacts a backend, so it says nothing about live state and needs
     # nothing to run. What it defends is an ordering with no undo -- every
@@ -539,6 +566,8 @@ jobs:
   cloud-armor-baseline-parity:
     name: Audit (Cloud Armor baseline parity)
     runs-on: ubuntu-latest
+    # Observed 0.07-0.12min over the last 20 successful runs (p95 0.12min).
+    timeout-minutes: 10
     # Credential-free by construction: reads only committed edge.ts, sites.ts
     # and the committed Cloud Armor baseline capture, never contacts GCP. What
     # it defends against is the edge-parity gate reading a stale capture as a
@@ -612,6 +641,9 @@ jobs:
     name: Detect which stacks' Pulumi inputs changed
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Observed 0.07-0.12min over the last 6 successful runs (p95 0.12min) --
+    # small sample, only fires on push to main.
+    timeout-minutes: 10
     outputs:
       edge: ${{ steps.filter.outputs.edge }}
       mail: ${{ steps.filter.outputs.mail }}
@@ -927,6 +959,66 @@ jobs:
 
       - name: Apply
         run: pulumi up --stack production --yes
+
+      # A clean `pulumi up` is evidence about the checkpoint, not about the
+      # deployed policy -- Cloud Armor writes rules as independent
+      # per-priority API calls, so a partial failure can leave live rules
+      # unchanged while the checkpoint and every Pulumi-side check agree the
+      # write happened (RUNBOOK-edge-state-move.md appendix A; both
+      # instances went undetected for as long as 13 days). The steps below
+      # automate two of CLOUD-ARMOR-BASELINE.md's "Reproducing this capture"
+      # steps -- export and normalize -- and fail the job by name if the
+      # result disagrees with the committed baseline. Deliberately not all of
+      # them: the `list` step (confirming exactly one policy exists) and the
+      # independent `describe` cross-read are a one-time proof that `export`
+      # is a trustworthy read for this policy, already recorded in that
+      # file's "Status of this capture"; repeating them on every deploy adds
+      # a second GCP read with no incremental protection against either
+      # incident this gate exists for, both of which `export` alone catches.
+      # `google-github-actions/auth` above already wrote the ADC credential
+      # file this step's `gcloud` picks up; no further authentication is
+      # needed.
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      # CI-2: the project id is bound to an env var rather than interpolated
+      # into the body. `vars.` is repo configuration rather than attacker
+      # input, but the clause is blanket on purpose -- the distinction is a
+      # judgement about the source, and the substitution happens before the
+      # shell sees the line either way.
+      - name: Capture the live Cloud Armor policy
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          scratch=$(mktemp -d)
+          echo "LIVE_ARMOR_SCRATCH=$scratch" >> "$GITHUB_ENV"
+          gcloud compute security-policies export branchleft-edge-armor \
+            --project="$GCP_PROJECT_ID" --global \
+            --file-name="$scratch/live.raw.json" --file-format=json
+
+      # Reuses the same normalizer a human recapture runs, unmodified -- its
+      # IP-redaction refusal therefore still applies to whatever this job
+      # captures: a live rule naming a specific address fails this step
+      # (exit 1) rather than reaching disk or a log line.
+      - name: Normalize the live capture
+        run: |
+          python3 scripts/normalize-cloud-armor-baseline.py \
+            "$LIVE_ARMOR_SCRATCH/live.raw.json" "$LIVE_ARMOR_SCRATCH/live.normalized.json"
+
+      - name: Verify the live policy matches the committed baseline
+        run: |
+          python3 scripts/assert-cloud-armor-live-parity.py --self-test
+          python3 scripts/assert-cloud-armor-live-parity.py \
+            cloud-armor-baseline/branchleft-edge-armor.normalized.json \
+            "$LIVE_ARMOR_SCRATCH/live.normalized.json"
+
+      # The raw export is an unguarded read -- see CLOUD-ARMOR-BASELINE.md's
+      # "Reproducing this capture" step 0 -- so it never belongs in the
+      # workspace or a later cache; `if: always()` clears it whether or not
+      # the checks above passed.
+      - name: Remove the live-capture scratch directory
+        if: always()
+        run: rm -rf "$LIVE_ARMOR_SCRATCH"
 
       - name: Write outcome to job summary
         if: always()
