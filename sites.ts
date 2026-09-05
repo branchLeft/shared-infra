@@ -92,6 +92,34 @@ export const sites: EdgeSite[] = [
     // until there is enough admin-API traffic to prove otherwise.
     injectionWafPreviewOnly: true,
   },
+
+  {
+    name: 'blog2',
+    hostnames: ['blog2.branchleft.co.uk'],
+    // No `cloudRunService`: born on Hetzner, never served from GCP, so
+    // `edge.ts` skips it. See that field in siteTypes.ts.
+    //
+    // Both values belong to this tenant's own stack, and neither is chosen
+    // here. They are read differently, which matters when copying them:
+    //
+    //   port    -- `blog2-infra:hostPort` in that repo's Pulumi.<slug>.yaml.
+    //              It is NOT a stack output; `pulumi stack output hostPort`
+    //              returns nothing. Read the config. This is the value that
+    //              was nearly taken from `ss -ltnp` on app1 instead, which
+    //              gave 8081 -- free, plausible, and wrong.
+    //   ceiling -- `pulumi stack output edgeRequestBodyMaxSize`, derived in
+    //              the tenant component as half the container's tmpfs ceiling.
+    //
+    // Inside that stack the ceiling and the tmpfs limit cannot disagree. The
+    // copy into this file is an unchecked transcription, so they can: if this
+    // tenant ever sets `uploadCeilingMib`, the output moves and this line does
+    // not, and the edge then admits more than the container can hold. Nothing
+    // compares them -- re-read both on any change to either.
+    privateUpstream: { host: 'app1', port: 8100 },
+    requestBodyMaxSize: '64MiB',
+    // Ghost-backed, same reasoning as the `blog` entry above.
+    injectionWafPreviewOnly: true,
+  },
 ];
 
 /**
