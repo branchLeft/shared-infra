@@ -30,6 +30,7 @@ import re
 import unittest
 
 HETZNER = pathlib.Path(__file__).resolve().parent.parent
+ROOT = HETZNER.parent
 
 # Set modes on the receiving side instead of copying them. `u=rwX,go=rX` gives
 # 0644 for files and 0755 for directories; `X` is "execute only where it is
@@ -60,9 +61,11 @@ RSYNC_COMMAND = re.compile(r"^rsync .*?(?:\\\n.*?)*$", re.MULTILINE)
 #
 # Deliberately narrower than "no `<...>` anywhere in a fenced block" or "no
 # IPv4-shaped token anywhere in a fenced block":
-# - Only a `bash` fence counts as a command block in these runbooks — `json`
-#   and `text` fences here hold illustrative sample output, never something
-#   pasted and run.
+# - Only a `bash` fence counts as a command block in these runbooks —
+#   `json`, `text` and `yaml` fences hold illustrative sample output, and a
+#   `console` fence is a captured transcript (a `$ ` prompt plus what it
+#   printed, sometimes with a placeholder inside the printed command itself)
+#   rather than something pasted and run.
 # - The address word must be *trailing*, not merely present, so a resource
 #   id such as `<edge1-ipv4-id>` is left alone: a destructive deletion is
 #   deliberately worked by id, looked up fresh, rather than by a hardcoded
@@ -93,12 +96,28 @@ BARE_IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b(?!/)")
 # terminal.
 FIXED_HOST_LITERALS = {
     "edge1": "46.225.95.167",
+    "edge1 (private)": "10.20.1.10",
     "db1": "10.20.1.20",
+    "mx1": "167.233.252.240",
 }
-# A repo-wide sweep for the literal check is separate work from this fix,
-# which corrects one runbook; scoping the check to that runbook is what
-# keeps it from failing CI on files this fix does not touch.
-LITERAL_CHECK_RUNBOOKS = ("RUNBOOK-provision-host.md",)
+# The files this check enforces the threaded-value pattern over. An explicit
+# list, not a glob over every `RUNBOOK-*.md` in the repo: three sibling
+# runbooks (`hetzner/RUNBOOK-existing-stack-migration.md`,
+# `hetzner/RUNBOOK-new-stack.md`, `mail/RUNBOOK-import-mail-host.md`) are
+# mid-fix in other open PRs, and a glob would start failing CI on content
+# this fix does not touch the moment one of them merges an untouched
+# literal or placeholder. A repo-wide sweep is separate work, tracked
+# outside this file.
+THREADED_VALUE_RUNBOOKS = (
+    HETZNER / "RUNBOOK-provision-host.md",
+    HETZNER / "RUNBOOK-edge.md",
+    HETZNER / "RUNBOOK-estate-project-move.md",
+    HETZNER / "RUNBOOK-monitoring.md",
+    ROOT / "README.md",
+    ROOT / "RUNBOOK-edge-state-move.md",
+    ROOT / "mail" / "RUNBOOK-mx1-prometheus-metrics.md",
+    ROOT / "mail" / "RUNBOOK-mx1-provision.md",
+)
 
 
 def runbooks() -> list[pathlib.Path]:
@@ -347,18 +366,20 @@ class RunbookFixedHostPlaceholderTests(unittest.TestCase):
     fix threads the value through a `$VARIABLE` populated by a lookup,
     which trips neither check."""
 
+    def test_the_threaded_value_runbooks_were_actually_found(self):
+        """A list of paths that resolved to nothing would pass every
+        assertion below without having scanned a single file."""
+        self.assertGreaterEqual(len(THREADED_VALUE_RUNBOOKS), 7)
+        for runbook in THREADED_VALUE_RUNBOOKS:
+            self.assertTrue(runbook.is_file(), f"missing: {runbook}")
+
     def test_no_bash_fence_contains_an_address_placeholder_or_a_fixed_host_literal(self):
         violations = []
-        for runbook in runbooks():
+        for runbook in THREADED_VALUE_RUNBOOKS:
             text = runbook.read_text(encoding="utf-8")
             for block in command_blocks(text):
                 for token in address_placeholders(block):
                     violations.append(f"{runbook.name}: unresolved placeholder {token}")
-                # The literal check is scoped to the one runbook this fix
-                # corrects. A repo-wide sweep for the same literal is
-                # separate work, tracked outside this file.
-                if runbook.name not in LITERAL_CHECK_RUNBOOKS:
-                    continue
                 for literal in fixed_host_literals(block):
                     violations.append(f"{runbook.name}: committed literal address {literal}")
         self.assertEqual(
