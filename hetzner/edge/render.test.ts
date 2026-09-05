@@ -159,6 +159,56 @@ describe('the registry serves two edges, and an entry must reach at least one', 
   });
 });
 
+describe('two sites may not share one upstream', () => {
+  it('refuses a duplicate host:port, because each hostname would serve the other tenant', () => {
+    const a = site({
+      name: 'tenant-a',
+      hostnames: ['a.test'],
+      privateUpstream: { host: 'app1', port: 8100 },
+    });
+    const b = site({
+      name: 'tenant-b',
+      hostnames: ['b.test'],
+      privateUpstream: { host: 'app1', port: 8100 },
+    });
+    expect(() => render(ENFORCING, [a, b])).toThrow(/both proxy to app1:8100/);
+  });
+
+  it('allows the same port on different hosts, which is not a collision', () => {
+    const a = site({
+      name: 'a',
+      hostnames: ['a.test'],
+      privateUpstream: { host: 'app1', port: 8100 },
+    });
+    const b = site({
+      name: 'b',
+      hostnames: ['b.test'],
+      privateUpstream: { host: 'db1', port: 8100 },
+    });
+    expect(() => render(ENFORCING, [a, b])).not.toThrow();
+  });
+
+  it('ignores sites this edge does not serve, which have no upstream to collide', () => {
+    const served = site({
+      name: 'served',
+      hostnames: ['x.test'],
+      privateUpstream: { host: 'app1', port: 8100 },
+    });
+    const pending = site({ name: 'pending', hostnames: ['y.test'], privateUpstream: undefined });
+    expect(() => render(ENFORCING, [served, pending])).not.toThrow();
+  });
+
+  it('the real registry has no two sites on one address', () => {
+    // Non-vacuous by construction: asserts at least two sites are actually
+    // compared, so this cannot pass by matching nothing the way the earlier
+    // ceiling guard did.
+    const served = sites.filter((s) => s.privateUpstream !== undefined);
+    expect(served.length).toBeGreaterThan(1);
+    const addresses = served.map((s) => `${s.privateUpstream!.host}:${s.privateUpstream!.port}`);
+    expect(new Set(addresses).size).toBe(addresses.length);
+  });
+});
+
 describe('the request-body ceiling', () => {
   // The value's source is a tenant stack output derived alongside the
   // container's tmpfs ceiling; see `requestBodyMaxSize` in siteTypes.ts.
@@ -391,8 +441,11 @@ describe('the rendered Caddyfile', () => {
     // client across tenant hostnames. `zone one_per_ip` / `zone two_per_ip`
     // below prove the *general* throttle does the opposite on purpose.
     const rendered = render(ENFORCING, [
-      site({ name: 'one', hostnames: ['one.test'] }),
-      site({ name: 'two', hostnames: ['two.test'] }),
+      // Distinct upstreams: two sites on one address is refused, and rightly
+      // -- see 'two sites may not share one upstream'. These fixtures are
+      // about zone naming, so the ports only need to differ.
+      site({ name: 'one', hostnames: ['one.test'], privateUpstream: { host: 'app1', port: 2368 } }),
+      site({ name: 'two', hostnames: ['two.test'], privateUpstream: { host: 'app1', port: 2369 } }),
     ]);
     // Four, not two: both loopback probes below carry the same matcher and
     // zone so the throttle can be trip-tested before any site serves the path.
@@ -554,8 +607,11 @@ describe('the rendered Caddyfile', () => {
 
   it('gives each site its own throttle zone, so one site cannot spend another site budget', () => {
     const rendered = render(ENFORCING, [
-      site({ name: 'one', hostnames: ['one.test'] }),
-      site({ name: 'two', hostnames: ['two.test'] }),
+      // Distinct upstreams: two sites on one address is refused, and rightly
+      // -- see 'two sites may not share one upstream'. These fixtures are
+      // about zone naming, so the ports only need to differ.
+      site({ name: 'one', hostnames: ['one.test'], privateUpstream: { host: 'app1', port: 2368 } }),
+      site({ name: 'two', hostnames: ['two.test'], privateUpstream: { host: 'app1', port: 2369 } }),
     ]);
     expect(rendered).toContain('zone one_per_ip {');
     expect(rendered).toContain('zone two_per_ip {');

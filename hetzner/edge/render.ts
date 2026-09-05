@@ -566,12 +566,48 @@ function renderBlock(block: Block): string[] {
   return [`${block.addresses.join(', ')} {`, ...block.body.map((line) => `\t${line}`), '}'];
 }
 
+/**
+ * No two sites may proxy to the same private address.
+ *
+ * Caddy accepts it happily -- two site blocks reverse-proxying one backend is
+ * valid configuration -- and a snapshot test cannot see it either, because the
+ * rendered file is exactly what the registry asked for. What it means on the
+ * wire is that one tenant's hostname serves another tenant's Ghost: their
+ * content, and their members' sessions.
+ *
+ * `resolvePrivateAddress` already rejects an unknown host name and an
+ * out-of-range port, so a typo in either is caught. A port that is merely
+ * *another site's* is not: it is well-formed, in range, and wrong. The near
+ * miss is on the record -- `blog2` was almost registered on 8081, read off
+ * `ss -ltnp` on app1, before its own stack config was consulted and gave 8100.
+ * 8081 was free; had it been the website's 8080, nothing here or in CI would
+ * have said so.
+ */
+function assertUpstreamsAreDistinct(servable: readonly EdgeSite[]): void {
+  const seen = new Map<string, string>();
+  for (const site of servable) {
+    const upstream = site.privateUpstream;
+    if (upstream === undefined) continue;
+    const address = `${upstream.host}:${upstream.port}`;
+    const owner = seen.get(address);
+    if (owner !== undefined) {
+      throw new Error(
+        `sites ${owner} and ${site.name} both proxy to ${address}. Two hostnames sharing one ` +
+          "backend means each serves the other's content and sessions -- take each site's port " +
+          'from its own stack rather than from what is free on the host.'
+      );
+    }
+    seen.set(address, site.name);
+  }
+}
+
 export function renderCaddyfile(
   sites: readonly EdgeSite[],
   hostRedirects: readonly HostRedirect[],
   posture: EdgePosture
 ): string {
   const servable = servableSites(sites);
+  assertUpstreamsAreDistinct(servable);
   const servableHostnames = new Set(servable.flatMap((site) => site.hostnames));
 
   // A redirect source needs its own certificate before it can redirect
