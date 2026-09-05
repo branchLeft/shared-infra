@@ -67,14 +67,26 @@ chooses the stack:
 
 from __future__ import annotations
 
+import contextlib
+import errno
+import fcntl
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
 
 CONFIG_DIR = "/etc/branchleft"
 STACK_DIR = "/opt/branchleft"
+
+# Bounded, not indefinite: a wait long enough to ride out two ordinary
+# deploys landing moments apart (the routine per-tenant bump case this repo
+# expects on the edge host), short enough that a genuinely stuck holder is
+# reported inside a single CI job rather than left to time the job out itself
+# with a far less specific error.
+DEPLOY_LOCK_TIMEOUT = 30.0
+DEPLOY_LOCK_POLL_INTERVAL = 0.2
 
 # Deliberately narrower than the character set systemd would accept in an
 # instance name: this value is interpolated into a unit name and a filesystem
@@ -120,6 +132,82 @@ def image_env_path(stack: str, config_dir: str = CONFIG_DIR) -> str:
 
 def compose_file_path(stack: str, stack_dir: str = STACK_DIR) -> str:
     return os.path.join(stack_dir, stack, "compose.yml")
+
+
+def deploy_lock_path(stack: str, config_dir: str = CONFIG_DIR) -> str:
+    return os.path.join(config_dir, f"{stack}.deploy.lock")
+
+
+@contextlib.contextmanager
+def stack_deploy_lock(
+    stack: str,
+    config_dir: str = CONFIG_DIR,
+    *,
+    timeout: float = DEPLOY_LOCK_TIMEOUT,
+    poll_interval: float = DEPLOY_LOCK_POLL_INTERVAL,
+    now=time.monotonic,
+    sleep=time.sleep,
+):
+    """Exclusive lock around one stack's read-modify-write-restart sequence.
+
+    Scoped per (host, stack) rather than per host or globally: `config_dir` is
+    already host-local (`/etc/branchleft` on that machine alone), and the lock
+    file lives inside it named for this stack, so two deploys to *different*
+    stacks on the same host never contend -- the routine case on the edge
+    host, where per-tenant image bumps are frequent and unrelated to each
+    other. A global lock would serialise those for no reason; a lock scoped
+    any wider than one stack would fix nothing the issue actually reported,
+    which was one stack's own pin being interleaved.
+
+    `flock(2)` is the primitive, not a PID file or a marker this code writes
+    and checks: the lock lives in the kernel against the open file
+    description, not in the file's bytes, so it is released the moment every
+    fd referencing it closes -- on a clean exit, an uncaught exception, or a
+    signal including SIGKILL, with no cleanup code of this process's own
+    needing to run for that to happen. It is also not persisted across a
+    reboot: the lock file itself (empty, just a namespace to flock against)
+    can survive one, but the lock state is in-kernel and gone with it, so a
+    host that rebooted mid-deploy comes back with no lock held by anyone --
+    never a wedged one waiting to be cleared by hand.
+
+    Held-lock behaviour is a bounded wait, not an immediate failure or an
+    indefinite block: polls for up to `timeout` seconds (default
+    `DEPLOY_LOCK_TIMEOUT`) using non-blocking `flock` attempts rather than a
+    single blocking call, so the caller sees the reason precisely instead of
+    the wait itself, and can still be given a deterministic clock and sleep
+    for testing. An ordinary overlap (two deploys landing moments apart)
+    quietly clears within that window; the operator only sees a message at
+    all once something has genuinely stayed wrong for the whole of it.
+    """
+    path = deploy_lock_path(stack, config_dir)
+    lock_fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        deadline = now() + timeout
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as error:
+                if error.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
+                    raise
+                if now() >= deadline:
+                    raise DeployError(
+                        f"could not acquire the deploy lock for {stack!r} "
+                        f"within {timeout:g}s ({path}); another "
+                        "branchleft-deploy invocation for this stack is still "
+                        "running. If none actually is, its process has hung "
+                        "rather than exited -- flock releases automatically "
+                        "on exit, so a lock that outlives its holder's exit "
+                        "is not possible; find and clear that process rather "
+                        "than the lock file"
+                    ) from None
+                sleep(poll_interval)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(lock_fd)
 
 
 def read_current_image(path: str) -> str | None:
@@ -452,6 +540,8 @@ def deploy(
     config_dir: str = CONFIG_DIR,
     stack_dir: str = STACK_DIR,
     run=subprocess.run,
+    lock_timeout: float = DEPLOY_LOCK_TIMEOUT,
+    lock_poll_interval: float = DEPLOY_LOCK_POLL_INTERVAL,
 ) -> None:
     validate_stack_name(stack)
     validate_image_ref(image)
@@ -516,104 +606,113 @@ def deploy(
         )
 
     env_path = image_env_path(stack, config_dir)
-    previous = read_current_image(env_path)
-    write_image_env(env_path, image)
+    # The read-modify-write-restart sequence below -- and the rollback's
+    # own read-modify-write-restart if the first restart fails -- is the
+    # entire race the lock exists to close, so both live under the one
+    # acquisition rather than two: a second deploy must not be able to
+    # interleave with the rollback half any more than with the initial
+    # write.
+    with stack_deploy_lock(
+        stack, config_dir, timeout=lock_timeout, poll_interval=lock_poll_interval
+    ):
+        previous = read_current_image(env_path)
+        write_image_env(env_path, image)
 
-    result = run(["systemctl", "restart", f"branchleft-compose@{stack}"], check=False)
-    if result.returncode == 0:
-        return
+        result = run(["systemctl", "restart", f"branchleft-compose@{stack}"], check=False)
+        if result.returncode == 0:
+            return
 
-    if previous is None:
-        # Nothing to roll back to. The unit's EnvironmentFile for the pin
-        # carries no leading dash, so it cannot start without one at all --
-        # restarting here would fail by construction, so this does not retry.
-        # It also must not assert what that failure means: the unit carries
-        # no ExecStop, so nothing here ever runs `docker compose down` --
-        # containers from an earlier successful start can still be up with
-        # initialised data regardless of what this restart's exit code says
-        # about the unit.
-        os.unlink(env_path)
-        raise DeployError(
-            f"branchleft-compose@{stack} failed to start on {image}, and there "
-            "was no previous pin to fall back to. This does not mean the stack "
-            "has never run or is down now -- check `docker ps --filter "
-            f"label=com.docker.compose.project={stack}` before running "
-            "anything destructive against it"
+        if previous is None:
+            # Nothing to roll back to. The unit's EnvironmentFile for the pin
+            # carries no leading dash, so it cannot start without one at all --
+            # restarting here would fail by construction, so this does not retry.
+            # It also must not assert what that failure means: the unit carries
+            # no ExecStop, so nothing here ever runs `docker compose down` --
+            # containers from an earlier successful start can still be up with
+            # initialised data regardless of what this restart's exit code says
+            # about the unit.
+            os.unlink(env_path)
+            raise DeployError(
+                f"branchleft-compose@{stack} failed to start on {image}, and there "
+                "was no previous pin to fall back to. This does not mean the stack "
+                "has never run or is down now -- check `docker ps --filter "
+                f"label=com.docker.compose.project={stack}` before running "
+                "anything destructive against it"
+            )
+
+        # "The restart failed" and "the new image is why" are not the same fact:
+        # `docker compose up -d --wait` fails the whole restart if any service's
+        # healthcheck does not pass in time, including one that has nothing to do
+        # with the image this call pinned. Rewriting the pin back to `previous`
+        # restarts every container in the stack onto an older image, which is not
+        # reversible for one whose data survives no such restart cleanly -- a
+        # database that already upgraded its on-disk format under the new image
+        # cannot be talked back down. So a rollback only happens on positive
+        # evidence the pinned image itself is the problem; anything else fails
+        # loudly with the pin left exactly as this call wrote it, for an operator
+        # to resolve deliberately rather than have it guessed at.
+        image_status = pinned_image_is_up(stack, image, run=run)
+        if image_status is None:
+            raise DeployError(
+                f"branchleft-compose@{stack} restart reported failure, and "
+                "whether the newly pinned image itself came up could not be "
+                "checked (`docker ps` failed); the pin was left in place rather "
+                "than rolled back on a guess. Check `docker compose -p "
+                f"{stack} ps` by hand before deciding anything"
+            )
+        if image_status:
+            raise DeployError(
+                f"branchleft-compose@{stack} restart reported failure, but a "
+                f"container running the newly pinned {image} is up and not "
+                "unhealthy; the failure does not implicate that image, so the "
+                "pin was left in place rather than rolled back. Check `docker "
+                f"compose -p {stack} ps` for which service actually failed its "
+                "wait"
+            )
+
+        write_image_env(env_path, previous)
+        # A rollback rewrites host state that nothing else records: the image
+        # pin file is overwritten with no history, and the restart that follows
+        # looks like any other unit start in `journalctl -u
+        # branchleft-compose@<stack>`. Without this, the only evidence a
+        # rollback happened at all is this process's own stdout/stderr, visible
+        # only to whoever ran the deploy and only for as long as that log is
+        # kept -- an operator checking the host later, or a monitor watching
+        # only whether the unit is active, would see a healthy restart and
+        # nothing else. `logger` puts the same fact in the host's own journal,
+        # independent of the calling channel.
+        run(
+            [
+                "logger",
+                "-t",
+                "branchleft-deploy",
+                f"{stack}: automatic rollback from {image} to {previous} -- "
+                "restart failed and the pinned image's own container was not up",
+            ],
+            check=False,
         )
 
-    # "The restart failed" and "the new image is why" are not the same fact:
-    # `docker compose up -d --wait` fails the whole restart if any service's
-    # healthcheck does not pass in time, including one that has nothing to do
-    # with the image this call pinned. Rewriting the pin back to `previous`
-    # restarts every container in the stack onto an older image, which is not
-    # reversible for one whose data survives no such restart cleanly -- a
-    # database that already upgraded its on-disk format under the new image
-    # cannot be talked back down. So a rollback only happens on positive
-    # evidence the pinned image itself is the problem; anything else fails
-    # loudly with the pin left exactly as this call wrote it, for an operator
-    # to resolve deliberately rather than have it guessed at.
-    image_status = pinned_image_is_up(stack, image, run=run)
-    if image_status is None:
+        # The rollback's own outcome decides what this reports. Asserting a
+        # recovery that did not happen is worse than reporting the original
+        # failure: it tells the caller the host is serving on last-known-good
+        # while it is down, which is the state nobody investigates.
+        rollback = run(["systemctl", "restart", f"branchleft-compose@{stack}"], check=False)
+        if rollback.returncode != 0:
+            # The unit carries no ExecStop, so `docker compose down` never fires
+            # here regardless of this restart's exit code -- whatever the most
+            # recent `up -d --wait` attempt started is still running, healthy or
+            # not.
+            raise DeployError(
+                f"restart of branchleft-compose@{stack} failed AND the rollback to "
+                f"{previous} also failed to start; branchleft-compose@{stack} is "
+                "now `failed` on both pins, which is the unit's state, not the "
+                "containers' -- check `docker ps --filter "
+                f"label=com.docker.compose.project={stack}` for what is actually "
+                "running before assuming an outage"
+            )
         raise DeployError(
-            f"branchleft-compose@{stack} restart reported failure, and "
-            "whether the newly pinned image itself came up could not be "
-            "checked (`docker ps` failed); the pin was left in place rather "
-            "than rolled back on a guess. Check `docker compose -p "
-            f"{stack} ps` by hand before deciding anything"
+            f"restart of branchleft-compose@{stack} failed; rolled back to {previous}"
         )
-    if image_status:
-        raise DeployError(
-            f"branchleft-compose@{stack} restart reported failure, but a "
-            f"container running the newly pinned {image} is up and not "
-            "unhealthy; the failure does not implicate that image, so the "
-            "pin was left in place rather than rolled back. Check `docker "
-            f"compose -p {stack} ps` for which service actually failed its "
-            "wait"
-        )
-
-    write_image_env(env_path, previous)
-    # A rollback rewrites host state that nothing else records: the image
-    # pin file is overwritten with no history, and the restart that follows
-    # looks like any other unit start in `journalctl -u
-    # branchleft-compose@<stack>`. Without this, the only evidence a
-    # rollback happened at all is this process's own stdout/stderr, visible
-    # only to whoever ran the deploy and only for as long as that log is
-    # kept -- an operator checking the host later, or a monitor watching
-    # only whether the unit is active, would see a healthy restart and
-    # nothing else. `logger` puts the same fact in the host's own journal,
-    # independent of the calling channel.
-    run(
-        [
-            "logger",
-            "-t",
-            "branchleft-deploy",
-            f"{stack}: automatic rollback from {image} to {previous} -- "
-            "restart failed and the pinned image's own container was not up",
-        ],
-        check=False,
-    )
-
-    # The rollback's own outcome decides what this reports. Asserting a
-    # recovery that did not happen is worse than reporting the original
-    # failure: it tells the caller the host is serving on last-known-good
-    # while it is down, which is the state nobody investigates.
-    rollback = run(["systemctl", "restart", f"branchleft-compose@{stack}"], check=False)
-    if rollback.returncode != 0:
-        # The unit carries no ExecStop, so `docker compose down` never fires
-        # here regardless of this restart's exit code -- whatever the most
-        # recent `up -d --wait` attempt started is still running, healthy or
-        # not.
-        raise DeployError(
-            f"restart of branchleft-compose@{stack} failed AND the rollback to "
-            f"{previous} also failed to start; branchleft-compose@{stack} is "
-            "now `failed` on both pins, which is the unit's state, not the "
-            "containers' -- check `docker ps --filter "
-            f"label=com.docker.compose.project={stack}` for what is actually "
-            "running before assuming an outage"
-        )
-    raise DeployError(
-        f"restart of branchleft-compose@{stack} failed; rolled back to {previous}"
-    )
 
 
 # Generous next to a reference that cannot exceed a few hundred bytes, and
