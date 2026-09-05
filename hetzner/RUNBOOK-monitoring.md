@@ -777,6 +777,14 @@ that data -- an empty result for either on a freshly-registered sender is not
 a fault, `time() - snds_collector_last_success_timestamp_seconds` moving is
 the proof the pipeline itself works end to end.
 
+If the run instead prints `collect_snds_metrics: fetch failed: expected the
+SNDS CSV/plain-text feed, got what looks like an HTML page` and exits
+non-zero, that is a real fault, not the quiet-day case above: the endpoint
+answered with something other than the feed (a login, consent, or
+portal-side error page), the previous textfile is left untouched, and the
+timestamp does _not_ advance. Re-check the bearer token and the portal
+session before assuming the collector itself regressed.
+
 ## Responding to the mail-delivery alerts
 
 Three rules read Stalwart's own counters from the `stalwart` job. They answer
