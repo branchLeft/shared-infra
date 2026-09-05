@@ -598,7 +598,7 @@ step that needs it.
 the running container can parse it without adopting it:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'docker exec $(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy) caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile'
 ```
 
