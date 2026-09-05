@@ -16,17 +16,21 @@ stack, and touches no bucket. Where a claim below needed a live API call or
 a credential this session does not hold, it says so instead of guessing
 (§8).
 
-Placement: alongside `RUNBOOK-existing-stack-migration.md` and
-`README.md` at the repo root, matching this repo's existing top-level
-reference-document convention (`CLOUD-ARMOR-BASELINE.md` is the precedent —
-a standing captured-state document, not a runbook to execute).
+Placement: at the repo root, alongside `README.md`, matching this repo's
+existing top-level reference-document convention (`CLOUD-ARMOR-BASELINE.md`
+is the precedent — a standing captured-state document, not a runbook to
+execute). It supports `hetzner/RUNBOOK-existing-stack-migration.md` without
+sitting beside it on disk — that runbook lives under `hetzner/`.
 
 ## 1. Every Pulumi stack in the estate
 
-Nine stacks, not the seven `RUNBOOK-existing-stack-migration.md`'s header
-table implies or the eight `scripts/pulumi-stack-inventory.json` currently
-lists. The ninth — `branchleft-ghost-platform-hosts` — is real, committed,
-and CI-applied; it is simply missing from the inventory JSON (§7).
+Nine stacks, not the eight `RUNBOOK-existing-stack-migration.md`'s own count
+implies ("Six stacks exist today across two state backends", plus "two
+Hetzner stacks that do not exist yet" in a third) or the eight
+`scripts/pulumi-stack-inventory.json` currently lists. The ninth —
+`branchleft-ghost-platform-hosts` — is real, committed, and CI-applied; it
+is simply missing from the inventory JSON (§7), and post-dates the
+runbook's "not yet created" wording for the third backend.
 
 | Project / stack                                                      | Repo                | Definition path                                           | Committed backend today                                | Born there or moved? |
 | -------------------------------------------------------------------- | ------------------- | --------------------------------------------------------- | ------------------------------------------------------ | -------------------- |
@@ -124,27 +128,63 @@ Both searches below used the same method (`grep -rl`, five target repos,
 common extensions) with a control case run first to prove the search tool
 returns results at all (a known hit, `shared-infra/.github/workflows/ci.yml`,
 returned 6 matches for `pulumi login` — the tool is not silently empty).
-The second method was reading `scripts/pulumi-stack-inventory.json`'s own
-`state_backends` map and per-file `backend_reference_sites` /
-`external_backend_reference_sites` entries, which independently names the
-same set of files.
+The second method was `git grep -l` from each repo's own root against
+tracked files only, which additionally rules out a stale/untracked local
+copy inflating a count. `graphify-out/`'s two committed files that also
+match (`GRAPH_REPORT.md`, `graph.html` in both `shared-infra` and
+`ghost-platform`) are excluded from every count below on purpose: CI
+regenerates them from source on every push, so they mirror a real site
+rather than being one themselves, and counting them would double-count the
+file they mirror.
 
-**`branchleft-pulumi-state`** — 20 files across the estate (excluding
-worktree/vendor duplicates and this document itself): 14 in `shared-infra`
-(`Pulumi.yaml`s, `README.md`, four `RUNBOOK-*.md`, `hetzner/scripts/test_probe_object_storage.py`,
-`scripts/pulumi-stack-inventory.json`, `scripts/audit-pulumi-secrets.py`,
-`scripts/test_audit_pulumi_secrets.py`, `.github/workflows/ci.yml`), 6 in
-`ghost-platform` (`RUNBOOK-tenant-onboarding.md`,
-`infra/platform/RUNBOOK-bootstrap.md`, `infra/provisioning/index.ts` — the
-guard comment, not a live reference, `infra/hosts/Pulumi.yaml` — the
-Hetzner bucket of the same name, `.github/workflows/provision-tenant.yml`,
-`.github/workflows/infra-platform-ci.yml`). Note this name is now
-**overloaded**: `branchleft-pulumi-state` is both the legacy GCS bucket
-(europe-west2, doc 14 §15 step 4 deletes it) and the current-generation
-Hetzner Object Storage bucket (`hel1`) that `mail`, both Hetzner-native
-stacks and the new `hosts` stack are pinned to. They are different buckets
-in different clouds that happen to share a name; every reference above was
-read in context to tell which one it means, not matched by string alone.
+**`branchleft-pulumi-state`** — **22 files** across the estate (excluding
+worktree/vendor duplicates, the `graphify-out/` mirrors above, and this
+document itself):
+
+- **14 in `shared-infra`**: three `Pulumi.yaml`s (`hetzner/Pulumi.yaml`,
+  `hetzner/estate/Pulumi.yaml`, `mail/Pulumi.yaml`), `README.md`, **five**
+  `RUNBOOK-*.md` (`RUNBOOK-ci-bootstrap.md`, `RUNBOOK-edge-state-move.md`,
+  `hetzner/RUNBOOK-existing-stack-migration.md`, `hetzner/RUNBOOK-new-stack.md`
+  — this is where the "two backends share this bucket name" passage §3
+  itself discusses lives — `mail/RUNBOOK-import-mail-host.md`),
+  `hetzner/scripts/test_probe_object_storage.py`,
+  `scripts/pulumi-stack-inventory.json`, `scripts/audit-pulumi-secrets.py`,
+  `scripts/test_audit_pulumi_secrets.py`, `.github/workflows/ci.yml`.
+- **6 in `ghost-platform`**: `RUNBOOK-tenant-onboarding.md`,
+  `infra/platform/RUNBOOK-bootstrap.md`, `infra/provisioning/index.ts` — the
+  guard comment, not a live reference, `infra/hosts/Pulumi.yaml` — the
+  Hetzner bucket of the same name, `.github/workflows/provision-tenant.yml`,
+  `.github/workflows/infra-platform-ci.yml`.
+- **2 in `website`**: `.github/workflows/ci.yml` — the live
+  `pulumi login gs://branchleft-pulumi-state` step, already named in §2.1's
+  table — and `infra/KNOWN_ISSUES.md`, already named in §2.3's table.
+
+Zero in `ghost-platform-tenant-template` or `ghost-tenant-blog`, confirmed
+by both `grep` and `git grep` and by their absence from every
+`backend_reference_sites`/`external_backend_reference_sites` entry in
+`scripts/pulumi-stack-inventory.json`.
+
+**Correction, and how the count diverged.** An earlier pass of this tally
+summed the per-repo file lists by hand into "14 + 6 = 20" and stopped
+without re-adding `website`, even though both `website` files were already
+named correctly in §2.1 and §2.3 above and both already appear in
+`scripts/pulumi-stack-inventory.json`'s `external_backend_reference_sites`
+under `repo: website`. The source data was right in three places and wrong
+in exactly the one place doing arithmetic on it by hand instead of
+re-reading it — this section now states the itemized list first and the
+total as its sum, rather than the other way round, so a future re-check
+can re-add the column instead of re-deriving the list. The same manual-sum
+error dropped a fifth `RUNBOOK-*.md` from `shared-infra`'s named list
+(`hetzner/RUNBOOK-new-stack.md`) while still counting it in the "14" —
+fixed above by naming all five.
+
+Separately, note this name is now **overloaded**: `branchleft-pulumi-state`
+is both the legacy GCS bucket (europe-west2, doc 14 §15 step 4 deletes it)
+and the current-generation Hetzner Object Storage bucket (`hel1`) that
+`mail`, both Hetzner-native stacks and the new `hosts` stack are pinned to.
+They are different buckets in different clouds that happen to share a
+name; every reference above was read in context to tell which one it
+means, not matched by string alone.
 
 **`branchleft-blog-pulumi-state`** — 2 files, both in `shared-infra`
 (`scripts/pulumi-stack-inventory.json`, `scripts/test_audit_pulumi_secrets.py`).
