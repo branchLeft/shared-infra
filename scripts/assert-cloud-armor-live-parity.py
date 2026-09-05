@@ -26,8 +26,24 @@ from __future__ import annotations
 
 import json
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+
+# Exact dotted paths (relative to a single rule -- see diff_normalized_policies,
+# which already keys `rules` itself by priority rather than position) whose
+# list value GCP does not return in a stable order and whose match semantics
+# do not depend on order either. Each one is a set of independently-OR'd
+# match criteria, not a sequence: `match.config.srcIpRanges` is "does the
+# source IP fall in ANY of these ranges" (the field this issue was filed
+# against; CLOUD-ARMOR-BASELINE.md documents the same set-of-ranges shape).
+# Everything else -- including fields this policy does not use today, such
+# as `preconfiguredWafConfig.exclusions` (whose evaluation order GCP does not
+# document and this script has no live access to confirm) and any header or
+# redirect field where position could plausibly affect the value sent
+# upstream -- stays positional. That is the safe default: a list absent from
+# this set is compared exactly as before.
+_UNORDERED_LIST_PATHS = frozenset({"match.config.srcIpRanges"})
 
 
 @dataclass(frozen=True)
@@ -40,6 +56,16 @@ class Divergence:
     @property
     def message(self) -> str:
         return f"{self.label}: field '{self.field}' -- baseline={self.baseline_value!r} live={self.captured_value!r}"
+
+
+def _multiset(values: list) -> Counter:
+    """A hashable, order-independent fingerprint of a list's contents.
+
+    Serializes each element rather than hashing it directly so a list of
+    dicts (not just the strings this is used for today) would still compare
+    safely if ever routed through this path.
+    """
+    return Counter(json.dumps(v, sort_keys=True) for v in values)
 
 
 def _diff_paths(baseline: object, captured: object, path: str = "") -> list[tuple[str, object, object]]:
@@ -63,6 +89,9 @@ def _diff_paths(baseline: object, captured: object, path: str = "") -> list[tupl
     if isinstance(baseline, list) and isinstance(captured, list):
         if len(baseline) != len(captured):
             return [(f"{path}[]", f"<{len(baseline)} items>", f"<{len(captured)} items>")]
+        if path in _UNORDERED_LIST_PATHS and _multiset(baseline) == _multiset(captured):
+            # Same items, same counts, different order -- not a divergence.
+            return []
         diffs = []
         for i, (b_item, c_item) in enumerate(zip(baseline, captured)):
             diffs.extend(_diff_paths(b_item, c_item, f"{path}[{i}]"))
@@ -252,6 +281,49 @@ def self_test() -> int:
     check(
         len(diff_normalized_policies(policy, double_drift)) == 2,
         "two simultaneous divergences were not both reported",
+    )
+
+    # branchLeft/shared-infra#136: `match.config.srcIpRanges` is an
+    # unordered set of ranges (does the source IP fall in ANY of them), so
+    # the same ranges captured in a different order must not diverge.
+    src_ip_baseline = json.loads(json.dumps(policy))
+    src_ip_baseline["rules"][0]["match"] = {"config": {"srcIpRanges": ["10.0.0.0/8", "192.168.0.0/16", "*"]}}
+    src_ip_reordered = json.loads(json.dumps(src_ip_baseline))
+    src_ip_reordered["rules"][0]["match"]["config"]["srcIpRanges"] = ["*", "10.0.0.0/8", "192.168.0.0/16"]
+    check(
+        diff_normalized_policies(src_ip_baseline, src_ip_reordered) == [],
+        "a reordered-but-equivalent srcIpRanges was reported as diverging",
+    )
+
+    # A genuine srcIpRanges change riding along with a reorder must still be
+    # caught -- order-insensitivity must never hide real drift.
+    src_ip_drifted = json.loads(json.dumps(src_ip_baseline))
+    src_ip_drifted["rules"][0]["match"]["config"]["srcIpRanges"] = ["*", "203.0.113.0/24", "192.168.0.0/16"]
+    divergences = diff_normalized_policies(src_ip_baseline, src_ip_drifted)
+    check(
+        len(divergences) >= 1
+        and all(d.field.startswith("match.config.srcIpRanges") for d in divergences),
+        f"a genuine srcIpRanges drift alongside a reorder was not caught: {divergences}",
+    )
+
+    # A list field with no confirmed order-insensitive semantics stays
+    # positional -- the safe default -- even when reordered with identical
+    # contents.
+    header_baseline = json.loads(json.dumps(policy))
+    header_baseline["rules"][0]["headerAction"] = {
+        "requestHeadersToAdds": [
+            {"headerName": "X-Foo", "headerValue": "1"},
+            {"headerName": "X-Bar", "headerValue": "2"},
+        ]
+    }
+    header_reordered = json.loads(json.dumps(header_baseline))
+    header_reordered["rules"][0]["headerAction"]["requestHeadersToAdds"] = [
+        {"headerName": "X-Bar", "headerValue": "2"},
+        {"headerName": "X-Foo", "headerValue": "1"},
+    ]
+    check(
+        len(diff_normalized_policies(header_baseline, header_reordered)) == 4,
+        "a reordered list outside the unordered allow-list was not caught positionally",
     )
 
     # Fails closed, rather than silently dropping the rule, on the shapes a

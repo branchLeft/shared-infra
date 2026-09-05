@@ -143,6 +143,73 @@ class DiffNormalizedPoliciesTests(unittest.TestCase):
         self.assertEqual(len(divergences), 1)
         self.assertEqual(divergences[0].field, "match.config.srcIpRanges[0]")
 
+    def test_reordered_src_ip_ranges_is_not_a_divergence(self):
+        # branchLeft/shared-infra#136: `match.config.srcIpRanges` is "does the
+        # source IP fall in ANY of these ranges" -- an unordered set of
+        # ranges, not a sequence. GCP gives no ordering guarantee for this
+        # repeated field, so a live capture holding the same ranges in a
+        # different order than the committed baseline has not drifted.
+        baseline = _clean_policy()
+        captured = copy.deepcopy(baseline)
+        baseline["rules"][0]["match"]["config"]["srcIpRanges"] = ["10.0.0.0/8", "192.168.0.0/16", "*"]
+        captured["rules"][0]["match"]["config"]["srcIpRanges"] = ["*", "10.0.0.0/8", "192.168.0.0/16"]
+
+        divergences = live_parity.diff_normalized_policies(baseline, captured)
+
+        self.assertEqual(divergences, [])
+
+    def test_a_genuine_src_ip_ranges_drift_is_still_caught_alongside_a_reorder(self):
+        # Order-insensitivity must never become a way to hide a real change
+        # riding along with a reorder: one range swapped for another, with
+        # the rest of the list also shuffled, must still be reported.
+        baseline = _clean_policy()
+        captured = copy.deepcopy(baseline)
+        baseline["rules"][0]["match"]["config"]["srcIpRanges"] = ["10.0.0.0/8", "192.168.0.0/16", "*"]
+        captured["rules"][0]["match"]["config"]["srcIpRanges"] = ["*", "203.0.113.0/24", "192.168.0.0/16"]
+
+        divergences = live_parity.diff_normalized_policies(baseline, captured)
+
+        # The multiset guard only skips the divergence check when the two
+        # lists hold exactly the same items -- here they don't, so this
+        # falls through to the original positional compare, which reports
+        # every index that differs (not necessarily just the one range that
+        # actually changed). That is still strictly safe: it names the
+        # right rule and the right field, and it never under-reports.
+        self.assertGreaterEqual(len(divergences), 1)
+        self.assertTrue(all("priority=1000" in d.label for d in divergences))
+        self.assertTrue(all(d.field.startswith("match.config.srcIpRanges") for d in divergences))
+
+    def test_a_list_field_outside_the_unordered_allow_list_still_compares_positionally(self):
+        # Everything not explicitly named as order-insensitive keeps the
+        # original, order-sensitive behaviour -- the safe default. This
+        # policy does not use `headerAction.requestHeadersToAdds` today, but
+        # header-insertion order can plausibly affect what is actually sent,
+        # and this script has no live access to confirm otherwise, so a
+        # reorder of it must still be flagged rather than silently accepted.
+        baseline = _clean_policy()
+        captured = copy.deepcopy(baseline)
+        baseline["rules"][0]["headerAction"] = {
+            "requestHeadersToAdds": [
+                {"headerName": "X-Foo", "headerValue": "1"},
+                {"headerName": "X-Bar", "headerValue": "2"},
+            ]
+        }
+        captured["rules"][0]["headerAction"] = {
+            "requestHeadersToAdds": [
+                {"headerName": "X-Bar", "headerValue": "2"},
+                {"headerName": "X-Foo", "headerValue": "1"},
+            ]
+        }
+
+        divergences = live_parity.diff_normalized_policies(baseline, captured)
+
+        # Each dict lands at a different index, so the positional compare
+        # recurses into both of its fields at both positions (4 diffs, not
+        # 2) -- more verbose than a hypothetical order-aware diff, but still
+        # correctly non-empty: the reorder is caught, not silently accepted.
+        self.assertEqual(len(divergences), 4)
+        self.assertTrue(all(d.field.startswith("headerAction.requestHeadersToAdds") for d in divergences))
+
     def test_a_field_present_only_in_the_live_capture_is_named_not_silently_ignored(self):
         # A compare that only walks the *baseline's* own keys would see zero
         # fields at this priority and report a clean diff -- exactly the
