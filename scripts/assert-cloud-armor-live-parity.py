@@ -30,19 +30,17 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-# Exact dotted paths (relative to a single rule -- see diff_normalized_policies,
-# which already keys `rules` itself by priority rather than position) whose
-# list value GCP does not return in a stable order and whose match semantics
-# do not depend on order either. Each one is a set of independently-OR'd
-# match criteria, not a sequence: `match.config.srcIpRanges` is "does the
-# source IP fall in ANY of these ranges" (the field this issue was filed
-# against; CLOUD-ARMOR-BASELINE.md documents the same set-of-ranges shape).
-# Everything else -- including fields this policy does not use today, such
-# as `preconfiguredWafConfig.exclusions` (whose evaluation order GCP does not
-# document and this script has no live access to confirm) and any header or
-# redirect field where position could plausibly affect the value sent
-# upstream -- stays positional. That is the safe default: a list absent from
-# this set is compared exactly as before.
+# Exact dotted paths, relative to a single rule (diff_normalized_policies
+# already keys `rules` itself by priority rather than position), whose value
+# is a set of independently-OR'd match criteria rather than a sequence.
+# `match.config.srcIpRanges` is "does the source IP fall in ANY of these
+# ranges", so a permutation of it is the same policy. Whether GCP ever
+# returns one permuted is UNVERIFIED, and unobservable from here: every
+# rule this policy declares matches on the single-element `["*"]`, which
+# has no order. This is defensive, not a fix for behaviour seen live.
+# Everything else stays positional -- that is the safe default, and it
+# covers fields with no confirmed order-insensitive semantics such as
+# `preconfiguredWafConfig.exclusions`.
 _UNORDERED_LIST_PATHS = frozenset({"match.config.srcIpRanges"})
 
 
@@ -283,9 +281,9 @@ def self_test() -> int:
         "two simultaneous divergences were not both reported",
     )
 
-    # branchLeft/shared-infra#136: `match.config.srcIpRanges` is an
-    # unordered set of ranges (does the source IP fall in ANY of them), so
-    # the same ranges captured in a different order must not diverge.
+    # `match.config.srcIpRanges` is an unordered set of ranges (does the
+    # source IP fall in ANY of them), so the same ranges captured in a
+    # different order must not diverge.
     src_ip_baseline = json.loads(json.dumps(policy))
     src_ip_baseline["rules"][0]["match"] = {"config": {"srcIpRanges": ["10.0.0.0/8", "192.168.0.0/16", "*"]}}
     src_ip_reordered = json.loads(json.dumps(src_ip_baseline))

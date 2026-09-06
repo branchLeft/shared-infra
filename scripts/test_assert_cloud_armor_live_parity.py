@@ -144,11 +144,11 @@ class DiffNormalizedPoliciesTests(unittest.TestCase):
         self.assertEqual(divergences[0].field, "match.config.srcIpRanges[0]")
 
     def test_reordered_src_ip_ranges_is_not_a_divergence(self):
-        # branchLeft/shared-infra#136: `match.config.srcIpRanges` is "does the
-        # source IP fall in ANY of these ranges" -- an unordered set of
-        # ranges, not a sequence. GCP gives no ordering guarantee for this
-        # repeated field, so a live capture holding the same ranges in a
-        # different order than the committed baseline has not drifted.
+        # `match.config.srcIpRanges` is "does the source IP fall in ANY of
+        # these ranges" -- an unordered set of ranges, not a sequence, so a
+        # capture holding the same ranges in a different order than the
+        # baseline has not drifted. Whether GCP ever reorders it is
+        # unverified; this is defensive.
         baseline = _clean_policy()
         captured = copy.deepcopy(baseline)
         baseline["rules"][0]["match"]["config"]["srcIpRanges"] = ["10.0.0.0/8", "192.168.0.0/16", "*"]
@@ -157,6 +157,41 @@ class DiffNormalizedPoliciesTests(unittest.TestCase):
         divergences = live_parity.diff_normalized_policies(baseline, captured)
 
         self.assertEqual(divergences, [])
+
+    def test_a_longer_src_ip_ranges_capture_is_reported_as_a_divergence(self):
+        # The length check in _diff_paths is what stops a widened rule being
+        # laundered through the unordered compare: zip() truncates to the
+        # shorter list, so without it a range ADDED live is invisible. This
+        # is the shape that matters -- ["10.0.0.0/8"] widened to also allow
+        # 0.0.0.0/0 is the whole internet reaching the production edge.
+        baseline = _clean_policy()
+        captured = copy.deepcopy(baseline)
+        baseline["rules"][0]["match"]["config"]["srcIpRanges"] = ["10.0.0.0/8"]
+        captured["rules"][0]["match"]["config"]["srcIpRanges"] = ["10.0.0.0/8", "0.0.0.0/0"]
+
+        divergences = live_parity.diff_normalized_policies(baseline, captured)
+
+        self.assertEqual(len(divergences), 1)
+        self.assertEqual(divergences[0].field, "match.config.srcIpRanges[]")
+        self.assertEqual(divergences[0].baseline_value, "<1 items>")
+        self.assertEqual(divergences[0].captured_value, "<2 items>")
+
+    def test_a_shorter_src_ip_ranges_capture_is_reported_as_a_divergence(self):
+        # The mirror direction: a range REMOVED live truncates the same way.
+        # Asserted separately from the widening case because zip() hides the
+        # tail of whichever side is longer, so one direction passing proves
+        # nothing about the other.
+        baseline = _clean_policy()
+        captured = copy.deepcopy(baseline)
+        baseline["rules"][0]["match"]["config"]["srcIpRanges"] = ["10.0.0.0/8", "192.168.0.0/16"]
+        captured["rules"][0]["match"]["config"]["srcIpRanges"] = ["10.0.0.0/8"]
+
+        divergences = live_parity.diff_normalized_policies(baseline, captured)
+
+        self.assertEqual(len(divergences), 1)
+        self.assertEqual(divergences[0].field, "match.config.srcIpRanges[]")
+        self.assertEqual(divergences[0].baseline_value, "<2 items>")
+        self.assertEqual(divergences[0].captured_value, "<1 items>")
 
     def test_a_genuine_src_ip_ranges_drift_is_still_caught_alongside_a_reorder(self):
         # Order-insensitivity must never become a way to hide a real change
