@@ -17,6 +17,7 @@ import json
 import os
 import secrets
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -24,6 +25,32 @@ BASE_URL = os.environ.get("STALWART_BASE_URL", "http://127.0.0.1:8080")
 CREDENTIALS_PATH = os.environ.get(
     "STALWART_CREDENTIALS_PATH", "/root/.stalwart-admin-credentials"
 )
+
+
+def _write_credential_atomic(path: str, contents: str) -> None:
+    """Writes `contents` to `path` atomically at mode 600, mirroring
+    render_shim_env.py's write_env_file_atomic: a temp file in the same
+    directory (so the final os.replace is same-filesystem, hence atomic),
+    created via mkstemp -- which is already mode 600 from the moment it
+    exists, never briefly at whatever mode `path` happened to carry before
+    -- explicitly re-asserted here anyway so that guarantee doesn't
+    silently depend on mkstemp's default.
+    """
+    directory = os.path.dirname(path) or "."
+    fd, tmp_path = tempfile.mkstemp(prefix=".stalwart-admin-credentials.", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(contents)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def _request(method: str, path: str, auth: tuple[str, str], body: bytes | None = None):
@@ -97,9 +124,7 @@ def main() -> int:
         )
         return 1
 
-    with open(CREDENTIALS_PATH, "w", encoding="utf-8") as f:
-        f.write(f"{username}:{new_secret}\n")
-    os.chmod(CREDENTIALS_PATH, 0o600)
+    _write_credential_atomic(CREDENTIALS_PATH, f"{username}:{new_secret}\n")
 
     print(f"ROTATED: new credential verified live, old credential verified dead, {CREDENTIALS_PATH} updated (mode 600)")
     return 0

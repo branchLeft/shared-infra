@@ -32,6 +32,9 @@ jobs:
   check-hub-pin:
     name: Compare the pinned crowdsec image against upstream latest
     runs-on: ubuntu-latest
+    # Observed 0.07-0.12min over the last 5 successful runs (p95 0.12min) --
+    # small sample (daily schedule), but very consistent.
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

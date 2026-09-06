@@ -144,8 +144,18 @@ export function createEdge(sites: EdgeSite[], hostRedirects: HostRedirect[] = []
   // Hostnames exempted from *enforcing* the injection rules. They get their own
   // preview-mode copies at 1100+ instead, so the exemption still produces the
   // false-positive evidence needed to end it.
+  //
+  // Restricted to sites this edge actually serves. A site with no
+  // `cloudRunService` is skipped below and so gets no URL-map host rule — but
+  // an exemption keyed on the Host *header* would still apply to it, and a
+  // request carrying that Host matches no rule and falls through to
+  // `defaultService`. Exempting a host this edge cannot route therefore turns
+  // the injection rules off for that Host on whichever backend the fallthrough
+  // lands on, which is the marketing site. `hostEquals` is documented as
+  // failing towards enforcement; that only holds while every exempted host has
+  // a rule of its own.
   const previewOnlyHosts = sites
-    .filter((site) => site.injectionWafPreviewOnly)
+    .filter((site) => site.injectionWafPreviewOnly && site.cloudRunService !== undefined)
     .flatMap((site) => site.hostnames);
   const isPreviewOnlyHost = previewOnlyHosts.map(hostEquals).join(' || ');
   const isNotPreviewOnlyHost = previewOnlyHosts.map((h) => `!(${hostEquals(h)})`).join(' && ');
@@ -249,14 +259,36 @@ export function createEdge(sites: EdgeSite[], hostRedirects: HostRedirect[] = []
     description: 'Certificate map for the branchLeft edge load balancer',
   });
 
+  // The URL map's `defaultService` is the first site's backend, and `sites.ts`
+  // requires the marketing site stay first so that fallback is never a
+  // tenant's service. Skipping GCP-less sites below could silently hand that
+  // role to a later entry, so the invariant is asserted rather than assumed.
+  if (sites.length > 0 && sites[0].cloudRunService === undefined) {
+    throw new Error(
+      `the first sites.ts entry (${sites[0].name}) has no cloudRunService, so the URL map's ` +
+        'defaultService would fall to a later entry — see "Ordering" in sites.ts'
+    );
+  }
+
   for (const site of sites) {
+    // A site with no Cloud Run service does not exist on this edge — it is
+    // served from Hetzner, or not yet served at all. Skipped before any
+    // resource is constructed, mirroring `servableSites` in
+    // hetzner/edge/render.ts, which drops sites with no `privateUpstream` for
+    // the same reason: an edge must never request a certificate for a
+    // hostname it cannot answer a challenge for.
+    const cloudRunService = site.cloudRunService;
+    if (cloudRunService === undefined) {
+      continue;
+    }
+
     // Serverless NEG — the only backend type that can point at Cloud Run.
     // Must be in the same region as the service it targets.
     const neg = new gcp.compute.RegionNetworkEndpointGroup(`${site.name}-neg`, {
       name: `${site.name}-neg`,
       region: site.region ?? defaultRegion,
       networkEndpointType: 'SERVERLESS',
-      cloudRun: { service: site.cloudRunService },
+      cloudRun: { service: cloudRunService },
     });
 
     const backendService = new gcp.compute.BackendService(`${site.name}-backend`, {
@@ -332,7 +364,10 @@ export function createEdge(sites: EdgeSite[], hostRedirects: HostRedirect[] = []
   }
 
   if (defaultService === undefined) {
-    throw new Error('createEdge requires at least one site');
+    throw new Error(
+      'createEdge produced no backend service: sites.ts is empty, or no entry has a ' +
+        'cloudRunService — this edge serves nothing'
+    );
   }
 
   // Canonical-domain redirects (e.g. www → apex), each on its own host rule

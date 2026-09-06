@@ -20,7 +20,8 @@ second Compose stack beside it, does not create the host, and assumes
 are already installed.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl is-active branchleft-compose@edge &&
   test -x /usr/bin/python3 &&
   echo ready'
@@ -30,11 +31,12 @@ Expect `active` then `ready`. `python3` is what
 `stack/render_alertmanager_config.py` runs under -- see "Colocation cgroup
 bounds" below for why that script exists at all.
 
-A `failed` reading here is not proof the edge stack is down. The unit is
-`Type=oneshot`, and a failed restart never runs `ExecStop`, so whatever the
-most recent `docker compose up -d` attempt started is still running, healthy
-or not. Check `docker ps --filter label=com.docker.compose.project=edge` on
-the host before treating `failed` as an outage.
+A `failed` reading here is not proof the edge stack is down. The unit carries
+no `ExecStop`, so a restart -- whether it succeeds or fails -- never runs
+`docker compose down`; whatever the most recent `docker compose up -d`
+attempt started is still running, healthy or not. Check `docker ps --filter
+label=com.docker.compose.project=edge` on the host before treating `failed`
+as an outage.
 
 ## Colocation cgroup bounds -- the sizing arithmetic and where it actually lives
 
@@ -169,13 +171,14 @@ CrowdSec's built-in metrics moved off its default `127.0.0.1` via
 `10.20.1.10:<port>` only, and the `mem_limit`/`cpu_shares` from the section
 above. Copy it, but **do not restart yet** -- step 6 restarts once, after the
 cgroup drop-in below is also in place, so `edge` does not need reloading
-twice.
+twice. `$EDGE1_IPV4` is set under "What has to be true first" above; re-set
+it first if you are entering here independently.
 
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  hetzner/edge/stack/ root@"$EDGE1_IPV4":/opt/branchleft/edge/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'chown -R root:root /opt/branchleft/edge/'
 ```
 
@@ -253,15 +256,16 @@ shared unit template), and it is also what
 that script's docstring for why Alertmanager's own config format cannot read
 an environment variable itself, unlike Caddy's `{env.X}`.
 
-| Variable                     | Used by                                                                                  | Where the value comes from                                                                                                                                                                                                                                                                                                            |
-| ---------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SMTP_USERNAME`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                        |
-| `SMTP_PASSWORD`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                        |
-| `HEALTHCHECKS_PING_URL`      | Alertmanager (via the render script)                                                     | The Healthchecks.io check's ping URL (PR's handover steps)                                                                                                                                                                                                                                                                            |
-| `ALERT_RECIPIENT_EMAIL`      | Alertmanager (via the render script)                                                     | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too                                                                                                                                                                            |
-| `MAILHOST_PING_URL`          | Alertmanager (via the render script)                                                     | A second, dedicated Healthchecks.io check's `/fail` endpoint -- hitting `/fail` marks it down immediately rather than waiting for a missed heartbeat. Routed to by `MailHostDown` and `AlertEmailDeliveryFailing` only (see `mailhost-deadman` in `renderAlertmanagerTemplate()`), never by anything else                             |
-| `GRAFANA_ADMIN_PASSWORD`     | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`)                                            | Generated fresh, stored in the password manager                                                                                                                                                                                                                                                                                       |
-| `STALWART_PROMETHEUS_SECRET` | Prometheus (via the render script, as the `stalwart` job's `basic_auth` `password_file`) | `/opt/stalwart/.env` on mx1, minted by `mail/provision/30-deploy-stalwart.sh` -- see `mail/RUNBOOK-mx1-prometheus-metrics.md`. **The one row here that is not fatal when absent**: the render script warns on stderr and removes any stale file, Prometheus starts normally, and the `stalwart` target reports `down` until it is set |
+| Variable                     | Used by                                                                                  | Where the value comes from                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SMTP_USERNAME`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `SMTP_PASSWORD`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `HEALTHCHECKS_PING_URL`      | Alertmanager (via the render script)                                                     | The Healthchecks.io check's ping URL (PR's handover steps)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `ALERT_RECIPIENT_EMAIL`      | Alertmanager (via the render script)                                                     | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `MAILHOST_PING_URL`          | Alertmanager (via the render script)                                                     | A second, dedicated Healthchecks.io check's `/fail` endpoint -- hitting `/fail` marks it down immediately rather than waiting for a missed heartbeat. Routed to by `MailHostDown` and `AlertEmailDeliveryFailing` only (see `mailhost-deadman` in `renderAlertmanagerTemplate()`), never by anything else                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `GRAFANA_ADMIN_PASSWORD`     | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`)                                            | Generated fresh, stored in the password manager                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `STALWART_PROMETHEUS_SECRET` | Prometheus (via the render script, as the `stalwart` job's `basic_auth` `password_file`) | `/opt/stalwart/.env` on mx1, minted by `mail/provision/30-deploy-stalwart.sh` -- see `mail/RUNBOOK-mx1-prometheus-metrics.md`. **The one row here that is not fatal when absent**: the render script warns on stderr and removes any stale file, Prometheus starts normally, and the `stalwart` target reports `down` until it is set                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `SNDS_BEARER_TOKEN`          | `snds/collect_snds_metrics.py`, run by `snds-collector.timer` (§14)                      | The SNDS portal at `sendersupport.olc.protection.outlook.com`, signed in as the registered sender. **Not a long-lived key**: Microsoft retired the static `?key=` automated-access URL in June 2026: the replacement is an OAuth bearer token tied to the portal login, observed to last on the order of hours, with no `refresh_token` Microsoft issues for unattended renewal. There is no automation for this repo to run: the operator re-generates it from the portal by hand and pastes the new value in here. A stale or absent token fails only the collector's own run (leaves the previous textfile output in place, per that script's docstring); `SNDSCollectorStale` (`render.ts`) pages once 36 hours pass with no successful refresh |
 
 **This step now writes five secrets, not four -- `MAILHOST_PING_URL` is as
 required as the other three Alertmanager variables.**
@@ -272,10 +276,12 @@ fails the unit start outright -- the monitoring stack does not come up
 degraded, it does not come up at all. On a host already running the
 pre-this-PR stack, write this variable into the file **before** restarting
 into the new `stack/` contents (step 7b); restarting first and writing the
-secret after leaves the stack down for the gap in between.
+secret after leaves the stack down for the gap in between. `$EDGE1_IPV4` is
+set under "What has to be true first" above; re-set it first if you are
+entering here independently.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   test -f /etc/branchleft/monitoring.env && grep -c . /etc/branchleft/monitoring.env || echo "absent"'
 ```
 
@@ -283,7 +289,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
 place rather than overwriting it.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   install -d -m 0755 -o root -g root /etc/branchleft &&
   umask 077 &&
   { printf "SMTP_USERNAME=%s\n" "<SUBMISSION_USERNAME>";
@@ -301,11 +307,14 @@ Expect `-rw------- 1 root root`. Do not print the file.
 
 ## 4. Copy the monitoring stack directory onto the host
 
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering here independently.
+
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  hetzner/monitoring/stack/ root@"$EDGE1_IPV4":/opt/branchleft/monitoring/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'chown -R root:root /opt/branchleft/monitoring/'
 ```
 
@@ -345,8 +354,11 @@ is read as the container-side user, so a root-owned file becomes unreadable.
 
 ## 5. Install the systemd cgroup drop-ins
 
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering here independently.
+
 ```bash
-hetzner/provision/install-systemd-drop-ins.sh root@46.225.95.167
+hetzner/provision/install-systemd-drop-ins.sh root@"$EDGE1_IPV4"
 ```
 
 The script walks every committed `*/systemd/*.override.conf` under
@@ -364,10 +376,11 @@ it for `monitoring`.
 
 One restart picks up everything queued since step 1: the metrics endpoints,
 the `mem_limit`/`cpu_shares` containment, and the systemd drop-in installed
-in step 5.
+in step 5. `$EDGE1_IPV4` is set under "What has to be true first" above;
+re-set it first if you are entering here independently.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'systemctl restart branchleft-compose@edge'
 ```
 
@@ -386,8 +399,11 @@ then restart, nothing else. The unit is already enabled, so 7b never runs
 
 ### 7a. First-time bring-up
 
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering here independently.
+
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl enable branchleft-compose@monitoring &&
   systemctl start branchleft-compose@monitoring'
 ```
@@ -423,19 +439,27 @@ re-adds that file with a leading dash precisely so the failure comes from
 ### 7b. Updating an already-running stack
 
 Run this immediately after step 4's copy -- the copy on its own has changed
-nothing, per step 4's note above.
+nothing, per step 4's note above. `$EDGE1_IPV4` is set under "What has to be
+true first" above; re-set it first if you are entering here independently.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'systemctl restart branchleft-compose@monitoring'
 ```
 
 A plain restart reruns `ExecStartPre`, so `alertmanager.yml` is regenerated
-from the current template and secrets, and recreates every container, so
-`prometheus.yml` and `alerts.yml` are read fresh from what step 4 just wrote.
-`enable` is not repeated -- it is idempotent but pointless once the unit is
-already enabled -- and the systemd drop-in install (step 5) only needs
-re-running when a drop-in file itself changes, not for an ordinary config
+from the current template and secrets. It also recreates every container --
+but only because `monitoring.override.conf` overrides the template's
+`ExecStart` to add `--force-recreate`; the shared unit template on its own
+recreates only the service whose _resolved_ Compose definition changed
+(branchLeft/shared-infra#171), which a bind-mounted file's contents never
+are. Without that override this restart would regenerate `alertmanager.yml`
+on disk and leave every running container, `alertmanager` included, still
+serving what it read at its last start -- `prometheus.yml` and `alerts.yml`
+are read fresh from what step 4 just wrote only because `--force-recreate` is
+there to force it. `enable` is not repeated -- it is idempotent but pointless
+once the unit is already enabled -- and the systemd drop-in install (step 5)
+only needs re-running when a drop-in file itself changes, not for an ordinary config
 update.
 
 Then verify with step 8, and read its note on `/api/v1/targets` before
@@ -444,8 +468,12 @@ trusting the first response: immediately after any restart it reads
 
 ## 8. Verify the stack is up
 
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering this section independently -- every check below
+reuses it.
+
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   docker ps --filter label=com.docker.compose.project=monitoring'
 ```
 
@@ -453,7 +481,7 @@ Expect six containers, all `Up`: `prometheus`, `alertmanager`, `grafana`,
 `node-exporter`, `blackbox-exporter`, `cadvisor`.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -L 9090:127.0.0.1:9090 root@46.225.95.167 -N &
+ssh -i ~/.ssh/id_ed25519_hetzner -L 9090:127.0.0.1:9090 root@"$EDGE1_IPV4" -N &
 curl -s http://127.0.0.1:9090/api/v1/targets | python3 -m json.tool | grep -E '"job"|"health"'
 ```
 
@@ -519,7 +547,7 @@ with a full 200 and `mysql_up 0` when it cannot read MySQL, which is the state
 `db1` was in for four days. Check the metric, not the target:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'curl -s --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=mysql_up"'
 ```
 
@@ -534,8 +562,11 @@ case, the `Watchdog` heartbeat's external dead-man's switch.
 
 ## 9. Verify Grafana is private-only
 
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering this section independently.
+
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' http://46.225.95.167:3000/  # from the workstation, over the public address
+curl -s -o /dev/null -w '%{http_code}\n' http://"$EDGE1_IPV4":3000/  # from the workstation, over the public address
 ```
 
 Expect a connection failure or timeout, never an HTTP response -- Compose
@@ -543,14 +574,15 @@ publishes Grafana on `10.20.1.10:3000` only, and `10.20.1.10` does not route
 from the public internet.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -L 3000:10.20.1.10:3000 root@46.225.95.167 -N &
+EDGE1_PRIVATE_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")
+ssh -i ~/.ssh/id_ed25519_hetzner -L 3000:"$EDGE1_PRIVATE_IPV4":3000 root@"$EDGE1_IPV4" -N &
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/login
 ```
 
 Expect `200`, reached only through the tunnel. Confirm the registry side too:
 
 ```bash
-grep -R 'grafana\|10.20.1.10' sites.ts hetzner/edge/stack/Caddyfile
+grep -R "grafana\|$EDGE1_PRIVATE_IPV4" sites.ts hetzner/edge/stack/Caddyfile
 ```
 
 Expect no match in either file -- Grafana carries no hostname, no Caddy
@@ -558,11 +590,14 @@ route and no public listener anywhere in this repository.
 
 ## 10. Verify the cgroup containment reaches the containers
 
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering this section independently.
+
 **The systemd unit properties, for completeness -- but this alone proves
 nothing about the containers** (see "Colocation cgroup bounds" above):
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl show -p MemoryMax -p CPUWeight branchleft-compose@edge.service &&
   systemctl show -p MemoryMax -p CPUWeight branchleft-compose@monitoring.service'
 ```
@@ -577,7 +612,7 @@ mitigation reached anything -- it only confirms the drop-in loaded.
 `HostConfig`:**
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   for c in $(docker ps --filter label=com.docker.compose.project=edge -q) \
            $(docker ps --filter label=com.docker.compose.project=monitoring -q); do
     docker inspect "$c" --format \
@@ -598,7 +633,7 @@ unit's cgroup** (the reason the check above is necessary at all, not just
 belt-and-braces):
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   CADDY_PID=$(docker inspect --format "{{.State.Pid}}" \
     $(docker ps --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy -q)) &&
   cat /proc/$CADDY_PID/cgroup &&
@@ -616,8 +651,11 @@ version bump alone; re-run this check.
 
 ## 11. Verify the heartbeat is wired to the dead-man's switch
 
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering here independently.
+
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -L 9093:127.0.0.1:9093 root@46.225.95.167 -N &
+ssh -i ~/.ssh/id_ed25519_hetzner -L 9093:127.0.0.1:9093 root@"$EDGE1_IPV4" -N &
 curl -s http://127.0.0.1:9093/api/v2/alerts | python3 -m json.tool | grep -A3 '"alertname": "Watchdog"'
 ```
 
@@ -645,13 +683,17 @@ alarm:
    over the tunnel from step 11) and confirm an email actually arrives at
    `ALERT_RECIPIENT_EMAIL`, not only that Alertmanager's API reports it
    dispatched.
-2. **A real dead-man alarm.** Stop the monitoring stack
-   (`systemctl stop branchleft-compose@monitoring`) and confirm Healthchecks.io
-   moves the check to "Late" and then "Down" and sends its own alert --
-   without that, the amendment's heartbeat requirement is unverified, not
-   satisfied. Restart the stack afterwards
-   (`systemctl start branchleft-compose@monitoring`) and confirm the check
-   recovers.
+2. **A real dead-man alarm.** `systemctl stop branchleft-compose@monitoring`
+   no longer stops anything -- the unit carries no `ExecStop`, so a stop
+   marks it inactive and leaves every container running. Take the stack
+   itself down with Compose directly
+   (`docker compose --project-directory /opt/branchleft/monitoring -p monitoring down`)
+   and confirm Healthchecks.io moves the check to "Late" and then "Down"
+   and sends its own alert -- without that, the amendment's heartbeat
+   requirement is unverified, not satisfied. Bring it back with `systemctl
+restart branchleft-compose@monitoring`, not `systemctl start`: systemd
+   still considers the unit active, so `start` would no-op, while `restart`
+   always reruns `ExecStart` regardless. Confirm the check recovers.
 
 Both are owner-executed, one-time, real-world proofs -- listed in the PR's
 handover steps rather than performed by CI or by an agent.
@@ -659,14 +701,16 @@ handover steps rather than performed by CI or by an agent.
 ## 13. Rolling back
 
 Same shape as `RUNBOOK-edge.md` §12: restore the previous `stack/` from git,
-re-copy, restart.
+re-copy, restart. `$EDGE1_IPV4` is set under "What has to be true first"
+above; re-set it first if you are entering here independently -- this is
+the section most likely to be entered mid-incident, days after the deploy.
 
 ```bash
 git checkout <PREVIOUS_MERGED_SHA> -- hetzner/monitoring/stack
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/monitoring/stack/ root@46.225.95.167:/opt/branchleft/monitoring/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  hetzner/monitoring/stack/ root@"$EDGE1_IPV4":/opt/branchleft/monitoring/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'chown -R root:root /opt/branchleft/monitoring/ &&
    systemctl restart branchleft-compose@monitoring'
 ```
@@ -675,6 +719,104 @@ Then `git checkout HEAD -- hetzner/monitoring/stack` on the workstation. If
 the rollback also needs to undo an edge-side change (the metrics endpoints
 or the cgroup containment), the same pattern applies to
 `hetzner/edge/stack`, followed by `systemctl restart branchleft-compose@edge`.
+
+## 14. Deploy the SNDS complaint-rate collector
+
+`snds/collect_snds_metrics.py` is copied to the host as part of step 4's
+`hetzner/monitoring/stack/` rsync (it lives under that directory). This
+section is everything specific to it on top of that: the bearer token,
+node-exporter's textfile-collector mount, and the systemd timer that actually
+runs it.
+
+**First, get a bearer token.** Sign in to the SNDS portal at
+`https://sendersupport.olc.protection.outlook.com/snds/` as the registered
+sender and generate an API token for the IP status/data endpoint. This is a
+manual, recurring step, not a one-time credential: Microsoft's current API has
+no `refresh_token`, and community reports put the token's life at roughly 8
+hours, so a token minted once will go stale well inside the collector's own
+24-36h alerting window. Write it into `/etc/branchleft/monitoring.env` as
+`SNDS_BEARER_TOKEN` (§3's table), the same file every other stack secret
+lives in -- there is no separate credential file for this one. `$EDGE1_IPV4`
+is set under "What has to be true first" above; re-set it first if you are
+entering this section independently -- every command below reuses it.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
+  grep -q "^SNDS_BEARER_TOKEN=" /etc/branchleft/monitoring.env &&
+  sed -i "s|^SNDS_BEARER_TOKEN=.*|SNDS_BEARER_TOKEN=<TOKEN>|" /etc/branchleft/monitoring.env ||
+  printf "SNDS_BEARER_TOKEN=%s\n" "<TOKEN>" >> /etc/branchleft/monitoring.env'
+```
+
+This does not restart anything -- `snds-collector.service` reads the file
+fresh on its next scheduled run, unlike Alertmanager's secrets, which need a
+stack restart. A stale or absent token fails only that one run;
+`SNDSCollectorStale` (§8's target-verification list has no matching entry
+for this one, since it does not run as a Prometheus scrape target -- see
+"What this stack deliberately does not do" below) pages once 36 hours pass
+with no successful fetch.
+
+**Then install the timer.** Not covered by step 5's
+`install-systemd-drop-ins.sh` -- that script only installs `*.override.conf`
+drop-ins for units this stack's template already defines, and
+`snds-collector.service`/`.timer` are standalone units of their own.
+
+```bash
+scp -i ~/.ssh/id_ed25519_hetzner \
+  hetzner/monitoring/systemd/snds-collector.service \
+  hetzner/monitoring/systemd/snds-collector.timer \
+  root@"$EDGE1_IPV4":/etc/systemd/system/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
+  systemctl daemon-reload &&
+  systemctl enable --now snds-collector.timer'
+```
+
+**Node-exporter needs its textfile-collector directory to exist before it
+next starts**, or the mount is empty and the metric families below simply do
+not appear -- not an error, just silent absence, indistinguishable at a
+glance from a collector that has not run yet.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
+  install -d -m 0755 -o root -g root /var/lib/branchleft/snds-exporter'
+```
+
+Do this before step 7's restart of the monitoring stack, so node-exporter's
+bind mount (`compose.yml`) resolves against a real directory on first start
+rather than Docker creating an empty one that then needs a container
+recreation to pick up.
+
+**Verify.**
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
+  systemctl start snds-collector.service &&
+  systemctl status snds-collector.service --no-pager &&
+  cat /var/lib/branchleft/snds-exporter/snds.prom'
+```
+
+A successful run prints `collect_snds_metrics: wrote N IP record(s)` and the
+file carries `snds_collector_last_success_timestamp_seconds` at or near the
+current time. Then confirm Prometheus is reading it back through
+node-exporter, over the tunnel from step 8:
+
+```bash
+curl -s --get http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=snds_collector_last_success_timestamp_seconds'
+```
+
+Expect one series with a recent value. `snds_complaint_rate` and
+`snds_reputation_status` only appear once SNDS has actually listed an IP with
+that data -- an empty result for either on a freshly-registered sender is not
+a fault, `time() - snds_collector_last_success_timestamp_seconds` moving is
+the proof the pipeline itself works end to end.
+
+If the run instead prints `collect_snds_metrics: fetch failed: expected the
+SNDS CSV/plain-text feed, got what looks like an HTML page` and exits
+non-zero, that is a real fault, not the quiet-day case above: the endpoint
+answered with something other than the feed (a login, consent, or
+portal-side error page), the previous textfile is left untouched, and the
+timestamp does _not_ advance. Re-check the bearer token and the portal
+session before assuming the collector itself regressed.
 
 ## Responding to the mail-delivery alerts
 
@@ -707,8 +849,10 @@ listing, which shows up as rejections concentrated on one provider.
 This is the **closest available proxy** for sender reputation, not a measure
 of it. Complaint rate -- the number an ESP would quote -- is reported by
 receiving providers through out-of-band feedback loops, and no self-hosted MTA
-can observe it. If a real complaint rate is ever needed, it comes from Google
-Postmaster Tools and Microsoft SNDS, not from here.
+can observe it. The real complaint rate for Outlook.com/Hotmail recipients is
+Microsoft's own Smart Network Data Services (SNDS) feed, covered below. Gmail's
+equivalent, Google Postmaster Tools, is a separate, deliberately deferred story
+(branchLeft/workspace#494).
 
 **`MailDeliveryMetricsMissing`** -- the scrape succeeds and publishes no
 `delivery_completed` at all. Nothing is wrong with mail; the two rules above
@@ -718,6 +862,45 @@ its metrics level reconfigured, then correct the metric names in
 `monitoring/render.ts` and re-run the deploy. The rules are covered by
 `monitoring/alert_rules_test.yml`, so a name change should be made there
 first and watched to fail.
+
+## Responding to the SNDS complaint-rate alerts
+
+Unlike every alert above, these three read a value Microsoft computed, not a
+counter this platform emits -- and Microsoft refreshes it at most once a day.
+Treat every timestamp on these as "as of Microsoft's last publish", not "as
+of now".
+
+**`SNDSComplaintRateHigh`** -- over 0.1% of mail from an IP was marked as
+junk by an Outlook.com/Hotmail recipient, on at least 50 messages. This is
+the signal `MailDeliveryFailureRatioHigh` structurally cannot be: a message
+that is accepted, delivered, and then marked as junk by its recipient never
+touches any of Stalwart's own delivery counters, which is exactly the shape
+of a magic-link signup flood landing on real, harvested addresses
+(branchLeft/workspace#222). Check the volume alerts
+(`MailDeliveryVolumeSpike`, `RateLimitDecliningRealClients`) for the same
+period first -- a real complaint spike from a flood usually arrives a day
+after the volume spike that caused it, not alongside it.
+
+**`SNDSReputationRed`** -- Microsoft's own filter-result classification for
+an IP is red: most or all mail from it is being routed straight to Junk,
+independent of whatever numeric complaint rate is also on record. Read this
+one first if both fire together -- a red status is Microsoft's own summary
+judgement, and the complaint-rate figure is one input to it among others
+this platform cannot see (spam-trap hits, volume trends, complaint history).
+
+**`SNDSCollectorStale`** -- the two rules above have gone quiet, and not
+because reputation is clean: the collector has not published a fresh
+snapshot in 36 hours, or has never once succeeded. Almost always the bearer
+token (§14) -- re-generate it from the SNDS portal and update
+`SNDS_BEARER_TOKEN` in `/etc/branchleft/monitoring.env`, then confirm with
+`systemctl start snds-collector.service` and `systemctl status
+snds-collector.service --no-pager`. If the token is current and the run
+still fails, check whether Microsoft has changed the response format again
+-- `snds/collect_snds_metrics.py`'s `parse_snds_response` is deliberately
+defensive (skips a malformed line rather than raising) but a wholesale
+schema change still yields zero parsed records, which reads as "no
+reputation data available", not as a fault of its own; watch the run's own
+stderr for skipped-line warnings.
 
 ## What this stack deliberately does not do
 
@@ -738,6 +921,15 @@ first and watched to fail.
   per-tenant p95 latency, shim queue drain time). Doc 14 §9.2 and §4 name
   these as later, separately-scoped additions; this story covers the host
   and platform-component layer only.
+- **It does not collect Google Postmaster Tools data.** Gmail's equivalent of
+  SNDS needs per-domain OAuth against a separate Google API, approved in
+  principle but deliberately deferred until a second tenant domain or
+  load-bearing Gmail volume makes it worth building -- branchLeft/workspace#494.
+- **It does not automate SNDS bearer-token renewal.** Microsoft's current API
+  issues no `refresh_token`, so there is nothing this repo could poll or
+  rotate on a schedule; §14's manual re-generation is the only mechanism that
+  exists today, and `SNDSCollectorStale` is what makes a lapsed renewal
+  visible rather than silently indistinguishable from a clean reputation.
 - **It does not rely on `--cgroup-parent`/`Delegate=yes` to nest containers
   under either systemd unit.** That would make the unit-level `MemoryMax`
   genuinely bound the containers, but it depends on the host's configured

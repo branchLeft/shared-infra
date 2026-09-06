@@ -417,6 +417,40 @@ describe('the mail-delivery alert rules', () => {
   });
 });
 
+describe('the SNDS complaint-rate alert rules', () => {
+  const rendered = renderAlertRules();
+
+  it('gates the complaint-rate alert on a volume floor, with a fallback that fires if the floor metric is not being published at all', () => {
+    expect(rendered).toContain('alert: SNDSComplaintRateHigh');
+    expect(rendered).toContain('(snds_complaint_rate > 0.001 and snds_message_volume > 50)');
+    // Matched per IP (`unless on(ip)`), not a blanket `on()` -- a global match
+    // would let one IP's real, present volume satisfy the floor for a
+    // different IP that has none. See alert_rules_test.yml's two-IP case for
+    // the promtool proof.
+    expect(rendered).toContain('(snds_complaint_rate > 0.001 unless on(ip) snds_message_volume)');
+  });
+
+  it("alerts on Microsoft's own red filter-result status, independent of the computed complaint rate", () => {
+    expect(rendered).toContain('alert: SNDSReputationRed');
+    expect(rendered).toContain('expr: snds_reputation_status{status="red"} == 1');
+  });
+
+  it('watches its own collector for staleness, since an absent or stuck gauge reads exactly like a clean reputation -- see alert_rules_test.yml for the promtool proof of both the stale and the never-succeeded case', () => {
+    expect(rendered).toContain('alert: SNDSCollectorStale');
+    expect(rendered).toContain('time() - snds_collector_last_success_timestamp_seconds > 129600');
+    expect(rendered).toContain('or absent(snds_collector_last_success_timestamp_seconds)');
+  });
+
+  it('annotates every SNDS alert with the daily-snapshot caveat, since this data is never live', () => {
+    for (const alertname of ['SNDSComplaintRateHigh', 'SNDSReputationRed']) {
+      const start = rendered.indexOf(`alert: ${alertname}`);
+      const end = rendered.indexOf('- alert:', start + 1);
+      const block = rendered.slice(start, end === -1 ? undefined : end);
+      expect(block.toLowerCase()).toMatch(/daily|yesterday/);
+    }
+  });
+});
+
 describe('the Alertmanager template', () => {
   const rendered = renderAlertmanagerTemplate();
 

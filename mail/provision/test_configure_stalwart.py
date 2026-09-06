@@ -5,6 +5,7 @@ mail/provision -p 'test_*.py' -v
 """
 import copy
 import io
+import itertools
 import unittest
 from unittest import mock
 
@@ -874,6 +875,145 @@ class PlanAllowedIpsTests(unittest.TestCase):
         created = list(plan["create"].values())
         self.assertEqual(len(created), 1)
         self.assertEqual(created[0]["address"], MONITORING_IP)
+
+
+class WaitForStalwartReadyTests(unittest.TestCase):
+    """_wait_for_stalwart_ready polls a fake _request rather than sleeping a
+    fixed guess -- a monotonically increasing fake clock stands in for
+    time.monotonic so the timeout path is deterministic and instant.
+    """
+
+    AUTH = ("admin", "admin-secret-not-real")
+
+    def setUp(self):
+        sleep_patcher = mock.patch("time.sleep")
+        sleep_patcher.start()
+        self.addCleanup(sleep_patcher.stop)
+        clock_patcher = mock.patch("time.monotonic", side_effect=itertools.count(0, 1))
+        clock_patcher.start()
+        self.addCleanup(clock_patcher.stop)
+
+    def test_returns_once_a_later_attempt_gets_a_real_response(self):
+        request_mock = mock.Mock(
+            side_effect=[ConnectionResetError(104, "connection reset by peer"), {"permissions": []}]
+        )
+        with mock.patch.object(cs, "_request", request_mock):
+            cs._wait_for_stalwart_ready(self.AUTH, timeout=10)
+
+        self.assertEqual(request_mock.call_count, 2)
+        request_mock.assert_called_with("GET", "/api/account", self.AUTH)
+
+    def test_never_answering_raises_instead_of_returning(self):
+        with mock.patch.object(
+            cs, "_request", side_effect=ConnectionResetError(104, "connection reset by peer")
+        ):
+            with self.assertRaises(RuntimeError):
+                cs._wait_for_stalwart_ready(self.AUTH, timeout=3)
+
+    def test_connection_refused_is_not_treated_as_ready(self):
+        # The sharpest regression this guards: a restart that never comes
+        # back presents as a refused connection, not just a reset one --
+        # treating that as success would silently reintroduce the outage
+        # this whole probe exists to catch.
+        with mock.patch.object(
+            cs, "_request", side_effect=ConnectionRefusedError(111, "connection refused")
+        ):
+            with self.assertRaises(RuntimeError):
+                cs._wait_for_stalwart_ready(self.AUTH, timeout=3)
+
+    def test_timeout_message_names_the_wait_and_the_last_error_without_a_credential(self):
+        with mock.patch.object(
+            cs, "_request", side_effect=ConnectionRefusedError(111, "connection refused")
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                cs._wait_for_stalwart_ready(self.AUTH, timeout=3)
+
+        message = str(ctx.exception)
+        self.assertIn("3", message)
+        self.assertNotIn(self.AUTH[1], message)
+
+
+class MainRestartReadinessTests(unittest.TestCase):
+    """main()'s final conditional restart is the one place this item
+    changes: once something changed and the restart runs, main() must not
+    report success until readiness is confirmed, and must not swallow a
+    readiness failure into a zero exit.
+    """
+
+    AUTH = ("admin", "admin-secret-not-real")
+
+    def setUp(self):
+        stdout_patcher = mock.patch("sys.stdout", new_callable=io.StringIO)
+        stdout_patcher.start()
+        self.addCleanup(stdout_patcher.stop)
+
+        exists_patcher = mock.patch.object(cs.os.path, "exists", return_value=True)
+        exists_patcher.start()
+        self.addCleanup(exists_patcher.stop)
+
+        load_creds_patcher = mock.patch.object(cs, "_load_credentials", return_value=self.AUTH)
+        load_creds_patcher.start()
+        self.addCleanup(load_creds_patcher.stop)
+
+        bootstrap_mode_patcher = mock.patch.object(cs, "_is_bootstrap_mode", return_value=False)
+        bootstrap_mode_patcher.start()
+        self.addCleanup(bootstrap_mode_patcher.stop)
+
+        acme_patcher = mock.patch.object(
+            cs, "_reconcile_acme_provider", return_value=(False, "acme-id")
+        )
+        acme_patcher.start()
+        self.addCleanup(acme_patcher.stop)
+
+        self.run_patcher = mock.patch.object(cs.subprocess, "run")
+        self.run_mock = self.run_patcher.start()
+        self.addCleanup(self.run_patcher.stop)
+
+    def _patch_remaining_reconcilers(self, listeners_changed):
+        names = (
+            "_reconcile_listeners",
+            "_reconcile_domains",
+            "_reconcile_http_access",
+            "_reconcile_metrics",
+            "_reconcile_tracer",
+            "_reconcile_security",
+            "_reconcile_allowed_ips",
+        )
+        for i, name in enumerate(names):
+            value = listeners_changed if i == 0 else False
+            patcher = mock.patch.object(cs, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_propagates_a_readiness_failure_instead_of_returning_success(self):
+        self._patch_remaining_reconcilers(listeners_changed=True)
+
+        with mock.patch.object(
+            cs, "_wait_for_stalwart_ready", side_effect=RuntimeError("stalwart never came back")
+        ):
+            with self.assertRaises(RuntimeError):
+                cs.main()
+
+        self.run_mock.assert_called_once()
+
+    def test_returns_zero_only_once_the_probe_confirms_readiness(self):
+        self._patch_remaining_reconcilers(listeners_changed=True)
+
+        with mock.patch.object(cs, "_wait_for_stalwart_ready") as wait_mock:
+            result = cs.main()
+
+        self.assertEqual(result, 0)
+        wait_mock.assert_called_once_with(self.AUTH)
+
+    def test_no_restart_and_no_probe_when_nothing_changed(self):
+        self._patch_remaining_reconcilers(listeners_changed=False)
+
+        with mock.patch.object(cs, "_wait_for_stalwart_ready") as wait_mock:
+            result = cs.main()
+
+        self.assertEqual(result, 0)
+        wait_mock.assert_not_called()
+        self.run_mock.assert_not_called()
 
 
 if __name__ == "__main__":

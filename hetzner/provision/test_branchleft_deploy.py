@@ -7,6 +7,8 @@ convenience behaviour, and both are covered here rather than left to a live
 deploy to discover.
 """
 
+import contextlib
+import fcntl
 import io
 import os
 import stat
@@ -23,16 +25,23 @@ VALID_IMAGE = f"ghcr.io/branchleft/example@sha256:{DIGEST}"
 
 class FakeRun:
     """Stands in for subprocess.run, recording calls and returning a queue of
-    exit codes."""
+    canned responses.
 
-    def __init__(self, return_codes):
-        self.return_codes = list(return_codes)
+    Each queued response is either a bare int (an exit code, empty stdout --
+    what every call except the `docker ps` discriminator check needs) or a
+    `(code, stdout)` pair, for the one call that reads its output rather than
+    only its exit code.
+    """
+
+    def __init__(self, responses):
+        self.responses = list(responses)
         self.calls = []
 
-    def __call__(self, argv, check=False):
+    def __call__(self, argv, check=False, capture_output=False, text=False):
         self.calls.append(list(argv))
-        code = self.return_codes.pop(0) if self.return_codes else 0
-        return subprocess.CompletedProcess(argv, code)
+        response = self.responses.pop(0) if self.responses else 0
+        code, stdout = response if isinstance(response, tuple) else (response, "")
+        return subprocess.CompletedProcess(argv, code, stdout=stdout)
 
 
 class StackNameTests(unittest.TestCase):
@@ -147,6 +156,171 @@ class ReadCurrentImageTests(unittest.TestCase):
             self.assertEqual(bd.read_current_image(path), VALID_IMAGE)
 
 
+class PinnedImageIsUpTests(unittest.TestCase):
+    """The discriminator that decides whether a restart failure implicates
+    the image this call just pinned, as opposed to some other service in the
+    same stack. This is the fact the MySQL data-dictionary-downgrade case
+    turns on: mysqld starting cleanly on the new image while an unrelated
+    exporter fails its healthcheck must read as "the image is fine.\""""
+
+    def test_a_healthy_container_reads_as_up(self):
+        run = FakeRun([(0, "Up 5 seconds (healthy)")])
+        self.assertTrue(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_a_container_with_no_healthcheck_reads_as_up(self):
+        run = FakeRun([(0, "Up 12 seconds")])
+        self.assertTrue(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_an_unhealthy_container_reads_as_not_up(self):
+        run = FakeRun([(0, "Up 5 seconds (unhealthy)")])
+        self.assertFalse(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_an_exited_container_reads_as_not_up(self):
+        run = FakeRun([(0, "Exited (1) 3 seconds ago")])
+        self.assertFalse(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_a_restart_looping_container_reads_as_not_up(self):
+        run = FakeRun([(0, "Restarting (1) 2 seconds ago")])
+        self.assertFalse(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_no_matching_container_reads_as_not_up(self):
+        run = FakeRun([(0, "")])
+        self.assertFalse(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_a_failing_docker_ps_is_unknown_not_not_up(self):
+        # `None`, distinct from `False`: an inconclusive check must not read
+        # as evidence the image is at fault, or a caller could roll back on
+        # a guess exactly when it has the least information to do so safely.
+        run = FakeRun([(1, "")])
+        self.assertIsNone(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_one_bad_container_among_several_reads_as_not_up(self):
+        run = FakeRun([(0, "Up 5 seconds (healthy)\nExited (1) 1 second ago")])
+        self.assertFalse(bd.pinned_image_is_up("edge", VALID_IMAGE, run=run))
+
+    def test_filters_by_project_label_and_the_exact_image_reference(self):
+        run = FakeRun([(0, "Up 1 second")])
+        bd.pinned_image_is_up("edge", VALID_IMAGE, run=run)
+        self.assertEqual(
+            run.calls,
+            [
+                [
+                    "docker",
+                    "ps",
+                    "--all",
+                    "--filter",
+                    "label=com.docker.compose.project=edge",
+                    "--filter",
+                    f"ancestor={VALID_IMAGE}",
+                    "--format",
+                    "{{.Status}}",
+                ]
+            ],
+        )
+
+
+class DeployLockTests(unittest.TestCase):
+    """The concurrency guard itself, exercised without a real second process.
+
+    A second `flock` attempt against a *different* open file description on
+    the same path genuinely contends, even from within a single test process
+    -- the lock is attached to the open file description, not to the process
+    or to the file's bytes, so opening the lock path a second time here and
+    holding it is a faithful stand-in for a second `branchleft-deploy`
+    invocation, with no subprocess needed.
+    """
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+
+    def hold(self, stack):
+        """Open and exclusively lock `stack`'s lock file, as a second holder would."""
+        path = bd.deploy_lock_path(stack, self.directory.name)
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return fd
+
+    def test_a_second_deploy_polls_then_fails_while_the_first_still_holds_it(self):
+        holder_fd = self.hold("edge")
+        self.addCleanup(os.close, holder_fd)
+
+        clock = [0.0]
+        sleeps = []
+
+        def fake_now():
+            return clock[0]
+
+        def fake_sleep(interval):
+            sleeps.append(interval)
+            clock[0] += interval
+
+        entered = False
+        with self.assertRaises(bd.DeployError) as caught:
+            with bd.stack_deploy_lock(
+                "edge",
+                self.directory.name,
+                timeout=1.0,
+                poll_interval=0.25,
+                now=fake_now,
+                sleep=fake_sleep,
+            ):
+                entered = True  # pragma: no cover -- must never run
+
+        self.assertFalse(entered)
+        message = str(caught.exception)
+        self.assertIn("edge", message)
+        self.assertIn("could not acquire", message)
+        # Polled rather than failing on the very first attempt or blocking
+        # forever: several bounded waits, not zero and not open-ended.
+        self.assertGreaterEqual(len(sleeps), 3)
+        self.assertAlmostEqual(sum(sleeps), 1.0, delta=0.25)
+
+    def test_a_free_lock_is_acquired_on_the_first_attempt_with_no_wait(self):
+        sleeps = []
+        with bd.stack_deploy_lock(
+            "edge", self.directory.name, sleep=lambda interval: sleeps.append(interval)
+        ):
+            pass
+        self.assertEqual(sleeps, [])
+
+    def test_the_lock_releases_the_instant_the_holder_process_exits(self):
+        holder_fd = self.hold("edge")
+        # Closing every fd on an open file description is exactly what
+        # process exit does to a flock it holds -- clean exit, an uncaught
+        # exception, or SIGKILL all close the process's file descriptors the
+        # same way, and the kernel drops the lock the moment that happens.
+        # Nothing here writes to or reads from the lock file's contents to
+        # simulate that: the guarantee is that flock is not the file.
+        os.close(holder_fd)
+
+        sleeps = []
+        with bd.stack_deploy_lock(
+            "edge",
+            self.directory.name,
+            timeout=1.0,
+            sleep=lambda interval: sleeps.append(interval),
+        ):
+            pass
+        self.assertEqual(sleeps, [])
+
+    def test_two_different_stacks_on_the_same_host_never_contend(self):
+        holder_fd = self.hold("edge")
+        self.addCleanup(os.close, holder_fd)
+
+        sleeps = []
+        # "monitoring" is a different lock file under the same config_dir --
+        # scoped per stack, not per host, so holding edge's lock must not
+        # block a deploy of an unrelated stack on the same box.
+        with bd.stack_deploy_lock(
+            "monitoring",
+            self.directory.name,
+            sleep=lambda interval: sleeps.append(interval),
+        ):
+            pass
+        self.assertEqual(sleeps, [])
+
+
 class DeployTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -158,7 +332,13 @@ class DeployTests(unittest.TestCase):
         with open(
             os.path.join(self.stack_dir, "edge", "compose.yml"), "w", encoding="utf-8"
         ) as handle:
-            handle.write("services:\n  app:\n    image: ${IMAGE}\n")
+            handle.write(
+                "services:\n"
+                "  app:\n"
+                "    image: ${IMAGE}\n"
+                "    healthcheck:\n"
+                "      test: ['CMD', 'true']\n"
+            )
 
     def deploy(self, image, run):
         bd.deploy(
@@ -207,7 +387,10 @@ class DeployTests(unittest.TestCase):
         previous = f"ghcr.io/branchleft/example@sha256:{'c' * 64}"
         self.deploy(previous, FakeRun([0]))
 
-        run = FakeRun([1, 1])
+        # [restart, discriminator docker ps, logger, rollback restart]. The
+        # discriminator reports the pinned image itself down, so the
+        # rollback proceeds -- and then that rollback restart also fails.
+        run = FakeRun([1, (0, "Exited (1) 2 seconds ago"), 0, 1])
         with self.assertRaises(bd.DeployError) as caught:
             self.deploy(VALID_IMAGE, run)
 
@@ -222,17 +405,78 @@ class DeployTests(unittest.TestCase):
         )
         self.assertNotIn("the stack is down", message)
         self.assertNotIn("needs an operator", message)
-        self.assertEqual(len(run.calls), 2)
+        self.assertEqual(len(run.calls), 4)
+        self.assertEqual(run.calls[3], ["systemctl", "restart", "branchleft-compose@edge"])
 
-    def test_failed_restart_rolls_back_to_previous_image(self):
+    def test_failed_restart_rolls_back_to_previous_image_when_the_pinned_image_is_down(
+        self,
+    ):
         previous = f"ghcr.io/branchleft/example@sha256:{'c' * 64}"
         self.deploy(previous, FakeRun([0]))
 
-        run = FakeRun([1, 0])
+        run = FakeRun([1, (0, "Exited (1) 2 seconds ago"), 0, 0])
         with self.assertRaises(bd.DeployError):
             self.deploy(VALID_IMAGE, run)
 
         self.assertEqual(bd.read_current_image(self.env_path()), previous)
+        self.assertEqual(len(run.calls), 4)
+        # Recorded to the host's own journal, independent of whoever is
+        # watching this process's stdout/stderr.
+        logger_calls = [call for call in run.calls if call[:2] == ["logger", "-t"]]
+        self.assertEqual(len(logger_calls), 1)
+        self.assertIn("edge", logger_calls[0][3])
+        self.assertIn(previous, logger_calls[0][3])
+
+    def test_failed_restart_leaves_the_pin_in_place_when_the_pinned_image_is_up(self):
+        previous = f"ghcr.io/branchleft/example@sha256:{'c' * 64}"
+        self.deploy(previous, FakeRun([0]))
+
+        # The stack-wide restart/wait failed, but a container running the
+        # image this call just pinned is up and not unhealthy -- the classic
+        # "MySQL came up fine, the exporter's healthcheck did not" case. The
+        # image is not what failed, so nothing here may rewrite the pin.
+        run = FakeRun([1, (0, "Up 5 seconds (healthy)")])
+        with self.assertRaises(bd.DeployError) as caught:
+            self.deploy(VALID_IMAGE, run)
+
+        message = str(caught.exception)
+        self.assertIn("left in place", message)
+        self.assertIn(VALID_IMAGE, message)
+        # No rollback: the pin this call wrote is still what is on disk, and
+        # there is no third (rollback restart) or `logger` call.
+        self.assertEqual(bd.read_current_image(self.env_path()), VALID_IMAGE)
+        self.assertEqual(len(run.calls), 2)
+        self.assertEqual(
+            run.calls[1],
+            [
+                "docker",
+                "ps",
+                "--all",
+                "--filter",
+                "label=com.docker.compose.project=edge",
+                "--filter",
+                f"ancestor={VALID_IMAGE}",
+                "--format",
+                "{{.Status}}",
+            ],
+        )
+
+    def test_failed_restart_leaves_the_pin_in_place_when_the_discriminator_is_inconclusive(
+        self,
+    ):
+        previous = f"ghcr.io/branchleft/example@sha256:{'c' * 64}"
+        self.deploy(previous, FakeRun([0]))
+
+        # `docker ps` itself errors (docker missing, daemon unreachable). No
+        # positive evidence the image is fine, but also none that it is at
+        # fault -- the safe default is to leave the pin and fail loud, not
+        # to guess by rolling back anyway.
+        run = FakeRun([1, 2])
+        with self.assertRaises(bd.DeployError) as caught:
+            self.deploy(VALID_IMAGE, run)
+
+        self.assertIn("could not be", str(caught.exception))
+        self.assertEqual(bd.read_current_image(self.env_path()), VALID_IMAGE)
         self.assertEqual(len(run.calls), 2)
 
     def test_failed_first_ever_deploy_removes_the_file_and_does_not_restart_again(self):
@@ -242,8 +486,14 @@ class DeployTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.env_path()))
         # A second restart would fail by construction with no pin file, so
         # the failure must be reported rather than dressed up as a rollback.
+        # The discriminator check does not run here either: there is no
+        # previous pin for it to protect.
         self.assertEqual(len(run.calls), 1)
-        self.assertIn("has never run", str(caught.exception))
+        message = str(caught.exception)
+        self.assertIn("does not mean the stack has never run", message)
+        self.assertIn(
+            "docker ps --filter label=com.docker.compose.project=edge", message
+        )
 
     def test_a_comment_mentioning_the_variable_does_not_satisfy_the_check(self):
         with open(
@@ -264,6 +514,66 @@ class DeployTests(unittest.TestCase):
             self.deploy("ghcr.io/branchleft/example:latest", run)
         self.assertFalse(os.path.exists(self.env_path()))
         self.assertEqual(run.calls, [])
+
+    def test_refuses_to_proceed_while_another_deploy_holds_this_stacks_lock(self):
+        # A real second holder, exclusively locking the exact path deploy()
+        # itself will try to lock -- not a mock of the locking call, so this
+        # proves the wiring into deploy(), not just the context manager in
+        # isolation (DeployLockTests covers that half).
+        lock_path = bd.deploy_lock_path("edge", self.config_dir)
+        holder_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(holder_fd, fcntl.LOCK_EX)
+        self.addCleanup(os.close, holder_fd)
+
+        run = FakeRun([0])
+        with self.assertRaises(bd.DeployError) as caught:
+            bd.deploy(
+                "edge",
+                VALID_IMAGE,
+                config_dir=self.config_dir,
+                stack_dir=self.stack_dir,
+                run=run,
+                lock_timeout=0.2,
+                lock_poll_interval=0.05,
+            )
+        self.assertIn("could not acquire", str(caught.exception))
+        # Neither half of the guarded sequence ran: the pin is untouched and
+        # systemctl was never invoked -- a second deploy that cannot get the
+        # lock must not have interleaved any part of it.
+        self.assertFalse(os.path.exists(self.env_path()))
+        self.assertEqual(run.calls, [])
+
+    def test_a_deploy_to_a_different_stack_is_unaffected_by_this_stacks_lock(self):
+        os.makedirs(os.path.join(self.stack_dir, "monitoring"))
+        with open(
+            os.path.join(self.stack_dir, "monitoring", "compose.yml"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            handle.write(
+                "services:\n"
+                "  app:\n"
+                "    image: ${IMAGE}\n"
+                "    healthcheck:\n"
+                "      test: ['CMD', 'true']\n"
+            )
+        lock_path = bd.deploy_lock_path("edge", self.config_dir)
+        holder_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(holder_fd, fcntl.LOCK_EX)
+        self.addCleanup(os.close, holder_fd)
+
+        run = FakeRun([0])
+        bd.deploy(
+            "monitoring",
+            VALID_IMAGE,
+            config_dir=self.config_dir,
+            stack_dir=self.stack_dir,
+            run=run,
+        )
+        self.assertEqual(
+            bd.read_current_image(bd.image_env_path("monitoring", self.config_dir)),
+            VALID_IMAGE,
+        )
 
 
 class SlotStdinTests(unittest.TestCase):
@@ -394,6 +704,46 @@ class MainTests(unittest.TestCase):
         )
         self.assertEqual(stdin.tell(), 0)
 
+    def _with_lock_timeout_env(self, value, argv, **kwargs):
+        old = os.environ.get(bd.LOCK_TIMEOUT_ENV_VAR)
+        os.environ[bd.LOCK_TIMEOUT_ENV_VAR] = value
+        try:
+            return bd.main(argv, **kwargs)
+        finally:
+            if old is None:
+                del os.environ[bd.LOCK_TIMEOUT_ENV_VAR]
+            else:
+                os.environ[bd.LOCK_TIMEOUT_ENV_VAR] = old
+
+    def test_lock_timeout_env_var_reaches_deploy_as_a_keyword(self):
+        # Not argv -- a new flag would widen the exact-length shape the
+        # sudoers grant depends on (see the constant's own comment). An
+        # operator invoking this binary directly can still reach the knob.
+        received = {}
+        code = self._with_lock_timeout_env(
+            "5",
+            ["branchleft-deploy", "edge", VALID_IMAGE],
+            deploy=lambda stack, image, **kw: received.update(kw),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(received, {"lock_timeout": 5.0})
+
+    def test_an_invalid_lock_timeout_env_var_is_reported_and_ignored(self):
+        calls = []
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = self._with_lock_timeout_env(
+                "not-a-number",
+                ["branchleft-deploy", "edge", VALID_IMAGE],
+                deploy=lambda stack, image, **kw: calls.append(kw),
+            )
+        self.assertEqual(code, 0)
+        # Falls back to the default rather than crashing or silently using a
+        # nonsense value -- the deploy proceeds with no override at all.
+        self.assertEqual(calls, [{}])
+        self.assertIn(bd.LOCK_TIMEOUT_ENV_VAR, stderr.getvalue())
+        self.assertIn("not-a-number", stderr.getvalue())
+
 
 class ResolvesImageFromEnvTests(unittest.TestCase):
     """The predicate is the sole arbiter of whether a stack's pin is enforced.
@@ -487,6 +837,191 @@ class FailOpenImageReferenceTests(unittest.TestCase):
                     )
                 self.assertIn("survives an empty pin", str(raised.exception))
                 self.assertEqual(os.listdir(config_dir), [])
+
+
+class HealthSignalGapsTests(unittest.TestCase):
+    """`deploy()`'s judgement call: refuse a gap nobody has reviewed, warn on
+    one that has (`KNOWN_UNHEALTHCHECKED_SERVICES`), and leave an
+    image-provided probe alone."""
+
+    def test_a_fully_probed_stack_has_no_gaps(self):
+        text = (
+            "services:\n"
+            "  app:\n"
+            "    image: ${IMAGE}\n"
+            "    healthcheck:\n"
+            "      test: ['CMD', 'true']\n"
+        )
+        self.assertEqual(bd.health_signal_gaps("edge", text), ([], []))
+
+    def test_an_unreviewed_absent_healthcheck_is_refused(self):
+        text = "services:\n  app:\n    image: ${IMAGE}\n"
+        self.assertEqual(bd.health_signal_gaps("edge", text), (["app (absent)"], []))
+
+    def test_a_disabled_healthcheck_is_refused_the_same_as_absent(self):
+        text = (
+            "services:\n"
+            "  app:\n"
+            "    image: ${IMAGE}\n"
+            "    healthcheck:\n"
+            "      disable: true\n"
+        )
+        self.assertEqual(bd.health_signal_gaps("edge", text), (["app (disabled)"], []))
+
+    def test_a_reviewed_gap_warns_rather_than_refuses(self):
+        text = "services:\n  website-metrics:\n    image: ${IMAGE}\n"
+        self.assertEqual(
+            bd.health_signal_gaps("website", text), ([], ["website-metrics (absent)"])
+        )
+
+    def test_the_db_stack_gap_is_also_reviewed(self):
+        text = "services:\n  mysqld-exporter:\n    image: ${IMAGE}\n"
+        self.assertEqual(
+            bd.health_signal_gaps("db", text), ([], ["mysqld-exporter (absent)"])
+        )
+
+    def test_an_image_provided_healthcheck_is_neither_refused_nor_warned(self):
+        text = "services:\n  cadvisor:\n    image: ${IMAGE}\n"
+        self.assertEqual(bd.health_signal_gaps("monitoring", text), ([], []))
+
+    def test_the_exemption_is_a_stack_service_pair_not_a_bare_service_name(self):
+        """`website-metrics` is only reviewed for the `website` stack -- the
+        same service name under a different stack is an unreviewed gap."""
+        text = "services:\n  website-metrics:\n    image: ${IMAGE}\n"
+        self.assertEqual(
+            bd.health_signal_gaps("blog", text), (["website-metrics (absent)"], [])
+        )
+
+    def test_one_unprobed_service_among_several_probed_ones_is_still_caught(self):
+        text = (
+            "services:\n"
+            "  probed:\n"
+            "    image: a\n"
+            "    healthcheck:\n"
+            "      test: ['CMD', 'true']\n"
+            "  bare:\n"
+            "    image: b\n"
+        )
+        self.assertEqual(bd.health_signal_gaps("edge", text), (["bare (absent)"], []))
+
+    def test_a_shape_the_parser_cannot_read_raises_rather_than_reporting_no_gaps(self):
+        """An anchored service header is invalid input to `healthcheck_states`,
+        not a stack with a clean bill of health -- `deploy()` is the layer that
+        decides what an unreadable file means for the check as a whole."""
+        text = "services:\n  app: &app\n    image: ${IMAGE}\n"
+        with self.assertRaises(bd.ComposeParseError):
+            bd.health_signal_gaps("edge", text)
+
+
+class DeployHealthSignalTests(unittest.TestCase):
+    """The behaviour `deploy()` wraps `health_signal_gaps` in: refuse before
+    any filesystem or systemd change, warn to stderr and proceed for a
+    reviewed gap, and never crash on a file the parser cannot read."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.config_dir = os.path.join(self.directory.name, "etc")
+        self.stack_dir = os.path.join(self.directory.name, "opt")
+        os.makedirs(self.config_dir)
+
+    def write_compose(self, stack, text):
+        directory = os.path.join(self.stack_dir, stack)
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "compose.yml"), "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def deploy(self, stack, run):
+        bd.deploy(
+            stack, VALID_IMAGE, config_dir=self.config_dir, stack_dir=self.stack_dir, run=run
+        )
+
+    def test_refuses_an_unreviewed_gap_before_writing_the_pin_or_restarting(self):
+        self.write_compose("edge", "services:\n  app:\n    image: ${IMAGE}\n")
+        run = FakeRun([0])
+        with self.assertRaises(bd.DeployError) as caught:
+            self.deploy("edge", run)
+        self.assertIn("app (absent)", str(caught.exception))
+        self.assertFalse(os.path.exists(bd.image_env_path("edge", self.config_dir)))
+        self.assertEqual(run.calls, [])
+
+    def test_refuses_when_only_one_of_several_services_lacks_a_probe(self):
+        self.write_compose(
+            "edge",
+            "services:\n"
+            "  probed:\n"
+            "    image: a\n"
+            "    healthcheck:\n"
+            "      test: ['CMD', 'true']\n"
+            "  bare:\n"
+            "    image: ${IMAGE}\n",
+        )
+        run = FakeRun([0])
+        with self.assertRaises(bd.DeployError) as caught:
+            self.deploy("edge", run)
+        self.assertIn("bare (absent)", str(caught.exception))
+        self.assertNotIn("probed", str(caught.exception))
+        self.assertEqual(run.calls, [])
+
+    def test_a_reviewed_gap_warns_and_still_deploys(self):
+        self.write_compose("website", "services:\n  website-metrics:\n    image: ${IMAGE}\n")
+        run = FakeRun([0])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.deploy("website", run)
+        self.assertEqual(len(run.calls), 1)
+        self.assertEqual(
+            bd.read_current_image(bd.image_env_path("website", self.config_dir)), VALID_IMAGE
+        )
+        message = stderr.getvalue()
+        self.assertIn("website-metrics", message)
+        self.assertIn("KNOWN_UNHEALTHCHECKED_SERVICES", message)
+
+    def test_an_image_provided_healthcheck_deploys_with_no_warning_at_all(self):
+        self.write_compose("monitoring", "services:\n  cadvisor:\n    image: ${IMAGE}\n")
+        run = FakeRun([0])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.deploy("monitoring", run)
+        self.assertEqual(len(run.calls), 1)
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_a_stack_with_every_service_probed_deploys_with_no_warning_at_all(self):
+        self.write_compose(
+            "edge",
+            "services:\n"
+            "  app:\n"
+            "    image: ${IMAGE}\n"
+            "    healthcheck:\n"
+            "      test: ['CMD', 'true']\n",
+        )
+        run = FakeRun([0])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.deploy("edge", run)
+        self.assertEqual(len(run.calls), 1)
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_a_shape_the_parser_cannot_read_warns_and_still_deploys(self):
+        """A parser limitation is not a property of the stack: refusing a
+        deploy over a shape this regex-based reader cannot classify would be
+        an outage the Compose file itself never had."""
+        self.write_compose("edge", "services:\n  app: &app\n    image: ${IMAGE}\n")
+        run = FakeRun([0])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.deploy("edge", run)
+        self.assertEqual(len(run.calls), 1)
+        self.assertIn("could not determine", stderr.getvalue())
+
+    def test_an_absent_compose_file_is_still_the_pre_existing_refusal(self):
+        """No health-signal check should ever run against a file that is not
+        there -- the existing `no compose file` refusal must still be first."""
+        run = FakeRun([0])
+        with self.assertRaises(bd.DeployError) as caught:
+            self.deploy("missing", run)
+        self.assertIn("no compose file", str(caught.exception))
+        self.assertEqual(run.calls, [])
 
 
 if __name__ == "__main__":

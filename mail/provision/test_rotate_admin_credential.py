@@ -145,66 +145,171 @@ class FileWriteSafetyTests(unittest.TestCase):
 
             self.assertEqual(stat.S_IMODE(os.stat(creds_path).st_mode), 0o600)
 
-    def test_new_secret_sits_at_the_pre_rotation_mode_until_chmod_runs(self):
-        # Characterizes a known write-then-chmod mode window; not fixed
-        # here -- see the PR description for why and what pins it.
+    def test_new_secret_never_observed_at_the_pre_rotation_mode(self):
+        # The write-then-chmod window is closed: the file that lands at
+        # CREDENTIALS_PATH is renamed into place already at 0600, via
+        # os.replace, so there is no gap where the new secret sits at
+        # whatever (possibly looser) mode the file carried before.
         with tempfile.TemporaryDirectory() as tmp:
             creds_path = os.path.join(tmp, "creds")
             _write_creds_file(creds_path, USERNAME, OLD_SECRET, mode=0o644)
             fake = FakeStalwart(USERNAME, OLD_SECRET)
 
-            observed_modes_at_chmod_time = []
-            real_chmod = os.chmod
+            observed_source_modes = []
+            real_replace = os.replace
 
-            def spying_chmod(path, mode, *args, **kwargs):
-                if path == creds_path:
-                    observed_modes_at_chmod_time.append(stat.S_IMODE(os.stat(path).st_mode))
-                real_chmod(path, mode, *args, **kwargs)
+            def spying_replace(src, dst, *args, **kwargs):
+                observed_source_modes.append(stat.S_IMODE(os.stat(src).st_mode))
+                real_replace(src, dst, *args, **kwargs)
 
             with _patched_rotation(fake, creds_path), \
-                 mock.patch("os.chmod", side_effect=spying_chmod):
+                 mock.patch("os.replace", side_effect=spying_replace):
                 result = rac.main()
 
             self.assertEqual(result, 0)
-            # the file already carried the new secret at the pre-rotation
-            # (world-readable) mode when chmod ran to fix it
-            self.assertEqual(observed_modes_at_chmod_time, [0o644])
+            # whatever was renamed onto creds_path already carried 0600 --
+            # the real path's mode never regresses to the pre-rotation one
+            self.assertEqual(observed_source_modes, [0o600])
             self.assertEqual(_read_creds_file(creds_path), f"{USERNAME}:{NEW_SECRET}\n")
             self.assertEqual(stat.S_IMODE(os.stat(creds_path).st_mode), 0o600)
 
-    def test_a_write_failure_after_truncation_destroys_the_old_credential(self):
-        # Characterizes a known non-atomic write; not fixed here -- see
-        # the PR description for why and what pins it.
+    def test_a_write_failure_leaves_the_old_credential_completely_untouched(self):
+        # Closes the non-atomic-truncate gap: a failure while building the
+        # replacement (here, at fsync) must never touch CREDENTIALS_PATH
+        # at all, so the old credential survives intact rather than being
+        # destroyed by an in-place truncate.
         with tempfile.TemporaryDirectory() as tmp:
             creds_path = os.path.join(tmp, "creds")
             _write_creds_file(creds_path, USERNAME, OLD_SECRET, mode=0o600)
             fake = FakeStalwart(USERNAME, OLD_SECRET)
-            real_open = open
-
-            class FailingAfterTruncate:
-                def __enter__(self):
-                    return self
-
-                def __exit__(self, *exc_info):
-                    return False
-
-                def write(self, _data):
-                    raise OSError("simulated: disk full mid-write")
-
-            def failing_open(path, mode="r", *args, **kwargs):
-                if path == creds_path and mode == "w":
-                    real_open(path, mode, *args, **kwargs).close()  # performs the truncation
-                    return FailingAfterTruncate()
-                return real_open(path, mode, *args, **kwargs)
 
             with _patched_rotation(fake, creds_path), \
-                 mock.patch("builtins.open", side_effect=failing_open):
+                 mock.patch("os.fsync", side_effect=OSError("simulated: disk full mid-write")):
                 with self.assertRaises(OSError) as ctx:
                     rac.main()
 
-            # the old credential is gone and nothing recoverable was written
-            self.assertEqual(_read_creds_file(creds_path), "")
+            # the old credential is completely intact, at its original mode
+            self.assertEqual(_read_creds_file(creds_path), f"{USERNAME}:{OLD_SECRET}\n")
+            self.assertEqual(stat.S_IMODE(os.stat(creds_path).st_mode), 0o600)
+            # no leftover temp file from the failed write
+            self.assertEqual(os.listdir(tmp), ["creds"])
             _assert_no_secret_leaked(str(ctx.exception), self.stdout.getvalue(), self.stderr.getvalue())
+
+
+class WriteCredentialAtomicTests(unittest.TestCase):
+    """Direct tests of the write primitive itself, mirroring
+    render_shim_env.py's WriteEnvFileAtomicTests for its sibling
+    write_env_file_atomic.
+    """
+
+    def test_writes_the_given_contents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "creds")
+            rac._write_credential_atomic(path, f"{USERNAME}:{NEW_SECRET}\n")
+            self.assertEqual(_read_creds_file(path), f"{USERNAME}:{NEW_SECRET}\n")
+
+    def test_file_mode_is_0600_when_no_file_existed_before(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "creds")
+            rac._write_credential_atomic(path, f"{USERNAME}:{NEW_SECRET}\n")
+            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+
+    def test_overwrites_a_more_permissive_existing_file_completely(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "creds")
+            _write_creds_file(path, USERNAME, OLD_SECRET, mode=0o644)
+            rac._write_credential_atomic(path, f"{USERNAME}:{NEW_SECRET}\n")
+            self.assertEqual(_read_creds_file(path), f"{USERNAME}:{NEW_SECRET}\n")
+            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+
+    def test_temp_file_is_already_0600_before_it_is_ever_renamed_into_place(self):
+        # Proves there is no mode window at all: whatever gets renamed
+        # onto `path` is already 0600 the moment it exists on disk, not
+        # chmod'd into place after the fact.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "creds")
+            _write_creds_file(path, USERNAME, OLD_SECRET, mode=0o644)
+            observed_source_modes = []
+            real_replace = os.replace
+
+            def spying_replace(src, dst, *args, **kwargs):
+                observed_source_modes.append(stat.S_IMODE(os.stat(src).st_mode))
+                real_replace(src, dst, *args, **kwargs)
+
+            with mock.patch("os.replace", side_effect=spying_replace):
+                rac._write_credential_atomic(path, f"{USERNAME}:{NEW_SECRET}\n")
+
+            self.assertEqual(observed_source_modes, [0o600])
+
+    def test_no_leftover_temp_file_after_a_successful_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "creds")
+            rac._write_credential_atomic(path, f"{USERNAME}:{NEW_SECRET}\n")
+            self.assertEqual(os.listdir(tmp), ["creds"])
+
+    def test_a_failure_during_write_leaves_no_temp_file_and_the_target_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "creds")
+            _write_creds_file(path, USERNAME, OLD_SECRET, mode=0o600)
+            with mock.patch("os.fsync", side_effect=OSError("simulated: disk full")):
+                with self.assertRaises(OSError):
+                    rac._write_credential_atomic(path, f"{USERNAME}:{NEW_SECRET}\n")
+            self.assertEqual(os.listdir(tmp), ["creds"])
+            self.assertEqual(_read_creds_file(path), f"{USERNAME}:{OLD_SECRET}\n")
+            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+
+    def test_a_failure_in_replace_leaves_the_target_completely_untouched(self):
+        # Simulated failure at the final atomic step -- the target must
+        # never observe a partial or intermediate state.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "creds")
+            _write_creds_file(path, USERNAME, OLD_SECRET, mode=0o600)
+            with mock.patch("os.replace", side_effect=OSError("simulated: cross-device or disk full")):
+                with self.assertRaises(OSError):
+                    rac._write_credential_atomic(path, f"{USERNAME}:{NEW_SECRET}\n")
+            self.assertEqual(_read_creds_file(path), f"{USERNAME}:{OLD_SECRET}\n")
+            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+            # the failed temp file was cleaned up -- only the real file remains
+            self.assertEqual(os.listdir(tmp), ["creds"])
+
+    def test_mkstemp_is_created_in_the_same_directory_as_the_target(self):
+        # os.replace is only atomic within a single filesystem. If the temp
+        # file ever landed outside `path`'s own directory (e.g. the system
+        # temp dir), the final replace would silently stop being atomic --
+        # or raise on a system where the two aren't the same filesystem.
+        # Pins the mkstemp call's own `dir` argument, not just where the
+        # file happens to end up.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "creds")
+            real_mkstemp = tempfile.mkstemp
+            observed_dirs = []
+
+            def spying_mkstemp(*args, **kwargs):
+                observed_dirs.append(kwargs.get("dir"))
+                return real_mkstemp(*args, **kwargs)
+
+            with mock.patch("tempfile.mkstemp", side_effect=spying_mkstemp):
+                rac._write_credential_atomic(path, f"{USERNAME}:{NEW_SECRET}\n")
+
+            self.assertEqual(observed_dirs, [os.path.dirname(path)])
+
+    def test_a_chmod_failure_leaves_the_target_completely_untouched(self):
+        # Pins the ordering, not just the end state: chmod must run on the
+        # temp path *before* os.replace, so a chmod failure can never leave
+        # the new secret already live at `path`. If chmod ran after replace
+        # instead, this is exactly the case that would go green even though
+        # the function still raised -- the old credential would already be
+        # gone, replaced by the new one, at the moment of the failure.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "creds")
+            _write_creds_file(path, USERNAME, OLD_SECRET, mode=0o600)
+            with mock.patch("os.chmod", side_effect=OSError("simulated: chmod failed")):
+                with self.assertRaises(OSError):
+                    rac._write_credential_atomic(path, f"{USERNAME}:{NEW_SECRET}\n")
+            self.assertEqual(_read_creds_file(path), f"{USERNAME}:{OLD_SECRET}\n")
+            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+            # the failed temp file was cleaned up -- only the real file remains
+            self.assertEqual(os.listdir(tmp), ["creds"])
 
 
 class TokenNeverLeaksTests(unittest.TestCase):

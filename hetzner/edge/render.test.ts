@@ -46,6 +46,11 @@ const site = (overrides: Partial<EdgeSite> = {}): EdgeSite => ({
   hostnames: ['example.test'],
   cloudRunService: 'example-service',
   privateUpstream: { host: 'app1', port: 2368 },
+  // Defaulted so a test that sets `injectionWafPreviewOnly` to exercise
+  // something else does not trip the Ghost-backed refusal in
+  // `requestBodyDirective`. Cases that are *about* the ceiling override it
+  // explicitly, `undefined` included.
+  requestBodyMaxSize: '64MiB',
   ...overrides,
 });
 
@@ -102,6 +107,200 @@ describe('sites without a private upstream', () => {
       }
     }
     expect(() => renderCaddyfile(sites, hostRedirects, POSTURE)).not.toThrow();
+  });
+});
+
+describe('the registry serves two edges, and an entry must reach at least one', () => {
+  // `edge.ts` skips a site with no `cloudRunService`; `servableSites` here
+  // skips a site with no `privateUpstream`. Each skip is correct on its own,
+  // and together they mean an entry declaring neither renders nothing on
+  // either edge while looking exactly like a configured site in the registry.
+  // No single edge's code can catch that -- each one's skip is indistinguishable
+  // from the legitimate case -- so the invariant is asserted over the registry
+  // itself.
+  it('every real entry declares a cloudRunService, a privateUpstream, or both', () => {
+    for (const entry of sites) {
+      const reachable = entry.cloudRunService !== undefined || entry.privateUpstream !== undefined;
+      expect(
+        reachable,
+        `site ${entry.name} declares neither cloudRunService nor privateUpstream, so it is ` +
+          'skipped by both edges and serves nothing'
+      ).toBe(true);
+    }
+  });
+
+  it('keeps a GCP-backed site first, because it is the URL map default service', () => {
+    // Mirrors the assertion in edge.ts. `sites.ts`'s "Ordering" section
+    // requires the fallback for an unmatched Host never be a tenant's service,
+    // and a Hetzner-only first entry would silently move that role.
+    expect(sites.length).toBeGreaterThan(0);
+    expect(
+      sites[0].cloudRunService,
+      `the first sites.ts entry (${sites[0].name}) has no cloudRunService, so edge.ts skips it ` +
+        "and the URL map's defaultService falls to a later entry -- see 'Ordering' in sites.ts"
+    ).toBeDefined();
+  });
+
+  it('renders a Hetzner-only site identically to a dual-edge one, since only the GCP side skips', () => {
+    // `servableSites` keys on `privateUpstream` alone and always did, so
+    // "it renders" would have passed before this change too and proves nothing
+    // about it. What is new is that the entry is now *constructible* without a
+    // cloudRunService, and that dropping the field changes nothing this
+    // renderer emits -- the asymmetry lives entirely in edge.ts.
+    const upstream = { host: 'app1', port: 8099 };
+    const dualEdge = site({ hostnames: ['both.test'], privateUpstream: upstream });
+    const hetznerOnly = site({
+      hostnames: ['both.test'],
+      cloudRunService: undefined,
+      privateUpstream: upstream,
+    });
+    expect(render(ENFORCING, [hetznerOnly])).toBe(render(ENFORCING, [dualEdge]));
+    expect(render(ENFORCING, [hetznerOnly])).toContain('both.test');
+  });
+});
+
+describe('two sites may not share one upstream', () => {
+  it('refuses a duplicate host:port, because each hostname would serve the other tenant', () => {
+    const a = site({
+      name: 'tenant-a',
+      hostnames: ['a.test'],
+      privateUpstream: { host: 'app1', port: 8100 },
+    });
+    const b = site({
+      name: 'tenant-b',
+      hostnames: ['b.test'],
+      privateUpstream: { host: 'app1', port: 8100 },
+    });
+    expect(() => render(ENFORCING, [a, b])).toThrow(/both proxy to app1:8100/);
+  });
+
+  it('allows the same port on different hosts, which is not a collision', () => {
+    const a = site({
+      name: 'a',
+      hostnames: ['a.test'],
+      privateUpstream: { host: 'app1', port: 8100 },
+    });
+    const b = site({
+      name: 'b',
+      hostnames: ['b.test'],
+      privateUpstream: { host: 'db1', port: 8100 },
+    });
+    expect(() => render(ENFORCING, [a, b])).not.toThrow();
+  });
+
+  it('ignores sites this edge does not serve, which have no upstream to collide', () => {
+    const served = site({
+      name: 'served',
+      hostnames: ['x.test'],
+      privateUpstream: { host: 'app1', port: 8100 },
+    });
+    const pending = site({ name: 'pending', hostnames: ['y.test'], privateUpstream: undefined });
+    expect(() => render(ENFORCING, [served, pending])).not.toThrow();
+  });
+
+  it('the real registry has no two sites on one address', () => {
+    // Non-vacuous by construction: asserts at least two sites are actually
+    // compared, so this cannot pass by matching nothing the way the earlier
+    // ceiling guard did.
+    const served = sites.filter((s) => s.privateUpstream !== undefined);
+    expect(served.length).toBeGreaterThan(1);
+    const addresses = served.map((s) => `${s.privateUpstream!.host}:${s.privateUpstream!.port}`);
+    expect(new Set(addresses).size).toBe(addresses.length);
+  });
+});
+
+describe('the request-body ceiling', () => {
+  // The value's source is a tenant stack output derived alongside the
+  // container's tmpfs ceiling; see `requestBodyMaxSize` in siteTypes.ts.
+  it('emits the directive first in the route -- textual position only, see the note', () => {
+    // Ghost-backed on purpose: that is the case the ceiling exists for, and it
+    // is what renders `appsec @inspected` rather than the bare `appsec` a
+    // non-authoring site gets.
+    const rendered = render(ENFORCING, [
+      site({
+        hostnames: ['bounded.test'],
+        injectionWafPreviewOnly: true,
+        requestBodyMaxSize: '64MiB',
+      }),
+    ]);
+    expect(rendered).toContain('max_size 64MiB');
+
+    // Scoped to the route block. Searching the whole document finds `appsec_url`
+    // in the global CrowdSec options long before any site directive, which makes
+    // a document-wide index comparison assert the opposite of what it reads as.
+    const route = rendered.slice(rendered.indexOf('route {'));
+    const body = route.indexOf('request_body {');
+    expect(body).toBeGreaterThanOrEqual(0);
+
+    // This asserts TEXTUAL position and nothing about runtime behaviour.
+    // Measured against Caddy v2.11.4, `request_body` does not short-circuit
+    // the handler chain: the rate limiter, AppSec and the upstream connection
+    // all still run. Ordering is convention here, not a boundary -- do not
+    // cite this test as evidence that an oversized body is cheap to reject.
+    //
+    // It still earns its place: asserting only `< reverse_proxy` stayed green
+    // with the directive moved after the chain, so the weaker form proved
+    // nothing at all, not even about position.
+    for (const later of ['rate_limit', 'appsec @inspected', 'reverse_proxy']) {
+      const at = route.indexOf(later);
+      expect(at, `${later} must appear in the route`).toBeGreaterThanOrEqual(0);
+      expect(at, `request_body must precede ${later}`).toBeGreaterThan(body);
+    }
+  });
+
+  it.each([true, false])(
+    'refuses any served site that declares none, injectionWafPreviewOnly=%s',
+    (ghostBacked) => {
+      // Both cases on purpose. Keying the refusal on `injectionWafPreviewOnly`
+      // was tried and is unsound -- that flag's own docstring records the
+      // condition for removing it, and removing it would have taken the body
+      // ceiling with it silently.
+      const noLimit = site({
+        hostnames: ['unbounded.test'],
+        injectionWafPreviewOnly: ghostBacked,
+        requestBodyMaxSize: undefined,
+      });
+      expect(() => render(ENFORCING, [noLimit])).toThrow(/declares no requestBodyMaxSize/);
+    }
+  );
+
+  it('refuses MB, which Caddy reads as a power of ten', () => {
+    // The trap this exists for: 64MB renders cleanly, looks right in review,
+    // and is 4.4% larger than the tmpfs ceiling it is meant to match.
+    const decimal = site({ hostnames: ['decimal.test'], requestBodyMaxSize: '64MB' });
+    expect(() => render(ENFORCING, [decimal])).toThrow(/powers of ten/);
+  });
+
+  it.each(['64', '64 MiB', '0MiB', '64mib', '64MiBB', ''])(
+    'refuses %o, which is not a binary size string',
+    (value) => {
+      const bad = site({ hostnames: ['bad.test'], requestBodyMaxSize: value });
+      expect(() => render(ENFORCING, [bad])).toThrow(/not a binary size/);
+    }
+  );
+
+  it.each(['512KiB', '64MiB', '2GiB'])('accepts %o', (value) => {
+    const ok = site({ hostnames: ['ok.test'], requestBodyMaxSize: value });
+    expect(render(ENFORCING, [ok])).toContain(`max_size ${value}`);
+  });
+
+  it('every site the real registry renders declares one, and at least one does', () => {
+    // The `served` count is asserted because the earlier form of this test
+    // guarded on `injectionWafPreviewOnly && privateUpstream`, which matched
+    // ZERO entries -- website has the upstream but not the flag, blog has the
+    // flag but no upstream. The loop body never ran, and removing the
+    // renderer's refusal left it green. A registry guard that cannot fail is
+    // worse than none: it reads as coverage.
+    let served = 0;
+    for (const entry of sites) {
+      if (entry.privateUpstream === undefined) continue;
+      served += 1;
+      expect(
+        entry.requestBodyMaxSize,
+        `site ${entry.name} is served by this edge and must declare requestBodyMaxSize`
+      ).toBeDefined();
+    }
+    expect(served, 'this guard matched no site and proves nothing').toBeGreaterThan(0);
   });
 });
 
@@ -242,8 +441,11 @@ describe('the rendered Caddyfile', () => {
     // client across tenant hostnames. `zone one_per_ip` / `zone two_per_ip`
     // below prove the *general* throttle does the opposite on purpose.
     const rendered = render(ENFORCING, [
-      site({ name: 'one', hostnames: ['one.test'] }),
-      site({ name: 'two', hostnames: ['two.test'] }),
+      // Distinct upstreams: two sites on one address is refused, and rightly
+      // -- see 'two sites may not share one upstream'. These fixtures are
+      // about zone naming, so the ports only need to differ.
+      site({ name: 'one', hostnames: ['one.test'], privateUpstream: { host: 'app1', port: 2368 } }),
+      site({ name: 'two', hostnames: ['two.test'], privateUpstream: { host: 'app1', port: 2369 } }),
     ]);
     // Four, not two: both loopback probes below carry the same matcher and
     // zone so the throttle can be trip-tested before any site serves the path.
@@ -405,8 +607,11 @@ describe('the rendered Caddyfile', () => {
 
   it('gives each site its own throttle zone, so one site cannot spend another site budget', () => {
     const rendered = render(ENFORCING, [
-      site({ name: 'one', hostnames: ['one.test'] }),
-      site({ name: 'two', hostnames: ['two.test'] }),
+      // Distinct upstreams: two sites on one address is refused, and rightly
+      // -- see 'two sites may not share one upstream'. These fixtures are
+      // about zone naming, so the ports only need to differ.
+      site({ name: 'one', hostnames: ['one.test'], privateUpstream: { host: 'app1', port: 2368 } }),
+      site({ name: 'two', hostnames: ['two.test'], privateUpstream: { host: 'app1', port: 2369 } }),
     ]);
     expect(rendered).toContain('zone one_per_ip {');
     expect(rendered).toContain('zone two_per_ip {');
@@ -616,6 +821,7 @@ describe('the fully enforcing posture', () => {
       cloudRunService: 'unused',
       injectionWafPreviewOnly: true,
       privateUpstream: { host: 'app1', port: 2368 },
+      requestBodyMaxSize: '64MiB',
     };
     await expect(renderCaddyfile([authoring], [], ENFORCING)).toMatchFileSnapshot(
       './validation/Caddyfile.authoring'
