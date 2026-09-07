@@ -371,12 +371,20 @@ can do as root. It refuses anything but a digest-pinned reference, refuses a
 `compose.yml` that does not resolve its image from `${IMAGE}` — a validated
 digest the Compose file never reads is a pin in name only — writes
 `/etc/branchleft/<stack>.image.env` atomically, restarts
-`branchleft-compose@<stack>`, and rolls the pin back if the restart fails. A
-rollback restart that also fails is reported as what it actually is -- the
-unit `failed` on both pins -- rather than a claimed recovery that did not
-happen, or an outage that a failed exit code alone does not prove: the unit
-is `Type=oneshot`, so a failed restart never runs `ExecStop`, and `docker ps`
-is what actually tells the two states apart.
+`branchleft-compose@<stack>`, and rolls the pin back if the restart fails.
+
+The unit carries no `ExecStop`. `systemctl restart` on a `Type=oneshot` unit
+still runs a stop transition before the start, but with no `ExecStop` that
+transition executes nothing -- so a restart's only real effect is a fresh
+`docker compose up -d --wait`, and Compose recreates only the service whose
+config actually changed rather than stopping every container in the stack
+first. Tearing a stack down outright, rather than updating it, is `docker
+compose down` run directly on the host; nothing routed through this unit
+does that. A rollback restart that also fails is reported as what it
+actually is -- the unit `failed` on both pins -- rather than a claimed
+recovery that did not happen, or an outage that a failed exit code alone
+does not prove: with no `ExecStop` at all, `docker ps` is what actually
+tells the two states apart, whether or not that restart succeeded.
 
 This is the replacement for the website's `imageTag` mechanism, not a port of
 it. The stack's Pulumi config carries no image reference at all, so there is

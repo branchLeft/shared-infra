@@ -40,6 +40,9 @@ jobs:
   publish:
     name: Build & Publish to GitHub Packages
     runs-on: ubuntu-latest
+    # Only 3 successful runs exist (observed 0.27-0.4min) -- too few for a
+    # real p95, so a generous bound chosen deliberately rather than derived.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: hetzner-host

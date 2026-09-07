@@ -11,11 +11,15 @@ creation. The CI deploy account cannot run any of this and is not meant to.
 Run every workstation command from the root of a `branchLeft/shared-infra`
 checkout.
 
-Addresses are written out rather than left as `<host-ipv4>` placeholders, unlike
-the sibling `RUNBOOK-provision-host.md`. That runbook is generic — it applies to
-any newly created host — and this one is about one host that already exists, so
-every command here is meant to be runnable as read, with nothing to resolve
-first.
+Addresses are threaded through a variable, `$EDGE1_IPV4`, derived once under
+"What has to be true first" below, rather than written out or left as a
+placeholder to resolve by hand — the same convention `RUNBOOK-provision-host.md`
+uses, reminder sentences included: a section a reader might enter on its own
+says where the variable comes from and to re-derive it first. The old
+convention's goal — nothing to resolve, every command runnable as read — was
+right; a threaded variable serves that goal better than a committed literal,
+because it survives `edge1` being rebuilt on a new address and the literal
+does not.
 
 ## What has to be true first
 
@@ -25,7 +29,8 @@ assumes Docker, `branchleft-compose@.service` and
 command:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl is-active docker &&
   test -x /usr/local/sbin/branchleft-deploy &&
   systemctl cat branchleft-compose@.service >/dev/null &&
@@ -133,10 +138,12 @@ secrets, and nothing automated ever writes it — the deploy wrapper writes
   mode this exists to prevent.
 
 **This command writes the file whole and discards anything already in it.**
-Nothing else belongs there today, but check before running it a second time:
+Nothing else belongs there today, but check before running it a second time.
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it first
+if you are entering here independently:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'test -f /etc/branchleft/edge.env && grep -c . /etc/branchleft/edge.env || echo "absent"'
 ```
 
@@ -146,7 +153,7 @@ in place instead of running the next command.
 Substituting a real mailbox for `ACME_EMAIL`:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   install -d -m 0755 -o root -g root /etc/branchleft &&
   umask 077 &&
   { printf "CROWDSEC_BOUNCER_KEY=%s\n" "$(openssl rand -hex 32)";
@@ -165,13 +172,14 @@ so a rotation is followed by step 6's restart and nothing else.
 
 `hetzner/edge/stack/` is the deployment: a Compose file, the generated Caddy
 configuration, and the generated CrowdSec acquisition files. It is copied
-verbatim.
+verbatim. `$EDGE1_IPV4` is set under "What has to be true first" above;
+re-set it first if you are entering here independently.
 
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  hetzner/edge/stack/ root@"$EDGE1_IPV4":/opt/branchleft/edge/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'chown -R root:root /opt/branchleft/edge/'
 ```
 
@@ -184,17 +192,22 @@ from a previous deployment.
 
 ## 5. Enable the unit
 
-Once, so the stack comes back after a reboot:
+Once, so the stack comes back after a reboot. `$EDGE1_IPV4` is set under
+"What has to be true first" above; re-set it first if you are entering here
+independently:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'systemctl enable branchleft-compose@edge'
 ```
 
 ## 6. Deploy
 
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering here independently.
+
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   '/usr/local/sbin/branchleft-deploy edge ghcr.io/branchleft/edge-caddy@<DIGEST>'
 ```
 
@@ -207,12 +220,13 @@ that worked — except on the very first deploy, where there is nothing to fall
 back to and it says so.
 
 If that rollback restart also fails, `branchleft-compose@edge` ends up
-`failed` on both pins — but a failed oneshot restart never runs `ExecStop`, so
-`docker compose down` does not fire, and whatever the most recent `up -d`
-attempt started is still running, healthy or not. `systemctl is-active
-branchleft-compose@edge` reading `failed` here is not proof the stack is
-down; use the `docker ps` check in step 7 below to see what is actually
-running before treating it as an outage.
+`failed` on both pins — but the unit carries no `ExecStop`, so `docker
+compose down` never fires regardless of whether that restart succeeded or
+failed, and whatever the most recent `up -d` attempt started is still
+running, healthy or not. `systemctl is-active branchleft-compose@edge`
+reading `failed` here is not proof the stack is down; use the `docker ps`
+check in step 7 below to see what is actually running before treating it as
+an outage.
 
 CrowdSec downloads its hub items on first start, so allow a couple of minutes
 before the checks below.
@@ -227,10 +241,11 @@ at the running containers with `docker ps`/`docker exec` instead, found by
 Compose's own labels rather than by name — `compose.yml` pins no
 `container_name`, so the container Compose v2 would create by default,
 `edge-crowdsec-1`, is not a contract. Reading a container's labels needs
-neither secret.
+neither secret. `$EDGE1_IPV4` is set under "What has to be true first"
+above; re-set it first if you are entering here independently.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   docker ps --filter label=com.docker.compose.project=edge &&
   CROWDSEC_CTR=$(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=crowdsec) &&
   docker exec "$CROWDSEC_CTR" cscli appsec-configs list &&
@@ -275,11 +290,15 @@ and actually fires. Running only the negative one would pass identically if the
 whole `rate_limit` module had silently failed to load, which is the failure this
 pair exists to distinguish (`branchLeft/workspace#209`).
 
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
+first if you are entering this section independently — every check below
+reuses it.
+
 **a. The general throttle is off.** 250 requests inside the 60-second window
 that would trip a 200-request limit:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   for i in $(seq 1 250); do
     curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8080/
   done | sort | uniq -c'
@@ -300,7 +319,7 @@ running them back to back exhausts the budget once and every later loop reads
 does not need its own window, but it does spend two events.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   for i in $(seq 1 8); do
     curl -s -o /dev/null -w "%{http_code}\n" -X POST \
       http://127.0.0.1:8080/members/api/send-magic-link
@@ -314,7 +333,7 @@ Then confirm the matcher keys on the **method**, not only the path — a `GET` t
 the same path must not count against this budget at all:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   for i in $(seq 1 8); do
     curl -s -o /dev/null -w "%{http_code}\n" \
       http://127.0.0.1:8080/members/api/send-magic-link
@@ -332,7 +351,7 @@ unbroken loop, not two separate ones: two loops each land in their own
 `5 204, 3 429` rather than proving anything shared.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   for i in $(seq 1 5); do
     curl -s -o /dev/null -w "%{http_code}\n" -X POST \
       http://127.0.0.1:8080/members/api/send-magic-link
@@ -370,7 +389,7 @@ alone cannot tell those apart, so each block names itself in an
 `X-Edge-Probe` response header, and that header is the thing to read:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   for h in edge-probe.invalid 127.0.0.1; do
     curl -s -o /dev/null -D - -X POST -H "Host: $h" \
       http://127.0.0.1:8080/members/api/send-magic-link |
@@ -395,7 +414,7 @@ this as one unbroken sequence — the point is that the second half inherits the
 first half's budget:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   for i in $(seq 1 5); do
     curl -s -o /dev/null -w "%{http_code}\n" -X POST \
       http://127.0.0.1:8080/members/api/send-magic-link
@@ -434,7 +453,7 @@ a defect to chase.
 **c. An attack is seen and not blocked.**
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   curl -s -o /dev/null -w "%{http_code}\n" \
     "http://127.0.0.1:8080/?id=1%27%20OR%20%271%27%3D%271"'
 ```
@@ -445,7 +464,7 @@ and was answered normally — which is the whole of what detect-only means.
 **d. The detection is recorded.**
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   CROWDSEC_CTR=$(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=crowdsec) &&
   docker exec "$CROWDSEC_CTR" cscli alerts list --limit 20 &&
   docker exec "$CROWDSEC_CTR" cscli decisions list'
@@ -461,10 +480,12 @@ Leave the edge in this posture until it has carried real traffic, which means
 until at least one site has a `privateUpstream` and its hostname resolves here.
 Detect-only over no traffic proves nothing.
 
-What the review is looking for, on the host:
+What the review is looking for, on the host. `$EDGE1_IPV4` is set under
+"What has to be true first" above; re-set it first if you are entering here
+independently:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   CROWDSEC_CTR=$(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=crowdsec) &&
   docker exec "$CROWDSEC_CTR" cscli alerts list --limit 100 &&
   docker exec "$CROWDSEC_CTR" cscli metrics'
@@ -509,10 +530,12 @@ inherited number picks one of those on faith.
 Derive it first, from the access log — which `posture.ts` names as this
 throttle's observation instrument, and which is enabled in every posture. The
 command below prints the distribution of requests per client address per minute
-and **no addresses**, so client IPs stay on the host:
+and **no addresses**, so client IPs stay on the host. `$EDGE1_IPV4` is set
+under "What has to be true first" above; re-set it first if you are entering
+this section independently:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'docker exec $(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy) \
      sh -c "cat /var/log/caddy/access.log"' |
 python3 -c '
@@ -550,9 +573,39 @@ Then:
    then restart, which needs no new image:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
-  'systemctl restart branchleft-compose@edge'
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
+  'docker restart $(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy)'
 ```
+
+**Not `systemctl restart branchleft-compose@edge`.** That unit carries no
+`ExecStop` since `hetzner/provision/branchleft-compose@.service` changed, so a
+restart runs `docker compose up -d` and Compose recreates only services whose
+_config hash_ moved. A bind-mounted file's **contents** are not part of that
+hash, so a Caddyfile-only change is a silent no-op: the command exits 0,
+`--wait` passes because the unchanged containers are already healthy, and Caddy
+goes on serving the configuration it loaded at container start. This was
+observed on the monitoring stack the same day it landed
+(branchLeft/workspace#666) and again here.
+
+The `edge` instance is deliberately **not** given the blanket
+`--force-recreate` that the monitoring instance gets: recreating this stack
+wholesale on every unit restart would also recreate CrowdSec, and
+`branchleft-deploy` restarts this unit for image bumps where a selective
+recreate is the correct behaviour. So the recreate is explicit here, at the one
+step that needs it.
+
+**Validate before restarting.** The copy is already on disk at this point, so
+the running container can parse it without adopting it:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
+  'docker exec $(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy) caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile'
+```
+
+Expect `Valid configuration`. CI validates the file in the repository; this
+validates the bytes that survived the `rsync`, in the pinned binary, with the
+file where Caddy will actually read it. Caddy terminates TLS for every hostname
+this edge serves, so restarting onto a config it cannot parse is an outage.
 
 5. Confirm it took, with §8a's loop. Expect roughly `200 204` followed by
    `50 429` rather than `250 204` — the inverse of what §8a asserts today, and
@@ -571,10 +624,11 @@ above, performed by whoever holds `~/.ssh/id_ed25519_hetzner`.
 Same four steps with `crowdsec: 'enforcing'`, which changes both the Caddy
 route chain and `crowdsec/acquis.d/appsec.yaml`.
 
-Confirm it took:
+Confirm it took. `$EDGE1_IPV4` is set under "What has to be true first"
+above; re-set it first if you are entering this section independently:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8080/.env'
 ```
 
@@ -596,7 +650,7 @@ host that address is the Docker bridge gateway. Clear it, or the host's own
 container traffic stays banned for the decision's lifetime:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 '
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   CROWDSEC_CTR=$(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=crowdsec) &&
   docker exec "$CROWDSEC_CTR" cscli decisions list &&
   docker exec "$CROWDSEC_CTR" cscli decisions delete --ip 172.17.0.1'
@@ -619,16 +673,20 @@ One registry entry, then a re-render. Nothing else.
    is forced: Caddy issues its certificate over HTTP-01, which cannot succeed
    until the hostname resolves here, and it will not attempt issuance at all
    until the site block exists.
-5. Watch issuance:
+5. Watch issuance. `$EDGE1_IPV4` is set under "What has to be true first"
+   above; re-set it first if you are entering this section independently:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'journalctl -u branchleft-compose@edge --since "10 min ago" | grep -i certificate'
 ```
 
 ## 12. Rolling back
 
-A bad configuration and a bad image roll back differently.
+A bad configuration and a bad image roll back differently. `$EDGE1_IPV4` is
+set under "What has to be true first" above; re-set it first if you are
+entering here independently — this is the section most likely to be entered
+mid-incident, days after the deploy.
 
 **Configuration** — restore the previous `hetzner/edge/stack/` from git and
 re-copy:
@@ -637,11 +695,18 @@ re-copy:
 git checkout <PREVIOUS_MERGED_SHA> -- hetzner/edge/stack
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/edge/stack/ root@46.225.95.167:/opt/branchleft/edge/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+  hetzner/edge/stack/ root@"$EDGE1_IPV4":/opt/branchleft/edge/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'chown -R root:root /opt/branchleft/edge/ &&
-   systemctl restart branchleft-compose@edge'
+   docker restart $(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy)'
 ```
+
+**The recreate matters more here than on the forward path.** A rollback is
+reached for during an outage, and `systemctl restart branchleft-compose@edge`
+would restore the previous file to disk and leave the broken configuration
+running in memory — exit 0, containers healthy, nothing fixed, and the one
+signal saying the rollback worked pointing the wrong way. See §10a.4 for why
+the unit no longer recreates on a bind-mount content change.
 
 Then `git checkout HEAD -- hetzner/edge/stack` on the workstation, so the
 checkout stops describing a state the repository does not hold.
@@ -649,7 +714,7 @@ checkout stops describing a state the repository does not hold.
 **Image** — re-run the deploy wrapper with the previous digest:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@46.225.95.167 \
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   '/usr/local/sbin/branchleft-deploy edge ghcr.io/branchleft/edge-caddy@<PREVIOUS_DIGEST>'
 ```
 

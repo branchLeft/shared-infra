@@ -13,6 +13,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import pathlib
 import tempfile
 import unittest
@@ -882,6 +883,10 @@ class ShippedInventoryLiveStateTests(unittest.TestCase):
                 ("ghost-tenant-blog", "Pulumi.blog.yaml"): "config:\n  gcp:project: p\n",
                 # branchleft-ghost-provisioning/blog has no committed config
                 # anywhere (its config_path is null) -- nothing to write.
+                (
+                    "ghost-platform",
+                    "infra/hosts/Pulumi.production.yaml",
+                ): "config:\n  a: b\n",
             }
             for (repo, rel), text in live.items():
                 path = root / repo / rel
@@ -915,6 +920,75 @@ class ShippedInventoryLiveStateTests(unittest.TestCase):
             by_stack = {f["stack"]: f for f in findings}
             self.assertEqual(by_stack["blog-infra/blog"]["status"], "drift")
             self.assertFalse(audit.satisfies_terminal_state(by_stack["blog-infra/blog"]))
+
+
+class WorkspaceStackDiscoveryTests(unittest.TestCase):
+    """Regression guard for the failure this inventory's own `$comment`
+    names: a stack that exists but was never entered here. Every check
+    elsewhere in this file audits sites the inventory already knows about;
+    none of them can notice a whole stack nobody wrote down, which is
+    exactly how one went missing before. This walks the stack-owning repos
+    for every `Pulumi.yaml` and fails if one has no matching entry.
+
+    Only runs where those repos sit next to this one on disk -- this
+    repo's own CI checks out `shared-infra` alone, so there the sibling
+    repos are absent and the test skips rather than reporting a false
+    pass or fail for a tree it cannot see.
+    """
+
+    STACK_OWNING_REPOS = ("website", "ghost-platform", "ghost-tenant-blog")
+    SKIP_DIR_NAMES = {".git", "node_modules", "vendor", "dist", "graphify-out"}
+
+    @classmethod
+    def _is_excluded_dir(cls, name):
+        return name in cls.SKIP_DIR_NAMES or name.startswith(".worktrees") or name == "worktrees"
+
+    @classmethod
+    def _find_workspace_root(cls):
+        candidate = audit.REPO_ROOT
+        for _ in range(8):
+            if all((candidate / repo).is_dir() for repo in cls.STACK_OWNING_REPOS):
+                return candidate
+            parent = candidate.parent
+            if parent == candidate:
+                return None
+            candidate = parent
+        return None
+
+    @classmethod
+    def _pulumi_projects(cls, repo_dir):
+        """Repo-relative paths of every `Pulumi.yaml` under `repo_dir`."""
+        found = []
+        for dirpath, dirnames, filenames in os.walk(repo_dir):
+            dirnames[:] = [d for d in dirnames if not cls._is_excluded_dir(d)]
+            if "Pulumi.yaml" in filenames:
+                found.append((pathlib.Path(dirpath) / "Pulumi.yaml").relative_to(repo_dir).as_posix())
+        return found
+
+    def test_every_pulumi_project_in_a_stack_owning_repo_is_in_the_inventory(self):
+        root = self._find_workspace_root()
+        if root is None:
+            self.skipTest(
+                "sibling repos not found above this checkout -- this check "
+                "only runs with the full multi-repo workspace present"
+            )
+        inventory = audit.load_inventory(audit.DEFAULT_INVENTORY)
+        known = {(entry.get("repo"), entry.get("project_path")) for entry in inventory["stacks"]}
+
+        missing = []
+        for path in self._pulumi_projects(audit.REPO_ROOT):
+            if (audit.THIS_REPO, path) not in known:
+                missing.append(f"{audit.THIS_REPO}/{path}")
+        for repo in self.STACK_OWNING_REPOS:
+            for path in self._pulumi_projects(root / repo):
+                if (repo, path) not in known:
+                    missing.append(f"{repo}/{path}")
+
+        self.assertEqual(
+            missing,
+            [],
+            f"Pulumi.yaml with no matching entry in {audit.DEFAULT_INVENTORY.name}: {missing}",
+        )
 
 
 if __name__ == "__main__":

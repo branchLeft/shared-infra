@@ -27,13 +27,20 @@ which fires on a non-zero `systemctl restart` and nothing else -- never runs.
 That is invisible to `docker compose config` and to the config-validation jobs,
 because none of them start a container.
 
-Nothing else backs that up. There is no post-start assertion in the unit to
-fall back on, so a service with no health signal has none at all -- which is
-why there is no exemption table here at all, empty or otherwise. The only way
-past the assertion is `IMAGE_PROVIDED_HEALTHCHECK`, which claims the image
-carries a probe rather than that none is needed. Excusing a service outright
-would mean writing a second register and the tests that police it, which is a
-visible decision rather than one more key in a dict somebody already trusts.
+The only way past the assertion below is `IMAGE_PROVIDED_HEALTHCHECK`, which
+claims the image carries a probe rather than that none is needed. Excusing a
+service outright would mean writing a second register and the tests that
+police it, which is a visible decision rather than one more key in a dict
+somebody already trusts.
+
+This module's assertion only reaches a stack whose Compose file is committed
+in this repository, at test time. `branchleft_deploy.py`'s `deploy()` reads
+the same `healthcheck_states()` a second time, at deploy time, for whatever
+stack is about to be restarted -- committed here or not, including a stack
+this module has never heard of. Its own exemption table,
+`KNOWN_UNHEALTHCHECKED_SERVICES`, is what backs a gap this module finds; it
+lives beside `deploy()` rather than here because a gap this module cannot see
+at all still has to be decided by something that can.
 
 The third contract is the reach of the first two, and it is the one a glob
 cannot state. `branchleft-compose@.service` is installed by
@@ -57,6 +64,14 @@ import re
 import unittest
 
 import branchleft_deploy as bd
+from branchleft_deploy import (
+    ABSENT,
+    DECLARED,
+    DISABLED,
+    IMAGE_PROVIDED_HEALTHCHECK,
+    ComposeParseError,
+    healthcheck_states,
+)
 
 HETZNER = pathlib.Path(__file__).resolve().parent.parent
 
@@ -70,58 +85,6 @@ RESET_DIRECTIVE = "EnvironmentFile="
 # position so a stack whose only variable is the pin is correctly read as
 # needing no secrets.
 COMPOSE_VARIABLE = re.compile(r"\$\{(?!IMAGE[}:])([A-Za-z_][A-Za-z0-9_]*)")
-
-# A top-level mapping key: column 0, so `services:` is told from a key nested
-# under it. Quoted and space-before-colon spellings are matched because YAML
-# accepts them and a `services:` this missed would end the section early,
-# leaving the rest of the file unread.
-TOP_LEVEL_KEY = re.compile(r"""\A(?P<quote>["']?)(?P<key>[A-Za-z0-9_.-]+)(?P=quote)\s*:""")
-
-# A service name under `services:`, at Compose's two-space nesting. Matched at
-# a fixed indent rather than by name so a service added at the wrong depth --
-# which Compose would not read as a service at all -- is not silently counted
-# as one that has a healthcheck.
-SERVICE_INDENT = 2
-SERVICE_HEADER = re.compile(rf"\A {{{SERVICE_INDENT}}}([A-Za-z0-9][A-Za-z0-9_.-]*):\s*\Z")
-
-# The healthcheck key of a service, with whatever follows it on the same line:
-# `healthcheck: {disable: true}` is a declaration that switches the check off,
-# and reads as one that turns it on unless the inline value is looked at.
-HEALTHCHECK_INDENT = 4
-HEALTHCHECK_HEADER = re.compile(rf"\A {{{HEALTHCHECK_INDENT}}}healthcheck:(?P<inline>.*)\Z")
-
-# The two ways Compose switches a healthcheck off. Both leave the `healthcheck:`
-# key in place, so a check for the key alone reads either as a declared probe --
-# and for a service whose image supplies one, `disable: true` is what removes
-# the only probe it has.
-HEALTHCHECK_DISABLED = re.compile(r"\bdisable:\s*(?:true|yes|on)\b", re.IGNORECASE)
-HEALTHCHECK_TEST_NONE = re.compile(
-    r"""\btest:\s*(?:\[\s*)?["']?NONE["']?\s*\]?\s*(?=[,}]|\Z)"""
-    r"""|\A\s*-\s*["']?NONE["']?\s*\Z"""
-)
-
-# The three states a service can be in, kept apart because "no healthcheck key"
-# and "healthcheck key that turns the probe off" mean opposite things for a
-# service whose image ships its own.
-ABSENT, DECLARED, DISABLED = "absent", "declared", "disabled"
-
-# Services whose image carries its own `HEALTHCHECK` instruction, so Compose
-# already waits for *healthy* without the Compose file restating it. Docker
-# reports these as `Up (healthy)` exactly as a Compose-declared one does, which
-# is why a stack can look uniformly healthy while most of it is not covered.
-#
-# Listed rather than detected: reading an image's metadata needs a Docker
-# daemon and a pulled image, which this suite deliberately has neither of. The
-# cost of that is a stale entry here if an image drops its healthcheck, which is
-# what `test_every_named_service_still_exists` bounds.
-IMAGE_PROVIDED_HEALTHCHECK: dict[tuple[str, str], str] = {
-    ("monitoring", "cadvisor"): (
-        "ghcr.io/google/cadvisor ships HEALTHCHECK CMD-SHELL /usr/bin/healthcheck.sh. "
-        "Left to the image rather than restated here: a Compose-level healthcheck "
-        "replaces the image's outright, so restating it would swap a probe cAdvisor "
-        "maintains for one this repository would have to."
-    ),
-}
 
 # Every service the parser must find, per stack. An exact set rather than a
 # sample: a parser that quietly skipped one would otherwise leave that service
@@ -222,6 +185,7 @@ SCANNED_SUFFIXES = frozenset(
         ".py",
         ".service",
         ".sh",
+        ".timer",
         ".tmpl",
         ".ts",
         ".yaml",
@@ -337,82 +301,6 @@ def stacks_named_in_this_repository() -> dict[str, set[str]]:
         stack = drop_in.name.removesuffix(".override.conf")
         found.setdefault(stack, set()).add(str(drop_in.relative_to(REPOSITORY)))
     return found
-
-
-class ComposeParseError(AssertionError):
-    """A line under `services:` the parser cannot classify.
-
-    Raised rather than skipped. The parser is a regex over indentation, so the
-    forms it does not understand -- a YAML anchor on the service header, an
-    inline mapping, a different nesting depth -- all look identical to "this
-    service has no healthcheck key yet". Skipping them silently empties the
-    result, and an empty result passes every assertion below.
-    """
-
-
-def healthcheck_states(compose_text: str) -> dict[str, str]:
-    """Every service in `services:`, mapped to `ABSENT`, `DECLARED` or `DISABLED`.
-
-    Regex rather than a YAML parse to keep this module stdlib-only, matching how
-    the image-pin half above reads the same files. Takes text rather than a path
-    so the shapes it must reject can be tested against fixtures.
-
-    Shapes it cannot classify raise. The one gap it cannot raise on is a
-    top-level key it fails to recognise at all, which would end the `services:`
-    section early and leave the rest of the file unread -- `EXPECTED_SERVICES`
-    is the backstop for that, because the services after it would go missing.
-    """
-    states: dict[str, str] = {}
-    current: str | None = None
-    in_services = False
-    healthcheck_block_of: str | None = None
-    for raw in bd.strip_yaml_comments(compose_text).splitlines():
-        if not raw.strip():
-            continue
-        top_level = TOP_LEVEL_KEY.match(raw)
-        if top_level:
-            in_services = top_level.group("key") == "services"
-            current = None
-            healthcheck_block_of = None
-            continue
-        if not in_services:
-            continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        if indent <= SERVICE_INDENT:
-            header = SERVICE_HEADER.match(raw)
-            if header is None:
-                raise ComposeParseError(
-                    f"cannot read {raw!r} as a service header. Every key directly "
-                    "under `services:` must be a bare `  name:` on its own line."
-                )
-            current = header.group(1)
-            states[current] = ABSENT
-            healthcheck_block_of = None
-            continue
-        if current is None:
-            raise ComposeParseError(
-                f"{raw!r} is nested under `services:` at indent {indent} with no "
-                "service header above it. Compose services nest at two spaces; a "
-                "different depth means this parser is reading a shape it was not "
-                "written for."
-            )
-        if healthcheck_block_of is not None and indent <= HEALTHCHECK_INDENT:
-            healthcheck_block_of = None
-        header = HEALTHCHECK_HEADER.match(raw)
-        if header:
-            inline = header.group("inline")
-            states[current] = (
-                DISABLED
-                if HEALTHCHECK_DISABLED.search(inline) or HEALTHCHECK_TEST_NONE.search(inline)
-                else DECLARED
-            )
-            healthcheck_block_of = current
-            continue
-        if healthcheck_block_of is not None and (
-            HEALTHCHECK_DISABLED.search(raw) or HEALTHCHECK_TEST_NONE.search(raw)
-        ):
-            states[healthcheck_block_of] = DISABLED
-    return states
 
 
 def stack_states() -> dict[str, dict[str, str]]:
@@ -790,6 +678,39 @@ class UnitTemplateAssumptionTests(unittest.TestCase):
             self.lines,
         )
 
+    def test_a_restart_reruns_start_unconditionally(self):
+        """`systemctl restart` always reruns ExecStart, whatever RemainAfterExit says.
+
+        The rolling-replace property below depends on this: `restart` still
+        runs a stop transition ahead of ExecStart, but it is `Type=oneshot`
+        with `RemainAfterExit=yes` that makes systemd treat a start after
+        that stop as unconditional rather than a no-op against a unit it
+        already considers active.
+        """
+        self.assertIn("Type=oneshot", self.lines)
+        self.assertIn("RemainAfterExit=yes", self.lines)
+
+    def test_a_restart_never_tears_the_stack_down_first(self):
+        """No `ExecStop`, so a restart's stop transition executes nothing.
+
+        A `Type=oneshot` unit with no `ExecStop` treats `stop` as marking
+        itself inactive and running no command. `branchleft-deploy` restarts
+        this unit for every image bump; with an `ExecStop` present, that
+        restart's stop half would run `docker compose down` ahead of every
+        `ExecStart`, tearing down every container in the stack -- including
+        ones the pinned image never touched -- to change one. Its absence is
+        what makes a restart a Compose-level rolling replace of only the
+        service whose config changed, rather than a full stop/start of the
+        whole stack.
+        """
+        self.assertEqual(
+            [line for line in self.lines if line.startswith("ExecStop=")],
+            [],
+            "the unit has an ExecStop. `systemctl restart` runs it before "
+            "every ExecStart, so its return turns every restart back into a "
+            "full stop-then-start of the whole stack.",
+        )
+
     def test_the_wait_is_the_only_post_start_signal(self):
         """No `ExecStartPost` stands behind `--wait`, and adding one is a decision.
 
@@ -808,6 +729,102 @@ class UnitTemplateAssumptionTests(unittest.TestCase):
             "reintroduced, replace this test with one that states what it "
             "guarantees that `--wait` does not.",
         )
+
+
+EXEC_START_RESET = "ExecStart="
+FORCE_RECREATE_START = "ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait --force-recreate"
+
+
+class MonitoringForceRecreateTests(unittest.TestCase):
+    """`branchLeft/workspace#666`: a bind-mounted config change is invisible to
+    Compose's own per-service hash, so the template's selective ExecStart
+    (relied on by `edge`, per branchLeft/shared-infra#171) silently does not
+    redeploy a rules or scrape-config edit to `monitoring`. `monitoring` has
+    none of `edge`'s multi-tenant reason to stay selective -- one stack, one
+    reason to restart -- so its own drop-in overrides ExecStart to force a
+    recreate every time, the same way it already resets EnvironmentFile= for
+    a reason specific to this instance.
+
+    This only pins the unit files' *shape*: whether `docker compose up`
+    actually gets asked to recreate an unchanged container is systemd and
+    Compose runtime behaviour this module cannot exercise without a host,
+    same limitation `UnitTemplateAssumptionTests` above already carries for
+    `ExecStop`.
+    """
+
+    def test_monitoring_overrides_exec_start_to_force_recreate(self):
+        drop_in = drop_in_for("monitoring")
+        self.assertIsNotNone(drop_in, "monitoring has no override.conf to check")
+        lines = service_lines(drop_in)
+        self.assertIn(
+            FORCE_RECREATE_START,
+            lines,
+            f"{drop_in} must set `{FORCE_RECREATE_START}` under [Service]: "
+            "without --force-recreate, a restart of this stack only picks up "
+            "a bind-mounted config change (alerts.yml, prometheus.yml, the "
+            "Alertmanager template) when Compose's own config hash also "
+            "changed for an unrelated reason, which a config-only edit never "
+            "does.",
+        )
+
+    def test_the_exec_start_override_resets_before_it_sets(self):
+        """A reset-then-set pair, same shape as the `EnvironmentFile=` one above.
+
+        Without the leading bare `ExecStart=`, systemd appends this drop-in's
+        ExecStart to the template's rather than replacing it -- `ExecStart=`
+        may be given more than once, and each one runs in sequence, so a
+        missing reset here runs `docker compose up` twice on every restart
+        instead of once with `--force-recreate`.
+        """
+        drop_in = drop_in_for("monitoring")
+        lines = service_lines(drop_in)
+        resets = [index for index, line in enumerate(lines) if line == EXEC_START_RESET]
+        forced = [index for index, line in enumerate(lines) if line == FORCE_RECREATE_START]
+        self.assertTrue(resets, f"{drop_in} sets ExecStart without a preceding bare reset")
+        self.assertTrue(forced, f"{drop_in} never sets the force-recreate ExecStart")
+        self.assertLess(
+            max(resets),
+            max(forced),
+            f"{drop_in} has the ExecStart reset after the force-recreate line -- "
+            "systemd applies directives in file order, so the later reset "
+            "clears it again and the unit falls back to no ExecStart at all.",
+        )
+
+    def test_edge_stays_selective(self):
+        """`edge` keeps the template's default: no ExecStart override at all.
+
+        It restarts on every per-tenant image bump (branchLeft/shared-infra#171),
+        and force-recreating the whole stack on each one is exactly the
+        every-tenant-offline-to-change-one regression that PR fixed -- so
+        `edge.override.conf` must not pick up `monitoring`'s override by
+        copy-paste.
+        """
+        drop_in = drop_in_for("edge")
+        self.assertIsNotNone(drop_in, "edge has no override.conf to check")
+        lines = service_lines(drop_in)
+        self.assertNotIn(
+            EXEC_START_RESET,
+            lines,
+            f"{drop_in} resets ExecStart. `edge` is restarted per-tenant by "
+            "branchleft-deploy and must keep the template's selective, "
+            "hash-based recreate -- a force-recreate here takes every tenant "
+            "offline to change one, the regression branchLeft/shared-infra#171 fixed.",
+        )
+
+    def test_the_template_itself_stays_selective(self):
+        """The shared template's own ExecStart carries no --force-recreate.
+
+        Any future stack that does not commit its own override inherits the
+        template as-is, and that default must stay the selective, per-service
+        recreate `edge` (and every other multi-tenant instance) depends on --
+        `monitoring`'s override is the exception, not a template-wide change.
+        """
+        template_lines = service_lines(HETZNER / "provision" / "branchleft-compose@.service")
+        self.assertIn(
+            "ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait",
+            template_lines,
+        )
+        self.assertNotIn(FORCE_RECREATE_START, template_lines)
 
 
 class StackNameScanTests(unittest.TestCase):

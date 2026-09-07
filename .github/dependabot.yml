@@ -1,6 +1,70 @@
 version: 2
 
 updates:
+  # Root: lint/format tooling and shared scripts.
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - 'minor'
+          - 'patch'
+    labels:
+      - 'dependencies'
+
+  # Hetzner edge provisioning scripts and tooling.
+  - package-ecosystem: 'npm'
+    directory: '/hetzner'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - 'minor'
+          - 'patch'
+    labels:
+      - 'dependencies'
+
+  # Hetzner host provisioning and deploy helpers.
+  - package-ecosystem: 'npm'
+    directory: '/hetzner-host'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - 'minor'
+          - 'patch'
+    labels:
+      - 'dependencies'
+
+  # Mail stack tooling and dependencies.
+  - package-ecosystem: 'npm'
+    directory: '/mail'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - 'minor'
+          - 'patch'
+    labels:
+      - 'dependencies'
+
   # Watches only hetzner/edge/stack/compose.yml's pinned crowdsec image.
   # A bump here is also what makes crowdsec/config.yaml.local's
   # `cscli.hub_branch: master` pin correct again once upstream ships past
@@ -15,11 +79,24 @@ updates:
       interval: 'weekly'
       day: 'monday'
     open-pull-requests-limit: 5
-    # caddy's image in the same compose file is `${IMAGE}`, written by the
-    # deploy wrapper at deploy time, not a literal tag Dependabot can read --
-    # this `allow` is defence in depth for the day a second literal image
-    # joins the file, not a workaround for caddy today.
     allow:
       - dependency-name: 'crowdsecurity/crowdsec'
     labels:
       - 'dependencies'
+
+  # GitHub Actions workflows
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 5
+    groups:
+      github-actions-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - 'minor'
+          - 'patch'
+    labels:
+      - 'dependencies'
+      - 'github-actions'

@@ -66,6 +66,7 @@ scrape_configs:
           - https://branchleft.co.uk
           - https://www.branchleft.co.uk
           - https://blog.branchleft.co.uk
+          - https://blog2.branchleft.co.uk
         labels: {host: edge1, expected_up: 'true'}
     relabel_configs:
       - source_labels: [__address__]

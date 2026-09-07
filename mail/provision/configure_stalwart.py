@@ -618,6 +618,34 @@ def _reconcile_allowed_ips(auth: tuple[str, str]) -> bool:
     return True
 
 
+def _wait_for_stalwart_ready(
+    auth: tuple[str, str], timeout: float = 60.0, poll_interval: float = 2.0
+) -> None:
+    """Polls the loopback admin API until it serves a real response, rather
+    than assuming a fixed delay is long enough. A restarting container can
+    accept a TCP connection and then reset or refuse it before the JMAP
+    stack itself is serving -- a socket accepting is not the same as the
+    service being ready, so only a parsed response to an authenticated call
+    counts; a connection error of any kind is treated as "not yet" and
+    retried, never as success.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    last_error: BaseException | None = None
+    while time.monotonic() < deadline:
+        try:
+            _request("GET", "/api/account", auth)
+            return
+        except (OSError, urllib.error.URLError, ValueError) as exc:
+            last_error = exc
+        time.sleep(poll_interval)
+    raise RuntimeError(
+        f"stalwart's admin API did not answer within {timeout:g}s of the restart "
+        f"({last_error!r} on the last attempt)"
+    )
+
+
 def main() -> int:
     if os.path.exists(CREDENTIALS_PATH):
         auth = _load_credentials()
@@ -650,6 +678,7 @@ def main() -> int:
 
     if changed:
         subprocess.run(["docker", "restart", "stalwart"], check=True, capture_output=True)
+        _wait_for_stalwart_ready(auth)
         print("configure_stalwart: restarted stalwart to apply changes")
 
     return 0

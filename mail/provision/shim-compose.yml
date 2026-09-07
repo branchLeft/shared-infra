@@ -42,12 +42,20 @@ services:
       # The image's own runtime, not curl/wget -- a from-scratch or
       # distroless-style Node image has no guarantee of shipping either,
       # but `node` itself is guaranteed to be there.
+      #
+      # Addressed by IP, not `localhost`: a dual-stack-resolving name makes
+      # Node's client try one address family before falling back to the
+      # other, which can cost several seconds if the first attempt has to
+      # be timed out rather than refused outright -- comfortably outside
+      # this healthcheck's own timeout below even though the server itself
+      # answers in well under a second. Naming 127.0.0.1 removes the
+      # resolution step, and with it the race.
       test:
         - CMD
         - node
         - -e
         - >-
-          require('node:http').get('http://localhost:8080/healthz',
+          require('node:http').get('http://127.0.0.1:8080/healthz',
           (r) => { process.exitCode = r.statusCode === 200 ? 0 : 1; })
           .on('error', () => { process.exitCode = 1; });
       interval: 10s

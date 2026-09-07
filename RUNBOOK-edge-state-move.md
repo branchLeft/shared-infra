@@ -997,9 +997,15 @@ Alongside the existing entries in `website/infra/KNOWN_ISSUES.md`:
 - **A clean `pulumi up` is not evidence that the resulting policy is what the
   code says** — it is evidence that the checkpoint says what the code says.
   Those are different claims, and this incident is the gap between them.
-- Verify Cloud Armor rule changes with
-  `gcloud compute security-policies describe`, every time. State is not a
-  substitute for looking.
+- Verifying by hand does not survive: appendix A.5 said exactly this before
+  and it was forgotten within seven days. `deploy-apply` in
+  `.github/workflows/ci.yml` now re-captures the live policy after every
+  `pulumi up` that touches the edge, normalizes it with
+  `scripts/normalize-cloud-armor-baseline.py`, and fails the job by name
+  (`scripts/assert-cloud-armor-live-parity.py`) if it disagrees with the
+  committed `cloud-armor-baseline/branchleft-edge-armor.normalized.json`.
+  State is not a substitute for looking, so this looks on every apply
+  instead of relying on someone remembering to.
 
 ### Outcome
 

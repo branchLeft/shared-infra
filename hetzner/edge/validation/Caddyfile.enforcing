@@ -31,6 +31,9 @@ branchleft.co.uk {
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
 	route {
+		request_body {
+			max_size 1MiB
+		}
 		rate_limit {
 			zone website_per_ip {
 				key {http.request.remote.host}
@@ -69,6 +72,43 @@ www.branchleft.co.uk {
 		}
 		crowdsec
 		redir https://branchleft.co.uk{uri} permanent
+	}
+}
+
+blog2.branchleft.co.uk {
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	@inspected not path /ghost/api/*
+	@members_magic_link {
+		method POST
+		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
+	route {
+		request_body {
+			max_size 64MiB
+		}
+		rate_limit {
+			zone blog2_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 5
+			}
+		}
+		crowdsec
+		appsec @inspected
+		reverse_proxy 10.20.1.100:8100
 	}
 }
 

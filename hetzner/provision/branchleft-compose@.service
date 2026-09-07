@@ -35,7 +35,16 @@ ExecStartPre=/usr/bin/docker compose pull --quiet
 # register in that same module; hetzner/README.md states the same split in
 # prose.
 ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait
-ExecStop=/usr/bin/docker compose down
+
+# No ExecStop. `branchleft-deploy` restarts this unit for every image bump,
+# and `systemctl restart` always reruns ExecStart even though it also runs
+# a stop transition first -- with no ExecStop, that stop transition marks
+# the oneshot unit inactive and executes nothing, so a restart's only real
+# effect is a fresh `docker compose up -d --wait`, and Compose recreates
+# only the service whose config actually changed rather than every
+# container in the stack. Tearing a stack down outright -- decommissioning
+# it, not updating it -- is `docker compose down` run directly on the host;
+# nothing routed through this unit does that anymore.
 
 # A registry pull plus a health-check wait on a cold host exceeds systemd's
 # 90 second default, and a timeout there is indistinguishable from a genuine
