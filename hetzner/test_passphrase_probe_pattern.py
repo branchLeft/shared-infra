@@ -68,18 +68,14 @@ _SELF_PATH = str(pathlib.Path(__file__).resolve().relative_to(pathlib.Path(__fil
 
 
 def _tracked_scan_files() -> list[pathlib.Path]:
-    """Every git-tracked .py/.sh/.yml/.yaml file in the repo, except graphify-out/ and this file.
+    """Every git-tracked .py/.sh/.yml/.yaml file in the repo, except this file.
 
     Uses `git ls-files` rather than a hand-maintained directory list: a
     fixed glob can leave a whole class of tracked files unscanned -- scripts
     and workflow files outside a runbook-only glob, for instance, while the
     literal flag still appears in them. This one grows automatically with
     the tracked tree instead of needing a second edit whenever a new script
-    or workflow is added. graphify-out/ is excluded: it is a
-    generated AST/semantic cache of every source file, so anything findable
-    there is a duplicate of a source file this scan already inspects
-    directly, and it must never be hand-edited regardless (workspace root
-    CLAUDE.md's graphify section).
+    or workflow is added.
     """
     result = subprocess.run(
         ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
@@ -87,7 +83,7 @@ def _tracked_scan_files() -> list[pathlib.Path]:
     return [
         REPO_ROOT / rel
         for rel in result.stdout.splitlines()
-        if not rel.startswith("graphify-out/") and rel != _SELF_PATH and rel.endswith(_SCAN_EXTENSIONS)
+        if rel != _SELF_PATH and rel.endswith(_SCAN_EXTENSIONS)
     ]
 
 

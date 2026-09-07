@@ -52,7 +52,7 @@ DEFAULT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 # deliberately absent: this package type-checks with `--noEmit` and builds
 # nothing, so a `Pulumi.yaml` appearing under one would be a stray copy that
 # still needs reporting rather than build output to ignore.
-SKIP_DIRS = {".git", ".worktrees", "node_modules", "graphify-out"}
+SKIP_DIRS = {".git", ".worktrees", "node_modules"}
 
 # What `package.json` means by an absent `main`.
 NPM_DEFAULT_MAIN = "index.js"

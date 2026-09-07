@@ -120,7 +120,6 @@ SKIP_DIRS = {
     ".git",
     ".worktrees",
     "node_modules",
-    "graphify-out",
     "dist",
     "vendor",
 }

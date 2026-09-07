@@ -727,7 +727,7 @@ class ReferenceScanTests(unittest.TestCase):
         self.assertEqual(audit.scan_backend_references(self.tree), set())
 
     def test_skips_vendored_and_generated_trees(self):
-        for skipped in ("node_modules", "graphify-out", "vendor"):
+        for skipped in ("node_modules", "vendor"):
             self._write(f"{skipped}/x.md", "gs://branchleft-pulumi-state\n")
         self.assertEqual(audit.scan_backend_references(self.tree), set())
 
@@ -778,7 +778,7 @@ class ProviderSelectionScanTests(unittest.TestCase):
         self.assertEqual(audit.scan_provider_selection_hits(self.tree), {"provision.sh"})
 
     def test_skips_vendored_and_generated_trees(self):
-        for skipped in ("node_modules", "graphify-out", "vendor"):
+        for skipped in ("node_modules", "vendor"):
             self._write(f"{skipped}/w.yml", f'--secrets-provider="{GCPKMS_URL}"\n')
         self.assertEqual(audit.scan_provider_selection_hits(self.tree), set())
 
@@ -937,7 +937,7 @@ class WorkspaceStackDiscoveryTests(unittest.TestCase):
     """
 
     STACK_OWNING_REPOS = ("website", "ghost-platform", "ghost-tenant-blog")
-    SKIP_DIR_NAMES = {".git", "node_modules", "vendor", "dist", "graphify-out"}
+    SKIP_DIR_NAMES = {".git", "node_modules", "vendor", "dist"}
 
     @classmethod
     def _is_excluded_dir(cls, name):
