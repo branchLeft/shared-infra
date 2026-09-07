@@ -576,22 +576,13 @@ Three rules for it:
 
 - **Do one stack per session, start to merged.** Do not re-wrap on a Friday
   and merge on a Monday.
-- **Freeze merges to that repo for the duration**, including tool-generated
-  PRs. A graph-update PR merging into that window is a push to `main` like
-  any other.
-- **Neutralise the automatic merge before step 5, not by intending to.**
-  A freeze that depends on people choosing not to merge does not hold here,
-  because nothing in this workspace waits to be asked: the workspace-root
-  hook `.claude/hooks/graphify-session.py` squash-merges open
-  `chore(graphify)` PRs **at every session start, with no human in the
-  loop**, and this repo's CI runs `Deploy (pulumi up)` on every push to
-  `main`. So anyone — or any agent — opening a session in the workspace
-  during the window pushes to `main` and triggers a deploy against a
-  checkpoint that no longer matches `main`'s config. Before step 5 either
-  merge or close every open `chore(graphify)` PR on this repo so the hook has
-  nothing to act on, or disable the hook for the duration. Confirm with
-  `gh pr list --repo branchLeft/shared-infra --author app/github-actions`
-  returning nothing before you start.
+- **Freeze merges to that repo for the duration**, including any
+  bot-generated PR. A PR like that merging into that window is a push to
+  `main` like any other. Confirm none is queued to merge on its own before
+  you start: `gh pr list --repo branchLeft/shared-infra --state open --json
+number,author --jq '.[] | select(.author.login | endswith("[bot]"))'`
+  returning nothing (this repo's Dependabot config opens up to 5 PRs a week,
+  and any future bot integration would show up the same way).
 - **If a sweep is abandoned mid-stack** — you re-wrapped and cannot finish —
   do not leave it. Either restore the A.2 step 3 archive with `pulumi stack
 import` (which puts the checkpoint back on KMS, valid while the key lives)

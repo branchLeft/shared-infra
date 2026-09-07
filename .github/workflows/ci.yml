@@ -637,9 +637,7 @@ jobs:
   # Two things the machinery cannot enforce, on the approver:
   #   - Approve each queued apply individually, with its own plan summary open.
   #     The pending-deployments screen offers a multi-select approve, and using
-  #     it signs off plans nobody read. Exception: graphify's own PR carries
-  #     `[skip ci]` in its title so GitHub never starts a run for its merge
-  #     commit.
+  #     it signs off plans nobody read.
   #   - The environment rule itself lives in repo settings. Each apply job's
   #     first step verifies via the API that a required-reviewer rule is live
   #     and fails the apply if not, so an unconfigured gate is a red run, not a

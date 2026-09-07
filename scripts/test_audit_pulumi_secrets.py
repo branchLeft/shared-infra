@@ -727,7 +727,7 @@ class ReferenceScanTests(unittest.TestCase):
         self.assertEqual(audit.scan_backend_references(self.tree), set())
 
     def test_skips_vendored_and_generated_trees(self):
-        for skipped in ("node_modules", "graphify-out", "vendor"):
+        for skipped in ("node_modules", "vendor", "graphify-out"):
             self._write(f"{skipped}/x.md", "gs://branchleft-pulumi-state\n")
         self.assertEqual(audit.scan_backend_references(self.tree), set())
 
@@ -778,7 +778,7 @@ class ProviderSelectionScanTests(unittest.TestCase):
         self.assertEqual(audit.scan_provider_selection_hits(self.tree), {"provision.sh"})
 
     def test_skips_vendored_and_generated_trees(self):
-        for skipped in ("node_modules", "graphify-out", "vendor"):
+        for skipped in ("node_modules", "vendor", "graphify-out"):
             self._write(f"{skipped}/w.yml", f'--secrets-provider="{GCPKMS_URL}"\n')
         self.assertEqual(audit.scan_provider_selection_hits(self.tree), set())
 
