@@ -345,6 +345,12 @@ describe('the rendered alert rules', () => {
     expect(rendered).toContain('expr: changes(up{expected_up="true"}[15m]) > 4');
   });
 
+  it('alerts when an expected_up="false" target answers anyway, the mirror gap HostOrServiceDown/ServiceFlapping leave -- see alert_rules_test.yml for the promtool proof it fires on both a crash loop and a clean start, and stays silent on a target that has never answered', () => {
+    expect(rendered).toContain('alert: ExpectedDownTargetAnswering');
+    expect(rendered).toContain('expr: max_over_time(up{expected_up="false"}[15m]) == 1');
+    expect(rendered).toContain('for: 5m');
+  });
+
   it('alerts on MySQL being unreadable, which no up-based rule can see -- see alert_rules_test.yml for the promtool proof that it fires while up stays 1', () => {
     expect(rendered).toContain('alert: MySQLUnreachable');
     expect(rendered).toContain('expr: mysql_up == 0');
