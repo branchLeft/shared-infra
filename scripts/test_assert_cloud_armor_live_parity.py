@@ -143,6 +143,108 @@ class DiffNormalizedPoliciesTests(unittest.TestCase):
         self.assertEqual(len(divergences), 1)
         self.assertEqual(divergences[0].field, "match.config.srcIpRanges[0]")
 
+    def test_reordered_src_ip_ranges_is_not_a_divergence(self):
+        # `match.config.srcIpRanges` is "does the source IP fall in ANY of
+        # these ranges" -- an unordered set of ranges, not a sequence, so a
+        # capture holding the same ranges in a different order than the
+        # baseline has not drifted. Whether GCP ever reorders it is
+        # unverified; this is defensive.
+        baseline = _clean_policy()
+        captured = copy.deepcopy(baseline)
+        baseline["rules"][0]["match"]["config"]["srcIpRanges"] = ["10.0.0.0/8", "192.168.0.0/16", "*"]
+        captured["rules"][0]["match"]["config"]["srcIpRanges"] = ["*", "10.0.0.0/8", "192.168.0.0/16"]
+
+        divergences = live_parity.diff_normalized_policies(baseline, captured)
+
+        self.assertEqual(divergences, [])
+
+    def test_a_longer_src_ip_ranges_capture_is_reported_as_a_divergence(self):
+        # The length check in _diff_paths is what stops a widened rule being
+        # laundered through the unordered compare: zip() truncates to the
+        # shorter list, so without it a range ADDED live is invisible. This
+        # is the shape that matters -- ["10.0.0.0/8"] widened to also allow
+        # 0.0.0.0/0 is the whole internet reaching the production edge.
+        baseline = _clean_policy()
+        captured = copy.deepcopy(baseline)
+        baseline["rules"][0]["match"]["config"]["srcIpRanges"] = ["10.0.0.0/8"]
+        captured["rules"][0]["match"]["config"]["srcIpRanges"] = ["10.0.0.0/8", "0.0.0.0/0"]
+
+        divergences = live_parity.diff_normalized_policies(baseline, captured)
+
+        self.assertEqual(len(divergences), 1)
+        self.assertEqual(divergences[0].field, "match.config.srcIpRanges[]")
+        self.assertEqual(divergences[0].baseline_value, "<1 items>")
+        self.assertEqual(divergences[0].captured_value, "<2 items>")
+
+    def test_a_shorter_src_ip_ranges_capture_is_reported_as_a_divergence(self):
+        # The mirror direction: a range REMOVED live truncates the same way.
+        # Asserted separately from the widening case because zip() hides the
+        # tail of whichever side is longer, so one direction passing proves
+        # nothing about the other.
+        baseline = _clean_policy()
+        captured = copy.deepcopy(baseline)
+        baseline["rules"][0]["match"]["config"]["srcIpRanges"] = ["10.0.0.0/8", "192.168.0.0/16"]
+        captured["rules"][0]["match"]["config"]["srcIpRanges"] = ["10.0.0.0/8"]
+
+        divergences = live_parity.diff_normalized_policies(baseline, captured)
+
+        self.assertEqual(len(divergences), 1)
+        self.assertEqual(divergences[0].field, "match.config.srcIpRanges[]")
+        self.assertEqual(divergences[0].baseline_value, "<2 items>")
+        self.assertEqual(divergences[0].captured_value, "<1 items>")
+
+    def test_a_genuine_src_ip_ranges_drift_is_still_caught_alongside_a_reorder(self):
+        # Order-insensitivity must never become a way to hide a real change
+        # riding along with a reorder: one range swapped for another, with
+        # the rest of the list also shuffled, must still be reported.
+        baseline = _clean_policy()
+        captured = copy.deepcopy(baseline)
+        baseline["rules"][0]["match"]["config"]["srcIpRanges"] = ["10.0.0.0/8", "192.168.0.0/16", "*"]
+        captured["rules"][0]["match"]["config"]["srcIpRanges"] = ["*", "203.0.113.0/24", "192.168.0.0/16"]
+
+        divergences = live_parity.diff_normalized_policies(baseline, captured)
+
+        # The multiset guard only skips the divergence check when the two
+        # lists hold exactly the same items -- here they don't, so this
+        # falls through to the original positional compare, which reports
+        # every index that differs (not necessarily just the one range that
+        # actually changed). That is still strictly safe: it names the
+        # right rule and the right field, and it never under-reports.
+        self.assertGreaterEqual(len(divergences), 1)
+        self.assertTrue(all("priority=1000" in d.label for d in divergences))
+        self.assertTrue(all(d.field.startswith("match.config.srcIpRanges") for d in divergences))
+
+    def test_a_list_field_outside_the_unordered_allow_list_still_compares_positionally(self):
+        # Everything not explicitly named as order-insensitive keeps the
+        # original, order-sensitive behaviour -- the safe default. This
+        # policy does not use `headerAction.requestHeadersToAdds` today, but
+        # header-insertion order can plausibly affect what is actually sent,
+        # and this script has no live access to confirm otherwise, so a
+        # reorder of it must still be flagged rather than silently accepted.
+        baseline = _clean_policy()
+        captured = copy.deepcopy(baseline)
+        baseline["rules"][0]["headerAction"] = {
+            "requestHeadersToAdds": [
+                {"headerName": "X-Foo", "headerValue": "1"},
+                {"headerName": "X-Bar", "headerValue": "2"},
+            ]
+        }
+        captured["rules"][0]["headerAction"] = {
+            "requestHeadersToAdds": [
+                {"headerName": "X-Bar", "headerValue": "2"},
+                {"headerName": "X-Foo", "headerValue": "1"},
+            ]
+        }
+
+        divergences = live_parity.diff_normalized_policies(baseline, captured)
+
+        # Each dict lands at a different index, so the positional compare
+        # recurses into both of its fields at both positions (4 diffs, not
+        # 2) -- more verbose than a hypothetical order-aware diff, but still
+        # correctly non-empty: the reorder is caught, not silently accepted.
+        self.assertEqual(len(divergences), 4)
+        self.assertTrue(all(d.field.startswith("headerAction.requestHeadersToAdds") for d in divergences))
+
     def test_a_field_present_only_in_the_live_capture_is_named_not_silently_ignored(self):
         # A compare that only walks the *baseline's* own keys would see zero
         # fields at this priority and report a clean diff -- exactly the
