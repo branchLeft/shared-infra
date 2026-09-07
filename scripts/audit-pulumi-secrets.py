@@ -120,6 +120,12 @@ SKIP_DIRS = {
     ".git",
     ".worktrees",
     "node_modules",
+    # A local, gitignored build of the optional workspace-wide code graph
+    # (`graph_build.py`) can still land here; its cached AST/semantic JSON
+    # embeds verbatim snippets of this repo's own source, so scanning it for
+    # backend/provider-selection references would false-positive on this
+    # script's own docstrings rather than a real committed reference.
+    "graphify-out",
     "dist",
     "vendor",
 }

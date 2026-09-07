@@ -578,7 +578,11 @@ Three rules for it:
   and merge on a Monday.
 - **Freeze merges to that repo for the duration**, including any
   bot-generated PR. A PR like that merging into that window is a push to
-  `main` like any other.
+  `main` like any other. Confirm none is queued to merge on its own before
+  you start: `gh pr list --repo branchLeft/shared-infra --state open --json
+number,author --jq '.[] | select(.author.login | endswith("[bot]"))'`
+  returning nothing (this repo's Dependabot config opens up to 5 PRs a week,
+  and any future bot integration would show up the same way).
 - **If a sweep is abandoned mid-stack** — you re-wrapped and cannot finish —
   do not leave it. Either restore the A.2 step 3 archive with `pulumi stack
 import` (which puts the checkpoint back on KMS, valid while the key lives)
