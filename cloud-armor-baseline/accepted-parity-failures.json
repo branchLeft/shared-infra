@@ -9,6 +9,13 @@
       "closedBy": "A deliberate change against the deployed policy, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
     },
     {
+      "priority": 1000,
+      "field": "match.expr.expression",
+      "observed": "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})",
+      "reason": "The captured sqli rule predates the preview-only-host carve-out edge.ts now declares, so its match expression is the pre-change one. See CLOUD-ARMOR-BASELINE.md, 'The capture and the code diverge on eight fields'.",
+      "closedBy": "Applying edge.ts's current expression to the deployed rule, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
+    },
+    {
       "priority": 1001,
       "field": "preview",
       "observed": true,
@@ -16,11 +23,25 @@
       "closedBy": "A deliberate change against the deployed policy, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
     },
     {
+      "priority": 1001,
+      "field": "match.expr.expression",
+      "observed": "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': 1})",
+      "reason": "The captured xss rule predates the preview-only-host carve-out edge.ts now declares, so its match expression is the pre-change one. See CLOUD-ARMOR-BASELINE.md, 'The capture and the code diverge on eight fields'.",
+      "closedBy": "Applying edge.ts's current expression to the deployed rule, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
+    },
+    {
       "priority": 1002,
       "field": "preview",
       "observed": true,
       "reason": "The captured rce rule carries preview: it records a match rather than acting on it, while edge.ts declares the rule enforcing. See CLOUD-ARMOR-BASELINE.md, 'The capture and the code diverge on eight fields'.",
       "closedBy": "A deliberate change against the deployed policy, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
+    },
+    {
+      "priority": 1002,
+      "field": "match.expr.expression",
+      "observed": "evaluatePreconfiguredWaf('rce-v33-stable', {'sensitivity': 1})",
+      "reason": "The captured rce rule predates the preview-only-host carve-out edge.ts now declares, so its match expression is the pre-change one. See CLOUD-ARMOR-BASELINE.md, 'The capture and the code diverge on eight fields'.",
+      "closedBy": "Applying edge.ts's current expression to the deployed rule, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
     },
     {
       "priority": 1003,
@@ -35,27 +56,6 @@
       "observed": true,
       "reason": "The captured the per-IP rate-limit rule carries preview: it records a match rather than acting on it, while edge.ts declares the rule enforcing. Its threshold, key and actions all match, so preview is its only divergence. See CLOUD-ARMOR-BASELINE.md, 'The capture and the code diverge on eight fields'.",
       "closedBy": "A deliberate change against the deployed policy, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first."
-    },
-    {
-      "priority": 1100,
-      "field": "undeclared-rule",
-      "observed": "deny(403)",
-      "reason": "The captured policy carries the preview-mode sqli-v33-stable rule for the preview-only-host carve-out, scoped to blog.branchleft.co.uk. edge.ts no longer declares it: that tenant was re-provisioned on Hetzner on 2026-09-10 and its sites.ts entry lost its cloudRunService, and edge.ts builds previewOnlyHosts only from sites this edge actually serves. blog was the last such host, so the whole 1100+ family is now undeclared while remaining live. Safe to hold: the rule is preview: true, so it records a match rather than acting on one, and its expression matches only that one Host -- neither condition lets it override another rule's enforcement, which is the risk the undeclared-rule check exists to raise.",
-      "closedBy": "Applying edge.ts's current shape to the deployed policy, which removes this rule, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first, which is now the likelier order."
-    },
-    {
-      "priority": 1101,
-      "field": "undeclared-rule",
-      "observed": "deny(403)",
-      "reason": "The captured policy carries the preview-mode xss-v33-stable rule for the preview-only-host carve-out, scoped to blog.branchleft.co.uk. edge.ts no longer declares it: that tenant was re-provisioned on Hetzner on 2026-09-10 and its sites.ts entry lost its cloudRunService, and edge.ts builds previewOnlyHosts only from sites this edge actually serves. blog was the last such host, so the whole 1100+ family is now undeclared while remaining live. Safe to hold: the rule is preview: true, so it records a match rather than acting on one, and its expression matches only that one Host -- neither condition lets it override another rule's enforcement, which is the risk the undeclared-rule check exists to raise.",
-      "closedBy": "Applying edge.ts's current shape to the deployed policy, which removes this rule, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first, which is now the likelier order."
-    },
-    {
-      "priority": 1102,
-      "field": "undeclared-rule",
-      "observed": "deny(403)",
-      "reason": "The captured policy carries the preview-mode rce-v33-stable rule for the preview-only-host carve-out, scoped to blog.branchleft.co.uk. edge.ts no longer declares it: that tenant was re-provisioned on Hetzner on 2026-09-10 and its sites.ts entry lost its cloudRunService, and edge.ts builds previewOnlyHosts only from sites this edge actually serves. blog was the last such host, so the whole 1100+ family is now undeclared while remaining live. Safe to hold: the rule is preview: true, so it records a match rather than acting on one, and its expression matches only that one Host -- neither condition lets it override another rule's enforcement, which is the risk the undeclared-rule check exists to raise.",
-      "closedBy": "Applying edge.ts's current shape to the deployed policy, which removes this rule, then re-running the capture procedure in CLOUD-ARMOR-BASELINE.md and deleting this entry in the same commit as the fresh capture. Superseded outright if the GCP edge is retired first, which is now the likelier order."
     }
   ]
 }

@@ -86,10 +86,22 @@ export const sites: EdgeSite[] = [
   {
     name: 'blog',
     hostnames: ['blog.branchleft.co.uk'],
-    // No `cloudRunService`: the GCP tenant this once named was destroyed on
-    // 2026-09-10 and the service no longer exists. Re-provisioned on Hetzner
-    // under the same slug, so this entry moves rather than being replaced --
-    // the hostname is unchanged and its history belongs with it.
+    // Still GCP-registered, deliberately, even though the Cloud Run service
+    // this names was destroyed on 2026-09-10 and the tenant re-provisioned on
+    // Hetzner. Dropping this field is NOT how a site is retired from the GCP
+    // edge: it stops edge.ts declaring this site's NEG, backend service, DNS
+    // authorization, certificate and certificate-map entry, all five of which
+    // are in PROTECTED_TYPES, so the delete guard refuses the plan and the
+    // apply never runs. This field's own note in siteTypes.ts says so, and a
+    // change that ignored it reached main on 2026-09-10 and left the edge
+    // deploy red until this restored it. Retiring the site is its own
+    // procedure, with the guard consulted deliberately, and belongs to the
+    // GCP wind-down rather than to this cutover.
+    //
+    // Carrying both fields is the transitional state: GCP keeps declaring what
+    // it already has, Hetzner serves the traffic, and DNS decides which is
+    // reached.
+    cloudRunService: 'ghost-tenant-blog',
     //
     // Both values below belong to the tenant's own stack and neither is chosen
     // here. They are read differently, which matters when copying them:
