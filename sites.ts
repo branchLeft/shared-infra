@@ -86,7 +86,26 @@ export const sites: EdgeSite[] = [
   {
     name: 'blog',
     hostnames: ['blog.branchleft.co.uk'],
-    cloudRunService: 'ghost-tenant-blog',
+    // No `cloudRunService`: the GCP tenant this once named was destroyed on
+    // 2026-09-10 and the service no longer exists. Re-provisioned on Hetzner
+    // under the same slug, so this entry moves rather than being replaced --
+    // the hostname is unchanged and its history belongs with it.
+    //
+    // Both values below belong to the tenant's own stack and neither is chosen
+    // here. They are read differently, which matters when copying them:
+    //
+    //   port    -- `blog-infra:hostPort` in that repo's Pulumi.<slug>.yaml.
+    //              It is NOT a stack output; `pulumi stack output hostPort`
+    //              returns nothing. Read the config.
+    //   ceiling -- `pulumi stack output edgeRequestBodyMaxSize`, derived in
+    //              the tenant component as half the container's tmpfs ceiling.
+    //
+    // The copy into this file is an unchecked transcription, so the two can
+    // drift: if this tenant ever sets `uploadCeilingMib`, the output moves and
+    // this line does not, and the edge then admits more than the container can
+    // hold. Nothing compares them -- re-read both on any change to either.
+    privateUpstream: { host: 'app1', port: 8101 },
+    requestBodyMaxSize: '64MiB',
     // Ghost-backed: its admin API carries author-written HTML and code, which
     // trips the injection signatures. Every Ghost tenant added here needs this
     // until there is enough admin-API traffic to prove otherwise.
