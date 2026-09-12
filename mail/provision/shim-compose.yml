@@ -43,20 +43,22 @@ services:
       # distroless-style Node image has no guarantee of shipping either,
       # but `node` itself is guaranteed to be there.
       #
-      # Addressed by IP, not `localhost`: a dual-stack-resolving name makes
-      # Node's client try one address family before falling back to the
-      # other, which can cost several seconds if the first attempt has to
-      # be timed out rather than refused outright -- comfortably outside
-      # this healthcheck's own timeout below even though the server itself
-      # answers in well under a second. Naming 127.0.0.1 removes the
-      # resolution step, and with it the race.
+      # Addressed by IP, not `localhost`, to remove any name-resolution step.
+      #
+      # `r.resume()` is load-bearing, not cosmetic: an http.IncomingMessage
+      # whose body is never read leaves its socket paused, and Node holds
+      # the process open waiting on that socket rather than exiting the
+      # instant the status code is known. Measured locally against a
+      # server returning this endpoint's exact JSON shape: 6.07s without
+      # this line, 0.04s with it -- the gap this healthcheck's timeout
+      # was tripping on.
       test:
         - CMD
         - node
         - -e
         - >-
           require('node:http').get('http://127.0.0.1:8080/healthz',
-          (r) => { process.exitCode = r.statusCode === 200 ? 0 : 1; })
+          (r) => { process.exitCode = r.statusCode === 200 ? 0 : 1; r.resume(); })
           .on('error', () => { process.exitCode = 1; });
       interval: 10s
       timeout: 3s
