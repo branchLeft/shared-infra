@@ -19,6 +19,17 @@ name previously produced is gone. Both are host-observable facts this suite
 has no access to; the delivery mechanism for this file is a human rsyncing it
 to the host, and the healthcheck's own live status after that is what proves
 it.
+
+`HealthcheckResponseDrainTests` and `HealthcheckProbeTimingTests` below cover
+a second, unrelated stall in the same probe: the callback reads
+`r.statusCode` but, absent a fix, never drains or destroys `r`. An unconsumed
+`http.IncomingMessage` leaves its socket paused, so Node's event loop cannot
+empty and the process survives until the *server's* own `keepAliveTimeout`
+(5000ms by default) closes the connection -- comfortably past this
+healthcheck's 3s budget even though the server answers instantly. The static
+test below (`HealthcheckResponseDrainTests`) is what would have caught that
+defect; the timing test is a live differential proof for anyone verifying
+the fix rather than trusting the pattern match.
 """
 
 from __future__ import annotations
@@ -26,6 +37,10 @@ from __future__ import annotations
 import ipaddress
 import pathlib
 import re
+import selectors
+import shutil
+import subprocess
+import time
 import unittest
 from urllib.parse import urlsplit
 
@@ -37,6 +52,25 @@ SHIM_COMPOSE = PROVISION_DIR / "shim-compose.yml"
 # always quotes the literal with `'`.
 HTTP_URL = re.compile(r"https?://[^\s'\"]+")
 
+# The mailgun-shim healthcheck's `node -e` body, as YAML's `>-` folds it: each
+# line of the block scalar joined by a single space. The continuation lines'
+# indentation is captured relative to the `- >-` marker's own (backreference
+# \1), not hardcoded to today's exact column, so a whitespace-only reindent
+# of the surrounding YAML doesn't make this stop matching; the `interval:`
+# sibling key that follows is excluded because it sits at the marker's own
+# indentation, not deeper than it.
+NODE_DASH_E_BODY = re.compile(r"^([ \t]*)- >-\n((?:^\1[ \t]+\S.*\n)+)", re.MULTILINE)
+
+# `(r) => { ... r.statusCode ... r.resume()/.destroy() ... }` -- the response
+# callback reads the status and also drains or tears down the same object,
+# within one arrow-function body. `(?:[^{}]|\{[^{}]*\})*` allows one level of
+# nested `{...}` (e.g. an object literal passed to a logging call) between
+# the two, rather than stopping dead at the first `}` a naive `[^}]*` would.
+_BODY_SPAN = r"(?:[^{}]|\{[^{}]*\})*"
+DRAINS_RESPONSE = re.compile(
+    r"\((\w+)\)\s*=>\s*\{" + _BODY_SPAN + r"\b\1\.statusCode\b" + _BODY_SPAN + r"\b\1\.(?:resume|destroy)\(\)"
+)
+
 
 def probed_urls(compose_text: str) -> list[str]:
     """Every http(s):// URL literal committed in the compose file, in file
@@ -46,6 +80,17 @@ def probed_urls(compose_text: str) -> list[str]:
     that too.
     """
     return HTTP_URL.findall(compose_text)
+
+
+def shim_healthcheck_script(compose_text: str) -> str:
+    """The mailgun-shim healthcheck's `node -e` script, folded to a single
+    line the way YAML's `>-` block scalar folds it, so it can be handed to
+    `node -e` standalone -- the same text Docker itself executes.
+    """
+    match = NODE_DASH_E_BODY.search(compose_text)
+    if match is None:
+        raise AssertionError("no `- >-` node script found in shim-compose.yml; the extractor regex has drifted")
+    return " ".join(line.strip() for line in match.group(2).splitlines())
 
 
 class HealthcheckProbeAddressTests(unittest.TestCase):
@@ -84,6 +129,154 @@ class HealthcheckProbeAddressTests(unittest.TestCase):
         self.assertEqual(len(shim_urls), 1, f"expected exactly one probe of port 8080, found {shim_urls}")
         host = urlsplit(shim_urls[0]).hostname
         self.assertIsInstance(ipaddress.ip_address(host), ipaddress.IPv4Address)
+
+
+class HealthcheckResponseDrainTests(unittest.TestCase):
+    def test_the_probe_callback_drains_or_destroys_the_response(self):
+        """A callback that reads `r.statusCode` and sets `process.exitCode`
+        from it, but never calls `r.resume()` or `r.destroy()`, leaves a
+        readable stream unread and therefore paused, so the process cannot
+        exit until the *server* closes the idle connection -- not something
+        this healthcheck's own 3s `timeout:` has any say over. This fails
+        against a script shaped that way (no `.resume()`/`.destroy()` in the
+        callback body).
+        """
+        script = shim_healthcheck_script(SHIM_COMPOSE.read_text(encoding="utf-8"))
+        self.assertRegex(
+            script,
+            DRAINS_RESPONSE,
+            "the response callback reads statusCode but never calls "
+            ".resume()/.destroy() on the same object -- the socket stays "
+            "paused and Node waits out the server's keepAliveTimeout "
+            "instead of exiting once the status is known",
+        )
+
+
+@unittest.skipUnless(shutil.which("node"), "node not on PATH")
+class HealthcheckProbeTimingTests(unittest.TestCase):
+    """Runs the exact committed `node -e` script against a real local HTTP
+    server, the same way Docker's healthcheck runs it against the shim. The
+    server's `keepAliveTimeout` is set to 3s rather than the production
+    default of 5s: still comfortably above ordinary `node -e` process-startup
+    noise on a loaded CI runner (a bare `node -e` measured at 151ms, 196ms
+    end-to-end once drained, on a quiet machine), so a regression here fails
+    clearly rather than racing the pass threshold, while still failing well
+    inside the 10-minute CI job budget rather than waiting out the full 5s
+    production default.
+
+    A Node server, not Python's stdlib `http.server`, is the throwaway
+    fixture here even though it adds a second subprocess: the differential
+    this test relies on is specifically Node's `keepAliveTimeout` behaviour
+    on the *server* side, and Python's stdlib server has no equivalent knob
+    to reproduce it with. The client script under test already requires
+    `node` (skip-guarded above), so this adds no new environment dependency.
+
+    Skipped, not failed, where `node` is unavailable: this environment is not
+    guaranteed to have it, and `HealthcheckResponseDrainTests` above is the
+    assertion that must never be skippable.
+    """
+
+    # Must match the port the committed probe itself targets
+    # (127.0.0.1:8080) -- this is the shim's own port, reserved elsewhere in
+    # shim-compose.yml specifically to avoid colliding with Stalwart's admin
+    # API on the same port, so a real collision here would mean something
+    # else on this machine is already bound to it.
+    PORT = 8080
+    KEEP_ALIVE_TIMEOUT_MS = 3000
+    READY_TIMEOUT_S = 5
+
+    SERVER_SCRIPT = (
+        "const http = require('node:http');"
+        "const server = http.createServer((req, res) => {"
+        "res.writeHead(200, {'Content-Type': 'application/json'});"
+        "res.end(JSON.stringify({status: 'ok'}));"
+        "});"
+        f"server.keepAliveTimeout = {KEEP_ALIVE_TIMEOUT_MS};"
+        "server.on('error', (err) => { process.stdout.write('server-error: ' + err.message + '\\n'); process.exit(1); });"
+        f"server.listen({PORT}, '127.0.0.1', () => {{ process.stdout.write('ready\\n'); }});"
+    )
+
+    def setUp(self):
+        self.server = subprocess.Popen(
+            [shutil.which("node"), "-e", self.SERVER_SCRIPT],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        self.addCleanup(self._stop_server)
+        ready = self._read_line_with_timeout(self.server.stdout, self.READY_TIMEOUT_S)
+        if ready is None:
+            self.fail(
+                f"local test server printed nothing within {self.READY_TIMEOUT_S}s -- "
+                "it may be hung rather than crashed, since a bind failure "
+                "prints 'server-error: ...' immediately"
+            )
+        if ready.startswith("server-error:"):
+            self.fail(
+                f"local test server failed to start: {ready.strip()} -- if this is "
+                f"EADDRINUSE, something else on this machine already holds "
+                f"127.0.0.1:{self.PORT}, which is not a regression in the "
+                "probe itself"
+            )
+        if "ready" not in ready:
+            self.fail(f"local test server did not report ready; got {ready!r}")
+
+    @staticmethod
+    def _read_line_with_timeout(stream, timeout_s: float) -> str | None:
+        """`stream.readline()` blocks forever if the subprocess neither
+        writes a line nor exits, which would hang the whole CI job rather
+        than fail it. `select` gives this a hard bound.
+        """
+        selector = selectors.DefaultSelector()
+        selector.register(stream, selectors.EVENT_READ)
+        try:
+            if not selector.select(timeout=timeout_s):
+                return None
+            return stream.readline()
+        finally:
+            selector.close()
+
+    def _stop_server(self):
+        self.server.kill()
+        self.server.wait(timeout=5)
+        self.server.stdout.close()
+
+    def test_probe_completes_well_under_its_own_healthcheck_timeout(self):
+        script = shim_healthcheck_script(SHIM_COMPOSE.read_text(encoding="utf-8"))
+        start = time.monotonic()
+        try:
+            result = subprocess.run(
+                [shutil.which("node"), "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail(
+                "probe did not exit within 10s against a 200 response -- an "
+                "undrained response would stall for this test server's "
+                f"{self.KEEP_ALIVE_TIMEOUT_MS}ms keepAliveTimeout at "
+                "minimum, so 10s is already a wide margin, not a tight one"
+            )
+        elapsed = time.monotonic() - start
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"probe did not exit 0 against a 200 response (stderr: {result.stderr!r})",
+        )
+        # 2s sits well clear of both sides of the differential this test
+        # relies on: comfortably above ordinary process-startup noise even
+        # under CI load, comfortably below the 3s an undrained response
+        # would stall for against this test server. A regression that
+        # removes `.resume()`/`.destroy()` fails this in several seconds.
+        self.assertLess(
+            elapsed,
+            2.0,
+            f"probe took {elapsed:.3f}s against a 3s production healthcheck "
+            "timeout -- an unconsumed response socket stalling until the "
+            "server's own keepAliveTimeout closes it would look exactly "
+            "like this",
+        )
 
 
 if __name__ == "__main__":
