@@ -1009,6 +1009,20 @@ with the wrong secret.
 covered. Four separate PASSes are the precondition; three PASSes and one run
 nobody kept the result of is not.
 
+**This is the one-time, hand-run wind-down precondition — a different,
+narrower, recurring check now also exists.**
+`.github/workflows/passphrase-drill.yml` runs this same script quarterly
+against a _fresh_ export of each **live** Hetzner-native stack's own state
+(`mail`, `hetzner-network`, `hetzner-estate` — not the six archived,
+pre-destruction exports this section covers), using the passphrase already
+sitting in that stack's own Actions secret rather than a value retrieved by
+hand from escrow. It answers "does the passphrase GitHub is holding today
+still open this stack's current state", on a cadence independent of whether
+a merge happens to touch that stack — not "does the escrowed copy in
+ProtonPass still match", which stays a hand-run check
+(branchLeft/workspace#180). Its dated results land as comments on
+branchLeft/shared-infra#203.
+
 ---
 
 ## Lab rehearsal

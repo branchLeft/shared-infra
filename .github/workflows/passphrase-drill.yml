@@ -1,0 +1,329 @@
+name: passphrase-drill
+
+# Nothing previously proved, on a recurring basis, that this repo's three
+# live Hetzner-native stack passphrases (`mail`, `hetzner-network`,
+# `hetzner-estate`) still open anything -- only that a merge touching a
+# stack's own inputs happened to exercise it, which leaves a dormant stack's
+# escrow unchecked for however long it stays dormant.
+#
+# Each drill job fetches a *fresh* `pulumi stack export` of its own stack --
+# read-only, no `--show-secrets`, and no decryption happens at that step --
+# then hands the export to `scripts/verify-archive-passphrase.py`, which
+# proves the same passphrase this job already holds as
+# `${{ secrets.* }}` actually decrypts it, against a throwaway backend that
+# never touches the live one a second time. That script's own docstring and
+# `hetzner/RUNBOOK-existing-stack-migration.md` Part C cover what this does
+# and does not prove; this workflow only adds the recurring cadence and the
+# dated record neither of those had.
+#
+# Quarterly, not on every merge: a merge-gated check already covers a stack
+# every time its own inputs change (see `ci.yml`'s `mail-plan` /
+# `hetzner-network-plan` / `hetzner-estate-plan`); this exists specifically
+# for the quarter in which nothing does.
+on:
+  schedule:
+    - cron: '0 6 1 1,4,7,10 *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  # The `record` job posts the dated result to a pinned issue in this same
+  # repo. Nothing else here writes anything, and nothing here ever needs
+  # `contents: write` -- the drill jobs only read a live backend.
+  issues: write
+
+# Every job below reuses `ci.yml`'s own env/secret names and its "fail
+# closed on every secret before it is used" pattern verbatim, so a secret
+# rename in one place cannot desync the two workflows without both going red.
+jobs:
+  drill-mail:
+    name: Drill (mail)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: mail
+    # No `pulumi login` step: the backend is pinned in `mail/Pulumi.yaml`
+    # (see `shared-infra/CLAUDE.md`), and no Node/npm setup either --
+    # `pulumi stack export` is a backend-only operation that never resolves
+    # or runs the project's language plugin, unlike `pulumi preview`.
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_MAIL }}
+      PULUMI_SALT_MAIL: ${{ secrets.PULUMI_SALT_MAIL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+    outputs:
+      outcome: ${{ steps.verify.outputs.outcome }}
+      exit_code: ${{ steps.verify.outputs.exit_code }}
+      detail: ${{ steps.verify.outputs.detail }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Verify the drill's own secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_MAIL is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          case "$PULUMI_SALT_MAIL" in
+            v1:*) ;;
+            *) echo "::error::PULUMI_SALT_MAIL is empty or does not start with 'v1:'" ; fail=1;;
+          esac
+          exit "$fail"
+
+      - name: Restore the stack's encryption salt
+        run: |
+          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_MAIL" >> Pulumi.production.yaml
+
+      - name: Export the live stack, read-only
+        run: pulumi stack export --stack production --file "$RUNNER_TEMP/mail-export.json"
+
+      - name: Verify the escrowed passphrase opens this export
+        id: verify
+        run: |
+          install -m 600 /dev/null "$RUNNER_TEMP/mail-passphrase"
+          printf '%s' "$PULUMI_CONFIG_PASSPHRASE" > "$RUNNER_TEMP/mail-passphrase"
+          rc=0
+          python3 ../scripts/verify-archive-passphrase.py \
+            --passphrase-file "$RUNNER_TEMP/mail-passphrase" \
+            --json "$RUNNER_TEMP/mail-export.json" > "$RUNNER_TEMP/mail-result.json" || rc=$?
+          python3 - "$RUNNER_TEMP/mail-result.json" "$rc" <<'PY'
+          import json, sys
+          result = json.load(open(sys.argv[1]))[0]
+          with open(__import__("os").environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"outcome={result['outcome']}\n")
+              fh.write(f"exit_code={sys.argv[2]}\n")
+              fh.write(f"detail={result['detail']}\n")
+          PY
+
+      - name: Clean up the export and passphrase file
+        if: always()
+        run: |
+          shred -u "$RUNNER_TEMP/mail-export.json" "$RUNNER_TEMP/mail-passphrase" 2>/dev/null || \
+            rm -f "$RUNNER_TEMP/mail-export.json" "$RUNNER_TEMP/mail-passphrase"
+
+  drill-hetzner-network:
+    name: Drill (hetzner-network)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hetzner
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_NETWORK }}
+      PULUMI_SALT_HETZNER_NETWORK: ${{ secrets.PULUMI_SALT_HETZNER_NETWORK }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+    outputs:
+      outcome: ${{ steps.verify.outputs.outcome }}
+      exit_code: ${{ steps.verify.outputs.exit_code }}
+      detail: ${{ steps.verify.outputs.detail }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Verify the drill's own secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_NETWORK is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          case "$PULUMI_SALT_HETZNER_NETWORK" in
+            v1:*) ;;
+            *) echo "::error::PULUMI_SALT_HETZNER_NETWORK is empty or does not start with 'v1:'" ; fail=1;;
+          esac
+          exit "$fail"
+
+      - name: Restore the stack's encryption salt
+        run: |
+          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_HETZNER_NETWORK" >> Pulumi.production.yaml
+
+      - name: Export the live stack, read-only
+        run: pulumi stack export --stack production --file "$RUNNER_TEMP/hetzner-network-export.json"
+
+      - name: Verify the escrowed passphrase opens this export
+        id: verify
+        run: |
+          install -m 600 /dev/null "$RUNNER_TEMP/hetzner-network-passphrase"
+          printf '%s' "$PULUMI_CONFIG_PASSPHRASE" > "$RUNNER_TEMP/hetzner-network-passphrase"
+          rc=0
+          python3 ../scripts/verify-archive-passphrase.py \
+            --passphrase-file "$RUNNER_TEMP/hetzner-network-passphrase" \
+            --json "$RUNNER_TEMP/hetzner-network-export.json" > "$RUNNER_TEMP/hetzner-network-result.json" || rc=$?
+          python3 - "$RUNNER_TEMP/hetzner-network-result.json" "$rc" <<'PY'
+          import json, sys
+          result = json.load(open(sys.argv[1]))[0]
+          with open(__import__("os").environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"outcome={result['outcome']}\n")
+              fh.write(f"exit_code={sys.argv[2]}\n")
+              fh.write(f"detail={result['detail']}\n")
+          PY
+
+      - name: Clean up the export and passphrase file
+        if: always()
+        run: |
+          shred -u "$RUNNER_TEMP/hetzner-network-export.json" "$RUNNER_TEMP/hetzner-network-passphrase" 2>/dev/null || \
+            rm -f "$RUNNER_TEMP/hetzner-network-export.json" "$RUNNER_TEMP/hetzner-network-passphrase"
+
+  drill-hetzner-estate:
+    name: Drill (hetzner-estate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hetzner/estate
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_ESTATE }}
+      PULUMI_SALT_HETZNER_ESTATE: ${{ secrets.PULUMI_SALT_HETZNER_ESTATE }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+    outputs:
+      outcome: ${{ steps.verify.outputs.outcome }}
+      exit_code: ${{ steps.verify.outputs.exit_code }}
+      detail: ${{ steps.verify.outputs.detail }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Verify the drill's own secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_ESTATE is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          case "$PULUMI_SALT_HETZNER_ESTATE" in
+            v1:*) ;;
+            *) echo "::error::PULUMI_SALT_HETZNER_ESTATE is empty or does not start with 'v1:'" ; fail=1;;
+          esac
+          exit "$fail"
+
+      - name: Restore the stack's encryption salt
+        run: |
+          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_HETZNER_ESTATE" >> Pulumi.production.yaml
+
+      - name: Export the live stack, read-only
+        run: pulumi stack export --stack production --file "$RUNNER_TEMP/hetzner-estate-export.json"
+
+      - name: Verify the escrowed passphrase opens this export
+        id: verify
+        run: |
+          install -m 600 /dev/null "$RUNNER_TEMP/hetzner-estate-passphrase"
+          printf '%s' "$PULUMI_CONFIG_PASSPHRASE" > "$RUNNER_TEMP/hetzner-estate-passphrase"
+          rc=0
+          python3 ../../scripts/verify-archive-passphrase.py \
+            --passphrase-file "$RUNNER_TEMP/hetzner-estate-passphrase" \
+            --json "$RUNNER_TEMP/hetzner-estate-export.json" > "$RUNNER_TEMP/hetzner-estate-result.json" || rc=$?
+          python3 - "$RUNNER_TEMP/hetzner-estate-result.json" "$rc" <<'PY'
+          import json, sys
+          result = json.load(open(sys.argv[1]))[0]
+          with open(__import__("os").environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"outcome={result['outcome']}\n")
+              fh.write(f"exit_code={sys.argv[2]}\n")
+              fh.write(f"detail={result['detail']}\n")
+          PY
+
+      - name: Clean up the export and passphrase file
+        if: always()
+        run: |
+          shred -u "$RUNNER_TEMP/hetzner-estate-export.json" "$RUNNER_TEMP/hetzner-estate-passphrase" 2>/dev/null || \
+            rm -f "$RUNNER_TEMP/hetzner-estate-export.json" "$RUNNER_TEMP/hetzner-estate-passphrase"
+
+  record:
+    name: Record the dated result
+    needs: [drill-mail, drill-hetzner-network, drill-hetzner-estate]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The target is a standing evidence log, not a piece of tracked work: it
+    # stays open indefinitely, carries no `Closes`/`Refs` trailer, and is not
+    # on any project board.
+    env:
+      EVIDENCE_ISSUE: 203
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # An unset output (job failed before verifying, was skipped, or was
+      # cancelled) renders as `INCONCLUSIVE` rather than being silently
+      # absent. `needs.*.outputs.*` arrives via `env:`, not interpolated
+      # into the script body, so a value can never be spliced in as code.
+      - name: Assemble this run's results
+        env:
+          MAIL_OUTCOME: ${{ needs.drill-mail.outputs.outcome }}
+          MAIL_EXIT_CODE: ${{ needs.drill-mail.outputs.exit_code }}
+          MAIL_DETAIL: ${{ needs.drill-mail.outputs.detail }}
+          NETWORK_OUTCOME: ${{ needs.drill-hetzner-network.outputs.outcome }}
+          NETWORK_EXIT_CODE: ${{ needs.drill-hetzner-network.outputs.exit_code }}
+          NETWORK_DETAIL: ${{ needs.drill-hetzner-network.outputs.detail }}
+          ESTATE_OUTCOME: ${{ needs.drill-hetzner-estate.outputs.outcome }}
+          ESTATE_EXIT_CODE: ${{ needs.drill-hetzner-estate.outputs.exit_code }}
+          ESTATE_DETAIL: ${{ needs.drill-hetzner-estate.outputs.detail }}
+        run: |
+          python3 - <<'PY' > "$RUNNER_TEMP/results.json"
+          import json
+          import os
+
+          def leg(name, outcome_var, exit_code_var, detail_var):
+              outcome = os.environ.get(outcome_var, "")
+              if not outcome:
+                  return {"stack": name, "outcome": "INCONCLUSIVE", "exit_code": 4,
+                           "detail": "the drill job for this stack did not reach a verdict "
+                                     "(failed, was skipped, or was cancelled before verifying)"}
+              return {
+                  "stack": name,
+                  "outcome": outcome,
+                  "exit_code": int(os.environ[exit_code_var]),
+                  "detail": os.environ.get(detail_var, ""),
+              }
+
+          results = [
+              leg("mail", "MAIL_OUTCOME", "MAIL_EXIT_CODE", "MAIL_DETAIL"),
+              leg("hetzner-network", "NETWORK_OUTCOME", "NETWORK_EXIT_CODE", "NETWORK_DETAIL"),
+              leg("hetzner-estate", "ESTATE_OUTCOME", "ESTATE_EXIT_CODE", "ESTATE_DETAIL"),
+          ]
+          json.dump(results, open("/dev/stdout", "w"))
+          PY
+
+      - name: Render the dated comment
+        id: render
+        run: |
+          rc=0
+          python3 scripts/render-drill-comment.py \
+            --date "$(date -u +%F)" \
+            --repo-label branchLeft/shared-infra \
+            < "$RUNNER_TEMP/results.json" > "$RUNNER_TEMP/comment.md" || rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post the dated result
+        run: gh issue comment "$EVIDENCE_ISSUE" --repo branchLeft/shared-infra --body-file "$RUNNER_TEMP/comment.md"
+
+      - name: Fail the run if any stack did not PASS
+        run: |
+          rc=${{ steps.render.outputs.rc }}
+          if [ "$rc" != "0" ]; then
+            echo "::error::at least one stack's passphrase drill did not PASS this quarter -- see the comment just posted on branchLeft/shared-infra#203"
+            exit "$rc"
+          fi
