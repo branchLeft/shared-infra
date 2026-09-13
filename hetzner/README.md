@@ -386,6 +386,17 @@ recovery that did not happen, or an outage that a failed exit code alone
 does not prove: with no `ExecStop` at all, `docker ps` is what actually
 tells the two states apart, whether or not that restart succeeded.
 
+A restart with no previous pin to roll back to -- a first deploy, always --
+removes the pin file instead of leaving one that failed, because there is
+nothing to fall back to and leaving it would be ambiguous. `AssertPathExists=`
+on the unit's own `[Unit]` section is what makes that recoverable rather than
+terminal: without it, the mandatory `EnvironmentFile=` failing on every
+subsequent start reports as systemd's generic "Failed to load environment
+files", indistinguishable from host resource exhaustion. With it, the unit
+fails outright and names the missing file. Either way the recovery is the
+same -- re-run the deploy job, which rewrites the pin and restarts the unit --
+spelled out in `branchLeft/ghost-platform`'s `RUNBOOK-tenant-onboarding.md`.
+
 This is the replacement for the website's `imageTag` mechanism, not a port of
 it. The stack's Pulumi config carries no image reference at all, so there is
 no committed placeholder for a local apply to revert production to.
