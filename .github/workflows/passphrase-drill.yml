@@ -7,8 +7,8 @@ name: passphrase-drill
 # escrow unchecked for however long it stays dormant.
 #
 # Each drill job fetches a *fresh* `pulumi stack export` of its own stack --
-# read-only, no `--show-secrets`, and no decryption happens at that step --
-# then hands the export to `scripts/verify-archive-passphrase.py`, which
+# read-only, no secret-revealing export flag, and no decryption happens at
+# that step -- then hands the export to `scripts/verify-archive-passphrase.py`, which
 # proves the same passphrase this job already holds as
 # `${{ secrets.* }}` actually decrypts it, against a throwaway backend that
 # never touches the live one a second time. That script's own docstring and
