@@ -4,9 +4,16 @@
 # file to write and no chance of two stacks' units drifting apart.
 [Unit]
 Description=branchLeft Compose stack %i
+Documentation=https://github.com/branchLeft/ghost-platform/blob/main/RUNBOOK-tenant-onboarding.md#if-the-first-deploy-fails
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
+
+# Assert (not Condition*=) so a missing pin is named exactly rather than
+# silently skipped. Per systemd.unit(5) a failed assert leaves the unit
+# inactive/dead, not failed -- check `systemctl status`, not `--failed`.
+# Full rationale and recovery: hetzner/README.md's "Deploys" section.
+AssertPathExists=/etc/branchleft/%i.image.env
 
 [Service]
 Type=oneshot
