@@ -399,14 +399,19 @@ def service_lines(drop_in: pathlib.Path) -> list[str]:
     Order is preserved because systemd applies directives in it: a reset after a
     re-added file clears it again.
     """
+    return section_lines(drop_in, "Service")
+
+
+def section_lines(unit_file: pathlib.Path, section: str) -> list[str]:
+    """Stripped, non-comment lines of the named `[section]`, in file order."""
     lines = []
-    in_service = False
-    for raw in drop_in.read_text(encoding="utf-8").splitlines():
+    in_section = False
+    for raw in unit_file.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if line.startswith("[") and line.endswith("]"):
-            in_service = line == "[Service]"
+            in_section = line == f"[{section}]"
             continue
-        if in_service and line and not line.startswith("#"):
+        if in_section and line and not line.startswith("#"):
             lines.append(line)
     return lines
 
@@ -708,10 +713,26 @@ class UnitTemplateAssumptionTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.lines = service_lines(HETZNER / "provision" / "branchleft-compose@.service")
+        self.unit_file = HETZNER / "provision" / "branchleft-compose@.service"
+        self.lines = service_lines(self.unit_file)
+        self.unit_section_lines = section_lines(self.unit_file, "Unit")
 
     def test_the_image_pin_is_still_mandatory(self):
         self.assertIn("EnvironmentFile=/etc/branchleft/%i.image.env", self.lines)
+
+    def test_a_missing_pin_is_asserted_before_the_mandatory_environment_file_load(self):
+        """Without this, a missing pin only ever surfaces as systemd's
+        generic "Failed to load environment files" -- naming neither the
+        file nor the cause. The assert must stay in `[Unit]`, evaluated
+        before any command spawns, not in `[Service]` where an
+        `ExecStartPre=` would hit the identical generic failure first.
+        """
+        self.assertIn(
+            "AssertPathExists=/etc/branchleft/%i.image.env",
+            self.unit_section_lines,
+            "the [Unit] section no longer asserts the image pin exists -- a "
+            "missing pin will regress to systemd's unnamed generic failure.",
+        )
 
     def test_the_secrets_file_is_still_optional(self):
         self.assertIn("EnvironmentFile=-/etc/branchleft/%i.env", self.lines)

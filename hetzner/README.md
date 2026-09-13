@@ -388,14 +388,21 @@ tells the two states apart, whether or not that restart succeeded.
 
 A restart with no previous pin to roll back to -- a first deploy, always --
 removes the pin file instead of leaving one that failed, because there is
-nothing to fall back to and leaving it would be ambiguous. `AssertPathExists=`
-on the unit's own `[Unit]` section is what makes that recoverable rather than
-terminal: without it, the mandatory `EnvironmentFile=` failing on every
-subsequent start reports as systemd's generic "Failed to load environment
-files", indistinguishable from host resource exhaustion. With it, the unit
-fails outright and names the missing file. Either way the recovery is the
-same -- re-run the deploy job, which rewrites the pin and restarts the unit --
-spelled out in `branchLeft/ghost-platform`'s `RUNBOOK-tenant-onboarding.md`.
+nothing to fall back to and leaving it would be ambiguous. That state was
+always recoverable -- re-running the deploy job rewrites the pin and
+restarts the unit, regardless of the assert below. What was missing was
+diagnosability: without `AssertPathExists=` on the unit's own `[Unit]`
+section, the mandatory `EnvironmentFile=` failing on every subsequent start
+reports as systemd's generic "Failed to load environment files",
+indistinguishable from host resource exhaustion. With it, systemd evaluates
+the assert before spawning anything, so a missing pin names the exact path --
+but per systemd.unit(5), a failed assertion does not fail the _unit_, only
+the queued job: the unit is left `inactive (dead)`, which will not show up
+in a `systemctl --failed` sweep. Check `systemctl status <stack>` instead --
+it carries the `AssertPathExists=... was not met` line and the
+`Documentation=` link. Either way the recovery is the same -- re-run the
+deploy job, which rewrites the pin and restarts the unit -- spelled out in
+`branchLeft/ghost-platform`'s `RUNBOOK-tenant-onboarding.md`.
 
 This is the replacement for the website's `imageTag` mechanism, not a port of
 it. The stack's Pulumi config carries no image reference at all, so there is

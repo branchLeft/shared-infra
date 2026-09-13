@@ -9,17 +9,10 @@ Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
 
-# The [Service] EnvironmentFile= below is mandatory (no leading dash) and is
-# reloaded at every command this unit spawns, so a missing pin fails the
-# very first ExecStartPre with systemd's own generic "Failed to load
-# environment files" -- naming neither the file nor the cause, and
-# indistinguishable from host resource exhaustion. An Assert here runs
-# before any command is spawned at all, so it is not subject to that: on
-# failure it names this exact path and marks the unit failed outright,
-# rather than the silent skip Condition*= directives give. Most commonly
-# tripped by a first deploy that failed with nothing to roll back to, which
-# is why branchleft-deploy removes the pin instead of leaving one that
-# failed -- see Documentation= above for the recovery.
+# Assert (not Condition*=) so a missing pin is named exactly rather than
+# silently skipped. Per systemd.unit(5) a failed assert leaves the unit
+# inactive/dead, not failed -- check `systemctl status`, not `--failed`.
+# Full rationale and recovery: hetzner/README.md's "Deploys" section.
 AssertPathExists=/etc/branchleft/%i.image.env
 
 [Service]
