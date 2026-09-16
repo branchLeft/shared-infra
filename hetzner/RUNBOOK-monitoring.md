@@ -765,15 +765,25 @@ let it reach the host **on stdin** rather than on a command line:
 
 ```bash
 read -rs SNDS_URL
-printf '%s' "$SNDS_URL" | ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
-  'umask 077; f=/etc/branchleft/monitoring.env; url=$(cat);
-   test -n "$url" || { echo "refusing to write an empty SNDS_DATA_URL" >&2; exit 1; };
-   grep -v "^SNDS_DATA_URL=" "$f" > "$f.tmp" 2>/dev/null || true;
-   printf "SNDS_DATA_URL=%s\n" "$url" >> "$f.tmp";
-   mv "$f.tmp" "$f";
-   echo "wrote SNDS_DATA_URL (${#url} characters)"'
+printf '%s' "$SNDS_URL" | ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
+  umask 077
+  f=/etc/branchleft/monitoring.env
+  url=$(cat)
+  if [ -z "$url" ]; then echo "FAILED: refusing to write an empty SNDS_DATA_URL" >&2; exit 1; fi
+  { grep -v "^SNDS_DATA_URL=" "$f" > "$f.tmp" 2>/dev/null || [ ! -s "$f.tmp" ]; } &&
+    printf "SNDS_DATA_URL=%s\n" "$url" >> "$f.tmp" &&
+    mv "$f.tmp" "$f" &&
+    [ "$(grep -c "^SNDS_DATA_URL=" "$f")" = 1 ] &&
+    [ "$(sed -n "s/^SNDS_DATA_URL=//p" "$f" | wc -c | tr -d " ")" = "$(( ${#url} + 1 ))" ] &&
+    echo "OK: SNDS_DATA_URL replaced, ${#url} characters, exactly one line" ||
+    { echo "FAILED: monitoring.env was NOT updated -- see the error above" >&2; exit 1; }'
 unset SNDS_URL
 ```
+
+Expect `OK: SNDS_DATA_URL replaced, N characters, exactly one line` **and exit
+0**. Anything else means the file was not updated and the collector is still
+using the old link -- which, if you have just re-enabled automated access, is
+already invalidated. Do not proceed on the message alone: `echo $?`.
 
 Expect `wrote SNDS_DATA_URL (N characters)`; check `N` against the URL's real
 length, since that is the one confirmation that does not involve printing the
@@ -804,10 +814,21 @@ credential when written the obvious way.**
    a failed edit cannot leave two `SNDS_DATA_URL=` lines with the stale one
    winning.
 
-The command above was checked against a URL containing `&`, `%2F`, `%2B` and
-`%3D`: the value round-trips byte-identically, the old line is gone, exactly
-one `SNDS_DATA_URL=` line remains, the other secrets in the file are
-untouched, and the result is `0600`.
+4. **It reports failure as failure.** Every step is chained with `&&` and
+   the result is read back -- exactly one `SNDS_DATA_URL=` line, and its
+   stored length matching what was sent. An earlier version of this command
+   printed `wrote SNDS_DATA_URL (N characters)` from the shell variable, after
+   an unchecked `mv`: against an unwritable directory every write failed, the
+   file kept the old credential, and it still printed success and exited 0.
+   The count is read from the file, never from the variable.
+
+Checked against four cases before being written down here: a URL containing
+`&`, `%2F`, `%2B` and `%3D` (round-trips byte-identically, old line gone,
+exactly one `SNDS_DATA_URL=` line, other secrets untouched, result `0600`);
+an unwritable target (fails, exits 1, leaves the old value in place); empty
+input (refuses, exits 1, leaves the old value in place); and a first-time
+write into a file with no `SNDS_DATA_URL=` line yet (appends, preserves the
+rest).
 
 This does not restart anything -- `snds-collector.service` reads the file
 fresh on its next scheduled run, unlike Alertmanager's secrets, which need a

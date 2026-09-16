@@ -976,3 +976,45 @@ tests:
               summary: 'The SNDS collector has not attempted a run in over 12 hours.'
               description: >-
                 Every run rewrites this timestamp before anything else can fail, so it stops advancing only if the collector did not run at all -- a disabled or failed timer, a host that is down, a textfile directory that is no longer writable. That is a different fault from SNDSCollectorFailing, which means the collector ran and the fetch failed, and it is the one case where snds_collector_last_run_success cannot be trusted: a process killed before it publishes health leaves that gauge frozen at whatever the last run wrote, which after a good run is a 1 that actively asserts health. 43200s (12h) is two missed 6h ticks. Deliberately not paired with `absent()` -- a collector that has never run at all has no series here to be stale, and SNDSCollectorStale's own `absent(...)` branch is what covers that.
+
+  # SNDSLinkAgeUnmeasurable: a state file that cannot be written restarts the
+  # link's age on every run, so SNDSAccessLinkExpiringSoon never reaches 25
+  # days and never fires. That is a silent loss of the only pre-emptive
+  # signal in this group, which is why it is alerted on rather than left in
+  # the journal.
+  - interval: 1m
+    input_series:
+      - series: 'snds_link_state_readable'
+        values: '0x800'
+    alert_rule_test:
+      - eval_time: 800m
+        alertname: SNDSLinkAgeUnmeasurable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "The SNDS collector cannot persist the access link's age, so the expiry warning cannot fire."
+              description: >-
+                The collector records when it first saw the current automated-access URL in a small state file beside its textfile output, and measures the 30-day expiry from that. If that file cannot be written, the age restarts on every run and SNDSAccessLinkExpiringSoon -- the only alert in this group that fires BEFORE an outage -- never reaches its threshold and so never fires at all. That is a silent loss of the one pre-emptive signal here, which is why it is alerted on rather than left as a line in the journal. Check the filesystem under /var/lib/branchleft/snds-exporter. `for: 12h` because a single failed write is recoverable on the next 6h tick.
+
+  # One failed write is recoverable on the next 6h tick, so a short outage
+  # must not page. Without this the `for: 12h` could be deleted and the
+  # firing case above would still pass.
+  - interval: 1m
+    input_series:
+      - series: 'snds_link_state_readable'
+        values: '0x800'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: SNDSLinkAgeUnmeasurable
+        exp_alerts: []
+
+  # A working state file stays silent.
+  - interval: 1m
+    input_series:
+      - series: 'snds_link_state_readable'
+        values: '1x800'
+    alert_rule_test:
+      - eval_time: 800m
+        alertname: SNDSLinkAgeUnmeasurable
+        exp_alerts: []

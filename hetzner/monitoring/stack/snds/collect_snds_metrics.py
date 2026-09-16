@@ -41,6 +41,7 @@ import ipaddress
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 import urllib.error
@@ -130,6 +131,14 @@ def _parse_complaint_rate(raw: str) -> float | None:
     token = raw.strip()
     if token.lower() in NO_RATE_TOKENS:
         return None
+    # SNDS reports "< 0.1%" for a healthy IP -- its most common value, and one
+    # float() cannot parse. Mapping it to None would put every clean IP in the
+    # "no rate computed" bucket, which is the opposite of what SNDS said: it
+    # computed a rate and reported it as below a bound. The bound itself is
+    # the value, which keeps the series present and leaves
+    # SNDSComplaintRateHigh's own `> 0.001` comparison to decide.
+    if token.startswith(("<", ">")):
+        token = token[1:].strip()
     try:
         if token.endswith("%"):
             return float(token[:-1]) / 100.0
@@ -146,6 +155,27 @@ def _parse_volume(raw: str) -> int | None:
         return int(float(token))
     except ValueError:
         return None
+
+
+def _looks_like_a_header(first_field: str) -> bool:
+    """Whether the feed's first row names its columns rather than carrying data.
+
+    Matched by shape rather than against a list of spellings. A fixed list
+    (`ip address`, `ip`) fails open in the direction that matters: a header
+    spelled `ip_address` or `Sending IP` is counted as a data line, skipped
+    for not being an address, and on a day with no other rows that makes
+    `every_line_was_skipped` true -- a schema alarm raised by a quiet day.
+    A first field that is not an address but reads as a column name is a
+    header whatever Microsoft calls it.
+    """
+    token = first_field.strip()
+    if not token:
+        return False
+    try:
+        ipaddress.ip_address(token)
+    except ValueError:
+        return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]*", token))
+    return False
 
 
 @dataclass(frozen=True)
@@ -166,6 +196,24 @@ class ParsedFeed:
     @property
     def every_line_was_skipped(self) -> bool:
         return self.data_lines > 0 and self.skipped_lines == self.data_lines
+
+    @property
+    def yielded_nothing_the_alerts_can_read(self) -> bool:
+        """Records parsed, but not one carries a status or a rate.
+
+        `every_line_was_skipped` only catches a reorder that displaces the IP
+        out of field 0. The reorder that actually happens does not: SNDS's
+        automated-access CSV carries activity timestamps and command counts
+        between the address and the filter result, so every row still starts
+        with a valid IP, every row parses, and the two columns the alerts
+        read come back empty -- with a command count landing in
+        `snds_message_volume`, which also satisfies (and so disables)
+        SNDSComplaintRateHigh's `unless on(ip) snds_message_volume` fallback.
+        Zero records is not this case: no rows at all is a quiet day.
+        """
+        return bool(self.records) and not any(
+            r.status is not None or r.complaint_rate is not None for r in self.records
+        )
 
 
 def parse_snds_feed(text: str) -> ParsedFeed:
@@ -199,8 +247,8 @@ def parse_snds_feed(text: str) -> ParsedFeed:
             continue
         fields = [f.strip() for f in line.split(",")]
         ip_field = fields[0]
-        if ip_field.lower() in ("ip address", "ip"):
-            continue  # an optional header row, not data
+        if not records and data_lines == 0 and _looks_like_a_header(ip_field):
+            continue  # a header row, not data
         data_lines += 1
 
         try:
@@ -293,6 +341,11 @@ def render_health_text(now: float, succeeded: bool, link_first_seen: float | Non
         "# TYPE snds_collector_last_run_success gauge",
         f"snds_collector_last_run_success {1 if succeeded else 0}",
     ]
+    lines += [
+        "# HELP snds_link_state_readable Whether this collector could persist the access link's first-seen time (1) or not (0). At 0 the link-age gauge below is absent and the expiry alert cannot fire.",
+        "# TYPE snds_link_state_readable gauge",
+        f"snds_link_state_readable {0 if link_first_seen is None else 1}",
+    ]
     if link_first_seen is not None:
         lines += [
             "# HELP snds_access_link_first_seen_timestamp_seconds Unix time the SNDS automated-access URL currently in use was first seen by this collector. Microsoft expires each link 30 days after it is generated.",
@@ -302,7 +355,7 @@ def render_health_text(now: float, succeeded: bool, link_first_seen: float | Non
     return "\n".join(lines) + "\n"
 
 
-def read_link_first_seen(state_path: pathlib.Path, url: str, now: float) -> float:
+def read_link_first_seen(state_path: pathlib.Path, url: str, now: float) -> float | None:
     """When the URL currently in `SNDS_DATA_URL` was first seen here.
 
     Microsoft dates the 30-day expiry from when the link was generated and
@@ -318,11 +371,11 @@ def read_link_first_seen(state_path: pathlib.Path, url: str, now: float) -> floa
     Hash equality is all that is needed to answer "is this the same link as
     last time".
 
-    An unreadable, missing or malformed state file is treated as a first
-    sighting. That is the conservative direction: the age restarts at zero,
-    so an expiry alert is late rather than falsely early -- and a stale link
-    that outlives the miscount is still caught by the 404 handling and by
-    `snds_collector_last_run_success`.
+    An unreadable or malformed state file is treated as a first sighting:
+    the age restarts at zero, so an expiry alert is late rather than falsely
+    early, and a stale link that outlives the miscount is still caught by the
+    404 handling and by `snds_collector_last_run_success`. A state file that
+    cannot be WRITTEN is a different matter and returns `None` -- see below.
     """
     digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
     try:
@@ -345,6 +398,12 @@ def read_link_first_seen(state_path: pathlib.Path, url: str, now: float) -> floa
             f"collect_snds_metrics: could not record the access link's first-seen time: {exc}",
             file=sys.stderr,
         )
+        # Not merely "the age restarts at zero". A write that keeps failing
+        # restarts it on EVERY run, so the age never reaches 25 days and
+        # SNDSAccessLinkExpiringSoon -- the only alert here that fires before
+        # an outage rather than after one -- can never fire at all. A stderr
+        # line nobody reads is not a signal, so the failure is published.
+        return None
     return now
 
 
@@ -557,6 +616,19 @@ def _collect(output_dir: pathlib.Path, now: float) -> tuple[int, float | None]:
         )
         return 1, link_first_seen
 
+    if feed.yielded_nothing_the_alerts_can_read:
+        print(
+            f"collect_snds_metrics: parsed {len(feed.records)} row(s), but not "
+            "one carried a filter result or a complaint rate -- the two "
+            "columns every reputation alert reads. Treating this as a failed "
+            "run rather than publishing a snapshot that would read as a clean "
+            "reputation. The column order has probably changed; compare a live "
+            "response against the order RUNBOOK-monitoring.md's SNDS section "
+            "documents. Leaving the previous reputation output untouched.",
+            file=sys.stderr,
+        )
+        return 1, link_first_seen
+
     output_path = output_dir / REPUTATION_FILENAME
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
     write_textfile_atomically(output_path, render_prometheus_text(feed.records, now))
@@ -574,14 +646,18 @@ def main(argv: list[str]) -> int:
 
     try:
         exit_code, link_first_seen = _collect(output_dir, now)
-    except BaseException as exc:
-        # Deliberately broad, and deliberately not re-raising. Two things must
+    except Exception as exc:
+        # Broad, and deliberately not re-raising. Two things must
         # hold however this run dies: the access key must not reach the
         # journal, and `snds_collector_last_run_success` must not be left at
         # whatever the last good run wrote. A gauge frozen at 1 by a crash is
         # worse than no gauge -- it actively asserts health, and every alert
         # in the group reads it. An unredacted traceback is suppressed for the
         # same reason: the URL is a credential and a traceback can carry it.
+        # `Exception`, not `BaseException`: swallowing KeyboardInterrupt and
+        # SystemExit would turn an operator's Ctrl-C into a written
+        # "last run failed", and no test distinguished the two -- narrowing
+        # from BaseException to Exception left all of them green.
         print(
             "collect_snds_metrics: run failed with an unexpected "
             f"{type(exc).__name__}: "

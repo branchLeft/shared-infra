@@ -11,10 +11,12 @@ OnBootSec=10min
 # it publishes. The credential no longer constrains this interval: the
 # automated-access URL lives 30 days, so unlike the ~8h bearer token it
 # replaced, a 6h cadence is not fighting a
-# credential that expires between runs. Persistent=true covers a missed run
-# across a host reboot; SNDSCollectorFailing (render.ts) catches a run that
-# ran and failed, and SNDSCollectorStale backstops a timer that is not
-# running at all.
+# credential that expires between runs. OnBootSec=10min is what covers a
+# missed run across a reboot -- Persistent= below applies only to OnCalendar=
+# timers and is inert on this one, which an earlier version of this comment
+# got wrong. SNDSCollectorFailing (render.ts) catches a run that ran and
+# failed, SNDSCollectorNotRunning a timer that stopped firing, and
+# SNDSCollectorStale backstops both.
 OnUnitActiveSec=6h
 Persistent=true
 

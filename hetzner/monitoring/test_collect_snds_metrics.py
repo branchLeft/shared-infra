@@ -938,5 +938,166 @@ class RedactEncodedKeyTests(unittest.TestCase):
         self.assertNotIn("AAAA/BBBB", out)
 
 
+class RealColumnOrderTests(unittest.TestCase):
+    """The reorder that actually happens, and the one the first guard missed.
+
+    SNDS's automated-access CSV carries activity timestamps and command
+    counts between the address and the filter result. Every row still starts
+    with a valid IP, so nothing is skipped and `every_line_was_skipped` stays
+    false -- while the two columns every reputation alert reads come back
+    empty and a command count lands in `snds_message_volume`, which also
+    satisfies (and so disables) SNDSComplaintRateHigh's `unless on(ip)`
+    fallback. Before this guard the run reported success.
+    """
+
+    REAL = (
+        "91.99.1.2,9/15/2026 12:00 AM,9/15/2026 11:59 PM,1200,1180,1180,GREEN,< 0.1%\n"
+        "91.99.1.3,9/15/2026 12:00 AM,9/15/2026 11:59 PM,90,88,88,YELLOW,0.4%\n"
+    )
+
+    def test_the_first_guard_does_not_catch_it(self) -> None:
+        # Pinned deliberately: this is why the second guard has to exist.
+        feed = collect_snds_metrics.parse_snds_feed(self.REAL)
+        self.assertFalse(feed.every_line_was_skipped)
+        self.assertEqual(len(feed.records), 2)
+
+    def test_the_alert_column_guard_does_catch_it(self) -> None:
+        feed = collect_snds_metrics.parse_snds_feed(self.REAL)
+        self.assertTrue(feed.yielded_nothing_the_alerts_can_read)
+
+    def test_a_run_against_it_fails_rather_than_publishing_silence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _run_main(tmp, return_value="203.0.113.5,green,0.05%,12000")
+            good = (pathlib.Path(tmp) / collect_snds_metrics.REPUTATION_FILENAME).read_text()
+
+            exit_code, output_dir = _run_main(tmp, return_value=self.REAL)
+
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(
+                (output_dir / collect_snds_metrics.REPUTATION_FILENAME).read_text(), good
+            )
+            self.assertIn(
+                "snds_collector_last_run_success 0",
+                (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text(),
+            )
+
+    def test_a_good_feed_is_not_caught_by_the_alert_column_guard(self) -> None:
+        feed = collect_snds_metrics.parse_snds_feed("203.0.113.5,green,0.05%,12000")
+        self.assertFalse(feed.yielded_nothing_the_alerts_can_read)
+
+    def test_a_status_alone_is_enough_to_pass_the_guard(self) -> None:
+        # A record carrying a status but no computed rate is a real shape --
+        # a low-volume IP. It must not read as a schema failure.
+        feed = collect_snds_metrics.parse_snds_feed("203.0.113.5,green,None,4")
+        self.assertFalse(feed.yielded_nothing_the_alerts_can_read)
+
+    def test_an_empty_feed_is_not_caught_by_the_alert_column_guard(self) -> None:
+        self.assertFalse(
+            collect_snds_metrics.parse_snds_feed("").yielded_nothing_the_alerts_can_read
+        )
+
+
+class HeaderShapeTests(unittest.TestCase):
+    """A header spelled anything other than the two literals the first version
+    listed was counted as a data line, skipped for not being an address, and
+    on a quiet day that made `every_line_was_skipped` true -- a schema alarm
+    raised by a header.
+    """
+
+    def test_alternative_header_spellings_are_not_data(self) -> None:
+        for header in ("ip_address,status", "Sending IP,Filter result", "IP,Status"):
+            with self.subTest(header=header):
+                feed = collect_snds_metrics.parse_snds_feed(header)
+                self.assertEqual(feed.data_lines, 0)
+                self.assertFalse(feed.every_line_was_skipped)
+
+    def test_a_header_only_response_is_a_quiet_day_not_a_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            exit_code, _ = _run_main(tmp, return_value="ip_address,filter_result\n")
+            self.assertEqual(exit_code, 0)
+
+    def test_a_genuine_bad_row_is_still_counted_as_skipped(self) -> None:
+        # The header rule must not swallow real garbage: it applies to the
+        # first row only, and a later non-address row is still a skip.
+        feed = collect_snds_metrics.parse_snds_feed("203.0.113.5,green\nnot-an-ip,green\n")
+        self.assertEqual(feed.skipped_lines, 1)
+
+    def test_a_non_name_shaped_first_field_is_data_not_a_header(self) -> None:
+        feed = collect_snds_metrics.parse_snds_feed("999.999.999.999,green\n")
+        self.assertEqual(feed.data_lines, 1)
+        self.assertEqual(feed.skipped_lines, 1)
+
+
+class BoundedComplaintRateTests(unittest.TestCase):
+    """`< 0.1%` is what SNDS reports for a healthy IP -- its most common
+    value, and one float() cannot parse. Mapping it to None would put every
+    clean IP in the "no rate computed" bucket, the opposite of what SNDS said.
+    """
+
+    def test_a_less_than_bound_parses_to_the_bound(self) -> None:
+        self.assertAlmostEqual(collect_snds_metrics._parse_complaint_rate("< 0.1%"), 0.001)
+
+    def test_a_greater_than_bound_parses_to_the_bound(self) -> None:
+        self.assertAlmostEqual(collect_snds_metrics._parse_complaint_rate("> 1%"), 0.01)
+
+    def test_the_bound_does_not_trip_the_high_complaint_threshold(self) -> None:
+        # SNDSComplaintRateHigh is `> 0.001`, so a healthy "< 0.1%" must sit
+        # exactly on the line and not over it.
+        self.assertFalse(collect_snds_metrics._parse_complaint_rate("< 0.1%") > 0.001)
+
+    def test_genuine_garbage_is_still_absent(self) -> None:
+        self.assertIsNone(collect_snds_metrics._parse_complaint_rate("< not-a-number"))
+
+
+class LinkStateUnwritableTests(unittest.TestCase):
+    """A state file that cannot be written restarts the age on every run, so
+    the only pre-emptive alert never reaches its threshold -- never, not late.
+    """
+
+    def test_an_unwritable_state_file_reports_none_rather_than_now(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = pathlib.Path(tmp) / "nope" / collect_snds_metrics.LINK_STATE_FILENAME
+            with mock.patch.object(
+                collect_snds_metrics.pathlib.Path, "mkdir", side_effect=OSError("read-only")
+            ):
+                self.assertIsNone(
+                    collect_snds_metrics.read_link_first_seen(state, "https://x.test/?key=abcdefgh", 1000.0)
+                )
+
+    def test_the_health_file_publishes_the_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                collect_snds_metrics, "read_link_first_seen", return_value=None
+            ):
+                _, output_dir = _run_main(tmp, return_value="203.0.113.5,green,0.05%,12000")
+            health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            self.assertIn("snds_link_state_readable 0", health)
+            self.assertNotIn("snds_access_link_first_seen_timestamp_seconds ", health)
+
+    def test_a_working_state_file_publishes_readable_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, output_dir = _run_main(tmp, return_value="203.0.113.5,green,0.05%,12000")
+            health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            self.assertIn("snds_link_state_readable 1", health)
+            self.assertIn("snds_access_link_first_seen_timestamp_seconds ", health)
+
+
+class CtrlCIsNotARunFailureTests(unittest.TestCase):
+    """`except BaseException` would turn an operator's Ctrl-C into a written
+    "last run failed". Narrowing it was invisible to every other test, which
+    is why this one exists.
+    """
+
+    def test_a_keyboard_interrupt_propagates_rather_than_being_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(KeyboardInterrupt):
+                _run_main(tmp, side_effect=KeyboardInterrupt())
+
+    def test_a_system_exit_propagates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit):
+                _run_main(tmp, side_effect=SystemExit(2))
+
+
 if __name__ == "__main__":
     unittest.main()
