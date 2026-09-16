@@ -1002,16 +1002,14 @@ becomes `SNDSCollectorFailing` in five days.
 
 **`SNDSCollectorFailing`** -- the collector ran and failed, read straight off
 `snds_collector_last_run_success`. `journalctl -u snds-collector.service -n
-20` names the cause on the last line. The two that matter:
+20` names the cause on the last line. The one that matters:
 
-- `HTTP 404 -- the automated-access link is expired or was never valid, or
-SNDS simply has no data for the requested day`. Microsoft returns one code
-  for both, so this genuinely cannot be told apart from the response. Check
-  the link's age first; if it is anywhere near 30 days, rotate it per §14
-  before assuming a quiet day.
 - `HTTP 400 -- SNDS rejected the automated-access link as malformed`. A
   truncated paste into `monitoring.env` is the usual cause; re-do §14's
   write step.
+
+**A 404 is deliberately NOT a failure and never reaches this alert.** See
+"When SNDS has no data at all" below.
 
 If the link is current and the run still fails, check whether Microsoft has
 changed the response format -- `snds/collect_snds_metrics.py`'s
@@ -1029,6 +1027,46 @@ timer (`systemctl status snds-collector.timer`), the host, and that
 `/var/lib/branchleft/snds-exporter` is still mounted into node-exporter. If
 `SNDSCollectorFailing` did fire first, work that one instead; this is the
 same incident seen 35 hours later.
+
+## When SNDS has no data at all
+
+**Verified live on 2026-09-17, and the reason the collector treats a 404 as a
+normal outcome rather than a fault.** SNDS publishes nothing for an IP that
+sent fewer than roughly a hundred messages on a given day. With one
+registered IP (`167.233.252.240`, mx1) and near-zero outbound mail, the
+portal reported _"No reports found for the selected date"_ for every date in
+the preceding month, and every automated-access URL -- the data report, the
+IP status report, and the data report for each of seven explicit past dates
+-- answered `HTTP 404` with a zero-byte body.
+
+So on this estate, **an empty feed is the steady state, not an incident**. A
+collector that treated 404 as a failed run would page hourly, for ever, about
+a feed that is merely empty -- which is what it did before this was measured.
+
+What the collector does instead:
+
+- A 404 is a **successful run with no data**. It advances
+  `snds_collector_last_success_timestamp_seconds` (so `SNDSCollectorStale`
+  stays quiet, correctly) and publishes `snds_data_available 0`.
+- `snds_data_available` is the honest signal: `0` means "SNDS has nothing to
+  say about us", never "our reputation is clean". Nothing pages on it,
+  because nothing is wrong -- but anything reading it will not claim
+  reputation is being watched when no reputation data has ever arrived.
+- The ambiguity Microsoft leaves in that 404 -- no data, versus an expired or
+  invalid link -- is resolved by the link's **age**, which Microsoft does not
+  give us and this collector observes for itself.
+  `SNDSAccessLinkExpiringSoon` fires at 25 days, five days before an expiry
+  could start masquerading as quiet.
+
+**What this means for the reputation alerts.** `SNDSComplaintRateHigh` and
+`SNDSReputationRed` cannot fire while `snds_data_available` is `0`, because
+there are no series for them to match. That is correct and unavoidable:
+there is no reputation data to alert on. Microsoft sender reputation is
+effectively unmonitored until outbound volume crosses SNDS's reporting
+threshold, and no amount of configuration here changes that. The first day
+real data arrives, the collector either parses it or fails loudly on an
+unrecognised shape -- it will not quietly publish an empty snapshot that
+reads as clean.
 
 **Why the reputation numbers still look fine while these fire.** The two
 rules above go quiet rather than critical, because a failed run deliberately

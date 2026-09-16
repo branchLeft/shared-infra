@@ -282,7 +282,7 @@ def parse_snds_response(text: str) -> list[IpReputation]:
     return parse_snds_feed(text).records
 
 
-def render_prometheus_text(records: list[IpReputation], now: float) -> str:
+def render_prometheus_text(records: list[IpReputation]) -> str:
     """Pure formatting -- the textfile-collector exposition format node_exporter
     reads. IPs and statuses are both validated in `parse_snds_response` before
     they ever reach a label value here (a fixed status enum, an
@@ -314,15 +314,16 @@ def render_prometheus_text(records: list[IpReputation], now: float) -> str:
         if r.status is not None:
             lines.append(f'snds_reputation_status{{ip="{r.ip}",status="{r.status}"}} 1')
 
-    lines += [
-        "# HELP snds_collector_last_success_timestamp_seconds Unix time this collector last fetched and parsed SNDS data successfully.",
-        "# TYPE snds_collector_last_success_timestamp_seconds gauge",
-        f"snds_collector_last_success_timestamp_seconds {now}",
-    ]
     return "\n".join(lines) + "\n"
 
 
-def render_health_text(now: float, succeeded: bool, link_first_seen: float | None) -> str:
+def render_health_text(
+    now: float,
+    succeeded: bool,
+    link_first_seen: float | None,
+    last_success: float | None = None,
+    data_available: bool | None = None,
+) -> str:
     """The half of the output that is written even when everything else
     failed. Kept separate from `render_prometheus_text` because the two have
     opposite write rules: reputation values are preserved across a failure,
@@ -341,6 +342,18 @@ def render_health_text(now: float, succeeded: bool, link_first_seen: float | Non
         "# TYPE snds_collector_last_run_success gauge",
         f"snds_collector_last_run_success {1 if succeeded else 0}",
     ]
+    if last_success is not None:
+        lines += [
+            "# HELP snds_collector_last_success_timestamp_seconds Unix time this collector last completed a run successfully, including a run on which SNDS reported no data.",
+            "# TYPE snds_collector_last_success_timestamp_seconds gauge",
+            f"snds_collector_last_success_timestamp_seconds {last_success}",
+        ]
+    if data_available is not None:
+        lines += [
+            "# HELP snds_data_available Whether SNDS returned reputation rows on the last successful run (1) or reported that it has none (0). Zero is the normal steady state for a sender below its reporting threshold, not a fault.",
+            "# TYPE snds_data_available gauge",
+            f"snds_data_available {1 if data_available else 0}",
+        ]
     lines += [
         "# HELP snds_link_state_readable Whether this collector could persist the access link's first-seen time (1) or not (0). At 0 the link-age gauge below is absent and the expiry alert cannot fire.",
         "# TYPE snds_link_state_readable gauge",
@@ -355,7 +368,7 @@ def render_health_text(now: float, succeeded: bool, link_first_seen: float | Non
     return "\n".join(lines) + "\n"
 
 
-def read_link_first_seen(state_path: pathlib.Path, url: str, now: float) -> float | None:
+def read_link_state(state_path: pathlib.Path, url: str, now: float) -> tuple[float | None, float | None]:
     """When the URL currently in `SNDS_DATA_URL` was first seen here.
 
     Microsoft dates the 30-day expiry from when the link was generated and
@@ -378,19 +391,27 @@ def read_link_first_seen(state_path: pathlib.Path, url: str, now: float) -> floa
     cannot be WRITTEN is a different matter and returns `None` -- see below.
     """
     digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    last_success: float | None = None
     try:
         state = json.loads(state_path.read_text())
+        recorded = state.get("last_success")
+        if isinstance(recorded, (int, float)):
+            last_success = float(recorded)
         if state.get("url_sha256") == digest:
             first_seen = state.get("first_seen")
             if isinstance(first_seen, (int, float)):
-                return float(first_seen)
+                return float(first_seen), last_success
     except (OSError, ValueError, AttributeError):
         pass
 
     try:
         state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
         tmp_path = state_path.with_suffix(state_path.suffix + ".tmp")
-        tmp_path.write_text(json.dumps({"url_sha256": digest, "first_seen": now}))
+        tmp_path.write_text(
+            json.dumps(
+                {"url_sha256": digest, "first_seen": now, "last_success": last_success}
+            )
+        )
         tmp_path.chmod(0o600)
         os.replace(tmp_path, state_path)
     except OSError as exc:
@@ -403,8 +424,8 @@ def read_link_first_seen(state_path: pathlib.Path, url: str, now: float) -> floa
         # SNDSAccessLinkExpiringSoon -- the only alert here that fires before
         # an outage rather than after one -- can never fire at all. A stderr
         # line nobody reads is not a signal, so the failure is published.
-        return None
-    return now
+        return None, last_success
+    return now, last_success
 
 
 class UnexpectedResponseShapeError(RuntimeError):
@@ -429,16 +450,63 @@ class MalformedDataUrlError(RuntimeError):
     """
 
 
-class AccessLinkRejectedError(RuntimeError):
-    """Raised for the two status codes Microsoft documents as being about the
-    access key itself.
+def record_successful_run(state_path: pathlib.Path, at: float) -> None:
+    """Stamps the last successful run into the state file.
 
-    Split out from a generic fetch failure because the operator response is
-    different and the message has to say so: 404 means the key is expired or
-    never existed *or* that there is simply no data for the requested day --
-    Microsoft returns one code for both, which no amount of parsing here can
-    disambiguate -- and 400 means the key is malformed. Both are cleared by
-    regenerating the link in the portal, neither by waiting.
+    Lives here rather than in the reputation textfile because it is a fact
+    about the COLLECTOR, not about reputation, and the two have opposite
+    persistence rules. Kept in the reputation file it could only be written
+    when there were reputation rows to write -- so on a sender SNDS publishes
+    nothing for, the timestamp would never exist, `SNDSCollectorStale`'s
+    `absent(...)` branch would fire for ever, and the alert would be
+    reporting an empty feed rather than a broken one.
+    """
+    try:
+        blob = json.loads(state_path.read_text())
+        if not isinstance(blob, dict):
+            blob = {}
+    except (OSError, ValueError):
+        blob = {}
+    blob["last_success"] = at
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+        tmp_path = state_path.with_suffix(state_path.suffix + ".tmp")
+        tmp_path.write_text(json.dumps(blob))
+        tmp_path.chmod(0o600)
+        os.replace(tmp_path, state_path)
+    except OSError as exc:
+        print(
+            f"collect_snds_metrics: could not record this run's success: {exc}",
+            file=sys.stderr,
+        )
+
+
+class NoDataAvailableError(RuntimeError):
+    """SNDS answered 404: it has nothing to report.
+
+    Microsoft overloads this code across "no data for the requested day" and
+    "expired or non-existent access key", and says so in its own status
+    table, so the response alone cannot tell them apart. This collector
+    resolves that with information Microsoft does not have: how long it has
+    known the current URL. A 404 on a link first seen days ago is a quiet
+    feed; a link nearing its 30-day expiry is caught five days earlier by
+    `SNDSAccessLinkExpiringSoon`, before a 404 could be mistaken for quiet.
+
+    Treated as a normal, non-failing outcome for that reason. SNDS publishes
+    nothing for an IP below roughly a hundred messages a day, so on a small
+    sender this is the STEADY STATE, not an incident -- and a collector that
+    paged about it would page for ever while nothing was wrong. Not
+    hypothetical: on 2026-09-17 the portal reported "no reports found" for
+    every date in the preceding month for this estate's only registered IP,
+    and every automated-access URL answered 404.
+    """
+
+
+class AccessLinkRejectedError(RuntimeError):
+    """Raised for a 400: SNDS rejected the access key as malformed.
+
+    A real fault, unlike the 404 above, and cleared by re-pasting the URL
+    rather than by waiting.
     """
 
 
@@ -448,13 +516,6 @@ _UNEXPECTED_CONTENT_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 # non-existent or expired key (and, ambiguously, for a day with no data), 400
 # for a malformed one.
 _ACCESS_KEY_STATUS_CODES = {
-    404: (
-        "HTTP 404 -- the automated-access link is expired or was never valid, "
-        "or SNDS simply has no data for the requested day. Microsoft returns "
-        "the same code for both, so this cannot be told apart from the "
-        "response alone: check the link's age first (it expires 30 days after "
-        "it is generated) and regenerate it in the portal if in doubt"
-    ),
     400: (
         "HTTP 400 -- SNDS rejected the automated-access link as malformed. "
         "Regenerate it from the portal's automated-access page; a truncated "
@@ -514,6 +575,16 @@ def fetch_snds_data(url: str, timeout: float = REQUEST_TIMEOUT_SECONDS) -> str:
         # on `.url`, and `from None` keeps a chained traceback from printing
         # it even though `str(exc)` alone would not.
         detail = redact(str(exc.msg), url)
+        if exc.code == 404:
+            raise NoDataAvailableError(
+                "HTTP 404 -- SNDS has no data to report. On a sender below "
+                "its reporting threshold this is the normal steady state, "
+                "not a fault. The same code also covers an expired or "
+                "non-existent link, which Microsoft does not distinguish; "
+                "the link's own age is what tells those apart, and "
+                "SNDSAccessLinkExpiringSoon fires five days before an expiry "
+                f"could be confused with quiet (server said: {detail})"
+            ) from None
         explanation = _ACCESS_KEY_STATUS_CODES.get(exc.code)
         if explanation is not None:
             raise AccessLinkRejectedError(f"{explanation} (server said: {detail})") from None
@@ -545,9 +616,17 @@ def write_textfile_atomically(path: pathlib.Path, content: str) -> None:
     os.replace(tmp_path, path)
 
 
-def _publish_health(
-    output_dir: pathlib.Path, now: float, succeeded: bool, link_first_seen: float | None
-) -> None:
+@dataclass(frozen=True)
+class RunOutcome:
+    """Everything `main` needs to publish health, however `_collect` ended."""
+
+    exit_code: int
+    link_first_seen: float | None = None
+    last_success: float | None = None
+    data_available: bool | None = None
+
+
+def _publish_health(output_dir: pathlib.Path, now: float, outcome: RunOutcome) -> None:
     """Health is best-effort by design: a collector that cannot write its own
     health file must not therefore fail a run that otherwise fetched real
     data. The write failure goes to the journal, and the absent gauge is
@@ -556,19 +635,27 @@ def _publish_health(
     try:
         output_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
         write_textfile_atomically(
-            output_dir / HEALTH_FILENAME, render_health_text(now, succeeded, link_first_seen)
+            output_dir / HEALTH_FILENAME,
+            render_health_text(
+                now,
+                outcome.exit_code == 0,
+                outcome.link_first_seen,
+                outcome.last_success,
+                outcome.data_available,
+            ),
         )
     except OSError as exc:
         print(f"collect_snds_metrics: could not write the health textfile: {exc}", file=sys.stderr)
 
 
-def _collect(output_dir: pathlib.Path, now: float) -> tuple[int, float | None]:
-    """One run's real work. `(exit_code, link_first_seen)`.
+def _collect(output_dir: pathlib.Path, now: float) -> RunOutcome:
+    """One run's real work.
 
     Split from `main` so that `main` can publish health for *every* way this
     can end, including the ways it can raise. Anything raised here reaches
     `main`'s own handler with the URL still in scope to redact against.
     """
+    state_path = output_dir / LINK_STATE_FILENAME
     url = os.environ.get("SNDS_DATA_URL")
     if not url:
         print(
@@ -578,12 +665,25 @@ def _collect(output_dir: pathlib.Path, now: float) -> tuple[int, float | None]:
             "untouched.",
             file=sys.stderr,
         )
-        return 1, None
+        return RunOutcome(exit_code=1)
 
-    link_first_seen = read_link_first_seen(output_dir / LINK_STATE_FILENAME, url, now)
+    link_first_seen, last_success = read_link_state(state_path, url, now)
 
     try:
         raw = fetch_snds_data(url)
+    except NoDataAvailableError as exc:
+        # NOT a failure. SNDS publishes nothing for an IP below its reporting
+        # threshold, so on a small sender this is the steady state and a
+        # collector that paged about it would page for ever. The run did what
+        # it was asked: it reached SNDS and got an answer.
+        print(f"collect_snds_metrics: {redact(str(exc), url)}", file=sys.stderr)
+        record_successful_run(state_path, now)
+        return RunOutcome(
+            exit_code=0,
+            link_first_seen=link_first_seen,
+            last_success=now,
+            data_available=False,
+        )
     except (
         urllib.error.URLError,
         TimeoutError,
@@ -593,7 +693,9 @@ def _collect(output_dir: pathlib.Path, now: float) -> tuple[int, float | None]:
         MalformedDataUrlError,
     ) as exc:
         print(f"collect_snds_metrics: fetch failed: {redact(str(exc), url)}", file=sys.stderr)
-        return 1, link_first_seen
+        return RunOutcome(
+            exit_code=1, link_first_seen=link_first_seen, last_success=last_success
+        )
 
     feed = parse_snds_feed(raw)
 
@@ -614,7 +716,9 @@ def _collect(output_dir: pathlib.Path, now: float) -> tuple[int, float | None]:
             "Leaving the previous reputation output untouched.",
             file=sys.stderr,
         )
-        return 1, link_first_seen
+        return RunOutcome(
+            exit_code=1, link_first_seen=link_first_seen, last_success=last_success
+        )
 
     if feed.yielded_nothing_the_alerts_can_read:
         print(
@@ -627,13 +731,21 @@ def _collect(output_dir: pathlib.Path, now: float) -> tuple[int, float | None]:
             "documents. Leaving the previous reputation output untouched.",
             file=sys.stderr,
         )
-        return 1, link_first_seen
+        return RunOutcome(
+            exit_code=1, link_first_seen=link_first_seen, last_success=last_success
+        )
 
     output_path = output_dir / REPUTATION_FILENAME
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
-    write_textfile_atomically(output_path, render_prometheus_text(feed.records, now))
+    write_textfile_atomically(output_path, render_prometheus_text(feed.records))
+    record_successful_run(state_path, now)
     print(f"collect_snds_metrics: wrote {len(feed.records)} IP record(s) to {output_path}")
-    return 0, link_first_seen
+    return RunOutcome(
+        exit_code=0,
+        link_first_seen=link_first_seen,
+        last_success=now,
+        data_available=bool(feed.records),
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -642,10 +754,9 @@ def main(argv: list[str]) -> int:
         os.environ.get("SNDS_OUTPUT_DIR", "/var/lib/branchleft/snds-exporter")
     )
     now = time.time()
-    link_first_seen: float | None = None
 
     try:
-        exit_code, link_first_seen = _collect(output_dir, now)
+        outcome = _collect(output_dir, now)
     except Exception as exc:
         # Broad, and deliberately not re-raising. Two things must
         # hold however this run dies: the access key must not reach the
@@ -664,11 +775,11 @@ def main(argv: list[str]) -> int:
             f"{redact(str(exc), os.environ.get('SNDS_DATA_URL') or '')}",
             file=sys.stderr,
         )
-        _publish_health(output_dir, now, succeeded=False, link_first_seen=link_first_seen)
+        _publish_health(output_dir, now, RunOutcome(exit_code=1))
         return 1
 
-    _publish_health(output_dir, now, succeeded=exit_code == 0, link_first_seen=link_first_seen)
-    return exit_code
+    _publish_health(output_dir, now, outcome)
+    return outcome.exit_code
 
 
 if __name__ == "__main__":

@@ -151,33 +151,44 @@ class MalformedAndAdversarialInputTests(unittest.TestCase):
         hostile = '1.2.3.4"} 999\nsnds_complaint_rate{ip="5.6.7.8'
         records = parse_snds_response(f"{hostile},green,0.05%,12000")
         self.assertEqual(records, [])
-        rendered = render_prometheus_text(records, now=1_700_000_000.0)
+        rendered = render_prometheus_text(records)
         self.assertNotIn("999", rendered)
         self.assertEqual(rendered.count("snds_complaint_rate{"), 0)
 
 
 class RenderPrometheusTextTests(unittest.TestCase):
-    def test_renders_all_four_metric_families(self) -> None:
+    def test_renders_the_three_reputation_metric_families(self) -> None:
         records = [IpReputation(ip="203.0.113.5", status="green", complaint_rate=0.0005, volume=12000)]
-        rendered = render_prometheus_text(records, now=1_700_000_000.0)
+        rendered = render_prometheus_text(records)
         self.assertIn('snds_complaint_rate{ip="203.0.113.5"} 0.0005', rendered)
         self.assertIn('snds_message_volume{ip="203.0.113.5"} 12000', rendered)
         self.assertIn('snds_reputation_status{ip="203.0.113.5",status="green"} 1', rendered)
-        self.assertIn("snds_collector_last_success_timestamp_seconds 1700000000.0", rendered)
 
     def test_a_record_with_no_computed_rate_emits_no_complaint_rate_series(self) -> None:
         records = [IpReputation(ip="203.0.113.5", status="green", complaint_rate=None, volume=4)]
-        rendered = render_prometheus_text(records, now=1_700_000_000.0)
+        rendered = render_prometheus_text(records)
         self.assertNotIn("snds_complaint_rate{", rendered)
         self.assertIn('snds_message_volume{ip="203.0.113.5"} 4', rendered)
 
-    def test_the_freshness_gauge_is_always_present_even_with_no_records(self) -> None:
-        rendered = render_prometheus_text([], now=1_700_000_000.0)
-        self.assertIn("snds_collector_last_success_timestamp_seconds 1700000000.0", rendered)
+    def test_the_freshness_gauge_lives_in_the_health_file_not_here(self) -> None:
+        """It moved deliberately. Kept in the reputation file it could only be
+        written when there were reputation rows to write -- so on a sender
+        SNDS publishes nothing for, it would never exist and
+        SNDSCollectorStale's `absent(...)` branch would fire for ever,
+        reporting an empty feed as a broken one.
+        """
+        rendered = render_prometheus_text([])
+        self.assertNotIn("snds_collector_last_success_timestamp_seconds", rendered)
+        health = collect_snds_metrics.render_health_text(
+            1_700_000_000.0, True, None, last_success=1_700_000_000.0, data_available=False
+        )
+        self.assertIn("snds_collector_last_success_timestamp_seconds 1700000000.0", health)
+        self.assertIn("snds_data_available 0", health)
+
 
     def test_output_is_well_formed_exposition_text(self) -> None:
         records = [IpReputation(ip="203.0.113.5", status="red", complaint_rate=0.01, volume=50)]
-        rendered = render_prometheus_text(records, now=1_700_000_000.0)
+        rendered = render_prometheus_text(records)
         for line in rendered.splitlines():
             self.assertTrue(line.startswith("#") or "{" in line or " " in line)
         self.assertTrue(rendered.endswith("\n"))
@@ -287,12 +298,13 @@ class MainFailureLeavesPreviousOutputTests(unittest.TestCase):
             content = output_path.read_text()
             self.assertIn('snds_complaint_rate{ip="203.0.113.5"} 0.0005', content)
             self.assertNotIn("stale-content", content)
-            # The freshness gauge is a real, current timestamp -- not a
-            # constant carried over from the module's import time.
+            # The freshness gauge now lives in the health file, and is still a
+            # real current timestamp rather than a constant from import time.
+            health = (pathlib.Path(tmp) / collect_snds_metrics.HEALTH_FILENAME).read_text()
             written_ts = float(
                 [
                     line
-                    for line in content.splitlines()
+                    for line in health.splitlines()
                     if line.startswith("snds_collector_last_success_timestamp_seconds ")
                 ][0].split()[-1]
             )
@@ -357,19 +369,22 @@ class AccessLinkStatusCodeTests(unittest.TestCase):
             fp=None,
         )
 
-    def test_404_is_reported_as_an_access_link_problem_naming_both_causes(self) -> None:
+    def test_404_is_reported_as_no_data_rather_than_as_a_failure(self) -> None:
+        # Proven live on 2026-09-17: every automated-access URL for this
+        # estate's only registered IP answered 404, because SNDS publishes
+        # nothing below its reporting threshold. Treating that as a fault
+        # would page for ever while nothing was wrong.
         with mock.patch.object(
             collect_snds_metrics.urllib.request, "urlopen", side_effect=self._raise_http(404)
         ):
-            with self.assertRaises(collect_snds_metrics.AccessLinkRejectedError) as ctx:
+            with self.assertRaises(collect_snds_metrics.NoDataAvailableError) as ctx:
                 collect_snds_metrics.fetch_snds_data("https://example.test/snds/data.aspx?key=x")
         message = str(ctx.exception)
         self.assertIn("404", message)
+        self.assertIn("no data", message.lower())
+        # The ambiguity must still survive into the message: the same code
+        # covers an expired link, and the operator needs to know that.
         self.assertIn("expired", message)
-        # The ambiguity itself must survive into the message -- an operator
-        # told only "expired" would regenerate a link that was never the
-        # problem, and one told only "no data" would ignore a dead link.
-        self.assertIn("no data", message)
 
     def test_400_is_reported_as_a_malformed_link(self) -> None:
         with mock.patch.object(
@@ -530,10 +545,11 @@ class MainZeroRecordsIsStillSuccessTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             content = output_path.read_text()
             self.assertNotIn("stale-content", content)
+            health = (pathlib.Path(tmp) / collect_snds_metrics.HEALTH_FILENAME).read_text()
             written_ts = float(
                 [
                     line
-                    for line in content.splitlines()
+                    for line in health.splitlines()
                     if line.startswith("snds_collector_last_success_timestamp_seconds ")
                 ][0].split()[-1]
             )
@@ -696,27 +712,27 @@ class LinkFirstSeenTests(unittest.TestCase):
     def test_the_first_sighting_records_now(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = pathlib.Path(tmp) / collect_snds_metrics.LINK_STATE_FILENAME
-            first = collect_snds_metrics.read_link_first_seen(state, self.URL_A, 1000.0)
+            first, _ = collect_snds_metrics.read_link_state(state, self.URL_A, 1000.0)
             self.assertEqual(first, 1000.0)
 
     def test_the_same_url_keeps_its_original_first_seen_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = pathlib.Path(tmp) / collect_snds_metrics.LINK_STATE_FILENAME
-            collect_snds_metrics.read_link_first_seen(state, self.URL_A, 1000.0)
-            later = collect_snds_metrics.read_link_first_seen(state, self.URL_A, 9999.0)
+            collect_snds_metrics.read_link_state(state, self.URL_A, 1000.0)
+            later, _ = collect_snds_metrics.read_link_state(state, self.URL_A, 9999.0)
             self.assertEqual(later, 1000.0)
 
     def test_a_rotated_url_resets_the_clock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = pathlib.Path(tmp) / collect_snds_metrics.LINK_STATE_FILENAME
-            collect_snds_metrics.read_link_first_seen(state, self.URL_A, 1000.0)
-            rotated = collect_snds_metrics.read_link_first_seen(state, self.URL_B, 9999.0)
+            collect_snds_metrics.read_link_state(state, self.URL_A, 1000.0)
+            rotated, _ = collect_snds_metrics.read_link_state(state, self.URL_B, 9999.0)
             self.assertEqual(rotated, 9999.0)
 
     def test_the_state_file_never_contains_the_url_or_its_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = pathlib.Path(tmp) / collect_snds_metrics.LINK_STATE_FILENAME
-            collect_snds_metrics.read_link_first_seen(state, self.URL_A, 1000.0)
+            collect_snds_metrics.read_link_state(state, self.URL_A, 1000.0)
             content = state.read_text()
             self.assertNotIn(self.URL_A, content)
             self.assertNotIn("aaaaaaaa-1111-2222-3333-444444444444", content)
@@ -726,7 +742,7 @@ class LinkFirstSeenTests(unittest.TestCase):
             state = pathlib.Path(tmp) / collect_snds_metrics.LINK_STATE_FILENAME
             state.write_text("{not json at all")
             self.assertEqual(
-                collect_snds_metrics.read_link_first_seen(state, self.URL_A, 4242.0), 4242.0
+                collect_snds_metrics.read_link_state(state, self.URL_A, 4242.0)[0], 4242.0
             )
 
     def test_the_age_gauge_is_published_in_the_health_file(self) -> None:
@@ -1061,13 +1077,15 @@ class LinkStateUnwritableTests(unittest.TestCase):
                 collect_snds_metrics.pathlib.Path, "mkdir", side_effect=OSError("read-only")
             ):
                 self.assertIsNone(
-                    collect_snds_metrics.read_link_first_seen(state, "https://x.test/?key=abcdefgh", 1000.0)
+                    collect_snds_metrics.read_link_state(
+                        state, "https://x.test/?key=abcdefgh", 1000.0
+                    )[0]
                 )
 
     def test_the_health_file_publishes_the_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.object(
-                collect_snds_metrics, "read_link_first_seen", return_value=None
+                collect_snds_metrics, "read_link_state", return_value=(None, None)
             ):
                 _, output_dir = _run_main(tmp, return_value="203.0.113.5,green,0.05%,12000")
             health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
@@ -1097,6 +1115,101 @@ class CtrlCIsNotARunFailureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(SystemExit):
                 _run_main(tmp, side_effect=SystemExit(2))
+
+
+class NoDataIsNotAFailureTests(unittest.TestCase):
+    """The live finding of 2026-09-17: SNDS returns 404 for an IP it has no
+    data for, and on a sender below its reporting threshold that is the
+    permanent steady state. Treating it as a failed run made
+    SNDSCollectorFailing page hourly for ever about a feed that was merely
+    empty -- while RUNBOOK-monitoring.md says in as many words that an empty
+    result is not a fault.
+    """
+
+    def _no_data(self):
+        return collect_snds_metrics.NoDataAvailableError("HTTP 404 -- SNDS has no data")
+
+    def test_a_no_data_run_exits_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            exit_code, _ = _run_main(tmp, side_effect=self._no_data())
+            self.assertEqual(exit_code, 0)
+
+    def test_a_no_data_run_publishes_success_so_nothing_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, output_dir = _run_main(tmp, side_effect=self._no_data())
+            health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            self.assertIn("snds_collector_last_run_success 1", health)
+
+    def test_a_no_data_run_says_so_rather_than_implying_clean_reputation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, output_dir = _run_main(tmp, side_effect=self._no_data())
+            health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            self.assertIn("snds_data_available 0", health)
+
+    def test_a_no_data_run_advances_the_success_timestamp(self) -> None:
+        # Otherwise SNDSCollectorStale fires at 36h and the false alarm has
+        # simply moved from one alert to another.
+        with tempfile.TemporaryDirectory() as tmp:
+            before = time.time()
+            _, output_dir = _run_main(tmp, side_effect=self._no_data())
+            health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            ts = float(
+                [
+                    l
+                    for l in health.splitlines()
+                    if l.startswith("snds_collector_last_success_timestamp_seconds ")
+                ][0].split()[-1]
+            )
+            self.assertGreaterEqual(ts, before)
+
+    def test_a_no_data_run_writes_no_reputation_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, output_dir = _run_main(tmp, side_effect=self._no_data())
+            self.assertFalse((output_dir / collect_snds_metrics.REPUTATION_FILENAME).exists())
+
+    def test_a_no_data_run_preserves_a_previous_real_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _run_main(tmp, return_value="203.0.113.5,green,0.05%,12000")
+            good = (pathlib.Path(tmp) / collect_snds_metrics.REPUTATION_FILENAME).read_text()
+            _run_main(tmp, side_effect=self._no_data())
+            self.assertEqual(
+                (pathlib.Path(tmp) / collect_snds_metrics.REPUTATION_FILENAME).read_text(), good
+            )
+
+    def test_the_success_timestamp_persists_across_a_later_failure(self) -> None:
+        # The stale alert reads this gauge, so a failing run must keep
+        # publishing the LAST success rather than dropping the series --
+        # otherwise `absent(...)` fires for a reason that is not true.
+        with tempfile.TemporaryDirectory() as tmp:
+            _run_main(tmp, side_effect=self._no_data())
+            _, output_dir = _run_main(
+                tmp, side_effect=collect_snds_metrics.urllib.error.URLError("boom")
+            )
+            health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            self.assertIn("snds_collector_last_run_success 0", health)
+            self.assertIn("snds_collector_last_success_timestamp_seconds ", health)
+
+    def test_a_400_is_still_a_failure(self) -> None:
+        # The other half of the split: a malformed key is a real fault and
+        # must not be quieted along with the empty-feed case.
+        with tempfile.TemporaryDirectory() as tmp:
+            exit_code, output_dir = _run_main(
+                tmp,
+                side_effect=collect_snds_metrics.AccessLinkRejectedError("HTTP 400 -- malformed"),
+            )
+            self.assertEqual(exit_code, 1)
+            self.assertIn(
+                "snds_collector_last_run_success 0",
+                (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text(),
+            )
+
+    def test_real_data_reports_data_available_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, output_dir = _run_main(tmp, return_value="203.0.113.5,green,0.05%,12000")
+            self.assertIn(
+                "snds_data_available 1",
+                (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text(),
+            )
 
 
 if __name__ == "__main__":
