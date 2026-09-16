@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.error
 from unittest import mock
 
 MODULE_PATH = (
@@ -215,8 +216,26 @@ class WriteTextfileAtomicallyTests(unittest.TestCase):
             self.assertEqual(path.read_text(), "second\n")
 
 
+def _run_main(tmp: str, *, url: str | None = "https://example.test/data?key=abc", **patches):
+    """Runs `main` against a temporary output directory, with `SNDS_DATA_URL`
+    either set or deliberately absent. Returns `(exit_code, output_dir)`.
+    """
+    output_dir = pathlib.Path(tmp)
+    env = {
+        k: v
+        for k, v in collect_snds_metrics.os.environ.items()
+        if k not in ("SNDS_DATA_URL", "SNDS_OUTPUT_DIR")
+    }
+    env["SNDS_OUTPUT_DIR"] = str(output_dir)
+    if url is not None:
+        env["SNDS_DATA_URL"] = url
+    with mock.patch.dict(collect_snds_metrics.os.environ, env, clear=True):
+        with mock.patch.object(collect_snds_metrics, "fetch_snds_data", **patches):
+            return collect_snds_metrics.main([]), output_dir
+
+
 class MainFailureLeavesPreviousOutputTests(unittest.TestCase):
-    """A fetch failure (network error, expired bearer token) must not blank
+    """A fetch failure (network error, expired access link) must not blank
     out the previous day's snapshot -- that would turn a transient failure
     into a false "no complaints on record" reading. Proven here by seeding an
     existing textfile, forcing the fetch to fail, and asserting the file is
@@ -225,33 +244,31 @@ class MainFailureLeavesPreviousOutputTests(unittest.TestCase):
 
     def test_a_fetch_failure_leaves_the_existing_textfile_untouched(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            output_path = pathlib.Path(tmp) / "snds.prom"
+            output_path = pathlib.Path(tmp) / collect_snds_metrics.REPUTATION_FILENAME
             output_path.write_text("previous-content\n")
 
-            with mock.patch.dict(
-                collect_snds_metrics.os.environ,
-                {"SNDS_BEARER_TOKEN": "token", "SNDS_OUTPUT_PATH": str(output_path)},
-                clear=False,
-            ), mock.patch.object(
-                collect_snds_metrics,
-                "fetch_snds_data",
-                side_effect=collect_snds_metrics.urllib.error.URLError("boom"),
-            ):
-                exit_code = collect_snds_metrics.main([])
+            exit_code, _ = _run_main(
+                tmp, side_effect=collect_snds_metrics.urllib.error.URLError("boom")
+            )
 
             self.assertEqual(exit_code, 1)
             self.assertEqual(output_path.read_text(), "previous-content\n")
 
-    def test_a_missing_token_makes_no_network_call_and_leaves_output_untouched(self) -> None:
+    def test_a_missing_url_makes_no_network_call_and_leaves_output_untouched(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            output_path = pathlib.Path(tmp) / "snds.prom"
+            output_path = pathlib.Path(tmp) / collect_snds_metrics.REPUTATION_FILENAME
             output_path.write_text("previous-content\n")
 
-            env = {k: v for k, v in collect_snds_metrics.os.environ.items() if k != "SNDS_BEARER_TOKEN"}
-            env["SNDS_OUTPUT_PATH"] = str(output_path)
-            with mock.patch.dict(collect_snds_metrics.os.environ, env, clear=True), mock.patch.object(
-                collect_snds_metrics, "fetch_snds_data"
-            ) as fetch:
+            output_dir = pathlib.Path(tmp)
+            env = {
+                k: v
+                for k, v in collect_snds_metrics.os.environ.items()
+                if k != "SNDS_DATA_URL"
+            }
+            env["SNDS_OUTPUT_DIR"] = str(output_dir)
+            with mock.patch.dict(
+                collect_snds_metrics.os.environ, env, clear=True
+            ), mock.patch.object(collect_snds_metrics, "fetch_snds_data") as fetch:
                 exit_code = collect_snds_metrics.main([])
                 fetch.assert_not_called()
 
@@ -260,20 +277,11 @@ class MainFailureLeavesPreviousOutputTests(unittest.TestCase):
 
     def test_a_successful_run_writes_fresh_content_and_advances_the_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            output_path = pathlib.Path(tmp) / "snds.prom"
+            output_path = pathlib.Path(tmp) / collect_snds_metrics.REPUTATION_FILENAME
             output_path.write_text("stale-content\n")
 
-            with mock.patch.dict(
-                collect_snds_metrics.os.environ,
-                {"SNDS_BEARER_TOKEN": "token", "SNDS_OUTPUT_PATH": str(output_path)},
-                clear=False,
-            ), mock.patch.object(
-                collect_snds_metrics,
-                "fetch_snds_data",
-                return_value="203.0.113.5,green,0.05%,12000",
-            ):
-                before = time.time()
-                exit_code = collect_snds_metrics.main([])
+            before = time.time()
+            exit_code, _ = _run_main(tmp, return_value="203.0.113.5,green,0.05%,12000")
 
             self.assertEqual(exit_code, 0)
             content = output_path.read_text()
@@ -292,7 +300,12 @@ class MainFailureLeavesPreviousOutputTests(unittest.TestCase):
 
 
 class FetchSndsDataTests(unittest.TestCase):
-    def test_sends_the_bearer_token_as_an_authorization_header(self) -> None:
+    def test_requests_the_url_verbatim_and_sends_no_authorization_header(self) -> None:
+        """The access key lives in the URL's own query string -- there is no
+        header to set. Asserting the absence of `Authorization` is what would
+        catch a half-finished revert to the old bearer-token mechanism, which
+        would send a credential this deployment no longer holds.
+        """
         captured: dict[str, object] = {}
 
         class FakeHeaders:
@@ -316,12 +329,89 @@ class FetchSndsDataTests(unittest.TestCase):
             captured["url"] = request.full_url  # type: ignore[attr-defined]
             return FakeResponse()
 
+        url = "https://example.test/snds/data.aspx?key=00000000-0000-0000-0000-000000000000"
         with mock.patch.object(collect_snds_metrics.urllib.request, "urlopen", fake_urlopen):
-            body = collect_snds_metrics.fetch_snds_data("https://example.test/ipstatus", "s3cr3t")
+            body = collect_snds_metrics.fetch_snds_data(url)
 
         self.assertEqual(body, "203.0.113.5,green,0.05%,12000")
-        self.assertEqual(captured["headers"].get("Authorization"), "Bearer s3cr3t")
-        self.assertEqual(captured["url"], "https://example.test/ipstatus")
+        self.assertEqual(captured["url"], url)
+        self.assertNotIn(
+            "authorization", {k.lower() for k in captured["headers"]}  # type: ignore[union-attr]
+        )
+
+
+class AccessLinkStatusCodeTests(unittest.TestCase):
+    """Microsoft documents exactly two status codes about the key itself, and
+    the operator response differs from a generic network failure: both are
+    cleared by regenerating the link, neither by waiting. 404 is doubly
+    important because Microsoft overloads it -- expired key AND no-data-today
+    share it -- so the message has to say that rather than assert one cause.
+    """
+
+    def _raise_http(self, code: int, msg: str = "Not Found") -> object:
+        return urllib.error.HTTPError(
+            url="https://example.test/snds/data.aspx?key=SUPERSECRETKEYVALUE",
+            code=code,
+            msg=msg,
+            hdrs=None,  # type: ignore[arg-type]
+            fp=None,
+        )
+
+    def test_404_is_reported_as_an_access_link_problem_naming_both_causes(self) -> None:
+        with mock.patch.object(
+            collect_snds_metrics.urllib.request, "urlopen", side_effect=self._raise_http(404)
+        ):
+            with self.assertRaises(collect_snds_metrics.AccessLinkRejectedError) as ctx:
+                collect_snds_metrics.fetch_snds_data("https://example.test/snds/data.aspx?key=x")
+        message = str(ctx.exception)
+        self.assertIn("404", message)
+        self.assertIn("expired", message)
+        # The ambiguity itself must survive into the message -- an operator
+        # told only "expired" would regenerate a link that was never the
+        # problem, and one told only "no data" would ignore a dead link.
+        self.assertIn("no data", message)
+
+    def test_400_is_reported_as_a_malformed_link(self) -> None:
+        with mock.patch.object(
+            collect_snds_metrics.urllib.request, "urlopen", side_effect=self._raise_http(400)
+        ):
+            with self.assertRaises(collect_snds_metrics.AccessLinkRejectedError) as ctx:
+                collect_snds_metrics.fetch_snds_data("https://example.test/snds/data.aspx?key=x")
+        self.assertIn("400", str(ctx.exception))
+
+    def test_an_unmapped_status_code_stays_a_plain_url_error(self) -> None:
+        with mock.patch.object(
+            collect_snds_metrics.urllib.request, "urlopen", side_effect=self._raise_http(503)
+        ):
+            with self.assertRaises(urllib.error.URLError) as ctx:
+                collect_snds_metrics.fetch_snds_data("https://example.test/snds/data.aspx?key=x")
+        self.assertNotIsInstance(ctx.exception, collect_snds_metrics.AccessLinkRejectedError)
+
+    def test_no_status_code_path_leaks_the_key_into_its_message(self) -> None:
+        """The reason phrase is the server's text, not this collector's, and
+        it lands in a message that must stay free of the access key.
+
+        The key is planted in `msg` deliberately: `HTTPError.__str__` happens
+        not to include the request URL, so a test that only checked
+        `str(exc)` would pass even against code that interpolated the whole
+        exception -- proven by sabotage, which survived exactly that test
+        before this one replaced it. Feeding the secret through the one
+        server-controlled field the message legitimately quotes is what makes
+        the redaction load-bearing rather than incidental.
+        """
+        url = "https://example.test/snds/data.aspx?key=SUPERSECRETKEYVALUE"
+        for code in (404, 400, 503):
+            with self.subTest(code=code):
+                with mock.patch.object(
+                    collect_snds_metrics.urllib.request,
+                    "urlopen",
+                    side_effect=self._raise_http(
+                        code, msg="rejected key SUPERSECRETKEYVALUE"
+                    ),
+                ):
+                    with self.assertRaises(Exception) as ctx:
+                        collect_snds_metrics.fetch_snds_data(url)
+                self.assertNotIn("SUPERSECRETKEYVALUE", str(ctx.exception))
 
 
 def _fake_response(body: bytes, content_type: str = "text/plain") -> "mock.Mock":
@@ -354,7 +444,7 @@ class FetchSndsDataShapeValidationTests(unittest.TestCase):
             return_value=_fake_response(html.encode("utf-8"), content_type="text/html"),
         ):
             with self.assertRaises(collect_snds_metrics.UnexpectedResponseShapeError) as ctx:
-                collect_snds_metrics.fetch_snds_data("https://example.test/ipstatus", "s3cr3t")
+                collect_snds_metrics.fetch_snds_data("https://example.test/ipstatus")
         self.assertIn("text/html", str(ctx.exception))
 
     def test_html_shaped_bytes_are_rejected_even_under_a_misleading_content_type(self) -> None:
@@ -368,7 +458,7 @@ class FetchSndsDataShapeValidationTests(unittest.TestCase):
             return_value=_fake_response(html.encode("utf-8"), content_type="text/plain"),
         ):
             with self.assertRaises(collect_snds_metrics.UnexpectedResponseShapeError):
-                collect_snds_metrics.fetch_snds_data("https://example.test/ipstatus", "s3cr3t")
+                collect_snds_metrics.fetch_snds_data("https://example.test/ipstatus")
 
     def test_a_well_formed_csv_response_with_rows_passes_through_unchanged(self) -> None:
         body = "203.0.113.5,green,0.05%,12000\n198.51.100.9,red,1.2%,300\n"
@@ -377,7 +467,7 @@ class FetchSndsDataShapeValidationTests(unittest.TestCase):
             "urlopen",
             return_value=_fake_response(body.encode("utf-8"), content_type="text/plain"),
         ):
-            fetched = collect_snds_metrics.fetch_snds_data("https://example.test/ipstatus", "s3cr3t")
+            fetched = collect_snds_metrics.fetch_snds_data("https://example.test/ipstatus")
         self.assertEqual(fetched, body)
 
     def test_a_well_formed_empty_response_passes_through_unchanged(self) -> None:
@@ -389,7 +479,7 @@ class FetchSndsDataShapeValidationTests(unittest.TestCase):
             "urlopen",
             return_value=_fake_response(b"", content_type="text/plain"),
         ):
-            fetched = collect_snds_metrics.fetch_snds_data("https://example.test/ipstatus", "s3cr3t")
+            fetched = collect_snds_metrics.fetch_snds_data("https://example.test/ipstatus")
         self.assertEqual(fetched, "")
 
 
@@ -403,21 +493,15 @@ class MainShapeFailureIsNotSuccessTests(unittest.TestCase):
 
     def test_an_html_response_leaves_the_existing_textfile_untouched_and_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            output_path = pathlib.Path(tmp) / "snds.prom"
+            output_path = pathlib.Path(tmp) / collect_snds_metrics.REPUTATION_FILENAME
             output_path.write_text("previous-content\n")
 
-            with mock.patch.dict(
-                collect_snds_metrics.os.environ,
-                {"SNDS_BEARER_TOKEN": "token", "SNDS_OUTPUT_PATH": str(output_path)},
-                clear=False,
-            ), mock.patch.object(
-                collect_snds_metrics,
-                "fetch_snds_data",
+            exit_code, _ = _run_main(
+                tmp,
                 side_effect=collect_snds_metrics.UnexpectedResponseShapeError(
                     "expected the SNDS CSV/plain-text feed, got what looks like an HTML page"
                 ),
-            ):
-                exit_code = collect_snds_metrics.main([])
+            )
 
             self.assertEqual(exit_code, 1)
             # The prior good snapshot survives byte-for-byte, same guarantee
@@ -437,20 +521,11 @@ class MainZeroRecordsIsStillSuccessTests(unittest.TestCase):
 
     def test_a_well_formed_empty_response_stamps_success_and_writes_zero_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            output_path = pathlib.Path(tmp) / "snds.prom"
+            output_path = pathlib.Path(tmp) / collect_snds_metrics.REPUTATION_FILENAME
             output_path.write_text("stale-content\n")
 
-            with mock.patch.dict(
-                collect_snds_metrics.os.environ,
-                {"SNDS_BEARER_TOKEN": "token", "SNDS_OUTPUT_PATH": str(output_path)},
-                clear=False,
-            ), mock.patch.object(
-                collect_snds_metrics,
-                "fetch_snds_data",
-                return_value="",
-            ):
-                before = time.time()
-                exit_code = collect_snds_metrics.main([])
+            before = time.time()
+            exit_code, _ = _run_main(tmp, return_value="")
 
             self.assertEqual(exit_code, 0)
             content = output_path.read_text()
@@ -463,6 +538,218 @@ class MainZeroRecordsIsStillSuccessTests(unittest.TestCase):
                 ][0].split()[-1]
             )
             self.assertGreaterEqual(written_ts, before)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class RedactTests(unittest.TestCase):
+    """`SNDS_DATA_URL` is the credential -- the access key is a query
+    parameter, so any log line carrying the URL carries the key. These prove
+    the redaction the failure paths depend on, including the case where only
+    the key (not the whole URL) appears in text this module did not write.
+    """
+
+    URL = "https://example.test/snds/data.aspx?key=9f3c1d2e-aaaa-bbbb-cccc-1234567890ab"
+    KEY = "9f3c1d2e-aaaa-bbbb-cccc-1234567890ab"
+
+    def test_the_whole_url_is_replaced(self) -> None:
+        out = collect_snds_metrics.redact(f"fetch of {self.URL} failed", self.URL)
+        self.assertNotIn(self.URL, out)
+        self.assertNotIn(self.KEY, out)
+
+    def test_the_key_alone_is_replaced_when_the_url_is_not_quoted_whole(self) -> None:
+        # A portal-side message echoing only the key back, or a proxy that
+        # rewrites the host -- the full-URL replacement alone would miss both.
+        out = collect_snds_metrics.redact(f"invalid key: {self.KEY}", self.URL)
+        self.assertNotIn(self.KEY, out)
+
+    def test_ordinary_text_is_left_alone(self) -> None:
+        out = collect_snds_metrics.redact("connection reset by peer", self.URL)
+        self.assertEqual(out, "connection reset by peer")
+
+    def test_a_short_query_value_is_not_used_as_a_replacement_needle(self) -> None:
+        # Replacing a 1-3 character value would corrupt unrelated prose
+        # without protecting anything -- "data" appearing in a message is not
+        # a credential leak.
+        out = collect_snds_metrics.redact(
+            "no data for that date", "https://example.test/d?fmt=csv&v=1"
+        )
+        self.assertEqual(out, "no data for that date")
+
+    def test_an_empty_url_is_a_no_op_rather_than_an_error(self) -> None:
+        self.assertEqual(collect_snds_metrics.redact("some message", ""), "some message")
+
+
+class MainRedactionTests(unittest.TestCase):
+    """The end-to-end property: no failure path may print the URL. Proven
+    against `main`'s own stderr rather than against `redact` in isolation,
+    because the defect this prevents is a *missed call* to `redact`, which a
+    unit test of `redact` itself cannot catch.
+    """
+
+    URL = "https://example.test/snds/data.aspx?key=SECRETKEY1234567890"
+
+    def _stderr_of_failing_run(self, exc: Exception) -> str:
+        import io
+        import contextlib
+
+        with tempfile.TemporaryDirectory() as tmp:
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                exit_code, _ = _run_main(tmp, url=self.URL, side_effect=exc)
+            self.assertEqual(exit_code, 1)
+            return buf.getvalue()
+
+    def test_a_url_error_quoting_the_url_is_redacted_before_it_reaches_stderr(self) -> None:
+        err = self._stderr_of_failing_run(
+            urllib.error.URLError(f"failed to open {self.URL}")
+        )
+        self.assertNotIn("SECRETKEY1234567890", err)
+        self.assertIn(collect_snds_metrics.REDACTED, err)
+
+    def test_an_access_link_rejection_reaches_stderr_without_the_key(self) -> None:
+        err = self._stderr_of_failing_run(
+            collect_snds_metrics.AccessLinkRejectedError("HTTP 404 -- expired, or no data")
+        )
+        self.assertNotIn("SECRETKEY1234567890", err)
+        self.assertIn("404", err)
+
+
+class HealthTextfileTests(unittest.TestCase):
+    """The half of the output that makes a failing collector visible in one
+    scrape instead of 36 hours. The reputation file is deliberately preserved
+    across a failure, which is exactly what makes a dashboard read green
+    while the collector is dead -- so health must be published separately and
+    unconditionally.
+    """
+
+    def test_a_failed_run_publishes_health_with_success_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            exit_code, output_dir = _run_main(
+                tmp, side_effect=collect_snds_metrics.urllib.error.URLError("boom")
+            )
+            self.assertEqual(exit_code, 1)
+            health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            self.assertIn("snds_collector_last_run_success 0", health)
+            self.assertIn("snds_collector_last_attempt_timestamp_seconds ", health)
+
+    def test_a_successful_run_publishes_health_with_success_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            exit_code, output_dir = _run_main(tmp, return_value="203.0.113.5,green,0.05%,12000")
+            self.assertEqual(exit_code, 0)
+            health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            self.assertIn("snds_collector_last_run_success 1", health)
+
+    def test_health_is_published_even_when_the_url_is_missing_entirely(self) -> None:
+        # The worst case for silent failure: nothing configured at all. The
+        # reputation file may not exist, but health must still say so.
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = pathlib.Path(tmp)
+            env = {
+                k: v
+                for k, v in collect_snds_metrics.os.environ.items()
+                if k != "SNDS_DATA_URL"
+            }
+            env["SNDS_OUTPUT_DIR"] = str(output_dir)
+            with mock.patch.dict(collect_snds_metrics.os.environ, env, clear=True):
+                exit_code = collect_snds_metrics.main([])
+            self.assertEqual(exit_code, 1)
+            health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            self.assertIn("snds_collector_last_run_success 0", health)
+
+    def test_a_failed_run_does_not_write_the_reputation_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, output_dir = _run_main(
+                tmp, side_effect=collect_snds_metrics.urllib.error.URLError("boom")
+            )
+            self.assertFalse((output_dir / collect_snds_metrics.REPUTATION_FILENAME).exists())
+
+    def test_the_two_files_are_separate_so_a_failure_cannot_blank_reputation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            # A good run, then a failing one: the reputation values from the
+            # good run must survive the failure untouched.
+            _run_main(tmp, return_value="203.0.113.5,green,0.05%,12000")
+            reputation_after_success = (
+                pathlib.Path(tmp) / collect_snds_metrics.REPUTATION_FILENAME
+            ).read_text()
+
+            _run_main(tmp, side_effect=collect_snds_metrics.urllib.error.URLError("boom"))
+
+            self.assertEqual(
+                (pathlib.Path(tmp) / collect_snds_metrics.REPUTATION_FILENAME).read_text(),
+                reputation_after_success,
+            )
+            health = (pathlib.Path(tmp) / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            self.assertIn("snds_collector_last_run_success 0", health)
+
+
+class LinkFirstSeenTests(unittest.TestCase):
+    """Microsoft expires each access link 30 days after it is generated and
+    puts that date in no response, so the age is observed here. The point of
+    observing it rather than having an operator record it is that an observed
+    age cannot drift out of sync with the URL actually in use.
+    """
+
+    URL_A = "https://example.test/snds/data.aspx?key=aaaaaaaa-1111-2222-3333-444444444444"
+    URL_B = "https://example.test/snds/data.aspx?key=bbbbbbbb-5555-6666-7777-888888888888"
+
+    def test_the_first_sighting_records_now(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = pathlib.Path(tmp) / collect_snds_metrics.LINK_STATE_FILENAME
+            first = collect_snds_metrics.read_link_first_seen(state, self.URL_A, 1000.0)
+            self.assertEqual(first, 1000.0)
+
+    def test_the_same_url_keeps_its_original_first_seen_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = pathlib.Path(tmp) / collect_snds_metrics.LINK_STATE_FILENAME
+            collect_snds_metrics.read_link_first_seen(state, self.URL_A, 1000.0)
+            later = collect_snds_metrics.read_link_first_seen(state, self.URL_A, 9999.0)
+            self.assertEqual(later, 1000.0)
+
+    def test_a_rotated_url_resets_the_clock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = pathlib.Path(tmp) / collect_snds_metrics.LINK_STATE_FILENAME
+            collect_snds_metrics.read_link_first_seen(state, self.URL_A, 1000.0)
+            rotated = collect_snds_metrics.read_link_first_seen(state, self.URL_B, 9999.0)
+            self.assertEqual(rotated, 9999.0)
+
+    def test_the_state_file_never_contains_the_url_or_its_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = pathlib.Path(tmp) / collect_snds_metrics.LINK_STATE_FILENAME
+            collect_snds_metrics.read_link_first_seen(state, self.URL_A, 1000.0)
+            content = state.read_text()
+            self.assertNotIn(self.URL_A, content)
+            self.assertNotIn("aaaaaaaa-1111-2222-3333-444444444444", content)
+
+    def test_a_corrupt_state_file_is_treated_as_a_first_sighting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = pathlib.Path(tmp) / collect_snds_metrics.LINK_STATE_FILENAME
+            state.write_text("{not json at all")
+            self.assertEqual(
+                collect_snds_metrics.read_link_first_seen(state, self.URL_A, 4242.0), 4242.0
+            )
+
+    def test_the_age_gauge_is_published_in_the_health_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, output_dir = _run_main(
+                tmp, url=self.URL_A, return_value="203.0.113.5,green,0.05%,12000"
+            )
+            health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            self.assertIn("snds_access_link_first_seen_timestamp_seconds ", health)
+
+    def test_the_age_gauge_survives_a_failing_run_so_expiry_stays_visible(self) -> None:
+        # The run that matters most for this gauge is a failing one: if the
+        # link has expired, the expiry alert must still have an age to read.
+        with tempfile.TemporaryDirectory() as tmp:
+            _, output_dir = _run_main(
+                tmp,
+                url=self.URL_A,
+                side_effect=collect_snds_metrics.AccessLinkRejectedError("HTTP 404"),
+            )
+            health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            self.assertIn("snds_access_link_first_seen_timestamp_seconds ", health)
 
 
 if __name__ == "__main__":

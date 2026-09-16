@@ -10,10 +10,12 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-# Same file the monitoring stack itself reads -- SNDS_BEARER_TOKEN sits
-# beside SMTP_USERNAME and the rest, not in a file of its own. A missing or
-# blank token fails this run and leaves the previous textfile output in
-# place (see collect_snds_metrics.py); it does not fail the monitoring
-# stack itself, which has no ExecStartPre dependency on this unit.
+# Same file the monitoring stack itself reads -- SNDS_DATA_URL sits beside
+# SMTP_USERNAME and the rest, not in a file of its own. A missing or blank
+# URL fails this run and leaves the previous reputation textfile in place
+# (see collect_snds_metrics.py); it does not fail the monitoring stack
+# itself, which has no ExecStartPre dependency on this unit. The health
+# textfile IS still rewritten on such a run, which is what makes the failure
+# visible within the hour rather than after 36h.
 EnvironmentFile=-/etc/branchleft/monitoring.env
 ExecStart=/usr/bin/python3 /opt/branchleft/monitoring/snds/collect_snds_metrics.py

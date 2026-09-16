@@ -256,16 +256,16 @@ shared unit template), and it is also what
 that script's docstring for why Alertmanager's own config format cannot read
 an environment variable itself, unlike Caddy's `{env.X}`.
 
-| Variable                     | Used by                                                                                  | Where the value comes from                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ---------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SMTP_USERNAME`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `SMTP_PASSWORD`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `HEALTHCHECKS_PING_URL`      | Alertmanager (via the render script)                                                     | The Healthchecks.io check's ping URL (PR's handover steps)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `ALERT_RECIPIENT_EMAIL`      | Alertmanager (via the render script)                                                     | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `MAILHOST_PING_URL`          | Alertmanager (via the render script)                                                     | A second, dedicated Healthchecks.io check's `/fail` endpoint -- hitting `/fail` marks it down immediately rather than waiting for a missed heartbeat. Routed to by `MailHostDown` and `AlertEmailDeliveryFailing` only (see `mailhost-deadman` in `renderAlertmanagerTemplate()`), never by anything else                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `GRAFANA_ADMIN_PASSWORD`     | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`)                                            | Generated fresh, stored in the password manager                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `STALWART_PROMETHEUS_SECRET` | Prometheus (via the render script, as the `stalwart` job's `basic_auth` `password_file`) | `/opt/stalwart/.env` on mx1, minted by `mail/provision/30-deploy-stalwart.sh` -- see `mail/RUNBOOK-mx1-prometheus-metrics.md`. **The one row here that is not fatal when absent**: the render script warns on stderr and removes any stale file, Prometheus starts normally, and the `stalwart` target reports `down` until it is set                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `SNDS_BEARER_TOKEN`          | `snds/collect_snds_metrics.py`, run by `snds-collector.timer` (§14)                      | The SNDS portal at `sendersupport.olc.protection.outlook.com`, signed in as the registered sender. **Not a long-lived key**: Microsoft retired the static `?key=` automated-access URL in June 2026: the replacement is an OAuth bearer token tied to the portal login, observed to last on the order of hours, with no `refresh_token` Microsoft issues for unattended renewal. There is no automation for this repo to run: the operator re-generates it from the portal by hand and pastes the new value in here. A stale or absent token fails only the collector's own run (leaves the previous textfile output in place, per that script's docstring); `SNDSCollectorStale` (`render.ts`) pages once 36 hours pass with no successful refresh |
+| Variable                     | Used by                                                                                  | Where the value comes from                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SMTP_USERNAME`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `SMTP_PASSWORD`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `HEALTHCHECKS_PING_URL`      | Alertmanager (via the render script)                                                     | The Healthchecks.io check's ping URL (PR's handover steps)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `ALERT_RECIPIENT_EMAIL`      | Alertmanager (via the render script)                                                     | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `MAILHOST_PING_URL`          | Alertmanager (via the render script)                                                     | A second, dedicated Healthchecks.io check's `/fail` endpoint -- hitting `/fail` marks it down immediately rather than waiting for a missed heartbeat. Routed to by `MailHostDown` and `AlertEmailDeliveryFailing` only (see `mailhost-deadman` in `renderAlertmanagerTemplate()`), never by anything else                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `GRAFANA_ADMIN_PASSWORD`     | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`)                                            | Generated fresh, stored in the password manager                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `STALWART_PROMETHEUS_SECRET` | Prometheus (via the render script, as the `stalwart` job's `basic_auth` `password_file`) | `/opt/stalwart/.env` on mx1, minted by `mail/provision/30-deploy-stalwart.sh` -- see `mail/RUNBOOK-mx1-prometheus-metrics.md`. **The one row here that is not fatal when absent**: the render script warns on stderr and removes any stale file, Prometheus starts normally, and the `stalwart` target reports `down` until it is set                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `SNDS_DATA_URL`              | `snds/collect_snds_metrics.py`, run by `snds-collector.timer` (§14)                      | A complete SNDS **Automated Data Access** URL, access key embedded in its query string -- the whole URL is the secret, which is why the collector never prints it. Generated from the SNDS portal's automated-access page (§14) and **expiring 30 days later**, so this is a monthly chore, not a set-once credential. `SNDSAccessLinkExpiringSoon` (`render.ts`) fires at 25 days to make it a scheduled one rather than an outage. A stale or absent URL fails only the collector's own run (the previous reputation textfile is left in place, per that script's docstring) and drives `snds_collector_last_run_success` to 0, which `SNDSCollectorFailing` picks up within the hour. **Deliberately not the OAuth bearer token** the same portal page also offers: that lives ~8h with no `refresh_token`, which cannot serve a 6-hourly unattended collector at all (branchLeft/workspace#538) |
 
 **This step now writes five secrets, not four -- `MAILHOST_PING_URL` is as
 required as the other three Alertmanager variables.**
@@ -728,36 +728,68 @@ or the cgroup containment), the same pattern applies to
 
 `snds/collect_snds_metrics.py` is copied to the host as part of step 4's
 `hetzner/monitoring/stack/` rsync (it lives under that directory). This
-section is everything specific to it on top of that: the bearer token,
-node-exporter's textfile-collector mount, and the systemd timer that actually
-runs it.
+section is everything specific to it on top of that: the automated-access
+URL, node-exporter's textfile-collector mount, and the systemd timer that
+actually runs it.
 
-**First, get a bearer token.** Sign in to the SNDS portal at
+**First, generate an automated-access URL.** Sign in to the SNDS portal at
 `https://sendersupport.olc.protection.outlook.com/snds/` as the registered
-sender and generate an API token for the IP status/data endpoint. This is a
-manual, recurring step, not a one-time credential: Microsoft's current API has
-no `refresh_token`, and community reports put the token's life at roughly 8
-hours, so a token minted once will go stale well inside the collector's own
-24-36h alerting window. Write it into `/etc/branchleft/monitoring.env` as
-`SNDS_BEARER_TOKEN` (§3's table), the same file every other stack secret
-lives in -- there is no separate credential file for this one. `$EDGE1_IPV4`
-is set under "What has to be true first" above; re-set it first if you are
-entering this section independently -- every command below reuses it.
+sender, open **View Data**, and follow "View or change your automated access
+settings". Enable the feature; the page then shows two URLs, one for the data
+report and one for IP status, each carrying an access key in its query
+string. Take the **data** URL.
+
+**Why this and not the OAuth bearer token.** The same page also documents a
+REST API behind an OAuth 2.0 bearer token. That token lives about 8 hours and
+Microsoft issues no `refresh_token` for it, so it cannot keep a 6-hourly
+unattended collector authenticated: a human would have to re-authenticate
+several times a day, for ever. The collector ran that way until
+branchLeft/workspace#538 -- every run failed within hours of each manual
+renewal, and the reputation data it was supposed to be watching read as
+_silent_ rather than as _clean_ for two weeks before anyone noticed. The
+automated-access URL expires every 30 days instead, which is a cadence a
+person can actually keep.
+
+**The URL is the credential.** It grants download of the account's SNDS data
+to anyone holding it, so it is handled exactly like the passwords beside it:
+written straight into `/etc/branchleft/monitoring.env` as `SNDS_DATA_URL`
+(§3's table) on the host, never pasted into a terminal that logs, an issue, a
+PR, or a chat. The collector never prints it -- every error path redacts both
+the whole URL and the key alone before anything reaches the journal.
+`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it first
+if you are entering this section independently -- every command below reuses
+it.
+
+Paste the URL when the shell prompts, rather than typing it into the command
+line, so it never enters shell history:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
-  grep -q "^SNDS_BEARER_TOKEN=" /etc/branchleft/monitoring.env &&
-  sed -i "s|^SNDS_BEARER_TOKEN=.*|SNDS_BEARER_TOKEN=<TOKEN>|" /etc/branchleft/monitoring.env ||
-  printf "SNDS_BEARER_TOKEN=%s\n" "<TOKEN>" >> /etc/branchleft/monitoring.env'
+read -rs SNDS_URL
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
+  "grep -q '^SNDS_DATA_URL=' /etc/branchleft/monitoring.env &&
+   sed -i \"s|^SNDS_DATA_URL=.*|SNDS_DATA_URL=${SNDS_URL}|\" /etc/branchleft/monitoring.env ||
+   printf 'SNDS_DATA_URL=%s\n' '${SNDS_URL}' >> /etc/branchleft/monitoring.env"
+unset SNDS_URL
 ```
 
 This does not restart anything -- `snds-collector.service` reads the file
 fresh on its next scheduled run, unlike Alertmanager's secrets, which need a
-stack restart. A stale or absent token fails only that one run;
-`SNDSCollectorStale` (§8's target-verification list has no matching entry
-for this one, since it does not run as a Prometheus scrape target -- see
-"What this stack deliberately does not do" below) pages once 36 hours pass
-with no successful fetch.
+stack restart. A stale or absent URL fails only that one run. Three alerts
+cover it, and they fire at different times on purpose:
+`SNDSCollectorFailing` within the hour (off `snds_collector_last_run_success`,
+rewritten every run); `SNDSAccessLinkExpiringSoon` at 25 days, _before_ the
+link dies; and `SNDSCollectorStale` at 36 hours as the backstop for a
+collector that is not running at all. §8's target-verification list has no
+entry for any of them, since this does not run as a Prometheus scrape target
+-- see "What this stack deliberately does not do" below.
+
+**Rotating it, every 30 days.** Disable and re-enable automated access on
+that same portal page (Microsoft issues a new link only that way; re-enabling
+immediately invalidates the old one), then re-run the command above with the
+new URL. Nothing else needs updating: the collector notices the URL changed,
+restarts its own 30-day clock, and `SNDSAccessLinkExpiringSoon` clears on the
+next scrape. It tracks this by storing a SHA-256 of the URL -- never the URL
+-- in `snds-link-state.json` beside the textfile output.
 
 **Then install the timer.** Not covered by step 5's
 `install-systemd-drop-ins.sh` -- that script only installs `*.override.conf`
@@ -795,12 +827,17 @@ recreation to pick up.
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl start snds-collector.service &&
   systemctl status snds-collector.service --no-pager &&
-  cat /var/lib/branchleft/snds-exporter/snds.prom'
+  cat /var/lib/branchleft/snds-exporter/snds.prom &&
+  cat /var/lib/branchleft/snds-exporter/snds_collector_health.prom'
 ```
 
-A successful run prints `collect_snds_metrics: wrote N IP record(s)` and the
-file carries `snds_collector_last_success_timestamp_seconds` at or near the
-current time. Then confirm Prometheus is reading it back through
+A successful run prints `collect_snds_metrics: wrote N IP record(s)`;
+`snds.prom` carries `snds_collector_last_success_timestamp_seconds` at or
+near the current time, and `snds_collector_health.prom` carries
+`snds_collector_last_run_success 1` beside the link's first-seen timestamp.
+The two files are deliberately separate: a failing run rewrites the health
+one and leaves the reputation one exactly as it was, so the last real
+reading survives a failure without the failure being invisible. Then confirm Prometheus is reading it back through
 node-exporter, over the tunnel from step 8:
 
 ```bash
@@ -819,8 +856,13 @@ SNDS CSV/plain-text feed, got what looks like an HTML page` and exits
 non-zero, that is a real fault, not the quiet-day case above: the endpoint
 answered with something other than the feed (a login, consent, or
 portal-side error page), the previous textfile is left untouched, and the
-timestamp does _not_ advance. Re-check the bearer token and the portal
-session before assuming the collector itself regressed.
+timestamp does _not_ advance. Re-check the automated-access URL and the
+portal session before assuming the collector itself regressed. A run that
+instead prints `HTTP 404 -- the automated-access link is expired or was
+never valid, or SNDS simply has no data for the requested day` is reporting
+Microsoft's own ambiguity, not guessing: that one status code covers both,
+so check the link's age (`SNDSAccessLinkExpiringSoon`, or the first-seen
+gauge in the health textfile) before concluding which it is.
 
 ## Responding to the mail-delivery alerts
 
@@ -892,19 +934,52 @@ one first if both fire together -- a red status is Microsoft's own summary
 judgement, and the complaint-rate figure is one input to it among others
 this platform cannot see (spam-trap hits, volume trends, complaint history).
 
-**`SNDSCollectorStale`** -- the two rules above have gone quiet, and not
-because reputation is clean: the collector has not published a fresh
-snapshot in 36 hours, or has never once succeeded. Almost always the bearer
-token (§14) -- re-generate it from the SNDS portal and update
-`SNDS_BEARER_TOKEN` in `/etc/branchleft/monitoring.env`, then confirm with
-`systemctl start snds-collector.service` and `systemctl status
-snds-collector.service --no-pager`. If the token is current and the run
-still fails, check whether Microsoft has changed the response format again
--- `snds/collect_snds_metrics.py`'s `parse_snds_response` is deliberately
-defensive (skips a malformed line rather than raising) but a wholesale
-schema change still yields zero parsed records, which reads as "no
-reputation data available", not as a fault of its own; watch the run's own
-stderr for skipped-line warnings.
+**`SNDSAccessLinkExpiringSoon`** -- a chore, not an incident, and the only
+one of these that arrives _before_ anything breaks. The automated-access URL
+is 25 days old and Microsoft kills it at 30. Rotate it per §14 (disable and
+re-enable automated access in the portal, then write the new URL into
+`/etc/branchleft/monitoring.env`); the collector restarts its own clock when
+it sees the new URL and the alert clears on the next scrape. Left alone, it
+becomes `SNDSCollectorFailing` in five days.
+
+**`SNDSCollectorFailing`** -- the collector ran and failed, read straight off
+`snds_collector_last_run_success`. `journalctl -u snds-collector.service -n
+20` names the cause on the last line. The two that matter:
+
+- `HTTP 404 -- the automated-access link is expired or was never valid, or
+SNDS simply has no data for the requested day`. Microsoft returns one code
+  for both, so this genuinely cannot be told apart from the response. Check
+  the link's age first; if it is anywhere near 30 days, rotate it per §14
+  before assuming a quiet day.
+- `HTTP 400 -- SNDS rejected the automated-access link as malformed`. A
+  truncated paste into `monitoring.env` is the usual cause; re-do §14's
+  write step.
+
+If the link is current and the run still fails, check whether Microsoft has
+changed the response format -- `snds/collect_snds_metrics.py`'s
+`parse_snds_response` is deliberately defensive (skips a malformed line
+rather than raising) but a wholesale schema change still yields zero parsed
+records, which reads as "no reputation data available", not as a fault of
+its own; watch the run's own stderr for skipped-line warnings
+(branchLeft/workspace#539).
+
+**`SNDSCollectorStale`** -- the backstop, not the first signal: the collector
+has published no fresh snapshot in 36 hours, or has never once succeeded.
+Reaching this _without_ `SNDSCollectorFailing` having fired first means the
+collector is not running at all rather than running and failing -- check the
+timer (`systemctl status snds-collector.timer`), the host, and that
+`/var/lib/branchleft/snds-exporter` is still mounted into node-exporter. If
+`SNDSCollectorFailing` did fire first, work that one instead; this is the
+same incident seen 35 hours later.
+
+**Why the reputation numbers still look fine while these fire.** The two
+rules above go quiet rather than critical, because a failed run deliberately
+leaves the last good `snds_complaint_rate`/`snds_reputation_status` in place
+-- blanking them would read as "no complaints", which is worse. So a green
+reputation panel during any of these three means "last known good", not
+"currently clean". That is exactly the two-week silence
+branchLeft/workspace#538 was filed for, and `snds_collector_last_run_success`
+is the gauge that now contradicts the panel within the hour.
 
 ## What this stack deliberately does not do
 

@@ -799,8 +799,8 @@ tests:
         exp_alerts: []
 
   # SNDSCollectorStale: the gauge is present but has not advanced in the 36h
-  # window -- the collector stopped running (a missed timer, an expired
-  # bearer token) without ever going fully absent.
+  # window -- the collector stopped running (a missed timer, a host
+  # reboot) without ever going fully absent.
   - interval: 1h
     input_series:
       - series: 'snds_collector_last_success_timestamp_seconds'
@@ -814,7 +814,7 @@ tests:
             exp_annotations:
               summary: 'The SNDS collector has not published a successful snapshot in over 36 hours.'
               description: >-
-                Both rules above go silent, not critical, if this collector stops running or its bearer token expires -- an absent-or-stale gauge reads exactly like a clean reputation otherwise. 129600s (36h) is half again the collector's own ~24h cadence, wide enough that one missed run does not page. The `or absent(...)` half catches a collector that has never once succeeded, which the time() subtraction alone cannot see -- subtracting from an absent series yields no series at all, not a large number. Two different causes share this one alert, and the response differs: an expired SNDS_BEARER_TOKEN (its ~8h life is well inside this 36h window) is the routine case, cleared by renewing it (RUNBOOK-monitoring.md §14, branchLeft/workspace#538) -- only treat this as a bug if a current, recently-renewed token still fails to produce a fresh snapshot.
+                Both rules above go silent, not critical, if this collector stops running -- an absent-or-stale gauge reads exactly like a clean reputation otherwise. 129600s (36h) is half again the collector's own ~24h cadence, wide enough that one missed run does not page. The `or absent(...)` half catches a collector that has never once succeeded, which the time() subtraction alone cannot see -- subtracting from an absent series yields no series at all, not a large number. This is the BACKSTOP, not the first signal: SNDSCollectorFailing below fires within the hour on the same underlying break, and SNDSAccessLinkExpiringSoon fires days before the most likely cause of one. Reaching this alert without either of those having fired first means the collector is not running at all (timer disabled, host down, textfile directory unmounted) rather than running and failing. See RUNBOOK-monitoring.md §14.
 
   # A collector that has never once succeeded: the gauge has never existed,
   # which `time() - <absent>` cannot see on its own (no series to subtract
@@ -830,7 +830,7 @@ tests:
             exp_annotations:
               summary: 'The SNDS collector has not published a successful snapshot in over 36 hours.'
               description: >-
-                Both rules above go silent, not critical, if this collector stops running or its bearer token expires -- an absent-or-stale gauge reads exactly like a clean reputation otherwise. 129600s (36h) is half again the collector's own ~24h cadence, wide enough that one missed run does not page. The `or absent(...)` half catches a collector that has never once succeeded, which the time() subtraction alone cannot see -- subtracting from an absent series yields no series at all, not a large number. Two different causes share this one alert, and the response differs: an expired SNDS_BEARER_TOKEN (its ~8h life is well inside this 36h window) is the routine case, cleared by renewing it (RUNBOOK-monitoring.md §14, branchLeft/workspace#538) -- only treat this as a bug if a current, recently-renewed token still fails to produce a fresh snapshot.
+                Both rules above go silent, not critical, if this collector stops running -- an absent-or-stale gauge reads exactly like a clean reputation otherwise. 129600s (36h) is half again the collector's own ~24h cadence, wide enough that one missed run does not page. The `or absent(...)` half catches a collector that has never once succeeded, which the time() subtraction alone cannot see -- subtracting from an absent series yields no series at all, not a large number. This is the BACKSTOP, not the first signal: SNDSCollectorFailing below fires within the hour on the same underlying break, and SNDSAccessLinkExpiringSoon fires days before the most likely cause of one. Reaching this alert without either of those having fired first means the collector is not running at all (timer disabled, host down, textfile directory unmounted) rather than running and failing. See RUNBOOK-monitoring.md §14.
 
   # A healthy, recently-succeeded collector must stay silent.
   - interval: 1h
@@ -840,4 +840,83 @@ tests:
     alert_rule_test:
       - eval_time: 2h
         alertname: SNDSCollectorStale
+        exp_alerts: []
+
+  # SNDSCollectorFailing: read off the gauge the collector rewrites on every
+  # run, so a break is visible within the hour rather than after the 36h
+  # SNDSCollectorStale needs. This is the case that used to be invisible: the
+  # reputation metrics keep serving their last good values across a failure,
+  # so nothing else in this group contradicts a green dashboard until the
+  # staleness window finally elapses.
+  #
+  # These three run at a 1-minute interval, unlike the rest of this file: a
+  # `for:` duration only accumulates across rule evaluations, and at the
+  # hourly interval used above the series is stale between them, so the
+  # pending state resets every time and the alert can never fire at all.
+  - interval: 1m
+    input_series:
+      - series: 'snds_collector_last_run_success'
+        values: '0x130'
+    alert_rule_test:
+      - eval_time: 130m
+        alertname: SNDSCollectorFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "The SNDS collector's last run failed."
+              description: >-
+                Read straight off a gauge the collector rewrites on every run, success or failure, rather than inferred from a timestamp that stopped advancing -- so this fires within the hour instead of the 36h SNDSCollectorStale needs. That gap is the whole point: the reputation metrics are deliberately LEFT AT THEIR LAST GOOD VALUES across a failure (blanking them would read as "no complaints", which is worse), so for those 36 hours a dashboard shows a green reputation that nothing is actually refreshing. `for: 1h` rides out a single transient fetch failure without paging, since the timer runs every 6h and one bad run is not yet a problem. The journal line from `journalctl -u snds-collector.service` names the cause; an expired or malformed automated-access link is the most likely one (RUNBOOK-monitoring.md §14).
+
+  # Still failing, but only for 30 minutes -- inside the `for: 1h` window, so
+  # a single transient fetch failure must not page. Without this case the
+  # duration could be deleted entirely and the case above would still pass.
+  - interval: 1m
+    input_series:
+      - series: 'snds_collector_last_run_success'
+        values: '0x130'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SNDSCollectorFailing
+        exp_alerts: []
+
+  # A healthy collector stays silent.
+  - interval: 1m
+    input_series:
+      - series: 'snds_collector_last_run_success'
+        values: '1x130'
+    alert_rule_test:
+      - eval_time: 130m
+        alertname: SNDSCollectorFailing
+        exp_alerts: []
+
+  # SNDSAccessLinkExpiringSoon: the only alert in this group that fires BEFORE
+  # an outage. 26 days since the link was first seen is past the 25-day
+  # threshold, leaving four days to rotate before Microsoft starts answering
+  # 404.
+  - interval: 1h
+    input_series:
+      - series: 'snds_access_link_first_seen_timestamp_seconds'
+        values: '0x624'
+    alert_rule_test:
+      - eval_time: 624h
+        alertname: SNDSAccessLinkExpiringSoon
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'The SNDS automated-access link is approaching its 30-day expiry.'
+              description: >-
+                Microsoft expires every SNDS automated-access link 30 days after it is generated, and publishes that date in no response -- so this measures from when the collector FIRST SAW the URL now configured, which is the only observable proxy for it. 2160000s is 25 days, leaving five days to rotate before the feed starts answering 404. Rotating it is a portal visit and one line in monitoring.env (RUNBOOK-monitoring.md §14); the collector notices the new URL by itself and restarts this clock, with nothing to update here. CAVEAT: first-seen lags generation by however long the new URL sat between being generated and being pasted onto the host, so this alert is optimistic by exactly that delay -- the five-day margin is sized to absorb a normal one, not a link pasted a week late. This is the only alert in this group that fires BEFORE an outage rather than after one; treat it as a chore, not an incident.
+
+  # 24 days is inside the threshold -- a link rotated three weeks ago must not
+  # page. Without this case the comparison could be inverted or the threshold
+  # set to zero and the firing case above would still pass.
+  - interval: 1h
+    input_series:
+      - series: 'snds_access_link_first_seen_timestamp_seconds'
+        values: '0x576'
+    alert_rule_test:
+      - eval_time: 576h
+        alertname: SNDSAccessLinkExpiringSoon
         exp_alerts: []
