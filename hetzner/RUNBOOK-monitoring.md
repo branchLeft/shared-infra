@@ -760,17 +760,54 @@ the whole URL and the key alone before anything reaches the journal.
 if you are entering this section independently -- every command below reuses
 it.
 
-Paste the URL when the shell prompts, rather than typing it into the command
-line, so it never enters shell history:
+Paste the URL when the shell prompts, so it never enters shell history, and
+let it reach the host **on stdin** rather than on a command line:
 
 ```bash
 read -rs SNDS_URL
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
-  "grep -q '^SNDS_DATA_URL=' /etc/branchleft/monitoring.env &&
-   sed -i \"s|^SNDS_DATA_URL=.*|SNDS_DATA_URL=${SNDS_URL}|\" /etc/branchleft/monitoring.env ||
-   printf 'SNDS_DATA_URL=%s\n' '${SNDS_URL}' >> /etc/branchleft/monitoring.env"
+printf '%s' "$SNDS_URL" | ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
+  'umask 077; f=/etc/branchleft/monitoring.env; url=$(cat);
+   test -n "$url" || { echo "refusing to write an empty SNDS_DATA_URL" >&2; exit 1; };
+   grep -v "^SNDS_DATA_URL=" "$f" > "$f.tmp" 2>/dev/null || true;
+   printf "SNDS_DATA_URL=%s\n" "$url" >> "$f.tmp";
+   mv "$f.tmp" "$f";
+   echo "wrote SNDS_DATA_URL (${#url} characters)"'
 unset SNDS_URL
 ```
+
+Expect `wrote SNDS_DATA_URL (N characters)`; check `N` against the URL's real
+length, since that is the one confirmation that does not involve printing the
+credential back.
+
+**Three things this deliberately does not do, each of which corrupts the
+credential when written the obvious way.**
+
+1. **It does not pass the URL through `sed`'s replacement text.** An `&`
+   there expands to the whole matched line, and the portal's URLs carry more
+   than one query parameter. Measured, with a two-parameter URL:
+
+   ```
+   SNDS_DATA_URL=https://…/data.aspx?key=NEWSECRETSNDS_DATA_URL=https://old.example/snds/data.aspx?key=OLDSECRETformat=csv
+   ```
+
+   The new key is truncated and **the just-invalidated old credential is
+   written back into the file**. The symptom is an HTTP 400, whose own
+   message blames a truncated paste -- so the diagnosis points at the
+   operator rather than at this command. Quoting does not fix it: `&` is a
+   `sed` metacharacter, not a shell one.
+
+2. **It does not interpolate the URL into the `ssh` command line**, where it
+   would be visible to `ps` on both machines and defeat the `read -rs`
+   above. `url=$(cat)` takes it from stdin, and `printf '%s'` writes it
+   without interpreting backslashes the way `echo` would.
+3. **It rewrites the whole file** rather than appending on a conditional, so
+   a failed edit cannot leave two `SNDS_DATA_URL=` lines with the stale one
+   winning.
+
+The command above was checked against a URL containing `&`, `%2F`, `%2B` and
+`%3D`: the value round-trips byte-identically, the old line is gone, exactly
+one `SNDS_DATA_URL=` line remains, the other secrets in the file are
+untouched, and the result is `0600`.
 
 This does not restart anything -- `snds-collector.service` reads the file
 fresh on its next scheduled run, unlike Alertmanager's secrets, which need a
@@ -1004,11 +1041,18 @@ is the gauge that now contradicts the panel within the hour.
   SNDS needs per-domain OAuth against a separate Google API, approved in
   principle but deliberately deferred until a second tenant domain or
   load-bearing Gmail volume makes it worth building -- branchLeft/workspace#494.
-- **It does not automate SNDS bearer-token renewal.** Microsoft's current API
-  issues no `refresh_token`, so there is nothing this repo could poll or
-  rotate on a schedule; §14's manual re-generation is the only mechanism that
-  exists today, and `SNDSCollectorStale` is what makes a lapsed renewal
-  visible rather than silently indistinguishable from a clean reputation.
+- **It does not automate SNDS credential renewal.** Neither credential
+  Microsoft offers can be renewed unattended: the OAuth bearer token issues
+  no `refresh_token` (and lives ~8h, which is why it is not used here), and a
+  new automated-access URL is minted only by toggling the feature in the
+  portal by hand. §14's 30-day rotation is the only mechanism that exists
+  today. What this stack does do is make a lapsed one _loud_:
+  `SNDSAccessLinkExpiringSoon` fires five days before the link dies,
+  `SNDSCollectorFailing` within the hour if one lapses anyway, and
+  `SNDSCollectorNotRunning`/`SNDSCollectorStale` behind both. Note the
+  ordering deliberately does not rest on `SNDSCollectorStale` alone -- that
+  alert is 36 hours wide, and a reputation feed that has quietly stopped
+  refreshing reads exactly like a clean one for the whole of that window.
 - **It does not rely on `--cgroup-parent`/`Delegate=yes` to nest containers
   under either systemd unit.** That would make the unit-level `MemoryMax`
   genuinely bound the containers, but it depends on the host's configured

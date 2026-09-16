@@ -97,10 +97,23 @@ def redact(message: str, url: str) -> str:
         query = urllib.parse.urlsplit(url).query
     except ValueError:
         return out
+
+    # Both the decoded and the raw form of every parameter value. `parse_qsl`
+    # percent-decodes, so it alone produces a needle that never matches a
+    # server or proxy echoing the request line back verbatim -- and a key
+    # containing any of `/+=`, which a base64-shaped one usually does, is
+    # exactly the case that reaches a log in its encoded form.
+    candidates: list[str] = []
     for _name, value in urllib.parse.parse_qsl(query, keep_blank_values=False):
-        # A short value cannot be an access key and may well be a literal
-        # substring of ordinary prose ("data", "1"), so replacing it would
-        # corrupt the message without protecting anything.
+        candidates.append(value)
+    for raw_pair in query.split("&"):
+        _, _, raw_value = raw_pair.partition("=")
+        candidates.append(raw_value)
+
+    # A short value cannot be an access key and may well be a literal
+    # substring of ordinary prose ("data", "1"), so replacing it would
+    # corrupt the message without protecting anything.
+    for value in sorted(set(candidates), key=len, reverse=True):
         if len(value) >= 8:
             out = out.replace(value, REDACTED)
     return out
@@ -135,7 +148,27 @@ def _parse_volume(raw: str) -> int | None:
         return None
 
 
-def parse_snds_response(text: str) -> list[IpReputation]:
+@dataclass(frozen=True)
+class ParsedFeed:
+    """What a parse found, including what it threw away.
+
+    The discard count is the load-bearing part. `records` alone cannot
+    distinguish a day on which SNDS reported nothing from a response whose
+    every row failed validation, and those are opposite claims: the first is
+    a quiet day, the second is a feed this parser no longer understands.
+    Collapsing them is what lets a schema change read as a clean reputation.
+    """
+
+    records: list[IpReputation]
+    data_lines: int
+    skipped_lines: int
+
+    @property
+    def every_line_was_skipped(self) -> bool:
+        return self.data_lines > 0 and self.skipped_lines == self.data_lines
+
+
+def parse_snds_feed(text: str) -> ParsedFeed:
     """Parses SNDS's per-IP status feed into validated records.
 
     Deliberately defensive rather than schema-strict: Microsoft's 2026
@@ -147,11 +180,19 @@ def parse_snds_response(text: str) -> list[IpReputation]:
     stderr, not fatal to the run -- one bad row (a truncated line, a non-IP
     first field) must not blank out every IP's data for the day.
 
+    Tolerating every line is a different matter, which is why the counts
+    come back with the records: if Microsoft reorders the columns so that
+    the first field is no longer an address, every row is skipped
+    individually and this returns zero records without a single fatal error.
+    The caller needs to be able to tell that from an empty feed.
+
     Column order, when present: IP address, filter-result status
     (green/yellow/red), complaint rate, message volume. The last two are
     optional -- a two-column line still yields a status-only record.
     """
     records: list[IpReputation] = []
+    data_lines = 0
+    skipped_lines = 0
     for lineno, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
         if not line:
@@ -160,6 +201,7 @@ def parse_snds_response(text: str) -> list[IpReputation]:
         ip_field = fields[0]
         if ip_field.lower() in ("ip address", "ip"):
             continue  # an optional header row, not data
+        data_lines += 1
 
         try:
             ip = str(ipaddress.ip_address(ip_field))
@@ -168,6 +210,7 @@ def parse_snds_response(text: str) -> list[IpReputation]:
                 f"collect_snds_metrics: line {lineno}: {ip_field!r} is not a valid IP address, skipped",
                 file=sys.stderr,
             )
+            skipped_lines += 1
             continue
 
         status = fields[1].strip().lower() if len(fields) > 1 and fields[1].strip() else None
@@ -183,7 +226,12 @@ def parse_snds_response(text: str) -> list[IpReputation]:
 
         records.append(IpReputation(ip=ip, status=status, complaint_rate=complaint_rate, volume=volume))
 
-    return records
+    return ParsedFeed(records=records, data_lines=data_lines, skipped_lines=skipped_lines)
+
+
+def parse_snds_response(text: str) -> list[IpReputation]:
+    """The records alone, for callers that do not need the discard counts."""
+    return parse_snds_feed(text).records
 
 
 def render_prometheus_text(records: list[IpReputation], now: float) -> str:
@@ -313,6 +361,15 @@ class UnexpectedResponseShapeError(RuntimeError):
     """
 
 
+class MalformedDataUrlError(RuntimeError):
+    """The configured URL is not a fetchable http(s) URL at all.
+
+    Separate from `AccessLinkRejectedError`, which is the server's verdict on
+    a well-formed URL: this one never leaves the host, so no status code
+    exists to report and the remedy is a re-paste rather than a rotation.
+    """
+
+
 class AccessLinkRejectedError(RuntimeError):
     """Raised for the two status codes Microsoft documents as being about the
     access key itself.
@@ -371,8 +428,22 @@ def fetch_snds_data(url: str, timeout: float = REQUEST_TIMEOUT_SECONDS) -> str:
     fetch of the feed this collector expects, even though `urlopen` raises
     nothing for it. See `UnexpectedResponseShapeError`.
     """
-    request = urllib.request.Request(url)
+    # Checked before `Request()` rather than after, because `Request()` itself
+    # raises ValueError on a URL with no usable scheme -- outside any handler
+    # that knows the URL is a credential, and carrying the whole URL in the
+    # exception text. A truncated paste into monitoring.env is the anticipated
+    # operator error here (see the 400 message below), and the subset of it
+    # that never reaches the server must not be the one path that logs the key.
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme not in ("http", "https"):
+        raise MalformedDataUrlError(
+            f"SNDS_DATA_URL does not start with http:// or https:// (scheme: "
+            f"{scheme or 'none'!r}) -- it is probably a truncated paste; "
+            "re-copy the whole URL from the portal's automated-access page"
+        )
+
     try:
+        request = urllib.request.Request(url)
         with urllib.request.urlopen(request, timeout=timeout) as response:
             content_type = response.headers.get_content_type()
             body = response.read().decode("utf-8", errors="replace")
@@ -432,13 +503,13 @@ def _publish_health(
         print(f"collect_snds_metrics: could not write the health textfile: {exc}", file=sys.stderr)
 
 
-def main(argv: list[str]) -> int:
-    del argv
-    output_dir = pathlib.Path(
-        os.environ.get("SNDS_OUTPUT_DIR", "/var/lib/branchleft/snds-exporter")
-    )
-    now = time.time()
+def _collect(output_dir: pathlib.Path, now: float) -> tuple[int, float | None]:
+    """One run's real work. `(exit_code, link_first_seen)`.
 
+    Split from `main` so that `main` can publish health for *every* way this
+    can end, including the ways it can raise. Anything raised here reaches
+    `main`'s own handler with the URL still in scope to redact against.
+    """
     url = os.environ.get("SNDS_DATA_URL")
     if not url:
         print(
@@ -448,8 +519,7 @@ def main(argv: list[str]) -> int:
             "untouched.",
             file=sys.stderr,
         )
-        _publish_health(output_dir, now, succeeded=False, link_first_seen=None)
-        return 1
+        return 1, None
 
     link_first_seen = read_link_first_seen(output_dir / LINK_STATE_FILENAME, url, now)
 
@@ -461,18 +531,68 @@ def main(argv: list[str]) -> int:
         OSError,
         UnexpectedResponseShapeError,
         AccessLinkRejectedError,
+        MalformedDataUrlError,
     ) as exc:
         print(f"collect_snds_metrics: fetch failed: {redact(str(exc), url)}", file=sys.stderr)
+        return 1, link_first_seen
+
+    feed = parse_snds_feed(raw)
+
+    # A response whose every row failed validation is not a quiet day, and
+    # writing it out would replace real reputation values with an empty file
+    # that reads exactly like "no complaints on record". The most likely cause
+    # is Microsoft changing the feed's column order, which this parser cannot
+    # detect any other way: each row is skipped individually and nothing
+    # raises. A genuinely empty feed (no data lines at all) is still a
+    # success, because a quiet day must not page.
+    if feed.every_line_was_skipped:
+        print(
+            "collect_snds_metrics: every one of the "
+            f"{feed.data_lines} data line(s) failed validation -- treating "
+            "this as a failed run rather than as an empty reputation "
+            "snapshot. The feed's shape has probably changed; the skipped-line "
+            "warnings above name the first field that stopped parsing. "
+            "Leaving the previous reputation output untouched.",
+            file=sys.stderr,
+        )
+        return 1, link_first_seen
+
+    output_path = output_dir / REPUTATION_FILENAME
+    output_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
+    write_textfile_atomically(output_path, render_prometheus_text(feed.records, now))
+    print(f"collect_snds_metrics: wrote {len(feed.records)} IP record(s) to {output_path}")
+    return 0, link_first_seen
+
+
+def main(argv: list[str]) -> int:
+    del argv
+    output_dir = pathlib.Path(
+        os.environ.get("SNDS_OUTPUT_DIR", "/var/lib/branchleft/snds-exporter")
+    )
+    now = time.time()
+    link_first_seen: float | None = None
+
+    try:
+        exit_code, link_first_seen = _collect(output_dir, now)
+    except BaseException as exc:
+        # Deliberately broad, and deliberately not re-raising. Two things must
+        # hold however this run dies: the access key must not reach the
+        # journal, and `snds_collector_last_run_success` must not be left at
+        # whatever the last good run wrote. A gauge frozen at 1 by a crash is
+        # worse than no gauge -- it actively asserts health, and every alert
+        # in the group reads it. An unredacted traceback is suppressed for the
+        # same reason: the URL is a credential and a traceback can carry it.
+        print(
+            "collect_snds_metrics: run failed with an unexpected "
+            f"{type(exc).__name__}: "
+            f"{redact(str(exc), os.environ.get('SNDS_DATA_URL') or '')}",
+            file=sys.stderr,
+        )
         _publish_health(output_dir, now, succeeded=False, link_first_seen=link_first_seen)
         return 1
 
-    records = parse_snds_response(raw)
-    output_path = output_dir / REPUTATION_FILENAME
-    output_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
-    write_textfile_atomically(output_path, render_prometheus_text(records, now))
-    _publish_health(output_dir, now, succeeded=True, link_first_seen=link_first_seen)
-    print(f"collect_snds_metrics: wrote {len(records)} IP record(s) to {output_path}")
-    return 0
+    _publish_health(output_dir, now, succeeded=exit_code == 0, link_first_seen=link_first_seen)
+    return exit_code
 
 
 if __name__ == "__main__":

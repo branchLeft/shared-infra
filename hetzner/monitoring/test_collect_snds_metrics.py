@@ -540,8 +540,6 @@ class MainZeroRecordsIsStillSuccessTests(unittest.TestCase):
             self.assertGreaterEqual(written_ts, before)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class RedactTests(unittest.TestCase):
@@ -750,6 +748,194 @@ class LinkFirstSeenTests(unittest.TestCase):
             )
             health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
             self.assertIn("snds_access_link_first_seen_timestamp_seconds ", health)
+
+
+class EveryLineSkippedIsNotAQuietDayTests(unittest.TestCase):
+    """The defect the review found: a 200 whose every row fails validation
+    used to blank the reputation file AND stamp success, so all five alerts
+    in the group went silent at once and the dashboard read clean.
+
+    The likeliest trigger is not a quiet day but a column reorder -- if the
+    first field stops being an address, every row is skipped individually and
+    nothing raises. A genuinely empty feed must still be a success, or a quiet
+    day pages.
+    """
+
+    REORDERED = "2026-09-16,203.0.113.5,green,0.05%\n2026-09-16,198.51.100.9,red,1.2%\n"
+
+    def test_the_parser_reports_that_it_discarded_everything(self) -> None:
+        feed = collect_snds_metrics.parse_snds_feed(self.REORDERED)
+        self.assertEqual(feed.records, [])
+        self.assertEqual(feed.data_lines, 2)
+        self.assertEqual(feed.skipped_lines, 2)
+        self.assertTrue(feed.every_line_was_skipped)
+
+    def test_an_empty_feed_is_not_reported_as_everything_skipped(self) -> None:
+        feed = collect_snds_metrics.parse_snds_feed("")
+        self.assertFalse(feed.every_line_was_skipped)
+
+    def test_a_header_only_feed_is_not_reported_as_everything_skipped(self) -> None:
+        feed = collect_snds_metrics.parse_snds_feed("IP Address,Status,Complaint Rate,Volume\n")
+        self.assertEqual(feed.data_lines, 0)
+        self.assertFalse(feed.every_line_was_skipped)
+
+    def test_a_partial_skip_is_not_reported_as_everything_skipped(self) -> None:
+        feed = collect_snds_metrics.parse_snds_feed("203.0.113.5,green,0.05%,1\nnot-an-ip,green\n")
+        self.assertEqual(len(feed.records), 1)
+        self.assertFalse(feed.every_line_was_skipped)
+
+    def test_an_all_skipped_response_preserves_the_previous_reputation_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _run_main(tmp, return_value="203.0.113.5,green,0.05%,12000")
+            good = (pathlib.Path(tmp) / collect_snds_metrics.REPUTATION_FILENAME).read_text()
+
+            exit_code, output_dir = _run_main(tmp, return_value=self.REORDERED)
+
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(
+                (output_dir / collect_snds_metrics.REPUTATION_FILENAME).read_text(), good
+            )
+
+    def test_an_all_skipped_response_publishes_failure_not_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, output_dir = _run_main(tmp, return_value=self.REORDERED)
+            health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            self.assertIn("snds_collector_last_run_success 0", health)
+
+    def test_a_genuinely_empty_feed_is_still_a_success(self) -> None:
+        # The overcorrection this must not become: a quiet day, or a
+        # freshly-registered sender SNDS has no history for, is not a fault.
+        with tempfile.TemporaryDirectory() as tmp:
+            exit_code, output_dir = _run_main(tmp, return_value="")
+            self.assertEqual(exit_code, 0)
+            health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            self.assertIn("snds_collector_last_run_success 1", health)
+
+
+class MalformedUrlTests(unittest.TestCase):
+    """A truncated paste into monitoring.env -- the operator error the 400
+    message itself anticipates. The subset that never reaches the server used
+    to raise an uncaught ValueError carrying the whole URL, so the one path
+    that logged the live key was the one the runbook warns about.
+    """
+
+    TRUNCATED = "sendersupport.olc.protection.outlook.com/snds/data.aspx?key=SUPERSECRETKEY123456"
+
+    def test_a_url_with_no_scheme_is_refused_before_any_network_call(self) -> None:
+        with mock.patch.object(collect_snds_metrics.urllib.request, "urlopen") as urlopen:
+            with self.assertRaises(collect_snds_metrics.MalformedDataUrlError):
+                collect_snds_metrics.fetch_snds_data(self.TRUNCATED)
+            urlopen.assert_not_called()
+
+    def test_the_refusal_does_not_carry_the_key(self) -> None:
+        with self.assertRaises(collect_snds_metrics.MalformedDataUrlError) as ctx:
+            collect_snds_metrics.fetch_snds_data(self.TRUNCATED)
+        self.assertNotIn("SUPERSECRETKEY123456", str(ctx.exception))
+
+    def test_main_publishes_health_and_leaks_nothing_on_a_malformed_url(self) -> None:
+        import io
+        import contextlib
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = pathlib.Path(tmp)
+            env = {
+                k: v
+                for k, v in collect_snds_metrics.os.environ.items()
+                if k not in ("SNDS_DATA_URL", "SNDS_OUTPUT_DIR")
+            }
+            env["SNDS_OUTPUT_DIR"] = str(output_dir)
+            env["SNDS_DATA_URL"] = self.TRUNCATED
+            buf = io.StringIO()
+            with mock.patch.dict(collect_snds_metrics.os.environ, env, clear=True):
+                with contextlib.redirect_stderr(buf):
+                    exit_code = collect_snds_metrics.main([])
+
+            self.assertEqual(exit_code, 1)
+            self.assertNotIn("SUPERSECRETKEY123456", buf.getvalue())
+            health = (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text()
+            self.assertIn("snds_collector_last_run_success 0", health)
+
+
+class UnexpectedCrashStillPublishesHealthTests(unittest.TestCase):
+    """`snds_collector_last_run_success` frozen at 1 by a crash is worse than
+    no gauge at all: it affirmatively asserts health, and every alert in the
+    group believes it. So no way of dying may skip the health write.
+    """
+
+    def test_an_unexpected_exception_publishes_failure_rather_than_propagating(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            # Seed a success first, so the gauge has a 1 to be wrongly left at.
+            _run_main(tmp, return_value="203.0.113.5,green,0.05%,12000")
+            self.assertIn(
+                "snds_collector_last_run_success 1",
+                (pathlib.Path(tmp) / collect_snds_metrics.HEALTH_FILENAME).read_text(),
+            )
+
+            exit_code, output_dir = _run_main(tmp, side_effect=RuntimeError("something unforeseen"))
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn(
+                "snds_collector_last_run_success 0",
+                (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text(),
+            )
+
+    def test_an_unexpected_exception_does_not_leak_the_url(self) -> None:
+        import io
+        import contextlib
+
+        url = "https://example.test/snds/data.aspx?key=SECRETKEY1234567890"
+        with tempfile.TemporaryDirectory() as tmp:
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                _run_main(tmp, url=url, side_effect=RuntimeError(f"failed on {url}"))
+            self.assertNotIn("SECRETKEY1234567890", buf.getvalue())
+
+    def test_a_failure_writing_the_reputation_file_still_publishes_health(self) -> None:
+        # A full or read-only /var/lib: the reputation write raises OSError,
+        # which used to escape before the health write next to it. Only the
+        # FIRST write is broken -- the health write that follows has to do its
+        # real work, or this test would pass against a collector that never
+        # wrote health at all.
+        real_write = collect_snds_metrics.write_textfile_atomically
+        calls: list[int] = []
+
+        def fail_first(path, content):  # type: ignore[no-untyped-def]
+            calls.append(1)
+            if len(calls) == 1:
+                raise OSError("No space left on device")
+            return real_write(path, content)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                collect_snds_metrics, "write_textfile_atomically", fail_first
+            ):
+                exit_code, output_dir = _run_main(
+                    tmp, return_value="203.0.113.5,green,0.05%,12000"
+                )
+            self.assertEqual(exit_code, 1)
+            self.assertIn(
+                "snds_collector_last_run_success 0",
+                (output_dir / collect_snds_metrics.HEALTH_FILENAME).read_text(),
+            )
+
+
+class RedactEncodedKeyTests(unittest.TestCase):
+    """`parse_qsl` percent-decodes, so the decoded value alone is a needle
+    that never matches a server echoing the request line back verbatim. A
+    base64-shaped key contains `/`, `+` and `=`, all of which travel encoded.
+    """
+
+    URL = "https://example.test/snds/data.aspx?key=AAAA%2FBBBB%2BCCCC%3DDDDD"
+
+    def test_the_encoded_form_is_redacted(self) -> None:
+        out = collect_snds_metrics.redact(
+            "Not Found: /snds/data.aspx?key=AAAA%2FBBBB%2BCCCC%3DDDDD", self.URL
+        )
+        self.assertNotIn("AAAA%2FBBBB", out)
+
+    def test_the_decoded_form_is_still_redacted(self) -> None:
+        out = collect_snds_metrics.redact("bad key AAAA/BBBB+CCCC=DDDD", self.URL)
+        self.assertNotIn("AAAA/BBBB", out)
 
 
 if __name__ == "__main__":

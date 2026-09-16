@@ -335,6 +335,28 @@ groups:
             an expired or malformed automated-access link is the most likely
             one (RUNBOOK-monitoring.md §14).
 
+      - alert: SNDSCollectorNotRunning
+        expr: >-
+          time() - snds_collector_last_attempt_timestamp_seconds > 43200
+        labels:
+          severity: warning
+        annotations:
+          summary: "The SNDS collector has not attempted a run in over 12 hours."
+          description: >-
+            Every run rewrites this timestamp before anything else can fail,
+            so it stops advancing only if the collector did not run at all --
+            a disabled or failed timer, a host that is down, a textfile
+            directory that is no longer writable. That is a different fault
+            from SNDSCollectorFailing, which means the collector ran and the
+            fetch failed, and it is the one case where
+            snds_collector_last_run_success cannot be trusted: a process
+            killed before it publishes health leaves that gauge frozen at
+            whatever the last run wrote, which after a good run is a 1 that
+            actively asserts health. 43200s (12h) is two missed 6h ticks.
+            Deliberately not paired with `absent()` -- a collector that has
+            never run at all has no series here to be stale, and
+            SNDSCollectorStale's own `absent(...)` branch is what covers that.
+
       - alert: SNDSAccessLinkExpiringSoon
         expr: time() - snds_access_link_first_seen_timestamp_seconds > 2160000
         labels:

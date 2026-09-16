@@ -920,3 +920,59 @@ tests:
       - eval_time: 576h
         alertname: SNDSAccessLinkExpiringSoon
         exp_alerts: []
+
+  # SNDSCollectorNotRunning: the attempt timestamp is rewritten before
+  # anything else in a run can fail, so it stops advancing only when the
+  # collector did not run at all. That is the one case where
+  # snds_collector_last_run_success cannot be trusted -- a process killed
+  # before it publishes health leaves that gauge frozen at the last run's
+  # value, which after a good run is a 1 that asserts health.
+  - interval: 1h
+    input_series:
+      - series: 'snds_collector_last_attempt_timestamp_seconds'
+        values: '0x13'
+    alert_rule_test:
+      - eval_time: 13h
+        alertname: SNDSCollectorNotRunning
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'The SNDS collector has not attempted a run in over 12 hours.'
+              description: >-
+                Every run rewrites this timestamp before anything else can fail, so it stops advancing only if the collector did not run at all -- a disabled or failed timer, a host that is down, a textfile directory that is no longer writable. That is a different fault from SNDSCollectorFailing, which means the collector ran and the fetch failed, and it is the one case where snds_collector_last_run_success cannot be trusted: a process killed before it publishes health leaves that gauge frozen at whatever the last run wrote, which after a good run is a 1 that actively asserts health. 43200s (12h) is two missed 6h ticks. Deliberately not paired with `absent()` -- a collector that has never run at all has no series here to be stale, and SNDSCollectorStale's own `absent(...)` branch is what covers that.
+
+  # Two missed ticks is the threshold, so one missed 6h tick must not page.
+  # Without this case the threshold could be dropped to zero and the firing
+  # case above would still pass.
+  - interval: 1h
+    input_series:
+      - series: 'snds_collector_last_attempt_timestamp_seconds'
+        values: '0x7'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: SNDSCollectorNotRunning
+        exp_alerts: []
+
+  # The gauge frozen at 1 by a crash is exactly the state this alert exists
+  # to contradict: last_run_success still says healthy, and only the attempt
+  # timestamp shows the collector stopped running.
+  - interval: 1h
+    input_series:
+      - series: 'snds_collector_last_attempt_timestamp_seconds'
+        values: '0x13'
+      - series: 'snds_collector_last_run_success'
+        values: '1x13'
+    alert_rule_test:
+      - eval_time: 13h
+        alertname: SNDSCollectorFailing
+        exp_alerts: []
+      - eval_time: 13h
+        alertname: SNDSCollectorNotRunning
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'The SNDS collector has not attempted a run in over 12 hours.'
+              description: >-
+                Every run rewrites this timestamp before anything else can fail, so it stops advancing only if the collector did not run at all -- a disabled or failed timer, a host that is down, a textfile directory that is no longer writable. That is a different fault from SNDSCollectorFailing, which means the collector ran and the fetch failed, and it is the one case where snds_collector_last_run_success cannot be trusted: a process killed before it publishes health leaves that gauge frozen at whatever the last run wrote, which after a good run is a 1 that actively asserts health. 43200s (12h) is two missed 6h ticks. Deliberately not paired with `absent()` -- a collector that has never run at all has no series here to be stale, and SNDSCollectorStale's own `absent(...)` branch is what covers that.
