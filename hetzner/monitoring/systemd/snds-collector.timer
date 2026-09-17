@@ -7,13 +7,16 @@ Description=Run the SNDS reputation collector on a schedule
 [Timer]
 OnBootSec=10min
 # SNDS itself refreshes at most once a day, at a time Microsoft does not
-# document -- 6h gives several chances to catch a fresh day's data soon
-# after it publishes, and several chances to succeed against a bearer token
-# that Rob refreshes by hand (see RUNBOOK-monitoring.md): a token minted once
-# near the start of a working day, then expired for the day's later runs, is
-# not indistinguishable from every run failing. Persistent=true covers a
-# missed run across a host reboot; SNDSCollectorStale (render.ts) is the
-# backstop if every run in a 36h window fails regardless of cause.
+# document -- 6h gives several chances to catch a fresh day's data soon after
+# it publishes. The credential no longer constrains this interval: the
+# automated-access URL lives 30 days, so unlike the ~8h bearer token it
+# replaced, a 6h cadence is not fighting a
+# credential that expires between runs. OnBootSec=10min is what covers a
+# missed run across a reboot -- Persistent= below applies only to OnCalendar=
+# timers and is inert on this one, which an earlier version of this comment
+# got wrong. SNDSCollectorFailing (render.ts) catches a run that ran and
+# failed, SNDSCollectorNotRunning a timer that stopped firing, and
+# SNDSCollectorStale backstops both.
 OnUnitActiveSec=6h
 Persistent=true
 

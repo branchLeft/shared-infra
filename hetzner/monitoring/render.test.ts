@@ -447,6 +447,24 @@ describe('the SNDS complaint-rate alert rules', () => {
     expect(rendered).toContain('or absent(snds_collector_last_success_timestamp_seconds)');
   });
 
+  it('reads collector failure off a gauge every run rewrites, so a break is visible within the hour rather than after the 36h staleness window -- see alert_rules_test.yml for the promtool proof that it rides out one transient failure', () => {
+    expect(rendered).toContain('alert: SNDSCollectorFailing');
+    expect(rendered).toContain('expr: snds_collector_last_run_success == 0');
+    // Without the duration a single failed 6h run pages; the promtool case
+    // at 30m is what proves the duration is load-bearing rather than decorative.
+    expect(rendered).toContain('for: 1h');
+  });
+
+  it('alerts on the collector not running at all, separately from it running and failing -- the one case where last_run_success is frozen at whatever the last good run wrote', () => {
+    expect(rendered).toContain('alert: SNDSCollectorNotRunning');
+    expect(rendered).toContain('time() - snds_collector_last_attempt_timestamp_seconds > 43200');
+  });
+
+  it("warns before the automated-access link's 30-day expiry rather than after it, which is the only alert in this group that fires ahead of an outage", () => {
+    expect(rendered).toContain('alert: SNDSAccessLinkExpiringSoon');
+    expect(rendered).toContain('time() - snds_access_link_first_seen_timestamp_seconds > 2160000');
+  });
+
   it('annotates every SNDS alert with the daily-snapshot caveat, since this data is never live', () => {
     for (const alertname of ['SNDSComplaintRateHigh', 'SNDSReputationRed']) {
       const start = rendered.indexOf(`alert: ${alertname}`);
