@@ -95,6 +95,11 @@ HETZNER = pathlib.Path(__file__).resolve().parent.parent
 # "If the empty string is assigned to this option, the list of file to read is
 # reset, all prior assignments have no effect").
 RESET_DIRECTIVE = "EnvironmentFile="
+# The same file is also asserted on, in [Unit]. An assert is evaluated before
+# ExecStartPre and before any EnvironmentFile is read, so the [Service] reset
+# above cannot reach it -- an inline-pinned stack needs both resets or it
+# cannot start at all.
+ASSERT_RESET_DIRECTIVE = "AssertPathExists="
 
 # Compose interpolates `${VAR}`; the stack needs a secrets file if it reads any
 # variable other than the image pin. `IMAGE` is excluded by name rather than by
@@ -393,6 +398,11 @@ def drop_in_for(stack: str) -> pathlib.Path | None:
     return matches[0]
 
 
+def unit_lines(drop_in: pathlib.Path) -> list[str]:
+    """Stripped, non-comment lines of the `[Unit]` section, in file order."""
+    return section_lines(drop_in, "Unit")
+
+
 def service_lines(drop_in: pathlib.Path) -> list[str]:
     """Stripped, non-comment lines of the `[Service]` section, in file order.
 
@@ -463,6 +473,54 @@ class ComposeUnitContractTests(unittest.TestCase):
                     f"[Service]: {stack} pins its images inline, so branchleft-deploy "
                     f"will refuse to write /etc/branchleft/{stack}.image.env and the "
                     "unit will fail to start on a missing EnvironmentFile.",
+                )
+
+    def test_an_inline_pinned_stack_resets_the_image_pin_assert(self):
+        """The [Service] EnvironmentFile reset is not enough on its own.
+
+        `branchleft-compose@.service` also carries
+        `AssertPathExists=/etc/branchleft/%i.image.env` in [Unit], and systemd
+        evaluates asserts before ExecStartPre and before any EnvironmentFile is
+        read. So a stack that resets only the EnvironmentFile still cannot
+        start: the unit goes inactive with "Assertion failed" and, on a reboot,
+        never comes back. Verified live on edge1 on 2026-09-17, where the
+        monitoring stack had been unrestartable for days while its containers
+        stayed up -- nothing had asked the unit to start.
+        """
+        inline_pinned, _ = classify_stacks()
+        for stack, _compose in inline_pinned:
+            with self.subTest(stack=stack):
+                drop_in = drop_in_for(stack)
+                self.assertIsNotNone(drop_in, f"{stack} has no drop-in at all")
+                self.assertIn(
+                    ASSERT_RESET_DIRECTIVE,
+                    unit_lines(drop_in),
+                    f"{drop_in} must contain a bare `AssertPathExists=` line under "
+                    f"[Unit]: {stack} pins its images inline, so nothing will ever "
+                    f"write /etc/branchleft/{stack}.image.env, and the template's "
+                    "assert on it blocks the start before the [Service] "
+                    "EnvironmentFile= reset is ever consulted.",
+                )
+
+    def test_an_image_pinned_stack_keeps_the_image_pin_assert(self):
+        """The mirror of the rule above: a ${IMAGE} stack must NOT reset it.
+
+        Resetting the assert there would let the unit start with no pin file
+        and resolve whatever `latest` meant at that moment -- the exact
+        fall-back the assert exists to prevent.
+        """
+        _, image_env = classify_stacks()
+        for stack, _compose in image_env:
+            with self.subTest(stack=stack):
+                drop_in = drop_in_for(stack)
+                if drop_in is None:
+                    continue
+                self.assertNotIn(
+                    ASSERT_RESET_DIRECTIVE,
+                    unit_lines(drop_in),
+                    f"{drop_in} resets AssertPathExists=, but {stack} resolves its "
+                    "image from ${IMAGE} and must fail to start on a missing pin "
+                    "rather than fall back to an unpinned reference.",
                 )
 
     def test_an_image_pinned_stack_keeps_the_mandatory_image_pin(self):
