@@ -5,8 +5,9 @@ Run as a preflight inside a CI deploy job, against the same stack state
 `pulumi up` is about to act on, seconds earlier and with the same credentials.
 One script serves all three Hetzner stacks (`branchleft-mail`,
 `branchleft-hetzner-network`, `branchleft-hetzner-estate`) because they share
-one provider and one failure mode; `assert-no-edge-deletes.py` stays separate
-because the GCP edge's protected set is name-shaped, not type-shaped.
+one provider and one failure mode. The GCP edge stack had its own equivalent
+guard, `assert-no-edge-deletes.py`, removed with that program in the GCP
+wind-down (branchLeft/workspace#1000).
 
 Usage:
     assert-no-hetzner-deletes.py <preview-json-file>

@@ -39,9 +39,11 @@ const GENERATED_BANNER = [
  *
  * The exemption removes **all** AppSec evaluation on these paths, not only the
  * injection rulesets — the Caddy handler is per-request, so there is no way to
- * exempt three rule families and keep a fourth. That is a widening relative to
- * the policy this replaces and it is disclosed in `CLOUD-ARMOR-BASELINE.md`
- * rather than left to be discovered.
+ * exempt three rule families and keep a fourth. That was a widening relative
+ * to the GCP Cloud Armor policy this edge replaced, disclosed in that
+ * policy's baseline document before it and the program that declared it
+ * (`edge.ts`) were deleted 2026-09-17 in the GCP wind-down
+ * (branchLeft/workspace#1000).
  */
 const AUTHORING_API_PATHS = ['/ghost/api/*'];
 

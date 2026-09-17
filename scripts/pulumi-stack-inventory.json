@@ -31,22 +31,6 @@
   },
   "stacks": [
     {
-      "project": "branchleft-shared-infra",
-      "stack": "production",
-      "repo": "shared-infra",
-      "project_path": "Pulumi.yaml",
-      "config_path": "Pulumi.production.yaml",
-      "state_backend": "shared",
-      "expected_secrets_provider": "passphrase",
-      "terminal_state": "migrate",
-      "note": "Salt-injected-at-deploy: CI appends the passphrase salt from a repository secret immediately before the first `pulumi` command and never commits it, so the committed file reads `absent` by design.",
-      "attestation": {
-        "state": "migrated",
-        "date": "2026-08-17",
-        "evidence": "secrets_providers read directly from the gs://branchleft-pulumi-state checkpoint: passphrase, 32 resources."
-      }
-    },
-    {
       "project": "branchleft-mail",
       "stack": "production",
       "repo": "shared-infra",
@@ -71,7 +55,7 @@
       "state_backend": "shared",
       "expected_secrets_provider": "passphrase",
       "terminal_state": "migrate",
-      "note": "Salt-injected-at-deploy, same pattern as branchleft-shared-infra. Two `secure:` ciphertexts (SMTP submission credential) stay committed -- PUL-12 permits that; nothing in the file lets an attacker derive the key without the salt beside it.",
+      "note": "Salt-injected-at-deploy, the same salt-injected-at-deploy pattern the now-deleted branchleft-shared-infra stack used (branchLeft/workspace#1000). Two `secure:` ciphertexts (SMTP submission credential) stay committed -- PUL-12 permits that; nothing in the file lets an attacker derive the key without the salt beside it.",
       "attestation": {
         "state": "migrated",
         "date": "2026-08-17",
@@ -163,22 +147,6 @@
     }
   ],
   "backend_reference_sites": [
-    {
-      "path": ".github/workflows/ci.yml",
-      "kind": "ci",
-      "backend": "shared",
-      "note": "`pulumi login gs://branchleft-pulumi-state` in the edge stack's deploy-plan and deploy-apply jobs. The mail jobs never log in: their backend is pinned in mail/Pulumi.yaml."
-    },
-    {
-      "path": "README.md",
-      "kind": "doc",
-      "backend": "shared"
-    },
-    {
-      "path": "RUNBOOK-ci-bootstrap.md",
-      "kind": "runbook",
-      "backend": "shared"
-    },
     {
       "path": "RUNBOOK-edge-state-move.md",
       "kind": "runbook",

@@ -4,54 +4,38 @@ name: CI
 # stacks on every push to `main` — each through a plan job whose output a
 # human approves before the paired apply job runs.
 #
-# **This file used to say the opposite**, and its reasoning was sound as far as
-# it went: this stack owns the single load balancer, URL map and certificate map
-# fronting every hostname branchLeft serves, so a bad apply is a simultaneous
-# outage across every product and every tenant. It concluded that applies belong
-# to a human at a workstation.
-#
-# That does not follow. Blast radius is an argument for guardrails, not for
-# laptops — a hand-run `pulumi up` has the same blast radius with an ambient
-# owner-level credential, no review, no audit trail beyond shell history, and
-# nothing stopping it applying uncommitted local edits. The guardrails the old
-# reasoning actually asked for are the six below; the argument for each, and
-# the bootstrap that has to happen once before any of it works, are in
-# RUNBOOK-ci-bootstrap.md.
+# The GCP edge program that used to live at the repository root (edge.ts and
+# its deploy-plan/deploy-apply jobs) is gone: the GCP estate was destroyed
+# 2026-09-13 and the program removed in the GCP wind-down
+# (branchLeft/workspace#1000). What is left is Hetzner-native: the mail stack
+# and both `hetzner/` stacks. The guardrails below are unchanged for them.
 #
 #   1. Anything credentialed runs only on `push` to `main` — a reviewed, merged
 #      commit. Pull requests get type-check only, and no credentials of any
 #      kind.
-#   2. The GCP edge stack's credentials are short-lived, exchanged via Workload
-#      Identity Federation and scoped by `attributeCondition` to this repo
-#      *and* `refs/heads/main`; no service-account key exists anywhere. The
-#      Hetzner mail stack has no federation equivalent — its API accepts a
-#      bearer token and nothing else — so its token is scoped to one hcloud
-#      project and one pipeline instead (hetzner/RUNBOOK-new-stack.md §7), a
+#   2. Hetzner has no Workload Identity Federation equivalent — its API accepts
+#      a bearer token and nothing else — so each stack's token is scoped to one
+#      hcloud project and one pipeline (hetzner/RUNBOOK-new-stack.md §7), a
 #      trade doc 14 §3.5 records deliberately.
-#   3. The GCP deployer identity cannot grant itself a role, widen its own
-#      federation, or delete a certificate — see serviceAccounts.ts.
-#   4. A preflight parses the real `pulumi preview` plan for this exact run and
+#   3. A preflight parses the real `pulumi preview` plan for this exact run and
 #      aborts before `pulumi up` if it would destroy protected infrastructure
-#      (scripts/assert-no-edge-deletes.py for the GCP edge,
-#      scripts/assert-no-hetzner-deletes.py for the Hetzner stacks).
-#   5. Every apply job declares an `environment` and a concurrency group. The
+#      (scripts/assert-no-hetzner-deletes.py).
+#   4. Every apply job declares an `environment` and a concurrency group. The
 #      environment's required-reviewer rule is what pauses the apply until a
 #      human has read the plan job's summary — the delete guard catches the
 #      destruction class mechanically, the reviewer catches the plan that is
 #      green, non-destructive and still wrong. An environment with no
 #      protection rule pauses nothing and says nothing; verify the rule via
 #      the API before trusting the gate.
-#   6. The apply job re-runs preview and the guard immediately before
+#   5. The apply job re-runs preview and the guard immediately before
 #      `pulumi up`: what was approved and what is applied can diverge only
 #      inside one run's window, and never past the guard.
 #
 # There is deliberately no `pulumi preview` job on pull requests. It is the
 # obvious next step, but it means handing credentials to a job running
-# unmerged code — for GCP the provider's branch condition correctly refuses to
-# federate a PR head branch, and for Hetzner a bearer token would work
-# anywhere, which makes the risk live rather than blocked. The
-# plan-then-approve split above is the compensating control: no plan applies
-# unread.
+# unmerged code, and a bearer token would work from anywhere, which makes the
+# risk live rather than blocked. The plan-then-approve split above is the
+# compensating control: no plan applies unread.
 
 on:
   push:
@@ -94,17 +78,6 @@ jobs:
 
       - name: Type check
         run: npx tsc --noEmit
-
-      # Credential-free, and catches the way the deploy job's guard dies
-      # quietly: a resource renamed in edge.ts while the guard's protected set
-      # keeps the old id still previews, still applies, and still reports a
-      # green preflight — while guarding nothing. Runs here as well as in
-      # `deploy` so the PR that introduces the drift fails, rather than the
-      # merge that ships it.
-      - name: Verify the delete guard still covers every protected resource
-        run: |
-          python3 scripts/assert-no-edge-deletes.py --self-test
-          python3 scripts/assert-no-edge-deletes.py --verify-coverage .
 
   mail-typecheck:
     name: Type check (mail)
@@ -572,43 +545,6 @@ jobs:
       - name: Audit
         run: python3 scripts/audit-pulumi-secrets.py
 
-  cloud-armor-baseline-parity:
-    name: Audit (Cloud Armor baseline parity)
-    runs-on: ubuntu-latest
-    # Observed 0.07-0.12min over the last 20 successful runs (p95 0.12min).
-    timeout-minutes: 10
-    # Credential-free by construction: reads only committed edge.ts, sites.ts
-    # and the committed Cloud Armor baseline capture, never contacts GCP. What
-    # it defends against is the edge-parity gate reading a stale capture as a
-    # faithful one -- the first version of CLOUD-ARMOR-BASELINE.md claimed a
-    # parity that its own committed JSON already contradicted.
-    #
-    # It is green despite eight open divergences, because those are enumerated
-    # one by one in cloud-armor-baseline/accepted-parity-failures.json. That is
-    # what makes this job worth gating `deploy` on: red here means a divergence
-    # nobody wrote down. A permanently red job carries no such distinction --
-    # the X looks identical whether the cause is the eight recorded problems or
-    # a regression landed this morning -- and could not gate anything without
-    # blocking every unrelated `mail/` and `hetzner/` deploy until a deployed
-    # change nobody in CI can make.
-    #
-    # Closing a recorded divergence deletes its entry, and this job fails
-    # until that deletion lands, so the list cannot rot into a suppression
-    # nobody rechecks. Both halves of that -- a fresh capture and the deleted
-    # entries -- are edits to committed files, so this job never blocks its
-    # own remedy. See CLOUD-ARMOR-BASELINE.md's "Machine-checked parity".
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Self-test
-        run: python3 scripts/assert-cloud-armor-baseline-parity.py --self-test
-
-      - name: Parity check
-        run: python3 scripts/assert-cloud-armor-baseline-parity.py
-
   # ---------------------------------------------------------------------------
   # Deploy pipelines. Each stack gets a plan job and an apply job: the plan job
   # writes the real `pulumi preview` plan for this exact commit to its job
@@ -617,11 +553,11 @@ jobs:
   # re-runs preview and the delete guard itself, so the approved window can
   # never smuggle a plan past the gate.
   #
-  # `changes` below decides which of the four pairs even start: a push that
+  # `changes` below decides which of the three pairs even start: a push that
   # touches none of a stack's own inputs skips that stack's plan, and its
   # apply with it — a job that `needs` a skipped dependency inherits the skip
   # by default, so nothing downstream has to repeat the condition. None of
-  # these eight jobs are required-status-check contexts (checked against this
+  # these six jobs are required-status-check contexts (checked against this
   # repo's ruleset before this filter was written), so a skip here can never
   # satisfy a branch-protection gate; it only decides whether an apply gets
   # queued at all.
@@ -652,7 +588,6 @@ jobs:
     # small sample, only fires on push to main.
     timeout-minutes: 10
     outputs:
-      edge: ${{ steps.filter.outputs.edge }}
       mail: ${{ steps.filter.outputs.mail }}
       hetzner_network: ${{ steps.filter.outputs.hetzner_network }}
       hetzner_estate: ${{ steps.filter.outputs.hetzner_estate }}
@@ -672,16 +607,6 @@ jobs:
         with:
           base: ${{ github.event.before }}
           filters: |
-            edge:
-              - '*.ts'
-              - 'Pulumi.yaml'
-              - 'Pulumi.production.yaml'
-              - 'package.json'
-              - 'package-lock.json'
-              - '.nvmrc'
-              - 'tsconfig.json'
-              - 'scripts/assert-no-edge-deletes.py'
-              - '.github/workflows/ci.yml'
             mail:
               - 'mail/*.ts'
               - 'mail/Pulumi.yaml'
@@ -717,333 +642,6 @@ jobs:
               - 'hetzner-host/**'
               - 'scripts/assert-no-hetzner-deletes.py'
               - '.github/workflows/ci.yml'
-
-  deploy-plan:
-    name: Plan (edge, pulumi preview)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs:
-      [
-        changes,
-        typecheck,
-        mail-typecheck,
-        mail-provision-checks,
-        hetzner-typecheck,
-        hetzner-host-typecheck,
-        hetzner-provision-checks,
-        scripts-tests,
-        pulumi-inventory-audit,
-        cloud-armor-baseline-parity,
-      ]
-    if: >-
-      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      needs.changes.outputs.edge == 'true'
-
-    # Job-level permissions replace the workflow-level block entirely, so
-    # `contents: read` and `packages: read` are restated alongside the scope
-    # actually being added. `id-token: write` is what lets the runner request
-    # the OIDC token WIF exchanges, and it is granted to the edge plan/apply
-    # jobs alone.
-    permissions:
-      contents: read
-      packages: read
-      id-token: write
-
-    # Every pulumi command that reads stack state requires this once the
-    # stack is passphrase-wrapped. Without it the plan fails closed at the
-    # preview step.
-    env:
-      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-      PULUMI_SALT_EDGE: ${{ secrets.PULUMI_SALT_EDGE }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          registry-url: https://npm.pkg.github.com
-
-      - name: Install dependencies
-        run: npm ci
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Writes an external-account credential file and points
-      # GOOGLE_APPLICATION_CREDENTIALS at it, which is what both the Pulumi GCP
-      # provider and `pulumi login gs://...` pick up. No setup-gcloud step:
-      # this job runs no gcloud commands.
-      #
-      # Repo variables rather than committed literals — the provider's resource
-      # name embeds the GCP project number. Set from `pulumi stack output`
-      # after the bootstrap apply (RUNBOOK-ci-bootstrap.md).
-      - name: Authenticate to GCP (Workload Identity Federation)
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          project_id: ${{ vars.GCP_PROJECT_ID }}
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_DEPLOYER_SA_EMAIL }}
-
-      - name: Install Pulumi CLI
-        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
-
-      # The stack's `encryptionsalt` is not committed: it is an offline
-      # verifier for the passphrase above, so a repository that anyone can
-      # clone must not carry it. Pulumi still needs it in the file to decrypt,
-      # so it is appended here, on the runner, for this job only.
-      #
-      # Read from the job-level `env:` block above rather than interpolated
-      # here: a `${{ }}` inside `run` is substituted before the shell parses
-      # the line, so a value containing shell metacharacters would be executed.
-      #
-      # Fails closed on an empty value. Without the check, Pulumi reads a file
-      # whose salt line is blank, reports the stack's secrets as corrupt, and
-      # sends whoever debugs it at the passphrase rather than at a repository
-      # secret nobody set.
-      - name: Restore the stack's encryption salt
-        run: |
-          if [ -z "$PULUMI_SALT_EDGE" ]; then
-            echo "PULUMI_SALT_EDGE is empty or unset -- set the repository secret before deploying" >&2
-            exit 1
-          fi
-          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_EDGE" >> Pulumi.production.yaml
-
-      # `pulumi login` writes ~/.pulumi/credentials.json for the rest of the
-      # job. Stack selection is not relied on the same way: every command below
-      # passes `--stack production` explicitly, so no step can operate on
-      # whichever stack happened to be selected.
-      - name: Log in to the Pulumi state backend
-        run: pulumi login gs://branchleft-pulumi-state
-
-      # `--json` rather than parsing rendered text. website/infra's equivalent
-      # gate parses human output, and its own docstring records the version of
-      # it that matched nothing, exited 0, and would have allowed the
-      # destruction it existed to prevent.
-      - name: Preview the plan
-        run: pulumi preview --stack production --json > preview.json
-
-      - name: Refuse a plan that destroys the edge
-        run: |
-          # Self-test first. A gate whose matcher has quietly stopped matching
-          # passes everything, so prove it still works before trusting a pass.
-          python3 scripts/assert-no-edge-deletes.py --self-test
-          python3 scripts/assert-no-edge-deletes.py --verify-coverage .
-
-          if ! python3 scripts/assert-no-edge-deletes.py preview.json; then
-            echo "--- full plan follows ---"
-            python3 -m json.tool preview.json
-            exit 1
-          fi
-
-      # This summary is what the approver of the apply job reads. It has to be
-      # written by the plan job, because the apply job's own summary does not
-      # exist until after approval.
-      - name: Write the plan to the job summary
-        if: always()
-        # Bound rather than interpolated: a `${{ }}` inside `run` is
-        # substituted before the shell parses the script.
-        env:
-          COMMIT_SHA: ${{ github.sha }}
-        run: |
-          {
-            echo '## Shared edge plan — read before approving the apply'
-            echo
-            echo "Commit: \`${COMMIT_SHA}\`"
-            echo
-            echo '```json'
-            # Resource URNs, step ops and this stack's non-secret config only.
-            # Job summaries are visible to anyone who can read the repo, and
-            # URNs here carry site names — which is the same audience sites.ts
-            # already has. Revisit if a secret config value is ever added.
-            python3 -m json.tool preview.json 2>/dev/null \
-              || echo '(no plan captured — the run failed before preview)'
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  deploy-apply:
-    name: Apply (edge, pulumi up)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: [deploy-plan]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    # The pause. An environment carrying no protection rule neither pauses a
-    # run nor says so, and this key's presence says nothing about whether one
-    # is configured. Read `protection_rules` via the API before believing an
-    # apply is gated.
-    environment: production
-
-    permissions:
-      contents: read
-      packages: read
-      id-token: write
-
-    # `cancel-in-progress: false` deliberately: cancelling an apply mid-flight
-    # leaves the stack locked and half-applied, which is worse than waiting.
-    concurrency:
-      group: pulumi-shared-infra-deploy
-      cancel-in-progress: false
-
-    env:
-      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-      PULUMI_SALT_EDGE: ${{ secrets.PULUMI_SALT_EDGE }}
-
-    steps:
-      # If the job is running and no required-reviewer rule exists, nothing
-      # paused it — the environment key is silently inert without one. Fail
-      # here, before any credential is touched, rather than apply unattended.
-      # Needs no checkout; the token's read access covers the endpoint.
-      - name: Refuse to apply through an ungated environment
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          reviewers=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production" \
-            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
-          if [ "${reviewers:-0}" -eq 0 ]; then
-            echo "::error::the production environment has no required-reviewer rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
-            exit 1
-          fi
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          registry-url: https://npm.pkg.github.com
-
-      - name: Install dependencies
-        run: npm ci
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Authenticate to GCP (Workload Identity Federation)
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          project_id: ${{ vars.GCP_PROJECT_ID }}
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_DEPLOYER_SA_EMAIL }}
-
-      - name: Install Pulumi CLI
-        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
-
-      - name: Restore the stack's encryption salt
-        run: |
-          if [ -z "$PULUMI_SALT_EDGE" ]; then
-            echo "PULUMI_SALT_EDGE is empty or unset -- set the repository secret before deploying" >&2
-            exit 1
-          fi
-          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_EDGE" >> Pulumi.production.yaml
-
-      - name: Log in to the Pulumi state backend
-        run: pulumi login gs://branchleft-pulumi-state
-
-      # Re-planned and re-gated after approval, not carried over from the plan
-      # job: two jobs are two runners, and the guard must see the exact plan
-      # this apply acts on.
-      - name: Preview the plan
-        run: pulumi preview --stack production --json > preview.json
-
-      - name: Refuse to apply a plan that destroys the edge
-        run: |
-          python3 scripts/assert-no-edge-deletes.py --self-test
-          python3 scripts/assert-no-edge-deletes.py --verify-coverage .
-
-          if ! python3 scripts/assert-no-edge-deletes.py preview.json; then
-            echo "--- full plan follows ---"
-            python3 -m json.tool preview.json
-            exit 1
-          fi
-
-      - name: Apply
-        run: pulumi up --stack production --yes
-
-      # A clean `pulumi up` is evidence about the checkpoint, not about the
-      # deployed policy -- Cloud Armor writes rules as independent
-      # per-priority API calls, so a partial failure can leave live rules
-      # unchanged while the checkpoint and every Pulumi-side check agree the
-      # write happened (RUNBOOK-edge-state-move.md appendix A; both
-      # instances went undetected for as long as 13 days). The steps below
-      # automate two of CLOUD-ARMOR-BASELINE.md's "Reproducing this capture"
-      # steps -- export and normalize -- and fail the job by name if the
-      # result disagrees with the committed baseline. Deliberately not all of
-      # them: the `list` step (confirming exactly one policy exists) and the
-      # independent `describe` cross-read are a one-time proof that `export`
-      # is a trustworthy read for this policy, already recorded in that
-      # file's "Status of this capture"; repeating them on every deploy adds
-      # a second GCP read with no incremental protection against either
-      # incident this gate exists for, both of which `export` alone catches.
-      # `google-github-actions/auth` above already wrote the ADC credential
-      # file this step's `gcloud` picks up; no further authentication is
-      # needed.
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
-
-      # CI-2: the project id is bound to an env var rather than interpolated
-      # into the body. `vars.` is repo configuration rather than attacker
-      # input, but the clause is blanket on purpose -- the distinction is a
-      # judgement about the source, and the substitution happens before the
-      # shell sees the line either way.
-      - name: Capture the live Cloud Armor policy
-        env:
-          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-        run: |
-          scratch=$(mktemp -d)
-          echo "LIVE_ARMOR_SCRATCH=$scratch" >> "$GITHUB_ENV"
-          gcloud compute security-policies export branchleft-edge-armor \
-            --project="$GCP_PROJECT_ID" --global \
-            --file-name="$scratch/live.raw.json" --file-format=json
-
-      # Reuses the same normalizer a human recapture runs, unmodified -- its
-      # IP-redaction refusal therefore still applies to whatever this job
-      # captures: a live rule naming a specific address fails this step
-      # (exit 1) rather than reaching disk or a log line.
-      - name: Normalize the live capture
-        run: |
-          python3 scripts/normalize-cloud-armor-baseline.py \
-            "$LIVE_ARMOR_SCRATCH/live.raw.json" "$LIVE_ARMOR_SCRATCH/live.normalized.json"
-
-      - name: Verify the live policy matches the committed baseline
-        run: |
-          python3 scripts/assert-cloud-armor-live-parity.py --self-test
-          python3 scripts/assert-cloud-armor-live-parity.py \
-            cloud-armor-baseline/branchleft-edge-armor.normalized.json \
-            "$LIVE_ARMOR_SCRATCH/live.normalized.json"
-
-      # The raw export is an unguarded read -- see CLOUD-ARMOR-BASELINE.md's
-      # "Reproducing this capture" step 0 -- so it never belongs in the
-      # workspace or a later cache; `if: always()` clears it whether or not
-      # the checks above passed.
-      - name: Remove the live-capture scratch directory
-        if: always()
-        run: rm -rf "$LIVE_ARMOR_SCRATCH"
-
-      - name: Write outcome to job summary
-        if: always()
-        env:
-          COMMIT_SHA: ${{ github.sha }}
-        run: |
-          {
-            echo '## Shared edge deploy'
-            echo
-            echo "Commit: \`${COMMIT_SHA}\`"
-            echo
-            echo '### Plan this run applied'
-            echo
-            echo '```json'
-            python3 -m json.tool preview.json 2>/dev/null \
-              || echo '(no plan captured — the run failed before preview)'
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
 
   mail-plan:
     name: Plan (mail, pulumi preview)
