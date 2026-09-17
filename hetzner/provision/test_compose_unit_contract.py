@@ -95,6 +95,19 @@ HETZNER = pathlib.Path(__file__).resolve().parent.parent
 # "If the empty string is assigned to this option, the list of file to read is
 # reset, all prior assignments have no effect").
 RESET_DIRECTIVE = "EnvironmentFile="
+# The same file is also asserted on, in [Unit]. An assert is evaluated before
+# ExecStartPre and before any EnvironmentFile is read, so the [Service] reset
+# above cannot reach it -- an inline-pinned stack needs both resets or it
+# cannot start at all.
+ASSERT_RESET_DIRECTIVE = "AssertPathExists="
+# Any empty Assert*= clears the WHOLE asserts list, not the named directive --
+# proven on edge1's systemd 257 with `systemd-analyze condition`:
+# `AssertPathExists=<missing> AssertPathIsDirectory=` exits 0, where
+# `AssertPathExists=<missing>` alone exits 1. So a guard that forbids one
+# spelling is evadable by any other, and a guard that requires one spelling is
+# satisfied by a line that does not reset anything.
+ANY_ASSERT_RESET = re.compile(r"\AAssert[A-Za-z]*=\s*\Z")
+ANY_ASSERT_SET = re.compile(r"\AAssert[A-Za-z]*=\s*\S")
 
 # Compose interpolates `${VAR}`; the stack needs a secrets file if it reads any
 # variable other than the image pin. `IMAGE` is excluded by name rather than by
@@ -393,6 +406,11 @@ def drop_in_for(stack: str) -> pathlib.Path | None:
     return matches[0]
 
 
+def unit_lines(drop_in: pathlib.Path) -> list[str]:
+    """Stripped, non-comment lines of the `[Unit]` section, in file order."""
+    return section_lines(drop_in, "Unit")
+
+
 def service_lines(drop_in: pathlib.Path) -> list[str]:
     """Stripped, non-comment lines of the `[Service]` section, in file order.
 
@@ -463,6 +481,73 @@ class ComposeUnitContractTests(unittest.TestCase):
                     f"[Service]: {stack} pins its images inline, so branchleft-deploy "
                     f"will refuse to write /etc/branchleft/{stack}.image.env and the "
                     "unit will fail to start on a missing EnvironmentFile.",
+                )
+
+    def test_an_inline_pinned_stack_resets_the_image_pin_assert(self):
+        """The [Service] EnvironmentFile reset is not enough on its own.
+
+        `branchleft-compose@.service` also carries
+        `AssertPathExists=/etc/branchleft/%i.image.env` in [Unit], and systemd
+        evaluates asserts before ExecStartPre and before any EnvironmentFile is
+        read. So a stack that resets only the EnvironmentFile still cannot
+        start: the unit goes inactive with "Assertion failed" and, on a reboot,
+        never comes back. Verified live on edge1 on 2026-09-17, where the
+        monitoring stack had been unrestartable for days while its containers
+        stayed up -- nothing had asked the unit to start.
+        """
+        inline_pinned, _ = classify_stacks()
+        for stack, _compose in inline_pinned:
+            with self.subTest(stack=stack):
+                drop_in = drop_in_for(stack)
+                self.assertIsNotNone(drop_in, f"{stack} has no drop-in at all")
+                lines = unit_lines(drop_in)
+                resets = [i for i, line in enumerate(lines) if ANY_ASSERT_RESET.match(line)]
+                self.assertTrue(
+                    resets,
+                    f"{drop_in} must contain a bare `Assert...=` line under "
+                    f"[Unit]: {stack} pins its images inline, so nothing will ever "
+                    f"write /etc/branchleft/{stack}.image.env, and the template's "
+                    "assert on it blocks the start before the [Service] "
+                    "EnvironmentFile= reset is ever consulted.",
+                )
+                # Order matters exactly as it does for the EnvironmentFile reset
+                # below: systemd applies directives in file order, so an assert
+                # set after the reset is back in force and the stack is
+                # unstartable again -- with the reset still present to read as
+                # though it were handled.
+                set_after = [i for i, line in enumerate(lines) if ANY_ASSERT_SET.match(line)]
+                if set_after:
+                    self.assertGreater(
+                        max(resets),
+                        max(set_after),
+                        f"{drop_in} sets an Assert...= after its reset. systemd "
+                        "applies directives in file order, so the later assert is "
+                        f"in force and {stack} cannot start -- the reset above it "
+                        "makes the file read as though it were.",
+                    )
+
+    def test_an_image_pinned_stack_keeps_the_image_pin_assert(self):
+        """The mirror of the rule above: a ${IMAGE} stack must NOT reset it.
+
+        Resetting the assert there would let the unit start with no pin file
+        and resolve whatever `latest` meant at that moment -- the exact
+        fall-back the assert exists to prevent.
+        """
+        _, image_env = classify_stacks()
+        for stack, _compose in image_env:
+            with self.subTest(stack=stack):
+                drop_in = drop_in_for(stack)
+                if drop_in is None:
+                    continue
+                offenders = [line for line in unit_lines(drop_in) if ANY_ASSERT_RESET.match(line)]
+                self.assertEqual(
+                    offenders,
+                    [],
+                    f"{drop_in} carries {offenders}, which clears the whole asserts "
+                    f"list -- but {stack} resolves its image from ${{IMAGE}} and must "
+                    "fail to start on a missing pin rather than fall back to an "
+                    "unpinned reference. Any empty Assert...= does this, not only "
+                    "AssertPathExists=.",
                 )
 
     def test_an_image_pinned_stack_keeps_the_mandatory_image_pin(self):
