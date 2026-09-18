@@ -426,8 +426,21 @@ only the ones a rule was written for. Left alone, that chain has no rule
 narrower than "forward it", so a tenant container can also reach `db1`'s
 non-MySQL sockets, `edge1`'s metrics and CrowdSec local API on `10.20.1.10`,
 the monitoring host, and the Hetzner metadata service at `169.254.169.254`.
-`app-host-isolation.sh` closes that down to the one destination a tenant
-legitimately opens, `db1:3306`.
+`app-host-isolation.sh` closes that down to the one destination a Ghost
+tenant legitimately opens, `db1:3306`.
+
+**Not every app host is a Ghost tenant, and the reconciler tells the
+difference itself.** `nextcloud1` runs this same script unchanged, but
+`branchleft_docker_user_policy.sh` recognises its own address
+(`10.20.1.50`, `NO_DB_EXCEPTION_ADDRESSES`'s default) the same way it
+recognises `edge1`'s below, and skips the `db1:3306` exception for it —
+`nextcloud1` gets the two drops and the conntrack accept with no carve-out
+at all, rather than a copy of app1's allow-list pointed at a database it
+has no legitimate reason to reach. This has to be self-identification
+rather than an argument or an environment variable passed to this step:
+`branchleft-docker-user-policy.service` carries no `Environment=` line, so
+whatever this script decides on a one-off manual run here is not what it
+decides again at the next boot unless the script itself can re-derive it.
 
 **App hosts only, and the reconciler enforces that itself.** `edge1` is the
 estate's NAT gateway: it forwards every private-only host's own internet

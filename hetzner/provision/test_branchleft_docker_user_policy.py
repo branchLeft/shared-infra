@@ -75,6 +75,13 @@ APP_HOST_WITH_PUBLIC_IP_ADDRESSES = "\n".join(
     ]
 )
 
+# nextcloud1's real shape: private-only, like db1 -- no public interface at
+# all (publicNetworking: false). The one host self-identification is
+# expected to recognise as not a Ghost tenant by default.
+NEXTCLOUD1_ADDRESSES = (
+    "3: enp7s0    inet 10.20.1.50/32 brd 10.20.1.50 scope global dynamic enp7s0"
+)
+
 
 class DockerUserPolicyTests(unittest.TestCase):
     def setUp(self):
@@ -105,6 +112,7 @@ class DockerUserPolicyTests(unittest.TestCase):
         db_host=None,
         db_port=None,
         gateway_ip=None,
+        no_db_exception_addresses=None,
         drop_iptables=False,
         insert_exit="0",
     ):
@@ -121,6 +129,11 @@ class DockerUserPolicyTests(unittest.TestCase):
                 "FAKE_IPTABLES_INSERT_EXIT": insert_exit,
             }
         )
+        # BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST must be genuinely absent from
+        # the child environment for the "never told anything" case -- popping
+        # it here guards against it leaking in from this test process's own
+        # environment, which os.environ was just copied from above.
+        env.pop("BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST", None)
         if subnet is not None:
             env["BRANCHLEFT_DOCKER_USER_POLICY_SUBNET"] = subnet
         if db_host is not None:
@@ -129,6 +142,10 @@ class DockerUserPolicyTests(unittest.TestCase):
             env["BRANCHLEFT_DOCKER_USER_POLICY_DB_PORT"] = db_port
         if gateway_ip is not None:
             env["BRANCHLEFT_DOCKER_USER_POLICY_GATEWAY_IP"] = gateway_ip
+        if no_db_exception_addresses is not None:
+            env["BRANCHLEFT_DOCKER_USER_POLICY_NO_DB_EXCEPTION_ADDRESSES"] = (
+                no_db_exception_addresses
+            )
         return subprocess.run(
             ["bash", SCRIPT],
             env=env,
@@ -247,6 +264,45 @@ class DockerUserPolicyTests(unittest.TestCase):
         self.assertTrue(any("10.20.1.0/24" in call for call in self.inserted()))
         self.assertTrue(any("169.254.169.254" in call for call in self.inserted()))
         self.assertTrue(any("ESTABLISHED,RELATED" in call for call in self.inserted()))
+
+    # -- Trap 4: self-identification, not a one-off env var, must decide it -
+
+    def test_self_identified_non_tenant_host_skips_the_db_accept_by_default(self):
+        # The actual fix for the reachability defect: nextcloud1 gets this
+        # for free, from its own address, with nothing set in its
+        # environment at all -- the shape every real boot is in, since
+        # branchleft-docker-user-policy.service carries no Environment=.
+        result = self.run_script(addresses=NEXTCLOUD1_ADDRESSES, db_host=None)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any("--dport" in call for call in self.inserted()))
+        self.assertEqual(len(self.inserted()), 3)
+
+    def test_explicit_db_host_override_wins_over_self_identification(self):
+        # An explicit caller value, even on a self-identifying host, is
+        # still honoured -- self-identification is a default, not a lock.
+        result = self.run_script(addresses=NEXTCLOUD1_ADDRESSES, db_host="10.20.1.20")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any("10.20.1.20" in call for call in self.inserted()))
+        self.assertEqual(len(self.inserted()), 4)
+
+    def test_ordinary_app_host_is_not_self_identified_as_non_tenant(self):
+        # The discriminating case: app1's own address must not trip the
+        # default meant for nextcloud1 -- otherwise every Ghost tenant host
+        # silently loses its db1 route the moment this ships.
+        result = self.run_script(addresses=APP_HOST_ADDRESSES, db_host=None)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any("10.20.1.20" in call for call in self.inserted()))
+        self.assertEqual(len(self.inserted()), 4)
+
+    def test_no_db_exception_addresses_is_overridable_for_testing(self):
+        result = self.run_script(
+            addresses=APP_HOST_ADDRESSES,
+            db_host=None,
+            no_db_exception_addresses="10.20.1.100",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any("--dport" in call for call in self.inserted()))
+        self.assertEqual(len(self.inserted()), 3)
 
     def test_subnet_is_overridable_for_testing(self):
         result = self.run_script(subnet="10.30.1.0/24")
@@ -376,6 +432,14 @@ class RunbookAppHostIsolationTests(unittest.TestCase):
         # reach to the app host's own address goes via INPUT, which
         # DOCKER-USER never sees.
         self.assertIn("INPUT", self.text)
+
+    def test_states_not_every_app_host_is_a_ghost_tenant(self):
+        # nextcloud1 runs this same step unchanged, but must not silently
+        # get app1's db1 exception -- the runbook has to say so, not just
+        # the script, or an operator reading only this file has no way to
+        # know the two hosts end up with different rules.
+        self.assertIn("Not every app host is a Ghost tenant", self.text)
+        self.assertIn("nextcloud1", self.text)
 
     def test_is_not_part_of_run_all(self):
         # Deliberately outside run-all.sh, the same way nat-gateway.sh is.
