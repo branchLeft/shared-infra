@@ -22,7 +22,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP"
 
 Expect `active`, then `enabled`, then `provisioned`.
 
-`edge1`'s Caddy config must already route `book.branchleft.co.uk` to
+`edge1`'s Caddy config must already route `cloud.branchleft.co.uk` to
 `nextcloud1:11000` — `RUNBOOK-edge.md` §11, already done as of
 branchLeft/shared-infra#215's deploy. Confirm with a curl from the
 workstation, not through the jump — a `502` with an empty body here means
@@ -30,7 +30,7 @@ routing is correct and nothing is listening yet, which is the expected state
 until this runbook's own step 5:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://book.branchleft.co.uk/
+curl -s -o /dev/null -w "%{http_code}\n" https://cloud.branchleft.co.uk/
 ```
 
 ## 1. Write the stack's secrets on the host
@@ -149,10 +149,13 @@ before relying on `--wait` again.
 Then, from the workstation, the same check this runbook opened with:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://book.branchleft.co.uk/
+curl -s -o /dev/null -w "%{http_code}\n" https://cloud.branchleft.co.uk/
 ```
 
-Expect `200`, not `502` — the whole chain (DNS, Caddy, this stack) is live.
+Expect `302`, not `502` — a healthy, unauthenticated `/` redirects to
+`/login`, observed live on this instance's first deploy. `302` here means
+the whole chain (DNS, Caddy, this stack) is live, not that anything is
+wrong.
 
 ## 7. What this runbook does not cover
 

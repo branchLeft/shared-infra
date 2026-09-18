@@ -80,11 +80,16 @@ export const sites: EdgeSite[] = [
 
   {
     name: 'nextcloud1',
-    // Placeholder subdomain — cheap to rename before the DNS step actually
-    // runs (nothing depends on this string except the cert/DNS entries this
-    // onboarding creates for it). The platform owner confirms the final
-    // hostname before publishing the _acme-challenge CNAME.
-    hostnames: ['book.branchleft.co.uk'],
+    // Renamed from book.branchleft.co.uk: the site outgrew the booking-page
+    // name it launched with -- Calendar, Talk/video and Files are all in use
+    // now -- and cloud.<domain> is this estate's convention for a
+    // self-hosted Nextcloud instance. book.branchleft.co.uk stays listed
+    // here, not dropped outright, purely so it keeps a certificate and can
+    // still appear as a redirect source below -- see the hostRedirects entry
+    // for why. Once the old DNS record is confirmed unused and removed at
+    // the registrar, both this entry and that redirect should be deleted in
+    // a follow-up change.
+    hostnames: ['cloud.branchleft.co.uk', 'book.branchleft.co.uk'],
     // No cloudRunService: this site was born on Hetzner and never had a GCP
     // backend, per this field's own doc in siteTypes.ts.
     //
@@ -109,4 +114,8 @@ export const sites: EdgeSite[] = [
  */
 export const hostRedirects: HostRedirect[] = [
   { from: 'www.branchleft.co.uk', to: 'branchleft.co.uk' },
+  // Temporary, for the book -> cloud cutover: anyone holding an old link
+  // gets redirected rather than a hard break. Remove once book's DNS record
+  // is retired (see the nextcloud1 entry above).
+  { from: 'book.branchleft.co.uk', to: 'cloud.branchleft.co.uk' },
 ];

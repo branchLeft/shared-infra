@@ -115,7 +115,7 @@ blog.branchleft.co.uk {
 	}
 }
 
-book.branchleft.co.uk {
+cloud.branchleft.co.uk {
 	log {
 		output file /var/log/caddy/access.log
 		format json
@@ -149,6 +149,27 @@ book.branchleft.co.uk {
 		crowdsec
 		appsec
 		reverse_proxy 10.20.1.50:11000
+	}
+}
+
+book.branchleft.co.uk {
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	route {
+		rate_limit {
+			zone nextcloud1_redirect_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		crowdsec
+		redir https://cloud.branchleft.co.uk{uri} permanent
 	}
 }
 
