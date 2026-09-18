@@ -57,7 +57,10 @@ MAIL_DOMAIN = os.environ.get("MAIL_DOMAIN", "branchleft.co.uk")
 # authenticates into and sends as, see provision_website_submission_credential.py
 # -- and for acme@ -- the Hetzner edge's ACME_EMAIL, see hetzner/RUNBOOK-edge.md
 # -- and for alerts@ -- the account Alertmanager's submission-only SMTP
-# credential authenticates into and sends as, see hetzner/RUNBOOK-monitoring.md).
+# credential authenticates into and sends as, see hetzner/RUNBOOK-monitoring.md
+# -- and for noreply@ -- the account Nextcloud's submission-only SMTP
+# credential authenticates into and sends as, see
+# mail/RUNBOOK-mx1-provision.md#nextcloud-submission-credential).
 MAILBOXES = ("rob", "contact", "info", "sales", "complaints", "abuse", "blog", "acme", "alerts", "noreply")
 
 # The ones that get a copy-forward to rob@ -- rob@ itself gets no script.
