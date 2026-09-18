@@ -130,6 +130,7 @@ EXPECTED_SERVICES: dict[str, set[str]] = {
         "blackbox-exporter",
         "cadvisor",
     },
+    "nextcloud1": {"app", "db", "redis"},
 }
 
 # The stacks every assertion above is about: exactly the ones whose Compose file

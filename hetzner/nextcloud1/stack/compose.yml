@@ -1,0 +1,133 @@
+# The nextcloud1 Compose stack, deployed as `nextcloud1` under
+# /opt/branchleft/nextcloud1.
+#
+# Plain Nextcloud -- the official images over ordinary Compose -- not
+# Nextcloud AIO. `hetzner/estate.ts`'s `nextcloud1` comment carries the full
+# reasoning: AIO's master container needs the Docker socket to manage its own
+# sibling containers, which is root-equivalent host access, and DOCKER-USER
+# (this host's only isolation policy) cannot bound a process with host root.
+# No service below ever mounts /var/run/docker.sock.
+#
+# Every image is pinned by tag-plus-digest, matching
+# hetzner/monitoring/stack/compose.yml's pattern: the tag is for a human
+# reading `docker ps`, the digest is what actually gets pulled.
+#
+# `app`'s published port binds nextcloud1's own private address only
+# (10.20.1.50, hetzner-host/addressPlan.ts's HOST_IPS.nextcloud1), matching
+# sites.ts's committed privateUpstream for book.branchleft.co.uk -- the two
+# must move together, same convention as every other site the Hetzner edge
+# proxies to. `db` and `redis` publish no host port at all: `app` reaches
+# both by Compose service name over the stack's own internal network, and
+# nothing else on this host has any reason to reach either.
+#
+# Every service declares a `healthcheck:` because that is what makes
+# `--wait` a deploy signal, and because hetzner/provision/test_compose_unit_contract.py
+# fails CI on any committed stack/compose.yml carrying a service without one.
+name: nextcloud1
+
+services:
+  app:
+    image: docker.io/library/nextcloud:31-apache@sha256:07ec73cc816e58d6f45a162cd53ef886462c29271a23fc68d0124cec276e3767
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      # Declared required here; every later reference to this variable in
+      # this file is bare -- Compose fails at this substitution, before
+      # anything starts, if the env file is missing it.
+      POSTGRES_PASSWORD: ${NEXTCLOUD_DB_PASSWORD:?set NEXTCLOUD_DB_PASSWORD in /etc/branchleft/nextcloud1.env}
+      REDIS_HOST: redis
+      REDIS_HOST_PASSWORD: ${NEXTCLOUD_REDIS_PASSWORD:?set NEXTCLOUD_REDIS_PASSWORD in /etc/branchleft/nextcloud1.env}
+      # Consumed by the entrypoint's install script only on a genuinely
+      # empty /var/www/html -- once Nextcloud is installed, changing this
+      # here has no effect on the account it created. RUNBOOK-nextcloud.md
+      # says so, so the first-run value doesn't quietly go stale in nobody's
+      # memory.
+      NEXTCLOUD_ADMIN_USER: admin
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:?set NEXTCLOUD_ADMIN_PASSWORD in /etc/branchleft/nextcloud1.env}
+      NEXTCLOUD_TRUSTED_DOMAINS: book.branchleft.co.uk
+      # edge1's private address -- the only host that ever proxies to this
+      # one, per its role as the estate's sole front door
+      # (hetzner-host/addressPlan.ts's HOST_IPS.edge1). Without this,
+      # Nextcloud treats every request as arriving directly and gets the
+      # scheme and host wrong behind Caddy's reverse proxy.
+      TRUSTED_PROXIES: 10.20.1.10
+      OVERWRITEPROTOCOL: https
+      OVERWRITEHOST: book.branchleft.co.uk
+      OVERWRITECLIURL: https://book.branchleft.co.uk
+      # Matches sites.ts's requestBodyMaxSize for this site (100MiB) --
+      # Caddy's limit is the outer bound, but PHP's own default (2M/8M) would
+      # otherwise reject an upload Caddy had already let through, which
+      # presents as a confusing mid-request failure rather than a clean 413
+      # at the edge.
+      PHP_MEMORY_LIMIT: 512M
+      PHP_UPLOAD_LIMIT: 100M
+    ports:
+      - '10.20.1.50:11000:80'
+    volumes:
+      - nextcloud-app:/var/www/html
+    # curl ships in the official image (it's an install-time dependency of
+    # Nextcloud's own app-store client) -- confirmed once, live, in
+    # RUNBOOK-nextcloud.md's verify step, rather than assumed here.
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost/status.php -o /dev/null || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    # This host runs nothing else -- no colocation containment story the way
+    # monitoring/edge share edge1 -- but a limit still stops one runaway
+    # container starving the others on a cx23's 4GB. Apache/PHP workers under
+    # real load are the most memory-hungry service here, hence the largest
+    # share.
+    mem_limit: 2048m
+    cpu_shares: 1024
+
+  db:
+    image: docker.io/library/postgres:16-alpine@sha256:3c5c8892d184f738f4fe282d14ddaa613a38f00f4189d2d94725ebe6f2909ddb
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: ${NEXTCLOUD_DB_PASSWORD}
+    volumes:
+      - nextcloud-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nextcloud -d nextcloud']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    mem_limit: 1024m
+    cpu_shares: 512
+
+  redis:
+    image: docker.io/library/redis:7-alpine@sha256:520775a41a63e77e06c73e35d2fd9cc15921a609516818796b4ecbb813078bc7
+    restart: unless-stopped
+    # No persistence volume, deliberately: this Redis is Nextcloud's file
+    # locking and session/cache backend, not a store of record. Losing it on
+    # a restart clears in-flight locks and caches, never user data -- the
+    # tradeoff every default Nextcloud+Redis deployment makes.
+    command: ['redis-server', '--requirepass', '${NEXTCLOUD_REDIS_PASSWORD}']
+    # The password is substituted by Compose directly into this command, the
+    # same way it is into `command:` above -- not read from a container env
+    # var, since none is set here. Visible via `docker inspect`/`ps` inside
+    # the container, the same exposure `command:` already accepts.
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a "${NEXTCLOUD_REDIS_PASSWORD}" ping | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 256m
+    cpu_shares: 128
+
+volumes:
+  nextcloud-app:
+  nextcloud-db:
