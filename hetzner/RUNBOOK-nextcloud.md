@@ -285,6 +285,202 @@ check) and confirm the DB-index and mimetype-migration warnings are gone;
 the maintenance-window and phone-region warnings clear from the same page
 and from 8.5's two values matching.
 
+## 9. Upgrading to a new major version
+
+`stack/compose.yml` pins `nextcloud:32-apache` by tag-plus-digest, same as
+every other image here. Bumping that pin and redeploying is **not** the
+same action as the redeploys above: it moves the on-disk schema forward,
+and Nextcloud's own docs are explicit that the move cannot be undone by
+re-pinning the old tag (9.6 below). Everything in this section is the
+platform owner's to run, for the same reason section 8's warning-closing
+commands are — no grant in `AUTHORISATIONS.md` covers a mutating change to
+this stack's data, and this one is irreversible in a way those aren't.
+
+### 9.1 What the image actually does on a version bump
+
+Confirmed against `nextcloud/docker`'s own `docker-entrypoint.sh` (the file
+is at the repository root and shared, unmodified, by every version
+directory including `32/apache` — not a per-version copy), pulled live
+rather than assumed:
+
+The entrypoint compares two version numbers on every container start —
+`installed_version`, read from `/var/www/html/version.php` on the
+persistent `nextcloud-app` volume, against `image_version`, read from
+`/usr/src/nextcloud/version.php` baked into the image. If the image is
+newer, it **runs the upgrade itself, with no separate trigger**: it
+`rsync`s the new release's files over `/var/www/html` (excluding `config`,
+`data`, `custom_apps`, `themes` per `upgrade.exclude`, but `version.php`
+itself is synced unconditionally), then runs `php occ upgrade` as the
+`www-data` user. There is no `NEXTCLOUD_UPDATE` or similar opt-out for this
+stack's case — the check runs whenever the container's first argument is
+`apache2*` (which is how the `app` service's default `CMD` starts), so
+simply redeploying with the new tag is the trigger.
+
+Two guards, both fail-closed:
+
+- **Downgrade refusal.** If `installed_version` is ever higher than
+  `image_version`, the entrypoint prints "Can't start Nextcloud because the
+  version of the data... is higher than the docker image version... and
+  downgrading is not supported" and `exit 1` — the container never reaches
+  `exec apache2`. This is the same rule Nextcloud's admin manual states for
+  `occ upgrade` itself: reverting to an older Nextcloud version is not
+  supported once the newer one has touched the data (9.6).
+- **One major version at a time.** If the image's major version is more
+  than one ahead of the installed one, the entrypoint refuses to start
+  rather than attempt a multi-version jump. 31 → 32 is exactly one major
+  version, so this stack clears that guard directly — no intermediate hop
+  needed.
+
+What the entrypoint does **not** do: it does not take any backup of its
+own, and it does not explicitly toggle maintenance mode before calling
+`occ upgrade` — that is `occ upgrade`'s own job internally (Nextcloud's
+manual-upgrade troubleshooting page gives `occ maintenance:mode --off` as
+the recovery command for an upgrade stuck mid-run, which only makes sense
+if `occ upgrade` itself is what turns maintenance mode on).
+
+**The real risk if `occ upgrade` fails partway**, worth naming precisely
+because it is not obvious from the script's shape: the `rsync` that copies
+`version.php` onto the volume runs _before_ `occ upgrade` is invoked, so
+the on-disk `installed_version` already reads as the new version the
+moment the file copy finishes — regardless of whether the database
+migration that follows succeeds. The script carries `set -eu`, so a
+failing `occ upgrade` does kill the entrypoint and the container exits
+without ever starting Apache (the half-migrated instance is never exposed
+to traffic). But because `installed_version` was already bumped, a
+subsequent restart — including the `--force-recreate` this unit already
+does on every `systemctl restart` — sees `installed_version ==
+image_version` and **skips the upgrade branch entirely** on the next
+attempt, rather than retrying `occ upgrade`. A crash mid-upgrade does not
+self-heal on restart; it needs the manual step in 9.6.
+
+### 9.2 Precondition: there is no backup mechanism for this stack
+
+Checked, not assumed: nothing under `hetzner/` schedules a Postgres dump,
+a volume snapshot, or any `restic`/`borg`-style job for `nextcloud1` or for
+`db1`'s own data. `nextcloud-db` and `nextcloud-app` are ordinary unmanaged
+Docker volumes with no export configured anywhere in this repo. This is a
+real gap, not a formality being skipped here — flagged as such rather than
+worked around, since building an actual backup pipeline is its own piece
+of work, not part of this change.
+
+Until that pipeline exists, take a manual snapshot immediately before
+starting 9.3, kept off this host:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
+  DB_CTR=$(docker ps -q --filter label=com.docker.compose.project=nextcloud1 --filter label=com.docker.compose.service=db) &&
+  docker exec "$DB_CTR" pg_dump -U nextcloud nextcloud | gzip > /root/nextcloud1-pre-upgrade-db.sql.gz &&
+  docker run --rm -v nextcloud1_nextcloud-app:/volume -v /root:/backup alpine \
+    tar czf /backup/nextcloud1-pre-upgrade-app.tar.gz -C /volume .'
+scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" \
+  root@"$HOST_PRIVATE_IP":/root/nextcloud1-pre-upgrade-db.sql.gz \
+  root@"$HOST_PRIVATE_IP":/root/nextcloud1-pre-upgrade-app.tar.gz \
+  ./
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" \
+  'rm -f /root/nextcloud1-pre-upgrade-db.sql.gz /root/nextcloud1-pre-upgrade-app.tar.gz'
+```
+
+Confirm both files landed on the workstation and are non-empty before
+proceeding — a backup nobody checked is not a backup. Move them somewhere
+durable off the workstation too (the password manager's attached-file
+storage, or wherever `RUNBOOK-monitoring.md`'s own backups land); this
+runbook does not pick that location for you.
+
+### 9.3 Redeploy with the new pin
+
+Same `rsync` + `chown` + restart shape as every other redeploy in this
+file — this instance's `ExecStart` already carries `--force-recreate`
+(§3), so a plain `systemctl restart` is sufficient, exactly as the
+Rolling-back section below relies on:
+
+```bash
+cd ~/branchLeft/shared-infra
+rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
+  -e "ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand=\"$JUMP\"" \
+  hetzner/nextcloud1/stack/ root@"$HOST_PRIVATE_IP":/opt/branchleft/nextcloud1/ &&
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" \
+  'chown -R root:root /opt/branchleft/nextcloud1/ &&
+   systemctl restart branchleft-compose@nextcloud1'
+```
+
+### 9.4 What to watch for during the upgrade
+
+`systemctl restart` blocks on `--wait` until every service reports
+healthy or `TimeoutStartSec` (600s) is hit, same as first bring-up (§5) —
+but this run does more work than a routine restart: a cold pull of the
+`32-apache` image plus 9.1's `rsync`-then-`occ upgrade` inside it,
+which the Nextcloud admin manual describes as taking "a few minutes to a
+few hours" depending on install size. Do not treat a restart command that
+takes several minutes as a hang.
+
+`https://cloud.branchleft.co.uk/` will serve Nextcloud's own maintenance
+page (occ upgrade puts the instance into maintenance mode for the
+migration's duration) rather than the usual `302` to `/login` for as long
+as the upgrade is running — that response, not a `502` or a connection
+failure, is the expected shape of the downtime window here. If
+`systemctl restart` returns and the unit is `active`, 9.5 below is the
+proof the upgrade actually finished rather than merely started.
+
+### 9.5 Verify the upgrade completed
+
+Same label-filter pattern as §6 and §8 — never a fresh-session `docker
+compose exec`, for the reason §6 already gives (no `EnvironmentFile=`
+variables on an interactive shell):
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
+  docker ps --filter label=com.docker.compose.project=nextcloud1 --format "{{.Names}}\t{{.Status}}"
+  APP_CTR=$(docker ps -q --filter label=com.docker.compose.project=nextcloud1 --filter label=com.docker.compose.service=app) &&
+  docker exec "$APP_CTR" php occ status'
+```
+
+Expect `installed: true`, `maintenance: false` (confirming the upgrade's
+own maintenance-mode window closed cleanly rather than getting stuck —
+9.6 covers the case where it doesn't), and `versionstring: 32.0.x`
+matching whatever the pinned digest resolved to at PR time (the admin
+panel named `32.0.15` as current when this pin was written). Then, from
+the workstation, the same check §6 closed with:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://cloud.branchleft.co.uk/
+```
+
+Expect `302` to `/login` again, not the maintenance page.
+
+### 9.6 If it fails partway
+
+**Re-pinning `compose.yml` back to `nextcloud:31-apache` and redeploying
+is not a working rollback once `occ upgrade` has touched the database** —
+confirmed against Nextcloud's own admin manual, not assumed: "Downgrading
+is not supported and risks corrupting your data! If you want to revert to
+an older Nextcloud version, make a new, fresh installation and then
+restore your data from backup." 9.1's downgrade guard makes this concrete
+here too: the `31-apache` entrypoint would see `installed_version` (32.x,
+already written by the interrupted run's `rsync`) higher than its own
+`image_version` and refuse to start at all.
+
+If the restart in 9.3 fails or the unit never reaches `active`:
+
+1. Check whether the instance is stuck in maintenance mode rather than
+   genuinely broken — `occ status` (9.5) showing `maintenance: true` with
+   the container otherwise running is the documented stuck-upgrade shape,
+   and the documented recovery is re-running the migration by hand:
+   `docker exec "$APP_CTR" php occ upgrade`, using the same label-filter
+   pattern as 9.5. Nextcloud's docs do not commit to `occ upgrade` being
+   fully resumable after every kind of interruption, only that this is the
+   published remediation for a stuck-but-otherwise-intact instance.
+2. If that does not bring the instance back — or the failure looks like
+   data corruption rather than a stuck migration — the only recovery path
+   the docs name is 9.2's backup: a fresh install at the old version,
+   restoring the pre-upgrade `pg_dump` and volume tarball into it. That is
+   a rebuild, not a redeploy, and is out of scope for this runbook to
+   script; it starts from `RUNBOOK-new-stack.md`'s general shape with
+   9.2's dump substituted for a first install.
+3. Whichever path is taken, do not re-attempt 9.3 against the same
+   half-upgraded volume without first resolving (1) or (2) — a second
+   `occ upgrade` invocation against a database in an unknown state is not
+   something either this runbook or Nextcloud's own docs vouch for.
+
 ## Rolling back
 
 **Configuration** — restore the previous `hetzner/nextcloud1/stack/` from git
