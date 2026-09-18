@@ -576,6 +576,30 @@ match `MAIL FROM`, hence a real account rather than a bare alias. Retrieved
 the same way as the website's credential (see "Retrieving the credential"
 above), substituting the label.
 
+## Nextcloud submission credential
+
+`66-provision-nextcloud-submission-credential.sh` runs the same
+`provision_website_submission_credential.py` as `60-...sh` above, with
+`SEND_AS_LOCAL=noreply`, `CREDENTIAL_LABEL=nextcloud-smtp` and
+`APP_PASSWORD_DESCRIPTION=nextcloud-transactional-submission` instead of
+the website's defaults. Everything in "Website submission credential" above
+applies identically, substituting `noreply@branchleft.co.uk` for
+`info@branchleft.co.uk` throughout. `50-provision-mailboxes.sh` must have
+already created the `noreply@` account or this script's account lookup fails
+the same way `61`'s does for `blog@`.
+
+This credential is what the self-hosted Nextcloud instance
+(`hetzner/nextcloud1/`) authenticates with to send transactional mail —
+password resets, notifications, Appointments booking confirmations — as
+`noreply@branchleft.co.uk`. Unlike the website and blog, nothing legitimate
+is ever expected to reply _to_ `noreply@`; it gets the same real storage and
+copy-forward-to-`rob@` as every other role address regardless, because the
+inbound side of a transactional-mail account is exactly where a delivery
+failure shows up — a bounce or an NDR for a password-reset email that never
+reached its recipient is worth seeing, the same reasoning `alerts@` documents
+for its own inbound traffic. Retrieved the same way as the website's
+credential (see "Retrieving the credential" above), substituting the label.
+
 ## Mailgun shim (bulk mail)
 
 Puts the mailgun-shim (a separate service, image built by a parallel PR)
