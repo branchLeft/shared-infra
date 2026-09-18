@@ -259,6 +259,34 @@ function tlsDirective(): string[] {
   return ['tls {', `\tprotocols ${TLS_PROTOCOLS.join(' ')}`, '}'];
 }
 
+/**
+ * `max-age=31536000` (365 days) with `includeSubDomains` is the standard
+ * baseline every browser vendor documents for this header. `preload` is
+ * deliberately absent -- submitting to a browser's preload list is a
+ * separate, slow-to-reverse decision (removal takes months to propagate),
+ * not a rendering default this file should choose unilaterally.
+ */
+const HSTS_VALUE = 'max-age=31536000; includeSubDomains';
+
+/**
+ * Emitted for every real hostname this edge serves -- this is what closed
+ * the gap an admin panel on `book.branchleft.co.uk` surfaced as a missing
+ * `Strict-Transport-Security` header finding. The gap was edge-wide, not
+ * specific to that tenant: before this, nothing in this file emitted any
+ * response header on any site.
+ *
+ * Called first in each route, ahead of `request_body` and the protection
+ * chain, deliberately -- `header` populates the response header map before
+ * calling the next handler, so whatever runs afterwards (a proxied response,
+ * a 429 from the throttle, a block from AppSec or CrowdSec) still carries it
+ * when it writes the response. Placed after `reverse_proxy` it would cover
+ * only the proxied 200s and miss exactly the responses where keeping a
+ * browser on HTTPS matters as much as it does on a success.
+ */
+function hstsDirective(): string[] {
+  return [`header Strict-Transport-Security "${HSTS_VALUE}"`];
+}
+
 function rateLimitDirective(zone: string): string[] {
   return [
     'rate_limit {',
@@ -429,7 +457,10 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   }
   body.push(
     'route {',
-    // First in the route by convention, not as a security boundary. Measured
+    // Ahead of everything else, including request_body -- see hstsDirective's
+    // own comment for why its position is load-bearing rather than tidiness.
+    ...hstsDirective().map((line) => `\t${line}`),
+    // First of the rest by convention, not as a security boundary. Measured
     // against Caddy v2.11.4: `request_body` wraps the body in a
     // MaxBytesReader and returns 413 once the limit is passed, which does
     // bound what is ingested -- but it does NOT terminate the handler chain.
@@ -457,6 +488,7 @@ function redirectBlock(redirect: HostRedirect, zone: string, posture: EdgePostur
       ...logDirective(ACCESS_LOG),
       ...tlsDirective(),
       'route {',
+      ...hstsDirective().map((line) => `\t${line}`),
       ...protectionChain(posture, zone, { appsec: 'none' }).map((line) => `\t${line}`),
       `\tredir https://${assertHostname(redirect.to)}{uri} permanent`,
       '}',

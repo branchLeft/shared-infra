@@ -32,6 +32,7 @@ authoring.invalid {
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
 	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		request_body {
 			max_size 64MiB
 		}
