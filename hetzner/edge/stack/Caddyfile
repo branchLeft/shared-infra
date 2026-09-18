@@ -129,6 +129,7 @@ book.branchleft.co.uk {
 		protocols tls1.2 tls1.3
 	}
 	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		redir https://cloud.branchleft.co.uk{uri} permanent
 	}
 }
