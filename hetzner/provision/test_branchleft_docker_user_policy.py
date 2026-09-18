@@ -224,6 +224,30 @@ class DockerUserPolicyTests(unittest.TestCase):
         db_rule = next(call for call in self.inserted() if "10.20.1.99" in call)
         self.assertIn("--dport 3307", db_rule)
 
+    def test_db_host_unset_still_defaults_to_db1(self):
+        # Regression guard for the app1 case: not passing the variable at all
+        # must keep carving out the db1 exception, exactly as before this
+        # script could be told to skip it.
+        result = self.run_script(db_host=None)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any("10.20.1.20" in call for call in self.inserted()))
+        self.assertEqual(len(self.inserted()), 4)
+
+    def test_db_host_explicitly_empty_skips_the_db_accept_rule_entirely(self):
+        # The fix for a real reachability defect: an app host with no
+        # legitimate reason to reach db1 (nextcloud1 is not a Ghost tenant)
+        # must get a deny-all-to-the-subnet policy with no exception, not a
+        # copy of app1's allow-list pointed at nothing.
+        result = self.run_script(db_host="")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any("--dport" in call for call in self.inserted()))
+        self.assertEqual(len(self.inserted()), 3)
+        # The two drops and the conntrack accept still land -- this host
+        # still needs its own reply traffic to work, just no forward exception.
+        self.assertTrue(any("10.20.1.0/24" in call for call in self.inserted()))
+        self.assertTrue(any("169.254.169.254" in call for call in self.inserted()))
+        self.assertTrue(any("ESTABLISHED,RELATED" in call for call in self.inserted()))
+
     def test_subnet_is_overridable_for_testing(self):
         result = self.run_script(subnet="10.30.1.0/24")
         self.assertEqual(result.returncode, 0, result.stderr)

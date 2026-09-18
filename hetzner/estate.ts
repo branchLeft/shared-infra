@@ -84,13 +84,27 @@ export const edge1PrivateIp = HOST_IPS.edge1;
  * `edge1` jump host over the private network, per
  * `RUNBOOK-provision-host.md` §5, rather than carrying its own public IPs.
  * That keeps the estate's public attack surface unchanged by this host's
- * addition, which matters more than usual here because Nextcloud AIO's
- * master container needs the Docker socket to manage its own sibling
- * containers — root-equivalent access this estate's CI deploy identity is
- * deliberately never given (see `cloudInit.ts`). Confining that to one
- * private-only, `app-host-isolation.sh`-fenced host (no route to `db1` or
- * anywhere else in the estate) is the isolation trade this host exists to
- * make, not an oversight.
+ * addition.
+ *
+ * **No container on this host may ever hold the Docker socket.** Nextcloud
+ * AIO's master container needs exactly that to manage its own sibling
+ * containers, which is root-equivalent host access — and `DOCKER-USER`
+ * (what `app-host-isolation.sh` writes to) only filters Docker's *forward*
+ * chain. It cannot bound a process with host root: that process can reach
+ * any interface directly or simply flush the rules, so it is not a
+ * containment boundary against this specific risk, whatever else it is
+ * doing for a Ghost tenant's published ports. **Deploy plain Nextcloud
+ * instead** — the official image(s) over ordinary Docker Compose, no
+ * Docker-in-Docker orchestrator, no socket mount anywhere on this host.
+ * That is what actually removes the risk, not an isolation policy layered
+ * on top of accepting it.
+ *
+ * `app-host-isolation.sh` is still installed here, with
+ * `BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST` set empty — this host is not a
+ * Ghost tenant and has no legitimate reason to reach `db1`, so it gets a
+ * deny-all-to-the-subnet policy with no carve-out (see that script's own
+ * comment). That bounds an ordinary container compromise; it was never
+ * being asked to bound a host-rooted one, and nothing here claims it does.
  */
 export const nextcloud1 = new Host({
   name: 'nextcloud1',

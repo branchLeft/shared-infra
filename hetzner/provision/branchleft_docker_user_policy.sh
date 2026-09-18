@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# Confines the forwarded reach of every tenant container on an app host to
-# db1:3306, closing off the co-tenant containers, edge1's metrics/CrowdSec
-# surfaces and the Hetzner metadata service that a published port would
-# otherwise leave reachable across the whole private subnet.
+# Confines the forwarded reach of every container on an app host to db1:3306
+# -- the one exception a Ghost tenant legitimately needs -- closing off the
+# co-tenant containers, edge1's metrics/CrowdSec surfaces and the Hetzner
+# metadata service that a published port would otherwise leave reachable
+# across the whole private subnet. Set BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST
+# to an empty string on an app host that is not a Ghost tenant and has no
+# legitimate reason to reach db1 -- the db1 exception is then skipped
+# entirely, leaving a deny-all-to-the-subnet policy with no carve-out.
 #
 # Installed as /usr/local/sbin/branchleft-docker-user-policy by
 # app-host-isolation.sh and re-run at every boot by
@@ -23,7 +27,15 @@ set -euo pipefail
 # Pulumi context to read them from -- the same reason branchleft_nat.sh's
 # SUBNET is a literal default.
 SUBNET="${BRANCHLEFT_DOCKER_USER_POLICY_SUBNET:-10.20.1.0/24}"
-DB_HOST="${BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST:-10.20.1.20}"
+# `-` not `:-`: this default must apply only when the caller never set the
+# variable, not when it set it empty. An app host with a legitimate reason to
+# reach nothing else in the estate (not every app host is a Ghost tenant --
+# nextcloud1 is not) sets this empty deliberately, to get the two drops and
+# the conntrack accept with no exception carved out at all. Falling back to
+# db1 on an empty string would silently hand that host the same MySQL route
+# app1 has, which is exactly the unreviewed lateral-movement path this
+# variable exists to let a caller refuse.
+DB_HOST="${BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST-10.20.1.20}"
 DB_PORT="${BRANCHLEFT_DOCKER_USER_POLICY_DB_PORT:-3306}"
 GATEWAY_PRIVATE_IP="${BRANCHLEFT_DOCKER_USER_POLICY_GATEWAY_IP:-10.20.1.10}"
 
@@ -106,11 +118,17 @@ ensure_rule() {
 ensure_rule filter DOCKER-USER -d "$METADATA_ADDRESS" -j DROP
 ensure_rule filter DOCKER-USER -d "$SUBNET" -j DROP
 
-# The one destination a tenant legitimately opens. Scoped to TCP and the
-# port MySQL listens on, not merely the address: db1 also carries an
-# exporter and administrative sockets no tenant container needs, and this
-# script is the one reviewed, tested place that allow-list is meant to live.
-ensure_rule filter DOCKER-USER -d "$DB_HOST" -p tcp --dport "$DB_PORT" -j ACCEPT
+# The one destination a Ghost tenant legitimately opens -- not every app host
+# is one. Scoped to TCP and the port MySQL listens on, not merely the
+# address: db1 also carries an exporter and administrative sockets no tenant
+# container needs, and this script is the one reviewed, tested place that
+# allow-list is meant to live. Skipped entirely when DB_HOST is explicitly
+# empty, which is what turns this into a deny-all-to-the-subnet policy with
+# no exception for a host that has no legitimate reason to reach db1 or
+# anything else here.
+if [[ -n "$DB_HOST" ]]; then
+    ensure_rule filter DOCKER-USER -d "$DB_HOST" -p tcp --dport "$DB_PORT" -j ACCEPT
+fi
 
 # Has to be the first rule DOCKER-USER evaluates. A published port is a DNAT,
 # so an inbound flow's reply (edge1 -> a tenant's Ghost, or a scrape -> a
