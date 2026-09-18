@@ -123,6 +123,28 @@ export const sites: EdgeSite[] = [
     // until there is enough admin-API traffic to prove otherwise.
     injectionWafPreviewOnly: true,
   },
+
+  {
+    name: 'nextcloud1',
+    // Placeholder subdomain — cheap to rename before the DNS step actually
+    // runs (nothing depends on this string except the cert/DNS entries this
+    // onboarding creates for it). The platform owner confirms the final
+    // hostname before publishing the _acme-challenge CNAME.
+    hostnames: ['book.branchleft.co.uk'],
+    // No cloudRunService: this site was born on Hetzner and never had a GCP
+    // backend, per this field's own doc in siteTypes.ts.
+    //
+    // Plain Nextcloud (official image over ordinary Compose), not AIO --
+    // see estate.ts's nextcloud1 comment for why AIO is ruled out on this
+    // host. 11000 is an arbitrary host-side port chosen for this deploy,
+    // bound to nextcloud1's private IP in its compose file, not a value
+    // Nextcloud itself picks -- the two must move together, same convention
+    // as the blog entry above.
+    privateUpstream: { host: 'nextcloud1', port: 11000 },
+    // Calendar/Talk attachments and avatars, not general file sync. Raise
+    // deliberately if a real bulk-upload use case shows up.
+    requestBodyMaxSize: '100MiB',
+  },
 ];
 
 /**

@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
-# Confines the forwarded reach of every tenant container on an app host to
-# db1:3306, closing off the co-tenant containers, edge1's metrics/CrowdSec
-# surfaces and the Hetzner metadata service that a published port would
-# otherwise leave reachable across the whole private subnet.
+# Confines the forwarded reach of every container on an app host to db1:3306
+# -- the one exception a Ghost tenant legitimately needs -- closing off the
+# co-tenant containers, edge1's metrics/CrowdSec surfaces and the Hetzner
+# metadata service that a published port would otherwise leave reachable
+# across the whole private subnet. A host in NO_DB_EXCEPTION_ADDRESSES below
+# is not a Ghost tenant and has no legitimate reason to reach db1 -- for it,
+# the db1 exception is skipped entirely, leaving a deny-all-to-the-subnet
+# policy with no carve-out.
 #
 # Installed as /usr/local/sbin/branchleft-docker-user-policy by
 # app-host-isolation.sh and re-run at every boot by
-# branchleft-docker-user-policy.service. Idempotent: every rule is checked
-# before it is added.
+# branchleft-docker-user-policy.service, with no arguments and no
+# environment of its own -- that unit carries no Environment= line, by
+# design, so every app host runs this file byte-identically. Which behaviour
+# a given host gets can therefore only come from something the host can
+# prove about itself on every run, not from anything a one-off invocation
+# happened to set: an env var passed by hand to a manual first run does not
+# survive to the next boot, when the unit re-execs this script with none of
+# it. NO_DB_EXCEPTION_ADDRESSES is that self-identification, the same
+# pattern GATEWAY_PRIVATE_IP below already uses to recognise edge1.
+#
+# Idempotent: every rule is checked before it is added.
 #
 # App hosts only. Refuses to run on the estate's NAT gateway, edge1, which
 # forwards every private-only host's own internet egress plus its own
@@ -23,9 +36,15 @@ set -euo pipefail
 # Pulumi context to read them from -- the same reason branchleft_nat.sh's
 # SUBNET is a literal default.
 SUBNET="${BRANCHLEFT_DOCKER_USER_POLICY_SUBNET:-10.20.1.0/24}"
-DB_HOST="${BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST:-10.20.1.20}"
 DB_PORT="${BRANCHLEFT_DOCKER_USER_POLICY_DB_PORT:-3306}"
 GATEWAY_PRIVATE_IP="${BRANCHLEFT_DOCKER_USER_POLICY_GATEWAY_IP:-10.20.1.10}"
+
+# Space-separated so a second non-tenant app host is one value away, not a
+# script change. nextcloud1 (hetzner-host/addressPlan.ts's HOST_IPS) is the
+# only one today. A host in this list gets the db1 exception skipped below,
+# purely from recognising its own address -- see the header comment for why
+# that, and not an env var a caller passes once, is what has to decide this.
+NO_DB_EXCEPTION_ADDRESSES="${BRANCHLEFT_DOCKER_USER_POLICY_NO_DB_EXCEPTION_ADDRESSES:-10.20.1.50}"
 
 # The metadata service's own address, hardcoded because it is Hetzner's, not
 # the estate's -- the same reasoning branchleft_host_egress.sh uses for it.
@@ -54,13 +73,37 @@ fi
 # fact about this host that is actually load-bearing for "is this the
 # gateway", rather than a network property two different roles both have.
 holds_gateway_address=0
+holds_no_db_exception_address=0
 while read -r address; do
     [[ "$address" == "$GATEWAY_PRIVATE_IP" ]] && holds_gateway_address=1
+    for candidate in $NO_DB_EXCEPTION_ADDRESSES; do
+        [[ "$address" == "$candidate" ]] && holds_no_db_exception_address=1
+    done
 done < <(ip -4 -o addr show scope global | awk '{ split($4, a, "/"); print a[1] }')
 
 if [[ "$holds_gateway_address" -eq 1 ]]; then
     echo "branchleft-docker-user-policy: this host holds the estate's gateway address ($GATEWAY_PRIVATE_IP) -- it is edge1, not an app host, and this policy is scoped to app hosts only" >&2
     exit 1
+fi
+
+# `${VAR+x}`, not `-v`: `-v` is bash 4.2+, and this script is invoked
+# directly by its own tests under macOS's system bash (3.2), the same
+# constraint install-systemd-drop-ins.sh already documents. `${VAR+x}`
+# expands to `x` when the variable is set -- even to an empty string -- and
+# to nothing when it is unset, which is the one distinction this branch
+# needs and the one every shell back to POSIX sh has always supported.
+#
+# An explicit caller override -- including a deliberate empty string, for a
+# test or a one-off exception -- always wins over self-identification.
+# Self-identification only supplies a default for a host that was never
+# told anything, which on a freshly booted host is every run this policy
+# ever makes.
+if [[ -n "${BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST+x}" ]]; then
+    DB_HOST="$BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST"
+elif [[ "$holds_no_db_exception_address" -eq 1 ]]; then
+    DB_HOST=""
+else
+    DB_HOST="10.20.1.20"
 fi
 
 # DOCKER-USER exists only under dockerd's iptables firewall backend. The
@@ -106,11 +149,17 @@ ensure_rule() {
 ensure_rule filter DOCKER-USER -d "$METADATA_ADDRESS" -j DROP
 ensure_rule filter DOCKER-USER -d "$SUBNET" -j DROP
 
-# The one destination a tenant legitimately opens. Scoped to TCP and the
-# port MySQL listens on, not merely the address: db1 also carries an
-# exporter and administrative sockets no tenant container needs, and this
-# script is the one reviewed, tested place that allow-list is meant to live.
-ensure_rule filter DOCKER-USER -d "$DB_HOST" -p tcp --dport "$DB_PORT" -j ACCEPT
+# The one destination a Ghost tenant legitimately opens -- not every app host
+# is one. Scoped to TCP and the port MySQL listens on, not merely the
+# address: db1 also carries an exporter and administrative sockets no tenant
+# container needs, and this script is the one reviewed, tested place that
+# allow-list is meant to live. Skipped entirely when DB_HOST is explicitly
+# empty, which is what turns this into a deny-all-to-the-subnet policy with
+# no exception for a host that has no legitimate reason to reach db1 or
+# anything else here.
+if [[ -n "$DB_HOST" ]]; then
+    ensure_rule filter DOCKER-USER -d "$DB_HOST" -p tcp --dport "$DB_PORT" -j ACCEPT
+fi
 
 # Has to be the first rule DOCKER-USER evaluates. A published port is a DNAT,
 # so an inbound flow's reply (edge1 -> a tenant's Ghost, or a scrape -> a

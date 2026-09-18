@@ -27,6 +27,11 @@ export const HOST_IPS = {
   edge1: '10.20.1.10',
   db1: '10.20.1.20',
   mon1: '10.20.1.30',
+  // .40 is deliberately skipped — see the note below. nextcloud1 is a
+  // shared-infra-owned host like the three above (role 'app', but created by
+  // this repository's estate.ts, not by ghost-platform's own app-host stack),
+  // so it belongs in this map rather than in APP_HOST_IPS.
+  nextcloud1: '10.20.1.50',
 } as const;
 
 /**
