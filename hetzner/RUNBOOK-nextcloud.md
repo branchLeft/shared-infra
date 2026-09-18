@@ -386,6 +386,41 @@ durable off the workstation too (the password manager's attached-file
 storage, or wherever `RUNBOOK-monitoring.md`'s own backups land); this
 runbook does not pick that location for you.
 
+**A non-empty file is not evidence it is restorable.** `gzip`/`tar` exiting
+0 over a truncated stream, or a dump that fails partway through a table,
+both still leave a non-empty file — the only check above that stopped at
+"non-empty" would pass either. Prove each backup actually restores, once,
+on a throwaway target, before relying on it as this section's precondition
+for 9.3:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
+  gunzip -t /root/nextcloud1-pre-upgrade-db.sql.gz &&
+  docker run --rm -d --name nc1-restore-drill \
+    -e POSTGRES_PASSWORD=drill -e POSTGRES_DB=nextcloud -e POSTGRES_USER=nextcloud \
+    postgres:16-alpine &&
+  sleep 5 &&
+  gunzip -c /root/nextcloud1-pre-upgrade-db.sql.gz \
+    | docker exec -i nc1-restore-drill psql -U nextcloud -d nextcloud -v ON_ERROR_STOP=1 &&
+  docker exec nc1-restore-drill psql -U nextcloud -d nextcloud -tAc "select count(*) from oc_users;" &&
+  docker stop nc1-restore-drill'
+```
+
+Expect the `psql` load to complete with no `ERROR:` output (`ON_ERROR_STOP=1`
+aborts on the first one rather than silently skipping it) and the row
+count to come back as a plausible non-zero number matching this instance's
+real user count, not `0` or a connection failure. Give the structural
+equivalent to the volume tarball — a plain byte count proves nothing about
+whether the paths inside are the ones a restore would need:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" \
+  'tar tzf /root/nextcloud1-pre-upgrade-app.tar.gz | grep -E "^(config/config\.php|data/)$"'
+```
+
+Expect both lines. Only once both checks are clean does either backup
+count as verified rather than merely produced — proceed to 9.3 from there.
+
 ### 9.3 Redeploy with the new pin
 
 Same `rsync` + `chown` + restart shape as every other redeploy in this
@@ -413,13 +448,34 @@ which the Nextcloud admin manual describes as taking "a few minutes to a
 few hours" depending on install size. Do not treat a restart command that
 takes several minutes as a hang.
 
+**A non-`active` unit here is very plausibly a false failure signal, not
+proof the upgrade broke — confirmed against `docker/compose`'s own source,
+not assumed.** `exec "$@"` (the line that starts Apache) is the _last_
+line of the entrypoint, after the whole upgrade block — per 9.1, nothing
+answers `app`'s healthcheck (`curl localhost/status.php`) until `occ
+upgrade` has already finished. `--wait` polls exactly that healthcheck,
+and `pkg/compose/service_containers.go`'s `isServiceHealthy` treats a
+container reporting `unhealthy` as an immediate, non-retryable error
+(`case container.Unhealthy: return false, fmt.Errorf(...)`) — it does not
+keep waiting through it the way it keeps waiting through `starting`.
+Working the healthcheck's own numbers (`start_period: 60s`,
+`interval: 30s`, `retries: 5`): the container is judged `unhealthy`, and
+`--wait` fails, at roughly the 3.5-minute mark (60 + 5×30 = 210s) —
+regardless of whether `occ upgrade` is proceeding correctly in the
+background. Nextcloud's own docs put a real upgrade's duration at "a few
+minutes to a few hours," so there is no reason to expect this instance
+clears Apache's restart before that 3.5-minute window closes. **Treat a
+failed or non-`active` `systemctl restart` here as unknown, not as
+failed, and go to 9.6's first check before doing anything else —
+including before re-running 9.3.**
+
 `https://cloud.branchleft.co.uk/` will serve Nextcloud's own maintenance
 page (occ upgrade puts the instance into maintenance mode for the
 migration's duration) rather than the usual `302` to `/login` for as long
 as the upgrade is running — that response, not a `502` or a connection
-failure, is the expected shape of the downtime window here. If
-`systemctl restart` returns and the unit is `active`, 9.5 below is the
-proof the upgrade actually finished rather than merely started.
+failure, is the expected shape of the downtime window here. An `active`
+unit plus 9.5 below is the proof the upgrade actually finished; a
+non-`active` unit is not, by itself, proof it didn't.
 
 ### 9.5 Verify the upgrade completed
 
@@ -461,10 +517,39 @@ already written by the interrupted run's `rsync`) higher than its own
 
 If the restart in 9.3 fails or the unit never reaches `active`:
 
-1. Check whether the instance is stuck in maintenance mode rather than
-   genuinely broken — `occ status` (9.5) showing `maintenance: true` with
-   the container otherwise running is the documented stuck-upgrade shape,
-   and the documented recovery is re-running the migration by hand:
+0. **Find out what is actually true before touching the container again —
+   9.4's false-failure window means a reported restart failure is not
+   itself evidence of a real one.** Check ground truth, not the restart
+   command's own exit status:
+
+   ```bash
+   ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
+     docker ps -a --filter label=com.docker.compose.project=nextcloud1 --format "{{.Names}}\t{{.Status}}"
+     APP_CTR=$(docker ps -aq --filter label=com.docker.compose.project=nextcloud1 --filter label=com.docker.compose.service=app) &&
+     docker logs --tail 80 "$APP_CTR"'
+   ```
+
+   - If `docker ps` still lists the `app` container as `Up ...`
+     (`(unhealthy)` or `(health: starting)` both count as `Up`), it has
+     not exited — the entrypoint script may still genuinely be running
+     `occ upgrade` in the background. `docker logs` will show the
+     entrypoint's own progress lines (`Upgrading nextcloud from...`,
+     ongoing repair-step output) if so, and its own completion marker
+     (`Initializing finished`, printed once, right before Apache starts)
+     if the migration side is actually done and only the healthcheck
+     grace window is what tripped. **In either of these cases, wait and
+     re-check — do not re-run 9.3.** Re-running it force-recreates this
+     same container and kills whatever is still running mid-transaction,
+     which is precisely 9.1's undetected half-upgrade scenario.
+   - Only if `docker ps -a` shows the container as `Exited` (the
+     entrypoint's own `set -eu` killed it — a genuine `occ upgrade`
+     failure, not a healthcheck timing artefact) does step 1 below apply.
+
+1. With a genuinely exited container confirmed by step 0: check whether
+   the instance is stuck in maintenance mode rather than fully broken —
+   `occ status` (9.5) showing `maintenance: true` with the container
+   otherwise running is the documented stuck-upgrade shape, and the
+   documented recovery is re-running the migration by hand:
    `docker exec "$APP_CTR" php occ upgrade`, using the same label-filter
    pattern as 9.5. Nextcloud's docs do not commit to `occ upgrade` being
    fully resumable after every kind of interruption, only that this is the
@@ -475,9 +560,10 @@ If the restart in 9.3 fails or the unit never reaches `active`:
    restoring the pre-upgrade `pg_dump` and volume tarball into it. That is
    a rebuild, not a redeploy, and is out of scope for this runbook to
    script; it starts from `RUNBOOK-new-stack.md`'s general shape with
-   9.2's dump substituted for a first install.
+   9.2's dump substituted for a first install. 9.2's restore drill is what
+   makes that substitution trustworthy rather than merely hoped-for.
 3. Whichever path is taken, do not re-attempt 9.3 against the same
-   half-upgraded volume without first resolving (1) or (2) — a second
+   half-upgraded volume without first resolving (0), (1) or (2) — a second
    `occ upgrade` invocation against a database in an unknown state is not
    something either this runbook or Nextcloud's own docs vouch for.
 
