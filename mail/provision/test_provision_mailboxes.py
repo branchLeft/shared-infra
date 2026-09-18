@@ -36,9 +36,9 @@ class MailboxesAndRoleAddressesTests(unittest.TestCase):
         for role in ROLE_ADDRESSES:
             self.assertIn(role, MAILBOXES)
 
-    def test_exactly_nine_mailboxes_eight_role_addresses(self):
-        self.assertEqual(len(MAILBOXES), 9)
-        self.assertEqual(len(ROLE_ADDRESSES), 8)
+    def test_exactly_ten_mailboxes_nine_role_addresses(self):
+        self.assertEqual(len(MAILBOXES), 10)
+        self.assertEqual(len(ROLE_ADDRESSES), 9)
 
     def test_forward_target_is_rob_at_the_mail_domain(self):
         self.assertEqual(FORWARD_TARGET, "rob@branchleft.co.uk")
