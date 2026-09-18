@@ -51,7 +51,19 @@ services:
       # memory.
       NEXTCLOUD_ADMIN_USER: admin
       NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:?set NEXTCLOUD_ADMIN_PASSWORD in /etc/branchleft/nextcloud1.env}
-      NEXTCLOUD_TRUSTED_DOMAINS: cloud.branchleft.co.uk
+      # Both names, not just the new one -- temporary, for the book -> cloud
+      # cutover. Nextcloud rejects any Host header not in this
+      # space-separated list before the request reaches OVERWRITEHOST below,
+      # so if this app redeploys before edge1's Caddy config does (or vice
+      # versa), whichever hostname the edge is still sending gets a working
+      # response instead of an "untrusted domain" error either way. Once
+      # edge1 is redeployed with sites.ts's book -> cloud hostRedirects
+      # entry, book requests never reach this app again -- Caddy redirects
+      # them before proxying -- so trusting book here is a safety margin
+      # against redeploy ordering, not a real second identity. Drop it back
+      # to cloud.branchleft.co.uk alone in the same follow-up that removes
+      # the redirect and the book entry in sites.ts.
+      NEXTCLOUD_TRUSTED_DOMAINS: cloud.branchleft.co.uk book.branchleft.co.uk
       # edge1's private address -- the only host that ever proxies to this
       # one, per its role as the estate's sole front door
       # (hetzner-host/addressPlan.ts's HOST_IPS.edge1). Without this,

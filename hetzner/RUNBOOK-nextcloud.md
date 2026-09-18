@@ -152,7 +152,10 @@ Then, from the workstation, the same check this runbook opened with:
 curl -s -o /dev/null -w "%{http_code}\n" https://cloud.branchleft.co.uk/
 ```
 
-Expect `200`, not `502` — the whole chain (DNS, Caddy, this stack) is live.
+Expect `302`, not `502` — a healthy, unauthenticated `/` redirects to
+`/login`, observed live on this instance's first deploy. `302` here means
+the whole chain (DNS, Caddy, this stack) is live, not that anything is
+wrong.
 
 ## 7. What this runbook does not cover
 
