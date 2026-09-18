@@ -491,6 +491,35 @@ jobs:
             docker.io/prom/blackbox-exporter:v0.28.0@sha256:43027b43fb785b7c5adc53bd3b5dbc1a258270a2e8aff24f477b45c4e38dac68 \
             --config.file=/etc/blackbox_exporter/config.yml --config.check
 
+  nextcloud1-config-validate:
+    name: Validate (nextcloud1 stack config)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Same reasoning as monitoring-config-validate above and deliberately not
+    # in `deploy`'s `needs` for the same reason: nextcloud1/ is not a Pulumi
+    # program, it's a Compose stack deployed by hand per RUNBOOK-nextcloud.md,
+    # so this gates review rather than any apply.
+    #
+    # test_compose_unit_contract.py's checks -- which do run elsewhere in this
+    # workflow -- are a hand-rolled parser over the [Unit]/[Service] sections
+    # and the healthcheck: block. It never invokes a real `docker compose
+    # config`, so it cannot catch a bad YAML value, a renamed env var, or a
+    # malformed volume/port line -- exactly the class edge-config-validate and
+    # monitoring-config-validate close for their own stacks. Without this job,
+    # that class is invisible until branchleft-deploy fails on the real host.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the Compose file resolves
+        env:
+          NEXTCLOUD_DB_PASSWORD: validation-only
+          NEXTCLOUD_REDIS_PASSWORD: validation-only
+          NEXTCLOUD_ADMIN_PASSWORD: validation-only
+        run: docker compose -f hetzner/nextcloud1/stack/compose.yml config -q
+
   scripts-tests:
     name: Test (scripts)
     runs-on: ubuntu-latest

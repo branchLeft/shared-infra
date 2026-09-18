@@ -416,7 +416,7 @@ has to say so.** `branchleft-deploy` refuses it by design, so nothing writes its
 `/etc/branchleft/<stack>.image.env`, and the template's mandatory
 `EnvironmentFile=` for that file would then stop the unit starting at all. Such
 a stack carries an instance drop-in resetting `EnvironmentFile=` and re-adding
-its own secrets file — `monitoring` is the first, and
+its own secrets file — `monitoring` is the first, `nextcloud1` the second, and
 `hetzner/provision/test_compose_unit_contract.py` holds every stack to whichever
 half of the contract it falls under. Deploying a new image to one of these means
 editing the committed digest and re-copying `stack/`, not calling
@@ -440,6 +440,7 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------- |
 | `branchleft-compose@edge`                                  | here, `hetzner/edge/stack/`                                                  | yes               |
 | `branchleft-compose@monitoring`                            | here, `hetzner/monitoring/stack/`                                            | yes               |
+| `branchleft-compose@nextcloud1`                            | here, `hetzner/nextcloud1/stack/`                                            | yes               |
 | `branchleft-compose@website`                               | `branchLeft/website`, `deploy/compose.yml`                                   | no                |
 | `branchleft-compose@db`                                    | `branchLeft/ghost-platform`, `db/stack/compose.yml`                          | no                |
 | `branchleft-compose@blog`, and one per further tenant slug | nowhere: rendered by `branchLeft/ghost-platform`'s `infra/tenant/compose.ts` | no                |
