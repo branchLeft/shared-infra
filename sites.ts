@@ -9,63 +9,27 @@ import type { EdgeSite, HostRedirect } from './siteTypes';
  * to be served from a hostname anyone can read, and the entry says nothing
  * about them beyond the hostname itself.
  *
- * ## Two edges read this file
+ * ## One edge reads this file now
  *
- * `edge.ts` derives the GCP load balancer from it, and `hetzner/edge/render.ts`
- * derives the Caddy and CrowdSec configuration for the replacement edge VM from
- * the same entries. During the migration both are true at once, which is why a
- * site carries both a `cloudRunService` and a `privateUpstream`: the first is
- * where it is served from today, the second is where it will be served from,
- * and a site gains the second only when its Hetzner backend actually exists.
+ * `hetzner/edge/render.ts` derives the Caddy and CrowdSec configuration for
+ * the Hetzner edge VM from these entries; `hetzner/monitoring/render.ts`
+ * derives blackbox probe targets from them too. A second edge used to read
+ * it — `edge.ts` declared a GCP load balancer from the same registry — until
+ * the GCP estate was destroyed and that program was deleted once it
+ * described infrastructure that no longer existed.
  *
- * ## Onboarding a site
+ * `cloudRunService` and `region` below are what `edge.ts` used to read; no
+ * code reads them any more. They are left on existing entries rather than
+ * stripped as part of that deletion — pruning them, and the GCP-specific
+ * onboarding steps that used to follow this comment, is its own pass, not a
+ * side effect of removing the program that read them.
  *
- * One entry. Everything else is derived: a serverless NEG, a backend service
- * carrying the shared Cloud Armor policy, one DNS authorization and one
- * managed certificate per hostname, a certificate-map entry per hostname, and
- * a URL-map host rule.
+ * ## Onboarding a site to the Hetzner edge
  *
- * Before adding an entry:
- *
- * 1. Confirm the Cloud Run service name and region are exactly right. Nothing
- *    in this program validates them — `cloudRunService` is a plain string by
- *    design, so that this stack has no dependency on any product's stack. A
- *    wrong name applies cleanly and then 404s in production.
- *
- *        gcloud run services list --project=branchleft-prod \
- *          --format='table(metadata.name,metadata.labels."cloud.googleapis.com/location")'
- *
- * 2. Set that service's ingress to `internal-and-cloud-load-balancing` — in
- *    the product's own stack, not here. Without it the `run.app` hostnames
- *    stay publicly reachable and bypass this LB, Cloud Armor and the TLS
- *    configuration entirely. Cloud Run issues **two** `run.app` hostnames per
- *    service and both must be checked; the blocked response is 404, not 403.
- *
- * 3. After `pulumi up`, publish the `_acme-challenge` CNAME this program
- *    outputs for each new hostname. Certificates sit in AUTHORIZING until it
- *    resolves. Allow 15–20 minutes for issuance, not the 5 the sandbox
- *    measured — production took ~13 — and then a further ~2 minutes after
- *    ACTIVE before the edge actually presents the certificate. Poll the
- *    handshake, not the certificate's `state` field.
- *
- * 4. Only cut the hostname's **A** record to the edge's global IP once the
- *    handshake succeeds, and wait a full DNS TTL before locking
- *    ingress. Traffic counters are *not* a safe signal for that — they read
- *    as drained roughly 45 minutes before it is actually safe, because what
- *    they measure is bot traffic turning over, not resolver caches expiring.
- * 5. Confirm no **AAAA** record exists for the hostname (`dig AAAA <host>`
- *    against several public resolvers). The edge is IPv4-only by design — no
- *    IPv6 forwarding rule exists — so a stray AAAA (e.g. one a prior Cloud
- *    Run Domain Mapping auto-published) sends IPv6-preferring clients to a
- *    dead address once ingress locks, and presents as intermittent TLS
- *    failure rather than as a DNS problem. This has happened here: a Cloud
- *    Run Domain Mapping had auto-published an AAAA nobody was tracking.
- *
- * ## Ordering
- *
- * The first entry's backend service is the URL map's `defaultService` — the
- * fallback for a request whose Host matches no rule. Keep the marketing site
- * first so that fallback is never a tenant's service.
+ * One entry with a `privateUpstream` — see that type's own doc comment in
+ * `siteTypes.ts` for what it needs, and `hetzner/edge/render.ts` for how the
+ * renderer turns it into a Caddy site block. There is no GCP-side step any
+ * more.
  */
 export const sites: EdgeSite[] = [
   {
@@ -86,21 +50,11 @@ export const sites: EdgeSite[] = [
   {
     name: 'blog',
     hostnames: ['blog.branchleft.co.uk'],
-    // Still GCP-registered, deliberately, even though the Cloud Run service
-    // this names was destroyed on 2026-09-10 and the tenant re-provisioned on
-    // Hetzner. Dropping this field is NOT how a site is retired from the GCP
-    // edge: it stops edge.ts declaring this site's NEG, backend service, DNS
-    // authorization, certificate and certificate-map entry, all five of which
-    // are in PROTECTED_TYPES, so the delete guard refuses the plan and the
-    // apply never runs. This field's own note in siteTypes.ts says so, and a
-    // change that ignored it reached main on 2026-09-10 and left the edge
-    // deploy red until this restored it. Retiring the site is its own
-    // procedure, with the guard consulted deliberately, and belongs to the
-    // GCP wind-down rather than to this cutover.
-    //
-    // Carrying both fields is the transitional state: GCP keeps declaring what
-    // it already has, Hetzner serves the traffic, and DNS decides which is
-    // reached.
+    // Vestigial: the GCP edge this named a Cloud Run service for is gone —
+    // edge.ts was deleted once the GCP estate it described was destroyed —
+    // and nothing reads `cloudRunService` any more. Left in place rather
+    // than stripped as a side effect of that deletion; pruning it is its
+    // own pass.
     cloudRunService: 'ghost-tenant-blog',
     //
     // Both values below belong to the tenant's own stack and neither is chosen

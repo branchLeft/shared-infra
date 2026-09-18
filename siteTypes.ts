@@ -1,12 +1,12 @@
 /**
  * The shape of the hostname registry in `sites.ts`.
  *
- * **This file must not import anything.** Two edges consume the registry — the
- * GCP load balancer in `edge.ts`, and the Hetzner Caddy renderer in
- * `hetzner/edge/` — and they live in separate npm packages with disjoint
- * dependency trees. A single import of `@pulumi/gcp` or of `./config` here
- * makes the registry unreadable from the other side, and the alternative to
- * reading it is a second copy of the hostname list.
+ * **This file must not import anything.** The Hetzner Caddy renderer in
+ * `hetzner/edge/` consumes the registry, in its own npm package with its own
+ * dependency tree — an import here would make the registry unreadable from
+ * there. A GCP load balancer (`edge.ts`) used to read it too, until it was
+ * deleted once the GCP estate it described was destroyed; this constraint
+ * predates that and outlives it.
  */
 
 /** Where a site's traffic goes on the Hetzner private network. */
@@ -22,37 +22,22 @@ export interface PrivateUpstream {
 }
 
 export interface EdgeSite {
-  /** Prefix for this site's Pulumi resource names and GCP resource names. */
+  /** This site's identifier in generated config and log output. */
   name: string;
   /** Every hostname routed to this site. Each gets a certificate-map entry. */
   hostnames: string[];
   /**
-   * The *name* of the Cloud Run service to route to — a plain string, not a
-   * resource reference. See "No dependency on any product stack" in `edge.ts`.
-   *
-   * Absent means the site has no GCP backend: it is skipped entirely by
-   * `edge.ts`, the mirror of what an absent `privateUpstream` does on the
-   * Hetzner side. Without the option, a site born on Hetzner cannot be
-   * registered at all — adding one derives a serverless NEG, a backend
-   * service, a DNS authorization, a managed certificate and a URL-map rule
-   * for a Cloud Run service that does not exist, and the certificate then
-   * sits in AUTHORIZING forever because the hostname's A record points at the
-   * Hetzner edge and no `_acme-challenge` CNAME is ever published for it.
-   *
-   * **This is for a site that never had a GCP backend, not for retiring one.**
-   * Dropping the field from an existing GCP-served site makes `edge.ts` stop
-   * declaring its NEG, backend service, DNS authorization, certificate and
-   * certificate-map entry — all five are in `PROTECTED_TYPES` in
-   * `scripts/assert-no-edge-deletes.py`, so `deploy-plan` refuses the plan and
-   * the apply never runs. If that site is the *first* registry entry, the
-   * assertion in `edge.ts` fails the stack outright instead. Retiring a site
-   * from the GCP edge is its own procedure and needs the delete guard consulted
-   * deliberately; it is not this field.
+   * The *name* of the Cloud Run service the now-deleted GCP edge (`edge.ts`)
+   * used to route to — a plain string, not a resource reference. Vestigial:
+   * `edge.ts` was deleted once the GCP estate it described was destroyed,
+   * so nothing reads this field any more.
+   * Existing entries keep it rather than have it stripped as a side effect of
+   * that deletion; pruning it from the type and every entry is its own pass.
    */
   cloudRunService?: string;
   /**
-   * Region the Cloud Run service lives in — the serverless NEG must match.
-   * Omitted means the edge stack's own `region` config value.
+   * Vestigial, same reasoning as `cloudRunService` above: the region the GCP
+   * edge's serverless NEG had to match. Nothing reads it any more.
    */
   region?: string;
   /**
@@ -63,18 +48,10 @@ export interface EdgeSite {
    * an injection payload at sensitivity 1. A false positive there locks the
    * owner out of publishing rather than degrading a page.
    *
-   * The two edges honour this flag differently, and the difference is not
-   * only one of scope:
-   *
-   * - **GCP.** The three injection rulesets go to preview for the whole
-   *   hostname. `lfi` enforces regardless — its signatures match filesystem
-   *   paths (`.env`, `.git/config`, `../`), which no legitimate request here
-   *   contains.
-   * - **Hetzner.** The exemption is one path prefix rather than a hostname,
-   *   but on that prefix it removes *every* AppSec rule, the `lfi` analogues
-   *   included — the handler is per-request, so a rule family cannot be kept
-   *   back. Narrower in one direction, wider in the other, and recorded as such
-   *   in `CLOUD-ARMOR-BASELINE.md`'s named differences.
+   * The Hetzner edge honours this as one path prefix rather than a whole
+   * hostname, and on that prefix it removes *every* AppSec rule, `lfi`
+   * included — the handler is per-request, so a rule family cannot be kept
+   * back individually.
    */
   injectionWafPreviewOnly?: boolean;
   /**

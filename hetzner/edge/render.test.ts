@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { hostRedirects, sites } from '../../sites';
@@ -10,7 +8,6 @@ import {
   POSTURE,
   RATE_LIMIT_EVENTS,
   RATE_LIMIT_WINDOW_SECONDS,
-  TLS_PROTOCOLS,
 } from './posture';
 import type { EdgePosture } from './posture';
 import {
@@ -110,52 +107,34 @@ describe('sites without a private upstream', () => {
   });
 });
 
-describe('the registry serves two edges, and an entry must reach at least one', () => {
-  // `edge.ts` skips a site with no `cloudRunService`; `servableSites` here
-  // skips a site with no `privateUpstream`. Each skip is correct on its own,
-  // and together they mean an entry declaring neither renders nothing on
-  // either edge while looking exactly like a configured site in the registry.
-  // No single edge's code can catch that -- each one's skip is indistinguishable
-  // from the legitimate case -- so the invariant is asserted over the registry
-  // itself.
-  it('every real entry declares a cloudRunService, a privateUpstream, or both', () => {
+describe('the registry, now that only this edge reads it', () => {
+  // `servableSites` skips a site with no `privateUpstream` -- that is the
+  // only field that makes an entry reachable now that `edge.ts` (the GCP
+  // edge `cloudRunService` used to route through) is gone, removed once it
+  // described infrastructure that no longer existed. A registry entry with
+  // no `privateUpstream` looks like a configured site but serves nothing.
+  it('every real entry declares a privateUpstream', () => {
     for (const entry of sites) {
-      const reachable = entry.cloudRunService !== undefined || entry.privateUpstream !== undefined;
       expect(
-        reachable,
-        `site ${entry.name} declares neither cloudRunService nor privateUpstream, so it is ` +
-          'skipped by both edges and serves nothing'
+        entry.privateUpstream !== undefined,
+        `site ${entry.name} declares no privateUpstream, so it is skipped and serves nothing`
       ).toBe(true);
     }
   });
 
-  it('keeps a GCP-backed site first, because it is the URL map default service', () => {
-    // Mirrors the assertion in edge.ts. `sites.ts`'s "Ordering" section
-    // requires the fallback for an unmatched Host never be a tenant's service,
-    // and a Hetzner-only first entry would silently move that role.
-    expect(sites.length).toBeGreaterThan(0);
-    expect(
-      sites[0].cloudRunService,
-      `the first sites.ts entry (${sites[0].name}) has no cloudRunService, so edge.ts skips it ` +
-        "and the URL map's defaultService falls to a later entry -- see 'Ordering' in sites.ts"
-    ).toBeDefined();
-  });
-
-  it('renders a Hetzner-only site identically to a dual-edge one, since only the GCP side skips', () => {
-    // `servableSites` keys on `privateUpstream` alone and always did, so
-    // "it renders" would have passed before this change too and proves nothing
-    // about it. What is new is that the entry is now *constructible* without a
-    // cloudRunService, and that dropping the field changes nothing this
-    // renderer emits -- the asymmetry lives entirely in edge.ts.
+  it('renders identically whether or not the vestigial cloudRunService is set', () => {
+    // cloudRunService has had no reader since edge.ts was deleted. This is
+    // the regression check for that: dropping it must change nothing this
+    // renderer emits.
     const upstream = { host: 'app1', port: 8099 };
-    const dualEdge = site({ hostnames: ['both.test'], privateUpstream: upstream });
-    const hetznerOnly = site({
+    const withField = site({ hostnames: ['both.test'], privateUpstream: upstream });
+    const withoutField = site({
       hostnames: ['both.test'],
       cloudRunService: undefined,
       privateUpstream: upstream,
     });
-    expect(render(ENFORCING, [hetznerOnly])).toBe(render(ENFORCING, [dualEdge]));
-    expect(render(ENFORCING, [hetznerOnly])).toContain('both.test');
+    expect(render(ENFORCING, [withoutField])).toBe(render(ENFORCING, [withField]));
+    expect(render(ENFORCING, [withoutField])).toContain('both.test');
   });
 });
 
@@ -724,7 +703,7 @@ describe('detect-only', () => {
       crowdsec: 'detect-only',
       // Still off: its threshold is inherited from a Cloud Armor rule that has
       // never enforced, so it is a number no traffic has been measured
-      // against. branchLeft/workspace#323.
+      // against. Deriving a real threshold is tracked as open work.
       rateLimit: 'off',
       // On: bounded to one POST path, threshold derived in `posture.ts`, and
       // what it protects is mx1's deliverability rather than edge compute.
@@ -745,59 +724,14 @@ describe('the CrowdSec acquisition files', () => {
   });
 });
 
-/**
- * Vitest runs from this project's root, so the repository root is one level up.
- * A wrong path throws out of `readFileSync` rather than passing quietly, which
- * is the only property these two need from it.
- */
-const repositoryFile = (name: string) => readFileSync(resolve(process.cwd(), '..', name), 'utf-8');
-
-const numericConstant = (source: string, name: string): number => {
-  const match = new RegExp(`const ${name} = (\\d+);`).exec(source);
-  if (match?.[1] === undefined) {
-    throw new Error(`could not find ${name} in edge.ts`);
-  }
-  return Number(match[1]);
-};
-
-describe('parity with the edge this one replaces', () => {
-  /**
-   * `edge.ts` and `posture.ts` state the same three thresholds in two
-   * programs that cannot import each other, so nothing but this stops them
-   * drifting apart while both suites stay green — and the drift would be
-   * invisible, because each side is internally consistent.
-   */
-  const edgeTs = repositoryFile('edge.ts');
-
-  it('carries the same per-IP throttle the GCP edge declares', () => {
-    expect(RATE_LIMIT_EVENTS).toBe(numericConstant(edgeTs, 'RATE_LIMIT_REQUESTS'));
-    expect(RATE_LIMIT_WINDOW_SECONDS).toBe(numericConstant(edgeTs, 'RATE_LIMIT_INTERVAL_SEC'));
-  });
-
-  it('carries the same TLS floor', () => {
-    expect(edgeTs).toContain("const TLS_MIN_VERSION = 'TLS_1_2'");
-    expect(TLS_PROTOCOLS[0]).toBe('tls1.2');
-  });
-});
-
-describe('the parity artifact', () => {
-  /**
-   * The §13 gate reads `CLOUD-ARMOR-BASELINE.md`, not this repository's code, so
-   * a remediation behaviour that is only in a runbook is a behaviour the gate
-   * cannot see. Both scenarios below turn an AppSec match into an IP ban, which
-   * the Cloud Armor rules being replaced never did.
-   */
-  const baseline = repositoryFile('CLOUD-ARMOR-BASELINE.md');
-
-  it('discloses that in-band and out-of-band matches both end in an IP ban', () => {
-    expect(baseline).toContain('crowdsecurity/appsec-vpatch');
-    expect(baseline).toContain('crowdsecurity/crowdsec-appsec-outofband');
-  });
-
-  it('discloses that the authoring exemption removes every rule on its prefix', () => {
-    expect(baseline).toContain('/ghost/api/');
-  });
-});
+// The two describe blocks that used to live here ('parity with the edge
+// this one replaces' and 'the parity artifact') read edge.ts and
+// CLOUD-ARMOR-BASELINE.md from disk to guard against this renderer drifting
+// from the GCP edge it was replacing. Both files were deleted once the GCP
+// estate they described was destroyed, so there is nothing left for this
+// renderer to stay in parity with. RATE_LIMIT_EVENTS and RATE_LIMIT_WINDOW_SECONDS are still
+// exercised directly above, against the rendered output; the TLS floor is
+// covered by the 'protocols tls1.2 tls1.3' assertion above too.
 
 describe('the fully enforcing posture', () => {
   /**

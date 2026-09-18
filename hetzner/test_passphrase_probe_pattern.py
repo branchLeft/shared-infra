@@ -43,9 +43,8 @@ def runbooks() -> list[pathlib.Path]:
 
     Non-recursive per directory, matching this repo's own convention -- every
     RUNBOOK lives directly in one of these three places, never nested
-    further -- but all three, not just hetzner/ and mail/: RUNBOOK-ci-bootstrap.md
-    and RUNBOOK-edge-state-move.md live at the repo root, and a scan that
-    skips it never sees either.
+    further -- but all three, not just hetzner/ and mail/: RUNBOOK-edge-state-move.md
+    lives at the repo root, and a scan that skips it never sees it.
     """
     found: set[pathlib.Path] = set()
     for base in (HETZNER, REPO_ROOT / "mail", REPO_ROOT):

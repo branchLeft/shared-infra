@@ -1,18 +1,13 @@
 {
   "name": "branchleft-shared-infra",
   "private": true,
-  "main": "index.ts",
   "prettier": "@branchleft/prettier-config",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "format": "prettier --write . --ignore-path .gitignore --ignore-path .prettierignore --ignore-path node_modules/@branchleft/prettier-config/prettierignore",
     "format:check": "prettier --check . --ignore-path .gitignore --ignore-path .prettierignore --ignore-path node_modules/@branchleft/prettier-config/prettierignore"
   },
-  "comment": "@pulumi/gcp is pinned exactly, not caret-ranged. The default provider's version is part of its URN (`pulumi:providers:gcp::default_9_32_1`), and `pulumi state move` carries the moved resources' provider reference with them. Resolving a different patch here would make the migration's zero-diff preview gate fail on a provider change against every resource. Bump it deliberately, after the state move has landed, and read the preview.",
-  "dependencies": {
-    "@pulumi/gcp": "9.32.1",
-    "@pulumi/pulumi": "^3.262.0"
-  },
+  "comment": "No Pulumi program lives at the repository root any more -- the GCP edge program (edge.ts and friends) was removed in the GCP wind-down (branchLeft/workspace#1000) once the GCP estate was destroyed. What remains here is sites.ts/siteTypes.ts, the hostname registry the Hetzner Caddy renderer in hetzner/edge/ still reads, plus this typecheck/format tooling. Neither needs @pulumi/gcp or @pulumi/pulumi.",
   "devDependencies": {
     "@branchleft/prettier-config": "^0.3.1",
     "@branchleft/tsconfig": "^0.3.1",

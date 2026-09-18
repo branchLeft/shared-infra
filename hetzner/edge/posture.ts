@@ -58,7 +58,7 @@ export interface EdgePosture {
    * own access log (the instrument named above), not the inherited one:
    * `edge1` averages well under 1 req/s but has 1-minute bursts two orders of
    * magnitude above that, and nothing currently attributes those to one client
-   * or to many. Tracked in branchLeft/workspace#323.
+   * or to many. Tracked as open work in the issue tracker.
    */
   rateLimit: 'off' | 'enforcing';
   /**
@@ -83,10 +83,11 @@ export const POSTURE: EdgePosture = {
 };
 
 /**
- * The throttle the captured Cloud Armor policy records: 200 requests per IP
- * per 60 seconds, 429 on exceed. Constants rather than stack config for the
- * reason `edge.ts`'s TLS floor is: a value that can move without a code review
- * is not a threshold.
+ * The throttle the captured Cloud Armor policy recorded, back when the GCP
+ * edge this one replaced still existed: 200 requests per IP per 60 seconds,
+ * 429 on exceed. A constant rather than stack config, same reasoning as the
+ * TLS floor below: a value that can move without a code review is not a
+ * threshold.
  */
 export const RATE_LIMIT_EVENTS = 200;
 export const RATE_LIMIT_WINDOW_SECONDS = 60;
@@ -134,9 +135,9 @@ export const MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS = 5;
 export const MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS = 60;
 
 /**
- * TLS floor for every hostname. Absent from the captured Cloud Armor baseline
- * because on GCP it lived on the target proxy's SSL policy rather than in the
- * security policy, so the parity gate cannot check this line against that
- * artifact — it is checked against `edge.ts`'s `TLS_MIN_VERSION` by reading.
+ * TLS floor for every hostname. On the GCP edge this replaced, the
+ * equivalent value lived on the target proxy's SSL policy rather than in the
+ * Cloud Armor security policy; that program (`edge.ts`) was deleted once it
+ * described infrastructure that no longer existed.
  */
 export const TLS_PROTOCOLS = ['tls1.2', 'tls1.3'] as const;
