@@ -24,6 +24,7 @@ for script in \
     61-provision-blog-submission-credential.sh \
     62-provision-shim-submission-credential.sh \
     64-provision-alerting-submission-credential.sh \
+    66-provision-nextcloud-submission-credential.sh \
     63-deploy-mailgun-shim.sh \
     65-install-local-resolver.sh \
     70-schedule-dnsbl-check.sh
