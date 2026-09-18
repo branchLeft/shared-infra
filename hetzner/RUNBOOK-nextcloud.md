@@ -22,7 +22,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP"
 
 Expect `active`, then `enabled`, then `provisioned`.
 
-`edge1`'s Caddy config must already route `book.branchleft.co.uk` to
+`edge1`'s Caddy config must already route `cloud.branchleft.co.uk` to
 `nextcloud1:11000` — `RUNBOOK-edge.md` §11, already done as of
 branchLeft/shared-infra#215's deploy. Confirm with a curl from the
 workstation, not through the jump — a `502` with an empty body here means
@@ -30,7 +30,7 @@ routing is correct and nothing is listening yet, which is the expected state
 until this runbook's own step 5:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://book.branchleft.co.uk/
+curl -s -o /dev/null -w "%{http_code}\n" https://cloud.branchleft.co.uk/
 ```
 
 ## 1. Write the stack's secrets on the host
@@ -171,14 +171,14 @@ probe and this runbook needs updating before relying on `--wait` again.
 Then, from the workstation, the same check this runbook opened with:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://book.branchleft.co.uk/
+curl -s -o /dev/null -w "%{http_code}\n" https://cloud.branchleft.co.uk/
 ```
 
-Expect `302` to `/login`, not `502` — a fresh, working Nextcloud redirects
-an unauthenticated `/` to its login page, which is correct behaviour, not
-an error. `curl -sI ... | grep -i ^location` confirms the target is
-`https://book.branchleft.co.uk/login`; anything else is worth a closer
-look. Either way, the whole chain (DNS, Caddy, this stack) is live.
+Expect `302`, not `502` — a healthy, unauthenticated `/` redirects to
+`/login`, observed live on this instance's first deploy. `curl -sI ... |
+grep -i ^location` confirms the target is `https://cloud.branchleft.co.uk/login`;
+anything else is worth a closer look. `302` here means the whole chain
+(DNS, Caddy, this stack) is live, not that anything is wrong.
 
 ## 7. What this runbook does not cover
 
@@ -186,6 +186,104 @@ Nextcloud's own first-run app configuration — enabling Calendar and Talk,
 setting up the Appointments booking page, TURN/STUN for Talk — is a separate
 piece of work through the admin web UI, not a provisioning step this runbook
 scripts. Do it once step 6 above is green.
+
+## 8. Closing the admin-panel warnings
+
+A freshly-deployed instance surfaces four warnings on Settings → Administration
+→ Overview: no maintenance window start time, a missing `filecache` DB index
+(`fs_storage_path_prefix`), pending mimetype migrations, and no default phone
+region. **None of the four is exposed as a `nextcloud:31-apache` image
+environment variable** — confirmed against the image's own
+`docker-entrypoint.sh` (the script that reads every environment-driven
+config the image supports; it references no `maintenance_window_start`,
+`default_phone_region` or `phone`/`maintenance window` anything) and a
+GitHub code search across `nextcloud/docker` for both config keys, zero hits
+either way. All four are one-off `occ` commands run by hand — nothing here
+changes `stack/compose.yml`.
+
+An interactive shell over a fresh SSH session has none of the env files
+`branchleft-compose@nextcloud1` supplies at start (`/etc/branchleft/nextcloud1.env`,
+loaded only via systemd's `EnvironmentFile=`), so a bare `docker compose
+exec` here re-parses `stack/compose.yml` and refuses on the missing
+`NEXTCLOUD_DB_PASSWORD` et al. before it reaches the container. Go straight
+at the running container with `docker exec`, found by Compose's own labels
+rather than by name — `compose.yml` pins no `container_name` — matching
+`RUNBOOK-edge.md` §8's pattern. `$JUMP` and `$HOST_PRIVATE_IP` are set under
+"What has to be true first" above; re-set them first if entering this
+section independently.
+
+**These four change live application config and are not covered by the
+non-mutating-diagnostics grant in `AUTHORISATIONS.md`** (that grant is
+explicitly "verifying a deploy, never performing one"), so each command
+below is the platform owner's to run, not an agent's.
+
+### 8.1 No maintenance window start time
+
+`maintenance_window_start` takes an hour, 0–23, UTC — background jobs that
+don't advertise themselves as time-sensitive are held to the 4-hour window
+starting at that hour. `1` (01:00–05:00 UTC) is the low-usage choice here.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
+  APP_CTR=$(docker ps -q --filter label=com.docker.compose.project=nextcloud1 --filter label=com.docker.compose.service=app) &&
+  docker exec "$APP_CTR" php occ config:system:set maintenance_window_start --type=integer --value=1'
+```
+
+Expect no output and exit status 0 — `config:system:set` is silent on
+success.
+
+### 8.2 Missing `filecache` index
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
+  APP_CTR=$(docker ps -q --filter label=com.docker.compose.project=nextcloud1 --filter label=com.docker.compose.service=app) &&
+  docker exec "$APP_CTR" php occ db:add-missing-indices'
+```
+
+Expect a `Check indices of the <table> table.` line for each table it
+inspects, and among them a line naming `fs_storage_path_prefix` on
+`filecache` as being added (wording varies by version; the load-bearing part
+is that `filecache` is named as changed, not merely checked). Exit status 0.
+
+### 8.3 Pending mimetype migrations
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
+  APP_CTR=$(docker ps -q --filter label=com.docker.compose.project=nextcloud1 --filter label=com.docker.compose.service=app) &&
+  docker exec "$APP_CTR" php occ maintenance:repair --include-expensive'
+```
+
+Expect a long list of `- OC\Repair\...` / repair-step lines (mimetype
+migration among them) and exit status 0. This is the "expensive" repair
+pass — it can take a while on a fresh instance even with no user data.
+
+### 8.4 No default phone region
+
+`GB` — an ISO 3166-1 alpha-2 code — so a phone number typed without a
+leading `+44` still validates.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
+  APP_CTR=$(docker ps -q --filter label=com.docker.compose.project=nextcloud1 --filter label=com.docker.compose.service=app) &&
+  docker exec "$APP_CTR" php occ config:system:set default_phone_region --value=GB'
+```
+
+Expect no output and exit status 0.
+
+### 8.5 Verify
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
+  APP_CTR=$(docker ps -q --filter label=com.docker.compose.project=nextcloud1 --filter label=com.docker.compose.service=app) &&
+  docker exec "$APP_CTR" php occ config:system:get maintenance_window_start &&
+  docker exec "$APP_CTR" php occ config:system:get default_phone_region'
+```
+
+Expect `1` then `GB`. For 8.2 and 8.3, re-open Settings → Administration →
+Overview in the admin web UI (no `occ` command surfaces the same aggregate
+check) and confirm the DB-index and mimetype-migration warnings are gone;
+the maintenance-window and phone-region warnings clear from the same page
+and from 8.5's two values matching.
 
 ## Rolling back
 
