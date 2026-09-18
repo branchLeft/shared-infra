@@ -58,7 +58,7 @@ export interface EdgePosture {
    * own access log (the instrument named above), not the inherited one:
    * `edge1` averages well under 1 req/s but has 1-minute bursts two orders of
    * magnitude above that, and nothing currently attributes those to one client
-   * or to many. Tracked in branchLeft/workspace#323.
+   * or to many. Tracked as open work in the issue tracker.
    */
   rateLimit: 'off' | 'enforcing';
   /**
@@ -137,7 +137,7 @@ export const MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS = 60;
 /**
  * TLS floor for every hostname. On the GCP edge this replaced, the
  * equivalent value lived on the target proxy's SSL policy rather than in the
- * Cloud Armor security policy; that program (`edge.ts`) was deleted
- * 2026-09-17 in the GCP wind-down (branchLeft/workspace#1000).
+ * Cloud Armor security policy; that program (`edge.ts`) was deleted once it
+ * described infrastructure that no longer existed.
  */
 export const TLS_PROTOCOLS = ['tls1.2', 'tls1.3'] as const;

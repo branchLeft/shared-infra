@@ -5,8 +5,8 @@
  * `hetzner/edge/` consumes the registry, in its own npm package with its own
  * dependency tree — an import here would make the registry unreadable from
  * there. A GCP load balancer (`edge.ts`) used to read it too, until it was
- * deleted 2026-09-17 in the GCP wind-down (branchLeft/workspace#1000); this
- * constraint predates that and outlives it.
+ * deleted once the GCP estate it described was destroyed; this constraint
+ * predates that and outlives it.
  */
 
 /** Where a site's traffic goes on the Hetzner private network. */
@@ -29,8 +29,8 @@ export interface EdgeSite {
   /**
    * The *name* of the Cloud Run service the now-deleted GCP edge (`edge.ts`)
    * used to route to — a plain string, not a resource reference. Vestigial:
-   * `edge.ts` was deleted 2026-09-17 in the GCP wind-down
-   * (branchLeft/workspace#1000), so nothing reads this field any more.
+   * `edge.ts` was deleted once the GCP estate it described was destroyed,
+   * so nothing reads this field any more.
    * Existing entries keep it rather than have it stripped as a side effect of
    * that deletion; pruning it from the type and every entry is its own pass.
    */

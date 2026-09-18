@@ -15,8 +15,8 @@ import type { EdgeSite, HostRedirect } from './siteTypes';
  * the Hetzner edge VM from these entries; `hetzner/monitoring/render.ts`
  * derives blackbox probe targets from them too. A second edge used to read
  * it — `edge.ts` declared a GCP load balancer from the same registry — until
- * the GCP estate was destroyed 2026-09-13 and that program was deleted
- * 2026-09-17 in the GCP wind-down (branchLeft/workspace#1000).
+ * the GCP estate was destroyed and that program was deleted once it
+ * described infrastructure that no longer existed.
  *
  * `cloudRunService` and `region` below are what `edge.ts` used to read; no
  * code reads them any more. They are left on existing entries rather than
@@ -51,10 +51,10 @@ export const sites: EdgeSite[] = [
     name: 'blog',
     hostnames: ['blog.branchleft.co.uk'],
     // Vestigial: the GCP edge this named a Cloud Run service for is gone —
-    // edge.ts was deleted 2026-09-17 in the GCP wind-down
-    // (branchLeft/workspace#1000) — and nothing reads `cloudRunService` any
-    // more. Left in place rather than stripped as a side effect of that
-    // deletion; pruning it is its own pass.
+    // edge.ts was deleted once the GCP estate it described was destroyed —
+    // and nothing reads `cloudRunService` any more. Left in place rather
+    // than stripped as a side effect of that deletion; pruning it is its
+    // own pass.
     cloudRunService: 'ghost-tenant-blog',
     //
     // Both values below belong to the tenant's own stack and neither is chosen

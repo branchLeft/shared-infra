@@ -42,8 +42,8 @@ const GENERATED_BANNER = [
  * exempt three rule families and keep a fourth. That was a widening relative
  * to the GCP Cloud Armor policy this edge replaced, disclosed in that
  * policy's baseline document before it and the program that declared it
- * (`edge.ts`) were deleted 2026-09-17 in the GCP wind-down
- * (branchLeft/workspace#1000).
+ * (`edge.ts`) were deleted once the GCP estate they described was
+ * destroyed.
  */
 const AUTHORING_API_PATHS = ['/ghost/api/*'];
 

@@ -6,8 +6,8 @@ name: CI
 #
 # The GCP edge program that used to live at the repository root (edge.ts and
 # its deploy-plan/deploy-apply jobs) is gone: the GCP estate was destroyed
-# 2026-09-13 and the program removed in the GCP wind-down
-# (branchLeft/workspace#1000). What is left is Hetzner-native: the mail stack
+# 2026-09-13 and the program removed once it described infrastructure that
+# no longer existed. What is left is Hetzner-native: the mail stack
 # and both `hetzner/` stacks. The guardrails below are unchanged for them.
 #
 #   1. Anything credentialed runs only on `push` to `main` — a reviewed, merged

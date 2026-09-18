@@ -110,8 +110,8 @@ describe('sites without a private upstream', () => {
 describe('the registry, now that only this edge reads it', () => {
   // `servableSites` skips a site with no `privateUpstream` -- that is the
   // only field that makes an entry reachable now that `edge.ts` (the GCP
-  // edge `cloudRunService` used to route through) is gone, removed 2026-09-17
-  // in the GCP wind-down (branchLeft/workspace#1000). A registry entry with
+  // edge `cloudRunService` used to route through) is gone, removed once it
+  // described infrastructure that no longer existed. A registry entry with
   // no `privateUpstream` looks like a configured site but serves nothing.
   it('every real entry declares a privateUpstream', () => {
     for (const entry of sites) {
@@ -703,7 +703,7 @@ describe('detect-only', () => {
       crowdsec: 'detect-only',
       // Still off: its threshold is inherited from a Cloud Armor rule that has
       // never enforced, so it is a number no traffic has been measured
-      // against. branchLeft/workspace#323.
+      // against. Deriving a real threshold is tracked as open work.
       rateLimit: 'off',
       // On: bounded to one POST path, threshold derived in `posture.ts`, and
       // what it protects is mx1's deliverability rather than edge compute.
@@ -727,10 +727,9 @@ describe('the CrowdSec acquisition files', () => {
 // The two describe blocks that used to live here ('parity with the edge
 // this one replaces' and 'the parity artifact') read edge.ts and
 // CLOUD-ARMOR-BASELINE.md from disk to guard against this renderer drifting
-// from the GCP edge it was replacing. Both files were deleted 2026-09-17 in
-// the GCP wind-down (branchLeft/workspace#1000) -- the GCP estate was
-// destroyed 2026-09-13, so there is nothing left for this renderer to stay
-// in parity with. RATE_LIMIT_EVENTS and RATE_LIMIT_WINDOW_SECONDS are still
+// from the GCP edge it was replacing. Both files were deleted once the GCP
+// estate they described was destroyed, so there is nothing left for this
+// renderer to stay in parity with. RATE_LIMIT_EVENTS and RATE_LIMIT_WINDOW_SECONDS are still
 // exercised directly above, against the rendered output; the TLS floor is
 // covered by the 'protocols tls1.2 tls1.3' assertion above too.
 
