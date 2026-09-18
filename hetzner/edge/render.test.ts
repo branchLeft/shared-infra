@@ -283,6 +283,91 @@ describe('the request-body ceiling', () => {
   });
 });
 
+describe('the Strict-Transport-Security header', () => {
+  it('emits the standard max-age and includeSubDomains, with no preload', () => {
+    const rendered = render(ENFORCING);
+    expect(rendered).toContain(
+      'header Strict-Transport-Security "max-age=31536000; includeSubDomains"'
+    );
+    expect(rendered).not.toContain('preload');
+  });
+
+  it('is not scoped to one hostname -- every site the registry declares gets its own', () => {
+    const rendered = render(ENFORCING, [
+      site({ name: 'one', hostnames: ['one.test'], privateUpstream: { host: 'app1', port: 2368 } }),
+      site({ name: 'two', hostnames: ['two.test'], privateUpstream: { host: 'app1', port: 2369 } }),
+    ]);
+    const oneBlock = rendered.split('one.test {')[1]?.split('\n}')[0] ?? '';
+    const twoBlock = rendered.split('two.test {')[1]?.split('\n}')[0] ?? '';
+    expect(oneBlock).toContain('Strict-Transport-Security');
+    expect(twoBlock).toContain('Strict-Transport-Security');
+  });
+
+  it('covers every hostname the real registry declares, not only book.branchleft.co.uk', () => {
+    // Non-vacuous by construction: this repo's registry check pattern (see
+    // 'the real registry has no two sites on one address') -- fails loudly if
+    // the fixture ever shrinks to one site rather than passing by omission.
+    const rendered = renderCaddyfile(sites, hostRedirects, POSTURE);
+    const servableCount = sites.filter((entry) => entry.privateUpstream !== undefined).length;
+    expect(servableCount).toBeGreaterThan(1);
+
+    const occurrences = (rendered.match(/header Strict-Transport-Security/g) ?? []).length;
+    expect(occurrences).toBeGreaterThanOrEqual(servableCount);
+
+    // Two distinct real hostnames, neither of which is the tenant that
+    // reported the gap -- the fix is edge-wide, not a patch for one site.
+    const blogBlock = rendered.split('blog.branchleft.co.uk {')[1]?.split('\n}')[0] ?? '';
+    const websiteBlock = rendered.split('branchleft.co.uk {')[1]?.split('\n}')[0] ?? '';
+    expect(blogBlock).toContain('Strict-Transport-Security');
+    expect(websiteBlock).toContain('Strict-Transport-Security');
+
+    // And the tenant that actually surfaced the finding still gets it too.
+    const bookBlock = rendered.split('book.branchleft.co.uk {')[1]?.split('\n}')[0] ?? '';
+    expect(bookBlock).toContain('Strict-Transport-Security');
+  });
+
+  it('is set ahead of the response body -- before request_body and the protection chain', () => {
+    // Same reasoning and shape as the request-body position test above:
+    // scoped to the route block, because an unscoped search would find
+    // `header X-Edge-Probe` text belonging to a different block entirely.
+    const rendered = render(ENFORCING, [
+      site({
+        hostnames: ['bounded.test'],
+        injectionWafPreviewOnly: true,
+        requestBodyMaxSize: '64MiB',
+      }),
+    ]);
+    const route = rendered.slice(rendered.indexOf('route {'));
+    const header = route.indexOf('Strict-Transport-Security');
+    expect(header).toBeGreaterThanOrEqual(0);
+    for (const later of ['request_body', 'rate_limit', 'appsec @inspected', 'reverse_proxy']) {
+      const at = route.indexOf(later);
+      expect(at, `${later} must appear in the route`).toBeGreaterThanOrEqual(0);
+      expect(at, `Strict-Transport-Security must precede ${later}`).toBeGreaterThan(header);
+    }
+  });
+
+  it('is emitted on a redirect source too, not only on the sites that serve content', () => {
+    const rendered = render(
+      ENFORCING,
+      [site({ hostnames: ['apex.test', 'www.apex.test'] })],
+      [{ from: 'www.apex.test', to: 'apex.test' }]
+    );
+    const redirectBlockText = rendered.split('www.apex.test {')[1]?.split('\n}')[0] ?? '';
+    expect(redirectBlockText).toContain(
+      'header Strict-Transport-Security "max-age=31536000; includeSubDomains"'
+    );
+  });
+
+  it('is absent from the internal probe and metrics listeners, which are not registry hostnames', () => {
+    const rendered = render(ENFORCING);
+    const probeBlockText = rendered.split('\n:8080 {')[1]?.split('\n}')[0] ?? '';
+    const metricsBlockText = rendered.split(':9091 {')[1]?.split('\n}')[0] ?? '';
+    expect(probeBlockText).not.toContain('Strict-Transport-Security');
+    expect(metricsBlockText).not.toContain('Strict-Transport-Security');
+  });
+});
+
 describe('the rendered Caddyfile', () => {
   it('serves a site at its hostnames over its private upstream', () => {
     const rendered = render(ENFORCING, [

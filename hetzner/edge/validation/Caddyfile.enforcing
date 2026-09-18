@@ -31,6 +31,7 @@ branchleft.co.uk {
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
 	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		request_body {
 			max_size 1MiB
 		}
@@ -63,6 +64,7 @@ www.branchleft.co.uk {
 		protocols tls1.2 tls1.3
 	}
 	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		rate_limit {
 			zone website_redirect_per_ip {
 				key {http.request.remote.host}
@@ -89,6 +91,7 @@ blog.branchleft.co.uk {
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
 	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		request_body {
 			max_size 64MiB
 		}
@@ -125,6 +128,7 @@ book.branchleft.co.uk {
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
 	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		request_body {
 			max_size 100MiB
 		}
