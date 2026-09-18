@@ -133,18 +133,40 @@ does not return instantly, and that is not a hang.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" \
-  'systemctl is-active branchleft-compose@nextcloud1 &&
-   docker compose -f /opt/branchleft/nextcloud1/compose.yml ps &&
-   docker compose -f /opt/branchleft/nextcloud1/compose.yml exec -T app curl -fsS http://localhost/status.php'
+  'systemctl is-active branchleft-compose@nextcloud1'
 ```
 
-Expect `active`, all three services `healthy` in the `ps` table, and the
-`curl` printing a JSON blob with `"installed":true`. **This is also the
-first live confirmation that curl exists in the `nextcloud:31-apache`
-image** — `stack/compose.yml`'s healthcheck assumes it; if this command
-itself fails with "curl: not found" rather than a connection or HTTP error,
-the healthcheck needs a different probe and this runbook needs updating
-before relying on `--wait` again.
+Expect `active`. That alone is real evidence, not a formality: `ExecStart`
+is `docker compose up -d --wait`, and `--wait` only reports success once
+every service with a `healthcheck:` is actually healthy — an active unit
+means the deploy already succeeded, sourced through `EnvironmentFile=` the
+way `systemd` does it.
+
+**Do not follow this with `docker compose -f .../compose.yml ps` or
+`exec` over a fresh SSH session.** Found live on the first real deploy: an
+ad-hoc `docker compose` invocation re-parses and re-interpolates the whole
+Compose file itself, and a plain interactive shell over SSH carries none of
+the `EnvironmentFile=` variables systemd sourced for `ExecStart` — every
+`${VAR:?...}` in `stack/compose.yml` fails with "required variable ... is
+missing a value", which reads exactly like a broken deploy when the unit
+is in fact already healthy. Use plain `docker` with label filters instead,
+which never re-reads the Compose file at all — the same pattern
+`RUNBOOK-edge.md`'s throttle-derivation section already uses for the same
+reason:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
+  docker ps --filter label=com.docker.compose.project=nextcloud1 --format "{{.Names}}\t{{.Status}}"
+  docker exec $(docker ps -q --filter label=com.docker.compose.project=nextcloud1 --filter label=com.docker.compose.service=app) curl -fsS http://localhost/status.php
+'
+```
+
+Expect three containers `Up ... (healthy)`, and the `curl` printing a JSON
+blob with `"installed":true`. **This is also the first live confirmation
+that curl exists in the `nextcloud:31-apache` image** — `stack/compose.yml`'s
+healthcheck assumes it; if this command itself fails with "curl: not found"
+rather than a connection or HTTP error, the healthcheck needs a different
+probe and this runbook needs updating before relying on `--wait` again.
 
 Then, from the workstation, the same check this runbook opened with:
 
@@ -152,7 +174,11 @@ Then, from the workstation, the same check this runbook opened with:
 curl -s -o /dev/null -w "%{http_code}\n" https://book.branchleft.co.uk/
 ```
 
-Expect `200`, not `502` — the whole chain (DNS, Caddy, this stack) is live.
+Expect `302` to `/login`, not `502` — a fresh, working Nextcloud redirects
+an unauthenticated `/` to its login page, which is correct behaviour, not
+an error. `curl -sI ... | grep -i ^location` confirms the target is
+`https://book.branchleft.co.uk/login`; anything else is worth a closer
+look. Either way, the whole chain (DNS, Caddy, this stack) is live.
 
 ## 7. What this runbook does not cover
 
