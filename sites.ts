@@ -80,11 +80,13 @@ export const sites: EdgeSite[] = [
 
   {
     name: 'nextcloud1',
-    // Placeholder subdomain — cheap to rename before the DNS step actually
-    // runs (nothing depends on this string except the cert/DNS entries this
-    // onboarding creates for it). The platform owner confirms the final
-    // hostname before publishing the _acme-challenge CNAME.
-    hostnames: ['book.branchleft.co.uk'],
+    // Renamed from book.branchleft.co.uk: the site outgrew the booking-page
+    // name it launched with -- Calendar, Talk/video and Files are all in use
+    // now -- and cloud.<domain> is this estate's convention for a
+    // self-hosted Nextcloud instance. The old hostname's DNS record stays
+    // live until the new one is confirmed working, then is removed manually
+    // at the registrar; nothing in this repo declares DNS.
+    hostnames: ['cloud.branchleft.co.uk'],
     // No cloudRunService: this site was born on Hetzner and never had a GCP
     // backend, per this field's own doc in siteTypes.ts.
     //

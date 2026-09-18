@@ -88,7 +88,7 @@ blog.branchleft.co.uk {
 	}
 }
 
-book.branchleft.co.uk {
+cloud.branchleft.co.uk {
 	log {
 		output file /var/log/caddy/access.log
 		format json

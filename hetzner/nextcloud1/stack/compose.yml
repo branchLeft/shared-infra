@@ -14,7 +14,7 @@
 #
 # `app`'s published port binds nextcloud1's own private address only
 # (10.20.1.50, hetzner-host/addressPlan.ts's HOST_IPS.nextcloud1), matching
-# sites.ts's committed privateUpstream for book.branchleft.co.uk -- the two
+# sites.ts's committed privateUpstream for cloud.branchleft.co.uk -- the two
 # must move together, same convention as every other site the Hetzner edge
 # proxies to. `db` and `redis` publish no host port at all: `app` reaches
 # both by Compose service name over the stack's own internal network, and
@@ -51,7 +51,7 @@ services:
       # memory.
       NEXTCLOUD_ADMIN_USER: admin
       NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:?set NEXTCLOUD_ADMIN_PASSWORD in /etc/branchleft/nextcloud1.env}
-      NEXTCLOUD_TRUSTED_DOMAINS: book.branchleft.co.uk
+      NEXTCLOUD_TRUSTED_DOMAINS: cloud.branchleft.co.uk
       # edge1's private address -- the only host that ever proxies to this
       # one, per its role as the estate's sole front door
       # (hetzner-host/addressPlan.ts's HOST_IPS.edge1). Without this,
@@ -59,8 +59,8 @@ services:
       # scheme and host wrong behind Caddy's reverse proxy.
       TRUSTED_PROXIES: 10.20.1.10
       OVERWRITEPROTOCOL: https
-      OVERWRITEHOST: book.branchleft.co.uk
-      OVERWRITECLIURL: https://book.branchleft.co.uk
+      OVERWRITEHOST: cloud.branchleft.co.uk
+      OVERWRITECLIURL: https://cloud.branchleft.co.uk
       # Matches sites.ts's requestBodyMaxSize for this site (100MiB) --
       # Caddy's limit is the outer bound, but PHP's own default (2M/8M) would
       # otherwise reject an upload Caddy had already let through, which
