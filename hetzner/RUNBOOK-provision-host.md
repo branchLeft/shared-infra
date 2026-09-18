@@ -86,13 +86,13 @@ first boot and `run-all.sh` actually taking over the same job permanently.
 
 Verify it on a host that has already had `run-all.sh` run — this has no
 public address of its own, so it needs the same gateway jump as every other
-command reaching it (`db1` is the only such host today). Neither address is
-typed in: each comes from a lookup run once, in the same session, ahead of
-the command that consumes it.
+command reaching it (`db1` and `nextcloud1` are the two such hosts today).
+Neither address is typed in: each comes from a lookup run once, in the same
+session, ahead of the command that consumes it.
 
 ```bash
 EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
-HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # the host being checked; db1 is the only one today
+HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # the host being checked; substitute nextcloud1 for the other private-only host
 JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
   ip route show default
@@ -112,6 +112,21 @@ rather than guessing among more than one candidate route:
 ```bash
 GW=$(ip -4 route show | awk '$1 != "default" && $1 != "169.254.169.254" && /via/{c++; for(i=1;i<=NF;i++) if($i=="via") g=$(i+1)} END{if(c==1) print g}'); [ -n "$GW" ] && ip route replace default via "$GW" || echo "no single candidate route found, not applying anything" >&2
 ```
+
+**A genuinely first boot can hit this too, not only a pre-fix host.**
+`nextcloud1` was created with this fix already in place and still had no
+default route the first time `run-all.sh`'s own egress check ran against it
+(`getent hosts deb.debian.org` failed with no output at all — a chained `&&`
+check prints nothing on the first failure, which reads as a hung command
+rather than a diagnosable one; unchain the checks when this happens, so each
+one's result is visible). The resolver file was already correct — only the
+route was missing. `bootcmd` and the private interface's own DHCP lease are
+both racing to be ready in cloud-init's very first stage, and on a
+private-only host there is nothing else to wait on that would order them.
+The repair is the same one-line fix above; there is nothing to detect this in
+advance, only to check for it (the `ip route show default` step) and correct
+it before it wastes time downstream, where a missing route on a private-only
+host presents as a broken package mirror.
 
 ### 1. Apply the route
 
@@ -375,7 +390,7 @@ independently.
 
 ```bash
 JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
-HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # the host being provisioned; db1 is the only one today
+HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # the host being provisioned; substitute nextcloud1 for the other private-only host
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
   getent hosts deb.debian.org &&
   curl -fsS -o /dev/null https://download.docker.com/linux/debian/gpg &&
