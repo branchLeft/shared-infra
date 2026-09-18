@@ -128,8 +128,8 @@ export const sites: EdgeSite[] = [
     name: 'nextcloud1',
     // Placeholder subdomain — cheap to rename before the DNS step actually
     // runs (nothing depends on this string except the cert/DNS entries this
-    // onboarding creates for it). Confirm with Rob before publishing the
-    // _acme-challenge CNAME.
+    // onboarding creates for it). The platform owner confirms the final
+    // hostname before publishing the _acme-challenge CNAME.
     hostnames: ['book.branchleft.co.uk'],
     // No cloudRunService: this site was born on Hetzner and never had a GCP
     // backend, per this field's own doc in siteTypes.ts.
