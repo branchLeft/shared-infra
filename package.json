@@ -12,7 +12,7 @@
     "@branchleft/prettier-config": "^0.3.1",
     "@branchleft/tsconfig": "^0.3.1",
     "@types/node": "^26",
-    "prettier": "^3.9.6",
+    "prettier": "^3.9.8",
     "typescript": "^5.9.0"
   }
 }
