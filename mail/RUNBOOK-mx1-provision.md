@@ -153,18 +153,13 @@ source (`stalwartlabs/stalwart` main, `crates/common/src/network/acme/` and
   one-time-per-renewal challenge.
 - **DNS-01 / DNS-PERSIST-01** — needs a DNS provider Stalwart can write TXT
   records to via API (`crates/registry/src/schema/structs.rs`'s
-  `DnsServer` object). ~~The zone is at a registrar with no API, and this is
-  not a workaround-able gap~~: DNS-PERSIST-01 avoids _per-renewal_ DNS writes but still needs one
+  `DnsServer` object), so this host would hold a write credential for the
+  zone — the one that also carries its MX, SPF and DKIM records.
+  DNS-PERSIST-01 avoids _per-renewal_ DNS writes but still needs one
   real API-driven write to establish the persistent record in the first
   place, per Stalwart's own `AcmeProvider`/`DnsServer` config shape. Ruled
-  out, matching the brief's own instinct to avoid it.
-
-  > **Struck 2026-09-23.** The premise was wrong — the registrar does publish
-  > a DNS API; the estate never enabled it — and it is moot now: owner ruling
-  > D18 moves the zone to Hetzner DNS, which is API-driven
-  > (`hetzner/dns/RUNBOOK-dns-cutover.md`). DNS-01 is available here, at the
-  > cost of a zone-write token on this host. TLS-ALPN-01 stands until someone
-  > decides that trade; it is no longer the only option.
+  out, matching the brief's own instinct to avoid it. The zone's DNS API is
+  `hetzner/dns/`'s; this is a choice not to use it here, not an absence.
 
 - **TLS-ALPN-01** — needs port 443 reachable, nothing else. RFC 8737 fixes
   the CA's validation connection at port 443 specifically (not

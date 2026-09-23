@@ -187,7 +187,7 @@ dig +short DS branchleft.co.uk @1.1.1.1
 
 Expected, and nothing else:
 
-```
+```text
 no differences: 17 rrsets, 112 names, 12 types, 7 servers; both controls caught
 ```
 
@@ -272,7 +272,7 @@ cached.
 **Domains & SSL → branchleft.co.uk → Nameservers → use custom name servers**,
 and enter, replacing the four IONOS servers:
 
-```
+```text
 hydrogen.ns.hetzner.com
 oxygen.ns.hetzner.com
 helium.ns.hetzner.de

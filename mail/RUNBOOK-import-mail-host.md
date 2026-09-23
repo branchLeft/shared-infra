@@ -214,12 +214,8 @@ else — no change to the server, no change to the existing 22/tcp or ICMP
 rules, no replace or delete of anything. (443 was added after this runbook
 was first written — see `mail/RUNBOOK-mx1-provision.md`'s "The ACME
 decision" for why: Stalwart's certificate issuance needs a reachable ACME
-challenge, and TLS-ALPN-01 ~~is the only challenge type that fits this host's
-inbound set without a DNS-provider API IONOS doesn't have~~ fits this host's
-inbound set with no DNS-provider credential on the host. _Struck 2026-09-23:
-the registrar does publish a DNS API, and the zone is moving to Hetzner DNS,
-which has one too, so DNS-01 was never impossible — see
-`hetzner/dns/RUNBOOK-dns-cutover.md`._) Read the plan.
+challenge, and TLS-ALPN-01 fits this host's inbound set with no
+DNS-provider credential on the host.) Read the plan.
 If it matches that description:
 
 ```bash
