@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { MARKER_PREFIX, PROJECT_NAMES, PROJECTS, tokenConfigKey } from './projects';
+import { MARKER_PREFIX, PROJECT_NAMES, PROJECTS } from './projects';
 
 describe('the project table', () => {
   it('names five projects, the four of the design plus the DNS-only one', () => {
@@ -25,19 +25,7 @@ describe('the project table', () => {
     expect(servers.some((server) => server.startsWith(MARKER_PREFIX))).toBe(false);
   });
 
-  it('keeps the existing mail and org stacks on the default provider', () => {
-    expect(PROJECTS.mail.explicitProvider).toBe(false);
-    expect(PROJECTS.org.explicitProvider).toBe(false);
-    expect(PROJECTS.tenants.explicitProvider).toBe(true);
-    expect(PROJECTS.demos.explicitProvider).toBe(true);
-    expect(PROJECTS.dns.explicitProvider).toBe(true);
-  });
-
   it('keeps the DNS project free of hosts', () => {
     expect(PROJECTS.dns.servers).toEqual([]);
-  });
-
-  it('derives one token key per project', () => {
-    expect(tokenConfigKey('tenants')).toBe('tenantsToken');
   });
 });

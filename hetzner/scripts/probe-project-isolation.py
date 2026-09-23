@@ -16,16 +16,21 @@ instrument:
 
 * **Listing.** Each token must list its own project's marker firewall (the
   positive), and must not list any other project's marker or known server.
+* **Real hosts.** The mail token must also list and fetch by id `mx1`, and
+  the org token `edge1`, so the positive is tied to the production project
+  and not only to a firewall someone created by hand.
 * **By id.** Each marker is fetched by id with its own token, which must
   return 200 and the marker's name. Every other token fetching that same id
   must return 404 `not_found`. The 200 is what makes the 404 mean "a different
   project", rather than "this path never works".
 
 **The control case.** `--control-swap tenants=demos` evaluates the tenants
-row with the demos token. A working probe must report FAIL for it -- the
-tenants marker is missing and the demos marker is visible. If it reports PASS,
-the probe cannot detect the thing it exists to detect, and its PASS on a real
-run is worthless. The control exits 0 only when it saw that FAIL.
+row with the demos token. A working probe must report FAIL for it, and
+specifically must mark the tenants row REACHES ACROSS in the demos column: the
+demos marker is listed and fetched by that token. A FAIL for any other reason
+-- the tenants marker missing, say -- does not count, because a probe whose
+cross-reach check is broken would still produce that one. The control exits
+0 only when it saw the reach.
 
 Exit codes: 0 PASS (or a control that failed as required), 1 FAIL (or a control
 that passed), 2 the probe could not run -- a transport error, a refused token,
@@ -62,6 +67,13 @@ PROJECTS: dict[str, tuple[str, ...]] = {
     "demos": ("demo1",),
     "dns": (),
 }
+
+
+# Servers that exist today and must be seen, by name and by id, from their
+# own project's token. A hand-made marker alone could be created in the wrong
+# project by the same mistake that mints a token there; a production host
+# cannot.
+REQUIRED_SERVERS: dict[str, tuple[str, ...]] = {"mail": ("mx1",), "org": ("edge1",)}
 
 
 def marker(project: str) -> str:
@@ -176,6 +188,21 @@ def observe(api: Api, tokens: dict[str, str]) -> dict[str, View]:
     }
 
 
+def missing_required_servers(api: Api, token: str, project: str, view: View) -> list[str]:
+    """Required servers that the project's own token cannot list and fetch."""
+    missing = []
+    for server in REQUIRED_SERVERS.get(project, ()):
+        server_id = view.servers.get(server)
+        if server_id is None:
+            missing.append(server)
+            continue
+        reply = api.get(token, f"/servers/{server_id}")
+        fetched = reply.body.get("server")
+        if reply.status != 200 or not isinstance(fetched, dict) or fetched.get("name") != server:
+            missing.append(server)
+    return missing
+
+
 def evaluate(api: Api, tokens: dict[str, str], views: dict[str, View]) -> Result:
     """Every (token, project) pair: own project positive, every other refused."""
     result = Result()
@@ -214,6 +241,10 @@ def evaluate(api: Api, tokens: dict[str, str], views: dict[str, View]) -> Result
             if row == column:
                 ok = listed and status == 200 and fetched_name == marker(column)
                 note = "own project, listed and fetched by id" if ok else "OWN PROJECT NOT SEEN"
+                missing = missing_required_servers(api, tokens[row], row, view)
+                if missing:
+                    ok = False
+                    note = f"OWN PROJECT NOT SEEN: {', '.join(missing)} not listed and fetched by id"
             elif status is None:
                 ok = False
                 note = f"no {column} marker id to test against"
@@ -248,6 +279,22 @@ def render(result: Result, label: str) -> str:
     lines.extend(f"  {problem}" for problem in result.problems)
     lines.append("PASS" if result.passed else "FAIL")
     return "\n".join(lines)
+
+
+def detected_reach(result: Result, row: str, source: str) -> bool:
+    """Whether the swapped row was caught reaching into the source's project.
+
+    Any FAIL is not enough: a probe whose cross-reach check is broken still
+    fails the swapped row on its missing own marker, and would pass as a
+    control while being unable to see the one thing it exists to see.
+    """
+    return any(
+        cell.row == row
+        and cell.column == source
+        and not cell.ok
+        and (cell.listed or cell.by_id_status == 200)
+        for cell in result.cells
+    )
 
 
 def read_tokens(environ: dict[str, str]) -> dict[str, str]:
@@ -300,14 +347,19 @@ def run(argv: list[str], environ: dict[str, str], api: Api, out=sys.stdout) -> i
             tokens[row] = tokens[source]
             result = evaluate(api, tokens, observe(api, tokens))
             print(render(result, f"CONTROL: {row} row evaluated with the {source} token"), file=out)
-            if result.passed:
+            if not detected_reach(result, row, source):
                 print(
-                    "CONTROL BROKEN: a swapped token passed, so this probe cannot detect a "
+                    f"CONTROL BROKEN: the {row} row, evaluated with the {source} token, does not "
+                    f"show REACHES ACROSS in the {source} column, so this probe cannot detect a "
                     "token reaching the wrong project. Its PASS on a real run proves nothing.",
                     file=out,
                 )
                 return 1
-            print("CONTROL OK: the probe reported FAIL for a swapped token, as it must.", file=out)
+            print(
+                f"CONTROL OK: the probe reported the {row} row reaching across into {source}, "
+                "as it must.",
+                file=out,
+            )
             return 0
         clashes = distinct(tokens)
         if clashes:

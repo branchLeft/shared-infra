@@ -1,4 +1,4 @@
-# Runbook — five Hetzner projects, one token each, isolation proven
+# Runbook — five Hetzner projects, a probe token each, isolation proven
 
 Refs branchLeft/workspace#1165. The issue closes on this runbook's verify
 output, not on the merge of the PR that adds it.
@@ -44,7 +44,8 @@ Where the Hetzner backup bucket lives is still an open design question
 ## Blast radius
 
 - **Creates:** three empty projects, five marker firewalls (no rules, attached
-  to nothing, so they cost nothing and change no traffic) and five API tokens.
+  to nothing, so they cost nothing and change no traffic) and five Read-only
+  API tokens. No token with write power is created.
 - **Changes nothing that exists.** No server, network or firewall already in
   mail or org is edited. The mail project gains one unattached firewall and
   nothing else.
@@ -77,23 +78,31 @@ name>` is the token's name in the Console, exactly. The entry holds:
   deployed (a CI secret name, or `local only`).
 
 The console name and the entry title match, so revoking a token and finding
-its entry are the same search. This runbook mints five tokens:
+its entry are the same search. This runbook mints five Read tokens, one probe token per project:
 
-| ProtonPass title                    | Console project      | Token name       | Permission   | Used by                                                    |
-| ----------------------------------- | -------------------- | ---------------- | ------------ | ---------------------------------------------------------- |
-| `hcloud / mail / probe-mail`        | the mail project     | `probe-mail`     | Read         | the isolation probe, local only                            |
-| `hcloud / org / probe-org`          | the estate project   | `probe-org`      | Read         | the isolation probe, local only                            |
-| `hcloud / tenants / pulumi-tenants` | `branchLeft tenants` | `pulumi-tenants` | Read & Write | the tenants stacks; later CI secret `HCLOUD_TOKEN_TENANTS` |
-| `hcloud / demos / pulumi-demos`     | `branchLeft demos`   | `pulumi-demos`   | Read & Write | the demos stacks; later CI secret `HCLOUD_TOKEN_DEMOS`     |
-| `hcloud / dns / pulumi-dns`         | `branchLeft dns`     | `pulumi-dns`     | Read & Write | the DNS stack; later CI secret `HCLOUD_TOKEN_DNS`          |
+| ProtonPass title                   | Console project      | Token name      | Permission | Used by                         |
+| ---------------------------------- | -------------------- | --------------- | ---------- | ------------------------------- |
+| `hcloud / mail / probe-mail`       | the mail project     | `probe-mail`    | Read       | the isolation probe, local only |
+| `hcloud / org / probe-org`         | the estate project   | `probe-org`     | Read       | the isolation probe, local only |
+| `hcloud / tenants / probe-tenants` | `branchLeft tenants` | `probe-tenants` | Read       | the isolation probe, local only |
+| `hcloud / demos / probe-demos`     | `branchLeft demos`   | `probe-demos`   | Read       | the isolation probe, local only |
+| `hcloud / dns / probe-dns`         | `branchLeft dns`     | `probe-dns`     | Read       | the isolation probe, local only |
 
-Mail and org get new **Read** tokens because their working tokens live in the
-`HCLOUD_TOKEN_MAIL` and `HCLOUD_TOKEN_ESTATE` repository secrets, and a
-repository secret can't be read back. The Cloud API scopes every token to its
-project, whatever its permission, so a Read token proves the same boundary. If
-you already hold the working mail or estate token in ProtonPass, add it to
-the convention by renaming the entry to `hcloud / mail / <its console name>` or
-`hcloud / org / <its console name>`.
+**Only Read tokens now.** A Read token can issue GET requests and nothing
+else, and the probe needs nothing more. The Cloud API scopes every token to
+its project whatever its permission, so a Read token proves the same
+boundary a Read & Write one would. A **Read & Write** token for tenants,
+demos or dns is minted only when the first stack in that project needs one,
+by that stack's own story, under the same convention (for example
+`hcloud / tenants / pulumi-tenants`). Until then nothing holds write power
+over the new projects. This matters for dns in particular: a stolen dns token
+reaches no data outside DNS, but a Read & Write one can still create billable
+resources in that project and use up the account-wide server cap.
+
+The working mail and estate tokens live in the `HCLOUD_TOKEN_MAIL` and
+`HCLOUD_TOKEN_ESTATE` repository secrets, which can't be read back. If you also
+hold either in ProtonPass, bring it under the convention by renaming the entry
+to `hcloud / mail / <its console name>` or `hcloud / org / <its console name>`.
 
 ## Steps
 
@@ -132,7 +141,7 @@ existing firewalls. Those are untouched.
 The name is the identity, and the probe and the stack guards match it
 exactly. `project-marker-tenant` or a capital letter is a different firewall.
 
-### 4. Mint the five tokens
+### 4. Mint the five probe tokens
 
 For each row of the naming table: open that project → **Security** → **API
 tokens** → **Generate API token**, name it exactly as the **Token name**
@@ -174,7 +183,8 @@ cd ~/branchLeft/shared-infra && python3 hetzner/scripts/probe-project-isolation.
 ```
 
 Expected: a 5×5 matrix where every cell starts `ok`. The diagonal reads
-`ok listed/200`: each token lists its own marker and fetches it by id. Every
+`ok listed/200`: each token lists its own marker and fetches it by id, and the
+mail and org tokens also list and fetch `mx1` and `edge1`. Every
 other cell reads `ok absent/404`: the token lists none of that project's
 servers or marker, and fetching that marker by id returns 404. The last lines
 are `PASS` and `exit=0`.
@@ -182,6 +192,9 @@ are `PASS` and `exit=0`.
 - `exit=1` with `REACHES ACROSS` in a row: that token sees another project.
   Stop. Revoke that token (rollback step R2) and re-mint it inside the
   correct project.
+- `exit=1` with `OWN PROJECT NOT SEEN: mx1` or `…: edge1`: the probe token
+  for mail or org was minted in the wrong project. Revoke it (R2) and re-mint
+  it in the project that holds that server.
 - `exit=1` with `does not list project-marker-…`: that project's marker is
   missing or misnamed, or the token was minted in a different project. Check
   step 3's name first.
@@ -200,7 +213,7 @@ cd ~/branchLeft/shared-infra && python3 hetzner/scripts/probe-project-isolation.
 
 Expected: the matrix's tenants row shows `XX`, the line
 `tenants token vs demos project: REACHES ACROSS`, then `FAIL`, then
-`CONTROL OK: the probe reported FAIL for a swapped token, as it must.`, then
+`CONTROL OK: the probe reported the tenants row reaching across into demos, as it must.`, then
 `exit=0`.
 
 If it prints `CONTROL BROKEN` and `exit=1`, step 5's `PASS` is void. Stop and
@@ -222,26 +235,10 @@ token, and it names only markers and the servers in `hetzner/projects.ts`.
 ## Verify
 
 Steps 5 and 6 are the verification: `PASS`/`exit=0`, then
-`CONTROL OK`/`exit=0`. Isolation is proven by the diagonal. Each token lists
+`CONTROL OK`/`exit=0`. They prove that each project's probe token reaches its
+own project and no other. Isolation is proven by the diagonal. Each token lists
 and fetches its own marker. That shows the 404s off the diagonal come from a
 project boundary, not a broken path.
-
-## Optional: the offline provider check
-
-The new projects' stacks use an explicit provider with the token in config,
-so rotating a token changes the provider's configuration. This check asks the
-Pulumi engine, with no network and a fake token, whether that plans a
-replacement. Agents are refused the state import it needs, so it's yours:
-
-```bash
-cd ~/branchLeft/shared-infra/hetzner && npm ci && python3 scripts/engine-check-provider-replace.py; echo "exit=$?"
-```
-
-Expected: `rotation plans no replacement: PASS`,
-`control sees the forced replacement: PASS`, `exit=0`. The `adoption` line is
-reported, not judged. It shows what moving an existing stack from the default
-provider to an explicit one would plan, and that is why the mail and org
-stacks stay on the default provider.
 
 ## Rollback
 
@@ -250,11 +247,10 @@ what it added. Run any subset, in this order:
 
 - **R1 — the markers.** In each project → Firewalls → the
   `project-marker-<name>` firewall → **Delete**. It is attached to nothing,
-  so no traffic changes. The new stacks' guards will then refuse every
-  preview until the marker is re-created, and that is the intended failure.
+  so no traffic changes. The probe then reports that project's marker missing
+  until it is re-created.
 - **R2 — a token.** Project → Security → API tokens → the token → **Delete**,
-  then delete its ProtonPass entry. Anything using it stops authenticating
-  immediately. Nothing uses these five yet.
+  then delete its ProtonPass entry. Only the probe uses these five.
 - **R3 — a new project.** Only once it is empty (no marker, no token, no
   resources): Project → **Settings** → **Delete project**. Never do this to
   the mail or estate project.

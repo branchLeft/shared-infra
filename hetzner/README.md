@@ -12,25 +12,23 @@ one.
 This file covers what is in this directory and why it is shaped the way it
 is.
 
-| File                                       | What it is                                                                                     |
-| ------------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `RUNBOOK-new-stack.md`                     | Object Storage state backend + passphrase secrets provider, for new stacks                     |
-| `RUNBOOK-provision-host.md`                | Delivering and running `provision/` against a newly created host                               |
-| `RUNBOOK-estate-project-move.md`           | Rebuilding both stacks in the estate hcloud project, once                                      |
-| `scripts/probe-object-storage.py`          | Writes to a **scratch** bucket to settle Hetzner Object Storage's actual semantics             |
-| `scripts/check-hetzner-projects.py`        | Structural checks over the Pulumi projects here — see "Two Pulumi projects" below              |
-| `scripts/check-address-plan-drift.py`      | Gates the address plan against the shell-side and runbook literals that copy it                |
-| `projects.ts`                              | The five Hetzner projects as data: markers, sentinel servers, which provider each stack uses   |
-| `projectGuard.ts`                          | Refuses a stack whose token addresses a different project — see below                          |
-| `projectProvider.ts`                       | The explicit, per-project provider for the tenants, demos and dns stacks                       |
-| `RUNBOOK-five-projects.md`                 | Creating the three new projects, their tokens and markers, and proving isolation               |
-| `scripts/probe-project-isolation.py`       | The 5x5 token isolation proof, with a swap-mode control that must report FAIL                  |
-| `scripts/engine-check-provider-replace.py` | Offline: does a provider change plan a replacement? Run by the platform owner                  |
-| `network.ts`                               | The private network, its subnet, and the estate's default route out to the internet            |
-| `egress.ts`                                | Validates the default route's gateway against the constraints the route API enforces           |
-| `estate.ts`, `estate/`                     | The estate stack — `edge1` today; see "The estate stack" for what it does not create           |
-| `provision/`                               | Idempotent host base provisioning, the Compose systemd template, and the deploy wrapper        |
-| `../hetzner-host/`                         | The published `@branchleft/hetzner-host` package — `Host`, firewalls, cloud-init, address plan |
+| File                                  | What it is                                                                                     |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `RUNBOOK-new-stack.md`                | Object Storage state backend + passphrase secrets provider, for new stacks                     |
+| `RUNBOOK-provision-host.md`           | Delivering and running `provision/` against a newly created host                               |
+| `RUNBOOK-estate-project-move.md`      | Rebuilding both stacks in the estate hcloud project, once                                      |
+| `scripts/probe-object-storage.py`     | Writes to a **scratch** bucket to settle Hetzner Object Storage's actual semantics             |
+| `scripts/check-hetzner-projects.py`   | Structural checks over the Pulumi projects here — see "Two Pulumi projects" below              |
+| `scripts/check-address-plan-drift.py` | Gates the address plan against the shell-side and runbook literals that copy it                |
+| `projects.ts`                         | The five Hetzner projects as data: their markers and sentinel servers                          |
+| `projectGuard.ts`                     | Refuses a stack whose token addresses a different project — see below                          |
+| `RUNBOOK-five-projects.md`            | Creating the three new projects, their tokens and markers, and proving isolation               |
+| `scripts/probe-project-isolation.py`  | The 5x5 token isolation proof, with a swap-mode control that must report FAIL                  |
+| `network.ts`                          | The private network, its subnet, and the estate's default route out to the internet            |
+| `egress.ts`                           | Validates the default route's gateway against the constraints the route API enforces           |
+| `estate.ts`, `estate/`                | The estate stack — `edge1` today; see "The estate stack" for what it does not create           |
+| `provision/`                          | Idempotent host base provisioning, the Compose systemd template, and the deploy wrapper        |
+| `../hetzner-host/`                    | The published `@branchleft/hetzner-host` package — `Host`, firewalls, cloud-init, address plan |
 
 ## Five projects, and why the boundary matters
 
@@ -41,17 +39,22 @@ the entire isolation mechanism**, which is why these are separate projects
 rather than separate label sets, and why networks not spanning projects is a
 feature here rather than a limitation.
 
-`projects.ts` is the table below as data; the guard, the provider factory and
-the isolation probe all read it.
+`projects.ts` is the table below as data; the guard and the isolation probe
+both read it.
 
-| Project | Holds                                                                     | Provider in its stacks                          |
-| ------- | ------------------------------------------------------------------------- | ----------------------------------------------- |
-| mail    | `mx1` alone                                                               | default, `hcloud:token` / `HCLOUD_TOKEN_MAIL`   |
-| org     | The `platform` network, `edge1`, `ops1` (was `nextcloud1`), `app1`, `db1` | default, `hcloud:token` / `HCLOUD_TOKEN_ESTATE` |
-| tenants | Built fresh: `edge-t`, `app-t1`, `db-t1`                                  | explicit, `hcloud-projects:tenantsToken`        |
-| demos   | Built fresh: `demo1`                                                      | explicit, `hcloud-projects:demosToken`          |
-| dns     | The DNS zone and no hosts, so a stolen token reaches DNS only             | explicit, `hcloud-projects:dnsToken`            |
-| lab     | Spikes and scratch tenants; no production data ever                       | Local work only — never a repository secret     |
+| Project | Holds                                                                     | Token today                                      |
+| ------- | ------------------------------------------------------------------------- | ------------------------------------------------ |
+| mail    | `mx1` alone                                                               | `hcloud:token` / `HCLOUD_TOKEN_MAIL`             |
+| org     | The `platform` network, `edge1`, `ops1` (was `nextcloud1`), `app1`, `db1` | `hcloud:token` / `HCLOUD_TOKEN_ESTATE`           |
+| tenants | Built fresh: `edge-t`, `app-t1`, `db-t1`                                  | a Read probe token only, until a stack needs one |
+| demos   | Built fresh: `demo1`                                                      | a Read probe token only, until a stack needs one |
+| dns     | The DNS zone and no hosts                                                 | a Read probe token only, until a stack needs one |
+| lab     | Spikes and scratch tenants; no production data ever                       | Local work only — never a repository secret      |
+
+A stolen dns token reaches no data outside DNS. A Read & Write one can still
+create billable resources in that project and use up the account-wide server
+cap, as any project's can; the boundary limits what it can read and break, not
+what it can spend.
 
 Nothing moved between projects to reach this layout: tenants, demos and dns
 started empty and their hosts are created there, and `db1` retires in place
@@ -66,19 +69,12 @@ can show.
 
 **The existing stacks stay on the default provider.** Moving a live resource
 to a different provider instance can plan its replacement, and the mail and
-org stacks hold `mx1`, `ops1` and the network. The new projects' stacks use
-`projectProvider(name)` from `projectProvider.ts` instead, which:
+org stacks hold `mx1`, `ops1` and the network. How the new projects' stacks
+select their token is decided with those stacks, in the repository that
+owns them.
 
-- reads the token from that project's own config key and nowhere else — never
-  `HCLOUD_TOKEN` from a shell that may hold another project's;
-- refuses to build unless the stack sets `pulumi:disable-default-providers`
-  to include `hcloud`, so a resource that forgets `{ provider }` fails the
-  preview instead of landing wherever the ambient token points;
-- returns a `verified` output — export it — that requires the project's own
-  marker in view and no other project's marker or server.
-
-`scripts/probe-project-isolation.py` proves the boundary itself, token by
-token, with a positive and a control case: see the runbook.
+`scripts/probe-project-isolation.py` proves the boundary for each project's
+probe token, with a positive and a control case: see the runbook.
 
 The estate and the mail host were one project until 2026-08-21. They were
 split because the estate's token count is about to multiply — a token per

@@ -85,6 +85,14 @@ class Handler(BaseHTTPRequestHandler):
         if project is None:
             return self.reply(401, {"error": {"code": "unauthorized", "message": "x"}})
         url = urllib.parse.urlparse(self.path)
+        server_match = re.fullmatch(r"/v1/servers/(\d+)", url.path)
+        if server_match:
+            wanted = int(server_match.group(1))
+            for owner in fake.reach(project, fake.id_leaks):
+                if wanted in fake.servers[owner]:
+                    name = fake.servers[owner][wanted]
+                    return self.reply(200, {"server": {"id": wanted, "name": name}})
+            return self.reply(404, {"error": {"code": "not_found", "message": "x"}})
         match = re.fullmatch(r"/v1/firewalls/(\d+)", url.path)
         if match:
             wanted = int(match.group(1))
@@ -192,6 +200,23 @@ class ControlCase(ProbeTestCase):
         self.assertEqual(code, 1)
         self.assertIn("CONTROL BROKEN", out)
 
+    def test_a_fail_without_the_reach_does_not_count_as_a_working_control(self):
+        # The swapped row fails on its missing own marker, but the cell that
+        # matters -- tenants token against demos -- reads clean.
+        failing = probe.Result(
+            cells=[probe.Cell("tenants", "demos", False, 404, True, "refused")],
+            problems=["tenants: its token does not list project-marker-tenants"],
+        )
+        original = probe.evaluate
+        probe.evaluate = lambda api, tokens, views: failing
+        try:
+            code, out = self.run_probe("--control-swap", "tenants=demos")
+        finally:
+            probe.evaluate = original
+        self.assertIn("\nFAIL\n", out)
+        self.assertEqual(code, 1)
+        self.assertIn("CONTROL BROKEN", out)
+
     def test_rejects_a_malformed_swap(self):
         for value in ("tenants", "tenants=tenants", "nope=demos", "tenants=nope"):
             with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
@@ -232,6 +257,39 @@ class Leaks(ProbeTestCase):
         code, out = self.run_probe()
         self.assertEqual(code, 1, out)
         self.assertIn("org token vs org project: OWN PROJECT NOT SEEN", out)
+
+
+class RequiredServers(ProbeTestCase):
+    def test_fails_when_the_mail_token_cannot_see_mx1(self):
+        self.fake.servers["mail"] = {}
+        code, out = self.run_probe()
+        self.assertEqual(code, 1, out)
+        self.assertIn("mail token vs mail project: OWN PROJECT NOT SEEN: mx1", out)
+
+    def test_fails_when_edge1_cannot_be_fetched_by_id(self):
+        edge1 = next(i for i, n in self.fake.servers["org"].items() if n == "edge1")
+        self.fake.servers["org"][edge1 + 50] = self.fake.servers["org"].pop(edge1)
+        original = probe.Api.list_names
+
+        def stale_ids(api, token, collection):
+            names = original(api, token, collection)
+            if collection == "servers" and "edge1" in names:
+                names["edge1"] = edge1
+            return names
+
+        probe.Api.list_names = stale_ids
+        try:
+            code, out = self.run_probe()
+        finally:
+            probe.Api.list_names = original
+        self.assertEqual(code, 1, out)
+        self.assertIn("org token vs org project: OWN PROJECT NOT SEEN: edge1", out)
+
+    def test_only_mail_and_org_have_required_servers(self):
+        self.assertEqual(probe.REQUIRED_SERVERS, {"mail": ("mx1",), "org": ("edge1",)})
+        for project, servers in probe.REQUIRED_SERVERS.items():
+            for server in servers:
+                self.assertIn(server, probe.PROJECTS[project])
 
 
 class CannotRun(ProbeTestCase):

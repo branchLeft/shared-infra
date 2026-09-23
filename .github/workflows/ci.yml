@@ -651,6 +651,7 @@ jobs:
               - 'hetzner/network.ts'
               - 'hetzner/egress.ts'
               - 'hetzner/projectGuard.ts'
+              - 'hetzner/projects.ts'
               - 'hetzner/Pulumi.yaml'
               - 'hetzner/Pulumi.production.yaml'
               - 'hetzner/package.json'
@@ -663,6 +664,7 @@ jobs:
             hetzner_estate:
               - 'hetzner/estate.ts'
               - 'hetzner/projectGuard.ts'
+              - 'hetzner/projects.ts'
               - 'hetzner/estate/**'
               - 'hetzner/package.json'
               - 'hetzner/package-lock.json'
