@@ -63,7 +63,7 @@ changed=0
 
 # Self-identifies the host's own estate-private address rather than taking
 # one on the command line, the same discipline
-# branchleft_docker_user_policy.sh uses for edge1/nextcloud1's addresses:
+# branchleft_docker_user_policy.sh uses for edge1/ops1's addresses:
 # whatever this script decides on a one-off manual run has to be re-derivable
 # at the next boot with no arguments, because the unit that reasserts this at
 # boot carries none. The first match is used; every host in this estate
