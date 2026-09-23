@@ -159,12 +159,12 @@ source (`stalwartlabs/stalwart` main, `crates/common/src/network/acme/` and
   place, per Stalwart's own `AcmeProvider`/`DnsServer` config shape. Ruled
   out, matching the brief's own instinct to avoid it.
 
-  > **Struck 2026-09-23.** The no-API premise is retired: owner ruling D18
-  > moves the zone to Hetzner DNS, which is API-driven
-  > (`hetzner/dns/RUNBOOK-dns-cutover.md`). Once the cutover completes,
-  > DNS-01 is available here too, at the cost of a zone-write token on this
-  > host. TLS-ALPN-01 stands until someone decides that trade; it is no longer
-  > the only option.
+  > **Struck 2026-09-23.** The premise was wrong — the registrar does publish
+  > a DNS API; the estate never enabled it — and it is moot now: owner ruling
+  > D18 moves the zone to Hetzner DNS, which is API-driven
+  > (`hetzner/dns/RUNBOOK-dns-cutover.md`). DNS-01 is available here, at the
+  > cost of a zone-write token on this host. TLS-ALPN-01 stands until someone
+  > decides that trade; it is no longer the only option.
 
 - **TLS-ALPN-01** — needs port 443 reachable, nothing else. RFC 8737 fixes
   the CA's validation connection at port 443 specifically (not

@@ -217,8 +217,9 @@ decision" for why: Stalwart's certificate issuance needs a reachable ACME
 challenge, and TLS-ALPN-01 ~~is the only challenge type that fits this host's
 inbound set without a DNS-provider API IONOS doesn't have~~ fits this host's
 inbound set with no DNS-provider credential on the host. _Struck 2026-09-23:
-the zone is moving to Hetzner DNS, which has an API, so DNS-01 is no longer
-impossible — see `hetzner/dns/RUNBOOK-dns-cutover.md`._) Read the plan.
+the registrar does publish a DNS API, and the zone is moving to Hetzner DNS,
+which has one too, so DNS-01 was never impossible — see
+`hetzner/dns/RUNBOOK-dns-cutover.md`._) Read the plan.
 If it matches that description:
 
 ```bash

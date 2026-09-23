@@ -58,10 +58,16 @@ because a signed zone moved this way would fail validation everywhere.
 
 ### 1. Create the DNS project and its token (console)
 
+**Decide first which project holds the zone — it is an owner decision.** A
+Hetzner token has full power over its project, so whichever project holds
+this zone, every token for it can rewrite the organisation's MX, SPF and DKIM
+records. The proposal here is a new project holding only this zone, so that
+no host's token — and in particular no DNS-01 credential placed on an edge or
+demo host for some other zone — can reach it. The program enforces only the
+weaker half: it refuses any project holding a server.
+
 In the Hetzner Console, create a new project named **`branchleft-dns`** and put
-nothing in it but DNS zones. A Hetzner token has full power over its project,
-so a project holding only zones bounds a leaked token to DNS. The program
-refuses to run against any project holding a server.
+nothing in it but this zone.
 
 In that project: **Security → API tokens → Generate API token**, description
 `pulumi branchleft-hetzner-dns`, permission **Read & Write**. Save it in
