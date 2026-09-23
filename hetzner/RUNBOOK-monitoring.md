@@ -927,25 +927,26 @@ gauge in the health textfile) before concluding which it is.
 ## 15. Deploy node_exporter to ops1 and prove HostOrServiceDown covers it
 
 branchLeft/workspace#1163. Closes the last gap `render.ts`'s
-`MONITORED_NODE_HOSTS` docstring names: `ops1` (still `nextcloud1` in the
-Pulumi/`HOST_IPS` sense until branchLeft/workspace#1149's rename lands) has
-never carried a node_exporter. **Do not run this section before #1149 has
-merged.** The rename is sequenced first, alone, precisely so a failure
-afterwards has one candidate cause — running this against a host still
-mid-rename gives any failure two.
+`MONITORED_NODE_HOSTS` docstring names: `ops1` has never carried a
+node_exporter. **This section must not run before the `nextcloud1`-to-`ops1`
+host rename (branchLeft/workspace#1149) has merged** — that rename is
+sequenced first, alone, precisely so a failure afterwards has one candidate
+cause, and running this section against a host still mid-rename gives any
+failure two. As of this story's own delivery the rename has already merged
+([PR branchLeft/shared-infra#228](https://github.com/branchLeft/shared-infra/pull/228)),
+so the check below should already pass — it stays here as a standing gate
+for whoever executes this section, not a one-time note.
 
 Confirm the rename landed before starting:
 
 ```bash
 git -C ~/branchLeft/shared-infra fetch origin main
-git -C ~/branchLeft/shared-infra log origin/main --oneline --grep="1149" -5
 grep -n "ops1" ~/branchLeft/shared-infra/hetzner-host/addressPlan.ts
 ```
 
-Expect a merged commit referencing #1149 and `HOST_IPS.ops1` (not
-`.nextcloud1`) in `addressPlan.ts`. If either is missing, stop — this PR's own
-body says so, and running the section anyway is the exact ordering mistake
-#1149's issue warns against.
+Expect `HOST_IPS.ops1` (not `.nextcloud1`) in `addressPlan.ts`. If it is
+missing, stop — running this section against a host still mid-rename is the
+exact ordering mistake branchLeft/workspace#1149 exists to prevent.
 
 ### 15a. Install node_exporter on ops1
 
@@ -960,7 +961,7 @@ private address and reached over `INPUT` is not.
 
 ```bash
 cd ~/branchLeft/shared-infra
-HOST_PRIVATE_IP=10.20.1.50   # ops1, unchanged by #1149 -- the rename touches the HOST_IPS key name, not the address itself
+HOST_PRIVATE_IP=10.20.1.50   # ops1 -- HOST_IPS.ops1, unchanged in value by the host rename, only in key name
 JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
 scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@"$HOST_PRIVATE_IP":/root/platform-provision
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/40-install-node-exporter.sh'

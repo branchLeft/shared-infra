@@ -64,15 +64,10 @@ describe('the rendered Prometheus config', () => {
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'edge1')?.address).toBe('10.20.1.10');
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'app1')?.address).toBe('10.20.1.100');
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'db1')?.address).toBe('10.20.1.20');
-    // Still HOST_IPS.nextcloud1, not HOST_IPS.ops1 -- a separate, sequenced-
-    // first change owns renaming the address-plan key, and this file does
-    // not pre-empt it. The address is asserted against that live export,
-    // not a repeated literal, so a rebase that renames the key breaks this
-    // test rather than leaving a stale '10.20.1.50' matching for the wrong
-    // reason.
-    expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'ops1')?.address).toBe(
-      HOST_IPS.nextcloud1
-    );
+    // Asserted against the live export, not a repeated literal, so a future
+    // address-plan change breaks this test rather than leaving a stale
+    // '10.20.1.50' matching for the wrong reason.
+    expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'ops1')?.address).toBe(HOST_IPS.ops1);
   });
 
   it('marks only edge1 node_exporter expected up -- app1, db1 and ops1 still have none', () => {
@@ -114,17 +109,17 @@ describe('the rendered Prometheus config', () => {
     const rendered = renderPrometheusConfig(sites);
     expect(rendered).toContain("targets: ['10.20.1.100:9100']");
     expect(rendered).toContain("targets: ['10.20.1.20:9100']");
-    expect(rendered).toContain(`targets: ['${HOST_IPS.nextcloud1}:${NODE_EXPORTER_PORT}']`);
+    expect(rendered).toContain(`targets: ['${HOST_IPS.ops1}:${NODE_EXPORTER_PORT}']`);
   });
 
-  it("labels ops1's node target 'ops1', not 'nextcloud1' -- the address is still the pre-rename key, but every label this stack renders reads the name the control plane will land on", () => {
+  it("labels ops1's node target 'ops1', matching the address plan's own name for this host", () => {
     const rendered = renderPrometheusConfig(sites);
     // The exact string nodeTarget() renders: address from the address plan,
     // label from MonitoredHost.name. Constructed from the live exports
     // rather than retyped, so a future rename of either does not leave this
     // assertion silently checking the wrong thing.
     expect(rendered).toContain(
-      `targets: ['${HOST_IPS.nextcloud1}:${NODE_EXPORTER_PORT}']\n        labels: {host: ops1, expected_up: 'false'}`
+      `targets: ['${HOST_IPS.ops1}:${NODE_EXPORTER_PORT}']\n        labels: {host: ops1, expected_up: 'false'}`
     );
     expect(rendered).not.toContain('host: nextcloud1');
   });
