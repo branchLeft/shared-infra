@@ -40,7 +40,7 @@ DB_PORT="${BRANCHLEFT_DOCKER_USER_POLICY_DB_PORT:-3306}"
 GATEWAY_PRIVATE_IP="${BRANCHLEFT_DOCKER_USER_POLICY_GATEWAY_IP:-10.20.1.10}"
 
 # Space-separated so a second non-tenant app host is one value away, not a
-# script change. nextcloud1 (hetzner-host/addressPlan.ts's HOST_IPS) is the
+# script change. ops1 (hetzner-host/addressPlan.ts's HOST_IPS) is the
 # only one today. A host in this list gets the db1 exception skipped below,
 # purely from recognising its own address -- see the header comment for why
 # that, and not an env var a caller passes once, is what has to decide this.
