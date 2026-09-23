@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+"""Prove that each Hetzner project's token reaches its own project and no other.
+
+Usage (tokens are read from the environment and never printed):
+
+    read -rs HCLOUD_PROBE_TOKEN_MAIL; export HCLOUD_PROBE_TOKEN_MAIL
+    ... one per project: MAIL, ORG, TENANTS, DEMOS, DNS
+    probe-project-isolation.py                           # the 5x5 proof
+    probe-project-isolation.py --control-swap tenants=demos
+
+**Why a denial alone proves nothing.** The Cloud API is implicitly scoped to
+the token's project, so "token A cannot see project B" and "token A is broken,
+expired, or pointed at an empty project" produce the same empty answer. Every
+negative cell here is therefore paired with a positive one taken by the same
+instrument:
+
+* **Listing.** Each token must list its own project's marker firewall (the
+  positive), and must not list any other project's marker or known server.
+* **By id.** Each marker is fetched by id with its own token, which must
+  return 200 and the marker's name. Every other token fetching that same id
+  must return 404 `not_found`. The 200 is what makes the 404 mean "a different
+  project", rather than "this path never works".
+
+**The control case.** `--control-swap tenants=demos` evaluates the tenants
+row with the demos token. A working probe must report FAIL for it -- the
+tenants marker is missing and the demos marker is visible. If it reports PASS,
+the probe cannot detect the thing it exists to detect, and its PASS on a real
+run is worthless. The control exits 0 only when it saw that FAIL.
+
+Exit codes: 0 PASS (or a control that failed as required), 1 FAIL (or a control
+that passed), 2 the probe could not run -- a transport error, a refused token,
+or a malformed response. 2 is never read as isolation.
+
+Only GET requests are issued, so a "Read" token is enough. The project table
+below is a copy of `hetzner/projects.ts`; `test_probe_project_isolation.py`
+fails if the two differ.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass, field
+
+API = "https://api.hetzner.cloud/v1"
+MARKER_PREFIX = "project-marker-"
+PER_PAGE = 50
+# A generous bound on pagination: an estate this size is a page or two. A
+# response that never stops offering a next page is a malformed instrument.
+MAX_PAGES = 100
+
+PROJECTS: dict[str, tuple[str, ...]] = {
+    "mail": ("mx1",),
+    "org": ("edge1", "nextcloud1", "ops1", "app1", "db1"),
+    "tenants": ("edge-t", "app-t1", "db-t1"),
+    "demos": ("demo1",),
+    "dns": (),
+}
+
+
+def marker(project: str) -> str:
+    return f"{MARKER_PREFIX}{project}"
+
+
+def token_env(project: str) -> str:
+    return f"HCLOUD_PROBE_TOKEN_{project.upper()}"
+
+
+class ProbeError(Exception):
+    """The probe could not observe something. Never evidence of isolation."""
+
+
+@dataclass
+class Response:
+    status: int
+    body: dict
+
+
+class Api:
+    """GETs against the Cloud API. `opener` is swappable for tests."""
+
+    def __init__(self, base: str = API, opener=urllib.request.urlopen, timeout: float = 20.0):
+        self.base = base.rstrip("/")
+        self.opener = opener
+        self.timeout = timeout
+
+    def get(self, token: str, path: str, query: dict | None = None) -> Response:
+        url = f"{self.base}{path}"
+        if query:
+            url = f"{url}?{urllib.parse.urlencode(query)}"
+        request = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        )
+        try:
+            with self.opener(request, timeout=self.timeout) as reply:
+                return Response(reply.status, _json(reply.read(), path))
+        except urllib.error.HTTPError as error:
+            with error:
+                return Response(error.code, _json(error.read(), path))
+        except (urllib.error.URLError, OSError) as error:
+            raise ProbeError(f"GET {path}: transport error ({error.__class__.__name__})") from None
+
+    def list_names(self, token: str, collection: str) -> dict[str, int]:
+        """`{name: id}` for every item in `collection`, across all pages."""
+        found: dict[str, int] = {}
+        page = 1
+        for _ in range(MAX_PAGES):
+            reply = self.get(token, f"/{collection}", {"page": page, "per_page": PER_PAGE})
+            if reply.status != 200:
+                raise ProbeError(f"GET /{collection}: HTTP {reply.status} {_code(reply.body)}")
+            items = reply.body.get(collection)
+            if not isinstance(items, list):
+                raise ProbeError(f"GET /{collection}: response has no '{collection}' list")
+            for item in items:
+                found[str(item["name"])] = int(item["id"])
+            next_page = reply.body.get("meta", {}).get("pagination", {}).get("next_page")
+            if next_page is None:
+                return found
+            page = int(next_page)
+        raise ProbeError(f"GET /{collection}: more than {MAX_PAGES} pages")
+
+
+def _json(raw: bytes, path: str) -> dict:
+    try:
+        body = json.loads(raw or b"{}")
+    except ValueError:
+        raise ProbeError(f"GET {path}: response is not JSON") from None
+    if not isinstance(body, dict):
+        raise ProbeError(f"GET {path}: response is not a JSON object")
+    return body
+
+
+def _code(body: dict) -> str:
+    error = body.get("error")
+    return str(error.get("code")) if isinstance(error, dict) else ""
+
+
+@dataclass
+class View:
+    servers: dict[str, int]
+    firewalls: dict[str, int]
+
+
+@dataclass
+class Cell:
+    """What token `row` observed about project `column`."""
+
+    row: str
+    column: str
+    listed: bool
+    by_id_status: int | None
+    ok: bool
+    note: str = ""
+
+
+@dataclass
+class Result:
+    cells: list[Cell] = field(default_factory=list)
+    problems: list[str] = field(default_factory=list)
+
+    @property
+    def passed(self) -> bool:
+        return not self.problems and all(cell.ok for cell in self.cells)
+
+
+def observe(api: Api, tokens: dict[str, str]) -> dict[str, View]:
+    return {
+        project: View(api.list_names(token, "servers"), api.list_names(token, "firewalls"))
+        for project, token in tokens.items()
+    }
+
+
+def evaluate(api: Api, tokens: dict[str, str], views: dict[str, View]) -> Result:
+    """Every (token, project) pair: own project positive, every other refused."""
+    result = Result()
+    marker_ids: dict[str, int] = {}
+    for project in PROJECTS:
+        own = views[project]
+        if marker(project) not in own.firewalls:
+            result.problems.append(
+                f"{project}: its token does not list {marker(project)} -- either the token "
+                f"belongs to another project or the marker was never created"
+            )
+        else:
+            marker_ids[project] = own.firewalls[marker(project)]
+
+    for row in PROJECTS:
+        view = views[row]
+        for column in PROJECTS:
+            listed = marker(column) in view.firewalls or any(
+                server in view.servers for server in PROJECTS[column]
+            )
+            status = None
+            fetched_name = None
+            if column in marker_ids:
+                reply = api.get(tokens[row], f"/firewalls/{marker_ids[column]}")
+                status = reply.status
+                if status not in (200, 404):
+                    raise ProbeError(
+                        f"GET marker of {column} with the {row} token: HTTP {status} "
+                        f"{_code(reply.body)}"
+                    )
+                if status == 404 and _code(reply.body) != "not_found":
+                    raise ProbeError(f"404 without error code not_found for {row}->{column}")
+                firewall = reply.body.get("firewall")
+                if isinstance(firewall, dict):
+                    fetched_name = firewall.get("name")
+            if row == column:
+                ok = listed and status == 200 and fetched_name == marker(column)
+                note = "own project, listed and fetched by id" if ok else "OWN PROJECT NOT SEEN"
+            elif status is None:
+                ok = False
+                note = f"no {column} marker id to test against"
+            else:
+                ok = not listed and status == 404
+                note = "refused" if ok else "REACHES ACROSS"
+            result.cells.append(Cell(row, column, listed, status, ok, note))
+    return result
+
+
+def render(result: Result, label: str) -> str:
+    names = list(PROJECTS)
+    width = max(len(name) for name in names) + 2
+    lines = [f"{label}: rows are tokens, columns are projects", ""]
+    lines.append("token".ljust(width) + "".join(name.ljust(width + 6) for name in names))
+    index = {(cell.row, cell.column): cell for cell in result.cells}
+    for row in names:
+        line = row.ljust(width)
+        for column in names:
+            cell = index.get((row, column))
+            if cell is None:
+                text = "-"
+            else:
+                shown = "listed" if cell.listed else "absent"
+                text = f"{'ok' if cell.ok else 'XX'} {shown}/{cell.by_id_status}"
+            line += text.ljust(width + 6)
+        lines.append(line)
+    lines.append("")
+    for cell in result.cells:
+        if not cell.ok:
+            lines.append(f"  {cell.row} token vs {cell.column} project: {cell.note}")
+    lines.extend(f"  {problem}" for problem in result.problems)
+    lines.append("PASS" if result.passed else "FAIL")
+    return "\n".join(lines)
+
+
+def read_tokens(environ: dict[str, str]) -> dict[str, str]:
+    tokens: dict[str, str] = {}
+    missing = []
+    for project in PROJECTS:
+        value = environ.get(token_env(project), "").strip()
+        if not value:
+            missing.append(token_env(project))
+        tokens[project] = value
+    if missing:
+        raise ProbeError(f"unset or empty: {', '.join(missing)}")
+    return tokens
+
+
+def distinct(tokens: dict[str, str]) -> list[str]:
+    """Projects sharing a token value, compared by digest so nothing is printed."""
+    seen: dict[str, str] = {}
+    clashes = []
+    for project, token in tokens.items():
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        if digest in seen:
+            clashes.append(f"{seen[digest]} and {project} were given the same token")
+        seen[digest] = project
+    return clashes
+
+
+def parse_swap(value: str) -> tuple[str, str]:
+    row, sep, source = value.partition("=")
+    if not sep or row not in PROJECTS or source not in PROJECTS or row == source:
+        raise argparse.ArgumentTypeError(
+            f"expected <project>=<other project> from {', '.join(PROJECTS)}"
+        )
+    return row, source
+
+
+def run(argv: list[str], environ: dict[str, str], api: Api, out=sys.stdout) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument(
+        "--control-swap",
+        type=parse_swap,
+        metavar="PROJECT=OTHER",
+        help="evaluate PROJECT's row with OTHER's token; must report FAIL",
+    )
+    args = parser.parse_args(argv)
+    try:
+        tokens = read_tokens(environ)
+        if args.control_swap:
+            row, source = args.control_swap
+            tokens[row] = tokens[source]
+            result = evaluate(api, tokens, observe(api, tokens))
+            print(render(result, f"CONTROL: {row} row evaluated with the {source} token"), file=out)
+            if result.passed:
+                print(
+                    "CONTROL BROKEN: a swapped token passed, so this probe cannot detect a "
+                    "token reaching the wrong project. Its PASS on a real run proves nothing.",
+                    file=out,
+                )
+                return 1
+            print("CONTROL OK: the probe reported FAIL for a swapped token, as it must.", file=out)
+            return 0
+        clashes = distinct(tokens)
+        if clashes:
+            raise ProbeError("; ".join(clashes))
+        result = evaluate(api, tokens, observe(api, tokens))
+    except ProbeError as error:
+        print(f"ERROR (not evidence of isolation): {error}", file=out)
+        return 2
+    print(render(result, "Hetzner project isolation"), file=out)
+    return 0 if result.passed else 1
+
+
+def main() -> int:
+    # The endpoint is deliberately not configurable from the environment: a
+    # stray variable pointing at anything else would receive every token and
+    # could answer PASS.
+    return run(sys.argv[1:], dict(os.environ), Api())
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
