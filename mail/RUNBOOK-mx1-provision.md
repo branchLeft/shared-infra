@@ -38,6 +38,7 @@ needed to change.
 | `rotate_admin_credential.py`                                                                   | Not part of `run-all.sh` — a standalone, on-demand rotation for the admin credential. See "Rotating the admin credential" below.                                                                                                                 |
 | `list_and_clear_blocked_ips.py`                                                                | Not part of `run-all.sh` — lists (`--list-only`), and clears specific (`--ip`, repeatable) or all (`--all`) IPs Stalwart's own scan-ban has blocked. See "Scan-ban" below.                                                                       |
 | `trigger_acme_renewal.py`                                                                      | Not part of `run-all.sh` — manually triggers a certificate renewal check. See "What remains owner-gated" below; normally unnecessary, since renewal is self-scheduled.                                                                           |
+| `provision_sending_domain.py`                                                                  | Not part of `run-all.sh` — on demand, one sending domain per run (the demo domain, then any tenant's). Creates the domain and its one Manual DKIM key, never touches an existing one. See "Sending domains" below.                               |
 
 Run the whole set:
 
@@ -1320,6 +1321,56 @@ changes.
 
 (The MX record is specified under "The MX cutover" above. SPF changes with the
 outbound cutover, not with the receive-only step.)
+
+## Sending domains
+
+Everything above provisions `branchleft.co.uk` itself — the domain Stalwart's
+setup wizard creates on first boot, with its default **Automatic** DKIM
+management. `provision_sending_domain.py` is separate: it creates any
+_other_ sending domain the platform needs, starting with the demo sending
+domain (`@demo.<platform>`, never a tenant domain, never the main domain),
+and later each tenant's own domain by the same call with a different name.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk \
+  'python3 /root/mail-provision/provision_sending_domain.py demo.example'
+```
+
+Add `--dkim-only` for a tenant domain, where the MX record and SPF are not
+ours to publish (only the DKIM selector is); add `--selector <name>` to use
+something other than the default `bl`. `--json` gives the same result as
+structured output for scripting.
+
+**Every domain it creates is Manual from the start**, never Automatic: a
+created domain gets `dkimManagement: Manual` and one RSA-2048 key under a
+fixed selector, generated on the mail host itself and never written to
+disk, printed, logged or read back — Stalwart redacts it on every read. The
+private key never leaves mx1.
+
+**It only ever creates.** A domain that already has the selector's key is a
+no-op; a domain with a key under any _other_ selector, or whose
+`dkimManagement` is anything but `Manual`, is refused before any write —
+this script will never touch or replace a key already in use, on this
+domain or `branchleft.co.uk`'s. Re-running it is always safe: a first run
+creates the domain and its key, every run after that is a no-op that
+reprints the same records.
+
+**This deliberately does not touch the rotation risk on
+`branchleft.co.uk`'s own domain**
+([branchLeft/workspace#1294](https://github.com/branchLeft/workspace/issues/1294)):
+that domain was set up by Stalwart's wizard under **Automatic** management,
+before this script existed, and already has DKIM keys under selectors this
+script did not create — so `plan_sending_domain` refuses it outright (keys
+under other selectors) rather than adding anything. A sending domain this
+script creates can never have that failure mode, because it is never
+anything but Manual.
+
+Run it, then publish the printed records the same way as "DKIM records to
+publish" above — at Hetzner once
+[branchLeft/workspace#1164](https://github.com/branchLeft/workspace/issues/1164)
+lands, or at IONOS by hand before it. The DKIM TXT record is required for
+every domain; MX, SPF and the DMARC record too unless `--dkim-only` was
+used.
 
 ## How to re-run safely
 
