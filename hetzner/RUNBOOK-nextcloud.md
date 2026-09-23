@@ -1,11 +1,18 @@
 # Runbook — the nextcloud1 stack
 
-Deploying plain Nextcloud (official images, no AIO) onto `nextcloud1`. Closes
+Deploying plain Nextcloud (official images, no AIO) onto `ops1`. Closes
 branchLeft/workspace#1083's remaining "deploy plain Nextcloud" step.
+
+**The stack is `nextcloud1`; the host is `ops1`.** The host was created as
+`nextcloud1` and renamed once it began to carry more than Nextcloud. The
+Compose stack kept its name deliberately: Compose derives its volume names
+from the project name (`nextcloud1_nextcloud-db`, `nextcloud1_nextcloud-app`),
+so renaming the stack would bring Nextcloud up on two new, empty volumes. The
+unit instance, the env file and `/opt/branchleft/nextcloud1` follow the stack.
 
 ## What has to be true first
 
-`nextcloud1` is private-only, reached through the `edge1` jump host, the same
+`ops1` is private-only, reached through the `edge1` jump host, the same
 shape as `db1`. `RUNBOOK-provision-host.md` must have been run against it
 first (base provisioning, then `app-host-isolation.sh`) — confirm:
 
@@ -23,7 +30,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP"
 Expect `active`, then `enabled`, then `provisioned`.
 
 `edge1`'s Caddy config must already route `cloud.branchleft.co.uk` to
-`nextcloud1:11000` — `RUNBOOK-edge.md` §11, already done as of
+`ops1:11000` — `RUNBOOK-edge.md` §11, already done as of
 branchLeft/shared-infra#215's deploy. Confirm with a curl from the
 workstation, not through the jump — a `502` with an empty body here means
 routing is correct and nothing is listening yet, which is the expected state
@@ -356,7 +363,7 @@ self-heal on restart; it needs the manual step in 9.6.
 ### 9.2 Precondition: there is no backup mechanism for this stack
 
 Checked, not assumed: nothing under `hetzner/` schedules a Postgres dump,
-a volume snapshot, or any `restic`/`borg`-style job for `nextcloud1` or for
+a volume snapshot, or any `restic`/`borg`-style job for this stack or for
 `db1`'s own data. `nextcloud-db` and `nextcloud-app` are ordinary unmanaged
 Docker volumes with no export configured anywhere in this repo. This is a
 real gap, not a formality being skipped here — flagged as such rather than
@@ -369,7 +376,7 @@ starting 9.3, kept off this host:
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
   DB_CTR=$(docker ps -q --filter label=com.docker.compose.project=nextcloud1 --filter label=com.docker.compose.service=db) &&
-  docker exec "$DB_CTR" pg_dump -U nextcloud nextcloud | gzip > /root/nextcloud1-pre-upgrade-db.sql.gz &&
+  docker exec "$DB_CTR" pg_dump --no-owner --no-acl -U nextcloud nextcloud | gzip > /root/nextcloud1-pre-upgrade-db.sql.gz &&
   docker run --rm -v nextcloud1_nextcloud-app:/volume -v /root:/backup alpine \
     tar czf /backup/nextcloud1-pre-upgrade-app.tar.gz -C /volume .'
 scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" \
@@ -405,6 +412,11 @@ ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP"
   docker exec nc1-restore-drill psql -U nextcloud -d nextcloud -tAc "select count(*) from oc_users;" &&
   docker stop nc1-restore-drill'
 ```
+
+`--no-owner --no-acl` is load-bearing: without it the dump names the live
+instance's database roles (`oc_admin` among them), which a fresh restore
+target does not have, and `ON_ERROR_STOP=1` aborts the drill on the first
+`ALTER ... OWNER TO`.
 
 Expect the `psql` load to complete with no `ERROR:` output (`ON_ERROR_STOP=1`
 aborts on the first one rather than silently skipping it) and the row
