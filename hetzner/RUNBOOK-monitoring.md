@@ -506,8 +506,10 @@ and `blackbox_mail`'s labels are what catch the exporter itself being down --
 a dead exporter runs no probe, so there is no `probe_success` series for
 `BlackboxProbeFailed` or `MailHostDown` to see; those alerts instead cover a
 live exporter reporting a failed probe, on `probe_success` rather than `up`.
-Only `node` for `app1` and `node` for `db1` are expected `down`: those two
-exporters are not provisioned (see `render.ts`'s `MONITORED_NODE_HOSTS`
+Only `node` for `app1`, `node` for `db1` and `node` for `ops1` are expected
+`down`: `app1`/`db1`'s exporters are not provisioned yet, and `ops1`'s carries
+`expected_up: 'false'` until §15 below confirms it live and flips that label
+in its own follow-up PR (see `render.ts`'s `MONITORED_NODE_HOSTS`
 docstring). A `down` target with `expected_up: 'true'` in its labels is the
 only one worth investigating -- but an `up` target with `expected_up: 'false'`
 is worth one too: `ExpectedDownTargetAnswering` pages on exactly that, because
@@ -921,6 +923,161 @@ never valid, or SNDS simply has no data for the requested day` is reporting
 Microsoft's own ambiguity, not guessing: that one status code covers both,
 so check the link's age (`SNDSAccessLinkExpiringSoon`, or the first-seen
 gauge in the health textfile) before concluding which it is.
+
+## 15. Deploy node_exporter to ops1 and prove HostOrServiceDown covers it
+
+branchLeft/workspace#1163. Closes the last gap `render.ts`'s
+`MONITORED_NODE_HOSTS` docstring names: `ops1` has never carried a
+node_exporter. **This section must not run before the `nextcloud1`-to-`ops1`
+host rename (branchLeft/workspace#1149) has merged** — that rename is
+sequenced first, alone, precisely so a failure afterwards has one candidate
+cause, and running this section against a host still mid-rename gives any
+failure two. As of this story's own delivery the rename has already merged
+([PR branchLeft/shared-infra#228](https://github.com/branchLeft/shared-infra/pull/228)),
+so the check below should already pass — it stays here as a standing gate
+for whoever executes this section, not a one-time note.
+
+Confirm the rename landed before starting:
+
+```bash
+git -C ~/branchLeft/shared-infra fetch origin main
+grep -n "ops1" ~/branchLeft/shared-infra/hetzner-host/addressPlan.ts
+```
+
+Expect `HOST_IPS.ops1` (not `.nextcloud1`) in `addressPlan.ts`. If it is
+missing, stop — running this section against a host still mid-rename is the
+exact ordering mistake branchLeft/workspace#1149 exists to prevent.
+
+### 15a. Install node_exporter on ops1
+
+Same shape as "5. Provision a host that has no public address" above, reached
+through the `edge1` jump host — `$EDGE1_IPV4` is set there; re-set it first if
+entering here independently. **Native binary, not a Compose service**:
+`40-install-node-exporter.sh`'s own header explains why — ops1 runs
+`app-host-isolation.sh`'s `DOCKER-USER` policy, which drops every forwarded
+packet to the subnet with no carve-out for this host, and a published
+container port is forwarded traffic. A process bound to the host's own
+private address and reached over `INPUT` is not.
+
+```bash
+cd ~/branchLeft/shared-infra
+HOST_PRIVATE_IP=10.20.1.50   # ops1 -- HOST_IPS.ops1, unchanged in value by the host rename, only in key name
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
+scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@"$HOST_PRIVATE_IP":/root/platform-provision
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/40-install-node-exporter.sh'
+```
+
+Expect the script's own closing line, `40-install-node-exporter: done,
+listening on 10.20.1.50:9100`. If it instead prints `no address in
+10.20.1.0/24 found on this host`, stop — that means this ran against the
+wrong host or the private network is not attached, not a problem the script
+can reconcile around.
+
+### 15b. The firewall rule this does not need, stated rather than left silent
+
+There is deliberately no Hetzner Cloud Firewall change and no
+`branchleft_docker_user_policy.sh` edit in this delivery. Both are already
+proven not to be needed, not merely assumed:
+
+- **Hetzner's firewall filters the public interface only**
+  (`hetzner-host/firewalls.ts`'s own header, and "5. Provision a host that has
+  no public address" above) — private-network traffic, including
+  `edge1` → `ops1:9100`, is never evaluated against it.
+- **`DOCKER-USER` only sees forwarded traffic** ("6. Confine tenant containers
+  on each app host" above) — a native process delivered via `INPUT` is
+  outside its scope entirely, which is the whole reason 15a installs
+  node_exporter natively rather than as a fourth Compose service on this
+  host.
+
+Confirm this rather than trust it, over the tunnel from 15c below once the
+scrape target exists:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" "iptables -t filter -S DOCKER-USER"
+```
+
+Expect the same four rules "6. Confine tenant containers on each app host"
+documents (the metadata drop, the subnet drop, no `db1` accept for this host,
+the conntrack accept) — unchanged by this section, because nothing in it
+touched that chain.
+
+### 15c. Deploy the updated scrape config and reload
+
+Standard config-only redeploy of the monitoring stack, same command as any
+other `render.ts` change — see "1. Copy the updated edge stack" and "7b.
+Updating an already-running stack" above for the full rsync/restart shape.
+The new target is additive (`ops1`'s `node` entry, `expected_up: 'false'`),
+so this redeploy pages nobody on its own.
+
+### 15d. Verify
+
+Over the tunnel from step 8 above:
+
+```bash
+curl -s --get http://127.0.0.1:9090/api/v1/query --data-urlencode 'query=up{host="ops1"}'
+```
+
+Expect one series, value `1` — the exporter answering, labelled
+`expected_up="false"`. **`1` here is necessary and not sufficient**: it proves
+the exporter is reachable, not that `HostOrServiceDown` covers it yet, which
+is still gated on the flip in 15e. A `0` or an empty result means 15a or 15b
+needs re-checking before going further — do not proceed to 15e against a
+target that has never actually answered.
+
+### 15e. Flip expected_up, as its own one-line PR
+
+**Not part of this PR, and not a hand edit.** `render.ts`'s
+`MONITORED_NODE_HOSTS` docstring names the reason: a hand edit here is
+exactly the gap that hid `db1`'s four-day `mysqld_exporter` crash loop
+(`RUNBOOK-monitoring.md` cites it above, and [[expected-up-flip-traps]]
+carries the full account). Once 15d's `1` is confirmed:
+
+1. Change `ops1`'s `expectedUp: false` to `true` in `MONITORED_NODE_HOSTS`.
+2. `npm run render` in `hetzner/` to regenerate `stack/prometheus/prometheus.yml`.
+3. Open a PR for that diff alone, citing this section and 15d's read-back.
+4. Once merged, redeploy per 15c again — this second redeploy is the one that
+   actually arms `HostOrServiceDown`/`ServiceFlapping` for `ops1`.
+
+### 15f. The control case — owner-executed, same proof standard as §12
+
+Two halves, matching §12's standard: a real alert reaching the real receiver,
+and proof the path does not depend on the host being monitored.
+
+**First, the routing half — safe to run before 15e, needs no live outage.**
+Over the tunnel from §11:
+
+```bash
+amtool alert add alertname=HostOrServiceDown severity=critical host=ops1 job=node instance=10.20.1.50:9100 expected_up=true --alertmanager.url=http://127.0.0.1:9093
+```
+
+Confirm delivery the same way §12.1 does — a real email at
+`ALERT_RECIPIENT_EMAIL`, not only that Alertmanager's API reports it
+dispatched. It arrives by the same `email` receiver and the same
+`mx1.branchleft.co.uk:587` relay every other host's `HostOrServiceDown` uses
+(`stack/alertmanager/alertmanager.yml.tmpl`'s default route) — nothing in
+that path runs on `ops1`, which is the property this half proves: the page
+for `ops1` being down does not depend on `ops1` being up to send it.
+
+**Second, the detection half — after 15e, a real outage.** Stop the exporter
+and watch the real rule fire, rather than an injected alert:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'systemctl stop node_exporter.service'
+```
+
+Wait 5 minutes (`HostOrServiceDown`'s `for:`), then repeat 15d's query and
+confirm it now returns `0` or empty, and that the same email arrives as the
+first half proved reachable. `alert_rules_test.yml`'s promtool case (grep
+`host="ops1"`) already proves the rule _would_ fire against this exact label
+shape; this step is the live proof the wiring in front of it — the real
+exporter, the real scrape, the real Alertmanager route — does too. Bring it
+back:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'systemctl start node_exporter.service'
+```
+
+Confirm 15d's query returns `1` again before closing the issue.
 
 ## Responding to the mail-delivery alerts
 

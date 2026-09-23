@@ -179,6 +179,51 @@ tests:
         eval_time: 5m30s
         exp_samples: []
 
+  # ops1's node_exporter, continuously down, once expected_up has been
+  # flipped true (see render.ts's MONITORED_NODE_HOSTS
+  # docstring for why it still reads false in the committed config today).
+  # This is the control case in rule form: it proves HostOrServiceDown
+  # actually selects a target carrying host="ops1" rather than matching
+  # nothing and reading as quiet -- the exact failure a selector typo (a
+  # mistyped host label, or expected_up spelled/quoted differently from what
+  # targetLabels() renders) produces, and which 'inactive' cannot be told
+  # apart from 'healthy' by reading the rules API alone. render.test.ts's own
+  # join test proves the *label text* this alert selects on is what
+  # nodeTarget() actually renders for ops1; this proves the *rule* fires
+  # against a series carrying that exact text.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    promql_expr_test:
+      - expr: ALERTS{alertname="HostOrServiceDown", alertstate="firing", host="ops1"}
+        eval_time: 5m30s
+        exp_samples:
+          - labels: 'ALERTS{alertname="HostOrServiceDown", alertstate="firing", severity="critical", job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+            value: 1
+      - expr: ALERTS{alertname="ServiceFlapping", alertstate="firing", host="ops1"}
+        eval_time: 5m30s
+        exp_samples: []
+
+  # The mirror of the case above, proving the alert stays silent on ops1
+  # today: expected_up="false" is what the committed config actually carries
+  # for this target until the live install is confirmed, so a continuous
+  # outage on it must not page anyone -- a target that has never been
+  # available is not a regression. ExpectedDownTargetAnswering is what
+  # watches this label from the other direction (a "false" target answering
+  # when it should not), proved on db1 above and identical in shape here.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="false"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    promql_expr_test:
+      - expr: ALERTS{alertname="HostOrServiceDown", alertstate="firing", host="ops1"}
+        eval_time: 5m30s
+        exp_samples: []
+      - expr: ALERTS{alertname="ServiceFlapping", alertstate="firing", host="ops1"}
+        eval_time: 5m30s
+        exp_samples: []
+
   # The same continuous outage, but on an expected_up="false" target
   # (app1's node_exporter, not provisioned yet). The mute is a real
   # selector match failure, not a rule that happens never to have been

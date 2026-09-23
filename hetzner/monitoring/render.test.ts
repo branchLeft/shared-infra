@@ -6,10 +6,12 @@ import {
   blackboxTargets,
   MONITORED_MYSQLD_HOST,
   MONITORED_NODE_HOSTS,
+  NODE_EXPORTER_PORT,
   renderAlertmanagerTemplate,
   renderAlertRules,
   renderPrometheusConfig,
 } from './render';
+import { HOST_IPS } from '@branchleft/hetzner-host';
 
 /**
  * The file-snapshot assertions at the bottom are not snapshots in the usual
@@ -58,19 +60,29 @@ describe('blackboxTargets', () => {
 
 describe('the rendered Prometheus config', () => {
   it('names every estate host membership, address-plan-derived rather than typed twice', () => {
-    expect(MONITORED_NODE_HOSTS.map((host) => host.name)).toEqual(['edge1', 'app1', 'db1']);
+    expect(MONITORED_NODE_HOSTS.map((host) => host.name)).toEqual(['edge1', 'app1', 'db1', 'ops1']);
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'edge1')?.address).toBe('10.20.1.10');
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'app1')?.address).toBe('10.20.1.100');
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'db1')?.address).toBe('10.20.1.20');
+    // Asserted against the live export, not a repeated literal, so a future
+    // address-plan change breaks this test rather than leaving a stale
+    // '10.20.1.50' matching for the wrong reason.
+    expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'ops1')?.address).toBe(HOST_IPS.ops1);
   });
 
-  it('marks only edge1 node_exporter expected up -- app1 and db1 still have none', () => {
+  it('marks only edge1 node_exporter expected up -- app1, db1 and ops1 still have none', () => {
     // Verified against edge1's own target list on 2026-08-28: `node` on app1
     // and db1 both report `down`, so `false` is a current fact here rather
-    // than an assumption inherited from when the constant was written.
+    // than an assumption inherited from when the constant was written. ops1
+    // joins them for a different reason: the node_exporter this story's
+    // provisioning script installs has not been run against the live host
+    // yet, and a target that has never answered must not page anyone the
+    // moment this config deploys -- see MONITORED_NODE_HOSTS's own docstring
+    // for the flip.
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'edge1')?.expectedUp).toBe(true);
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'app1')?.expectedUp).toBe(false);
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'db1')?.expectedUp).toBe(false);
+    expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'ops1')?.expectedUp).toBe(false);
   });
 
   it('marks the db1 mysqld_exporter expected up, because it is live', () => {
@@ -93,10 +105,23 @@ describe('the rendered Prometheus config', () => {
     expect(rendered).not.toContain('10.20.1.10:9100');
   });
 
-  it('reaches app1 and db1 node_exporter by their fixed private address', () => {
+  it('reaches app1, db1 and ops1 node_exporter by their fixed private address', () => {
     const rendered = renderPrometheusConfig(sites);
     expect(rendered).toContain("targets: ['10.20.1.100:9100']");
     expect(rendered).toContain("targets: ['10.20.1.20:9100']");
+    expect(rendered).toContain(`targets: ['${HOST_IPS.ops1}:${NODE_EXPORTER_PORT}']`);
+  });
+
+  it("labels ops1's node target 'ops1', matching the address plan's own name for this host", () => {
+    const rendered = renderPrometheusConfig(sites);
+    // The exact string nodeTarget() renders: address from the address plan,
+    // label from MonitoredHost.name. Constructed from the live exports
+    // rather than retyped, so a future rename of either does not leave this
+    // assertion silently checking the wrong thing.
+    expect(rendered).toContain(
+      `targets: ['${HOST_IPS.ops1}:${NODE_EXPORTER_PORT}']\n        labels: {host: ops1, expected_up: 'false'}`
+    );
+    expect(rendered).not.toContain('host: nextcloud1');
   });
 
   it('scrapes the db1 mysqld_exporter and expects it to answer', () => {
@@ -338,6 +363,53 @@ describe('the rendered alert rules', () => {
   it('scopes the host/service-down alert to expected targets only', () => {
     expect(rendered).toContain('alert: HostOrServiceDown');
     expect(rendered).toContain('expr: up{expected_up="true"} == 0');
+  });
+
+  /**
+   * The join a rule test and a config test can each pass without proving:
+   * one half of this file proves the rule's own text, another proves a
+   * target's own labels, but neither proves the two actually meet. A
+   * selector that reads
+   * `expected_up="true"` (correct) matched against a target labelled
+   * `expected_up='True'` or a host name typo'd as `ops-1` still promtool-passes
+   * every rule test written against hand-typed series -- `alert_rule_test`
+   * never reads the rendered scrape config, so a real mismatch is invisible
+   * to it and reads at the API as `inactive`, identical to healthy. This
+   * test reads both sides of the join from the one thing that can catch a
+   * drift between them: the two render functions themselves, not a retyped
+   * copy of either.
+   */
+  it("the selector's label key/value, pulled from HostOrServiceDown's own rendered expr, is exactly what ops1's node target renders once expected_up flips true -- catching a typo on either side that a hand-typed promtool series cannot", () => {
+    const promConfig = renderPrometheusConfig(sites);
+    const opsHost = MONITORED_NODE_HOSTS.find((host) => host.name === 'ops1');
+    expect(opsHost).toBeDefined();
+
+    // Captured from the rule's own text, not retyped -- if a future edit
+    // changes the key HostOrServiceDown selects on, this capture moves with
+    // it instead of silently comparing against a stale copy.
+    const selectorMatch = rendered.match(/expr: up\{(\w+)="(\w+)"\} == 0/);
+    expect(selectorMatch).not.toBeNull();
+    const [, selectorKey, selectorTrueValue] = selectorMatch!;
+
+    // Built from the selector's own captured key/value, never a hand-typed
+    // 'expected_up'/'true' -- two independently mistyped literals could
+    // agree with each other by luck, this cannot.
+    const labelIfFlipped = `labels: {host: ops1, ${selectorKey}: '${selectorTrueValue}'}`;
+    const opsTargetPrefix = `targets: ['${opsHost!.address}:${NODE_EXPORTER_PORT}']\n        `;
+
+    // Today (expectedUp false) the target does not carry that label -- if it
+    // did, the assertion below would pass whatever the renderer emitted, and
+    // this test would prove nothing.
+    expect(promConfig).not.toContain(opsTargetPrefix + labelIfFlipped);
+
+    // Swap in the selector's own captured value for ops1's CURRENT boolean
+    // and it has to land exactly where nodeTarget() actually wrote it. A
+    // selector key typo ('exp3cted_up') or a targetLabels() key typo
+    // ('expected__up') each break this differently -- the captured key
+    // would not match the literal targetLabels() renders -- and either way
+    // this assertion, not a live host, is what catches it.
+    const labelToday = labelIfFlipped.replace(`'${selectorTrueValue}'`, `'${opsHost!.expectedUp}'`);
+    expect(promConfig).toContain(opsTargetPrefix + labelToday);
   });
 
   it('adds a flap detector alongside HostOrServiceDown, scoped the same way -- see alert_rules_test.yml for the promtool proof that it catches a flap HostOrServiceDown misses and ignores a single clean restart', () => {
