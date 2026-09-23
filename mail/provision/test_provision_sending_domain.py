@@ -9,8 +9,10 @@ import copy
 import io
 import itertools
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 import unittest
 import urllib.error
 from unittest import mock
@@ -362,6 +364,20 @@ class KeyGenerationTests(unittest.TestCase):
         with mock.patch.object(psd.subprocess, "run", return_value=done):
             with self.assertRaisesRegex(RuntimeError, "no PKCS#8"):
                 psd.generate_private_key()
+
+
+class CredentialsTests(unittest.TestCase):
+    def test_splits_username_from_secret_on_the_first_colon_only(self):
+        # The secret itself may contain ':' -- split(":", 1) must not
+        # truncate it.
+        fd, path = tempfile.mkstemp()
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write("admin:pass:word\n")
+            with mock.patch.object(psd, "CREDENTIALS_PATH", path):
+                self.assertEqual(psd._load_credentials(), ("admin", "pass:word"))
+        finally:
+            os.remove(path)
 
 
 class _Response(io.BytesIO):
