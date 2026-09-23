@@ -86,13 +86,13 @@ first boot and `run-all.sh` actually taking over the same job permanently.
 
 Verify it on a host that has already had `run-all.sh` run — this has no
 public address of its own, so it needs the same gateway jump as every other
-command reaching it (`db1` and `nextcloud1` are the two such hosts today).
+command reaching it (`db1` and `ops1` are the two such hosts today).
 Neither address is typed in: each comes from a lookup run once, in the same
 session, ahead of the command that consumes it.
 
 ```bash
 EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
-HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # the host being checked; substitute nextcloud1 for the other private-only host
+HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # the host being checked; substitute ops1 for the other private-only host
 JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
   ip route show default
@@ -114,7 +114,7 @@ GW=$(ip -4 route show | awk '$1 != "default" && $1 != "169.254.169.254" && /via/
 ```
 
 **A genuinely first boot can hit this too, not only a pre-fix host.**
-`nextcloud1` was created with this fix already in place and still had no
+`ops1` (created as `nextcloud1`) had this fix already in place and still had no
 default route the first time `run-all.sh`'s own egress check ran against it
 (`getent hosts deb.debian.org` failed with no output at all — a chained `&&`
 check prints nothing on the first failure, which reads as a hung command
@@ -390,7 +390,7 @@ independently.
 
 ```bash
 JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
-HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # the host being provisioned; substitute nextcloud1 for the other private-only host
+HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # the host being provisioned; substitute ops1 for the other private-only host
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
   getent hosts deb.debian.org &&
   curl -fsS -o /dev/null https://download.docker.com/linux/debian/gpg &&
@@ -445,11 +445,11 @@ the monitoring host, and the Hetzner metadata service at `169.254.169.254`.
 tenant legitimately opens, `db1:3306`.
 
 **Not every app host is a Ghost tenant, and the reconciler tells the
-difference itself.** `nextcloud1` runs this same script unchanged, but
+difference itself.** `ops1` runs this same script unchanged, but
 `branchleft_docker_user_policy.sh` recognises its own address
 (`10.20.1.50`, `NO_DB_EXCEPTION_ADDRESSES`'s default) the same way it
 recognises `edge1`'s below, and skips the `db1:3306` exception for it —
-`nextcloud1` gets the two drops and the conntrack accept with no carve-out
+`ops1` gets the two drops and the conntrack accept with no carve-out
 at all, rather than a copy of app1's allow-list pointed at a database it
 has no legitimate reason to reach. This has to be self-identification
 rather than an argument or an environment variable passed to this step:

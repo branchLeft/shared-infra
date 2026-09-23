@@ -5,12 +5,12 @@ import { verifyEstateProject } from './projectGuard';
 
 /**
  * The hosts this repository owns: the edge, the monitoring host once it
- * splits off it, and `nextcloud1` — a shared, product-agnostic collaboration
- * host (self-hosted Calendly-equivalent booking + video calling), which
+ * splits off it, and `ops1` — a shared, product-agnostic operations host
+ * (today self-hosted Calendly-equivalent booking + video calling), which
  * belongs here rather than in `ghost-platform` precisely because it has
  * nothing to do with the Ghost platform. The Ghost application and database
  * hosts are still homed in the Ghost platform repository and created by a
- * stack there, not by this one — `nextcloud1` is not one of those; it is
+ * stack there, not by this one — `ops1` is not one of those; it is
  * shared estate infrastructure like `edge1`, just not edge-role.
  *
  * `Host` and the address plan come from `@branchleft/hetzner-host` — the same
@@ -78,7 +78,7 @@ export const edge1PublicIpv4 = edge1.publicIpv4;
 export const edge1PrivateIp = HOST_IPS.edge1;
 
 /**
- * Self-hosted Nextcloud (Calendar/Appointments booking + Talk video) —
+ * Runs self-hosted Nextcloud (Calendar/Appointments booking + Talk video) —
  * shared collaboration infrastructure, not a Ghost tenant, so it is not
  * homed in `ghost-platform`. Private-only, like `db1`: reached through the
  * `edge1` jump host over the private network, per
@@ -110,21 +110,33 @@ export const edge1PrivateIp = HOST_IPS.edge1;
  * container compromise; it was never being asked to bound a host-rooted
  * one, and nothing here claims it does.
  */
-export const nextcloud1 = new Host({
-  name: 'nextcloud1',
-  role: 'app',
-  location: ESTATE_LOCATION,
-  image,
-  ownerSshKeyNames,
-  networkId,
-  serverType: config.require('nextcloud1ServerType'),
-  privateIp: HOST_IPS.nextcloud1,
-  deployPublicKey: config.require('nextcloud1DeployPublicKey'),
-  publicNetworking: false,
-});
+export const ops1 = new Host(
+  {
+    name: 'ops1',
+    role: 'app',
+    location: ESTATE_LOCATION,
+    image,
+    ownerSshKeyNames,
+    networkId,
+    serverType: config.require('ops1ServerType'),
+    privateIp: HOST_IPS.ops1,
+    deployPublicKey: config.require('ops1DeployPublicKey'),
+    publicNetworking: false,
+  },
+  {
+    // The host was created as `nextcloud1`, and its resources' URNs in state
+    // still carry that name. Without this alias a rename plans a new server
+    // and the deletion of the live one; with it, the server and firewall are
+    // updated in place. Their children inherit it because both names start
+    // with the component's own (`ops1`, `ops1-firewall`). estate.test.ts pins
+    // the exact URNs this must match. It can go only after the production
+    // stack has applied the rename; before that, removing it is a replace.
+    aliases: [{ name: 'nextcloud1' }],
+  }
+);
 
 /** Restated from the address plan as a stack output, matching `edge1PrivateIp`. */
-export const nextcloud1PrivateIp = HOST_IPS.nextcloud1;
+export const ops1PrivateIp = HOST_IPS.ops1;
 
 /**
  * Read from the created server rather than re-exported from `ESTATE_LOCATION`.

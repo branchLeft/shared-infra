@@ -67,5 +67,8 @@ config:
   branchleft-hetzner-estate:edge1DeployPublicKey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPRwF0ZN5JU3j235hE9gBswGUkbEcriGlR5dBa4PEyMY deploy@edge1
   # Same rationale as edge1ServerType above: cx23, checked as `Available:` not
   # `Recommended:` immediately before applying.
-  branchleft-hetzner-estate:nextcloud1ServerType: cx23
-  branchleft-hetzner-estate:nextcloud1DeployPublicKey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ/qLfYy9e48K/5SeUIosrBXP9Vs+4jSTYTI0ZsSOh3n deploy@nextcloud1
+  branchleft-hetzner-estate:ops1ServerType: cx23
+  # The key's comment still reads `deploy@nextcloud1`, the host's name when
+  # it was generated. Left byte-identical: it is the key the host installed at
+  # first boot, and (as above) editing it here would change nothing on-host.
+  branchleft-hetzner-estate:ops1DeployPublicKey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ/qLfYy9e48K/5SeUIosrBXP9Vs+4jSTYTI0ZsSOh3n deploy@nextcloud1
