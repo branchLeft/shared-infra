@@ -291,6 +291,14 @@ jobs:
       - name: Python unit tests (hetzner root)
         run: python3 -m unittest hetzner.test_passphrase_probe_pattern -v
 
+      # zonecheck.py is the gate the DNS cutover runbook stops on: an empty
+      # diff from it is what licenses switching the registrar's nameservers.
+      # Its tests include the control cases -- an altered record, a server not
+      # serving the zone, two sides that are secretly one provider -- each of
+      # which must fail the check rather than print an all-clear.
+      - name: Python unit tests (hetzner/dns)
+        run: python3 -m unittest discover -s hetzner/dns -p 'test_*.py' -v
+
       # Run the checker itself, not only its tests. Its whole subject is the
       # committed layout, and the failure it exists for -- a Pulumi project in
       # a subdirectory that silently runs the package root's program instead of

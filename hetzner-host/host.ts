@@ -135,12 +135,13 @@ export class Host extends pulumi.ComponentResource {
      * server-creation allocation, which sets `auto_delete` and releases the
      * address back to the pool when the server goes.
      *
-     * That is not survivable here. The DNS zone is manual at a registrar with
-     * no API, and certificate issuance is HTTP-01, so an address that changes
-     * cannot be repaired by a program: every record has to be hand-edited and
-     * propagate before any hostname can reissue. The rebuild that this
-     * component deliberately permits would otherwise take the whole estate's
-     * public reachability with it.
+     * That is not survivable here. Certificate issuance is HTTP-01, so an
+     * address that changes breaks every hostname until each record naming it
+     * has been repointed and has propagated, and only then can any of them
+     * reissue. A mail host's sending reputation is attached to its address
+     * and does not move at all. The rebuild that this component deliberately
+     * permits would otherwise take the whole estate's public reachability
+     * with it.
      */
     if (wantsPublicNetworking) {
       this.primaryIpv4 = new hcloud.PrimaryIp(

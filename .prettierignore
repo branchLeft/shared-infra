@@ -25,3 +25,8 @@ hetzner/edge/stack/crowdsec/acquis.d/appsec.yaml
 hetzner/edge/stack/crowdsec/acquis.d/caddy.yaml
 hetzner/edge/validation/Caddyfile.enforcing
 hetzner/edge/validation/Caddyfile.authoring
+
+# Written by `hetzner/dns/zonecheck.py capture`, not by hand. A recapture must
+# produce a diff of only the records that changed, which it cannot if a
+# formatter re-wraps the arrays it writes.
+hetzner/dns/zone.json

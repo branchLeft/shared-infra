@@ -122,10 +122,17 @@ These apply to every path below:
 
 ## DNS records that matter, and what breaks while each is wrong
 
-**All manual, at IONOS.** No program in this repo or elsewhere owns DNS
+~~**All manual, at IONOS.** No program in this repo or elsewhere owns DNS
 (`shared-infra/CLAUDE.md`: "Not DNS"). Every row below is a human editing the
 zone by hand, with a human-speed TTL lag after each edit — there is no way to
-make any of these instant.
+make any of these instant.~~
+
+> **Struck 2026-09-23.** The zone is moving to Hetzner DNS (owner ruling D18),
+> declared record for record in `hetzner/dns/zone.json` and applied by
+> `hetzner/dns/`'s Pulumi stack. Until `hetzner/dns/RUNBOOK-dns-cutover.md`
+> has been run, the registrar's panel is still the copy that answers, and
+> every row below is still a hand edit there. After it, every row is an edit
+> to `zone.json` landed by PR. Either way each edit still carries its TTL lag.
 
 | Record                                                          | Changes when                                                                                                                                                                                               | Breaks while wrong                                                                                                                                                                                                                                                                                    |
 | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

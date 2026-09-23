@@ -56,10 +56,10 @@ properties are worth knowing before using it:
   own provisioning runbook is where that procedure belongs, not this
   package, since it depends on how that stack reaches its hosts.
 - **Primary IPs are declared, not allocated.** Left to server creation they
-  carry `auto_delete`, so a rebuild releases the address. With a manual DNS
-  zone and HTTP-01 issuance, an address that changes cannot be repaired by
-  any program — every record is hand-edited and has to propagate before a
-  single hostname can reissue.
+  carry `auto_delete`, so a rebuild releases the address. With HTTP-01
+  issuance, an address that changes breaks every hostname until each record
+  naming it has been repointed and has propagated, and a mail host's sending
+  reputation does not move with it at all.
 - **`publicNetworking` is a create-time decision.** Flipping it from `true`
   to `false` on a live host asks Pulumi to delete two delete-protected
   primary IPs, the API refuses, and the stack wedges mid-update. Changing it

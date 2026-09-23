@@ -21,6 +21,7 @@ is.
 | `scripts/check-hetzner-projects.py`   | Structural checks over the Pulumi projects here — see "Two Pulumi projects" below              |
 | `scripts/check-address-plan-drift.py` | Gates the address plan against the shell-side and runbook literals that copy it                |
 | `projectGuard.ts`                     | Refuses either stack if `hcloud:token` addresses the mail project — see below                  |
+| `dns.ts`, `dnsZone.ts`, `dns/`        | The DNS zone stack, its zone file, `zonecheck.py` and the cutover runbook                      |
 | `network.ts`                          | The private network, its subnet, and the estate's default route out to the internet            |
 | `egress.ts`                           | Validates the default route's gateway against the constraints the route API enforces           |
 | `estate.ts`, `estate/`                | The estate stack — `edge1` today; see "The estate stack" for what it does not create           |
@@ -40,6 +41,7 @@ networks not spanning projects is a feature here rather than a limitation.
 | mail    | `mx1` alone                                                         | `mail/`'s stack                                            |
 | estate  | The `platform` network, `edge1`, and later `db1`, `app1..N`, `mon1` | `hetzner/`'s two stacks, and `ghost-platform`'s host stack |
 | lab     | Spikes and scratch tenants; no production data ever                 | Local work only — never a repository secret                |
+| dns     | The `branchleft.co.uk` zone, and no servers                         | `hetzner/dns/`'s stack, which refuses any other project    |
 
 The estate and the mail host were one project until 2026-08-21. They were
 split because the estate's token count is about to multiply — a token per

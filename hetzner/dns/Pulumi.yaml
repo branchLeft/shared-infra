@@ -1,0 +1,14 @@
+name: branchleft-hetzner-dns
+runtime: nodejs
+
+# `main` is mandatory for the same reason as in `../estate/Pulumi.yaml`: this
+# directory holds a Pulumi project but no npm package, so without it Pulumi
+# reads `../package.json`'s `"main"` and silently runs the network program.
+main: ../dns.ts
+
+# Pinned for the same reason as every other project here: `pulumi login` is
+# global state on a workstation. The bucket is in `hel1`, and both the
+# endpoint host and `region` must name it.
+backend:
+  url: 's3://branchleft-pulumi-state?endpoint=hel1.your-objectstorage.com&s3ForcePathStyle=true&region=hel1'
+description: The branchleft.co.uk DNS zone at Hetzner DNS, record for record from dns/zone.json. Its own project because its token belongs to a Hetzner project holding only DNS zones, and because the zone is the one resource whose loss takes the website, the edge and mail down together.

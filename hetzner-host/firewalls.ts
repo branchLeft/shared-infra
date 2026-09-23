@@ -46,9 +46,10 @@ const ICMP: Rule = {
 };
 
 /** The only role that terminates public traffic. Port 80 is not redundant
- * with 443: HTTP-01 challenge validation arrives there, and with the DNS zone
- * held at a registrar with no API, HTTP-01 is the only issuance path
- * available. */
+ * with 443: HTTP-01 challenge validation arrives there, and every certificate
+ * the edge holds renews over HTTP-01. DNS-01 needs the zone served by an
+ * API-driven provider (`hetzner/dns/`); closing 80 is only safe once every
+ * hostname has moved to it. */
 export const EDGE_RULES: Rule[] = [
   SSH,
   ICMP,
