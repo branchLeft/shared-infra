@@ -39,6 +39,27 @@ const GENERATED_BANNER = [
  * emits below. A target that has never been available must not page anyone;
  * a target that stops answering after being available must.
  *
+ * **`ops1`'s entry is named for the host it will be, not the host it still
+ * is.** A separate, already-sequenced change renames `nextcloud1` to `ops1`
+ * across this estate -- the Pulumi resource, the `HOST_IPS` key, the
+ * `sites.ts` entry and every runbook reference -- landing first and alone,
+ * precisely so a failure afterwards has one candidate cause. This entry's
+ * `name` is already `ops1` (every label, alert and runbook reference this
+ * stack renders should read `ops1` from the day the control plane starts
+ * landing on this host), but its `address` still reads `HOST_IPS.nextcloud1`
+ * -- that key does not become `HOST_IPS.ops1` until the rename above lands,
+ * and this file does not pre-empt a rename it does not own. Once that
+ * change lands, this one line changes to `HOST_IPS.ops1` and nothing else
+ * here does. `expectedUp` starts `false`, the same reason app1/db1 do:
+ * `RUNBOOK-monitoring.md`'s ops1 section installs the node_exporter this
+ * entry scrapes, but nothing has confirmed it answering live yet, and a
+ * target that has never answered must not page anyone the moment this
+ * config deploys. Flipping it to `true` is a deliberate one-line follow-up
+ * change, made only once that runbook section's read-back confirms the
+ * exporter is live -- a hand edit instead of a reviewed change is how this
+ * exact flip, on a different host's exporter, once hid a four-day outage
+ * (see this file's `MONITORED_MYSQLD_HOST` comment below).
+ *
  * Deliberately not every entry in `HOST_IPS`/`APP_HOST_IPS`: `mon1`'s address
  * is reserved for the eventual split (doc 14 §3.1) and nothing listens there
  * yet, and `app2`/`app3` are scale-out rungs with no host behind them either.
@@ -56,6 +77,10 @@ export const MONITORED_NODE_HOSTS: readonly MonitoredHost[] = [
   { name: 'edge1', address: HOST_IPS.edge1, expectedUp: true },
   { name: 'app1', address: APP_HOST_IPS.app1, expectedUp: false },
   { name: 'db1', address: HOST_IPS.db1, expectedUp: false },
+  // Address is HOST_IPS.nextcloud1, not HOST_IPS.ops1 -- see the docstring
+  // above. The address-plan rename is a separate, sequenced-first change;
+  // this file only renames the label it monitors under.
+  { name: 'ops1', address: HOST_IPS.nextcloud1, expectedUp: false },
 ];
 
 /**
