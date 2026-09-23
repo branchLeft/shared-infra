@@ -4,8 +4,8 @@
 Usage (tokens are read from the environment and never printed):
 
     read -rs HCLOUD_PROBE_TOKEN_MAIL; export HCLOUD_PROBE_TOKEN_MAIL
-    ... one per project: MAIL, ORG, TENANTS, DEMOS, DNS
-    probe-project-isolation.py                           # the 5x5 proof
+    ... one per project: MAIL, ORG, TENANTS, DEMOS, DNS, BACKUP, DEMO_DNS
+    probe-project-isolation.py                           # the 7x7 proof
     probe-project-isolation.py --control-swap tenants=demos
 
 **Why a denial alone proves nothing.** The Cloud API is implicitly scoped to
@@ -66,6 +66,8 @@ PROJECTS: dict[str, tuple[str, ...]] = {
     "tenants": ("edge-t", "app-t1", "db-t1"),
     "demos": ("demo1",),
     "dns": (),
+    "backup": (),
+    "demo-dns": (),
 }
 
 
@@ -81,7 +83,11 @@ def marker(project: str) -> str:
 
 
 def token_env(project: str) -> str:
-    return f"HCLOUD_PROBE_TOKEN_{project.upper()}"
+    # A shell variable name can't carry a hyphen, and `demo-dns` does --
+    # replaced with `_` here and nowhere else, so the project's own name
+    # (the dict key, the marker suffix, the CLI's --control-swap value) never
+    # changes.
+    return f"HCLOUD_PROBE_TOKEN_{project.upper().replace('-', '_')}"
 
 
 class ProbeError(Exception):

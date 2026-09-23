@@ -41,7 +41,7 @@ PAGE_SIZE = 2
 
 
 class FakeHetzner:
-    """Five projects. `visible_to` decides which projects a token's reads reach."""
+    """Seven projects. `visible_to` decides which projects a token's reads reach."""
 
     def __init__(self):
         self.firewalls: dict[str, dict[int, str]] = {}
@@ -153,12 +153,12 @@ class IsolatedEstate(ProbeTestCase):
         code, out = self.run_probe()
         self.assertEqual(code, 0, out)
         self.assertTrue(out.rstrip().endswith("PASS"), out)
-        self.assertEqual(out.count("ok "), 25, out)
+        self.assertEqual(out.count("ok "), 49, out)
 
     def test_every_own_cell_is_a_200_and_every_other_a_404(self):
         views = probe.observe(self.api, TOKENS)
         result = probe.evaluate(self.api, TOKENS, views)
-        self.assertEqual(len(result.cells), 25)
+        self.assertEqual(len(result.cells), 49)
         for cell in result.cells:
             expected = 200 if cell.row == cell.column else 404
             self.assertEqual(cell.by_id_status, expected, cell)
@@ -172,6 +172,13 @@ class IsolatedEstate(ProbeTestCase):
             _, out = self.run_probe(*argv)
             for token in TOKENS.values():
                 self.assertNotIn(token, out)
+
+    def test_demo_dns_env_var_uses_an_underscore_not_the_project_names_hyphen(self):
+        # A shell variable name can't contain '-'. `probe.PROJECTS` and
+        # `--control-swap` still use the hyphenated project name; only the
+        # environment lookup is translated.
+        self.assertEqual(probe.token_env("demo-dns"), "HCLOUD_PROBE_TOKEN_DEMO_DNS")
+        self.assertIn("HCLOUD_PROBE_TOKEN_DEMO_DNS", self.environ)
 
 
 class ControlCase(ProbeTestCase):
@@ -328,12 +335,15 @@ class TableMatchesProjectsTs(unittest.TestCase):
 
     def test_same_projects_servers_and_markers(self):
         source = (HERE.parent / "projects.ts").read_text()
+        # The object key is a bare identifier for most entries but a quoted
+        # string for `'demo-dns'`, since a hyphen is not a valid identifier
+        # character; the project name itself can carry a hyphen either way.
         entries = re.findall(
-            r"(\w+): project\(\s*'(\w+)',\s*'[^']*',\s*\[([^\]]*)\]", source, flags=re.S
+            r"(?:\w+|'[\w-]+'):\s*project\(\s*'([\w-]+)',\s*'[^']*',\s*\[([^\]]*)\]",
+            source,
+            flags=re.S,
         )
-        parsed = {
-            name: tuple(re.findall(r"'([^']+)'", servers)) for key, name, servers in entries
-        }
+        parsed = {name: tuple(re.findall(r"'([^']+)'", servers)) for name, servers in entries}
         self.assertEqual(parsed, probe.PROJECTS)
         self.assertIn(f"MARKER_PREFIX = '{probe.MARKER_PREFIX}'", source)
 

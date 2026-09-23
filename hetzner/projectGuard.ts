@@ -91,7 +91,7 @@ export function assertProject(
       `the hcloud token addresses the ${owners} project, not the ${expected} project — ` +
         `it can see ${foreign.map((sighting) => sighting.name).join(', ')}. ` +
         `Applying with it would create ${expected} resources in the wrong project. ` +
-        `${options.fix} and re-run; see hetzner/README.md, "Five projects, and why the boundary matters".`
+        `${options.fix} and re-run; see hetzner/README.md, "Seven projects, and why the boundary matters".`
     );
   }
   if (!options.requireOwnMarker) {
@@ -105,7 +105,7 @@ export function assertProject(
     throw new Error(
       `the hcloud token cannot see the firewall ${marker}, so nothing shows it addresses the ` +
         `${expected} project. Either the token belongs to another project or the marker was never ` +
-        `created — RUNBOOK-five-projects.md creates it. ${options.fix} and re-run.`
+        `created — RUNBOOK-seven-projects.md creates it. ${options.fix} and re-run.`
     );
   }
 }

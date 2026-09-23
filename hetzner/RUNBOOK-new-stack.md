@@ -289,8 +289,9 @@ shell history and in the process table, and a token that has been in either
 is a token that has to be rotated.
 
 The token is scoped to one hcloud project, and `projects.ts` lists them: mail
-(`mx1` alone), org (the network and the estate's hosts), tenants, demos and
-dns, plus the lab. A token from the wrong one must never be set on a stack —
+(`mx1` alone), org (the network and the estate's hosts), tenants, demos, dns,
+backup and demo-dns, plus the lab. A token from the wrong one must never be
+set on a stack —
 the project boundary is the only isolation hcloud offers, since a token has
 full power over everything in its project.
 
@@ -300,9 +301,9 @@ preview, and refuses the program if any other project's server — `mx1` first
 among them — is in view. For these two stacks it asks for no marker firewall,
 so it rules other projects out rather than confirming this one: a lab token
 still passes, because a lab project is empty, and so would an empty tenants,
-demos or dns project. The guard rules out the expensive mistake, not every
-mistake. Confirm the project by what the token can see before the first apply
-of a new stack:
+demos, dns, backup or demo-dns project. The guard rules out the expensive
+mistake, not every mistake. Confirm the project by what the token can see
+before the first apply of a new stack:
 
 ```bash
 HCLOUD_TOKEN='<the token>' hcloud server list

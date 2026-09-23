@@ -151,6 +151,21 @@ describe('assertProject with the own-marker requirement', () => {
     );
   });
 
+  it('passes the demo-dns project on its own hyphenated marker name', () => {
+    expect(() =>
+      assertProject('demo-dns', { servers: [], firewalls: ['project-marker-demo-dns'] }, options)
+    ).not.toThrow();
+  });
+
+  it("does not let dns's marker satisfy demo-dns, or the reverse", () => {
+    expect(() =>
+      assertProject('demo-dns', { servers: [], firewalls: ['project-marker-dns'] }, options)
+    ).toThrow(/addresses the dns project, not the demo-dns project/);
+    expect(() =>
+      assertProject('dns', { servers: [], firewalls: ['project-marker-demo-dns'] }, options)
+    ).toThrow(/addresses the demo-dns project, not the dns project/);
+  });
+
   it('refuses a swapped token even when the own marker is somehow also present', () => {
     expect(() =>
       assertProject(

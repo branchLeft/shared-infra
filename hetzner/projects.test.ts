@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { MARKER_PREFIX, PROJECT_NAMES, PROJECTS } from './projects';
 
 describe('the project table', () => {
-  it('names five projects, the four of the design plus the DNS-only one', () => {
-    expect(PROJECT_NAMES).toEqual(['mail', 'org', 'tenants', 'demos', 'dns']);
+  it('names seven projects, the four of the design plus dns, backup and demo-dns', () => {
+    expect(PROJECT_NAMES).toEqual(['mail', 'org', 'tenants', 'demos', 'dns', 'backup', 'demo-dns']);
   });
 
   it('gives every project a distinct marker derived from its name', () => {
@@ -27,5 +27,10 @@ describe('the project table', () => {
 
   it('keeps the DNS project free of hosts', () => {
     expect(PROJECTS.dns.servers).toEqual([]);
+  });
+
+  it('keeps the backup and demo-dns projects free of hosts, permanently', () => {
+    expect(PROJECTS.backup.servers).toEqual([]);
+    expect(PROJECTS['demo-dns'].servers).toEqual([]);
   });
 });

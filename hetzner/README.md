@@ -20,17 +20,17 @@ is.
 | `scripts/probe-object-storage.py`     | Writes to a **scratch** bucket to settle Hetzner Object Storage's actual semantics             |
 | `scripts/check-hetzner-projects.py`   | Structural checks over the Pulumi projects here — see "Two Pulumi projects" below              |
 | `scripts/check-address-plan-drift.py` | Gates the address plan against the shell-side and runbook literals that copy it                |
-| `projects.ts`                         | The five Hetzner projects as data: their markers and sentinel servers                          |
+| `projects.ts`                         | The seven Hetzner projects as data: their markers and sentinel servers                         |
 | `projectGuard.ts`                     | Refuses a stack whose token addresses a different project — see below                          |
-| `RUNBOOK-five-projects.md`            | Creating the three new projects, their tokens and markers, and proving isolation               |
-| `scripts/probe-project-isolation.py`  | The 5x5 token isolation proof, with a swap-mode control that must report FAIL                  |
+| `RUNBOOK-seven-projects.md`           | Creating the five new projects, their tokens and markers, and proving isolation                |
+| `scripts/probe-project-isolation.py`  | The 7x7 token isolation proof, with a swap-mode control that must report FAIL                  |
 | `network.ts`                          | The private network, its subnet, and the estate's default route out to the internet            |
 | `egress.ts`                           | Validates the default route's gateway against the constraints the route API enforces           |
 | `estate.ts`, `estate/`                | The estate stack — `edge1` today; see "The estate stack" for what it does not create           |
 | `provision/`                          | Idempotent host base provisioning, the Compose systemd template, and the deploy wrapper        |
 | `../hetzner-host/`                    | The published `@branchleft/hetzner-host` package — `Host`, firewalls, cloud-init, address plan |
 
-## Five projects, and why the boundary matters
+## Seven projects, and why the boundary matters
 
 hcloud has no fine-grained IAM. An API token reaches everything in its project
 — the only scope below that is "Read" (GET requests only) versus "Read &
@@ -42,23 +42,27 @@ feature here rather than a limitation.
 `projects.ts` is the table below as data; the guard and the isolation probe
 both read it.
 
-| Project | Holds                                                                     | Token today                                      |
-| ------- | ------------------------------------------------------------------------- | ------------------------------------------------ |
-| mail    | `mx1` alone                                                               | `hcloud:token` / `HCLOUD_TOKEN_MAIL`             |
-| org     | The `platform` network, `edge1`, `ops1` (was `nextcloud1`), `app1`, `db1` | `hcloud:token` / `HCLOUD_TOKEN_ESTATE`           |
-| tenants | Built fresh: `edge-t`, `app-t1`, `db-t1`                                  | a Read probe token only, until a stack needs one |
-| demos   | Built fresh: `demo1`                                                      | a Read probe token only, until a stack needs one |
-| dns     | The DNS zone and no hosts                                                 | a Read probe token only, until a stack needs one |
-| lab     | Spikes and scratch tenants; no production data ever                       | Local work only — never a repository secret      |
+| Project  | Holds                                                                     | Token today                                      |
+| -------- | ------------------------------------------------------------------------- | ------------------------------------------------ |
+| mail     | `mx1` alone                                                               | `hcloud:token` / `HCLOUD_TOKEN_MAIL`             |
+| org      | The `platform` network, `edge1`, `ops1` (was `nextcloud1`), `app1`, `db1` | `hcloud:token` / `HCLOUD_TOKEN_ESTATE`           |
+| tenants  | Built fresh: `edge-t`, `app-t1`, `db-t1`                                  | a Read probe token only, until a stack needs one |
+| demos    | Built fresh: `demo1`                                                      | a Read probe token only, until a stack needs one |
+| dns      | The branchleft.co.uk DNS zone and no hosts                                | a Read probe token only, until a stack needs one |
+| backup   | The Hetzner Object Storage backup bucket and no hosts, ever               | a Read probe token only, until a stack needs one |
+| demo-dns | The demo domain's own DNS zone and no hosts, ever                         | a Read probe token only, until a stack needs one |
+| lab      | Spikes and scratch tenants; no production data ever                       | Local work only — never a repository secret      |
 
-A stolen dns token reaches no data outside DNS. A Read & Write one can still
-create billable resources in that project and use up the account-wide server
-cap, as any project's can; the boundary limits what it can read and break, not
-what it can spend.
+A stolen dns or demo-dns token reaches no data outside that one zone; a
+stolen backup token reaches no data outside the backup bucket. A Read & Write
+one can still create billable resources in that project and use up the
+account-wide server cap, as any project's can; the boundary limits what it
+can read and break, not what it can spend.
 
-Nothing moved between projects to reach this layout: tenants, demos and dns
-started empty and their hosts are created there, and `db1` retires in place
-once the blog has left it. `RUNBOOK-five-projects.md` creates the three new
+Nothing moved between projects to reach this layout: tenants, demos, dns,
+backup and demo-dns all started empty; tenants' and demos' hosts are created
+there, `db1` retires in place once the blog has left it, and dns, backup and
+demo-dns hold no host, ever. `RUNBOOK-seven-projects.md` creates the five new
 projects, the tokens and the markers, and proves the isolation.
 
 **Every project carries a marker**: a firewall named `project-marker-<name>`,
@@ -83,7 +87,7 @@ tokens would otherwise have had full power over `mx1`. mx1's sending
 reputation is the asset here that is rebuildable in months rather than in an
 afternoon, so it is the one that gets the boundary drawn around it. The
 reasoning, the alternatives and the costs accepted are in
-`ghost-platform-docs` doc 14 §3.4; the five-project layout is the try-it-now
+`ghost-platform-docs` doc 14 §3.4; the seven-project layout is the try-it-now
 design's §02.
 
 **What the split costs, recorded so it is not rediscovered as a surprise:**
