@@ -20,8 +20,8 @@ projects:
 
 | Project    | Console name          | Holds                                                      |
 | ---------- | --------------------- | ---------------------------------------------------------- |
-| `mail`     | as it is today        | `mx1`. Exists                                              |
-| `org`      | as it is today        | the network, `edge1`, `ops1`, `app1`, `db1`. Exists        |
+| `mail`     | the mail project      | `mx1`. Exists                                              |
+| `org`      | the estate project    | the network, `edge1`, `ops1`, `app1`, `db1`. Exists        |
 | `tenants`  | `branchLeft tenants`  | new, empty: `edge-t`, `app-t1`, `db-t1` later              |
 | `demos`    | `branchLeft demos`    | new, empty: `demo1` later                                  |
 | `dns`      | `branchLeft dns`      | new, empty: the branchleft.co.uk zone later, never a host  |
@@ -50,7 +50,10 @@ more.
 - **Creates:** five empty projects (`tenants`, `demos`, `dns`, `backup`,
   `demo-dns`), seven marker firewalls across all seven projects (no rules,
   attached to nothing, so they cost nothing and change no traffic) and seven
-  Read-only API tokens. No token with write power is created.
+  Read-only API tokens. No token with write power is created. Hetzner caps
+  Firewalls at 50 **across the whole account, not per project**; these seven
+  markers use 7 of that 50, alongside whatever the mail and org stacks
+  already hold.
 - **Changes nothing that exists.** No server, network or firewall already in
   mail or org is edited. The mail and org projects each gain one unattached
   firewall and nothing else.
@@ -130,9 +133,10 @@ Open each project. Its ID is the number in the address bar,
 `console.hetzner.com/projects/<ID>/...`. Keep the seven `name → ID` pairs for
 step 7. Project IDs aren't secret.
 
-Expected: seven distinct numbers. The mail project and the estate project are
-two different IDs. If you only find two, stop: the estate is not where this
-runbook thinks it is.
+Expected: seven distinct numbers. Check in particular that the mail
+project's ID and the estate project's ID differ from each other — if the
+two read the same number, the estate is not where this runbook thinks it is;
+stop and find it before going further.
 
 ### 3. Create the seven marker firewalls
 
@@ -281,6 +285,13 @@ what it added. Run any subset, in this order:
 
 ## After it succeeds
 
+- **Keep the seven probe tokens; don't revoke them.** They are Read-only —
+  GET requests only, no write power over anything — so leaving them live
+  costs nothing beyond what step 4's blast radius already accepted, and they
+  are what re-runs `probe-project-isolation.py` later without a fresh console
+  session. Revoking them buys no extra safety, since a Read token can only
+  list and fetch what its own project already exposes, and it turns every
+  future isolation check back into a console trip.
 - The agent posts the ID map and the step 5/6 output on
   branchLeft/workspace#1165 and closes it, citing that comment.
 - Later stories, not this one: register the owner SSH key

@@ -53,11 +53,22 @@ both read it.
 | demo-dns | The demo domain's own DNS zone and no hosts, ever                         | a Read probe token only, until a stack needs one |
 | lab      | Spikes and scratch tenants; no production data ever                       | Local work only — never a repository secret      |
 
-A stolen dns or demo-dns token reaches no data outside that one zone; a
-stolen backup token reaches no data outside the backup bucket. A Read & Write
-one can still create billable resources in that project and use up the
-account-wide server cap, as any project's can; the boundary limits what it
-can read and break, not what it can spend.
+A stolen dns or demo-dns token reaches no data outside that one zone. A
+stolen backup _Cloud API_ token reaches no bucket at all — Object Storage is
+addressed by a separate S3 credential, never a Cloud API token (see
+`RUNBOOK-new-stack.md`, "Before you start"). The Cloud API boundary this
+project buys is billable-resource and server-cap containment, the same as
+dns and demo-dns. Object Storage's own default is that an S3 key reaches
+_every bucket in its project_, so the real reason the backup bucket wants its
+own project is to keep every other project's S3 key from reaching it — a
+different boundary, proven by a different credential, owed by [ISSUE
+branchLeft/workspace#1203](https://github.com/branchLeft/workspace/issues/1203),
+which provisions the bucket. Nothing here provisions it or proves that.
+
+For dns, demo-dns and backup alike, a Read & Write Cloud API token can still
+create billable resources in that project and use up the account-wide server
+cap, as any project's can; the boundary limits what it can read and break,
+not what it can spend.
 
 Nothing moved between projects to reach this layout: tenants, demos, dns,
 backup and demo-dns all started empty; tenants' and demos' hosts are created
@@ -110,8 +121,21 @@ in view. For these two stacks it asks for no marker: the check rules other
 projects out rather than confirming the estate one, which is enough because
 their state already names their resources by id, so a wrong token plans
 replacements nobody confirms by accident. The silent case is only ever a
-stack whose state is still empty, and that is exactly what the new projects'
-own-marker requirement covers.
+stack whose state is still empty.
+
+`projectGuard.ts` also exports `assertProject`/`checkProjectResults` with
+`requireOwnMarker: true`, for exactly that silent case: a new-project stack
+calls it once its project's marker exists, and it refuses an empty project
+unless _its own_ marker is in view — the only way to tell two empty projects
+apart. **Nothing calls it yet.** The first new-project stack to actually
+exist, `hetzner/dns/` in the sibling [PR
+branchLeft/shared-infra#230](https://github.com/branchLeft/shared-infra/pull/230),
+still checks only `assertDnsOnlyProject`: servers-only, no marker, so it
+passes _any_ project with zero servers. This PR creates four more
+permanently-empty ones (`tenants`, `demos`, `backup`, `demo-dns`), so a
+dns-stack token minted in the wrong one of those would pass it silently.
+Wiring #230 onto the marker check is tracked at [ISSUE
+branchLeft/workspace#1306](https://github.com/branchLeft/workspace/issues/1306).
 
 The lab project does not exist yet. Projects are console-only; there is no
 API for creating one — which is also why creating the estate project is a

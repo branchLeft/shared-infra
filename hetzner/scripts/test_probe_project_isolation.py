@@ -180,6 +180,16 @@ class IsolatedEstate(ProbeTestCase):
         self.assertEqual(probe.token_env("demo-dns"), "HCLOUD_PROBE_TOKEN_DEMO_DNS")
         self.assertIn("HCLOUD_PROBE_TOKEN_DEMO_DNS", self.environ)
 
+    def test_demo_dns_marker_keeps_its_hyphen(self):
+        # Against a literal, not `probe.marker()` itself -- the whole run
+        # above uses `marker()` to build its own fixtures and its own
+        # expectations, so it would stay green even if `marker()` started
+        # translating '-' to '_' the way `token_env` correctly does. The
+        # marker is a Console-created firewall name, unlike the env var: it
+        # must keep the project's own hyphen, or the runbook's step 3 name
+        # and the probe's expectation would silently diverge.
+        self.assertEqual(probe.marker("demo-dns"), "project-marker-demo-dns")
+
 
 class ControlCase(ProbeTestCase):
     def test_swap_reports_fail_and_the_control_passes(self):
