@@ -94,3 +94,7 @@ npx tsc --noEmit                              # what CI type-checks with
   repos that still have Pulumi programs.
 - `website/infra/KNOWN_ISSUES.md` — GCP/Pulumi bootstrap failure modes; that
   repo's own infra program is a separate, later removal.
+
+## License
+
+Source-available under the PolyForm Shield License 1.0.0. See [LICENSE](LICENSE).
