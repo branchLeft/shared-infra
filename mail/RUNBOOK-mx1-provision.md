@@ -232,7 +232,7 @@ If the import has not run at all, 443 lands in the same `pulumi up` that opens
 
 `50-provision-mailboxes.sh` runs `provision_mailboxes.py`, which creates real
 mailbox accounts — `rob@`, `contact@`, `info@`, `sales@`, `complaints@`,
-`abuse@`, `blog@`, `acme@` and `alerts@` at `branchleft.co.uk` (`MAILBOXES`) — each with
+`abuse@`, `blog@`, `acme@`, `alerts@`, `noreply@` and `psl@` at `branchleft.co.uk` (`MAILBOXES`) — each with
 its own storage, not an alias, and gives each role address (not `rob@`;
 `ROLE_ADDRESSES`) a per-mailbox Sieve script that copies inbound mail to
 `rob@` without suppressing the original delivery. `blog@` gets a mailbox and
@@ -244,7 +244,9 @@ certificate-expiry warnings, so it needs the same real storage and copy-
 forward as any other role address, not just an alias. `alerts@` is the account
 Alertmanager's submission credential authenticates into and sends as
 (`hetzner/RUNBOOK-monitoring.md`); what arrives _in_ it is bounces and replies
-to alert mail, which is why it gets the same real storage and copy-forward.
+to alert mail, which is why it gets the same real storage and copy-forward. `psl@` is the contact address published in the Public Suffix List entry for
+`sites.publicpress.co.uk`, where the list's maintainers send renewal and
+removal notices, so it too needs real storage and the copy-forward.
 
 **Every role script carries exactly one `redirect`, and that is a constraint
 rather than a style.** Stalwart caps an untrusted Sieve script at

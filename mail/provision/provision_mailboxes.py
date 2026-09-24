@@ -61,13 +61,13 @@ MAIL_DOMAIN = os.environ.get("MAIL_DOMAIN", "branchleft.co.uk")
 # -- and for noreply@ -- the account Nextcloud's submission-only SMTP
 # credential authenticates into and sends as, see
 # mail/RUNBOOK-mx1-provision.md#nextcloud-submission-credential).
-MAILBOXES = ("rob", "contact", "info", "sales", "complaints", "abuse", "blog", "acme", "alerts", "noreply")
+MAILBOXES = ("rob", "contact", "info", "sales", "complaints", "abuse", "blog", "acme", "alerts", "noreply", "psl")
 
 # The ones that get a copy-forward to rob@ -- rob@ itself gets no script.
 # Exactly one `redirect` each, never two: a second is dropped at delivery while
 # the script still compiles and diffs clean. See
 # mail/RUNBOOK-mx1-provision.md#mailbox-provisioning.
-ROLE_ADDRESSES = ("contact", "info", "sales", "complaints", "abuse", "blog", "acme", "alerts", "noreply")
+ROLE_ADDRESSES = ("contact", "info", "sales", "complaints", "abuse", "blog", "acme", "alerts", "noreply", "psl")
 
 FORWARD_TARGET = f"rob@{MAIL_DOMAIN}"
 SIEVE_SCRIPT_NAME = "forward-copy-to-rob"
