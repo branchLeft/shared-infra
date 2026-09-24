@@ -944,11 +944,11 @@ was not touched by this change.
 
 ```bash
 # Is the resolver up, and does recursion work?
-ssh root@mx1.branchleft.co.uk 'systemctl is-active unbound && dig +short @127.0.0.1 A deb.debian.org'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'systemctl is-active unbound && dig +short @127.0.0.1 A deb.debian.org'
 
 # Does Spamhaus answer this host for real? The industry-standard test point
 # must come back in the 127.0.0.2 range, NOT 127.255.255.254:
-ssh root@mx1.branchleft.co.uk 'dig +short @127.0.0.1 A 2.0.0.127.zen.spamhaus.org'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'dig +short @127.0.0.1 A 2.0.0.127.zen.spamhaus.org'
 ```
 
 ### Alerting
@@ -1370,34 +1370,23 @@ publish" above — at Hetzner once
 [branchLeft/workspace#1164](https://github.com/branchLeft/workspace/issues/1164)
 lands, or at IONOS by hand before it. The DKIM TXT record is required for
 every domain; MX, SPF and the DMARC record too unless `--dkim-only` was
-used.
+used. For the demo domain, the DMARC policy is: `TXT _dmarc.trypublicpress.co.uk v=DMARC1; p=none; adkim=s; aspf=s`
 
 ### Verification steps for the demo domain
 
 Once the records are published, verify the setup with two concrete checks:
 
-**DKIM TXT record read-back.** The script prints the public key and selector
-(default `bl`). Query the published TXT record:
+**DKIM TXT record read-back.** The script prints both the public key and the
+selector (default `bl` unless overridden with `--selector <name>`). Query the
+published TXT record using the selector the script printed:
 
 ```bash
-dig +short TXT bl._domainkey.trypublicpress.co.uk
+dig +short TXT <selector>._domainkey.trypublicpress.co.uk
 ```
 
 This must return the DKIM public key that the script printed. If it does not
 match, the record is not published or is incorrect at the registrar — republish
 and verify again.
-
-**DMARC record.** Publish the DMARC policy for `trypublicpress.co.uk`:
-
-```
-TXT _dmarc.trypublicpress.co.uk v=DMARC1; p=none; adkim=s; aspf=s
-```
-
-Verify it resolves:
-
-```bash
-dig +short TXT _dmarc.trypublicpress.co.uk
-```
 
 **Signed-message check.** Send a test message from the demo domain
 (`@trypublicpress.co.uk`) and confirm it arrives with `dkim=pass` in the
