@@ -128,15 +128,20 @@ stack whose state is still empty.
 `requireOwnMarker: true`, for exactly that silent case: a new-project stack
 calls it once its project's marker exists, and it refuses an empty project
 unless _its own_ marker is in view — the only way to tell two empty projects
-apart. **Nothing calls it yet.** The first new-project stack to actually
-exist, `hetzner/dns/` in the sibling [PR
-branchLeft/shared-infra#230](https://github.com/branchLeft/shared-infra/pull/230),
-still checks only `assertDnsOnlyProject`: servers-only, no marker, so it
-passes _any_ project with zero servers. This PR creates four more
-permanently-empty ones (`tenants`, `demos`, `backup`, `demo-dns`), so a
-dns-stack token minted in the wrong one of those would pass it silently.
-Wiring #230 onto the marker check is tracked at [ISSUE
-branchLeft/workspace#1306](https://github.com/branchLeft/workspace/issues/1306).
+apart. **`hetzner/dns/` is the first, and so far only, caller.**
+`hetzner/dnsZone.ts`'s `assertDnsOnlyProject`/`verifyDnsOnlyProject` delegate
+to `checkProjectResults('dns', …, requireOwnMarker: true, …)`, so a token
+addressing any of the other permanently-empty projects (`tenants`, `demos`,
+`backup`, `demo-dns`) is refused by name — it is no longer enough for the
+token's project to merely hold no servers, which every one of those shares
+with `dns` before its first apply. The zone's own creation is threaded
+through the guard's output (`dns.ts`'s `verifiedZoneName`), so a rejected
+guard makes the `Zone` resource itself unregisterable rather than leaving a
+sibling output nobody reads.
+
+The estate and mail stacks stay on the weaker, servers-only form above —
+unchanged by this — because their state already names their resources; see
+the paragraph before this one.
 
 The lab project does not exist yet. Projects are console-only; there is no
 API for creating one — which is also why creating the estate project is a

@@ -378,9 +378,11 @@ handed directly to `smtplib`, never echoed.
 
 ## The MX cutover
 
-Nothing in this repository declares DNS: `branchleft.co.uk`'s zone is manual at
-the registrar, and the cutover is a hand-made change there. What follows is the
-shape of it, not a record of any particular zone's contents.
+The zone is now declared record for record in `hetzner/dns/`, whichever
+provider is currently authoritative for it (`hetzner/dns/RUNBOOK-dns-cutover.md`
+covers moving that authority itself). The change below is still made by hand,
+at whichever provider that is: what follows is the shape of it, not a record
+of any particular zone's contents.
 
 Audit the zone first, against at least two public resolvers, over both UDP and
 TCP — `+tcp` rules out a UDP-truncated answer hiding additional records:

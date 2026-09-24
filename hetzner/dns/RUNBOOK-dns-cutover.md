@@ -277,12 +277,30 @@ IONOS side's shorter TTLs are not a diff. This is also the **final
 comparison**: from here, no record changes at either provider until 48 hours
 after step 10.
 
+**If the comparison instead shows a `DIFF`, stop here — do not go on to phase
+C.** Something changed one side after step 7's comparison. Read which record
+and which side: restore its value at IONOS from `hetzner/dns/zone.json` (the
+committed source of truth) if IONOS drifted, or re-`pulumi up` the stack from
+`main` if Hetzner did — never edit either side freehand to make the diff go
+away. Re-run this step's comparison until it is clean before touching step 10.
+The same applies to any `ERROR` (a server not answering) — resolve the reason
+for the error, don't proceed around it.
+
 Why at IONOS and why before: through the switch window, a resolver can keep
 an IONOS answer for as long as its TTL. Short TTLs mean that if the switch has
 to be reversed, or a record has to be corrected at IONOS during the window,
 the correction reaches everyone in five minutes rather than an hour. Lowering
 them during the switch would be too late — the long TTLs would already be
 cached.
+
+**The trade-off this doesn't cover: Hetzner's own TTL stays 3600 throughout**
+(`zone.json`'s rrsets are all TTL 3600, and nothing here lowers it before or
+during the switch). If a correction is ever needed at Hetzner during the
+window — as opposed to at IONOS, which this step already covers — it takes up
+to an hour to reach every resolver, not five minutes. Creating the zone at a
+short TTL and raising it once the window closes would remove that asymmetry;
+this runbook does not do that today, so a Hetzner-side correction mid-window
+should be treated as slow, not as fixed the moment it's applied.
 
 ## Phase C — switch the nameservers
 
@@ -317,16 +335,23 @@ delegation — up to 48 hours' worth — now fail rather than getting an answer.
 Decide at once between rolling back (below) and riding out the tail; there is
 no third option.
 
-Then, over the following 48 hours:
+Then, over the following 48 hours, read back more than NS and MX — web,
+SPF and mail policy too, not only the record this runbook's authors happened
+to think of first:
 
 ```bash
 for r in 1.1.1.1 8.8.8.8 9.9.9.9; do echo "$r: $(dig +short NS branchleft.co.uk @$r | sort | tr '\n' ' ')"; done
 for r in 1.1.1.1 8.8.8.8 9.9.9.9; do echo "$r: $(dig +short MX branchleft.co.uk @$r)"; done
+for r in 1.1.1.1 8.8.8.8 9.9.9.9; do echo "$r: $(dig +short A www.branchleft.co.uk blog.branchleft.co.uk cloud.branchleft.co.uk @$r | tr '\n' ' ')"; done
+for r in 1.1.1.1 8.8.8.8 9.9.9.9; do echo "$r: $(dig +short TXT branchleft.co.uk @$r | grep spf1)"; done
+for r in 1.1.1.1 8.8.8.8 9.9.9.9; do echo "$r: $(dig +short TXT _dmarc.branchleft.co.uk @$r)"; done
 ```
 
 Expected: the NS answers move from the `ui-dns` names to the Hetzner names as
-caches expire; the MX answer is `10 mx1.branchleft.co.uk.` from every resolver
-at every point, before, during and after.
+caches expire; the MX answer is `10 mx1.branchleft.co.uk.`, the three A
+records answer `46.225.95.167`, the SPF TXT starts `v=spf1`, and the DMARC TXT
+starts `v=DMARC1; p=none` — every one of them from every resolver at every
+point, before, during and after.
 
 ### 12. Verify mail end to end
 
@@ -340,8 +365,11 @@ Once 1.1.1.1 and 8.8.8.8 both return the Hetzner NS set:
 branchleft.co.uk`, `DMARC: 'PASS'`, with the DKIM selector one of
    `v1-rsa-20260811` or `v1-ed25519-20260811`.
 
-A receiving server that already followed the new delegation read the key from
-Hetzner, so a DKIM pass here proves the Hetzner copy of the key.
+A DKIM pass in step 2's headers only proves that _whichever_ zone the
+receiver's resolver used serves the right key — it says nothing about which
+provider that was, since the receiver's own resolver's delegation state is
+not observable from here. The query below is what actually proves the
+Hetzner copy: it asks Hetzner directly, bypassing every resolver's cache.
 
 ```bash
 dig +norec @hydrogen.ns.hetzner.com v1-rsa-20260811._domainkey.branchleft.co.uk TXT +short | head -c 60; echo
