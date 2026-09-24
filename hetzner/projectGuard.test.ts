@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { assertEstateProject, checkServersResult, mailProjectServersIn } from './projectGuard';
+import {
+  assertEstateProject,
+  assertProject,
+  checkProjectResults,
+  checkServersResult,
+  foreignSightings,
+  mailProjectServersIn,
+} from './projectGuard';
 
 /**
  * What is not covered here is one line — handing `hcloud.getServers()` to
@@ -86,5 +93,138 @@ describe('checkServersResult', () => {
     expect(() => checkServersResult({ servers: [{ name: 'mx1' }] })).toThrow(
       /addresses the mail project/
     );
+  });
+});
+
+describe('foreignSightings', () => {
+  it('sees nothing foreign in a project holding only its own servers and marker', () => {
+    expect(
+      foreignSightings('tenants', {
+        servers: ['edge-t', 'app-t1', 'db-t1'],
+        firewalls: ['project-marker-tenants'],
+      })
+    ).toEqual([]);
+  });
+
+  it("names every other project's server it can see", () => {
+    expect(foreignSightings('tenants', { servers: ['edge1', 'demo1', 'mx1'] })).toEqual([
+      { project: 'mail', name: 'mx1' },
+      { project: 'org', name: 'edge1' },
+      { project: 'demos', name: 'demo1' },
+    ]);
+  });
+
+  it("names another project's marker, which is what separates two empty projects", () => {
+    expect(
+      foreignSightings('tenants', { servers: [], firewalls: ['project-marker-demos'] })
+    ).toEqual([{ project: 'demos', name: 'project-marker-demos' }]);
+  });
+
+  it('holds across the nextcloud1 rename', () => {
+    expect(foreignSightings('demos', { servers: ['ops1'] })).toEqual([
+      { project: 'org', name: 'ops1' },
+    ]);
+    expect(foreignSightings('demos', { servers: ['nextcloud1'] })).toEqual([
+      { project: 'org', name: 'nextcloud1' },
+    ]);
+  });
+
+  it('matches markers exactly, not as a prefix', () => {
+    expect(
+      foreignSightings('tenants', { servers: [], firewalls: ['project-marker-demos-old'] })
+    ).toEqual([]);
+  });
+});
+
+describe('assertProject with the own-marker requirement', () => {
+  const options = { requireOwnMarker: true, fix: 'FIX' };
+
+  it('passes an empty project that carries its own marker', () => {
+    expect(() =>
+      assertProject('dns', { servers: [], firewalls: ['project-marker-dns'] }, options)
+    ).not.toThrow();
+  });
+
+  it('refuses an empty project with no marker, because it could be any empty project', () => {
+    expect(() => assertProject('dns', { servers: [], firewalls: [] }, options)).toThrow(
+      /cannot see the firewall project-marker-dns/
+    );
+  });
+
+  it('passes the demo-dns project on its own hyphenated marker name', () => {
+    expect(() =>
+      assertProject('demo-dns', { servers: [], firewalls: ['project-marker-demo-dns'] }, options)
+    ).not.toThrow();
+  });
+
+  it("does not let dns's marker satisfy demo-dns, or the reverse", () => {
+    expect(() =>
+      assertProject('demo-dns', { servers: [], firewalls: ['project-marker-dns'] }, options)
+    ).toThrow(/addresses the dns project, not the demo-dns project/);
+    expect(() =>
+      assertProject('dns', { servers: [], firewalls: ['project-marker-demo-dns'] }, options)
+    ).toThrow(/addresses the demo-dns project, not the dns project/);
+  });
+
+  it('refuses a swapped token even when the own marker is somehow also present', () => {
+    expect(() =>
+      assertProject(
+        'tenants',
+        { servers: [], firewalls: ['project-marker-tenants', 'project-marker-demos'] },
+        options
+      )
+    ).toThrow(/addresses the demos project, not the tenants project/);
+  });
+
+  it('refuses outright when it was not given the firewall list', () => {
+    expect(() => assertProject('tenants', { servers: [] }, options)).toThrow(
+      /needs the firewall list/
+    );
+  });
+
+  it('never repeats unrelated names it was shown', () => {
+    let message = '';
+    try {
+      assertProject(
+        'tenants',
+        { servers: ['mx1', 'private-host'], firewalls: ['private-fw'] },
+        options
+      );
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain('mx1');
+    expect(message).not.toContain('private-host');
+    expect(message).not.toContain('private-fw');
+  });
+});
+
+describe('checkProjectResults', () => {
+  it('reads names out of both results the provider returns', () => {
+    expect(
+      checkProjectResults(
+        'demos',
+        { servers: [{ name: 'demo1' }] },
+        { firewalls: [{ name: 'project-marker-demos' }] },
+        'FIX'
+      )
+    ).toBe(true);
+  });
+
+  it('refuses when the marker is missing from the firewall result', () => {
+    expect(() =>
+      checkProjectResults('demos', { servers: [] }, { firewalls: [{ name: 'other' }] }, 'FIX')
+    ).toThrow(/project-marker-demos/);
+  });
+
+  it('refuses when the firewall result carries another project marker', () => {
+    expect(() =>
+      checkProjectResults(
+        'demos',
+        { servers: [] },
+        { firewalls: [{ name: 'project-marker-demos' }, { name: 'project-marker-org' }] },
+        'FIX'
+      )
+    ).toThrow(/addresses the org project/);
   });
 });

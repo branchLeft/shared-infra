@@ -39,6 +39,24 @@ const GENERATED_BANNER = [
  * emits below. A target that has never been available must not page anyone;
  * a target that stops answering after being available must.
  *
+ * **`ops1` joins the list once the host it names has actually been renamed,
+ * not before.** A separate, sequenced-first change already renamed
+ * `nextcloud1` to `ops1` across this estate -- the Pulumi resource, the
+ * `HOST_IPS` key, the `sites.ts` `privateUpstream` -- precisely so this
+ * entry could land second, after, rather than in the same change: a failure
+ * following a rename alone has one candidate cause, a rename and a new
+ * monitoring target together would have two. The Compose stack itself
+ * keeps the name `nextcloud1` (renaming it would start Nextcloud on empty
+ * volumes), which is why `hetzner/nextcloud1/` and this repository's
+ * `nextcloud1` unit/env-file references are untouched by either change --
+ * only the host's own identity moved. `expectedUp` is `true` only because
+ * `RUNBOOK-monitoring.md`'s ops1 section read the exporter back answering
+ * live first: a target that has never answered must not page anyone the
+ * moment its config deploys, which is why app1/db1 stay `false`. The flip
+ * is a reviewed change, never a hand edit -- a hand edit of this flag, on a
+ * different host's exporter, once hid a four-day outage (see this file's
+ * `MONITORED_MYSQLD_HOST` comment below).
+ *
  * Deliberately not every entry in `HOST_IPS`/`APP_HOST_IPS`: `mon1`'s address
  * is reserved for the eventual split (doc 14 §3.1) and nothing listens there
  * yet, and `app2`/`app3` are scale-out rungs with no host behind them either.
@@ -56,6 +74,7 @@ export const MONITORED_NODE_HOSTS: readonly MonitoredHost[] = [
   { name: 'edge1', address: HOST_IPS.edge1, expectedUp: true },
   { name: 'app1', address: APP_HOST_IPS.app1, expectedUp: false },
   { name: 'db1', address: HOST_IPS.db1, expectedUp: false },
+  { name: 'ops1', address: HOST_IPS.ops1, expectedUp: true },
 ];
 
 /**

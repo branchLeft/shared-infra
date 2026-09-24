@@ -1,0 +1,35 @@
+# Installed at /etc/systemd/system/node_exporter.service by
+# 40-install-node-exporter.sh. Deliberately not a Compose service: ops1 runs
+# the DOCKER-USER isolation policy (branchleft_docker_user_policy.sh), which
+# sees every *forwarded* packet a published container port receives and
+# drops everything to the estate subnet with no carve-out for this host --
+# see that script's own header. A native process bound to the host's own
+# private address is delivered locally via INPUT, which DOCKER-USER never
+# sees, so this is the one shape of "install an exporter on ops1" that does
+# not need a firewall change to be reachable from edge1's Prometheus. The
+# same reasoning is why edge1's node_exporter alone runs inside the
+# monitoring Compose project (RUNBOOK-monitoring.md) -- it is reached by
+# Compose service name from a container on the same host, never forwarded.
+[Unit]
+Description=Prometheus node_exporter (native, not Compose -- see the header above)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Written by the installer from this host's own self-identified estate
+# address -- never 0.0.0.0 and never the public interface, matching the
+# "a service binds its private address" rule hetzner-host/firewalls.ts states
+# for every other exporter in this estate.
+EnvironmentFile=/etc/default/node-exporter
+ExecStart=/usr/local/bin/node_exporter --web.listen-address=${NODE_EXPORTER_LISTEN_ADDRESS}:9100
+Restart=always
+RestartSec=5
+User=node-exporter
+Group=node-exporter
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -79,6 +79,8 @@ export const sites: EdgeSite[] = [
   },
 
   {
+    // The site keeps the Nextcloud stack's name, `nextcloud1`, not the host's:
+    // it names the workload, and the edge's rate-limit zones derive from it.
     name: 'nextcloud1',
     // Renamed from book.branchleft.co.uk: the site outgrew the booking-page
     // name it launched with -- Calendar, Talk/video and Files are all in use
@@ -94,12 +96,12 @@ export const sites: EdgeSite[] = [
     // backend, per this field's own doc in siteTypes.ts.
     //
     // Plain Nextcloud (official image over ordinary Compose), not AIO --
-    // see estate.ts's nextcloud1 comment for why AIO is ruled out on this
+    // see estate.ts's ops1 comment for why AIO is ruled out on this
     // host. 11000 is an arbitrary host-side port chosen for this deploy,
-    // bound to nextcloud1's private IP in its compose file, not a value
+    // bound to ops1's private IP in its compose file, not a value
     // Nextcloud itself picks -- the two must move together, same convention
     // as the blog entry above.
-    privateUpstream: { host: 'nextcloud1', port: 11000 },
+    privateUpstream: { host: 'ops1', port: 11000 },
     // Calendar/Talk attachments and avatars, not general file sync. Raise
     // deliberately if a real bulk-upload use case shows up.
     requestBodyMaxSize: '100MiB',

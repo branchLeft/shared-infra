@@ -1,103 +1,159 @@
 import * as hcloud from '@pulumi/hcloud';
 import * as pulumi from '@pulumi/pulumi';
 
+import { PROJECT_NAMES, PROJECTS, type ProjectName } from './projects';
+
 /**
- * Fails a preview that is pointed at the mail project.
+ * Fails a preview whose token addresses a different project from the one the
+ * program is written for.
  *
  * hcloud has no fine-grained IAM: a token has full power over everything in
  * its project, and nothing in the API tells a caller which project it is
- * holding — there is no project endpoint to ask. This guard therefore checks
- * a sentinel rather than an identity: it rules the mail project *out* by what
- * is visible in it, and cannot rule the estate project *in*. An empty project
- * passes whether it is the estate's or the lab's. So the only thing that
- * keeps the estate's resources out of the
- * mail project is the operator setting the right token, and the failure mode
- * when they do not is silent success at the wrong thing — the estate's state
- * is empty before its first apply in the new project, so a mail-project token
- * plans a clean create of the whole estate *inside the mail project*, and
- * every one of those creates succeeds.
+ * holding — there is no project endpoint to ask. So the guard reads what the
+ * token can *see* and compares it with `projects.ts`:
  *
- * The reverse mistake is loud and needs no guard: the mail stack's state
- * already names mx1 by id, so an estate token makes the provider read that id,
- * miss, and plan a replacement — which no operator confirms by accident.
- * That asymmetry is why this guard is one-directional.
+ * - any other project's server or marker in view is a refusal;
+ * - where the project is one of the new, initially empty ones, the project's
+ *   own marker must also be in view. Without that, an empty tenants project
+ *   and an empty demos project are indistinguishable, and a demos token in a
+ *   tenants stack would plan a clean create of the tenant estate inside the
+ *   demos project — every create succeeding.
  *
- * `RUNBOOK-hetzner-lab-project.md` has always carried this as a manual step
- * ("if this prints mx1, the token was created in the production project").
- * A check that only runs when someone remembers to run it is not the control;
- * this one runs on every preview and every apply, in the program, where it
- * cannot be omitted by forgetting to wire a CI job.
+ * The existing mail and org stacks keep the narrower, servers-only form below
+ * (`verifyEstateProject`). Their state already names their resources by id, so
+ * a wrong token there plans replacements, which no operator confirms by
+ * accident; the silent case is only ever a stack whose state is still empty.
  *
- * It has no bypass, which makes one operation impossible: tearing the estate's
- * own resources back out of the mail project. That was needed exactly once, to
- * move them, and `RUNBOOK-estate-project-move.md` sequences it before this
- * file exists rather than building an escape hatch that would then stand open
- * for good. Nothing after that move has any business applying either of these
- * programs against the mail project — `mail/` is a different Pulumi project
- * and this guard never sees it.
+ * It has no bypass. `RUNBOOK-estate-project-move.md` sequenced the one
+ * operation that needed one before this guard existed.
  */
 
-/**
- * Servers whose presence proves the token addresses the mail project.
- *
- * Names rather than ids: an id would have to be recovered from an account
- * nothing here can query, and would go stale the first time the host is
- * rebuilt, at which point the guard would pass against the very project it
- * exists to refuse.
- */
-const MAIL_PROJECT_SERVERS: readonly string[] = ['mx1'];
+export interface ProjectView {
+  readonly servers: readonly string[];
+  /** `undefined` when the caller did not read firewalls at all. */
+  readonly firewalls?: readonly string[];
+}
 
-/** The mail-project servers visible to whichever token is in use. */
-export function mailProjectServersIn(serverNames: readonly string[]): string[] {
-  const seen = new Set(serverNames);
-  return MAIL_PROJECT_SERVERS.filter((name) => seen.has(name));
+export interface Sighting {
+  readonly project: ProjectName;
+  readonly name: string;
 }
 
 /**
- * Throws unless the token's project is free of mail-project servers.
- *
- * An empty project passes, and has to: that is exactly the state of the estate
- * project between its creation and its first apply.
- *
- * The message names only the sentinel it matched, never the server list it was
- * given. That list is the mail project's inventory, and a preview's output is
- * the kind of thing that gets pasted into an issue.
+ * Everything in `view` that belongs to a project other than `expected`.
+ * Exact, case-sensitive matches only: hcloud names are case-sensitive, and a
+ * substring match would make `mx10` a sentinel for `mx1`.
  */
-export function assertEstateProject(serverNames: readonly string[]): void {
-  const found = mailProjectServersIn(serverNames);
-  if (found.length === 0) {
+export function foreignSightings(expected: ProjectName, view: ProjectView): Sighting[] {
+  const servers = new Set(view.servers);
+  const firewalls = new Set(view.firewalls ?? []);
+  const found: Sighting[] = [];
+  for (const name of PROJECT_NAMES) {
+    if (name === expected) {
+      continue;
+    }
+    const other = PROJECTS[name];
+    for (const server of other.servers) {
+      if (servers.has(server)) {
+        found.push({ project: name, name: server });
+      }
+    }
+    if (firewalls.has(other.marker)) {
+      found.push({ project: name, name: other.marker });
+    }
+  }
+  return found;
+}
+
+/** The mail-project servers visible to whichever token is in use. */
+export function mailProjectServersIn(serverNames: readonly string[]): string[] {
+  return foreignSightings('org', { servers: serverNames })
+    .filter((sighting) => sighting.project === 'mail')
+    .map((sighting) => sighting.name);
+}
+
+/**
+ * Throws unless `view` is consistent with the token addressing `expected`.
+ *
+ * The message names only the sentinels it matched, never the rest of what it
+ * was shown: that is another project's inventory, and a failed preview is the
+ * kind of output that gets pasted into an issue.
+ */
+export function assertProject(
+  expected: ProjectName,
+  view: ProjectView,
+  options: { requireOwnMarker: boolean; fix: string }
+): void {
+  const foreign = foreignSightings(expected, view);
+  if (foreign.length > 0) {
+    const owners = [...new Set(foreign.map((sighting) => sighting.project))].join(', ');
+    throw new Error(
+      `the hcloud token addresses the ${owners} project, not the ${expected} project — ` +
+        `it can see ${foreign.map((sighting) => sighting.name).join(', ')}. ` +
+        `Applying with it would create ${expected} resources in the wrong project. ` +
+        `${options.fix} and re-run; see hetzner/README.md, "Seven projects, and why the boundary matters".`
+    );
+  }
+  if (!options.requireOwnMarker) {
     return;
   }
-  throw new Error(
-    `hcloud:token addresses the mail project, not the estate project — it can see ${found.join(', ')}. ` +
-      'Applying with it would create estate resources inside the mail project. ' +
-      "Set the estate project's token with `pulumi config set --secret hcloud:token` " +
-      'and re-run; see hetzner/README.md, "Three projects, and why the boundary matters".'
+  const marker = PROJECTS[expected].marker;
+  if (view.firewalls === undefined) {
+    throw new Error(`the ${expected} project guard needs the firewall list and was not given one`);
+  }
+  if (!view.firewalls.includes(marker)) {
+    throw new Error(
+      `the hcloud token cannot see the firewall ${marker}, so nothing shows it addresses the ` +
+        `${expected} project. Either the token belongs to another project or the marker was never ` +
+        `created — RUNBOOK-seven-projects.md creates it. ${options.fix} and re-run.`
+    );
+  }
+}
+
+/** The existing estate stacks' check: servers only, no marker required. */
+export function assertEstateProject(serverNames: readonly string[]): void {
+  assertProject(
+    'org',
+    { servers: serverNames },
+    {
+      requireOwnMarker: false,
+      fix: "Set the estate project's token with `pulumi config set --secret hcloud:token`",
+    }
   );
 }
 
 /**
- * The assertion as the data source hands it over.
- *
- * Split out from `verifyEstateProject` below so that the shape-reading —
- * which field holds the list, which field holds the name — is covered by a
- * test rather than only by an apply against a live account. Getting that
- * wrong reads as a guard that passes everything.
+ * The assertion as the data source hands it over. Split out so the
+ * shape-reading — which field holds the list, which field holds the name — is
+ * covered by a test: getting it wrong reads as a guard that passes everything.
  */
 export function checkServersResult(result: { servers: { name: string }[] }): boolean {
   assertEstateProject(result.servers.map((server) => server.name));
   return true;
 }
 
+export function checkProjectResults(
+  expected: ProjectName,
+  servers: { servers: { name: string }[] },
+  firewalls: { firewalls: { name: string }[] },
+  fix: string
+): boolean {
+  assertProject(
+    expected,
+    {
+      servers: servers.servers.map((server) => server.name),
+      firewalls: firewalls.firewalls.map((firewall) => firewall.name),
+    },
+    { requireOwnMarker: true, fix }
+  );
+  return true;
+}
+
 /**
- * Reads the token's project and asserts it is not the mail project.
- *
- * Exported as a stack output by both callers rather than left as a loose
- * `apply`. The Node runtime does await module-scope work before a deployment
- * completes, so a loose one would run too — but an output is awaited by
- * construction, survives a refactor that stops importing the module for its
- * side effect, and leaves `pulumi stack output` able to show that the check is
- * wired at all. It is a constant `true`, so it never adds a diff.
+ * Exported as a stack output by both existing callers rather than left as a
+ * loose `apply`: an output is awaited by construction and survives a refactor
+ * that stops importing the module for its side effect. A constant `true`, so
+ * it never adds a diff.
  */
 export function verifyEstateProject(): pulumi.Output<boolean> {
   return pulumi.output(hcloud.getServers()).apply(checkServersResult);

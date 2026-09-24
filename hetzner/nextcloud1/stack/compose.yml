@@ -2,7 +2,7 @@
 # /opt/branchleft/nextcloud1.
 #
 # Plain Nextcloud -- the official images over ordinary Compose -- not
-# Nextcloud AIO. `hetzner/estate.ts`'s `nextcloud1` comment carries the full
+# Nextcloud AIO. `hetzner/estate.ts`'s `ops1` comment carries the full
 # reasoning: AIO's master container needs the Docker socket to manage its own
 # sibling containers, which is root-equivalent host access, and DOCKER-USER
 # (this host's only isolation policy) cannot bound a process with host root.
@@ -12,8 +12,8 @@
 # hetzner/monitoring/stack/compose.yml's pattern: the tag is for a human
 # reading `docker ps`, the digest is what actually gets pulled.
 #
-# `app`'s published port binds nextcloud1's own private address only
-# (10.20.1.50, hetzner-host/addressPlan.ts's HOST_IPS.nextcloud1), matching
+# `app`'s published port binds its host's own private address only
+# (10.20.1.50, hetzner-host/addressPlan.ts's HOST_IPS.ops1), matching
 # sites.ts's committed privateUpstream for cloud.branchleft.co.uk -- the two
 # must move together, same convention as every other site the Hetzner edge
 # proxies to. `db` and `redis` publish no host port at all: `app` reaches
