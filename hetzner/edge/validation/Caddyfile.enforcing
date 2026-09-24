@@ -198,7 +198,7 @@ publicpress.co.uk {
 		crowdsec
 		appsec
 		header Content-Type "text/html; charset=utf-8"
-		respond "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>PublicPress</title></head><body><h1>PublicPress</h1><p>PUBLICPRESS_HOLDING_TEXT</p><section><p>Report abuse: <a href='mailto:abuse@branchleft.co.uk'>abuse@branchleft.co.uk</a></p><p>Operated by BRANCHLEFT LTD</p></section></body></html>" 200
+		respond "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>PublicPress</title></head><body><h1>PublicPress</h1><p>PublicPress&trade;, a platform, ecosystem &amp; community for independent journalism. Built for people &amp; planet by <a href='https://branchleft.co.uk'>branchLeft</a>. Register interest: <a href='mailto:contact@branchleft.co.uk'>contact@branchleft.co.uk</a>. Complaints: <a href='mailto:complaints@branchleft.co.uk'>complaints@branchleft.co.uk</a>.</p><section><p>Report abuse: <a href='mailto:abuse@branchleft.co.uk'>abuse@branchleft.co.uk</a></p><p>Operated by BRANCHLEFT LTD</p></section></body></html>" 200
 	}
 }
 

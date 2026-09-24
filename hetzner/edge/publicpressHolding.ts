@@ -13,11 +13,11 @@
  */
 
 /**
- * Placeholder. The owner writes this paragraph -- an agent never fills in
- * real prose here. Replace the string literal with the final text; nothing
- * else in this file or in `render.ts` needs to change.
+ * The owner's own copy. Change it here only; nothing else in this file or in
+ * `render.ts` needs to change. Keep attributes single-quoted and never use a
+ * double quote (see the note at the top of this file).
  */
-export const PUBLICPRESS_HOLDING_TEXT = 'PUBLICPRESS_HOLDING_TEXT';
+export const PUBLICPRESS_HOLDING_TEXT = `PublicPress&trade;, a platform, ecosystem &amp; community for independent journalism. Built for people &amp; planet by <a href='https://branchleft.co.uk'>branchLeft</a>. Register interest: <a href='mailto:contact@branchleft.co.uk'>contact@branchleft.co.uk</a>. Complaints: <a href='mailto:complaints@branchleft.co.uk'>complaints@branchleft.co.uk</a>.`;
 
 /**
  * The address the Public Suffix List's submission process requires to be
