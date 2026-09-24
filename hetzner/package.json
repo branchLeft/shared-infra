@@ -1,6 +1,7 @@
 {
   "name": "branchleft-hetzner-network",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "main": "index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
