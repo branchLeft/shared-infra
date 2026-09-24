@@ -1,6 +1,7 @@
 {
   "name": "branchleft-shared-infra",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "prettier": "@branchleft/prettier-config",
   "scripts": {
     "typecheck": "tsc --noEmit",
