@@ -134,6 +134,18 @@
       "attestation": null
     },
     {
+      "project": "branchleft-hetzner-dns",
+      "stack": "production",
+      "repo": "shared-infra",
+      "project_path": "hetzner/dns/Pulumi.yaml",
+      "config_path": "hetzner/dns/Pulumi.production.yaml",
+      "state_backend": "hetzner",
+      "expected_secrets_provider": "passphrase",
+      "terminal_state": "never-kms",
+      "note": "Born on the passphrase provider, never KMS-wrapped. Not yet created: hetzner/dns/RUNBOOK-dns-cutover.md carries its first-time stack init, operator-held salt and a DNS-only Hetzner project's token. The committed config file holds comments only and reads `absent`, which never-kms accepts on its own, same as the network stack.",
+      "attestation": null
+    },
+    {
       "project": "branchleft-ghost-platform-hosts",
       "stack": "production",
       "repo": "ghost-platform",
@@ -176,7 +188,18 @@
       "note": "The estate's own project. Pins the same backend as hetzner/Pulumi.yaml deliberately: it resolves a stack reference to the network stack, and a stack reference resolves inside one backend only."
     },
     {
+      "path": "hetzner/dns/Pulumi.yaml",
+      "kind": "pinned",
+      "backend": "hetzner",
+      "note": "The DNS zone's own project, pinned to the same backend as the other Hetzner projects so no workstation login can redirect it."
+    },
+    {
       "path": "hetzner/RUNBOOK-new-stack.md",
+      "kind": "runbook",
+      "backend": "hetzner"
+    },
+    {
+      "path": "hetzner/dns/RUNBOOK-dns-cutover.md",
       "kind": "runbook",
       "backend": "hetzner"
     },

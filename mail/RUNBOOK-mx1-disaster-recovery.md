@@ -122,10 +122,12 @@ These apply to every path below:
 
 ## DNS records that matter, and what breaks while each is wrong
 
-**All manual, at IONOS.** No program in this repo or elsewhere owns DNS
-(`shared-infra/CLAUDE.md`: "Not DNS"). Every row below is a human editing the
-zone by hand, with a human-speed TTL lag after each edit — there is no way to
-make any of these instant.
+**Wherever the zone is served from, `hetzner/dns/zone.json` is its record.**
+Until `hetzner/dns/RUNBOOK-dns-cutover.md` has been run, the registrar's panel
+is the copy that answers, so every row below is a hand edit there and in
+`zone.json` both. After it, every row is an edit to `zone.json` landed by PR
+and applied by `hetzner/dns/`'s stack. Either way each edit carries its TTL
+lag — there is no way to make any of these instant.
 
 | Record                                                          | Changes when                                                                                                                                                                                               | Breaks while wrong                                                                                                                                                                                                                                                                                    |
 | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

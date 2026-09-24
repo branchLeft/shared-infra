@@ -214,8 +214,8 @@ else — no change to the server, no change to the existing 22/tcp or ICMP
 rules, no replace or delete of anything. (443 was added after this runbook
 was first written — see `mail/RUNBOOK-mx1-provision.md`'s "The ACME
 decision" for why: Stalwart's certificate issuance needs a reachable ACME
-challenge, and TLS-ALPN-01 is the only challenge type that fits this host's
-inbound set without a DNS-provider API IONOS doesn't have.) Read the plan.
+challenge, and TLS-ALPN-01 fits this host's inbound set with no
+DNS-provider credential on the host.) Read the plan.
 If it matches that description:
 
 ```bash

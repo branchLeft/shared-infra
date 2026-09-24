@@ -154,11 +154,14 @@ source (`stalwartlabs/stalwart` main, `crates/common/src/network/acme/` and
   one-time-per-renewal challenge.
 - **DNS-01 / DNS-PERSIST-01** — needs a DNS provider Stalwart can write TXT
   records to via API (`crates/registry/src/schema/structs.rs`'s
-  `DnsServer` object). The zone is at a registrar with no API, and this is
-  not a workaround-able gap: DNS-PERSIST-01 avoids _per-renewal_ DNS writes but still needs one
+  `DnsServer` object), so this host would hold a write credential for the
+  zone — the one that also carries its MX, SPF and DKIM records.
+  DNS-PERSIST-01 avoids _per-renewal_ DNS writes but still needs one
   real API-driven write to establish the persistent record in the first
   place, per Stalwart's own `AcmeProvider`/`DnsServer` config shape. Ruled
-  out, matching the brief's own instinct to avoid it.
+  out, matching the brief's own instinct to avoid it. The zone's DNS API is
+  `hetzner/dns/`'s; this is a choice not to use it here, not an absence.
+
 - **TLS-ALPN-01** — needs port 443 reachable, nothing else. RFC 8737 fixes
   the CA's validation connection at port 443 specifically (not
   configurable, by any implementation).
@@ -375,9 +378,11 @@ handed directly to `smtplib`, never echoed.
 
 ## The MX cutover
 
-Nothing in this repository declares DNS: `branchleft.co.uk`'s zone is manual at
-the registrar, and the cutover is a hand-made change there. What follows is the
-shape of it, not a record of any particular zone's contents.
+The zone is now declared record for record in `hetzner/dns/`, whichever
+provider is currently authoritative for it (`hetzner/dns/RUNBOOK-dns-cutover.md`
+covers moving that authority itself). The change below is still made by hand,
+at whichever provider that is: what follows is the shape of it, not a record
+of any particular zone's contents.
 
 Audit the zone first, against at least two public resolvers, over both UDP and
 TCP — `+tcp` rules out a UDP-truncated answer hiding additional records:

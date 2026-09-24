@@ -30,8 +30,10 @@ dig +short branchleft.co.uk www.branchleft.co.uk blog.branchleft.co.uk blog2.bra
 Expected: the first three answer `34.149.131.244` (the GCP load balancer) and
 `blog2` answers nothing. **If any of them answers `46.225.95.167`, stop** — the
 edge is serving live traffic, and this runbook would take it down for the
-length of a rebuild plus a re-provision with no DNS undo (the zone is manual at
-IONOS).
+length of a rebuild plus a re-provision with no DNS undo. The zone is manual
+at the registrar unless `hetzner/dns/RUNBOOK-dns-cutover.md` has already been
+run — that runbook is what removes this permanent-sounding "no undo" for
+future operations, not this one.
 
 **Between step 4 and step 6 the estate does not exist.** Recovery from a failed
 bring-up is to finish the bring-up: the resources are declarative and nothing

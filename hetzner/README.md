@@ -24,6 +24,7 @@ is.
 | `projectGuard.ts`                     | Refuses a stack whose token addresses a different project — see below                          |
 | `RUNBOOK-seven-projects.md`           | Creating the five new projects, their tokens and markers, and proving isolation                |
 | `scripts/probe-project-isolation.py`  | The 7x7 token isolation proof, with a swap-mode control that must report FAIL                  |
+| `dns.ts`, `dnsZone.ts`, `dns/`        | The DNS zone stack, its zone file, `zonecheck.py` and the cutover runbook                      |
 | `network.ts`                          | The private network, its subnet, and the estate's default route out to the internet            |
 | `egress.ts`                           | Validates the default route's gateway against the constraints the route API enforces           |
 | `estate.ts`, `estate/`                | The estate stack — `edge1` today; see "The estate stack" for what it does not create           |
@@ -42,16 +43,16 @@ feature here rather than a limitation.
 `projects.ts` is the table below as data; the guard and the isolation probe
 both read it.
 
-| Project  | Holds                                                                     | Token today                                      |
-| -------- | ------------------------------------------------------------------------- | ------------------------------------------------ |
-| mail     | `mx1` alone                                                               | `hcloud:token` / `HCLOUD_TOKEN_MAIL`             |
-| org      | The `platform` network, `edge1`, `ops1` (was `nextcloud1`), `app1`, `db1` | `hcloud:token` / `HCLOUD_TOKEN_ESTATE`           |
-| tenants  | Built fresh: `edge-t`, `app-t1`, `db-t1`                                  | a Read probe token only, until a stack needs one |
-| demos    | Built fresh: `demo1`                                                      | a Read probe token only, until a stack needs one |
-| dns      | The branchleft.co.uk DNS zone and no hosts                                | a Read probe token only, until a stack needs one |
-| backup   | The Hetzner Object Storage backup bucket and no hosts, ever               | a Read probe token only, until a stack needs one |
-| demo-dns | The demo domain's own DNS zone and no hosts, ever                         | a Read probe token only, until a stack needs one |
-| lab      | Spikes and scratch tenants; no production data ever                       | Local work only — never a repository secret      |
+| Project  | Holds                                                                     | Token today                                                                                                         |
+| -------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| mail     | `mx1` alone                                                               | `hcloud:token` / `HCLOUD_TOKEN_MAIL`                                                                                |
+| org      | The `platform` network, `edge1`, `ops1` (was `nextcloud1`), `app1`, `db1` | `hcloud:token` / `HCLOUD_TOKEN_ESTATE`                                                                              |
+| tenants  | Built fresh: `edge-t`, `app-t1`, `db-t1`                                  | a Read probe token only, until a stack needs one                                                                    |
+| demos    | Built fresh: `demo1`                                                      | a Read probe token only, until a stack needs one                                                                    |
+| dns      | The branchleft.co.uk DNS zone and no hosts                                | `HCLOUD_TOKEN`, exported by hand per `hetzner/dns/RUNBOOK-dns-cutover.md` — `hetzner/dns/`'s stack, no CI apply yet |
+| backup   | The Hetzner Object Storage backup bucket and no hosts, ever               | a Read probe token only, until a stack needs one                                                                    |
+| demo-dns | The demo domain's own DNS zone and no hosts, ever                         | a Read probe token only, until a stack needs one                                                                    |
+| lab      | Spikes and scratch tenants; no production data ever                       | Local work only — never a repository secret                                                                         |
 
 A stolen dns or demo-dns token reaches no data outside that one zone. A
 stolen backup _Cloud API_ token reaches no bucket at all — Object Storage is
@@ -127,15 +128,20 @@ stack whose state is still empty.
 `requireOwnMarker: true`, for exactly that silent case: a new-project stack
 calls it once its project's marker exists, and it refuses an empty project
 unless _its own_ marker is in view — the only way to tell two empty projects
-apart. **Nothing calls it yet.** The first new-project stack to actually
-exist, `hetzner/dns/` in the sibling [PR
-branchLeft/shared-infra#230](https://github.com/branchLeft/shared-infra/pull/230),
-still checks only `assertDnsOnlyProject`: servers-only, no marker, so it
-passes _any_ project with zero servers. This PR creates four more
-permanently-empty ones (`tenants`, `demos`, `backup`, `demo-dns`), so a
-dns-stack token minted in the wrong one of those would pass it silently.
-Wiring #230 onto the marker check is tracked at [ISSUE
-branchLeft/workspace#1306](https://github.com/branchLeft/workspace/issues/1306).
+apart. **`hetzner/dns/` is the first, and so far only, caller.**
+`hetzner/dnsZone.ts`'s `assertDnsOnlyProject`/`verifyDnsOnlyProject` delegate
+to `checkProjectResults('dns', …, requireOwnMarker: true, …)`, so a token
+addressing any of the other permanently-empty projects (`tenants`, `demos`,
+`backup`, `demo-dns`) is refused by name — it is no longer enough for the
+token's project to merely hold no servers, which every one of those shares
+with `dns` before its first apply. The zone's own creation is threaded
+through the guard's output (`dns.ts`'s `verifiedZoneName`), so a rejected
+guard makes the `Zone` resource itself unregisterable rather than leaving a
+sibling output nobody reads.
+
+The estate and mail stacks stay on the weaker, servers-only form above —
+unchanged by this — because their state already names their resources; see
+the paragraph before this one.
 
 The lab project does not exist yet. Projects are console-only; there is no
 API for creating one — which is also why creating the estate project is a

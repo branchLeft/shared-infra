@@ -60,10 +60,10 @@ export const mailFirewall = new hcloud.Firewall(
       // planned inbound set (25/465/587/993) -- added because Stalwart's
       // certificate issuance needs a challenge type, and the two
       // alternatives don't fit: HTTP-01 needs 80 (no HTTP service runs
-      // here), DNS-01 needs a DNS provider with an API (IONOS has none,
-      // and DNS-01/DNS-PERSIST-01 both require one -- confirmed against
-      // Stalwart's own source, not just its docs). TLS-ALPN-01 needs
-      // only this one port, and RFC 8737 fixes the CA's validation
+      // here), and DNS-01/DNS-PERSIST-01 both need Stalwart to hold a
+      // write credential for the zone's DNS API -- confirmed against
+      // Stalwart's own source, not just its docs. TLS-ALPN-01 needs
+      // only this one port and no credential, and RFC 8737 fixes the CA's validation
       // connection at 443 -- not configurable to reuse 465/587/993.
       // This listener carries no HTTP/admin traffic (see
       // mail/RUNBOOK-mx1-provision.md's ACME section) -- opening it

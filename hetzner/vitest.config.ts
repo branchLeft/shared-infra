@@ -6,11 +6,12 @@ import { defineConfig } from 'vitest/config';
  * shared default globs `src/` and `app/`, neither of which exists here — a
  * Pulumi program is a flat set of modules at the project root.
  *
- * `estate.ts`, `network.ts` and `index.ts` are excluded because importing any
+ * `estate.ts`, `network.ts`, `index.ts` and `dns.ts` are excluded because importing any
  * of them *constructs resources* at module scope, which is what a Pulumi
  * program is. They are covered by `pulumi preview`, not by Vitest, and
  * leaving them in the coverage denominator would report a permanent zero for
- * files this suite does not exercise as behaviour. `egress.test.ts` does
+ * files this suite does not exercise as behaviour. `dns.ts`'s logic lives in
+ * `dnsZone.ts`, which is measured. `egress.test.ts` does
  * import `network.ts` under mocks, but only to pin one resolved resource
  * option — that single assertion is not the program-level coverage this
  * exclusion is about.
@@ -37,6 +38,7 @@ export default defineConfig(
       'index.ts',
       'network.ts',
       'estate.ts',
+      'dns.ts',
     ],
   })
 );

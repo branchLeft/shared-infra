@@ -1,0 +1,21 @@
+# This stack declares no configuration of its own: every record comes from
+# `zone.json`, read by the program.
+#
+# `encryptionsalt` and the `hcloud:token` ciphertext are deliberately absent
+# from this committed file, for the same reason as
+# `../Pulumi.production.yaml`'s: the salt is an offline passphrase verifier and
+# the ciphertext is only as safe as that passphrase. An operator appends both
+# from their own source for a hand-gated stack operation, and never commits
+# the result — `git checkout -- hetzner/dns/Pulumi.production.yaml` before
+# staging anything else.
+#
+# The token is the **DNS project's** (Hetzner console id 16139783) — a project
+# holding nothing but DNS zones — and reaches the provider as the HCLOUD_TOKEN
+# environment variable, so it is never written here either. `../dnsZone.ts`
+# refuses the program unless the token's own project marker
+# (`project-marker-dns`) is visible, not merely a project holding no server:
+# every other permanently-empty Hetzner project (tenants, demos, backup,
+# demo-dns) shares that same zero-server shape, and only the marker tells them
+# apart (`../projectGuard.ts`'s `assertProject`, `requireOwnMarker: true`).
+# `RUNBOOK-dns-cutover.md` carries the first-time stack creation and every
+# later step.

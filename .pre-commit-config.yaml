@@ -94,6 +94,15 @@ repos:
         files: ^hetzner/scripts/.*\.py$
         pass_filenames: false
 
+      # zone.json is an input too: its checked-in-zone tests pin the mail
+      # records, so an edit dropping MX, SPF or DMARC fails at the commit.
+      - id: hetzner-dns-tests
+        name: hetzner dns zonecheck unit tests
+        entry: sh -c "python3 -m unittest discover -s hetzner/dns -p 'test_*.py'"
+        language: system
+        files: ^hetzner/dns/.*\.(py|json)$
+        pass_filenames: false
+
       # Widened past the checker's own inputs on purpose: what it reads is
       # every Pulumi.yaml and package.json under hetzner/, plus whether each
       # project's `main` still resolves to a file — so a renamed or deleted

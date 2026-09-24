@@ -1,0 +1,272 @@
+{
+  "$comment": [
+    "The branchleft.co.uk zone, record for record: the source of truth the Hetzner",
+    "zone is created from (../dns.ts) and the expectation zonecheck.py compares",
+    "every authoritative server against.",
+    "",
+    "Captured by `zonecheck.py capture` from the registrar's authoritative servers,",
+    "which refuse zone transfers. A record is only here if its name is in",
+    "probe_names, so a new name must be added there before it can be captured or",
+    "compared. Absent names are compared too: every probe name that holds no",
+    "record must be NXDOMAIN at both providers.",
+    "",
+    "The apex NS and SOA are absent on purpose: each provider serves its own.",
+    "Values are in zone-file presentation form, which is also what the Hetzner",
+    "API takes: absolute names end in a dot, TXT is one or more quoted strings of",
+    "at most 255 characters each."
+  ],
+  "zone": "branchleft.co.uk",
+  "rrsets": [
+    {
+      "name": "@",
+      "type": "A",
+      "ttl": 3600,
+      "values": [
+        "46.225.95.167"
+      ]
+    },
+    {
+      "name": "@",
+      "type": "MX",
+      "ttl": 3600,
+      "values": [
+        "10 mx1.branchleft.co.uk."
+      ]
+    },
+    {
+      "name": "@",
+      "type": "TXT",
+      "ttl": 3600,
+      "values": [
+        "\"google-site-verification=P0MsyfRuhKWcf3fMb1hJBtYvsHTSK1Kw0A4WJENps2o\"",
+        "\"v=spf1 ip4:167.233.252.240 ip6:2a01:4f8:1c18:866::1 include:_spf.google.com include:_spf-eu.ionos.com ~all\""
+      ]
+    },
+    {
+      "name": "_acme-challenge",
+      "type": "CNAME",
+      "ttl": 3600,
+      "values": [
+        "74bab56b-f5e2-4c49-9386-f51fa65a2c8a.16.authorize.certificatemanager.goog."
+      ]
+    },
+    {
+      "name": "_acme-challenge.blog",
+      "type": "CNAME",
+      "ttl": 3600,
+      "values": [
+        "f60916b8-5bf3-45c1-8d20-294fcb29faed.1.authorize.certificatemanager.goog."
+      ]
+    },
+    {
+      "name": "_acme-challenge.www",
+      "type": "CNAME",
+      "ttl": 3600,
+      "values": [
+        "fda3887d-7b41-4f8e-af89-e7f49e3c3a64.8.authorize.certificatemanager.goog."
+      ]
+    },
+    {
+      "name": "_dmarc",
+      "type": "TXT",
+      "ttl": 3600,
+      "values": [
+        "\"v=DMARC1; p=none; rua=mailto:rob@branchleft.co.uk\""
+      ]
+    },
+    {
+      "name": "_domainconnect",
+      "type": "CNAME",
+      "ttl": 3600,
+      "values": [
+        "_domainconnect.ionos.com."
+      ]
+    },
+    {
+      "name": "blog",
+      "type": "A",
+      "ttl": 3600,
+      "values": [
+        "46.225.95.167"
+      ]
+    },
+    {
+      "name": "book",
+      "type": "A",
+      "ttl": 3600,
+      "values": [
+        "46.225.95.167"
+      ]
+    },
+    {
+      "name": "cloud",
+      "type": "A",
+      "ttl": 3600,
+      "values": [
+        "46.225.95.167"
+      ]
+    },
+    {
+      "name": "google._domainkey",
+      "type": "TXT",
+      "ttl": 3600,
+      "values": [
+        "\"v=DKIM1;k=rsa;p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmfAAS4/N4DSvyalno1yXo7dE7KZXhuKdNq4ouAhANTxEdL+/3OaPnxNfsImFDEkWj6KrD+piggL0i7Sh7yrn66mWo/PZtkMSOkJCbudusHYfUolZtOJfywzRm+vs+xNO/9JkecJDtMTnJHjODrNTyNV4uVsYY9evXeQ2vxjLG6saRRZ4r3FcrUy3QY1RKXr5GFv\" \"axTD8j+me77CqhqoZRlIuU49Rd9/k9pK2kFBf7QjjE+TMVwSRtYV72g069myPpxD1wc1i+RoUU1d9yFPdE4jPv1THX6nsXqwcnB+37GCLW4p+hU3B6LR5SmYJyxMHdPofUK5x605z3ahJVyNYjwIDAQAB\""
+      ]
+    },
+    {
+      "name": "mx1",
+      "type": "A",
+      "ttl": 3600,
+      "values": [
+        "167.233.252.240"
+      ]
+    },
+    {
+      "name": "mx1",
+      "type": "AAAA",
+      "ttl": 3600,
+      "values": [
+        "2a01:4f8:1c18:866::1"
+      ]
+    },
+    {
+      "name": "v1-ed25519-20260811._domainkey",
+      "type": "TXT",
+      "ttl": 3600,
+      "values": [
+        "\"v=DKIM1; k=ed25519; h=sha256; p=+3yCcQHZA5Lww0Qc5+pOLLzvLmUFHl6RDCGwA/WXCiA=\""
+      ]
+    },
+    {
+      "name": "v1-rsa-20260811._domainkey",
+      "type": "TXT",
+      "ttl": 3600,
+      "values": [
+        "\"v=DKIM1; k=rsa; h=sha256; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAk32xFtFjigp8pVvsQTblK/xMItIoXvu+bTFQ51DufaDueXu0cTO6+PQbnIZRIX5lehAhNtMWXXj1fIbKYBxmvlppDLmNaLIwSPR9ddmD1kFmoaktDmtAoF1U7rBEQEO5JPPze0wjfuExC584GS4Po/FIN2JCnR1AGKkVtezC2MhDKTljGLf91u5\" \"qC9YYQQfpiTYz2OwJAHQ7koJhrCqGAprdXrBomaqxZz8Qh0+eOVyMKsytYcnNRXUOkFPe0FXQ8Cdqo0ktX8gnFB4aX3oSlQfknqvw+rEyBTYFskmsaLQ+9my1g0XxgMFeIYP83U41ttQTlaQOrF+gwCb3RRdlkQIDAQAB\""
+      ]
+    },
+    {
+      "name": "www",
+      "type": "A",
+      "ttl": 3600,
+      "values": [
+        "46.225.95.167"
+      ]
+    }
+  ],
+  "probe_names": [
+    "@",
+    "_25._tcp",
+    "_25._tcp.mx1",
+    "_443._tcp",
+    "_443._tcp.mx1",
+    "_465._tcp.mx1",
+    "_587._tcp.mx1",
+    "_993._tcp.mx1",
+    "_acme-challenge",
+    "_acme-challenge.blog",
+    "_acme-challenge.book",
+    "_acme-challenge.cloud",
+    "_acme-challenge.mx1",
+    "_acme-challenge.www",
+    "_amazonses",
+    "_atproto",
+    "_autodiscover._tcp",
+    "_bimi",
+    "_caldav._tcp",
+    "_caldavs._tcp",
+    "_carddav._tcp",
+    "_carddavs._tcp",
+    "_discord",
+    "_dmarc",
+    "_dmarc.mx1",
+    "_dnsauth",
+    "_domainconnect",
+    "_domainkey",
+    "_gh-branchleft-o",
+    "_github-challenge-branchleft-org",
+    "_github-pages-challenge-branchleft",
+    "_imap._tcp",
+    "_imaps._tcp",
+    "_jmap._tcp",
+    "_keybase",
+    "_mailchannels",
+    "_mta-sts",
+    "_openpgpkey",
+    "_pop3s._tcp",
+    "_psl",
+    "_smtp._tls",
+    "_smtp._tls.mx1",
+    "_submission._tcp",
+    "_submissions._tcp",
+    "admin",
+    "api",
+    "app",
+    "app1",
+    "assets",
+    "auth",
+    "autoconfig",
+    "autodiscover",
+    "blog",
+    "blog2",
+    "book",
+    "cdn",
+    "cloud",
+    "db1",
+    "default._bimi",
+    "demo",
+    "dev",
+    "docs",
+    "edge",
+    "edge1",
+    "example",
+    "files",
+    "ftp",
+    "go",
+    "google._domainkey",
+    "grafana",
+    "help",
+    "id",
+    "imap",
+    "img",
+    "links",
+    "localhost",
+    "login",
+    "mail",
+    "mail2",
+    "media",
+    "members",
+    "monitoring",
+    "mta-sts",
+    "mx1",
+    "mx1._domainkey",
+    "news",
+    "newsletter",
+    "nextcloud",
+    "nextcloud1",
+    "ok",
+    "ops1",
+    "other",
+    "pop",
+    "portal",
+    "s1._domainkey",
+    "sandbox",
+    "shop",
+    "sites",
+    "smtp",
+    "sso",
+    "staging",
+    "static",
+    "status",
+    "support",
+    "tenant.sandbox",
+    "test",
+    "ua-auto-config",
+    "v1-ed25519-20260811._domainkey",
+    "v1-rsa-20260811._domainkey",
+    "webmail",
+    "www",
+    "zz-no-such-name-4f1c"
+  ]
+}
