@@ -27,12 +27,12 @@
     "@pulumi/pulumi": "^3.262.0"
   },
   "peerDependencies": {
-    "@pulumi/hcloud": "1.41.0"
+    "@pulumi/hcloud": "1.42.0"
   },
   "devDependencies": {
     "@branchleft/tsconfig": "^0.6.0",
     "@branchleft/vitest-config": "^0.6.0",
-    "@pulumi/hcloud": "1.41.0",
+    "@pulumi/hcloud": "1.42.0",
     "@types/node": "^26",
     "@vitest/coverage-v8": "^4.1.10",
     "typescript": "^5.9.0",
