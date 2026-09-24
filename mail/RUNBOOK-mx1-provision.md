@@ -43,8 +43,8 @@ needed to change.
 Run the whole set:
 
 ```bash
-scp -r mail/provision/. root@mx1.branchleft.co.uk:/root/mail-provision
-ssh root@mx1.branchleft.co.uk 'chmod +x /root/mail-provision/*.sh /root/mail-provision/*.py && /root/mail-provision/run-all.sh'
+scp -i ~/.ssh/id_ed25519_hetzner -r mail/provision/. root@mx1.branchleft.co.uk:/root/mail-provision
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'chmod +x /root/mail-provision/*.sh /root/mail-provision/*.py && /root/mail-provision/run-all.sh'
 ```
 
 **The trailing `/.` on the `scp` source is load-bearing**, the same way it is
@@ -701,7 +701,7 @@ rotated credential via a fresh `62` run, or a new shim image digest):
 
 ```bash
 scp -i ~/.ssh/id_ed25519_hetzner -r mail/provision/. root@mx1.branchleft.co.uk:/root/mail-provision
-ssh root@mx1.branchleft.co.uk 'chmod +x /root/mail-provision/*.sh /root/mail-provision/*.py && /root/mail-provision/62-provision-shim-submission-credential.sh && /root/mail-provision/63-deploy-mailgun-shim.sh'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'chmod +x /root/mail-provision/*.sh /root/mail-provision/*.py && /root/mail-provision/62-provision-shim-submission-credential.sh && /root/mail-provision/63-deploy-mailgun-shim.sh'
 ```
 
 ### Idempotence
@@ -730,7 +730,7 @@ Safe to run twice in a row, by construction, not just by convention:
 The shim tracks registered sending tenants itself. Register the blog:
 
 ```bash
-ssh root@mx1.branchleft.co.uk 'docker compose -p mailgun-shim -f /etc/mailgun-shim/shim-compose.yml exec mailgun-shim node dist/cli.js register blog.branchleft.co.uk'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'docker compose -p mailgun-shim -f /etc/mailgun-shim/shim-compose.yml exec mailgun-shim node dist/cli.js register blog.branchleft.co.uk'
 ```
 
 This prints an API key exactly once. Where it goes next (Ghost's own
@@ -743,14 +743,14 @@ Edit `/var/lib/mailgun-shim/throttle.json` directly on the box; no restart
 needed (the shim reads it live, per the image's own contract):
 
 ```bash
-ssh root@mx1.branchleft.co.uk 'vi /var/lib/mailgun-shim/throttle.json'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'vi /var/lib/mailgun-shim/throttle.json'
 ```
 
 ### Log access
 
 ```bash
-ssh root@mx1.branchleft.co.uk 'docker compose -p mailgun-shim -f /etc/mailgun-shim/shim-compose.yml logs -f mailgun-shim'
-ssh root@mx1.branchleft.co.uk 'docker compose -p mailgun-shim -f /etc/mailgun-shim/shim-compose.yml logs -f caddy'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'docker compose -p mailgun-shim -f /etc/mailgun-shim/shim-compose.yml logs -f mailgun-shim'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'docker compose -p mailgun-shim -f /etc/mailgun-shim/shim-compose.yml logs -f caddy'
 ```
 
 ### Backup
@@ -944,11 +944,11 @@ was not touched by this change.
 
 ```bash
 # Is the resolver up, and does recursion work?
-ssh root@mx1.branchleft.co.uk 'systemctl is-active unbound && dig +short @127.0.0.1 A deb.debian.org'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'systemctl is-active unbound && dig +short @127.0.0.1 A deb.debian.org'
 
 # Does Spamhaus answer this host for real? The industry-standard test point
 # must come back in the 127.0.0.2 range, NOT 127.255.255.254:
-ssh root@mx1.branchleft.co.uk 'dig +short @127.0.0.1 A 2.0.0.127.zen.spamhaus.org'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'dig +short @127.0.0.1 A 2.0.0.127.zen.spamhaus.org'
 ```
 
 ### Alerting
@@ -1002,13 +1002,13 @@ before real tenant traffic depends on it.
 
 ```bash
 # Read the last recorded state without querying DNS again:
-ssh root@mx1.branchleft.co.uk 'python3 /root/mail-provision/check_dnsbl_blocklist.py --status'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'python3 /root/mail-provision/check_dnsbl_blocklist.py --status'
 
 # Force a fresh live check right now:
-ssh root@mx1.branchleft.co.uk 'python3 /root/mail-provision/check_dnsbl_blocklist.py'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'python3 /root/mail-provision/check_dnsbl_blocklist.py'
 
 # Anything the automated hourly run has flagged as needing attention:
-ssh root@mx1.branchleft.co.uk 'journalctl -t dnsbl-check -p err -b'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'journalctl -t dnsbl-check -p err -b'
 ```
 
 `--status` reads `/root/.dnsbl-check-state.json` (not secret — just the last
@@ -1058,7 +1058,7 @@ Use `mail/provision/rotate_admin_credential.py` any time the credential in
 review transcript), routine hygiene, or a handover:
 
 ```bash
-ssh root@mx1.branchleft.co.uk 'python3 /root/mail-provision/rotate_admin_credential.py'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'python3 /root/mail-provision/rotate_admin_credential.py'
 ```
 
 It generates a new secret on-box, applies it via
@@ -1092,7 +1092,7 @@ mechanism meant to expose it. Docker's host-side restriction is the single,
 sufficient control point here.)
 
 ```bash
-ssh -L 18080:127.0.0.1:8080 root@mx1.branchleft.co.uk
+ssh -i ~/.ssh/id_ed25519_hetzner -L 18080:127.0.0.1:8080 root@mx1.branchleft.co.uk
 # then, on the host:
 curl -u "$(cat <the admin credentials file>)" http://127.0.0.1:18080/api/account
 ```
@@ -1171,15 +1171,15 @@ here. An earlier version of this script cleared everything
 unconditionally, which would have released the scanner too.
 
 ```bash
-ssh root@mx1.branchleft.co.uk 'python3 /root/mail-provision/list_and_clear_blocked_ips.py --list-only'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'python3 /root/mail-provision/list_and_clear_blocked_ips.py --list-only'
 # prints one line per blocked IP, e.g.:
 #   198.51.100.7    reason=portScanning    since=2026-08-11T22:50:18Z
 
-ssh root@mx1.branchleft.co.uk 'python3 /root/mail-provision/list_and_clear_blocked_ips.py --ip 198.51.100.7'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'python3 /root/mail-provision/list_and_clear_blocked_ips.py --ip 198.51.100.7'
 # clears only that IP and reloads the live block list (see below for why the
 # reload step is necessary) -- repeat --ip for more than one address
 
-ssh root@mx1.branchleft.co.uk 'python3 /root/mail-provision/list_and_clear_blocked_ips.py --reason portScanning'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'python3 /root/mail-provision/list_and_clear_blocked_ips.py --reason portScanning'
 # clears every entry with that reason in one reviewed command -- the
 # accumulated-false-positives case now that scanBanRate no longer runs;
 # --ip and --reason may be combined (a union of both selectors)
@@ -1258,7 +1258,7 @@ eventually drift and break domain-wide DKIM signing if used verbatim.
 To retrieve the current DKIM records:
 
 ```bash
-ssh root@mx1.branchleft.co.uk 'python3 <<EOFPYTHON
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'python3 <<EOFPYTHON
 import json
 import urllib.request
 import base64
@@ -1370,7 +1370,32 @@ publish" above — at Hetzner once
 [branchLeft/workspace#1164](https://github.com/branchLeft/workspace/issues/1164)
 lands, or at IONOS by hand before it. The DKIM TXT record is required for
 every domain; MX, SPF and the DMARC record too unless `--dkim-only` was
-used.
+used. For the demo domain, the DMARC policy is: `TXT _dmarc.trypublicpress.co.uk v=DMARC1; p=none; adkim=s; aspf=s`
+
+### Verification steps for the demo domain
+
+Once the records are published, verify the setup with two concrete checks:
+
+**DKIM TXT record read-back.** The script prints both the public key and the
+selector (default `bl` unless overridden with `--selector <name>`). Query the
+published TXT record using the selector the script printed:
+
+```bash
+dig +short TXT <selector>._domainkey.trypublicpress.co.uk
+```
+
+This must return the DKIM public key that the script printed. If it does not
+match, the record is not published or is incorrect at the registrar — republish
+and verify again.
+
+**Signed-message check.** Send a test message from the demo domain
+(`@trypublicpress.co.uk`) and confirm it arrives with `dkim=pass` in the
+recipient's `Authentication-Results` header. This check happens only when
+demo-domain mail first flows through the host — a local test send via the
+provision scripts does not exercise DKIM signing, only the delivery
+forwarding logic verified earlier. Real DKIM validation requires a message
+that flows through the mail host's own outbound path to a recipient on a
+different provider who can report the auth results.
 
 ## How to re-run safely
 
@@ -1425,7 +1450,7 @@ by hand means copying the admin credential into the operator's own shell.
 The script looks the id up live and runs entirely on-box:
 
 ```bash
-ssh root@mx1.branchleft.co.uk 'python3 /root/mail-provision/trigger_acme_renewal.py'
+ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'python3 /root/mail-provision/trigger_acme_renewal.py'
 ```
 
 If a certificate is already valid and not yet due for renewal, Stalwart
