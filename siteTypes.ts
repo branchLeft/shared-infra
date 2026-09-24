@@ -95,3 +95,22 @@ export interface HostRedirect {
   /** The hostname to redirect to. */
   to: string;
 }
+
+/**
+ * A hostname the Hetzner edge answers directly with a fixed page, proxying
+ * nowhere. Distinct from `EdgeSite` rather than an `EdgeSite` with an absent
+ * `privateUpstream`, because that combination already means something else
+ * here: `privateUpstream` absent is how a site is *skipped* by the renderer
+ * (see its own doc comment). A static site is the opposite -- always
+ * rendered, never proxied.
+ *
+ * Hostname and addressing only, same rule as the rest of this registry: the
+ * page content itself lives in a file under `hetzner/edge/`, keyed by `name`,
+ * so that changing the words on the page never touches this file.
+ */
+export interface StaticSite {
+  /** This site's identifier in generated config and log output, and the key its page content is looked up by. */
+  name: string;
+  /** The single hostname this page answers on. No `www`, no subdomain, no wildcard -- each needs its own deliberate entry. */
+  hostname: string;
+}

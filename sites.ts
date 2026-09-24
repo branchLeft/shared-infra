@@ -1,4 +1,4 @@
-import type { EdgeSite, HostRedirect } from './siteTypes';
+import type { EdgeSite, HostRedirect, StaticSite } from './siteTypes';
 
 /**
  * The site registry — everything this load balancer serves.
@@ -30,6 +30,11 @@ import type { EdgeSite, HostRedirect } from './siteTypes';
  * `siteTypes.ts` for what it needs, and `hetzner/edge/render.ts` for how the
  * renderer turns it into a Caddy site block. There is no GCP-side step any
  * more.
+ *
+ * A hostname with nowhere to proxy to -- a fixed page the edge answers
+ * itself -- is a `StaticSite` in `staticSites` below instead, never an
+ * `EdgeSite` with `privateUpstream` left out: that combination already means
+ * "not rendered at all" here.
  */
 export const sites: EdgeSite[] = [
   {
@@ -120,4 +125,21 @@ export const hostRedirects: HostRedirect[] = [
   // gets redirected rather than a hard break. Remove once book's DNS record
   // is retired (see the nextcloud1 entry above).
   { from: 'book.branchleft.co.uk', to: 'cloud.branchleft.co.uk' },
+];
+
+/**
+ * Hostnames the edge answers directly with a fixed page instead of proxying.
+ * `hetzner/edge/render.ts` looks up each entry's actual page content by
+ * `name` from its own `hetzner/edge/publicpressHolding.ts` (or the
+ * equivalent file for a future entry) -- this registry stays hostname and
+ * addressing only, same rule as the rest of this file.
+ */
+export const staticSites: StaticSite[] = [
+  {
+    // No `www`, no `sites.*`, no wildcard: publicpress.co.uk's own eventual
+    // platform, and its subdomains, are a separate onboarding when they
+    // exist. This entry is a temporary holding page for the apex alone.
+    name: 'publicpress-holding',
+    hostname: 'publicpress.co.uk',
+  },
 ];

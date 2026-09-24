@@ -1,6 +1,6 @@
 import { APP_HOST_IPS, HOST_IPS } from '@branchleft/hetzner-host';
 
-import type { EdgeSite, HostRedirect } from '../../siteTypes';
+import type { EdgeSite, HostRedirect, StaticSite } from '../../siteTypes';
 import {
   MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS,
   MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS,
@@ -9,6 +9,7 @@ import {
   TLS_PROTOCOLS,
   type EdgePosture,
 } from './posture';
+import { PUBLICPRESS_HOLDING_HTML } from './publicpressHolding';
 
 /**
  * Renders the edge VM's Caddy and CrowdSec configuration from the hostname
@@ -287,6 +288,47 @@ function hstsDirective(): string[] {
   return [`header Strict-Transport-Security "${HSTS_VALUE}"`];
 }
 
+/**
+ * Every fetch directive `'none'`, for a static site that ships no script, no
+ * stylesheet, no font and no image of its own. `form-action` and
+ * `frame-ancestors` are refused too: the page takes no input and is not meant
+ * to be framed. CSP does not govern anchor navigation, so this does not
+ * affect the page's own `mailto:` link.
+ */
+const STATIC_SITE_CSP =
+  "default-src 'none'; script-src 'none'; style-src 'none'; img-src 'none'; " +
+  "font-src 'none'; connect-src 'none'; frame-src 'none'; frame-ancestors 'none'; " +
+  "base-uri 'none'; form-action 'none'";
+
+function cspDirective(value: string): string[] {
+  return [`header Content-Security-Policy "${value}"`];
+}
+
+/** No form on this page and no legitimate reason for a request body at all. */
+const STATIC_SITE_REQUEST_BODY_MAX_SIZE = '1KiB';
+
+const STATIC_SITE_CONTENT_TYPE = 'text/html; charset=utf-8';
+
+/**
+ * Page content for each `StaticSite` in `sites.ts`, keyed by `name`. Kept as
+ * a map rather than a field on `StaticSite` itself so that registry (hostname
+ * and addressing) and content stay in separate files, the same split the
+ * rest of `sites.ts` draws.
+ */
+const STATIC_SITE_CONTENT: Record<string, string> = {
+  'publicpress-holding': PUBLICPRESS_HOLDING_HTML,
+};
+
+function staticSiteContent(site: StaticSite): string {
+  const html = STATIC_SITE_CONTENT[site.name];
+  if (html === undefined) {
+    throw new Error(
+      `static site ${site.name} has no page content registered in render.ts's STATIC_SITE_CONTENT`
+    );
+  }
+  return html;
+}
+
 function rateLimitDirective(zone: string): string[] {
   return [
     'rate_limit {',
@@ -497,6 +539,54 @@ function redirectBlock(redirect: HostRedirect, zone: string, posture: EdgePostur
 }
 
 /**
+ * A hostname the edge answers directly with a fixed page, never proxying
+ * anywhere -- see `StaticSite`'s own doc comment in `siteTypes.ts` for what
+ * belongs in an entry, and `publicpressHolding.ts` for where this one's
+ * actual page text lives.
+ *
+ * Carries the same TLS and throttle posture as a proxied site block
+ * (`siteBlock` above): a browser or a scanner cannot tell this has a simpler
+ * backend and must not be given a weaker one. It differs in three ways --
+ * there is no upstream to proxy to, so `respond` answers directly; every
+ * path gets the same response, so there is no per-path routing to speak of;
+ * and it carries its own strict Content-Security-Policy, appropriate here
+ * because the page ships no script or external resource of any kind, which
+ * is not true of every site this edge serves.
+ *
+ * No members-magic-link matcher: that route is Ghost's, and nothing here is
+ * Ghost.
+ */
+function staticBlock(site: StaticSite, posture: EdgePosture): Block {
+  const html = staticSiteContent(site);
+  return {
+    addresses: [assertHostname(site.hostname)],
+    body: [
+      ...logDirective(ACCESS_LOG),
+      ...tlsDirective(),
+      'route {',
+      // Ahead of everything else, same reasoning as hstsDirective's own
+      // comment: both headers must survive a 429 or a 403 from the chain
+      // below, not only the 200 this block otherwise always answers.
+      ...hstsDirective().map((line) => `\t${line}`),
+      ...cspDirective(STATIC_SITE_CSP).map((line) => `\t${line}`),
+      ...['request_body {', `\tmax_size ${STATIC_SITE_REQUEST_BODY_MAX_SIZE}`, '}'].map(
+        (line) => `\t${line}`
+      ),
+      ...protectionChain(posture, `${site.name}_per_ip`, { appsec: 'all' }).map(
+        (line) => `\t${line}`
+      ),
+      // Set immediately ahead of `respond`, not with the headers above:
+      // unlike HSTS and the CSP, this describes the 200 body specifically,
+      // and a request the chain above already answered (429, 403) never
+      // reaches this line.
+      `\theader Content-Type "${STATIC_SITE_CONTENT_TYPE}"`,
+      `\trespond "${html}" 200`,
+      '}',
+    ],
+  };
+}
+
+/**
  * A listener on loopback only, carrying the same handler chain as the public
  * sites and answering 204.
  *
@@ -635,14 +725,42 @@ function assertUpstreamsAreDistinct(servable: readonly EdgeSite[]): void {
   }
 }
 
+/**
+ * A static site's hostname must not be one an `EdgeSite` already serves --
+ * Caddy would happily bind two site blocks to the same address, and whichever
+ * one it picked would silently shadow the other. Optional and defaulted to
+ * `[]` in `renderCaddyfile` so every existing caller -- committed fixtures
+ * and every test that predates this registry -- keeps rendering unchanged.
+ */
+function assertStaticHostnamesAreDistinct(
+  staticSites: readonly StaticSite[],
+  servableHostnames: ReadonlySet<string>
+): void {
+  const seen = new Set<string>();
+  for (const site of staticSites) {
+    if (servableHostnames.has(site.hostname)) {
+      throw new Error(
+        `static site ${site.name} declares ${site.hostname}, which an EdgeSite in sites.ts ` +
+          'already serves -- one hostname cannot be both proxied and answered statically.'
+      );
+    }
+    if (seen.has(site.hostname)) {
+      throw new Error(`two static sites both declare ${site.hostname}.`);
+    }
+    seen.add(site.hostname);
+  }
+}
+
 export function renderCaddyfile(
   sites: readonly EdgeSite[],
   hostRedirects: readonly HostRedirect[],
-  posture: EdgePosture
+  posture: EdgePosture,
+  staticSites: readonly StaticSite[] = []
 ): string {
   const servable = servableSites(sites);
   assertUpstreamsAreDistinct(servable);
   const servableHostnames = new Set(servable.flatMap((site) => site.hostnames));
+  assertStaticHostnamesAreDistinct(staticSites, servableHostnames);
 
   // A redirect source needs its own certificate before it can redirect
   // anything, so it is only rendered when its target is a hostname this edge
@@ -664,6 +782,9 @@ export function renderCaddyfile(
     for (const redirect of redirects.filter((entry) => site.hostnames.includes(entry.from))) {
       blocks.push(redirectBlock(redirect, `${site.name}_redirect_per_ip`, posture));
     }
+  }
+  for (const site of staticSites) {
+    blocks.push(staticBlock(site, posture));
   }
   // Host-qualified first, bare port second. Caddy picks the most specific
   // matching site regardless of order, so this is for the reader, not for it.
