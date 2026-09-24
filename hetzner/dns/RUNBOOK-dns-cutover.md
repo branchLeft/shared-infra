@@ -56,24 +56,42 @@ because a signed zone moved this way would fail validation everywhere.
 
 ## Phase A — create the zone at Hetzner
 
-### 1. Create the DNS project and its token (console)
+### 1. Generate a Read & Write token in the existing dns project (console)
 
-**Decide first which project holds the zone — it is an owner decision.** A
-Hetzner token has full power over its project, so whichever project holds
-this zone, every token for it can rewrite the organisation's MX, SPF and DKIM
-records. The proposal here is a new project holding only this zone, so that
-no host's token — and in particular no DNS-01 credential placed on an edge or
-demo host for some other zone — can reach it. The program enforces only the
-weaker half: it refuses any project holding a server.
+**Which project holds the zone is already settled — [ISSUE
+branchLeft/workspace#1165](https://github.com/branchLeft/workspace/issues/1165):
+the estate's seven Hetzner projects, this zone's among them.** A Hetzner
+token has full power over its project, so whichever project holds this zone,
+every token for it can rewrite the organisation's MX, SPF and DKIM records;
+a DNS-only project bounds that to DNS alone, with no host's token — and in
+particular no DNS-01 credential placed on an edge or demo host for some
+other zone — able to reach it.
 
-In the Hetzner Console, create a new project named **`branchleft-dns`** and put
-nothing in it but this zone.
+The project already exists: **branchLeft dns**, Hetzner Console project id
+**16139783**, created and proven isolated by `RUNBOOK-seven-projects.md` on
+2026-09-23 ([comment
+5802428073](https://github.com/branchLeft/workspace/issues/1165#issuecomment-5802428073)).
+It holds no servers, and one unattached marker firewall,
+`project-marker-dns`, created by that runbook — do not remove it: the
+program refuses to apply without it (see "If it fails" below).
 
-In that project: **Security → API tokens → Generate API token**, description
-`pulumi branchleft-hetzner-dns`, permission **Read & Write**. Save it in
-ProtonPass as `hcloud token — branchleft-dns project`.
+In the Hetzner Console, open the **branchLeft dns** project (id 16139783) —
+do not create a new one. **Security → API tokens → Generate API token**,
+description `pulumi branchleft-hetzner-dns`, permission **Read & Write**.
+Save it in ProtonPass as `hcloud / dns / pulumi-branchleft-hetzner-dns`,
+alongside the project's existing `probe-dns` Read-only token.
 
-Expected: the project exists with no servers, and one token.
+Expected: the project already has the marker firewall and now has this one
+new Read & Write token, alongside its existing Read-only probe token.
+
+**If it fails** with `the hcloud token addresses the X project, not the dns
+project`, the token is from the wrong project: go back to the console and
+generate one from **branchLeft dns** (16139783). If it fails with `cannot
+see the firewall project-marker-dns`, the token's project has no marker —
+confirm you generated it inside **branchLeft dns**, not a lookalike empty
+project; the marker is what tells them apart, and a servers-only check
+would have let a wrong empty project's token through silently
+([ISSUE branchLeft/workspace#1306](https://github.com/branchLeft/workspace/issues/1306)).
 
 ### 2. Supply the state and API credentials
 
@@ -96,7 +114,7 @@ read -rs "AWS_SECRET_ACCESS_KEY?Object Storage secret: "; echo; export AWS_SECRE
 ```
 
 ```bash
-read -rs "HCLOUD_TOKEN?branchleft-dns project token: "; echo; export HCLOUD_TOKEN
+read -rs "HCLOUD_TOKEN?dns project (16139783) Read & Write token: "; echo; export HCLOUD_TOKEN
 ```
 
 The provider reads `HCLOUD_TOKEN` from the environment, so the token is never
@@ -144,8 +162,9 @@ Expected: 19 resources to create — the stack, `hcloud:index/zone:Zone`
 `v1-ed25519-20260811._domainkey-txt`, `v1-rsa-20260811._domainkey-txt`,
 `www-a`). Nothing to update or delete.
 
-If it fails with `the hcloud token addresses a project holding N server(s)`, the
-token is from the wrong project: go back to step 1.
+If it fails with `the hcloud token addresses the X project, not the dns
+project` or `cannot see the firewall project-marker-dns`, the token is from
+the wrong project or lacks the dns project's marker: go back to step 1.
 
 ### 5. Apply
 
