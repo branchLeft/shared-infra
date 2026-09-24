@@ -127,22 +127,57 @@ describe('rrsetResourceName', () => {
 });
 
 describe('assertDnsOnlyProject', () => {
-  it('passes a project with no servers', () => {
-    expect(() => assertDnsOnlyProject([])).not.toThrow();
-    expect(checkDnsOnlyProject({ servers: [] })).toBe(true);
+  it('passes the dns project on its own marker', () => {
+    expect(() => assertDnsOnlyProject([], ['project-marker-dns'])).not.toThrow();
+    expect(
+      checkDnsOnlyProject({ servers: [] }, { firewalls: [{ name: 'project-marker-dns' }] })
+    ).toBe(true);
   });
 
-  it('refuses any project holding a server, without naming it', () => {
-    expect(() => checkDnsOnlyProject({ servers: [{ name: 'edge1' }] })).toThrow(
-      'addresses a project holding 1 server(s)'
+  it('refuses an empty project with no marker -- a servers-only check would have passed this', () => {
+    expect(() => assertDnsOnlyProject([], [])).toThrow(
+      /cannot see the firewall project-marker-dns/
+    );
+  });
+
+  it('refuses another empty project on its own marker, not only a server -- this is the sabotage this guard exists to catch', () => {
+    expect(() => assertDnsOnlyProject([], ['project-marker-demos'])).toThrow(
+      /addresses the demos project, not the dns project/
+    );
+    expect(() => assertDnsOnlyProject([], ['project-marker-tenants'])).toThrow(
+      /addresses the tenants project, not the dns project/
+    );
+  });
+
+  it('still refuses a project holding a server', () => {
+    expect(() => assertDnsOnlyProject(['edge1'], ['project-marker-dns'])).toThrow(
+      /addresses the org project, not the dns project/
     );
     let message = '';
     try {
-      assertDnsOnlyProject(['mx1', 'edge1']);
+      assertDnsOnlyProject(['mx1', 'some-unrelated-host'], []);
     } catch (error) {
       message = String(error);
     }
-    expect(message).toContain('holding 2 server(s)');
-    expect(message).not.toMatch(/mx1|edge1/);
+    expect(message).toContain('mx1');
+    expect(message).not.toContain('some-unrelated-host');
+  });
+
+  it('points at the runbook', () => {
+    expect(() => assertDnsOnlyProject([], [])).toThrow(/RUNBOOK-dns-cutover\.md/);
+  });
+});
+
+describe('checkDnsOnlyProject', () => {
+  it('reads names out of both results the provider returns', () => {
+    expect(
+      checkDnsOnlyProject({ servers: [] }, { firewalls: [{ name: 'project-marker-dns' }] })
+    ).toBe(true);
+  });
+
+  it('refuses when the marker is missing from the firewall result', () => {
+    expect(() => checkDnsOnlyProject({ servers: [] }, { firewalls: [] })).toThrow(
+      /project-marker-dns/
+    );
   });
 });

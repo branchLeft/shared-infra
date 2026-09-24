@@ -9,7 +9,9 @@ import { beforeAll, describe, expect, it } from 'vitest';
  * test of `dnsZone.ts` alone cannot see -- the resource options, and that
  * every rrset in the zone file becomes exactly one resource with its values
  * intact. The mock answers `hcloud:index/getServers:getServers` with an empty
- * project, which is the only project the program accepts.
+ * project and `hcloud:index/getFirewalls:getFirewalls` with the dns
+ * project's own marker, which is the only project the program accepts --
+ * see `dnsZone.ts`'s `assertDnsOnlyProject`.
  */
 
 const zoneFile = JSON.parse(fs.readFileSync(path.join(__dirname, 'dns', 'zone.json'), 'utf8'));
@@ -41,6 +43,9 @@ describe('dns.ts, as Pulumi resolves it', () => {
         },
         call(args: pulumi.runtime.MockCallArgs) {
           if (args.token === 'hcloud:index/getServers:getServers') return { servers: [] };
+          if (args.token === 'hcloud:index/getFirewalls:getFirewalls') {
+            return { firewalls: [{ name: 'project-marker-dns' }] };
+          }
           return {};
         },
       },

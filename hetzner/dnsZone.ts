@@ -1,6 +1,8 @@
 import * as hcloud from '@pulumi/hcloud';
 import * as pulumi from '@pulumi/pulumi';
 
+import { checkProjectResults } from './projectGuard';
+
 /**
  * The checked-in zone file, validated into the rrsets the Hetzner zone is
  * built from. Everything here is pure so that it is covered by Vitest; the
@@ -131,31 +133,53 @@ export function rrsetResourceName(rrset: Pick<RrsetSpec, 'name' | 'type'>): stri
 }
 
 /**
- * Throws unless the token's project holds no servers.
+ * Fixed instructions for the `dns` project's own-marker check, below.
+ * `projectGuard.ts` prints this after its own message rather than deriving a
+ * per-project command, since only the caller knows the runbook to point at.
+ */
+const DNS_PROJECT_FIX =
+  "Export the dns project's token as HCLOUD_TOKEN; see hetzner/dns/RUNBOOK-dns-cutover.md";
+
+/**
+ * Throws unless the token addresses the `dns` project, proven by its own
+ * marker firewall (`project-marker-dns`) rather than only the absence of
+ * servers.
  *
  * The zone lives in a project of its own because a Hetzner token has full
- * power over its project: a DNS-only project bounds a leaked token to DNS, and
- * a token for any project holding hosts would put the zone beside them. This
- * rules in the one shape the project is meant to have rather than ruling out
- * one known wrong project, so it cannot pass against a project nobody
- * anticipated. The message names no server: a preview's output gets pasted
- * into issues, and a project's inventory does not belong there.
+ * power over its project: a DNS-only project bounds a leaked token to DNS.
+ * A servers-only check rules in the *shape* dns is meant to have, but every
+ * other zero-server project (tenants and demos before their first apply,
+ * backup, demo-dns) has that same shape — a token minted for any of them
+ * would pass a servers-only check identically to the dns project's own
+ * token, and a preview run against the wrong empty project plans a clean
+ * create of the whole zone *there*, every record succeeding. Requiring the
+ * project's own marker (`projectGuard.ts`'s `assertProject` with
+ * `requireOwnMarker: true`) is what tells two empty projects apart. The
+ * message names no server: a preview's output gets pasted into issues, and
+ * a project's inventory does not belong there.
  */
-export function assertDnsOnlyProject(serverNames: readonly string[]): void {
-  if (serverNames.length === 0) return;
-  throw new Error(
-    `the hcloud token addresses a project holding ${serverNames.length} server(s); the zone belongs in a ` +
-      "project holding only DNS zones. Export that project's token as HCLOUD_TOKEN; " +
-      'see hetzner/dns/RUNBOOK-dns-cutover.md.'
+export function assertDnsOnlyProject(
+  serverNames: readonly string[],
+  firewallNames: readonly string[]
+): void {
+  checkProjectResults(
+    'dns',
+    { servers: serverNames.map((name) => ({ name })) },
+    { firewalls: firewallNames.map((name) => ({ name })) },
+    DNS_PROJECT_FIX
   );
 }
 
-export function checkDnsOnlyProject(result: { servers: { name: string }[] }): boolean {
-  assertDnsOnlyProject(result.servers.map((server) => server.name));
-  return true;
+export function checkDnsOnlyProject(
+  servers: { servers: { name: string }[] },
+  firewalls: { firewalls: { name: string }[] }
+): boolean {
+  return checkProjectResults('dns', servers, firewalls, DNS_PROJECT_FIX);
 }
 
 /** Awaited by construction as a stack output, like `verifyEstateProject`. */
 export function verifyDnsOnlyProject(): pulumi.Output<boolean> {
-  return pulumi.output(hcloud.getServers()).apply(checkDnsOnlyProject);
+  return pulumi
+    .all([pulumi.output(hcloud.getServers()), pulumi.output(hcloud.getFirewalls())])
+    .apply(([servers, firewalls]) => checkDnsOnlyProject(servers, firewalls));
 }
