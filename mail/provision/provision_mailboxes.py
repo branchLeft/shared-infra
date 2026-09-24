@@ -60,7 +60,10 @@ MAIL_DOMAIN = os.environ.get("MAIL_DOMAIN", "branchleft.co.uk")
 # credential authenticates into and sends as, see hetzner/RUNBOOK-monitoring.md
 # -- and for noreply@ -- the account Nextcloud's submission-only SMTP
 # credential authenticates into and sends as, see
-# mail/RUNBOOK-mx1-provision.md#nextcloud-submission-credential).
+# mail/RUNBOOK-mx1-provision.md#nextcloud-submission-credential
+# -- and for psl@ -- the role contact published in the Public Suffix List
+# entry for sites.publicpress.co.uk, which the list's maintainers email and
+# expect answered within 30 days, see mail/RUNBOOK-mx1-provision.md#mailbox-provisioning).
 MAILBOXES = ("rob", "contact", "info", "sales", "complaints", "abuse", "blog", "acme", "alerts", "noreply", "psl")
 
 # The ones that get a copy-forward to rob@ -- rob@ itself gets no script.
