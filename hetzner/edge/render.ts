@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { APP_HOST_IPS, HOST_IPS } from '@branchleft/hetzner-host';
 
 import type { EdgeSite, HostRedirect, StaticSite } from '../../siteTypes';
@@ -289,16 +291,26 @@ function hstsDirective(): string[] {
 }
 
 /**
- * Every fetch directive `'none'`, for a static site that ships no script, no
- * stylesheet, no font and no image of its own. `form-action` and
- * `frame-ancestors` are refused too: the page takes no input and is not meant
- * to be framed. CSP does not govern anchor navigation, so this does not
- * affect the page's own `mailto:` link.
+ * Every fetch directive `'none'` bar `style-src`, for a static site that ships
+ * no script, no font and no image of its own. `style-src` admits exactly the
+ * page's own inline `<style>` elements by SHA-256 and nothing else, so no
+ * stylesheet can be injected and a `style` attribute is refused; a page with
+ * no `<style>` gets `'none'`. The hash is taken from the page served, so the
+ * two cannot drift. `form-action` and `frame-ancestors` are refused too: the
+ * page takes no input and is not meant to be framed. CSP does not govern
+ * anchor navigation, so this does not affect the page's own `mailto:` links.
  */
-const STATIC_SITE_CSP =
-  "default-src 'none'; script-src 'none'; style-src 'none'; img-src 'none'; " +
-  "font-src 'none'; connect-src 'none'; frame-src 'none'; frame-ancestors 'none'; " +
-  "base-uri 'none'; form-action 'none'";
+export function staticSiteCsp(html: string): string {
+  const hashes = [...html.matchAll(/<style>([^<]*)<\/style>/g)].map(
+    ([, css]) => `'sha256-${createHash('sha256').update(css, 'utf8').digest('base64')}'`
+  );
+  const styleSrc = hashes.length > 0 ? hashes.join(' ') : "'none'";
+  return (
+    `default-src 'none'; script-src 'none'; style-src ${styleSrc}; img-src 'none'; ` +
+    "font-src 'none'; connect-src 'none'; frame-src 'none'; frame-ancestors 'none'; " +
+    "base-uri 'none'; form-action 'none'"
+  );
+}
 
 function cspDirective(value: string): string[] {
   return [`header Content-Security-Policy "${value}"`];
@@ -550,8 +562,8 @@ function redirectBlock(redirect: HostRedirect, zone: string, posture: EdgePostur
  * there is no upstream to proxy to, so `respond` answers directly; every
  * path gets the same response, so there is no per-path routing to speak of;
  * and it carries its own strict Content-Security-Policy, appropriate here
- * because the page ships no script or external resource of any kind, which
- * is not true of every site this edge serves.
+ * because the page ships no script or external resource of any kind, only
+ * its own inline stylesheet, which is not true of every site this edge serves.
  *
  * No members-magic-link matcher: that route is Ghost's, and nothing here is
  * Ghost.
@@ -568,7 +580,7 @@ function staticBlock(site: StaticSite, posture: EdgePosture): Block {
       // comment: both headers must survive a 429 or a 403 from the chain
       // below, not only the 200 this block otherwise always answers.
       ...hstsDirective().map((line) => `\t${line}`),
-      ...cspDirective(STATIC_SITE_CSP).map((line) => `\t${line}`),
+      ...cspDirective(staticSiteCsp(html)).map((line) => `\t${line}`),
       ...['request_body {', `\tmax_size ${STATIC_SITE_REQUEST_BODY_MAX_SIZE}`, '}'].map(
         (line) => `\t${line}`
       ),

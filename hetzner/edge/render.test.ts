@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 
 import { hostRedirects, sites, staticSites } from '../../sites';
@@ -17,6 +19,7 @@ import {
   renderCaddyLogAcquisition,
   resolvePrivateAddress,
   servableSites,
+  staticSiteCsp,
 } from './render';
 
 /**
@@ -839,8 +842,34 @@ describe('the publicpress.co.uk holding page', () => {
   it('carries a strict Content-Security-Policy refusing scripts and every external resource', () => {
     expect(block()).toContain("Content-Security-Policy \"default-src 'none'");
     expect(block()).toContain("script-src 'none'");
-    expect(block()).toContain("style-src 'none'");
     expect(block()).toContain("img-src 'none'");
+    expect(block()).toContain("font-src 'none'");
+  });
+
+  it("admits exactly the page's own stylesheet by the hash of the body actually served", () => {
+    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
+    const styles = [...body.matchAll(/<style>([^<]*)<\/style>/g)].map(([, css]) => css);
+    expect(styles).toHaveLength(1);
+    const expected = createHash('sha256').update(styles[0], 'utf8').digest('base64');
+    const styleSrc = /style-src ([^;]*);/.exec(block())?.[1];
+    expect(styleSrc).toBe(`'sha256-${expected}'`);
+  });
+
+  it('carries no style attribute, script, stylesheet link, image or remote URL the CSP would silently drop', () => {
+    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
+    expect(body).not.toMatch(/\sstyle=/);
+    expect(body).not.toMatch(/<(script|link|img|iframe|object)\b/);
+    expect(body).not.toMatch(
+      /url\(|@import|https?:\/\/(?!www\.w3\.org\/2000\/svg'|branchleft\.co\.uk')/
+    );
+  });
+
+  it('heads the page with the outlined wordmark, named for assistive technology', () => {
+    expect(block()).toMatch(/<h1><svg [^>]*role='img' aria-label='PublicPress'>/);
+  });
+
+  it('refuses every stylesheet on a page that carries none', () => {
+    expect(staticSiteCsp('<p>plain</p>')).toContain("style-src 'none';");
   });
 
   it('answers with an inline text/html response and no reverse_proxy at all', () => {
