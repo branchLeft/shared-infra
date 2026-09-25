@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { hostRedirects, sites } from '../../sites';
-import type { EdgeSite, HostRedirect } from '../../siteTypes';
+import { hostRedirects, sites, staticSites } from '../../sites';
+import type { EdgeSite, HostRedirect, StaticSite } from '../../siteTypes';
 import {
   MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS,
   MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS,
@@ -10,6 +10,7 @@ import {
   RATE_LIMIT_WINDOW_SECONDS,
 } from './posture';
 import type { EdgePosture } from './posture';
+import { PUBLICPRESS_ABUSE_CONTACT } from './publicpressHolding';
 import {
   renderAppsecAcquisition,
   renderCaddyfile,
@@ -103,7 +104,7 @@ describe('sites without a private upstream', () => {
         expect(() => resolvePrivateAddress(upstream.host, upstream.port)).not.toThrow();
       }
     }
-    expect(() => renderCaddyfile(sites, hostRedirects, POSTURE)).not.toThrow();
+    expect(() => renderCaddyfile(sites, hostRedirects, POSTURE, staticSites)).not.toThrow();
   });
 });
 
@@ -818,6 +819,66 @@ describe('the CrowdSec acquisition files', () => {
 // exercised directly above, against the rendered output; the TLS floor is
 // covered by the 'protocols tls1.2 tls1.3' assertion above too.
 
+describe('the publicpress.co.uk holding page', () => {
+  const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
+  const block = () => rendered.split('publicpress.co.uk {')[1]?.split('\n}')[0] ?? '';
+
+  it('serves exactly the apex hostname -- no www, no sites.* subdomain, no wildcard', () => {
+    expect(rendered).toContain('\npublicpress.co.uk {');
+    expect(rendered).not.toContain('www.publicpress.co.uk');
+    expect(rendered).not.toContain('sites.publicpress.co.uk');
+    expect(rendered).not.toContain('*.publicpress.co.uk');
+  });
+
+  it('carries the site-wide TLS floor and HSTS header, the same as every proxied site', () => {
+    expect(block()).toContain('tls {');
+    expect(block()).toContain('protocols tls1.2 tls1.3');
+    expect(block()).toContain('Strict-Transport-Security "max-age=31536000; includeSubDomains"');
+  });
+
+  it('carries a strict Content-Security-Policy refusing scripts and every external resource', () => {
+    expect(block()).toContain("Content-Security-Policy \"default-src 'none'");
+    expect(block()).toContain("script-src 'none'");
+    expect(block()).toContain("style-src 'none'");
+    expect(block()).toContain("img-src 'none'");
+  });
+
+  it('answers with an inline text/html response and no reverse_proxy at all', () => {
+    expect(block()).toContain('header Content-Type "text/html; charset=utf-8"');
+    expect(block()).toContain('respond "');
+    expect(block()).not.toContain('reverse_proxy');
+  });
+
+  it('serves the abuse contact the Public Suffix List submission needs to find on the page', () => {
+    expect(block()).toContain('Report abuse:');
+    expect(block()).toContain(`mailto:${PUBLICPRESS_ABUSE_CONTACT}`);
+    expect(block()).toContain(PUBLICPRESS_ABUSE_CONTACT);
+  });
+
+  it('carries the general throttle and AppSec once the posture enforces them', () => {
+    const enforcingBlock = renderCaddyfile(sites, hostRedirects, ENFORCING, staticSites)
+      .split('publicpress.co.uk {')[1]
+      ?.split('\n}')[0];
+    expect(enforcingBlock).toContain('rate_limit {');
+    expect(enforcingBlock).toContain('appsec');
+  });
+
+  it('refuses a static hostname an EdgeSite in the registry already proxies to', () => {
+    const clashing: StaticSite = { name: 'clash', hostname: sites[0].hostnames[0] };
+    expect(() => renderCaddyfile(sites, hostRedirects, POSTURE, [clashing])).toThrow(
+      /already serves/
+    );
+  });
+
+  it('refuses two static sites declaring the same hostname', () => {
+    const duplicate: StaticSite[] = [
+      { name: 'first', hostname: 'duplicate.invalid' },
+      { name: 'second', hostname: 'duplicate.invalid' },
+    ];
+    expect(() => renderCaddyfile([], [], POSTURE, duplicate)).toThrow(/both declare/);
+  });
+});
+
 describe('the fully enforcing posture', () => {
   /**
    * Committed but never deployed. The posture flip is designed to be reviewed
@@ -828,7 +889,7 @@ describe('the fully enforcing posture', () => {
    * during the flip.
    */
   it('renders a configuration CI can load before anything depends on it', async () => {
-    await expect(renderCaddyfile(sites, hostRedirects, ENFORCING)).toMatchFileSnapshot(
+    await expect(renderCaddyfile(sites, hostRedirects, ENFORCING, staticSites)).toMatchFileSnapshot(
       './validation/Caddyfile.enforcing'
     );
   });
@@ -850,7 +911,7 @@ describe('the fully enforcing posture', () => {
 
 describe('the committed stack directory', () => {
   it('is what this renderer produces from the registry and the committed posture', async () => {
-    await expect(renderCaddyfile(sites, hostRedirects, POSTURE)).toMatchFileSnapshot(
+    await expect(renderCaddyfile(sites, hostRedirects, POSTURE, staticSites)).toMatchFileSnapshot(
       './stack/Caddyfile'
     );
     await expect(renderAppsecAcquisition(POSTURE)).toMatchFileSnapshot(

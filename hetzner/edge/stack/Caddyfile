@@ -134,6 +134,26 @@ book.branchleft.co.uk {
 	}
 }
 
+publicpress.co.uk {
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		header Content-Security-Policy "default-src 'none'; script-src 'none'; style-src 'none'; img-src 'none'; font-src 'none'; connect-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+		request_body {
+			max_size 1KiB
+		}
+		appsec
+		header Content-Type "text/html; charset=utf-8"
+		respond "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>PublicPress</title></head><body><h1>PublicPress</h1><p>PublicPress&trade;, a platform, ecosystem &amp; community for independent journalism. Built for people &amp; planet by <a href='https://branchleft.co.uk'>branchLeft</a>. Register interest: <a href='mailto:contact@branchleft.co.uk'>contact@branchleft.co.uk</a>. Complaints: <a href='mailto:complaints@branchleft.co.uk'>complaints@branchleft.co.uk</a>.</p><section><p>Report abuse: <a href='mailto:abuse@branchleft.co.uk'>abuse@branchleft.co.uk</a></p><p>Operated by BRANCHLEFT LTD</p></section></body></html>" 200
+	}
+}
+
 http://edge-probe.invalid:8080 {
 	log {
 		output file /var/log/caddy/probe.log
