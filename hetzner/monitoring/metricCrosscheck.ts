@@ -75,6 +75,7 @@ function stripExprNoise(expr: string): string {
   return expr
     .replace(/"(?:[^"\\]|\\.)*"/g, '') // label-matcher / regex string literals
     .replace(/\[[^\]]*\]/g, '') // range-vector durations, e.g. [15m]
+    .replace(/\boffset\s+-?[0-9][0-9a-z]*/g, ' ') // `offset 1h`, else `h` reads as a metric
     .replace(VECTOR_MATCH_MODIFIER, ' ');
 }
 
@@ -295,6 +296,8 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   delivery_dsn_perm_fail: "Stalwart's own Prometheus exporter, on mx1",
   delivery_rcpt_to_rejected: "Stalwart's own Prometheus exporter, on mx1",
   delivery_completed: "Stalwart's own Prometheus exporter, on mx1",
+  delivery_dsn_temp_fail: "Stalwart's own Prometheus exporter, on mx1",
+  queue_rescheduled: "Stalwart's own Prometheus exporter, on mx1",
   alertmanager_notifications_failed_total: 'built into Alertmanager itself',
 };
 

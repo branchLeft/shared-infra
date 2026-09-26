@@ -1124,6 +1124,40 @@ its metrics level reconfigured, then correct the metric names in
 `monitoring/alert_rules_test.yml`, so a name change should be made there
 first and watched to fail.
 
+**`MailDeliveryDeferred`** -- a remote server deferred mx1 more than 5 times
+in six hours (`queue_rescheduled`), against a baseline of 0-2 a day.
+**`MailDelayNotified`** -- mx1 sent a sender a delay notice
+(`delivery_dsn_temp_fail`), which means someone is already waiting: a reader
+on a sign-in link, or an alert that has not arrived. Stalwart's counters carry
+no recipient-domain label, so neither can name the provider; Gmail's
+`421 4.7.28` against a cold IP is the likeliest. What to do:
+
+1. **Never resend** anything into it. The queue's backoff is the correct
+   pacing; resends are the "unusual rate" Gmail objects to.
+2. Check Google Postmaster Tools (branchleft.co.uk) for IP and domain
+   reputation and delivery errors over the same days.
+3. Which messages are stuck, and to which domain, is visible only on mx1 --
+   an owner step, since mx1 is never agent-operated.
+
+### Alerts that stay on mx1 (`notify: on-host`)
+
+Alertmanager's `email` receiver sends to an off-host mailbox, and every
+message it sends is an external delivery from mx1's IP. Rules labelled
+`notify: on-host` route instead to `email-on-host`, a mailbox on mx1 that
+mx1 delivers locally, so they cost no sending reputation. Two kinds carry it:
+
+- **The SNDS rules.** They are expected to fire while mx1's volume is too
+  low for Microsoft to report, and unengaged repeats of machine mail to an
+  external provider spend the very reputation they watch.
+- **The two deferral rules above.** The provider deferring mx1 is usually
+  the one hosting the off-host mailbox, so the alert would queue behind the
+  mail it reports on.
+
+Read these in the on-host mailbox, not the off-host one. CI's
+`Test the Alertmanager routing` step proves the route tree delivers each to
+exactly the receiver it names; `MailHostDown` keeps its off-host path, since
+it fires precisely when mx1 cannot deliver anything.
+
 ## Responding to the SNDS complaint-rate alerts
 
 Unlike every alert above, these three read a value Microsoft computed, not a

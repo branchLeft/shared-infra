@@ -483,6 +483,26 @@ jobs:
             docker.io/prom/alertmanager:v0.34.0@sha256:268d4bf0e4bc0fe6dbdef6a59ce81a2918c88458bf8edf7dd0572ad372a093e6 \
             check-config /etc/alertmanager/alertmanager.yml
 
+      # check-config parses the route tree; it never walks it, and it reports
+      # success for a `continue` that silently replaces a receiver. This walks
+      # it: each line names the exact receiver set an alert must reach, and
+      # --verify.receivers fails the step on any other set.
+      - name: Test the Alertmanager routing
+        run: |
+          route() {
+            docker run --rm \
+              -v "$PWD/hetzner/monitoring/stack/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro" \
+              --entrypoint /bin/amtool \
+              docker.io/prom/alertmanager:v0.34.0@sha256:268d4bf0e4bc0fe6dbdef6a59ce81a2918c88458bf8edf7dd0572ad372a093e6 \
+              config routes test --config.file=/etc/alertmanager/alertmanager.yml \
+              --verify.receivers="$1" "${@:2}"
+          }
+          route email-on-host alertname=SNDSCollectorStale notify=on-host
+          route email-on-host alertname=MailDeliveryDeferred notify=on-host
+          route email alertname=HostOrServiceDown
+          route mailhost-deadman,email alertname=MailHostDown
+          route heartbeat alertname=Watchdog
+
       # Never committed: it carries the placeholder secrets rendered above,
       # and the real thing carries real ones -- the same reason RUNBOOK-monitoring.md
       # tells the operator to re-render rather than to hand-edit this file.
