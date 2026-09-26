@@ -32,8 +32,19 @@ route:
     - matchers:
         - alertname =~ "^(MailHostDown|AlertEmailDeliveryFailing)$"
       receiver: email
+    - matchers:
+        - severity = "page"
+        - alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead)$"
+      receiver: PAGE_RECEIVER_TBD
+      group_by: ['tenant']
 
 receivers:
+  - name: PAGE_RECEIVER_TBD
+    # No supplier chosen for this receiver yet -- see RUNBOOK-monitoring.md.
+    # An empty receiver is valid Alertmanager config: every alert routed
+    # here is accepted and dropped, not refused, so this route validates
+    # in CI without paging anyone.
+
   - name: email
     email_configs:
       - to: '__ALERT_RECIPIENT_EMAIL__'
