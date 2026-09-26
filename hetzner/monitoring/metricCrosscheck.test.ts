@@ -19,6 +19,11 @@ describe('extractQueriedMetrics', () => {
     expect(result).toEqual([{ name: 'up', labelKeys: new Set(['expected_up']) }]);
   });
 
+  it('does not read an offset duration as a metric name', () => {
+    const result = extractQueriedMetrics('sum(x unless x offset 1h) > 0 or y offset -30m');
+    expect(result.map((series) => series.name)).toEqual(['x', 'y']);
+  });
+
   it('reads a bare name with no label constraint', () => {
     const result = extractQueriedMetrics(
       'mysql_global_status_threads_connected / mysql_global_variables_max_connections > 0.70'

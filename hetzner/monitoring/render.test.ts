@@ -541,6 +541,30 @@ describe('the SNDS complaint-rate alert rules', () => {
   });
 });
 
+describe('the notify="on-host" label', () => {
+  // Exact set, both directions: a missing label sends expected or
+  // deferral-time mail off-host; a stray one strands an alert whose whole
+  // point is reaching someone when mx1 cannot (MailHostDown) on mx1.
+  it('is carried by every SNDS rule and both deferral rules, and nothing else', () => {
+    const onHost = renderAlertRules()
+      .split('- alert: ')
+      .slice(1)
+      .filter((rule) => /\n\s+notify: on-host(\n|$)/.test(rule.split(/\n\s+annotations:/)[0]))
+      .map((rule) => rule.split('\n')[0]);
+    expect(onHost).toEqual([
+      'MailDeliveryDeferred',
+      'MailDelayNotified',
+      'SNDSComplaintRateHigh',
+      'SNDSReputationRed',
+      'SNDSCollectorStale',
+      'SNDSCollectorFailing',
+      'SNDSCollectorNotRunning',
+      'SNDSLinkAgeUnmeasurable',
+      'SNDSAccessLinkExpiringSoon',
+    ]);
+  });
+});
+
 describe('the Alertmanager template', () => {
   const rendered = renderAlertmanagerTemplate();
 
@@ -585,6 +609,17 @@ describe('the Alertmanager template', () => {
     expect(routeSection.indexOf('receiver: mailhost-deadman')).toBeLessThan(
       routeSection.lastIndexOf('receiver: email')
     );
+  });
+
+  it('keeps notify="on-host" alerts on mx1: a local recipient, and no continue into the off-host root receiver', () => {
+    // CI's `amtool config routes test` step proves the walk itself; this pins
+    // the two properties that make the receiver it lands on local.
+    const routeSection = rendered.split('receivers:')[0];
+    const onHostRoute = routeSection.slice(routeSection.indexOf('notify = "on-host"'));
+    expect(onHostRoute.split('- matchers:')[0]).not.toContain('continue');
+    const receiver = rendered.slice(rendered.indexOf('name: email-on-host'));
+    const recipient = /to: '([^']+)'/.exec(receiver)?.[1];
+    expect(recipient).toMatch(/@branchleft\.co\.uk$/);
   });
 
   it('does not send a resolved notification to the mailhost-deadman receiver', () => {

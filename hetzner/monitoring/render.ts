@@ -638,6 +638,46 @@ export function renderAlertRules(): string {
     '            host -- which is the failure this whole target exists to avoid.',
     '            Gated on up == 1 so a scrape outage pages once, as',
     '            HostOrServiceDown, rather than twice here as well.',
+    '',
+    // Both deferral rules carry `notify: on-host`. The provider deferring mx1
+    // is most often the one hosting ALERT_RECIPIENT_EMAIL, so an alert routed
+    // there would queue behind the mail it reports on, and every retry would
+    // add to the rate the provider is already refusing.
+    '      - alert: MailDeliveryDeferred',
+    '        expr: sum(increase(queue_rescheduled[6h])) > 5',
+    '        labels:',
+    '          severity: warning',
+    '          notify: on-host',
+    '        annotations:',
+    '          summary: "A remote mail server deferred mx1 deliveries more than 5 times in 6 hours."',
+    '          description: >-',
+    '            queue_rescheduled counts retries mx1 schedules after a remote',
+    "            4xx or a failed connection. Stalwart's counters carry no",
+    '            recipient-domain label, so this cannot name the provider; the',
+    '            likeliest is Gmail, whose 421 4.7.28 throttles a cold IP. The',
+    '            baseline is 0-2 a day, so 5 in 6h is a provider refusing mx1',
+    '            rather than one greylist. Never resend into a deferral -- the',
+    "            queue's backoff is the right pacing. See RUNBOOK-monitoring.md.",
+    '',
+    '      - alert: MailDelayNotified',
+    '        expr: >-',
+    '          sum(increase(delivery_dsn_temp_fail[1h])) > 0',
+    '          or',
+    '          sum(delivery_dsn_temp_fail unless delivery_dsn_temp_fail offset 1h) > 0',
+    '        labels:',
+    '          severity: warning',
+    '          notify: on-host',
+    '        annotations:',
+    '          summary: "mx1 told a sender their message is delayed."',
+    '          description: >-',
+    '            A delay DSN goes out only once a message has been stuck long',
+    '            enough to warn its sender, so this is the point at which a',
+    '            deferral became visible to someone -- a reader waiting on a',
+    '            sign-in link, or an alert that has not arrived. Fires on the',
+    '            first one. The unless-offset half catches the series being',
+    '            born: Stalwart publishes a counter only once it has counted',
+    '            something, and increase() cannot see a first sample.',
+    '            See RUNBOOK-monitoring.md.',
     '  - name: alerting-pipeline',
     // Not folded into `probes` above: those alerts watch probe_success, an
     // external vantage point on the estate's own services. This one watches
@@ -669,6 +709,11 @@ export function renderAlertRules(): string {
     // by the recipient never touches any of Stalwart's delivery counters at
     // all, which is exactly the shape of a signup flood aimed at harvested
     // real addresses (RUNBOOK-monitoring.md's SNDS section).
+    //
+    // Every rule here carries `notify: on-host`: SNDS alerts are expected to
+    // fire while mx1's volume is too low for Microsoft to report on, and each
+    // repeat that leaves mx1 for an external mailbox is unengaged machine mail
+    // spending the very reputation these rules watch.
     '  - name: snds-reputation',
     '    rules:',
     '      - alert: SNDSComplaintRateHigh',
@@ -678,6 +723,7 @@ export function renderAlertRules(): string {
     '          (snds_complaint_rate > 0.001 unless on(ip) snds_message_volume)',
     '        labels:',
     '          severity: warning',
+    '          notify: on-host',
     '        annotations:',
     '          summary: "Microsoft SNDS reported a complaint rate over 0.1% for {{ $labels.ip }}."',
     '          description: >-',
@@ -701,6 +747,7 @@ export function renderAlertRules(): string {
     '        expr: snds_reputation_status{status="red"} == 1',
     '        labels:',
     '          severity: warning',
+    '          notify: on-host',
     '        annotations:',
     '          summary: "Microsoft SNDS filter-result status for {{ $labels.ip }} is red."',
     '          description: >-',
@@ -716,6 +763,7 @@ export function renderAlertRules(): string {
     '          or absent(snds_collector_last_success_timestamp_seconds)',
     '        labels:',
     '          severity: warning',
+    '          notify: on-host',
     '        annotations:',
     '          summary: "The SNDS collector has not published a successful snapshot in over 36 hours."',
     '          description: >-',
@@ -739,6 +787,7 @@ export function renderAlertRules(): string {
     '        for: 1h',
     '        labels:',
     '          severity: warning',
+    '          notify: on-host',
     '        annotations:',
     '          summary: "The SNDS collector\'s last run failed."',
     '          description: >-',
@@ -761,6 +810,7 @@ export function renderAlertRules(): string {
     '          time() - snds_collector_last_attempt_timestamp_seconds > 43200',
     '        labels:',
     '          severity: warning',
+    '          notify: on-host',
     '        annotations:',
     '          summary: "The SNDS collector has not attempted a run in over 12 hours."',
     '          description: >-',
@@ -783,6 +833,7 @@ export function renderAlertRules(): string {
     '        for: 12h',
     '        labels:',
     '          severity: warning',
+    '          notify: on-host',
     '        annotations:',
     '          summary: "The SNDS collector cannot persist the access link\'s age, so the expiry warning cannot fire."',
     '          description: >-',
@@ -802,6 +853,7 @@ export function renderAlertRules(): string {
     '        expr: time() - snds_access_link_first_seen_timestamp_seconds > 2160000',
     '        labels:',
     '          severity: warning',
+    '          notify: on-host',
     '        annotations:',
     '          summary: "The SNDS automated-access link is approaching its 30-day expiry."',
     '          description: >-',
@@ -855,6 +907,11 @@ export function renderAlertmanagerTemplate(): string {
     '      group_wait: 0s',
     '      group_interval: 1m',
     '      repeat_interval: 1m',
+    // No `continue`: an on-host alert must never also reach the root email
+    // receiver, whose recipient is off-host. See the notify label's rules.
+    '    - matchers:',
+    '        - notify = "on-host"',
+    '      receiver: email-on-host',
     // Two sibling routes on the same matcher, not one: Alertmanager's route
     // tree falls back to the root's own receiver (email) only when *no*
     // child route matches at all, so a single matching child with
@@ -877,6 +934,13 @@ export function renderAlertmanagerTemplate(): string {
     '  - name: email',
     '    email_configs:',
     "      - to: '__ALERT_RECIPIENT_EMAIL__'",
+    '        send_resolved: true',
+    '',
+    // A mailbox on mx1 itself: mx1 delivers it locally, so it never makes an
+    // external delivery attempt and costs no sending reputation.
+    '  - name: email-on-host',
+    '    email_configs:',
+    "      - to: 'rob@branchleft.co.uk'",
     '        send_resolved: true',
     '',
     '  - name: heartbeat',

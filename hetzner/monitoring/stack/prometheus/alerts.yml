@@ -230,6 +230,42 @@ groups:
             host -- which is the failure this whole target exists to avoid.
             Gated on up == 1 so a scrape outage pages once, as
             HostOrServiceDown, rather than twice here as well.
+
+      - alert: MailDeliveryDeferred
+        expr: sum(increase(queue_rescheduled[6h])) > 5
+        labels:
+          severity: warning
+          notify: on-host
+        annotations:
+          summary: "A remote mail server deferred mx1 deliveries more than 5 times in 6 hours."
+          description: >-
+            queue_rescheduled counts retries mx1 schedules after a remote
+            4xx or a failed connection. Stalwart's counters carry no
+            recipient-domain label, so this cannot name the provider; the
+            likeliest is Gmail, whose 421 4.7.28 throttles a cold IP. The
+            baseline is 0-2 a day, so 5 in 6h is a provider refusing mx1
+            rather than one greylist. Never resend into a deferral -- the
+            queue's backoff is the right pacing. See RUNBOOK-monitoring.md.
+
+      - alert: MailDelayNotified
+        expr: >-
+          sum(increase(delivery_dsn_temp_fail[1h])) > 0
+          or
+          sum(delivery_dsn_temp_fail unless delivery_dsn_temp_fail offset 1h) > 0
+        labels:
+          severity: warning
+          notify: on-host
+        annotations:
+          summary: "mx1 told a sender their message is delayed."
+          description: >-
+            A delay DSN goes out only once a message has been stuck long
+            enough to warn its sender, so this is the point at which a
+            deferral became visible to someone -- a reader waiting on a
+            sign-in link, or an alert that has not arrived. Fires on the
+            first one. The unless-offset half catches the series being
+            born: Stalwart publishes a counter only once it has counted
+            something, and increase() cannot see a first sample.
+            See RUNBOOK-monitoring.md.
   - name: alerting-pipeline
     rules:
       - alert: AlertEmailDeliveryFailing
@@ -257,6 +293,7 @@ groups:
           (snds_complaint_rate > 0.001 unless on(ip) snds_message_volume)
         labels:
           severity: warning
+          notify: on-host
         annotations:
           summary: "Microsoft SNDS reported a complaint rate over 0.1% for {{ $labels.ip }}."
           description: >-
@@ -280,6 +317,7 @@ groups:
         expr: snds_reputation_status{status="red"} == 1
         labels:
           severity: warning
+          notify: on-host
         annotations:
           summary: "Microsoft SNDS filter-result status for {{ $labels.ip }} is red."
           description: >-
@@ -295,6 +333,7 @@ groups:
           or absent(snds_collector_last_success_timestamp_seconds)
         labels:
           severity: warning
+          notify: on-host
         annotations:
           summary: "The SNDS collector has not published a successful snapshot in over 36 hours."
           description: >-
@@ -318,6 +357,7 @@ groups:
         for: 1h
         labels:
           severity: warning
+          notify: on-host
         annotations:
           summary: "The SNDS collector's last run failed."
           description: >-
@@ -340,6 +380,7 @@ groups:
           time() - snds_collector_last_attempt_timestamp_seconds > 43200
         labels:
           severity: warning
+          notify: on-host
         annotations:
           summary: "The SNDS collector has not attempted a run in over 12 hours."
           description: >-
@@ -362,6 +403,7 @@ groups:
         for: 12h
         labels:
           severity: warning
+          notify: on-host
         annotations:
           summary: "The SNDS collector cannot persist the access link's age, so the expiry warning cannot fire."
           description: >-
@@ -381,6 +423,7 @@ groups:
         expr: time() - snds_access_link_first_seen_timestamp_seconds > 2160000
         labels:
           severity: warning
+          notify: on-host
         annotations:
           summary: "The SNDS automated-access link is approaching its 30-day expiry."
           description: >-

@@ -23,6 +23,9 @@ route:
       group_interval: 1m
       repeat_interval: 1m
     - matchers:
+        - notify = "on-host"
+      receiver: email-on-host
+    - matchers:
         - alertname =~ "^(MailHostDown|AlertEmailDeliveryFailing)$"
       receiver: mailhost-deadman
       continue: true
@@ -34,6 +37,11 @@ receivers:
   - name: email
     email_configs:
       - to: '__ALERT_RECIPIENT_EMAIL__'
+        send_resolved: true
+
+  - name: email-on-host
+    email_configs:
+      - to: 'rob@branchleft.co.uk'
         send_resolved: true
 
   - name: heartbeat
