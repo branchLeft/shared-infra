@@ -458,6 +458,18 @@ describe('the rendered alert rules', () => {
       'expr: increase(alertmanager_notifications_failed_total{integration="email"}[30m]) > 0'
     );
   });
+
+  it('alerts on a stale per-tenant backup age, warning severity so it never pages -- see alert_rules_test.yml for the promtool proof one stale tenant fires while a fresh sibling stays silent', () => {
+    expect(rendered).toContain('alert: TenantBackupAgeHigh');
+    expect(rendered).toContain(
+      'expr: (time() - backup_worker_last_success_timestamp_seconds) > 129600'
+    );
+    const start = rendered.indexOf('alert: TenantBackupAgeHigh');
+    const end = rendered.indexOf('- alert:', start + 1);
+    const block = rendered.slice(start, end === -1 ? undefined : end);
+    expect(block).toContain('severity: warning');
+    expect(block).not.toContain('notify: on-host');
+  });
 });
 
 describe('the mail-delivery alert rules', () => {

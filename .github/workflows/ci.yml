@@ -500,6 +500,7 @@ jobs:
           route email-on-host alertname=SNDSCollectorStale notify=on-host
           route email-on-host alertname=MailDeliveryDeferred notify=on-host
           route email alertname=HostOrServiceDown
+          route email alertname=TenantBackupAgeHigh
           route mailhost-deadman,email alertname=MailHostDown
           route heartbeat alertname=Watchdog
 
