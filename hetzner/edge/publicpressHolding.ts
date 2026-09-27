@@ -7,7 +7,7 @@
  *
  * The assembled page is a single line with no line breaks and single-quoted
  * HTML attributes throughout. `render.ts` embeds it inside a double-quoted
- * Caddyfile token, so a double quote anywhere in this file would need
+ * Caddyfile token, so a double quote anywhere in the page would need
  * escaping that a future hand-edit of the prose could easily get wrong --
  * avoiding the character avoids the escaping question entirely.
  */
@@ -17,7 +17,16 @@
  * `render.ts` needs to change. Keep attributes single-quoted and never use a
  * double quote (see the note at the top of this file).
  */
-export const PUBLICPRESS_HOLDING_TEXT = `PublicPress&trade;, a platform, ecosystem &amp; community for independent journalism. Built for people &amp; planet by <a href='https://branchleft.co.uk'>branchLeft</a>. Register interest: <a href='mailto:contact@branchleft.co.uk'>contact@branchleft.co.uk</a>. Complaints: <a href='mailto:complaints@branchleft.co.uk'>complaints@branchleft.co.uk</a>.`;
+export const PUBLICPRESS_HOLDING_TEXT = `PublicPress&trade;, a platform, ecosystem &amp; community for independent journalism. Built for people &amp; planet by <a href='https://branchleft.co.uk'>branchLeft</a>.`;
+
+/**
+ * Each contact renders as its own paragraph, the label on one line and the
+ * address on the next. Same quoting rule as the copy above.
+ */
+export const PUBLICPRESS_CONTACTS: ReadonlyArray<readonly [label: string, address: string]> = [
+  ['Register interest:', 'contact@branchleft.co.uk'],
+  ['Complaints:', 'complaints@branchleft.co.uk'],
+];
 
 /**
  * The address the Public Suffix List's submission process requires to be
@@ -55,6 +64,10 @@ export const PUBLICPRESS_HOLDING_CSS =
   `footer{margin-top:2.5rem;padding-top:1rem;border-top:2px solid #FF48B0;font:400 .875rem/1.5 'Courier Prime','Courier New',Courier,monospace;color:#000}` +
   `footer p{margin:0 0 .25rem}`;
 
+function contactLine(label: string, address: string): string {
+  return `<p>${label}<br><a href='mailto:${address}'>${address}</a></p>`;
+}
+
 /**
  * The full page `render.ts` serves verbatim for every path on
  * `publicpress.co.uk`. No script, no font, no image, no external resource of
@@ -66,8 +79,12 @@ export const PUBLICPRESS_HOLDING_HTML =
   `<title>PublicPress</title><style>${PUBLICPRESS_HOLDING_CSS}</style></head><body><main>` +
   `<h1>${PUBLICPRESS_WORDMARK_SVG}</h1>` +
   `<p>${PUBLICPRESS_HOLDING_TEXT}</p>` +
+  PUBLICPRESS_CONTACTS.map(([label, address]) => contactLine(label, address)).join('') +
   '<footer>' +
-  `<p>Report abuse: <a href='mailto:${PUBLICPRESS_ABUSE_CONTACT}'>${PUBLICPRESS_ABUSE_CONTACT}</a></p>` +
+  contactLine(
+    'Seen spam, phishing or other misuse on a PublicPress site? Report it to:',
+    PUBLICPRESS_ABUSE_CONTACT
+  ) +
   '<p>Operated by BRANCHLEFT LTD</p>' +
   '</footer>' +
   '</main></body></html>';

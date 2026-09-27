@@ -879,9 +879,17 @@ describe('the publicpress.co.uk holding page', () => {
   });
 
   it('serves the abuse contact the Public Suffix List submission needs to find on the page', () => {
-    expect(block()).toContain('Report abuse:');
     expect(block()).toContain(`mailto:${PUBLICPRESS_ABUSE_CONTACT}`);
     expect(block()).toContain(PUBLICPRESS_ABUSE_CONTACT);
+  });
+
+  it('sets every email address on a line of its own', () => {
+    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
+    const addresses = [...body.matchAll(/mailto:([^']+)'/g)].map(([, address]) => address);
+    expect(addresses).toHaveLength(3);
+    for (const address of addresses) {
+      expect(body).toContain(`<br><a href='mailto:${address}'>${address}</a></p>`);
+    }
   });
 
   it('carries the general throttle and AppSec once the posture enforces them', () => {
