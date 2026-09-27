@@ -291,22 +291,29 @@ function hstsDirective(): string[] {
 }
 
 /**
- * Every fetch directive `'none'` bar `style-src`, for a static site that ships
- * no script, no font and no image of its own. `style-src` admits exactly the
- * page's own inline `<style>` elements by SHA-256 and nothing else, so no
- * stylesheet can be injected and a `style` attribute is refused; a page with
- * no `<style>` gets `'none'`. The hash is taken from the page served, so the
- * two cannot drift. `form-action` and `frame-ancestors` are refused too: the
- * page takes no input and is not meant to be framed. CSP does not govern
- * anchor navigation, so this does not affect the page's own `mailto:` links.
+ * Every fetch directive `'none'` bar `script-src` and `style-src`, for a
+ * static site that fetches no font and no image. Those two admit
+ * exactly the page's own inline `<script>` and `<style>` elements by SHA-256
+ * and nothing else, so nothing can be injected and a `style` or event-handler
+ * attribute is refused; a page with no such element gets `'none'`. The hash
+ * is taken from the page served, so the two cannot drift. `connect-src`
+ * stays `'none'`, so the script can
+ * never send anything anywhere. `form-action` and `frame-ancestors` are
+ * refused too: the page takes no input and is not meant to be framed. CSP
+ * does not govern anchor navigation, so this does not affect the page's own
+ * `mailto:` links.
  */
 export function staticSiteCsp(html: string): string {
-  const hashes = [...html.matchAll(/<style>([^<]*)<\/style>/g)].map(
-    ([, css]) => `'sha256-${createHash('sha256').update(css, 'utf8').digest('base64')}'`
-  );
-  const styleSrc = hashes.length > 0 ? hashes.join(' ') : "'none'";
+  const source = (pattern: RegExp): string => {
+    const hashes = [...html.matchAll(pattern)].map(
+      ([, body]) => `'sha256-${createHash('sha256').update(body, 'utf8').digest('base64')}'`
+    );
+    return hashes.length > 0 ? hashes.join(' ') : "'none'";
+  };
+  const scriptSrc = source(/<script>([\s\S]*?)<\/script>/g);
+  const styleSrc = source(/<style>([^<]*)<\/style>/g);
   return (
-    `default-src 'none'; script-src 'none'; style-src ${styleSrc}; img-src 'none'; ` +
+    `default-src 'none'; script-src ${scriptSrc}; style-src ${styleSrc}; img-src 'none'; ` +
     "font-src 'none'; connect-src 'none'; frame-src 'none'; frame-ancestors 'none'; " +
     "base-uri 'none'; form-action 'none'"
   );
@@ -562,8 +569,9 @@ function redirectBlock(redirect: HostRedirect, zone: string, posture: EdgePostur
  * there is no upstream to proxy to, so `respond` answers directly; every
  * path gets the same response, so there is no per-path routing to speak of;
  * and it carries its own strict Content-Security-Policy, appropriate here
- * because the page ships no script or external resource of any kind, only
- * its own inline stylesheet, which is not true of every site this edge serves.
+ * because the page ships no external resource of any kind, only its own
+ * inline stylesheet and script, which is not true of every site this edge
+ * serves.
  *
  * No members-magic-link matcher: that route is Ghost's, and nothing here is
  * Ghost.

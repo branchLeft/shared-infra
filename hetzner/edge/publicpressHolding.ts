@@ -62,7 +62,47 @@ export const PUBLICPRESS_HOLDING_CSS =
   `a{color:#3255A4;text-decoration:underline;text-decoration-color:#FF48B0;text-decoration-thickness:2px;text-underline-offset:3px}` +
   `a:hover,a:focus-visible{background:#FFE800;color:#000;outline:none}` +
   `footer{margin-top:2.5rem;padding-top:1rem;border-top:2px solid #FF48B0;font:400 .875rem/1.5 'Courier Prime','Courier New',Courier,monospace;color:#000}` +
-  `footer p{margin:0 0 .25rem}`;
+  `footer p{margin:0 0 .25rem}` +
+  `canvas{position:fixed;top:0;left:0;width:100%;height:100%;touch-action:none;cursor:crosshair}` +
+  `main{position:relative;pointer-events:none}` +
+  `main>*{pointer-events:auto}`;
+
+/**
+ * An easter egg: the dotted background is a sheet to draw on in the three
+ * Riso inks, each stroke fading away ten seconds after it is finished. The
+ * content column takes its own pointer events so text stays selectable.
+ *
+ * `render.ts` admits it by its SHA-256, as for the stylesheet. Besides the
+ * no-double-quote rule, it must contain no backslash (the Caddyfile lexer
+ * reads one as an escape) and every `{` must be followed by a space, because
+ * Caddy substitutes a known placeholder such as `{path}` inside the body.
+ */
+export const PUBLICPRESS_HOLDING_SCRIPT = [
+  '(function () {',
+  " var c = document.querySelector('canvas'), x = c.getContext('2d');",
+  " var inks = ['#FF48B0', '#3255A4', '#FFE800'], strokes = [], live = null, n = 0, raf = 0;",
+  ' var HOLD = 10000, FADE = 1500;',
+  ' function size() { var d = window.devicePixelRatio || 1; c.width = innerWidth * d; c.height = innerHeight * d; x.setTransform(d, 0, 0, d, 0, 0); draw(); }',
+  ' function draw() {',
+  '  var now = Date.now();',
+  '  strokes = strokes.filter(function (s) { return s === live || now - s.t < HOLD + FADE; });',
+  '  x.clearRect(0, 0, c.width, c.height);',
+  "  x.globalCompositeOperation = 'multiply'; x.lineWidth = 6; x.lineCap = x.lineJoin = 'round';",
+  '  strokes.forEach(function (s) {',
+  '   x.globalAlpha = s === live ? 1 : Math.min(1, (HOLD + FADE - (now - s.t)) / FADE);',
+  '   x.strokeStyle = s.ink; x.beginPath(); x.moveTo(s.p[0][0], s.p[0][1]);',
+  '   s.p.forEach(function (q) { x.lineTo(q[0] + 0.01, q[1]); });',
+  '   x.stroke();',
+  '  });',
+  '  raf = strokes.length ? requestAnimationFrame(draw) : 0;',
+  ' }',
+  " c.addEventListener('pointerdown', function (e) { live = { ink: inks[n++ % inks.length], p: [[e.clientX, e.clientY]], t: 0 }; strokes.push(live); c.setPointerCapture(e.pointerId); if (!raf) raf = requestAnimationFrame(draw); });",
+  " c.addEventListener('pointermove', function (e) { if (live) live.p.push([e.clientX, e.clientY]); });",
+  ' function end() { if (live) { live.t = Date.now(); live = null; } }',
+  " c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);",
+  " addEventListener('resize', size); size();",
+  '})();',
+].join('');
 
 function contactLine(label: string, address: string): string {
   return `<p>${label}<br><a href='mailto:${address}'>${address}</a></p>`;
@@ -70,13 +110,14 @@ function contactLine(label: string, address: string): string {
 
 /**
  * The full page `render.ts` serves verbatim for every path on
- * `publicpress.co.uk`. No script, no font, no image, no external resource of
- * any kind; one inline stylesheet, admitted by hash.
+ * `publicpress.co.uk`. No font, no image, no external resource of any kind;
+ * one inline stylesheet and one inline script, each admitted by hash.
  */
 export const PUBLICPRESS_HOLDING_HTML =
   "<!doctype html><html lang='en'><head><meta charset='utf-8'>" +
   "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
-  `<title>PublicPress</title><style>${PUBLICPRESS_HOLDING_CSS}</style></head><body><main>` +
+  `<title>PublicPress</title><style>${PUBLICPRESS_HOLDING_CSS}</style></head><body>` +
+  "<canvas aria-hidden='true'></canvas><main>" +
   `<h1>${PUBLICPRESS_WORDMARK_SVG}</h1>` +
   `<p>${PUBLICPRESS_HOLDING_TEXT}</p>` +
   PUBLICPRESS_CONTACTS.map(([label, address]) => contactLine(label, address)).join('') +
@@ -87,4 +128,6 @@ export const PUBLICPRESS_HOLDING_HTML =
   ) +
   '<p>Operated by BRANCHLEFT LTD</p>' +
   '</footer>' +
-  '</main></body></html>';
+  '</main>' +
+  `<script>${PUBLICPRESS_HOLDING_SCRIPT}</script>` +
+  '</body></html>';
