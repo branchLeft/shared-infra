@@ -552,6 +552,9 @@ export function renderAlertRules(): string {
     // every other tenant's keeps climbing -- the metric carries a `tenant`
     // label already, so one alert instance per stale tenant is what
     // `time()` minus the gauge naturally produces, with no group-by needed.
+    // The rule's own `or absent(...)` branch covers the other failure shape:
+    // the whole metric family gone (exporter down, textfile deleted), which
+    // no per-tenant series can ever be stale enough to represent on its own.
     // Warning, never page: a stale backup is a chore on its own timescale,
     // not an outage, and this estate has no page register entry for it by
     // design -- routing carries no `notify: on-host` label either, since
@@ -559,7 +562,9 @@ export function renderAlertRules(): string {
     // receiver HostMemoryPressure and HostDiskSpaceLow already use.
     '    rules:',
     '      - alert: TenantBackupAgeHigh',
-    '        expr: (time() - backup_worker_last_success_timestamp_seconds) > 129600',
+    '        expr: >-',
+    '          (time() - backup_worker_last_success_timestamp_seconds > 129600)',
+    '          or absent(backup_worker_last_success_timestamp_seconds)',
     '        labels:',
     '          severity: warning',
     '        annotations:',
@@ -570,10 +575,16 @@ export function renderAlertRules(): string {
     '            consistently-refused worker for one tenant leaves that',
     "            tenant's gauge frozen while every other tenant's keeps",
     '            advancing -- each tenant is its own series, so this fires for',
-    '            the stale one alone. 129600s (36h) is one missed nightly run',
-    "            (24h cadence) plus margin, the same shape as this file's own",
-    '            SNDSCollectorStale threshold. Warning, never page: a stale',
-    '            backup is not an outage on its own timescale. The scrape',
+    '            the stale one alone. The `or absent(...)` half catches the',
+    '            whole metric family vanishing -- the exporter down, or the',
+    '            textfile deleted -- which the time() subtraction alone cannot',
+    '            see, since subtracting from an absent series yields no series',
+    '            at all, not a large number; that branch carries no tenant',
+    '            label, unlike a single stale tenant firing on its own. 129600s',
+    "            (36h) is 1.5x the nightly (24h) cadence, following this file's",
+    '            own SNDSCollectorStale threshold convention -- LLD-9 names the',
+    '            cadence, not a number of missed runs. Warning, never page: a',
+    '            stale backup is not an outage on its own timescale. The scrape',
     "            wiring for the worker's own host -- the node_exporter",
     '            textfile-collector mount -- is a separate, host-specific',
     '            change; see RUNBOOK-monitoring.md for the bring-up shape once',

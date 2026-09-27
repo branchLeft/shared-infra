@@ -461,14 +461,19 @@ describe('the rendered alert rules', () => {
 
   it('alerts on a stale per-tenant backup age, warning severity so it never pages -- see alert_rules_test.yml for the promtool proof one stale tenant fires while a fresh sibling stays silent', () => {
     expect(rendered).toContain('alert: TenantBackupAgeHigh');
-    expect(rendered).toContain(
-      'expr: (time() - backup_worker_last_success_timestamp_seconds) > 129600'
-    );
     const start = rendered.indexOf('alert: TenantBackupAgeHigh');
     const end = rendered.indexOf('- alert:', start + 1);
     const block = rendered.slice(start, end === -1 ? undefined : end);
+    expect(block).toContain('time() - backup_worker_last_success_timestamp_seconds > 129600');
     expect(block).toContain('severity: warning');
     expect(block).not.toContain('notify: on-host');
+  });
+
+  it("also fires TenantBackupAgeHigh when the whole metric family is absent -- exporter down or textfile deleted -- which no single tenant's staleness can represent, and carries no tenant label when it does -- see alert_rules_test.yml for the promtool proof", () => {
+    const start = rendered.indexOf('alert: TenantBackupAgeHigh');
+    const end = rendered.indexOf('- alert:', start + 1);
+    const block = rendered.slice(start, end === -1 ? undefined : end);
+    expect(block).toContain('or absent(backup_worker_last_success_timestamp_seconds)');
   });
 });
 
