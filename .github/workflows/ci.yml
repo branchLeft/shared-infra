@@ -502,6 +502,19 @@ jobs:
           route email alertname=HostOrServiceDown
           route mailhost-deadman,email alertname=MailHostDown
           route heartbeat alertname=Watchdog
+          # The page register (hetzner/monitoring/pageRegister.ts): every
+          # live entry pages the placeholder receiver.
+          route PAGE_RECEIVER_TBD alertname=TierTwoSafetyMatch severity=page tenant=acme
+          route PAGE_RECEIVER_TBD alertname=TenantFailedUnsafe severity=page tenant=acme
+          route PAGE_RECEIVER_TBD alertname=ReadersCannotRead severity=page tenant=acme
+          # The dormant entry (no target set) reaches no route at all.
+          route email alertname=AppealLatencyBreach severity=page
+          # A page-severity alertname the register has never heard of
+          # reaches no route either -- the wiring half of the control
+          # sabotage. pageRegister.test.ts's `findUnregisteredPageSeverityAlerts`
+          # is the other half: it fails the build before a rule like this one
+          # is ever rendered for real.
+          route email alertname=SomeUnregisteredPagingAlert severity=page
 
       # Never committed: it carries the placeholder secrets rendered above,
       # and the real thing carries real ones -- the same reason RUNBOOK-monitoring.md

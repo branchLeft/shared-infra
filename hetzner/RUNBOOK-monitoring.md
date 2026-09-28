@@ -1079,6 +1079,40 @@ ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP"
 
 Confirm 15d's query returns `1` again before closing the issue.
 
+## 16. The page register
+
+`hetzner/monitoring/pageRegister.ts` is the single committed list of what
+may page a phone. Adding an entry is a decision, not a configuration
+change, and `renderAlertmanagerTemplate` renders the page route in
+`stack/alertmanager/alertmanager.yml.tmpl` from that list and nothing else
+-- `pageRegister.test.ts`'s `findUnregisteredPageSeverityAlerts` fails the
+build if a rule ever carries `severity: page` under an alertname the
+register does not know.
+
+Four entries route through this stack's own Alertmanager, matched on
+`severity = "page"` and their `alertname`, and grouped on the `tenant`
+label rather than on `alertname` -- two different entries firing for the
+same tenant collapse into one notification, because it is one incident, not
+two. The fifth -- a stopped drain worker -- pages through its own
+Healthchecks.io dead-man's switch directly, so it renders no Alertmanager
+route at all; it is listed in the register purely so the register still
+names every path that can reach a phone.
+
+**The receiver is `PAGE_RECEIVER_TBD`, and it carries no `*_configs`.** No
+supplier has been chosen for it yet -- an empty receiver is valid
+Alertmanager config, so this route, and every test above it, validates
+without paging anyone. Choosing the receiver (SMS, push, a paging service)
+is a supplier decision. Once one is chosen: rename the receiver away from
+`_TBD` in `pageRegister.ts`, give it its own `*_configs` block (the same
+`__TOKEN__` placeholder-and-substitute pattern `render_alertmanager_config.py`
+already uses for the other receivers), and repeat this file's §12 proof
+standard end to end -- a real page, reaching the real receiver, before this
+route is trusted with anything that matters.
+
+An entry marked `dormant` in the register (appeal latency, until a target
+is set) renders no route at all; flip the flag in the same change that sets
+the target.
+
 ## Responding to the mail-delivery alerts
 
 Three rules read Stalwart's own counters from the `stalwart` job. They answer

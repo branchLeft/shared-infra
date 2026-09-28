@@ -1,6 +1,12 @@
 import { APP_HOST_IPS, HOST_IPS } from '@branchleft/hetzner-host';
 
 import type { EdgeSite } from '../../siteTypes';
+import {
+  PAGE_REGISTER,
+  renderPageReceiverBlock,
+  renderPageRoute,
+  type PageRegisterEntry,
+} from './pageRegister';
 
 /**
  * Renders the monitoring stack's Prometheus scrape configuration and alert
@@ -881,8 +887,17 @@ export function renderAlertRules(): string {
  * `stack/render_alertmanager_config.py` from `/etc/branchleft/monitoring.env`
  * before every start -- see that script's docstring for why this file cannot
  * just read the environment itself.
+ *
+ * The page route (`pageRegister.ts`) is the one part of this template not
+ * hand-typed below: `register` defaults to the committed `PAGE_REGISTER`,
+ * and the parameter exists so a caller can prove the route is actually
+ * derived from it rather than from a hardcoded duplicate -- see
+ * `pageRegister.test.ts`.
  */
-export function renderAlertmanagerTemplate(): string {
+export function renderAlertmanagerTemplate(
+  register: readonly PageRegisterEntry[] = PAGE_REGISTER
+): string {
+  const pageRoute = renderPageRoute(register);
   return `${[
     ...GENERATED_BANNER,
     '# Rendered into alertmanager.yml at container start by',
@@ -929,8 +944,15 @@ export function renderAlertmanagerTemplate(): string {
     '    - matchers:',
     '        - alertname =~ "^(MailHostDown|AlertEmailDeliveryFailing)$"',
     '      receiver: email',
+    // Rendered from the page register and nothing else -- see
+    // `pageRegister.ts`. Empty when the register names no alertname to
+    // route (every entry dormant or none delivered by Alertmanager), so no
+    // stray route sits in the tree matching nothing.
+    ...(pageRoute ? [pageRoute] : []),
     '',
     'receivers:',
+    renderPageReceiverBlock(),
+    '',
     '  - name: email',
     '    email_configs:',
     "      - to: '__ALERT_RECIPIENT_EMAIL__'",
