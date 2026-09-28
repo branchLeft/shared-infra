@@ -299,6 +299,12 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   delivery_dsn_temp_fail: "Stalwart's own Prometheus exporter, on mx1",
   queue_rescheduled: "Stalwart's own Prometheus exporter, on mx1",
   alertmanager_notifications_failed_total: 'built into Alertmanager itself',
+  // branchLeft/ghost-platform's infra/provisioning/scripts/backup_worker.py
+  // (called from nightly_dump_loop.py), a node_exporter textfile collector
+  // on the org/control host -- not a collector this repository owns or can
+  // scan, per this module's own limitation above.
+  backup_worker_lock_wait_seconds:
+    'backup_worker.py, in branchLeft/ghost-platform, on the org/control host',
 };
 
 /**
