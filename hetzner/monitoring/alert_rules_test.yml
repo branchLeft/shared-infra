@@ -1153,12 +1153,12 @@ tests:
               description: >-
                 A delay DSN goes out only once a message has been stuck long enough to warn its sender, so this is the point at which a deferral became visible to someone -- a reader waiting on a sign-in link, or an alert that has not arrived. Fires on the first one. The unless-offset half catches the series being born: Stalwart publishes a counter only once it has counted something, and increase() cannot see a first sample. See RUNBOOK-monitoring.md.
 
-  # BackupLockWaitHigh: branchLeft/workspace#1158's ruling. A single
-  # tenant's gauge over the 5s threshold fires, carrying that tenant's own
-  # label -- backup_worker_lock_wait_seconds is a textfile-collector gauge
-  # (see backup_worker.py in branchLeft/ghost-platform), so a flat value is
-  # the realistic input: it only changes when a dump next runs, not every
-  # scrape.
+  # BackupLockWaitHigh: a single tenant's gauge over the 5s threshold
+  # fires, carrying that tenant's own label -- backup_worker_lock_wait_seconds
+  # is a textfile-collector gauge (see backup_worker.py in
+  # branchLeft/ghost-platform), so a flat value is the realistic input: it
+  # only changes when a dump next runs, not every scrape. No for: -- see
+  # render.ts's own comment above the rule.
   - interval: 1m
     input_series:
       - series: 'backup_worker_lock_wait_seconds{tenant="blog"}'
@@ -1171,9 +1171,9 @@ tests:
               severity: warning
               tenant: blog
             exp_annotations:
-              summary: "blog's dump waited over 5s for db1's global read lock."
+              summary: "blog's dump took over 5s from dial-in to its first byte."
               description: >-
-                mysqldump --source-data=2 takes a brief, server-wide FLUSH TABLES WITH READ LOCK to record the binlog position point-in-time recovery depends on -- branchLeft/workspace#1158's own review measured this on MySQL 8.0.46, and the ruling keeps --source-data=2 rather than dropping it. Dumping tenants strictly one at a time means two tenants' own locks never queue against each OTHER, but a lock can still queue behind ordinary write traffic on ANY tenant while it waits to be granted -- this alert is that wait, per tenant, written whether or not the dump that eventually ran past it also went on to pass its own floor check. 5s is well past the sub-second wait 09-backup-and-recovery.html measured at toy scale; re-tune once real-estate figures exist, the same as this group's own SNDS thresholds.
+                mysqldump --source-data=2 takes a brief, server-wide FLUSH TABLES WITH READ LOCK to record the binlog position point-in-time recovery depends on. This gauge is a PROXY for that wait, not a direct MySQL read: it times dial-in to the producer's first byte, which also includes connection setup -- unverified against the real dial-in transport, still unwired as of this alert shipping (see branchLeft/ghost-platform infra/provisioning/scripts/README.md). Dumping tenants strictly one at a time means two tenants' own locks never queue against each OTHER, but a lock can still queue behind ordinary write traffic on ANY tenant while it waits to be granted -- this alert is that wait, per tenant, written whether or not the dump that eventually ran past it also went on to pass its own floor check. 5s is well past the sub-second wait 09-backup-and-recovery.html measured at toy scale; re-tune once real-estate figures exist, the same as this group's own SNDS thresholds.
 
   # A wait comfortably under the threshold -- the ordinary case every night,
   # since 09-backup-and-recovery.html measured sub-second waits at toy

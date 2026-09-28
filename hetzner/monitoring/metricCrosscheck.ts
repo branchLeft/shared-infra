@@ -301,10 +301,11 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   alertmanager_notifications_failed_total: 'built into Alertmanager itself',
   // branchLeft/ghost-platform's infra/provisioning/scripts/backup_worker.py
   // (called from nightly_dump_loop.py), a node_exporter textfile collector
-  // on the org/control host -- not a collector this repository owns or can
-  // scan, per this module's own limitation above.
-  backup_worker_lock_wait_seconds:
-    'backup_worker.py, in branchLeft/ghost-platform, on the org/control host',
+  // in org/control -- not a collector this repository owns or can scan, per
+  // this module's own limitation above. Which host in org/control is still
+  // open (LLD-9 names only the project, never a host); nothing here assumes
+  // one.
+  backup_worker_lock_wait_seconds: 'backup_worker.py, in branchLeft/ghost-platform, in org/control',
 };
 
 /**

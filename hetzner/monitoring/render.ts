@@ -872,13 +872,18 @@ export function renderAlertRules(): string {
     '            is the only alert in this group that fires BEFORE an outage rather',
     '            than after one; treat it as a chore, not an incident.',
     '',
-    // branchLeft/workspace#1158's ruling ("lock=a"): nightly_dump_loop.py
-    // (ghost-platform's infra/provisioning/scripts/) dumps tenants strictly
-    // one at a time and records how long each one waited for db1's global
-    // read lock, per tenant, in the same textfile-collector shape as this
-    // group's own SNDS gauges. This alert is the other half of that ruling.
-    // Not `notify: on-host`: unlike an SNDS or mail-deferral alert, nothing
-    // about this signal depends on a route that avoids mx1.
+    // ghost-platform's infra/provisioning/scripts/backup_worker.py (called
+    // from nightly_dump_loop.py) dumps tenants strictly one at a time and
+    // records each one's dial-in-to-first-byte gap, per tenant, in the same
+    // textfile-collector shape as this group's own SNDS gauges. This alert
+    // is on that gauge. Not `notify: on-host`: unlike an SNDS or
+    // mail-deferral alert, nothing about this signal depends on a route
+    // that avoids mx1.
+    //
+    // No `for:` -- unlike every other alert in this group. The gauge is
+    // written once per tenant per night and otherwise flat, so there is no
+    // scrape-to-scrape flapping to debounce, and paging on the very next
+    // scrape after a bad wait is the intended behaviour, not a shortcut.
     '  - name: backup',
     '    rules:',
     '      - alert: BackupLockWaitHigh',
@@ -886,18 +891,21 @@ export function renderAlertRules(): string {
     '        labels:',
     '          severity: warning',
     '        annotations:',
-    '          summary: "{{ $labels.tenant }}\'s dump waited over 5s for db1\'s global read lock."',
+    '          summary: "{{ $labels.tenant }}\'s dump took over 5s from dial-in to its first byte."',
     '          description: >-',
     '            mysqldump --source-data=2 takes a brief, server-wide FLUSH TABLES',
     '            WITH READ LOCK to record the binlog position point-in-time recovery',
-    "            depends on -- branchLeft/workspace#1158's own review measured this",
-    '            on MySQL 8.0.46, and the ruling keeps --source-data=2 rather than',
-    '            dropping it. Dumping tenants strictly one at a time means two',
-    "            tenants' own locks never queue against each OTHER, but a lock can",
-    '            still queue behind ordinary write traffic on ANY tenant while it',
-    '            waits to be granted -- this alert is that wait, per tenant, written',
-    '            whether or not the dump that eventually ran past it also went on to',
-    '            pass its own floor check. 5s is well past the sub-second wait',
+    '            depends on. This gauge is a PROXY for that wait, not a direct MySQL',
+    "            read: it times dial-in to the producer's first byte, which also",
+    '            includes connection setup -- unverified against the real dial-in',
+    '            transport, still unwired as of this alert shipping (see',
+    '            branchLeft/ghost-platform infra/provisioning/scripts/README.md).',
+    "            Dumping tenants strictly one at a time means two tenants' own",
+    '            locks never queue against each OTHER, but a lock can still queue',
+    '            behind ordinary write traffic on ANY tenant while it waits to be',
+    '            granted -- this alert is that wait, per tenant, written whether or',
+    '            not the dump that eventually ran past it also went on to pass its',
+    '            own floor check. 5s is well past the sub-second wait',
     '            09-backup-and-recovery.html measured at toy scale; re-tune once',
     "            real-estate figures exist, the same as this group's own SNDS",
     '            thresholds.',

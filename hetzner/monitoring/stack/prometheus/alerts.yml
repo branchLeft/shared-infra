@@ -449,18 +449,21 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.tenant }}'s dump waited over 5s for db1's global read lock."
+          summary: "{{ $labels.tenant }}'s dump took over 5s from dial-in to its first byte."
           description: >-
             mysqldump --source-data=2 takes a brief, server-wide FLUSH TABLES
             WITH READ LOCK to record the binlog position point-in-time recovery
-            depends on -- branchLeft/workspace#1158's own review measured this
-            on MySQL 8.0.46, and the ruling keeps --source-data=2 rather than
-            dropping it. Dumping tenants strictly one at a time means two
-            tenants' own locks never queue against each OTHER, but a lock can
-            still queue behind ordinary write traffic on ANY tenant while it
-            waits to be granted -- this alert is that wait, per tenant, written
-            whether or not the dump that eventually ran past it also went on to
-            pass its own floor check. 5s is well past the sub-second wait
+            depends on. This gauge is a PROXY for that wait, not a direct MySQL
+            read: it times dial-in to the producer's first byte, which also
+            includes connection setup -- unverified against the real dial-in
+            transport, still unwired as of this alert shipping (see
+            branchLeft/ghost-platform infra/provisioning/scripts/README.md).
+            Dumping tenants strictly one at a time means two tenants' own
+            locks never queue against each OTHER, but a lock can still queue
+            behind ordinary write traffic on ANY tenant while it waits to be
+            granted -- this alert is that wait, per tenant, written whether or
+            not the dump that eventually ran past it also went on to pass its
+            own floor check. 5s is well past the sub-second wait
             09-backup-and-recovery.html measured at toy scale; re-tune once
             real-estate figures exist, the same as this group's own SNDS
             thresholds.
