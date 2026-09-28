@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
 
+import { PublicPressLogo, PublicPressWordmark } from '@branchleft/components';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import { hostRedirects, sites, staticSites } from '../../sites';
@@ -839,10 +842,10 @@ describe('the publicpress.co.uk holding page', () => {
     expect(block()).toContain('Strict-Transport-Security "max-age=31536000; includeSubDomains"');
   });
 
-  it('carries a strict Content-Security-Policy refusing scripts and every external resource', () => {
+  it('carries a strict Content-Security-Policy refusing every external resource', () => {
     expect(block()).toContain("Content-Security-Policy \"default-src 'none'");
-    expect(block()).toContain("script-src 'none'");
-    expect(block()).toContain("img-src 'none'");
+    expect(block()).toContain("connect-src 'none'");
+    expect(block()).toContain('img-src data:;');
     expect(block()).toContain("font-src 'none'");
   });
 
@@ -858,7 +861,14 @@ describe('the publicpress.co.uk holding page', () => {
   it('carries no style attribute, script, stylesheet link, image or remote URL the CSP would silently drop', () => {
     const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
     expect(body).not.toMatch(/\sstyle=/);
-    expect(body).not.toMatch(/<(script|link|img|iframe|object)\b/);
+    expect(body).not.toMatch(/<(img|iframe|object)\b/);
+    const links = [...body.matchAll(/<link\b[^>]*>/g)].map(([link]) => link);
+    expect(links).toHaveLength(1);
+    expect(links[0]).toMatch(
+      /^<link rel='icon' type='image\/svg\+xml' href='data:image\/svg\+xml,/
+    );
+    expect(body).not.toMatch(/<script\s[^>]*src=/);
+    expect(body).not.toMatch(/\son[a-z]+=/);
     expect(body).not.toMatch(
       /url\(|@import|https?:\/\/(?!www\.w3\.org\/2000\/svg'|branchleft\.co\.uk')/
     );
@@ -866,6 +876,40 @@ describe('the publicpress.co.uk holding page', () => {
 
   it('heads the page with the outlined wordmark, named for assistive technology', () => {
     expect(block()).toMatch(/<h1><svg [^>]*role='img' aria-label='PublicPress'>/);
+  });
+
+  it("admits exactly the page's own script by the hash of the body actually served", () => {
+    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
+    const scripts = [...body.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(([, js]) => js);
+    expect(scripts).toHaveLength(1);
+    const expected = createHash('sha256').update(scripts[0], 'utf8').digest('base64');
+    const scriptSrc = /script-src ([^;]*);/.exec(block())?.[1];
+    expect(scriptSrc).toBe(`'sha256-${expected}'`);
+  });
+
+  it('serves a script Caddy passes through untouched: no escape, no placeholder', () => {
+    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
+    const script = /<script>([\s\S]*?)<\/script>/.exec(body)?.[1] ?? '';
+    expect(script).not.toMatch(/[\\"]/);
+    expect(script).not.toMatch(/\{[^\s]/);
+  });
+
+  it('refuses every script and image on a page that carries none', () => {
+    expect(staticSiteCsp('<p>plain</p>')).toContain("script-src 'none';");
+    expect(staticSiteCsp('<p>plain</p>')).toContain("img-src 'none';");
+  });
+
+  it('serves the wordmark and favicon exactly as @branchleft/components renders them', () => {
+    const rendered = (mark: typeof PublicPressLogo) =>
+      renderToStaticMarkup(createElement(mark))
+        .replace(/ style="[^"]*"/, '')
+        .replaceAll('"', "'");
+    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
+    expect(body).toContain(`<h1>${rendered(PublicPressWordmark)}</h1>`);
+    const href = /<link rel='icon' [^>]*href='([^']*)'/.exec(body)?.[1] ?? '';
+    expect(decodeURIComponent(href.replace('data:image/svg+xml,', ''))).toBe(
+      rendered(PublicPressLogo)
+    );
   });
 
   it('refuses every stylesheet on a page that carries none', () => {
@@ -879,9 +923,17 @@ describe('the publicpress.co.uk holding page', () => {
   });
 
   it('serves the abuse contact the Public Suffix List submission needs to find on the page', () => {
-    expect(block()).toContain('Report abuse:');
     expect(block()).toContain(`mailto:${PUBLICPRESS_ABUSE_CONTACT}`);
     expect(block()).toContain(PUBLICPRESS_ABUSE_CONTACT);
+  });
+
+  it('sets every email address on a line of its own', () => {
+    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
+    const addresses = [...body.matchAll(/mailto:([^']+)'/g)].map(([, address]) => address);
+    expect(addresses).toHaveLength(3);
+    for (const address of addresses) {
+      expect(body).toContain(`<br><a href='mailto:${address}'>${address}</a></p>`);
+    }
   });
 
   it('carries the general throttle and AppSec once the posture enforces them', () => {
