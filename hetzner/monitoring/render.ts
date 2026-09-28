@@ -1,6 +1,12 @@
 import { APP_HOST_IPS, HOST_IPS } from '@branchleft/hetzner-host';
 
 import type { EdgeSite } from '../../siteTypes';
+import {
+  PAGE_REGISTER,
+  renderPageReceiverBlock,
+  renderPageRoute,
+  type PageRegisterEntry,
+} from './pageRegister';
 
 /**
  * Renders the monitoring stack's Prometheus scrape configuration and alert
@@ -544,6 +550,96 @@ export function renderAlertRules(): string {
     '            for: 10m rather than 5m because a MySQL restart during a db',
     '            stack deploy produces mysql_up 0 legitimately for a minute or two.',
     '',
+    '  - name: backup',
+    // Both alerts in this group watch the same producer, backup_worker.py
+    // in branchLeft/ghost-platform -- one on-demand call, one nightly loop,
+    // never a second code path (see that repo's backup_worker.md). One
+    // group, not two, since a reader hunting "the backup alerts" should
+    // find both without also having to remember which of two
+    // similarly-named groups holds which: TenantBackupAgeHigh (is a
+    // tenant's backup happening at all) and BackupLockWaitHigh (is the
+    // dump that DID happen taking too long to get past db1's lock).
+    //
+    // The producer-side signal, not a liveness check: backup_platform's
+    // worker (branchLeft/ghost-platform) advances this gauge only after a
+    // floor-verified successful dump for that tenant, so a stopped or
+    // consistently-refused worker leaves one tenant's series frozen while
+    // every other tenant's keeps climbing -- the metric carries a `tenant`
+    // label already, so one alert instance per stale tenant is what
+    // `time()` minus the gauge naturally produces, with no group-by needed.
+    // The rule's own `or absent(...)` branch covers the other failure shape:
+    // the whole metric family gone (exporter down, textfile deleted), which
+    // no per-tenant series can ever be stale enough to represent on its own.
+    // Warning, never page: a stale backup is a chore on its own timescale,
+    // not an outage, and this estate has no page register entry for it by
+    // design -- routing carries no `notify: on-host` label either, since
+    // the producer host is not mx1, so this reaches the same off-host email
+    // receiver HostMemoryPressure and HostDiskSpaceLow already use.
+    '    rules:',
+    '      - alert: TenantBackupAgeHigh',
+    '        expr: >-',
+    '          (time() - backup_worker_last_success_timestamp_seconds > 129600)',
+    '          or absent(backup_worker_last_success_timestamp_seconds)',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "{{ $labels.tenant }}\'s last successful backup is over 36 hours old."',
+    '          description: >-',
+    '            backup_worker_last_success_timestamp_seconds only advances on',
+    '            a floor-verified successful dump, so a stopped or',
+    '            consistently-refused worker for one tenant leaves that',
+    "            tenant's gauge frozen while every other tenant's keeps",
+    '            advancing -- each tenant is its own series, so this fires for',
+    '            the stale one alone. The `or absent(...)` half catches the',
+    '            whole metric family vanishing -- the exporter down, or the',
+    '            textfile deleted -- which the time() subtraction alone cannot',
+    '            see, since subtracting from an absent series yields no series',
+    '            at all, not a large number; that branch carries no tenant',
+    '            label, unlike a single stale tenant firing on its own. 129600s',
+    "            (36h) is 1.5x the nightly (24h) cadence, following this file's",
+    '            own SNDSCollectorStale threshold convention -- LLD-9 names the',
+    '            cadence, not a number of missed runs. Warning, never page: a',
+    '            stale backup is not an outage on its own timescale. The scrape',
+    "            wiring for the worker's own host -- the node_exporter",
+    '            textfile-collector mount -- is a separate, host-specific',
+    '            change; see RUNBOOK-monitoring.md for the bring-up shape once',
+    '            that host is chosen. Per-tenant coverage is proved in',
+    '            alert_rules_test.yml.',
+    '',
+    // Not `notify: on-host`: unlike an SNDS or mail-deferral alert, nothing
+    // about this signal depends on a route that avoids mx1.
+    //
+    // No `for:` -- unlike every other alert in this group. The gauge is
+    // written once per tenant per night and otherwise flat, so there is no
+    // scrape-to-scrape flapping to debounce, and paging on the very next
+    // scrape after a bad wait is the intended behaviour, not a shortcut.
+    '      - alert: BackupLockWaitHigh',
+    '        expr: backup_worker_lock_wait_seconds > 5',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "{{ $labels.tenant }}\'s dump took over 5s from dial-in to its first byte."',
+    '          description: >-',
+    '            mysqldump --source-data=2 takes a brief, server-wide FLUSH TABLES',
+    '            WITH READ LOCK to record the binlog position point-in-time recovery',
+    '            depends on. This gauge is a PROXY for that wait, not a direct MySQL',
+    '            read: it times from starting mysqldump to its first byte, which',
+    "            also includes mysqldump's own TCP+TLS+auth connection to db1 --",
+    '            a known, bounded overhead now that the real transport is wired',
+    '            (RemoteMysqldumpTransport, a local subprocess with no separate',
+    '            dial-in layer), but still not measured directly, so still a',
+    '            proxy, not a settled lock-wait read (see',
+    '            branchLeft/ghost-platform infra/provisioning/scripts/backup_worker.md#_lockwaittimer).',
+    "            Dumping tenants strictly one at a time means two tenants' own",
+    '            locks never queue against each OTHER, but a lock can still queue',
+    '            behind ordinary write traffic on ANY tenant while it waits to be',
+    '            granted -- this alert is that wait, per tenant, written whether or',
+    '            not the dump that eventually ran past it also went on to pass its',
+    '            own floor check. 5s is well past the sub-second wait',
+    '            09-backup-and-recovery.html measured at toy scale; re-tune once',
+    "            real-estate figures exist, the same as this group's own SNDS",
+    '            thresholds.',
+    '',
     '  - name: probes',
     '    rules:',
     '      - alert: BlackboxProbeFailed',
@@ -871,44 +967,6 @@ export function renderAlertRules(): string {
     '            sized to absorb a normal one, not a link pasted a week late. This',
     '            is the only alert in this group that fires BEFORE an outage rather',
     '            than after one; treat it as a chore, not an incident.',
-    '',
-    // ghost-platform's infra/provisioning/scripts/backup_worker.py (called
-    // from nightly_dump_loop.py) dumps tenants strictly one at a time and
-    // records each one's dial-in-to-first-byte gap, per tenant, in the same
-    // textfile-collector shape as this group's own SNDS gauges. This alert
-    // is on that gauge. Not `notify: on-host`: unlike an SNDS or
-    // mail-deferral alert, nothing about this signal depends on a route
-    // that avoids mx1.
-    //
-    // No `for:` -- unlike every other alert in this group. The gauge is
-    // written once per tenant per night and otherwise flat, so there is no
-    // scrape-to-scrape flapping to debounce, and paging on the very next
-    // scrape after a bad wait is the intended behaviour, not a shortcut.
-    '  - name: backup',
-    '    rules:',
-    '      - alert: BackupLockWaitHigh',
-    '        expr: backup_worker_lock_wait_seconds > 5',
-    '        labels:',
-    '          severity: warning',
-    '        annotations:',
-    '          summary: "{{ $labels.tenant }}\'s dump took over 5s from dial-in to its first byte."',
-    '          description: >-',
-    '            mysqldump --source-data=2 takes a brief, server-wide FLUSH TABLES',
-    '            WITH READ LOCK to record the binlog position point-in-time recovery',
-    '            depends on. This gauge is a PROXY for that wait, not a direct MySQL',
-    "            read: it times dial-in to the producer's first byte, which also",
-    '            includes connection setup -- unverified against the real dial-in',
-    '            transport, still unwired as of this alert shipping (see',
-    '            branchLeft/ghost-platform infra/provisioning/scripts/README.md).',
-    "            Dumping tenants strictly one at a time means two tenants' own",
-    '            locks never queue against each OTHER, but a lock can still queue',
-    '            behind ordinary write traffic on ANY tenant while it waits to be',
-    '            granted -- this alert is that wait, per tenant, written whether or',
-    '            not the dump that eventually ran past it also went on to pass its',
-    '            own floor check. 5s is well past the sub-second wait',
-    '            09-backup-and-recovery.html measured at toy scale; re-tune once',
-    "            real-estate figures exist, the same as this group's own SNDS",
-    '            thresholds.',
   ].join('\n')}\n`;
 }
 
@@ -919,8 +977,17 @@ export function renderAlertRules(): string {
  * `stack/render_alertmanager_config.py` from `/etc/branchleft/monitoring.env`
  * before every start -- see that script's docstring for why this file cannot
  * just read the environment itself.
+ *
+ * The page route (`pageRegister.ts`) is the one part of this template not
+ * hand-typed below: `register` defaults to the committed `PAGE_REGISTER`,
+ * and the parameter exists so a caller can prove the route is actually
+ * derived from it rather than from a hardcoded duplicate -- see
+ * `pageRegister.test.ts`.
  */
-export function renderAlertmanagerTemplate(): string {
+export function renderAlertmanagerTemplate(
+  register: readonly PageRegisterEntry[] = PAGE_REGISTER
+): string {
+  const pageRoute = renderPageRoute(register);
   return `${[
     ...GENERATED_BANNER,
     '# Rendered into alertmanager.yml at container start by',
@@ -967,8 +1034,15 @@ export function renderAlertmanagerTemplate(): string {
     '    - matchers:',
     '        - alertname =~ "^(MailHostDown|AlertEmailDeliveryFailing)$"',
     '      receiver: email',
+    // Rendered from the page register and nothing else -- see
+    // `pageRegister.ts`. Empty when the register names no alertname to
+    // route (every entry dormant or none delivered by Alertmanager), so no
+    // stray route sits in the tree matching nothing.
+    ...(pageRoute ? [pageRoute] : []),
     '',
     'receivers:',
+    renderPageReceiverBlock(),
+    '',
     '  - name: email',
     '    email_configs:',
     "      - to: '__ALERT_RECIPIENT_EMAIL__'",

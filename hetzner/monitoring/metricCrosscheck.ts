@@ -299,6 +299,9 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   delivery_dsn_temp_fail: "Stalwart's own Prometheus exporter, on mx1",
   queue_rescheduled: "Stalwart's own Prometheus exporter, on mx1",
   alertmanager_notifications_failed_total: 'built into Alertmanager itself',
+  backup_worker_last_success_timestamp_seconds:
+    "the tenant backup worker's own textfile-collector export, branchLeft/ghost-platform " +
+    '(no source under this root to check against -- this repo only renders the rule).',
   // branchLeft/ghost-platform's infra/provisioning/scripts/backup_worker.py
   // (called from nightly_dump_loop.py), a node_exporter textfile collector
   // in org/control -- not a collector this repository owns or can scan, per

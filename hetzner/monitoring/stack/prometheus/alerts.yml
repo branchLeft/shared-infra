@@ -144,6 +144,65 @@ groups:
             for: 10m rather than 5m because a MySQL restart during a db
             stack deploy produces mysql_up 0 legitimately for a minute or two.
 
+  - name: backup
+    rules:
+      - alert: TenantBackupAgeHigh
+        expr: >-
+          (time() - backup_worker_last_success_timestamp_seconds > 129600)
+          or absent(backup_worker_last_success_timestamp_seconds)
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.tenant }}'s last successful backup is over 36 hours old."
+          description: >-
+            backup_worker_last_success_timestamp_seconds only advances on
+            a floor-verified successful dump, so a stopped or
+            consistently-refused worker for one tenant leaves that
+            tenant's gauge frozen while every other tenant's keeps
+            advancing -- each tenant is its own series, so this fires for
+            the stale one alone. The `or absent(...)` half catches the
+            whole metric family vanishing -- the exporter down, or the
+            textfile deleted -- which the time() subtraction alone cannot
+            see, since subtracting from an absent series yields no series
+            at all, not a large number; that branch carries no tenant
+            label, unlike a single stale tenant firing on its own. 129600s
+            (36h) is 1.5x the nightly (24h) cadence, following this file's
+            own SNDSCollectorStale threshold convention -- LLD-9 names the
+            cadence, not a number of missed runs. Warning, never page: a
+            stale backup is not an outage on its own timescale. The scrape
+            wiring for the worker's own host -- the node_exporter
+            textfile-collector mount -- is a separate, host-specific
+            change; see RUNBOOK-monitoring.md for the bring-up shape once
+            that host is chosen. Per-tenant coverage is proved in
+            alert_rules_test.yml.
+
+      - alert: BackupLockWaitHigh
+        expr: backup_worker_lock_wait_seconds > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.tenant }}'s dump took over 5s from dial-in to its first byte."
+          description: >-
+            mysqldump --source-data=2 takes a brief, server-wide FLUSH TABLES
+            WITH READ LOCK to record the binlog position point-in-time recovery
+            depends on. This gauge is a PROXY for that wait, not a direct MySQL
+            read: it times from starting mysqldump to its first byte, which
+            also includes mysqldump's own TCP+TLS+auth connection to db1 --
+            a known, bounded overhead now that the real transport is wired
+            (RemoteMysqldumpTransport, a local subprocess with no separate
+            dial-in layer), but still not measured directly, so still a
+            proxy, not a settled lock-wait read (see
+            branchLeft/ghost-platform infra/provisioning/scripts/backup_worker.md#_lockwaittimer).
+            Dumping tenants strictly one at a time means two tenants' own
+            locks never queue against each OTHER, but a lock can still queue
+            behind ordinary write traffic on ANY tenant while it waits to be
+            granted -- this alert is that wait, per tenant, written whether or
+            not the dump that eventually ran past it also went on to pass its
+            own floor check. 5s is well past the sub-second wait
+            09-backup-and-recovery.html measured at toy scale; re-tune once
+            real-estate figures exist, the same as this group's own SNDS
+            thresholds.
+
   - name: probes
     rules:
       - alert: BlackboxProbeFailed
@@ -441,29 +500,3 @@ groups:
             sized to absorb a normal one, not a link pasted a week late. This
             is the only alert in this group that fires BEFORE an outage rather
             than after one; treat it as a chore, not an incident.
-
-  - name: backup
-    rules:
-      - alert: BackupLockWaitHigh
-        expr: backup_worker_lock_wait_seconds > 5
-        labels:
-          severity: warning
-        annotations:
-          summary: "{{ $labels.tenant }}'s dump took over 5s from dial-in to its first byte."
-          description: >-
-            mysqldump --source-data=2 takes a brief, server-wide FLUSH TABLES
-            WITH READ LOCK to record the binlog position point-in-time recovery
-            depends on. This gauge is a PROXY for that wait, not a direct MySQL
-            read: it times dial-in to the producer's first byte, which also
-            includes connection setup -- unverified against the real dial-in
-            transport, still unwired as of this alert shipping (see
-            branchLeft/ghost-platform infra/provisioning/scripts/README.md).
-            Dumping tenants strictly one at a time means two tenants' own
-            locks never queue against each OTHER, but a lock can still queue
-            behind ordinary write traffic on ANY tenant while it waits to be
-            granted -- this alert is that wait, per tenant, written whether or
-            not the dump that eventually ran past it also went on to pass its
-            own floor check. 5s is well past the sub-second wait
-            09-backup-and-recovery.html measured at toy scale; re-tune once
-            real-estate figures exist, the same as this group's own SNDS
-            thresholds.

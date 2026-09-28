@@ -630,11 +630,25 @@ Stalwart's own listeners or ACME in any way. Three new artifacts under
   credential" above), send-as `blog@`, labelled `blog-shim-bulk-submission`
   — independently revocable from `61`'s transactional `blog-ghost-smtp`
   credential, so retiring or rotating the shim's bulk-mail path never
-  touches transactional mail or vice versa.
+  touches transactional mail or vice versa. **Not read by `render_shim_env.py`
+  any more** — the shim's own outbound delivery (`worker.ts`/`smtp.ts`) is
+  gone (`ghost-platform#238`, `branchLeft/workspace#1237`), so nothing in
+  this repo currently consumes this credential; it is retained because
+  authenticated SMTP submission to mx1 is the only way anything reaches this
+  host (HLD §03), and something has to hold it once the mail collector
+  (`branchLeft/workspace#1239`) exists.
 - `63-deploy-mailgun-shim.sh` / `render_shim_env.py` — installs the compose
   file and Caddyfile, seeds `/var/lib/mailgun-shim/throttle.json` only if
-  absent, renders `/etc/mailgun-shim/env` (mode 600) from `62`'s credential,
-  and brings the stack up.
+  absent, renders `/etc/mailgun-shim/env` (mode 600) — `PORT`,
+  `SHIM_DB_PATH`, `SHIM_THROTTLE_PATH` plus `SHIM_DRAIN_TOKEN` (generated on
+  the host on first use and recorded in
+  `/root/.stalwart-service-credentials` under `shim-drain-token`, the same
+  file `62`'s credential lives in, never printed) — and brings the stack up.
+  `SHIM_DRAIN_TOKEN` authenticates `GET /drain` as a bearer token
+  (`config.ts`'s `requireEnv` — an unset value fails the container closed);
+  the mail collector (`branchLeft/workspace#1239`) needs this same value to
+  call it, and moving it there is an owner step — see "Handing the drain
+  token to the collector" below.
 
 ### ACME coexistence
 
@@ -743,6 +757,40 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'docker compose -p ma
 This prints an API key exactly once. Where it goes next (Ghost's own
 config, a secret store) is the platform owner's call — it never belongs in
 this repo, a PR, or a chat transcript.
+
+### Handing the drain token to the collector — owner action, once #1239 exists
+
+`render_shim_env.py` generates `SHIM_DRAIN_TOKEN` on mx1 itself (on first
+`63-deploy-mailgun-shim.sh` run after this change lands) and records it in
+`/root/.stalwart-service-credentials` under the `shim-drain-token` label —
+the same file `62`'s credential lives in, never printed by either script.
+The mail collector (`branchLeft/workspace#1239`), once built and deployed to
+`ops1`, needs this exact value to authenticate its `GET /drain` calls
+(`Authorization: Bearer <token>`, per `config.ts`'s `requireDrainToken`).
+Nothing here copies it there automatically — moving a live secret between
+two hosts is this file's own never-list, unchanged by this PR.
+
+1. **Read it, without printing it, on mx1** (`root@mx1.branchleft.co.uk`, the
+   `id_ed25519_hetzner` key):
+   ```
+   ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk \
+     "sed -n 's/^shim-drain-token://p' /root/.stalwart-service-credentials"
+   ```
+   Copy the single line of output directly into the next step's prompt —
+   never paste it into a file, an issue, a PR or a chat transcript.
+2. **Set it as `ops1`'s own copy**, wherever the collector's deploy reads its
+   environment from (its own `env` file or systemd unit, the same pattern
+   `/etc/mailgun-shim/env` uses on mx1) — read it into the shell rather than
+   typing a placeholder:
+   ```
+   printf 'SHIM_DRAIN_TOKEN (from mx1, step 1 above): '; read -rs SHIM_DRAIN_TOKEN; echo
+   ```
+   then write it into the collector's own env file at mode 600, the same
+   discipline `write_env_file_atomic` uses here.
+3. **What becomes true:** the collector on `ops1` can authenticate
+   `GET https://mx1.branchleft.co.uk:8443/drain`; nothing on mx1 changes, and
+   rotating the token later means overwriting `shim-drain-token`'s line in
+   `/root/.stalwart-service-credentials` and re-running this same handover.
 
 ### Throttle tuning
 
