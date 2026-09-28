@@ -1152,3 +1152,68 @@ tests:
                 mx1 told a sender their message is delayed.
               description: >-
                 A delay DSN goes out only once a message has been stuck long enough to warn its sender, so this is the point at which a deferral became visible to someone -- a reader waiting on a sign-in link, or an alert that has not arrived. Fires on the first one. The unless-offset half catches the series being born: Stalwart publishes a counter only once it has counted something, and increase() cannot see a first sample. See RUNBOOK-monitoring.md.
+
+  # TenantBackupAgeHigh: the issue's own sabotage line ("stop one tenant's
+  # backups, see it fire for that tenant only"), reproduced without a live
+  # host. tenant-a's gauge is frozen at its very first success -- backups
+  # for it never ran again -- while tenant-b's keeps advancing in step with
+  # time, exactly as a healthy tenant's producer-side gauge would. Checked
+  # via ALERTS rather than alert_rule_test/exp_annotations, matching this
+  # file's own reasoning elsewhere: it keeps the assertion on the expression
+  # and the firing state, independent of this rule's own annotation prose.
+  - interval: 1h
+    input_series:
+      - series: 'backup_worker_last_success_timestamp_seconds{tenant="tenant-a"}'
+        values: '0x40'
+      - series: 'backup_worker_last_success_timestamp_seconds{tenant="tenant-b"}'
+        values: '0+3600x40'
+    promql_expr_test:
+      - expr: ALERTS{alertname="TenantBackupAgeHigh", alertstate="firing", tenant="tenant-a"}
+        eval_time: 40h
+        exp_samples:
+          - labels: 'ALERTS{alertname="TenantBackupAgeHigh", alertstate="firing", severity="warning", tenant="tenant-a"}'
+            value: 1
+      - expr: ALERTS{alertname="TenantBackupAgeHigh", alertstate="firing", tenant="tenant-b"}
+        eval_time: 40h
+        exp_samples: []
+
+  # The threshold itself is load-bearing, not decorative: at 35h the tenant
+  # is not yet stale (still inside the 1.5x-cadence margin), and by 37h --
+  # past the 36h mark, 1.5x the 24h nightly cadence -- it is. Without the
+  # negative case, 129600 could be dropped to zero and the isolation case
+  # above would still pass.
+  - interval: 1h
+    input_series:
+      - series: 'backup_worker_last_success_timestamp_seconds{tenant="tenant-c"}'
+        values: '0x37'
+    alert_rule_test:
+      - eval_time: 35h
+        alertname: TenantBackupAgeHigh
+        exp_alerts: []
+      - eval_time: 37h
+        alertname: TenantBackupAgeHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: tenant-c
+            exp_annotations:
+              summary: >-
+                tenant-c's last successful backup is over 36 hours old.
+              description: >-
+                backup_worker_last_success_timestamp_seconds only advances on a floor-verified successful dump, so a stopped or consistently-refused worker for one tenant leaves that tenant's gauge frozen while every other tenant's keeps advancing -- each tenant is its own series, so this fires for the stale one alone. The `or absent(...)` half catches the whole metric family vanishing -- the exporter down, or the textfile deleted -- which the time() subtraction alone cannot see, since subtracting from an absent series yields no series at all, not a large number; that branch carries no tenant label, unlike a single stale tenant firing on its own. 129600s (36h) is 1.5x the nightly (24h) cadence, following this file's own SNDSCollectorStale threshold convention -- LLD-9 names the cadence, not a number of missed runs. Warning, never page: a stale backup is not an outage on its own timescale. The scrape wiring for the worker's own host -- the node_exporter textfile-collector mount -- is a separate, host-specific change; see RUNBOOK-monitoring.md for the bring-up shape once that host is chosen. Per-tenant coverage is proved in alert_rules_test.yml.
+
+  # The other failure shape entirely: the metric family has never existed at
+  # all -- exporter down, or the textfile deleted -- so there is no per-tenant
+  # series for the time()-based branch to read, and `time() - <absent>`
+  # cannot see that on its own (no series to subtract from). Mirrors
+  # SNDSCollectorStale's own "never once succeeded" case. Fires immediately,
+  # with no tenant label at all -- the whole reason this branch exists is to
+  # cover the case a per-tenant selector structurally cannot.
+  - interval: 1h
+    input_series: []
+    promql_expr_test:
+      - expr: ALERTS{alertname="TenantBackupAgeHigh", alertstate="firing"}
+        eval_time: 1h
+        exp_samples:
+          - labels: 'ALERTS{alertname="TenantBackupAgeHigh", alertstate="firing", severity="warning"}'
+            value: 1

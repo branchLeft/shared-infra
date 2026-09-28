@@ -550,6 +550,53 @@ export function renderAlertRules(): string {
     '            for: 10m rather than 5m because a MySQL restart during a db',
     '            stack deploy produces mysql_up 0 legitimately for a minute or two.',
     '',
+    '  - name: backup-age',
+    // The producer-side signal, not a liveness check: backup_platform's
+    // worker (branchLeft/ghost-platform) advances this gauge only after a
+    // floor-verified successful dump for that tenant, so a stopped or
+    // consistently-refused worker leaves one tenant's series frozen while
+    // every other tenant's keeps climbing -- the metric carries a `tenant`
+    // label already, so one alert instance per stale tenant is what
+    // `time()` minus the gauge naturally produces, with no group-by needed.
+    // The rule's own `or absent(...)` branch covers the other failure shape:
+    // the whole metric family gone (exporter down, textfile deleted), which
+    // no per-tenant series can ever be stale enough to represent on its own.
+    // Warning, never page: a stale backup is a chore on its own timescale,
+    // not an outage, and this estate has no page register entry for it by
+    // design -- routing carries no `notify: on-host` label either, since
+    // the producer host is not mx1, so this reaches the same off-host email
+    // receiver HostMemoryPressure and HostDiskSpaceLow already use.
+    '    rules:',
+    '      - alert: TenantBackupAgeHigh',
+    '        expr: >-',
+    '          (time() - backup_worker_last_success_timestamp_seconds > 129600)',
+    '          or absent(backup_worker_last_success_timestamp_seconds)',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "{{ $labels.tenant }}\'s last successful backup is over 36 hours old."',
+    '          description: >-',
+    '            backup_worker_last_success_timestamp_seconds only advances on',
+    '            a floor-verified successful dump, so a stopped or',
+    '            consistently-refused worker for one tenant leaves that',
+    "            tenant's gauge frozen while every other tenant's keeps",
+    '            advancing -- each tenant is its own series, so this fires for',
+    '            the stale one alone. The `or absent(...)` half catches the',
+    '            whole metric family vanishing -- the exporter down, or the',
+    '            textfile deleted -- which the time() subtraction alone cannot',
+    '            see, since subtracting from an absent series yields no series',
+    '            at all, not a large number; that branch carries no tenant',
+    '            label, unlike a single stale tenant firing on its own. 129600s',
+    "            (36h) is 1.5x the nightly (24h) cadence, following this file's",
+    '            own SNDSCollectorStale threshold convention -- LLD-9 names the',
+    '            cadence, not a number of missed runs. Warning, never page: a',
+    '            stale backup is not an outage on its own timescale. The scrape',
+    "            wiring for the worker's own host -- the node_exporter",
+    '            textfile-collector mount -- is a separate, host-specific',
+    '            change; see RUNBOOK-monitoring.md for the bring-up shape once',
+    '            that host is chosen. Per-tenant coverage is proved in',
+    '            alert_rules_test.yml.',
+    '',
     '  - name: probes',
     '    rules:',
     '      - alert: BlackboxProbeFailed',
