@@ -651,17 +651,8 @@ describe('the rendered Caddyfile', () => {
     });
 
     /**
-     * The highest-consequence regression this split could produce, named
-     * explicitly rather than left to the committed-Caddyfile snapshot.
-     *
-     * `redirectBlock()` gets its chain from `protectionChain()` without
-     * `membersMagicLink: true`, so the directive cannot render there — but that
-     * is a property of one argument at one call site, and a redirect block has
-     * no matcher to reference. If it ever gained the directive, the rendered
-     * Caddyfile would carry `rate_limit @members_magic_link` against an
-     * undefined matcher, Caddy would refuse to load the file, and the restart
-     * that deployed it would take every hostname on this edge down rather than
-     * throttling one path.
+     * The highest-consequence regression this split could produce; why it
+     * would take the whole edge down, not just this route: `render.test.md`.
      */
     it('never renders the magic-link directive into a redirect block, which has no matcher to reference', () => {
       const rendered = render(

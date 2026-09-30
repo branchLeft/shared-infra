@@ -1,15 +1,6 @@
 /**
  * The one-page holding site `render.ts` serves at `publicpress.co.uk`.
- *
- * Kept separate from the Caddy-rendering logic in `render.ts` on purpose:
- * the owner's copy drops in as a change to `PUBLICPRESS_HOLDING_TEXT` below,
- * and nobody editing that sentence needs to read or touch the renderer.
- *
- * The assembled page is a single line with no line breaks and single-quoted
- * HTML attributes throughout. `render.ts` embeds it inside a double-quoted
- * Caddyfile token, so a double quote anywhere in the page would need
- * escaping that a future hand-edit of the prose could easily get wrong --
- * avoiding the character avoids the escaping question entirely.
+ * File layout, quoting rule and why: `publicpressHolding.md`.
  */
 
 import { Logo, PublicPressLogo, PublicPressWordmark } from '@branchleft/components';
@@ -18,16 +9,8 @@ import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 /**
- * The owner's own copy. Change it here only; nothing else in this file or in
- * `render.ts` needs to change. Keep attributes single-quoted and never use a
- * double quote (see the note at the top of this file).
- *
- * The branchLeft credit is the brand's own logo mark (inlined SVG, same
- * treatment as the PublicPress marks below) plus the word "branchLeft" set
- * in the page's own body face -- the brand package has no separate wordmark
- * *component* to inline (its wordmark is a styled-text treatment in a font
- * this page does not load), so the word itself stands in for it. Both sit
- * inside one link, `.bl-credit` in the stylesheet below.
+ * The owner's own copy. Change it here only. The branchLeft credit link and
+ * its Syne wordmark face: `publicpressHolding.md`.
  */
 export const PUBLICPRESS_HOLDING_TEXT = `PublicPress&trade;, a platform, ecosystem &amp; community for independent journalism. Built for people &amp; planet by <a href='https://branchleft.co.uk' class='bl-credit'>${markupOf(
   createElement(Logo, { width: '20', height: '20', 'aria-hidden': 'true' })
