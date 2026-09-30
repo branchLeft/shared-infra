@@ -846,7 +846,11 @@ describe('the publicpress.co.uk holding page', () => {
     expect(block()).toContain("Content-Security-Policy \"default-src 'none'");
     expect(block()).toContain("connect-src 'none'");
     expect(block()).toContain('img-src data:;');
-    expect(block()).toContain("font-src 'none'");
+    expect(block()).toContain('font-src data:;');
+  });
+
+  it('refuses every font on a page whose stylesheet carries no inline data: font', () => {
+    expect(staticSiteCsp('<style>body{color:red}</style>')).toContain("font-src 'none';");
   });
 
   it("admits exactly the page's own stylesheet by the hash of the body actually served", () => {
@@ -869,13 +873,31 @@ describe('the publicpress.co.uk holding page', () => {
     );
     expect(body).not.toMatch(/<script\s[^>]*src=/);
     expect(body).not.toMatch(/\son[a-z]+=/);
+    // url(data:...) is the one exception: the self-hosted font, which fetches
+    // nothing, same reasoning as the data: favicon above.
     expect(body).not.toMatch(
-      /url\(|@import|https?:\/\/(?!www\.w3\.org\/2000\/svg'|branchleft\.co\.uk')/
+      /url\((?!data:)|@import|https?:\/\/(?!www\.w3\.org\/2000\/svg'|branchleft\.co\.uk')/
     );
   });
 
   it('heads the page with the outlined wordmark, named for assistive technology', () => {
     expect(block()).toMatch(/<h1><svg [^>]*role='img' aria-label='PublicPress'>/);
+  });
+
+  it('sets body copy in the self-hosted Jost face at a readable size, Futura as its own fallback', () => {
+    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
+    const styles = /<style>([^<]*)<\/style>/.exec(body)?.[1] ?? '';
+    expect(styles).toMatch(
+      /body\{[^}]*font:400 1rem\/1\.6 'Jost','Futura','Century Gothic','Avenir Next',system-ui,sans-serif\}/
+    );
+    expect(styles).toMatch(/@font-face\{font-family:'Jost';src:url\(data:font\/woff2;base64,/);
+  });
+
+  it('credits branchLeft with an inline logo mark and the word "branchLeft" in one link', () => {
+    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
+    expect(body).toMatch(
+      /<a href='https:\/\/branchleft\.co\.uk' class='bl-credit'><svg [^>]*aria-hidden='true'[^>]*>[\s\S]*?<\/svg><span>branchLeft<\/span><\/a>/
+    );
   });
 
   it("admits exactly the page's own script by the hash of the body actually served", () => {

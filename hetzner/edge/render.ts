@@ -297,12 +297,13 @@ function hstsDirective(): string[] {
  * and nothing else, so nothing can be injected and a `style` or event-handler
  * attribute is refused; a page with no such element gets `'none'`. The hash
  * is taken from the page served, so the two cannot drift. `img-src` admits
- * `data:` only when the page carries an inline `data:` favicon, and a `data:`
- * image makes no request. `connect-src` stays `'none'`, so the script can
- * never send anything anywhere. `form-action` and `frame-ancestors` are
- * refused too: the page takes no input and is not meant to be framed. CSP
- * does not govern anchor navigation, so this does not affect the page's own
- * `mailto:` links.
+ * `data:` only when the page carries an inline `data:` favicon, and `font-src`
+ * admits `data:` only when the stylesheet carries an inline `data:` font --
+ * either way a `data:` URI makes no request. `connect-src` stays `'none'`, so
+ * the script can never send anything anywhere. `form-action` and
+ * `frame-ancestors` are refused too: the page takes no input and is not
+ * meant to be framed. CSP does not govern anchor navigation, so this does
+ * not affect the page's own `mailto:` links.
  */
 export function staticSiteCsp(html: string): string {
   const source = (pattern: RegExp): string => {
@@ -314,9 +315,10 @@ export function staticSiteCsp(html: string): string {
   const scriptSrc = source(/<script>([\s\S]*?)<\/script>/g);
   const styleSrc = source(/<style>([^<]*)<\/style>/g);
   const imgSrc = /<link rel='icon' [^>]*href='data:/.test(html) ? 'data:' : "'none'";
+  const fontSrc = /@font-face\{[^}]*src:url\(data:/.test(html) ? 'data:' : "'none'";
   return (
     `default-src 'none'; script-src ${scriptSrc}; style-src ${styleSrc}; img-src ${imgSrc}; ` +
-    "font-src 'none'; connect-src 'none'; frame-src 'none'; frame-ancestors 'none'; " +
+    `font-src ${fontSrc}; connect-src 'none'; frame-src 'none'; frame-ancestors 'none'; ` +
     "base-uri 'none'; form-action 'none'"
   );
 }
