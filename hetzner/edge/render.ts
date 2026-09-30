@@ -13,86 +13,27 @@ import {
 } from './posture';
 import { PUBLICPRESS_HOLDING_HTML } from './publicpressHolding';
 
-/**
- * Renders the edge VM's Caddy and CrowdSec configuration from the hostname
- * registry in `sites.ts` and the enforcement posture in `posture.ts`.
- *
- * Pure string building, deliberately: the output is committed under `stack/`
- * and copied onto the host by hand, so the only thing that can differ between
- * what a reviewer reads and what the edge runs is the copy step. `render.test.ts`
- * is what keeps the committed files and this file from drifting apart.
- *
- * ## The registry is the only hostname list
- *
- * A hostname written here rather than derived from `sites.ts` is a hostname the
- * GCP edge does not know about, which is precisely the class of stray record
- * the cutover has to find and fix. Everything below is derived.
- */
+// Why: renders config from sites.ts & posture.ts; pure strings, committed to
+// stack/, hand-copied. Registry is the only hostname list. See render.md
+// §"Module: Caddy configuration rendering".
 
 const GENERATED_BANNER = [
   '# Generated from sites.ts and hetzner/edge/posture.ts.',
   '# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.',
 ];
 
-/**
- * Paths exempted from AppSec evaluation on a site flagged
- * `injectionWafPreviewOnly`. Ghost's admin API is where author-written HTML,
- * code samples and SQL arrive in a request body; the admin UI around it is a
- * static bundle carrying none, so the prefix is the API and not `/ghost`.
- *
- * The exemption removes **all** AppSec evaluation on these paths, not only the
- * injection rulesets — the Caddy handler is per-request, so there is no way to
- * exempt three rule families and keep a fourth. That was a widening relative
- * to the GCP Cloud Armor policy this edge replaced, disclosed in that
- * policy's baseline document before it and the program that declared it
- * (`edge.ts`) were deleted once the GCP estate they described was
- * destroyed.
- */
+// Why: exempts author-written HTML/code/SQL from AppSec on preview-only sites;
+// removes ALL AppSec evaluation (not just injection). See render.md §"AUTHORING_API_PATHS".
 const AUTHORING_API_PATHS = ['/ghost/api/*'];
 
 /**
- * Ghost's members send-magic-link route (`ghost/core/core/server/web/members/app.js`,
- * mounted at `/members` by `ghost/core/core/server/web/parent/frontend.js`):
- * `POST /members/api/send-magic-link`. The one unauthenticated route that
- * turns a request into an email send from `mx1` -- see `posture.ts` for why
- * it gets its own, far tighter, throttle.
- *
- * Both forms are listed because Express's default router (`strict: false`) routes
- * a trailing slash identically, and Caddy's `path` matcher does not normalise
- * one away -- an unmatched `/members/api/send-magic-link/` would fall through
- * to the general per-site zone instead, forty times looser. Deliberately two
- * exact patterns rather than a `*` suffix: a wildcard here would also match
- * any *longer* path sharing this prefix, which is wider than the one route
- * this throttle exists for.
- *
- * No case variants listed: confirmed against the exact `2.11.4` tag this
- * edge's image pins (`Dockerfile`'s `CADDY_VERSION`) that Caddy's `path`
- * matcher lowercases both the request path and every pattern before
- * comparing (`modules/caddyhttp/matchers.go`) -- its own stated rationale is
- * that RFC 9110's case-sensitive path matching is a security footgun it
- * deliberately does not reproduce -- so `/Members/API/Send-Magic-Link`
- * already matches without listing it. Not assumed from a general Caddy
- * version claim: checked against this pin specifically.
- *
- * Assumes one Ghost instance per hostname, rooted at `/` -- true of every
- * site in `sites.ts` today. A tenant served from a subdirectory rather than
- * its own hostname would need `/<prefix>` folded into both patterns below;
- * nothing here derives that prefix automatically.
+ * Ghost's members send-magic-link route, both trailing-slash forms, case
+ * variants included by Caddy's own path-matcher lowercasing. Why: `render.md`.
  */
 const MEMBERS_MAGIC_LINK_PATHS = ['/members/api/send-magic-link', '/members/api/send-magic-link/'];
 
-/**
- * The same zone name is declared again in every site's own `rate_limit`
- * block below, not shared by reference -- Caddy's directive syntax has no
- * "reference elsewhere" form, so each site block carries its own full zone
- * declaration. What still makes it one shared counter across every tenant
- * hostname, rather than a per-site one like `rateLimitDirective` below: the
- * module's zone state is a process-wide registry keyed by name
- * (`mholt/caddy-ratelimit`'s `LoadOrStore` on the zone map), so re-declaring
- * the identical name attaches to the same counter instead of creating a new
- * one. See `posture.ts` for why that sharing is the property Ghost's own
- * per-instance limiter lacks.
- */
+// Why: zone name re-declared per-site for shared counter via mholt/caddy-ratelimit's
+// LoadOrStore. See render.md §"MEMBERS_MAGIC_LINK_ZONE".
 const MEMBERS_MAGIC_LINK_ZONE = 'members_magic_link_per_ip';
 
 /** Where Caddy writes the access log CrowdSec parses. */
@@ -110,41 +51,12 @@ const PROBE_LOG = '/var/log/caddy/probe.log';
 /** Loopback-published port the runbook's verification commands talk to. */
 const PROBE_PORT = 8080;
 
-/**
- * A second probe address on the same port, differing only in carrying a host.
- *
- * The bare-port probe proves the handler chain runs; it cannot prove a request
- * reaches that chain *through a site block*, because a bare `:port` address
- * matches every Host and so exercises no host routing at all. A control that
- * has only ever been tripped on the bare port is one whose real delivery path
- * -- Caddy selecting a site by Host, then running its route -- has never
- * executed.
- *
- * `.invalid` is reserved by RFC 2606 and is guaranteed never to resolve, so
- * this can never collide with a tenant hostname or be reached from off-host,
- * and the `http://` scheme keeps Caddy from attempting ACME for a name no CA
- * could ever validate. The firewall does not open this port and Compose
- * publishes it on `127.0.0.1` only, exactly as for the bare-port probe.
- *
- * It also makes the one property this control adds over Ghost's own limiter
- * testable: the magic-link zone is global across hostnames, so a budget spent
- * on the bare-port probe must already be spent when the same client arrives on
- * this host. Ghost's `membersAuthEnumeration` counts per instance and would
- * not be. `RUNBOOK-edge.md` §8b(4) is that test.
- */
+// Why: host-qualified probe exercises site routing (unlike bare :port); .invalid
+// never resolves; global magic-link zone testable. See render.md §"PROBE_HOSTNAME".
 const PROBE_HOSTNAME = 'edge-probe.invalid';
 
-/**
- * Response header naming which probe block answered, and its two values.
- *
- * The bare-port probe is a catch-all: it matches every Host, so it answers a
- * request carrying `Host: edge-probe.invalid` exactly as the host-qualified
- * block would, whenever that block is absent. Status code alone therefore
- * cannot tell a delivered config from an undelivered one -- a skipped `rsync`
- * would produce the documented success signal with no host routing exercised
- * at all. The marker is the only thing that distinguishes them, and so is what
- * the verification actually reads.
- */
+// Why: status code alone cannot distinguish delivered config from skipped rsync;
+// marker header is the only discriminator. See render.md §"PROBE_MARKER_* constants".
 const PROBE_MARKER_HEADER = 'X-Edge-Probe';
 const PROBE_MARKER_HOST = 'host-routed';
 const PROBE_MARKER_BARE = 'bare-port';
@@ -271,39 +183,14 @@ function tlsDirective(): string[] {
  */
 const HSTS_VALUE = 'max-age=31536000; includeSubDomains';
 
-/**
- * Emitted for every real hostname this edge serves -- this is what closed
- * the gap an admin panel on `book.branchleft.co.uk` surfaced as a missing
- * `Strict-Transport-Security` header finding. The gap was edge-wide, not
- * specific to that tenant: before this, nothing in this file emitted any
- * response header on any site.
- *
- * Called first in each route, ahead of `request_body` and the protection
- * chain, deliberately -- `header` populates the response header map before
- * calling the next handler, so whatever runs afterwards (a proxied response,
- * a 429 from the throttle, a block from AppSec or CrowdSec) still carries it
- * when it writes the response. Placed after `reverse_proxy` it would cover
- * only the proxied 200s and miss exactly the responses where keeping a
- * browser on HTTPS matters as much as it does on a success.
- */
+// Why: first in route (before reverse_proxy) to survive 429/403 responses; only
+// control that emitted response headers before this fix. See render.md §"hstsDirective".
 function hstsDirective(): string[] {
   return [`header Strict-Transport-Security "${HSTS_VALUE}"`];
 }
 
-/**
- * Every fetch directive `'none'` bar `script-src` and `style-src`, for a
- * static site that fetches no font and no image. Those two admit
- * exactly the page's own inline `<script>` and `<style>` elements by SHA-256
- * and nothing else, so nothing can be injected and a `style` or event-handler
- * attribute is refused; a page with no such element gets `'none'`. The hash
- * is taken from the page served, so the two cannot drift. `img-src` admits
- * `data:` only when the page carries an inline `data:` favicon, and a `data:`
- * image makes no request. `connect-src` stays `'none'`, so the script can
- * never send anything anywhere. `form-action` and `frame-ancestors` are
- * refused too: the page takes no input and is not meant to be framed. CSP
- * does not govern anchor navigation, so this does not affect the page's own
- * `mailto:` links.
- */
+// Why: restricts directives to inline-only hashes; img-src/font-src support data: URIs
+// when present; CSP does not govern mailto: links. See render.md §"staticSiteCsp".
 export function staticSiteCsp(html: string): string {
   const source = (pattern: RegExp): string => {
     const hashes = [...html.matchAll(pattern)].map(
@@ -314,9 +201,10 @@ export function staticSiteCsp(html: string): string {
   const scriptSrc = source(/<script>([\s\S]*?)<\/script>/g);
   const styleSrc = source(/<style>([^<]*)<\/style>/g);
   const imgSrc = /<link rel='icon' [^>]*href='data:/.test(html) ? 'data:' : "'none'";
+  const fontSrc = /@font-face\{[^}]*src:url\(data:/.test(html) ? 'data:' : "'none'";
   return (
     `default-src 'none'; script-src ${scriptSrc}; style-src ${styleSrc}; img-src ${imgSrc}; ` +
-    "font-src 'none'; connect-src 'none'; frame-src 'none'; frame-ancestors 'none'; " +
+    `font-src ${fontSrc}; connect-src 'none'; frame-src 'none'; frame-ancestors 'none'; ` +
     "base-uri 'none'; form-action 'none'"
   );
 }
@@ -354,18 +242,8 @@ function rateLimitDirective(zone: string): string[] {
   return [
     'rate_limit {',
     `\tzone ${zone} {`,
-    // The edge is the first hop — no proxy in front of it — so the direct peer
-    // is the client. `{http.request.client_ip}` would take a forwarded header
-    // into account, which here is a header an attacker sets.
-    //
-    // This key and the no-CDN assumption are one decision and must move
-    // together. Put any CDN or scrubbing service in front of this edge and
-    // every request arrives from a handful of its addresses: a per-IP throttle
-    // then counts the whole internet as a few clients and throttles everyone
-    // within seconds of the change. Both zones share this key, so that failure
-    // would take the magic-link path down with the general one. Whoever
-    // evaluates a CDN owns changing this line to a trusted-proxy configuration
-    // in the same change, never afterwards.
+    // Why: direct peer is client, not forwarded header; no-CDN assumption must move
+    // together with this key. See render.md §"rateLimitDirective: client IP key".
     '\t\tkey {http.request.remote.host}',
     `\t\twindow ${RATE_LIMIT_WINDOW_SECONDS}s`,
     `\t\tevents ${RATE_LIMIT_EVENTS}`,
@@ -402,17 +280,8 @@ function membersMagicLinkRateLimitDirective(): string[] {
   ];
 }
 
-/**
- * The handler chain, in evaluation order.
- *
- * The throttle runs **before** the WAF, which is the one place this edge
- * deliberately reorders the Cloud Armor baseline (whose WAF rules sat at
- * priority 1000–1003, ahead of the throttle at 2000). Cloud Armor evaluated on
- * Google's edge fleet; this evaluates on two vCPUs, so a flood that reached the
- * WAF first would spend exactly the capacity the throttle exists to protect.
- * The observable difference is confined to a client that is both flooding and
- * attacking: it is answered 429 rather than 403.
- */
+// Why: throttle runs before WAF (unlike Cloud Armor baseline); order protects vCPUs
+// from floods reaching inspection. See render.md §"protectionChain: handler evaluation order".
 function protectionChain(
   posture: EdgePosture,
   zone: string,
@@ -441,42 +310,16 @@ function protectionChain(
   return lines;
 }
 
-/**
- * Caddy size strings this renderer will emit, restricted to powers of two.
- *
- * `MB`/`GB` are deliberately absent rather than merely unused. Caddy reads
- * them as powers of ten -- measured against the pinned binary, `64MiB` is
- * 67,108,864 and `64MB` is 64,000,000, so `MB` is ~4.6% *smaller*. It is the
- * restrictive direction, not the permissive one, and rejecting it is unit
- * hygiene rather than a safety control: the value's source derives it in MiB,
- * and a registry that silently accepts a different base makes the two
- * incommensurable for anyone reasoning about them together.
- *
- * Do not restate this as "MB would be dangerously large". It would not, and a
- * maintainer who believes it will draw the wrong conclusion under pressure.
- */
+// Why: powers of two only; MB/GB are powers of ten in Caddy (~4.6% smaller); value
+// must stay commensurable with tmpfs ceiling. See render.md §"BINARY_SIZE regex".
 const BINARY_SIZE = /^[1-9][0-9]*(KiB|MiB|GiB)$/;
 
 function requestBodyDirective(site: EdgeSite): string[] {
   const size = site.requestBodyMaxSize;
 
   if (size === undefined) {
-    // Required of every site this edge serves, not only Ghost-backed ones.
-    //
-    // Keying this on `injectionWafPreviewOnly` was tried and is unsound: that
-    // flag is a WAF-preview switch whose own docstring in sites.ts records the
-    // condition for removing it ("until there is enough admin-API traffic to
-    // prove otherwise"). Meeting that condition and dropping the flag would
-    // have silently dropped the body ceiling with it -- no error, no failing
-    // test -- and for a Ghost tenant this directive is the only bound that
-    // exists: verified in Ghost's core/server/web/api/middleware/upload.js,
-    // where the generic multer instance carries no `limits` and only
-    // `themeUpload` sets `fileSize`. A control must not hang off a flag
-    // documented as temporary.
-    //
-    // Requiring it of everything also removes the "which sites are Ghost?"
-    // question entirely, and bounds the marketing site, which had no ceiling
-    // at all and would stream an arbitrarily large POST to app1.
+    // Why: required of all sites, not keyed to injectionWafPreviewOnly (which is
+    // temporary). Only bound Ghost tenants have. See render.md §"requestBodyDirective".
     throw new Error(
       `site ${site.name} declares no requestBodyMaxSize. Every site this edge serves needs one: ` +
         "for a tenant take it from that stack's `pulumi stack output edgeRequestBodyMaxSize` " +
@@ -523,15 +366,8 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
     // Ahead of everything else, including request_body -- see hstsDirective's
     // own comment for why its position is load-bearing rather than tidiness.
     ...hstsDirective().map((line) => `\t${line}`),
-    // First of the rest by convention, not as a security boundary. Measured
-    // against Caddy v2.11.4: `request_body` wraps the body in a
-    // MaxBytesReader and returns 413 once the limit is passed, which does
-    // bound what is ingested -- but it does NOT terminate the handler chain.
-    // The rate-limit token, the AppSec inspection and the upstream connection
-    // are all still spent, and up to `max_size` bytes still reach the origin.
-    // Ordering it first therefore buys tidiness and nothing else; AppSec in
-    // particular already caps its own inspection at `appsec_max_body_bytes`
-    // (64 KiB, global block), so it was never reading the whole body anyway.
+    // Why: does not terminate handler chain; ordering buys tidiness only. AppSec
+    // caps at appsec_max_body_bytes anyway. See render.md §"siteBlock: request_body ordering".
     ...requestBodyDirective(site).map((line) => `\t${line}`),
     ...protectionChain(posture, `${site.name}_per_ip`, {
       appsec: site.injectionWafPreviewOnly ? 'except-authoring' : 'all',
@@ -559,25 +395,8 @@ function redirectBlock(redirect: HostRedirect, zone: string, posture: EdgePostur
   };
 }
 
-/**
- * A hostname the edge answers directly with a fixed page, never proxying
- * anywhere -- see `StaticSite`'s own doc comment in `siteTypes.ts` for what
- * belongs in an entry, and `publicpressHolding.ts` for where this one's
- * actual page text lives.
- *
- * Carries the same TLS and throttle posture as a proxied site block
- * (`siteBlock` above): a browser or a scanner cannot tell this has a simpler
- * backend and must not be given a weaker one. It differs in three ways --
- * there is no upstream to proxy to, so `respond` answers directly; every
- * path gets the same response, so there is no per-path routing to speak of;
- * and it carries its own strict Content-Security-Policy, appropriate here
- * because the page ships no external resource of any kind, only its own
- * inline stylesheet and script, which is not true of every site this edge
- * serves.
- *
- * No members-magic-link matcher: that route is Ghost's, and nothing here is
- * Ghost.
- */
+// Why: fixed-page hostname with same TLS/throttle posture as siteBlock; no upstream,
+// no members route; strict CSP (inline only). See render.md §"staticBlock".
 function staticBlock(site: StaticSite, posture: EdgePosture): Block {
   const html = staticSiteContent(site);
   return {
@@ -608,18 +427,8 @@ function staticBlock(site: StaticSite, posture: EdgePosture): Block {
   };
 }
 
-/**
- * A listener on loopback only, carrying the same handler chain as the public
- * sites and answering 204.
- *
- * It is what makes the posture observable before any hostname resolves to this
- * host: the throttle and the CrowdSec handlers can be exercised with `curl`
- * against a running edge that serves no public traffic yet. The Hetzner firewall
- * does not open this port and Compose publishes it on `127.0.0.1` only.
- *
- * Rendered twice, at the same port, with and without a host. See
- * `PROBE_HOSTNAME` for why the second one exists.
- */
+// Why: loopback listener makes posture observable before hostnames resolve;
+// rendered twice (bare port and host-qualified). See render.md §"probeBlock".
 function probeBlock(
   posture: EdgePosture,
   address: string,
@@ -712,23 +521,8 @@ function renderBlock(block: Block): string[] {
   return [`${block.addresses.join(', ')} {`, ...block.body.map((line) => `\t${line}`), '}'];
 }
 
-/**
- * No two sites may proxy to the same private address.
- *
- * Caddy accepts it happily -- two site blocks reverse-proxying one backend is
- * valid configuration -- and a snapshot test cannot see it either, because the
- * rendered file is exactly what the registry asked for. What it means on the
- * wire is that one tenant's hostname serves another tenant's Ghost: their
- * content, and their members' sessions.
- *
- * `resolvePrivateAddress` already rejects an unknown host name and an
- * out-of-range port, so a typo in either is caught. A port that is merely
- * *another site's* is not: it is well-formed, in range, and wrong. The near
- * miss is on the record -- `blog2` was almost registered on 8081, read off
- * `ss -ltnp` on app1, before its own stack config was consulted and gave 8100.
- * 8081 was free; had it been the website's 8080, nothing here or in CI would
- * have said so.
- */
+// Why: two sites on one upstream = one tenant serves another's content/sessions;
+// typo in address is well-formed and wrong. See render.md §"assertUpstreamsAreDistinct".
 function assertUpstreamsAreDistinct(servable: readonly EdgeSite[]): void {
   const seen = new Map<string, string>();
   for (const site of servable) {
