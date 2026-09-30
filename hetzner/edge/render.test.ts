@@ -891,6 +891,25 @@ describe('the publicpress.co.uk holding page', () => {
     );
   });
 
+  it('sets the branchLeft credit word in the self-hosted Syne wordmark face at weight 500', () => {
+    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
+    const styles = /<style>([^<]*)<\/style>/.exec(body)?.[1] ?? '';
+    expect(styles).toMatch(/a\.bl-credit span\{font-family:'Syne',sans-serif;font-weight:500/);
+    expect(styles).toMatch(/@font-face\{font-family:'Syne';src:url\(data:font\/woff2;base64,/);
+  });
+
+  it('embeds the Syne face subsetted to a handful of glyphs, not the whole variable font', () => {
+    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
+    const styles = /<style>([^<]*)<\/style>/.exec(body)?.[1] ?? '';
+    const [, base64] =
+      /@font-face\{font-family:'Syne';src:url\(data:font\/woff2;base64,([^)]*)\)/.exec(styles) ??
+      [];
+    expect(base64).toBeTruthy();
+    // The unsubsetted variable font this page's Syne embed is cut from is
+    // ~38KB; a ten-glyph subset should land under 10KB decoded.
+    expect(Buffer.from(base64 ?? '', 'base64').byteLength).toBeLessThan(10_000);
+  });
+
   it("admits exactly the page's own script by the hash of the body actually served", () => {
     const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
     const scripts = [...body.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(([, js]) => js);
