@@ -1,7 +1,9 @@
 # Stalwart on mx1. Pinned to an exact patch version, not `latest` or the
 # floating `v0.16` tag -- an unattended minor bump on a mail server that
 # signs and receives production traffic is not a surprise worth having.
-# Bump deliberately, re-running 30-deploy-stalwart.sh after editing the tag.
+# Bump deliberately, re-running 30-deploy-stalwart.sh after editing the tag,
+# then re-run check_collector_sender_scope.py once on the host and update
+# VERIFIED_STALWART_VERSION: provision_collector_submission_credential.md.
 #
 # Port 8080 (webadmin + JMAP management API) is published to 127.0.0.1 only
 # -- see mail/RUNBOOK-mx1-provision.md for the SSH-tunnel access path. Every

@@ -82,6 +82,9 @@ needs a version upgrade to arise.
   the exact-address check and not held to its domains. **Open.** So after
   any change to the pinned Stalwart version, re-run
   `check_collector_sender_scope.py` before the collector sends again.
+  A unit test enforces the reminder: it fails when `docker-compose.yml` pins
+  a version other than `VERIFIED_STALWART_VERSION`, and its message says to
+  re-run the check and then update that constant.
 
 The domain check is written before `mustMatchSender` is relaxed. So during a
 run there is no moment where the collector is exempt from the exact-address
@@ -156,7 +159,11 @@ secret, and runs two transactions.
 1. **Accept:** `MAIL FROM` an address in the first sending domain, to a
    local mailbox on the main domain that has no forwarding script. Every
    step must return `250`. This is the control: if the credential cannot
-   submit at all, a refusal in step 2 would prove nothing.
+   submit at all, a refusal in step 2 would prove nothing. The address is
+   deliberately **not** the account's own: Stalwart's default exact-address
+   check accepts the account's own address with no domain rule loaded, so
+   only a different address can show the rule is active. The script refuses
+   to run with the account's own address.
 2. **Refuse:** `MAIL FROM` an address in the main domain. It must return a
    permanent `5xx`. A `4xx` is a deferral, not a refusal, and fails the
    check.

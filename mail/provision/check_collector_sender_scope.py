@@ -50,9 +50,21 @@ def _reply(code: int, text: bytes) -> str:
     return f"{code} {text.decode(errors='replace')}"
 
 
+def check_senders(authenticated: str, accept: str, refuse: str) -> None:
+    """Raises ValueError unless the accept sender can only pass through the
+    domain rule: the account's own address passes even with no rule loaded."""
+    if accept == authenticated:
+        raise ValueError(f"accept sender {accept!r} is the authenticated address; it proves nothing")
+    if accept.split("@", 1)[1] not in collector.COLLECTOR_SENDING_DOMAINS:
+        raise ValueError(f"accept sender {accept!r} is outside the collector's sending domains")
+    if refuse.split("@", 1)[1] != collector.MAIN_DOMAIN:
+        raise ValueError(f"refuse sender {refuse!r} is not in the main domain")
+
+
 def run(secret: str) -> int:
     nonce = uuid.uuid4().hex[:12]
     address = collector.collector_address()
+    check_senders(address, ACCEPT_SENDER, REFUSE_SENDER)
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
         smtp.ehlo()
         smtp.starttls(context=ssl.create_default_context())
@@ -93,6 +105,9 @@ def main() -> int:
         return 1
     try:
         return run(secret)
+    except ValueError as exc:
+        print(f"check_collector_sender_scope: {exc}", file=sys.stderr)
+        return 1
     except smtplib.SMTPAuthenticationError as exc:
         print(f"check_collector_sender_scope: authentication refused ({exc.smtp_code}); stop, do not retry", file=sys.stderr)
         return 1

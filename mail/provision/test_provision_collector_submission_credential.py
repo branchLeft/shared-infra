@@ -6,6 +6,8 @@ import contextlib
 import copy
 import io
 import os
+import pathlib
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -53,6 +55,21 @@ class MainDomainNeverAllowedTests(unittest.TestCase):
                 pc.main([])
         load.assert_not_called()
         call.assert_not_called()
+
+
+class VersionPinTests(unittest.TestCase):
+    def test_the_pinned_stalwart_is_the_version_the_scope_was_proven_on(self):
+        compose = pathlib.Path(__file__).resolve().parent / "docker-compose.yml"
+        pins = re.findall(r"image:\s*stalwartlabs/stalwart:(\S+)", compose.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            pins,
+            [pc.VERIFIED_STALWART_VERSION],
+            "the Stalwart pin changed: an expression that no longer compiles falls back "
+            "silently to its default, which can open the collector's scope. After the "
+            "upgrade, re-run check_collector_sender_scope.py once on the mail host, then "
+            "update VERIFIED_STALWART_VERSION. See provision_collector_submission_credential.md.",
+        )
 
 
 class ValidateSendingDomainsTests(unittest.TestCase):

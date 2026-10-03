@@ -38,6 +38,10 @@ APP_PASSWORD_DESCRIPTION = "mail-collector-submission"
 # The only two permissions an SMTP submission asserts in Stalwart v0.16.17.
 CREDENTIAL_PERMISSIONS = ("authenticate", "emailSend")
 
+# The Stalwart version the scope was proven on; test_provision_collector_
+# submission_credential.py fails when docker-compose.yml pins another one.
+VERIFIED_STALWART_VERSION = "v0.16.17"
+
 # Stalwart v0.16.17's shipped defaults, kept as every other account's branch.
 DEFAULT_MUST_MATCH_SENDER = "true"
 DEFAULT_IS_SENDER_ALLOWED = (

@@ -56,7 +56,7 @@ class FakeSMTP:
 
     instances = []
 
-    def __init__(self, mail_replies, data_reply=(250, b"2.0.0 Message queued for delivery.")):
+    def __init__(self, mail_replies, data_reply=(250, b"2.0.0 Message queued with id 1a2b3c.")):
         self.mail_replies = mail_replies
         self.data_reply = data_reply
         self.calls = []
@@ -117,7 +117,7 @@ class RunTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn(f"REFUSE  MAIL FROM:<{check.REFUSE_SENDER}> -> 550 5.7.1 Sender address not allowed.", output)
-        self.assertIn("ACCEPT  DATA -> 250 2.0.0 Message queued for delivery.", output)
+        self.assertIn("ACCEPT  DATA -> 250 2.0.0 Message queued with id", output)
 
     def test_the_secret_is_never_printed(self):
         _, output = self.run_with(self.scoped())
@@ -157,6 +157,70 @@ class RunTests(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("ACCEPT  DATA -> 554", output)
+
+
+class SenderChoiceTests(unittest.TestCase):
+    def test_committed_senders_are_valid(self):
+        check.check_senders(check.collector.collector_address(), check.ACCEPT_SENDER, check.REFUSE_SENDER)
+
+    def test_the_accept_sender_is_not_the_authenticated_address(self):
+        self.assertNotEqual(check.ACCEPT_SENDER, check.collector.collector_address())
+
+    def test_the_authenticated_address_as_accept_sender_is_refused(self):
+        address = check.collector.collector_address()
+
+        with self.assertRaises(ValueError):
+            check.check_senders(address, address, check.REFUSE_SENDER)
+
+    def test_an_out_of_scope_accept_sender_is_refused(self):
+        with self.assertRaises(ValueError):
+            check.check_senders(check.collector.collector_address(), "x@elsewhere.org", check.REFUSE_SENDER)
+
+    def test_a_non_main_domain_refuse_sender_is_refused(self):
+        with self.assertRaises(ValueError):
+            check.check_senders(check.collector.collector_address(), check.ACCEPT_SENDER, "x@elsewhere.org")
+
+
+class PolicySMTP(FakeSMTP):
+    """Answers MAIL FROM the way Stalwart's two checks would for the logged-in
+    account, with the collector's rule loaded or absent (shipped defaults)."""
+
+    def __init__(self, rule_loaded):
+        super().__init__({})
+        self.rule_loaded = rule_loaded
+        self.user = None
+
+    def login(self, user, password):
+        super().login(user, password)
+        self.user = user
+
+    def mail(self, sender):
+        self.calls.append(("mail", sender))
+        domain = sender.split("@", 1)[1]
+        if self.rule_loaded and self.user == check.collector.collector_address():
+            if domain in check.collector.COLLECTOR_SENDING_DOMAINS:
+                return 250, b"2.1.0 OK"
+            return 550, b"5.7.1 Sender address not allowed."
+        if sender == self.user:
+            return 250, b"2.1.0 OK"
+        return 501, b"5.5.4 You are not allowed to send from this address."
+
+
+class RuleAbsentTests(unittest.TestCase):
+    """The check must tell 'rule loaded' from 'rule absent'."""
+
+    def run_against(self, fake):
+        with mock.patch.object(check.smtplib, "SMTP", fake), contextlib.redirect_stdout(io.StringIO()) as out:
+            return check.run(SECRET), out.getvalue()
+
+    def test_rule_loaded_passes(self):
+        self.assertEqual(self.run_against(PolicySMTP(rule_loaded=True))[0], 0)
+
+    def test_rule_absent_fails(self):
+        code, output = self.run_against(PolicySMTP(rule_loaded=False))
+
+        self.assertEqual(code, 1)
+        self.assertIn("control failed", output)
 
 
 class MainTests(unittest.TestCase):
