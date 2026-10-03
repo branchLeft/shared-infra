@@ -21,7 +21,10 @@ Wants=network-online.target
 # "a service binds its private address" rule hetzner-host/firewalls.ts states
 # for every other exporter in this estate.
 EnvironmentFile=/etc/default/node-exporter
-ExecStart=/usr/local/bin/node_exporter --web.listen-address=${NODE_EXPORTER_LISTEN_ADDRESS}:9100
+# The textfile directory is the one ghost-platform's backup worker writes its
+# per-tenant gauges to, on this same host. Until its first run the directory
+# is absent, and node_textfile_scrape_error reads 1 rather than failing.
+ExecStart=/usr/local/bin/node_exporter --web.listen-address=${NODE_EXPORTER_LISTEN_ADDRESS}:9100 --collector.textfile.directory=/var/lib/branchleft/backup-worker-exporter
 Restart=always
 RestartSec=5
 User=node-exporter

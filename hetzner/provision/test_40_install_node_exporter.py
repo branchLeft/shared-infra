@@ -285,5 +285,16 @@ class InstallNodeExporterTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.env_file))
 
 
+class UnitTextfileCollectorTests(unittest.TestCase):
+    def test_execstart_reads_the_backup_workers_textfile_directory(self):
+        with open(UNIT, encoding="utf-8") as handle:
+            exec_start = [line for line in handle if line.startswith("ExecStart=")]
+        self.assertEqual(len(exec_start), 1)
+        self.assertIn(
+            "--collector.textfile.directory=/var/lib/branchleft/backup-worker-exporter",
+            exec_start[0].split(),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
