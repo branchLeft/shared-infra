@@ -254,6 +254,7 @@ class FakeStalwart:
         }
         self.writes = []
         self.drop_writes_to = None
+        self.reject_writes_to = None
 
     def __call__(self, auth, method, args):
         object_type, verb = method[2:].split("/")
@@ -278,6 +279,8 @@ class FakeStalwart:
             entries = self.app_passwords.setdefault(args["accountId"], [])
             entries.append({"id": f"p{len(entries)}", "description": args["create"]["s"]["description"]})
             return {"created": {"s": {"secret": SECRET}}}
+        if object_type == self.reject_writes_to:
+            return {"notUpdated": {"singleton": {"type": "invalidProperties"}}}
         if object_type != self.drop_writes_to:
             self.singletons[object_type].update(copy.deepcopy(args["update"]["singleton"]))
         return {"updated": {"singleton": None}}
@@ -439,6 +442,15 @@ class MainTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("destroyed 0 app password(s), found no local record", output)
+
+    def test_a_rejected_domain_check_never_relaxes_the_exact_match(self):
+        self.fake.reject_writes_to = "MtaStageMail"
+
+        with self.assertRaises(RuntimeError):
+            self.run_main()
+        self.assertEqual(self.fake.writes, ["MtaStageMail"])
+        self.assertEqual(self.fake.singletons["MtaStageAuth"]["mustMatchSender"], {"match": {}, "else": "true"})
+        self.restart.assert_not_called()
 
     def test_a_read_back_that_differs_from_what_was_written_fails_loudly(self):
         self.fake.drop_writes_to = "MtaStageAuth"

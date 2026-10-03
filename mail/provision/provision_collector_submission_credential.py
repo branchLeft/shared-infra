@@ -310,7 +310,10 @@ def _get_singleton(auth: tuple[str, str], object_type: str) -> dict[str, Any]:
 
 
 def _set_singleton(auth: tuple[str, str], object_type: str, patch: dict[str, Any]) -> None:
-    configure_stalwart._jmap_call(auth, f"x:{object_type}/set", {"update": {"singleton": patch}})
+    # Checked here as well as in _jmap_call: the next write is only safe if this one landed.
+    result = configure_stalwart._jmap_call(auth, f"x:{object_type}/set", {"update": {"singleton": patch}})
+    if result.get("notUpdated") or "singleton" not in (result.get("updated") or {}):
+        raise RuntimeError(f"x:{object_type}/set did not apply: {result.get('notUpdated')!r}")
 
 
 def main(argv: list[str] | None = None) -> int:
