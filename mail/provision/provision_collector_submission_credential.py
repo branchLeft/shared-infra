@@ -259,6 +259,49 @@ def _record_secret(secret: str) -> None:
     os.chmod(SERVICE_CREDENTIALS_PATH, 0o600)
 
 
+def remove_recorded_secret(path: str, label: str) -> bool:
+    """Drops every `label:` line from the label:secret file, keeping the rest.
+    Returns whether anything was removed."""
+    if not os.path.exists(path):
+        return False
+    with open(path, encoding="utf-8") as f:
+        lines = f.readlines()
+    kept = [line for line in lines if line.split(":", 1)[0].strip() != label]
+    if len(kept) == len(lines):
+        return False
+    temporary = f"{path}.tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as f:
+        f.writelines(kept)
+    os.replace(temporary, path)
+    return True
+
+
+def _destroy_app_passwords(auth: tuple[str, str], account_id: str) -> int:
+    found = configure_stalwart._jmap_call(
+        auth, "x:AppPassword/get", {"accountId": account_id, "properties": ["description"]}
+    )["list"]
+    ids = [entry["id"] for entry in found if entry.get("description") == APP_PASSWORD_DESCRIPTION]
+    if ids:
+        configure_stalwart._jmap_call(auth, "x:AppPassword/set", {"accountId": account_id, "destroy": ids})
+    return len(ids)
+
+
+def revoke() -> int:
+    """Destroys the collector's app password and its local record. Leaves
+    the account and both expressions, which match nothing without it."""
+    auth = configure_stalwart._load_credentials()
+    domain_id = _domain_ids(auth).get(COLLECTOR_ACCOUNT_DOMAIN)
+    account_id = None if domain_id is None else _find_account(auth, COLLECTOR_ACCOUNT_LOCAL, domain_id)
+    destroyed = 0 if account_id is None else _destroy_app_passwords(auth, account_id)
+    removed = remove_recorded_secret(SERVICE_CREDENTIALS_PATH, CREDENTIAL_LABEL)
+    print(
+        f"provision_collector_submission_credential: REVOKED -- destroyed {destroyed} app password(s), "
+        f"{'removed' if removed else 'found no'} local record under {CREDENTIAL_LABEL!r}"
+    )
+    return 0
+
+
 def _get_singleton(auth: tuple[str, str], object_type: str) -> dict[str, Any]:
     found = configure_stalwart._jmap_call(auth, f"x:{object_type}/get", {"ids": ["singleton"]})["list"]
     if not found:
@@ -271,7 +314,10 @@ def _set_singleton(auth: tuple[str, str], object_type: str, patch: dict[str, Any
 
 
 def main(argv: list[str] | None = None) -> int:
-    dry_run = "--dry-run" in (sys.argv[1:] if argv is None else argv)
+    args = sys.argv[1:] if argv is None else argv
+    if "--revoke" in args:
+        return revoke()
+    dry_run = "--dry-run" in args
     address = collector_address()
     is_sender_allowed = build_is_sender_allowed(address, COLLECTOR_SENDING_DOMAINS)
     must_match_sender = build_must_match_sender(address)
@@ -333,6 +379,13 @@ def main(argv: list[str] | None = None) -> int:
         print("provision_collector_submission_credential: set MtaStageAuth.mustMatchSender")
         changed = True
 
+    # Restart now, not at the end: a later failure must not leave stored but
+    # unloaded expressions that a re-run would see as already reconciled.
+    if changed:
+        subprocess.run(["docker", "restart", "stalwart"], check=True, capture_output=True)
+        configure_stalwart._wait_for_stalwart_ready(auth)
+        print("provision_collector_submission_credential: restarted stalwart to apply changes")
+
     if account_id is None:
         account_id = _create_account(
             auth, build_account_create_args(COLLECTOR_ACCOUNT_LOCAL, domain_ids[COLLECTOR_ACCOUNT_DOMAIN])
@@ -350,11 +403,6 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         print("provision_collector_submission_credential: credential already provisioned, no-op")
-
-    if changed:
-        subprocess.run(["docker", "restart", "stalwart"], check=True, capture_output=True)
-        configure_stalwart._wait_for_stalwart_ready(auth)
-        print("provision_collector_submission_credential: restarted stalwart to apply changes")
 
     # Proves storage, not enforcement: check_collector_sender_scope.py does that.
     stored_mail = _get_singleton(auth, "MtaStageMail").get("isSenderAllowed")

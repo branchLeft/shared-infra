@@ -270,10 +270,13 @@ class FakeStalwart:
             created = args["create"]["c"]
             self.accounts.append({"id": "a1", "name": created["name"], "domainId": created["domainId"]})
             return {"created": {"c": {"id": "a1"}}}
+        if object_type == "AppPassword" and "destroy" in args:
+            entries = self.app_passwords.get(args["accountId"], [])
+            self.app_passwords[args["accountId"]] = [e for e in entries if e["id"] not in args["destroy"]]
+            return {"destroyed": list(args["destroy"])}
         if object_type == "AppPassword":
-            self.app_passwords.setdefault(args["accountId"], []).append(
-                {"description": args["create"]["s"]["description"]}
-            )
+            entries = self.app_passwords.setdefault(args["accountId"], [])
+            entries.append({"id": f"p{len(entries)}", "description": args["create"]["s"]["description"]})
             return {"created": {"s": {"secret": SECRET}}}
         if object_type != self.drop_writes_to:
             self.singletons[object_type].update(copy.deepcopy(args["update"]["singleton"]))
@@ -383,12 +386,59 @@ class MainTests(unittest.TestCase):
 
     def test_an_orphaned_credential_exits_non_zero_without_writing(self):
         self.fake.accounts.append({"id": "a1", "name": "collector", "domainId": "d1"})
-        self.fake.app_passwords["a1"] = [{"description": pc.APP_PASSWORD_DESCRIPTION}]
+        self.fake.app_passwords["a1"] = [{"id": "p0", "description": pc.APP_PASSWORD_DESCRIPTION}]
 
         code, _ = self.run_main()
 
         self.assertEqual(code, 1)
         self.assertEqual(self.fake.writes, [])
+
+    def test_restart_happens_before_the_account_is_created(self):
+        order = []
+        self.restart.side_effect = lambda *a, **k: order.append("restart")
+        real = self.fake.__call__
+
+        def tracking(auth, method, args):
+            if method.endswith("/set"):
+                order.append(method[2:].split("/")[0])
+            return real(auth, method, args)
+
+        with mock.patch.object(pc.configure_stalwart, "_jmap_call", tracking):
+            self.run_main()
+
+        self.assertEqual(order, ["MtaStageMail", "MtaStageAuth", "restart", "Account", "AppPassword"])
+
+    def test_revoke_destroys_only_the_collector_credential_and_its_record(self):
+        self.run_main()
+        self.fake.app_passwords["a1"].append({"id": "other", "description": "something-else"})
+        with open(self.creds, "a", encoding="utf-8") as f:
+            f.write("blog-ghost-smtp:keep-me\n")
+
+        code, output = self.run_main("--revoke")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(self.fake.app_passwords["a1"], [{"id": "other", "description": "something-else"}])
+        with open(self.creds, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "blog-ghost-smtp:keep-me\n")
+        self.assertEqual(os.stat(self.creds).st_mode & 0o777, 0o600)
+        self.assertIn("destroyed 1 app password(s), removed local record", output)
+        self.assertNotIn(SECRET, output)
+
+    def test_revoke_then_provision_mints_a_fresh_credential(self):
+        self.run_main()
+        self.run_main("--revoke")
+
+        code, _ = self.run_main()
+
+        self.assertEqual(code, 0)
+        with open(self.creds, encoding="utf-8") as f:
+            self.assertEqual(f.read(), f"collector-smtp:{SECRET}\n")
+
+    def test_revoke_with_nothing_provisioned_is_a_no_op(self):
+        code, output = self.run_main("--revoke")
+
+        self.assertEqual(code, 0)
+        self.assertIn("destroyed 0 app password(s), found no local record", output)
 
     def test_a_read_back_that_differs_from_what_was_written_fails_loudly(self):
         self.fake.drop_writes_to = "MtaStageAuth"

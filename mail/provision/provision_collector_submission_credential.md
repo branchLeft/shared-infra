@@ -117,12 +117,23 @@ the orphaned case. It is reported and exits non-zero, as in
 
 A second run against reconciled state makes only GET calls and does not
 restart Stalwart. When either expression changes, the script restarts
-Stalwart and waits for the admin API to answer, the same way
-`configure_stalwart.py` does. It then reads both expressions back and fails
-if they differ from what was written.
+Stalwart straight after writing them, before it creates the account or the
+credential. It waits for the admin API to answer, the same way
+`configure_stalwart.py` does. Restarting at that point means a failure later
+in the run cannot leave expressions that are stored but not loaded, which a
+re-run would then skip as already reconciled. At the end, the script reads
+both expressions back and fails if they differ from what was written.
 
 That read-back proves storage, not enforcement.
 `check_collector_sender_scope.py` proves enforcement.
+
+## Revoking
+
+`--revoke` destroys the collector's app password and removes its line from
+the service-credentials file, leaving every other line in place. It leaves
+the account and both expressions alone: they only match the collector
+account, which cannot sign in once its app password is gone. Running the
+wrapper again afterwards mints a fresh credential.
 
 ## Why it is not in `run-all.sh`
 
