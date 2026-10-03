@@ -216,3 +216,14 @@ hostname in `sites.ts`. If the blackbox_exporter dies, `HostOrServiceDown`
 fires once per probed hostname rather than once total. That is correct
 behaviour — `up{job="blackbox_http"}` measures whether Prometheus can reach
 the exporter, not whether a probe succeeded.
+
+## Selector and target label join
+
+A rule test and a config test can each pass without proving the two meet. One
+proves a rule's own text, another proves a target's own labels, but a selector
+reading `expected_up="true"` against a target labelled `expected_up='True'`, or
+a host name typo'd as `ops-1`, still passes every promtool rule test written
+against hand-typed series: `alert_rule_test` never reads the rendered scrape
+config, and the mismatch reads at the API as `inactive`, identical to healthy.
+The test in `render.test.ts` reads both sides of the join from the two render
+functions themselves, not a retyped copy of either.

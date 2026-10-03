@@ -499,8 +499,11 @@ jobs:
           }
           route email-on-host alertname=SNDSCollectorStale notify=on-host
           route email-on-host alertname=MailDeliveryDeferred notify=on-host
-          route email alertname=HostOrServiceDown
-          route email alertname=TenantBackupAgeHigh
+          route email alertname=HostOrServiceDown severity=critical
+          route email alertname=BlackboxProbeFailed severity=critical
+          # Warnings stay on mx1; only critical reaches the off-host mailbox.
+          route email-on-host alertname=TenantBackupAgeHigh severity=warning
+          route email-on-host alertname=HostMemoryPressure severity=warning
           route mailhost-deadman,email alertname=MailHostDown
           route heartbeat alertname=Watchdog
           # The page register (hetzner/monitoring/pageRegister.ts): every
