@@ -1452,6 +1452,22 @@ forwarding logic verified earlier. Real DKIM validation requires a message
 that flows through the mail host's own outbound path to a recipient on a
 different provider who can report the auth results.
 
+## Collector submission credential
+
+`67-provision-collector-submission-credential.sh` gives the mail collector
+its submission credential. Unlike the credentials above, it may send as any
+address in the collector's sending domains (today `trypublicpress.co.uk`),
+and never as `branchleft.co.uk` or anything under it. It does that with a
+dedicated account, an app password limited to submission, and one
+collector-only branch on two server-wide sender expressions.
+`check_collector_sender_scope.py` proves the scope on the live server with
+one session: one sender accepted, one refused.
+
+How it works, what it refuses and why it is not in `run-all.sh`:
+`mail/provision/provision_collector_submission_credential.md`. The owner's
+steps for running it on this host are kept in the private operations
+repository, not here.
+
 ## How to re-run safely
 
 Every script in `mail/provision/` is idempotent by design — see the table
