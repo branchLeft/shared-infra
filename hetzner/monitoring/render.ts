@@ -857,8 +857,12 @@ export function renderAlertmanagerTemplate(
     '  receiver: email',
     "  group_by: ['alertname']",
     '  group_wait: 30s',
-    '  group_interval: 5m',
-    '  repeat_interval: 3h',
+    // Slow on purpose. Every message the email receiver sends is an external
+    // delivery from mx1's IP, and unengaged repeats of machine mail are what
+    // spent its Gmail reputation. group_interval bounds how often a group
+    // whose membership keeps changing (a flapping target) can re-notify.
+    '  group_interval: 1h',
+    '  repeat_interval: 24h',
     '  routes:',
     '    - matchers:',
     '        - alertname = "Watchdog"',
@@ -888,11 +892,35 @@ export function renderAlertmanagerTemplate(
     '    - matchers:',
     '        - alertname =~ "^(MailHostDown|AlertEmailDeliveryFailing)$"',
     '      receiver: email',
+    // Warnings never leave mx1: the off-host mailbox gets critical alerts
+    // only. After the mail-host pair above, which are critical anyway.
+    '    - matchers:',
+    '        - severity = "warning"',
+    '      receiver: email-on-host',
     // Rendered from the page register and nothing else -- see
     // `pageRegister.ts`. Empty when the register names no alertname to
     // route (every entry dormant or none delivered by Alertmanager), so no
     // stray route sits in the tree matching nothing.
     ...(pageRoute ? [pageRoute] : []),
+    '',
+    // An alert whose cause is already firing adds nothing but another
+    // message. The first two key on `instance`, which both rules inherit
+    // unchanged from the same `up` or mysqld series.
+    'inhibit_rules:',
+    '  - source_matchers:',
+    '      - alertname = "HostOrServiceDown"',
+    '    target_matchers:',
+    '      - alertname = "ServiceFlapping"',
+    "    equal: ['instance']",
+    '  - source_matchers:',
+    '      - alertname = "MySQLUnreachable"',
+    '    target_matchers:',
+    '      - alertname = "MySQLConnectionsHigh"',
+    "    equal: ['instance']",
+    '  - source_matchers:',
+    '      - alertname = "MailHostDown"',
+    '    target_matchers:',
+    '      - alertname =~ "^(MailDeliveryFailureRatioHigh|MailDeliveryVolumeSpike|MailDeliveryMetricsMissing)$"',
     '',
     'receivers:',
     renderPageReceiverBlock(),
@@ -900,7 +928,9 @@ export function renderAlertmanagerTemplate(
     '  - name: email',
     '    email_configs:',
     "      - to: '__ALERT_RECIPIENT_EMAIL__'",
-    '        send_resolved: true',
+    // false: a resolved notice is a second external delivery per incident,
+    // and a flapping alert would send one for every flap.
+    '        send_resolved: false',
     '',
     // A mailbox on mx1 itself: mx1 delivers it locally, so it never makes an
     // external delivery attempt and costs no sending reputation.
