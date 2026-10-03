@@ -362,20 +362,7 @@ describe('the rendered alert rules', () => {
     expect(rendered).toContain('expr: up{expected_up="true"} == 0');
   });
 
-  /**
-   * The join a rule test and a config test can each pass without proving:
-   * one half of this file proves the rule's own text, another proves a
-   * target's own labels, but neither proves the two actually meet. A
-   * selector that reads
-   * `expected_up="true"` (correct) matched against a target labelled
-   * `expected_up='True'` or a host name typo'd as `ops-1` still promtool-passes
-   * every rule test written against hand-typed series -- `alert_rule_test`
-   * never reads the rendered scrape config, so a real mismatch is invisible
-   * to it and reads at the API as `inactive`, identical to healthy. This
-   * test reads both sides of the join from the one thing that can catch a
-   * drift between them: the two render functions themselves, not a retyped
-   * copy of either.
-   */
+  // The selector/target label join is explained in render.md#selector-and-target-label-join.
   it("the selector's label key/value, pulled from HostOrServiceDown's own rendered expr, is exactly what ops1's node target renders now that it is expected up -- catching a typo on either side that a hand-typed promtool series cannot", () => {
     const promConfig = renderPrometheusConfig(sites);
     const opsHost = MONITORED_NODE_HOSTS.find((host) => host.name === 'ops1');
@@ -663,7 +650,11 @@ describe('the Alertmanager template', () => {
     expect(section).toContain('alertname = "ServiceFlapping"');
     expect(section).toContain('alertname = "MySQLUnreachable"');
     expect(section).toContain('alertname = "MailHostDown"');
-    expect(section.split('source_matchers:').length - 1).toBe(3);
+    const rules = section.split('  - source_matchers:').slice(1);
+    expect(rules).toHaveLength(3);
+    expect(rules[0]).toContain("equal: ['instance']");
+    expect(rules[1]).toContain("equal: ['instance']");
+    expect(rules[2]).not.toContain('equal:');
   });
 
   it('does not send a resolved notification to the mailhost-deadman receiver', () => {
