@@ -94,7 +94,21 @@ def run(secret: str) -> int:
     return 0 if passed else 1
 
 
-def main() -> int:
+def ehlo_only() -> int:
+    """One connection, EHLO, QUIT: is submission accepting again? No login."""
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
+            code, _ = smtp.ehlo()
+    except (smtplib.SMTPException, OSError) as exc:
+        print(f"EHLO {SMTP_HOST}:{SMTP_PORT} -> no answer ({exc!r})")
+        return 1
+    print(f"EHLO {SMTP_HOST}:{SMTP_PORT} -> {code}")
+    return 0 if code == 250 else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    if "--ehlo-only" in (sys.argv[1:] if argv is None else argv):
+        return ehlo_only()
     secret = collector._load_recorded_secret()
     if secret is None:
         print(

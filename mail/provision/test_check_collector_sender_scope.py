@@ -223,13 +223,44 @@ class RuleAbsentTests(unittest.TestCase):
         self.assertIn("control failed", output)
 
 
+class EhloOnlyTests(unittest.TestCase):
+    def run_main(self, smtp):
+        out = io.StringIO()
+        with mock.patch.object(check.smtplib, "SMTP", smtp), contextlib.redirect_stdout(out):
+            code = check.main(["--ehlo-only"])
+        return code, out.getvalue()
+
+    def test_accepting_again_passes_without_logging_in(self):
+        session = mock.MagicMock()
+        session.__enter__.return_value.ehlo.return_value = (250, b"mx1")
+
+        code, output = self.run_main(mock.MagicMock(return_value=session))
+
+        self.assertEqual(code, 0)
+        self.assertIn("EHLO mx1.branchleft.co.uk:587 -> 250", output)
+        session.__enter__.return_value.login.assert_not_called()
+
+    def test_refused_connection_fails(self):
+        code, output = self.run_main(mock.MagicMock(side_effect=ConnectionRefusedError()))
+
+        self.assertEqual(code, 1)
+        self.assertIn("no answer", output)
+
+    def test_no_secret_is_read(self):
+        session = mock.MagicMock()
+        session.__enter__.return_value.ehlo.return_value = (250, b"mx1")
+        with mock.patch.object(check.collector, "_load_recorded_secret") as load:
+            self.run_main(mock.MagicMock(return_value=session))
+        load.assert_not_called()
+
+
 class MainTests(unittest.TestCase):
     def test_no_recorded_secret_never_connects(self):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.object(check.collector, "SERVICE_CREDENTIALS_PATH", os.path.join(tmp, "none")), \
                 mock.patch.object(check.smtplib, "SMTP") as smtp, \
                 contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(check.main(), 1)
+            self.assertEqual(check.main([]), 1)
         smtp.assert_not_called()
 
     def test_an_auth_refusal_says_do_not_retry(self):
@@ -241,7 +272,7 @@ class MainTests(unittest.TestCase):
             with mock.patch.object(check.collector, "SERVICE_CREDENTIALS_PATH", path), \
                     mock.patch.object(check, "run", side_effect=smtplib.SMTPAuthenticationError(535, b"no")), \
                     contextlib.redirect_stderr(err):
-                self.assertEqual(check.main(), 1)
+                self.assertEqual(check.main([]), 1)
         self.assertIn("do not retry", err.getvalue())
         self.assertNotIn(SECRET, err.getvalue())
 
