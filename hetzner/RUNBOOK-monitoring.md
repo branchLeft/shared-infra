@@ -1187,6 +1187,16 @@ mx1 delivers locally, so they cost no sending reputation. Two kinds carry it:
   the one hosting the off-host mailbox, so the alert would queue behind the
   mail it reports on.
 
+**Every `severity: warning` alert also routes to `email-on-host`.** The
+off-host mailbox receives critical alerts only, with no resolved notices,
+`group_interval: 1h` and `repeat_interval: 24h`, because repeated unread
+machine mail to Gmail is what spent mx1's reputation. Three `inhibit_rules`
+mute an alert whose cause is already firing (`ServiceFlapping` under
+`HostOrServiceDown`, `MySQLConnectionsHigh` under `MySQLUnreachable`, the
+three mail-delivery rules under `MailHostDown`). The route tree is proven by
+CI's `Test the Alertmanager routing` step; amtool cannot test inhibition, so
+read it back from `/api/v2/status` on the host after a deploy.
+
 Read these in the on-host mailbox, not the off-host one. CI's
 `Test the Alertmanager routing` step proves the route tree delivers each to
 exactly the receiver it names; `MailHostDown` keeps its off-host path, since

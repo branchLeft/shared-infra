@@ -639,6 +639,33 @@ describe('the Alertmanager template', () => {
     expect(recipient).toMatch(/@branchleft\.co\.uk$/);
   });
 
+  it('keeps off-host email rare: slow repeats, no resolved notices, warnings kept on mx1', () => {
+    const routeSection = rendered.split('receivers:')[0];
+    expect(routeSection).toContain('group_interval: 1h');
+    expect(routeSection).toContain('repeat_interval: 24h');
+    expect(routeSection).not.toMatch(/repeat_interval: 3h/);
+    const emailReceiver = rendered.slice(
+      rendered.indexOf('  - name: email\n'),
+      rendered.indexOf('  - name: email-on-host')
+    );
+    expect(emailReceiver).toContain('send_resolved: false');
+    expect(emailReceiver).not.toContain('send_resolved: true');
+    const warningRoute = routeSection.slice(routeSection.indexOf('severity = "warning"'));
+    expect(warningRoute.split('- matchers:')[0]).toContain('receiver: email-on-host');
+  });
+
+  it('inhibits alerts whose cause is already firing', () => {
+    const section = rendered.slice(
+      rendered.indexOf('inhibit_rules:'),
+      rendered.indexOf('receivers:')
+    );
+    expect(section).toContain('alertname = "HostOrServiceDown"');
+    expect(section).toContain('alertname = "ServiceFlapping"');
+    expect(section).toContain('alertname = "MySQLUnreachable"');
+    expect(section).toContain('alertname = "MailHostDown"');
+    expect(section.split('source_matchers:').length - 1).toBe(3);
+  });
+
   it('does not send a resolved notification to the mailhost-deadman receiver', () => {
     // The URL is the Healthchecks.io check's /fail endpoint -- there is no
     // "/fail but resolved" semantic on the receiving end, so a resolved
