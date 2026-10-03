@@ -270,7 +270,8 @@ def _set_singleton(auth: tuple[str, str], object_type: str, patch: dict[str, Any
     configure_stalwart._jmap_call(auth, f"x:{object_type}/set", {"update": {"singleton": patch}})
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    dry_run = "--dry-run" in (sys.argv[1:] if argv is None else argv)
     address = collector_address()
     is_sender_allowed = build_is_sender_allowed(address, COLLECTOR_SENDING_DOMAINS)
     must_match_sender = build_must_match_sender(address)
@@ -306,6 +307,19 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    if dry_run:
+        planned = [
+            *(["set MtaStageMail.isSenderAllowed"] if mail_patch is not None else []),
+            *(["set MtaStageAuth.mustMatchSender"] if auth_patch is not None else []),
+            *([f"create the account {address}"] if account_id is None else []),
+            *(["create the app password"] if action == "create" else []),
+        ]
+        print(
+            "provision_collector_submission_credential: DRY RUN, nothing written; would "
+            + ("; ".join(planned) if planned else "change nothing")
+        )
+        return 0
 
     # Domain restriction first, so the collector is never exempt from the
     # exact-address check without already being held to its domains.

@@ -7,4 +7,4 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CREDENTIAL_LABEL=collector-smtp \
-    python3 "$SCRIPT_DIR/provision_collector_submission_credential.py"
+    python3 "$SCRIPT_DIR/provision_collector_submission_credential.py" "$@"

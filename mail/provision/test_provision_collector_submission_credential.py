@@ -50,7 +50,7 @@ class MainDomainNeverAllowedTests(unittest.TestCase):
                 mock.patch.object(pc.configure_stalwart, "_load_credentials") as load, \
                 mock.patch.object(pc.configure_stalwart, "_jmap_call") as call:
             with self.assertRaises(pc.Refused):
-                pc.main()
+                pc.main([])
         load.assert_not_called()
         call.assert_not_called()
 
@@ -297,11 +297,37 @@ class MainTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def run_main(self):
+    def run_main(self, *argv):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = pc.main()
+            code = pc.main(list(argv))
         return code, out.getvalue() + err.getvalue()
+
+    def test_dry_run_reads_and_plans_but_writes_nothing(self):
+        code, output = self.run_main("--dry-run")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(self.fake.writes, [])
+        self.restart.assert_not_called()
+        self.assertFalse(os.path.exists(self.creds))
+        self.assertIn(
+            "would set MtaStageMail.isSenderAllowed; set MtaStageAuth.mustMatchSender; "
+            "create the account collector@trypublicpress.co.uk; create the app password",
+            output,
+        )
+
+    def test_dry_run_still_refuses(self):
+        self.fake.singletons["MtaStageAuth"]["mustMatchSender"] = {"match": {}, "else": "false"}
+
+        with self.assertRaises(pc.Refused):
+            self.run_main("--dry-run")
+
+    def test_dry_run_after_a_real_run_would_change_nothing(self):
+        self.run_main()
+
+        _, output = self.run_main("--dry-run")
+
+        self.assertIn("would change nothing", output)
 
     def test_fresh_server_writes_the_domain_check_before_relaxing_the_exact_match(self):
         code, _ = self.run_main()

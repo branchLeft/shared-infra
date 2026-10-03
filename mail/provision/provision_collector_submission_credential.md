@@ -61,16 +61,34 @@ joined with `||`, the same operator Stalwart's own default uses.
 
 Both checks act on the SMTP envelope sender (`MAIL FROM`).
 
-## Fails closed
+## Failure modes
 
-If either expression ever fails to evaluate, Stalwart treats both as `true`
-(`unwrap_or(true)` at each call site). `mustMatchSender = true` then refuses
-every collector sender, because the collector account owns no address it
-could legitimately send as.
+There are three ways an expression can fail. Only the third is open, and it
+needs a version upgrade to arise.
 
-The domain check is written before `mustMatchSender` is relaxed. So there is
-no moment where the collector is exempt from the exact-address check but not
-yet held to its domains.
+- **It fails to evaluate on a message.** Stalwart treats both as `true`
+  (`unwrap_or(true)` at each call site). `mustMatchSender = true` then refuses
+  every collector sender, because the collector account owns no address it
+  could legitimately send as. Closed.
+- **It fails to compile when written.** The admin API compiles every
+  expression on `/set` and rejects one that does not parse
+  (`crates/jmap/src/registry/set.rs`). The script stops on that rejection.
+  Because the domain check is written first, a rejected domain check means
+  `mustMatchSender` is never relaxed. Closed.
+- **It fails to compile at startup after a Stalwart upgrade.** Here Stalwart
+  logs the error and silently uses that field's shipped default
+  (`compile_expr`, `crates/common/src/expr/if_block.rs`). If only
+  `isSenderAllowed` fell back like this, the collector would be exempt from
+  the exact-address check and not held to its domains. **Open.** So after
+  any change to the pinned Stalwart version, re-run
+  `check_collector_sender_scope.py` before the collector sends again.
+
+The domain check is written before `mustMatchSender` is relaxed. So during a
+run there is no moment where the collector is exempt from the exact-address
+check but not yet held to its domains.
+
+`--dry-run` performs every read and every refusal, prints what it would
+write, and writes nothing.
 
 ## What it refuses, before writing anything
 
