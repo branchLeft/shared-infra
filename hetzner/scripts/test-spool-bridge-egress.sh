@@ -66,7 +66,7 @@ OUTSIDE_IP="$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NET\").IP
 docker run -d --privileged --name "$HOST" --hostname app-proof --network "$NET" \
     -e DOCKER_TLS_CERTDIR= \
     -v "$HERE/provision:/policy:ro" \
-    "$DIND_IMAGE" >/dev/null
+    "$DIND_IMAGE" --ipv6 --ip6tables --fixed-cidr-v6=fd00:d0c::/64 >/dev/null
 HOST_IP="$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NET\").IPAddress}}" "$HOST")"
 
 tries=0
@@ -86,7 +86,7 @@ docker exec "$OUTSIDE" ip route add "$SPOOL_SUBNET" via "$HOST_IP"
 
 # The spool's networks as render-core renders them: one non-internal bridge
 # with a fixed name and masquerade off, one internal network for a tenant.
-on_host "docker network create --driver bridge --subnet $SPOOL_SUBNET --gateway 172.29.50.1 \
+on_host "docker network create --driver bridge --ipv6 --subnet $SPOOL_SUBNET --gateway 172.29.50.1 --subnet fd00:50::/64 \
     -o com.docker.network.bridge.name=br-mailspool \
     -o com.docker.network.bridge.enable_ip_masquerade=false drain >/dev/null"
 on_host "docker network create --internal tenant >/dev/null"
@@ -130,8 +130,22 @@ on_host "iptables -D DOCKER-USER -i br-mailspool ! -o br-mailspool -j DROP"
 on_host "bash /policy/branchleft_docker_user_policy.sh" >/dev/null
 expect_reach "a re-run puts the forward drop second, under the conntrack accept" \
     "on_host \"iptables -S DOCKER-USER | sed -n 2p | grep -q ctstate && iptables -S DOCKER-USER | sed -n 3p | grep -q 'br-mailspool'\""
-expect_reach "the IPv6 family carries the INPUT rules (rule presence only; no IPv6 traffic is sent)" \
+expect_reach "the IPv6 family carries the INPUT rules" \
     "on_host \"ip6tables -S INPUT | grep -q -- '-i br-mailspool -j DROP' && ip6tables -S INPUT | grep -Eq -- '-i br-mailspool .*ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j ACCEPT'\""
+# Position, not presence: a drop beneath Docker's own RETURN is never reached.
+expect_reach "the IPv6 forward drop is the first rule, above any RETURN" \
+    "on_host \"ip6tables -S DOCKER-USER | sed -n 2p | grep -q -- '-i br-mailspool ! -o br-mailspool -j DROP'\""
+# Behaviour: a packet forwarded from the drain bridge to an off-bridge IPv6
+# destination must hit the drop (its counter moves) and so must be dropped.
+on_host "ip link add proofdummy type dummy && ip link set proofdummy up && ip -6 route add 2001:db8:1::/64 dev proofdummy"
+V6_BEFORE="$(on_host "ip6tables -nvxL DOCKER-USER 1 | awk '{print \$1}'")"
+on_host "docker run --rm --network drain $PROBE_IMAGE ping -6 -c 1 -W 2 2001:db8:1::1" >/dev/null 2>&1 || true
+V6_AFTER="$(on_host "ip6tables -nvxL DOCKER-USER 1 | awk '{print \$1}'")"
+if [ "$V6_AFTER" -gt "$V6_BEFORE" ]; then
+    pass "a forwarded IPv6 packet from the drain bridge hit the drop ($V6_BEFORE -> $V6_AFTER)"
+else
+    fail "a forwarded IPv6 packet from the drain bridge did not hit the drop ($V6_BEFORE -> $V6_AFTER)"
+fi
 
 echo "== after the policy"
 expect_blocked "a container on the drain bridge cannot reach the outside" "probe drain \"$TO_OUTSIDE\""

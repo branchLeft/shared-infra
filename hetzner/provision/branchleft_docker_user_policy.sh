@@ -142,24 +142,26 @@ fi
 ensure_rule filter DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
 # The spool's drain bridge may open nothing, forwarded or to the host itself.
-# Written after the conntrack accept so a failure here cannot drop replies, and
-# the forward drop is inserted at position 2, directly beneath it, so a re-run
-# on a host that already has the policy gives the same order as a boot.
+# Written after the conntrack accept so a failure here cannot drop replies.
+# The forward drop goes at the position given: IPv4 puts it at 2, under the
+# conntrack accept, so a re-run orders as a boot does. IPv6 has no accept of
+# ours and Docker's own RETURN may be the chain's only rule, so it goes at 1,
+# above that RETURN, which also works on an empty chain.
 ensure_spool_rules() {
-    local tool="$1"
+    local tool="$1" forward_pos="$2"
     command -v "$tool" >/dev/null 2>&1 || {
         echo "branchleft-docker-user-policy: $tool is not installed" >&2
         return 1
     }
     if "$tool" -t filter -S DOCKER-USER >/dev/null 2>&1; then
-        ensure_rule_at "$tool" 2 filter DOCKER-USER -i "$MAIL_SPOOL_BRIDGE" ! -o "$MAIL_SPOOL_BRIDGE" -j DROP
+        ensure_rule_at "$tool" "$forward_pos" filter DOCKER-USER -i "$MAIL_SPOOL_BRIDGE" ! -o "$MAIL_SPOOL_BRIDGE" -j DROP
     else
         echo "branchleft-docker-user-policy: no $tool DOCKER-USER chain, so Docker forwards no such traffic yet; forward drop skipped"
     fi
     ensure_rule_at "$tool" 1 filter INPUT -i "$MAIL_SPOOL_BRIDGE" -j DROP
     ensure_rule_at "$tool" 1 filter INPUT -i "$MAIL_SPOOL_BRIDGE" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 }
-ensure_spool_rules iptables
-ensure_spool_rules ip6tables
+ensure_spool_rules iptables 2
+ensure_spool_rules ip6tables 1
 
 echo "branchleft-docker-user-policy: app-host isolation applied in DOCKER-USER"

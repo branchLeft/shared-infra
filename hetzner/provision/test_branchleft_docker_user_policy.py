@@ -256,15 +256,34 @@ class DockerUserPolicyTests(unittest.TestCase):
 
     # -- IPv6: app1 holds a public IPv6 address --------------------------
 
-    def test_ipv6_gets_the_same_spool_rules(self):
+    FORWARD_DROP = "-i br-mailspool ! -o br-mailspool -j DROP"
+
+    def test_ipv6_forward_drop_sits_above_dockers_own_return(self):
+        # On Docker 27 the chain's only rule is its RETURN; a drop inserted
+        # beneath it is never reached, so it must land at position 1.
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
-        calls = self.inserted6()
         self.assertEqual(
-            self.replay(calls, "DOCKER-USER", self.EXISTING_POLICY[:1]),
-            [self.SPOOL_RULES[0], self.SPOOL_RULES[1]],
+            self.replay(self.inserted6(), "DOCKER-USER", ["-j RETURN"]),
+            [self.FORWARD_DROP, "-j RETURN"],
         )
-        self.assertEqual(self.replay(calls, "INPUT"), self.INPUT_RULES)
+
+    def test_ipv6_forward_drop_works_on_an_empty_chain(self):
+        self.run_script()
+        self.assertEqual(
+            self.replay(self.inserted6(), "DOCKER-USER", []), [self.FORWARD_DROP]
+        )
+
+    def test_ipv6_input_pair_is_replies_then_drop(self):
+        self.run_script()
+        self.assertEqual(self.replay(self.inserted6(), "INPUT"), self.INPUT_RULES)
+
+    def test_ipv4_forward_drop_stays_under_the_conntrack_accept(self):
+        self.run_script(rule_present=True, absent="mailspool")
+        self.assertEqual(
+            self.replay(self.inserted(), "DOCKER-USER", self.EXISTING_POLICY)[:2],
+            [self.EXISTING_POLICY[0], self.FORWARD_DROP],
+        )
 
     def test_ipv6_rules_name_the_spool_bridge_alone(self):
         self.run_script()
