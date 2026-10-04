@@ -241,6 +241,10 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   mysql_global_status_threads_connected: 'mysqld_exporter, on db1',
   mysql_global_variables_max_connections: 'mysqld_exporter, on db1',
   mysql_up: 'mysqld_exporter, on db1',
+  // Read through db1's tunnel; names confirmed against a live v0.20.0 scrape.
+  mysql_slave_status_slave_io_running: 'mysqld_exporter v0.20.0, on db-t1',
+  mysql_slave_status_slave_sql_running: 'mysqld_exporter v0.20.0, on db-t1',
+  mysql_slave_status_seconds_behind_master: 'mysqld_exporter v0.20.0, on db-t1',
   delivery_dsn_perm_fail: "Stalwart's own Prometheus exporter, on mx1",
   delivery_rcpt_to_rejected: "Stalwart's own Prometheus exporter, on mx1",
   delivery_completed: "Stalwart's own Prometheus exporter, on mx1",

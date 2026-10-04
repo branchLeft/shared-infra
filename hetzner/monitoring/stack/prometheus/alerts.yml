@@ -107,7 +107,7 @@ groups:
           description: "doc 14 §4 scale-out trigger: disk >70% anywhere -> grow the volume."
 
       - alert: MySQLConnectionsHigh
-        expr: mysql_global_status_threads_connected / mysql_global_variables_max_connections > 0.70
+        expr: mysql_global_status_threads_connected{job="mysqld"} / mysql_global_variables_max_connections{job="mysqld"} > 0.70
         for: 10m
         labels:
           severity: warning
@@ -123,7 +123,7 @@ groups:
             needs its own rule.
 
       - alert: MySQLUnreachable
-        expr: mysql_up == 0
+        expr: mysql_up{job="mysqld"} == 0
         for: 10m
         labels:
           severity: critical
@@ -143,6 +143,63 @@ groups:
             in branchLeft/ghost-platform carries the rotation.
             for: 10m rather than 5m because a MySQL restart during a db
             stack deploy produces mysql_up 0 legitimately for a minute or two.
+
+  - name: replica-tunnel
+    rules:
+      - alert: ReplicaTunnelDown
+        expr: up{job="db_t1_replica", expected_up="true"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The tunnel from db1 to db-t1 has been down for 5 minutes."
+          description: >-
+            This scrape rides the same ssh session as replication, so the
+            replica is not receiving db1's changes. It reconnects by itself
+            once the tunnel is back. On db1: systemctl status and journalctl
+            -u branchleft-db-tunnel.service.
+
+      - alert: ReplicaNotReplicating
+        expr: >-
+          mysql_slave_status_slave_io_running{job="db_t1_replica", expected_up="true"} == 0
+          or mysql_slave_status_slave_sql_running{job="db_t1_replica", expected_up="true"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A replication thread on db-t1 has been stopped for 5 minutes."
+          description: >-
+            The tunnel is up but the IO thread is not running (Connecting
+            counts as not running) or the SQL thread has stopped. Read
+            SHOW REPLICA STATUS on db-t1 for Last_IO_Error and
+            Last_SQL_Error.
+
+      - alert: ReplicaLagHigh
+        expr: mysql_slave_status_seconds_behind_master{job="db_t1_replica", expected_up="true"} > 300
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "db-t1 has been over 5 minutes behind db1 for 10 minutes."
+          description: >-
+            Both threads are running and the replica is falling behind.
+            A NULL lag publishes no series, so it never reads as zero here;
+            ReplicaNotReplicating covers that case.
+
+      - alert: ReplicaStatusMissing
+        expr: >-
+          up{job="db_t1_replica", expected_up="true"} == 1
+          unless on(instance) mysql_slave_status_slave_io_running{job="db_t1_replica", expected_up="true"}
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "db-t1's exporter answers but reports no replica status."
+          description: >-
+            Either the exporter cannot read MySQL on db-t1, or MySQL has no
+            replication channel configured. Every other rule in this group
+            reads the replica status series, so this is the one that sees
+            them vanish.
 
   - name: backup
     rules:

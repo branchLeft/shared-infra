@@ -1294,3 +1294,122 @@ tests:
       - eval_time: 5m
         alertname: BackupLockWaitHigh
         exp_alerts: []
+
+  # The replica tunnel group. Series names and labels are the ones a live
+  # mysqld_exporter v0.20.0 published through the tunnel in the container
+  # proof (ghost-platform db/tunnel/prove-replica-tunnel.sh). Empty labels
+  # (channel_name, connection_name) are left out, as Prometheus stores them.
+  #
+  # Tunnel down: the scrape through db1's forward fails. The same outage on a
+  # target still labelled expected_up="false" stays silent.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true"}'
+        values: '1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'up{job="db_t1_replica", instance="10.20.1.20:9106", host="db-t1", expected_up="false"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ReplicaTunnelDown", alertstate="firing"}
+        eval_time: 6m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ReplicaTunnelDown", alertstate="firing", severity="critical", job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true"}'
+            value: 1
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ReplicaTunnelDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ReplicaStatusMissing
+        exp_alerts: []
+
+  # The IO thread stuck in Connecting, the state the proof recorded during a
+  # tunnel outage: io_running 0 and Seconds_Behind_Source NULL, so the lag
+  # series is absent. ReplicaNotReplicating fires; the lag rule cannot.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true"}'
+        values: '1x24'
+      - series: 'mysql_up{job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true"}'
+        values: '1x24'
+      - series: 'mysql_slave_status_slave_io_running{job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true", master_host="127.0.0.1", master_uuid="u1"}'
+        values: '0x24'
+      - series: 'mysql_slave_status_slave_sql_running{job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true", master_host="127.0.0.1", master_uuid="u1"}'
+        values: '1x24'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ReplicaNotReplicating", alertstate="firing"}
+        eval_time: 5m30s
+        exp_samples:
+          - labels: 'ALERTS{alertname="ReplicaNotReplicating", alertstate="firing", severity="critical", job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true", master_host="127.0.0.1", master_uuid="u1"}'
+            value: 1
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ReplicaLagHigh
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ReplicaStatusMissing
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ReplicaTunnelDown
+        exp_alerts: []
+
+  # The SQL thread stopped on an error while the IO thread keeps receiving.
+  - interval: 30s
+    input_series:
+      - series: 'mysql_slave_status_slave_io_running{job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true", master_host="127.0.0.1", master_uuid="u1"}'
+        values: '1x14'
+      - series: 'mysql_slave_status_slave_sql_running{job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true", master_host="127.0.0.1", master_uuid="u1"}'
+        values: '0x14'
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="ReplicaNotReplicating", alertstate="firing"})
+        eval_time: 5m30s
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+  # Lag: both threads running and 10 minutes behind for over 10 minutes fires
+  # a warning. A shorter spike, and the same lag on a target not yet expected
+  # up, do not.
+  - interval: 30s
+    input_series:
+      - series: 'mysql_slave_status_seconds_behind_master{job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true", master_host="127.0.0.1", master_uuid="u1"}'
+        values: '600x24'
+      - series: 'mysql_slave_status_seconds_behind_master{job="db_t1_replica", instance="10.20.1.20:9107", host="db-t1", expected_up="true", master_host="127.0.0.1", master_uuid="u2"}'
+        values: '600x10 0x14'
+      - series: 'mysql_slave_status_seconds_behind_master{job="db_t1_replica", instance="10.20.1.20:9106", host="db-t1", expected_up="false", master_host="127.0.0.1", master_uuid="u3"}'
+        values: '600x24'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ReplicaLagHigh", alertstate="firing"}
+        eval_time: 11m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ReplicaLagHigh", alertstate="firing", severity="warning", job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true", master_host="127.0.0.1", master_uuid="u1"}'
+            value: 1
+
+  # The exporter answers but publishes no replica status: MySQL unreadable
+  # (mysql_up 0) on one target, no channel configured on another. A healthy
+  # third target with every series present stays silent.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true"}'
+        values: '1x24'
+      - series: 'mysql_up{job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true"}'
+        values: '0x24'
+      - series: 'up{job="db_t1_replica", instance="10.20.1.20:9107", host="db-t1", expected_up="true"}'
+        values: '1x24'
+      - series: 'up{job="db_t1_replica", instance="10.20.1.20:9108", host="db-t1", expected_up="true"}'
+        values: '1x24'
+      - series: 'mysql_slave_status_slave_io_running{job="db_t1_replica", instance="10.20.1.20:9108", host="db-t1", expected_up="true", master_host="127.0.0.1", master_uuid="u1"}'
+        values: '1x24'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ReplicaStatusMissing", alertstate="firing"}
+        eval_time: 10m30s
+        exp_samples:
+          - labels: 'ALERTS{alertname="ReplicaStatusMissing", alertstate="firing", severity="critical", job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true"}'
+            value: 1
+          - labels: 'ALERTS{alertname="ReplicaStatusMissing", alertstate="firing", severity="critical", job="db_t1_replica", instance="10.20.1.20:9107", host="db-t1", expected_up="true"}'
+            value: 1
+    alert_rule_test:
+      # db1's own MySQL rule is scoped to job="mysqld" and must not read the
+      # replica's mysql_up 0 as db1 being unreachable.
+      - eval_time: 10m30s
+        alertname: MySQLUnreachable
+        exp_alerts: []

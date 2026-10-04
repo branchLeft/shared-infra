@@ -59,6 +59,20 @@ export const MONITORED_MYSQLD_HOST: MonitoredHost = {
   expectedUp: true,
 };
 
+/**
+ * The replica host's MySQL exporter, read on db1's private address through
+ * the tunnel's metrics forward (`../provision/branchleft-db-tunnel.service`).
+ * See render.md#monitored_replica_host for the flip and the teardown.
+ */
+export const MONITORED_REPLICA_HOST: MonitoredHost = {
+  name: 'db-t1',
+  address: HOST_IPS.db1,
+  expectedUp: false,
+};
+export const REPLICA_TUNNEL_JOB = 'db_t1_replica';
+export const REPLICA_TUNNEL_METRICS_PORT = 9105;
+const REPLICA_SELECTOR = `job="${REPLICA_TUNNEL_JOB}", expected_up="true"`;
+
 export const NODE_EXPORTER_PORT = 9100;
 export const MYSQLD_EXPORTER_PORT = 9104;
 export const CADVISOR_PORT = 8080;
@@ -223,6 +237,11 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '    static_configs:',
     `      - targets: ['${MONITORED_MYSQLD_HOST.address}:${MYSQLD_EXPORTER_PORT}']`,
     `        labels: ${targetLabels(MONITORED_MYSQLD_HOST)}`,
+    '',
+    `  - job_name: ${REPLICA_TUNNEL_JOB}`,
+    '    static_configs:',
+    `      - targets: ['${MONITORED_REPLICA_HOST.address}:${REPLICA_TUNNEL_METRICS_PORT}']`,
+    `        labels: ${targetLabels(MONITORED_REPLICA_HOST)}`,
     '',
     '  - job_name: cadvisor',
     '    static_configs:',
@@ -403,7 +422,7 @@ export function renderAlertRules(): string {
     '          description: "doc 14 §4 scale-out trigger: disk >70% anywhere -> grow the volume."',
     '',
     '      - alert: MySQLConnectionsHigh',
-    '        expr: mysql_global_status_threads_connected / mysql_global_variables_max_connections > 0.70',
+    '        expr: mysql_global_status_threads_connected{job="mysqld"} / mysql_global_variables_max_connections{job="mysqld"} > 0.70',
     '        for: 10m',
     '        labels:',
     '          severity: warning',
@@ -419,7 +438,8 @@ export function renderAlertRules(): string {
     '            needs its own rule.',
     '',
     '      - alert: MySQLUnreachable',
-    '        expr: mysql_up == 0',
+    // db1's job only: the replica's exporter has its own rule group below.
+    '        expr: mysql_up{job="mysqld"} == 0',
     '        for: 10m',
     '        labels:',
     '          severity: critical',
@@ -439,6 +459,66 @@ export function renderAlertRules(): string {
     '            in branchLeft/ghost-platform carries the rotation.',
     '            for: 10m rather than 5m because a MySQL restart during a db',
     '            stack deploy produces mysql_up 0 legitimately for a minute or two.',
+    '',
+    // The migration replica on db-t1, read through db1's tunnel. Every rule
+    // is scoped to expected_up="true" so nothing fires before the tunnel is
+    // installed. See render.md#the-replica-tunnel-rule-group.
+    '  - name: replica-tunnel',
+    '    rules:',
+    '      - alert: ReplicaTunnelDown',
+    `        expr: up{${REPLICA_SELECTOR}} == 0`,
+    '        for: 5m',
+    '        labels:',
+    '          severity: critical',
+    '        annotations:',
+    '          summary: "The tunnel from db1 to db-t1 has been down for 5 minutes."',
+    '          description: >-',
+    '            This scrape rides the same ssh session as replication, so the',
+    "            replica is not receiving db1's changes. It reconnects by itself",
+    '            once the tunnel is back. On db1: systemctl status and journalctl',
+    '            -u branchleft-db-tunnel.service.',
+    '',
+    '      - alert: ReplicaNotReplicating',
+    '        expr: >-',
+    `          mysql_slave_status_slave_io_running{${REPLICA_SELECTOR}} == 0`,
+    `          or mysql_slave_status_slave_sql_running{${REPLICA_SELECTOR}} == 0`,
+    '        for: 5m',
+    '        labels:',
+    '          severity: critical',
+    '        annotations:',
+    '          summary: "A replication thread on db-t1 has been stopped for 5 minutes."',
+    '          description: >-',
+    '            The tunnel is up but the IO thread is not running (Connecting',
+    '            counts as not running) or the SQL thread has stopped. Read',
+    '            SHOW REPLICA STATUS on db-t1 for Last_IO_Error and',
+    '            Last_SQL_Error.',
+    '',
+    '      - alert: ReplicaLagHigh',
+    `        expr: mysql_slave_status_seconds_behind_master{${REPLICA_SELECTOR}} > 300`,
+    '        for: 10m',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "db-t1 has been over 5 minutes behind db1 for 10 minutes."',
+    '          description: >-',
+    '            Both threads are running and the replica is falling behind.',
+    '            A NULL lag publishes no series, so it never reads as zero here;',
+    '            ReplicaNotReplicating covers that case.',
+    '',
+    '      - alert: ReplicaStatusMissing',
+    '        expr: >-',
+    `          up{${REPLICA_SELECTOR}} == 1`,
+    `          unless on(instance) mysql_slave_status_slave_io_running{${REPLICA_SELECTOR}}`,
+    '        for: 10m',
+    '        labels:',
+    '          severity: critical',
+    '        annotations:',
+    '          summary: "db-t1\'s exporter answers but reports no replica status."',
+    '          description: >-',
+    '            Either the exporter cannot read MySQL on db-t1, or MySQL has no',
+    '            replication channel configured. Every other rule in this group',
+    '            reads the replica status series, so this is the one that sees',
+    '            them vanish.',
     '',
     '  - name: backup',
     // One group, not two -- both alerts watch the same producer.
@@ -916,6 +996,11 @@ export function renderAlertmanagerTemplate(
     '      - alertname = "MySQLUnreachable"',
     '    target_matchers:',
     '      - alertname = "MySQLConnectionsHigh"',
+    "    equal: ['instance']",
+    '  - source_matchers:',
+    '      - alertname = "ReplicaTunnelDown"',
+    '    target_matchers:',
+    '      - alertname =~ "^(HostOrServiceDown|ServiceFlapping)$"',
     "    equal: ['instance']",
     '  - source_matchers:',
     '      - alertname = "MailHostDown"',

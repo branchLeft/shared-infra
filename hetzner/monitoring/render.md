@@ -109,6 +109,47 @@ it by design -- routing carries no `notify: on-host` label either, since
 the producer host is not mx1, so this reaches the same off-host email
 receiver `HostMemoryPressure` and `HostDiskSpaceLow` already use.
 
+## The `replica-tunnel` rule group
+
+Watches the blog's migration replica on `db-t1`, which receives `db1`'s
+changes through `db1`'s `branchleft-db-tunnel.service`
+(`../provision/45-install-db-tunnel.md`). The replica's mysqld_exporter is
+read through the same ssh session, on `db1`'s `10.20.1.20:9105`, so one scrape
+answers two questions: is the tunnel up, and what does the replica report.
+
+| Alert                   | Fires when                                                                                               | Severity |
+| ----------------------- | -------------------------------------------------------------------------------------------------------- | -------- |
+| `ReplicaTunnelDown`     | the scrape through the tunnel fails for 5m                                                               | critical |
+| `ReplicaNotReplicating` | the IO or SQL thread is not running for 5m (`Connecting` counts as not running)                          | critical |
+| `ReplicaLagHigh`        | both threads run and the replica is over 300s behind for 10m                                             | warning  |
+| `ReplicaStatusMissing`  | the exporter answers but publishes no replica status for 10m: MySQL unreadable, or no channel configured | critical |
+
+A NULL `Seconds_Behind_Source` publishes no series at all; the container
+proof saw NULL while the IO thread was `Connecting`. So the lag rule never
+reads NULL as zero, and the thread rule is what covers that state. The
+promtool cases in `alert_rules_test.yml` use the series names and labels a
+live mysqld_exporter v0.20.0 published through the tunnel.
+
+`ReplicaTunnelDown` inhibits `HostOrServiceDown` and `ServiceFlapping` on the
+same instance: they read the same `up` series and would add only a second
+message.
+
+`MySQLUnreachable` and `MySQLConnectionsHigh` are scoped to `job="mysqld"`.
+Both name `db1` in their summary, and a second mysqld_exporter job would
+otherwise raise them for the replica under `db1`'s name.
+
+## MONITORED_REPLICA_HOST
+
+`expectedUp` is `false` until the tunnel is installed on `db1`, and every rule
+in the group above selects `expected_up="true"`, so nothing fires before then.
+Once the tunnel is live, `ExpectedDownTargetAnswering` warns that this target
+answers, which is the prompt to flip it: the flip is a one-line reviewed
+change here, then a monitoring delivery to `edge1`.
+
+The target is temporary. After the migration's cutover the replica is
+promoted and replication stops on purpose, so the target and the rule group
+are removed in the same change that tears the tunnel down.
+
 ## The `snds-reputation` rule group
 
 Microsoft's own feedback-loop data, not a proxy: mail-delivery alerts

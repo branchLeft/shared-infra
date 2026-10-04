@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { sites } from '../../sites';
@@ -6,7 +9,10 @@ import {
   blackboxTargets,
   MONITORED_MYSQLD_HOST,
   MONITORED_NODE_HOSTS,
+  MONITORED_REPLICA_HOST,
   NODE_EXPORTER_PORT,
+  REPLICA_TUNNEL_JOB,
+  REPLICA_TUNNEL_METRICS_PORT,
   renderAlertmanagerTemplate,
   renderAlertRules,
   renderPrometheusConfig,
@@ -406,7 +412,8 @@ describe('the rendered alert rules', () => {
 
   it('alerts on MySQL being unreadable, which no up-based rule can see -- see alert_rules_test.yml for the promtool proof that it fires while up stays 1', () => {
     expect(rendered).toContain('alert: MySQLUnreachable');
-    expect(rendered).toContain('expr: mysql_up == 0');
+    // db1's job only, so the replica's exporter never raises an alert that names db1.
+    expect(rendered).toContain('expr: mysql_up{job="mysqld"} == 0');
     // Deliberately not scoped by expected_up: the metric only exists at all
     // when the exporter is answering, so the target is up by construction.
     expect(rendered).not.toContain('mysql_up{expected_up="true"} == 0');
@@ -461,6 +468,69 @@ describe('the rendered alert rules', () => {
     const end = rendered.indexOf('- alert:', start + 1);
     const block = rendered.slice(start, end === -1 ? undefined : end);
     expect(block).toContain('or absent(backup_worker_last_success_timestamp_seconds)');
+  });
+});
+
+describe('the replica tunnel', () => {
+  const rules = renderAlertRules();
+  const promConfig = renderPrometheusConfig(sites);
+  const group = rules.slice(
+    rules.indexOf('- name: replica-tunnel'),
+    rules.indexOf('- name: backup')
+  );
+  const exprs = [...group.matchAll(/expr: (?:>-\n)?([\s\S]*?)\n {8}for:/g)].map((m) => m[1]);
+
+  it("scrapes db-t1's exporter on db1's private address, quiet until the tunnel is installed", () => {
+    expect(MONITORED_REPLICA_HOST.address).toBe(HOST_IPS.db1);
+    expect(MONITORED_REPLICA_HOST.expectedUp).toBe(false);
+    expect(promConfig).toContain(
+      `  - job_name: ${REPLICA_TUNNEL_JOB}\n    static_configs:\n` +
+        `      - targets: ['${HOST_IPS.db1}:${REPLICA_TUNNEL_METRICS_PORT}']\n` +
+        "        labels: {host: db-t1, expected_up: 'false'}"
+    );
+  });
+
+  it("scrapes the port db1's tunnel unit actually forwards, read from the unit itself", () => {
+    const unit = readFileSync(
+      join(__dirname, '..', 'provision', 'branchleft-db-tunnel.service'),
+      'utf8'
+    );
+    const forward = unit.match(/-L \$\{DB_TUNNEL_SOURCE_ADDRESS\}:(\d+):127\.0\.0\.1:\d+/);
+    expect(forward).not.toBeNull();
+    expect(Number(forward![1])).toBe(REPLICA_TUNNEL_METRICS_PORT);
+  });
+
+  it('names four rules, each selecting only the replica job and only once it is expected up', () => {
+    expect([...group.matchAll(/- alert: (\w+)/g)].map((m) => m[1])).toEqual([
+      'ReplicaTunnelDown',
+      'ReplicaNotReplicating',
+      'ReplicaLagHigh',
+      'ReplicaStatusMissing',
+    ]);
+    expect(exprs).toHaveLength(4);
+    for (const expr of exprs) {
+      const selectors = [...expr.matchAll(/\{([^}]*)\}/g)].map((m) => m[1]);
+      expect(selectors.length).toBeGreaterThan(0);
+      for (const selector of selectors) {
+        expect(selector).toBe(`job="${REPLICA_TUNNEL_JOB}", expected_up="true"`);
+      }
+    }
+  });
+
+  it('keeps db1-named MySQL rules off the replica job', () => {
+    expect(rules).toContain(
+      'expr: mysql_global_status_threads_connected{job="mysqld"} / mysql_global_variables_max_connections{job="mysqld"} > 0.70'
+    );
+    expect(rules).not.toMatch(/expr: mysql_up == 0/);
+  });
+
+  it('lets a tunnel outage stand in for the generic down alerts on the same target', () => {
+    const template = renderAlertmanagerTemplate();
+    expect(template).toContain(
+      '      - alertname = "ReplicaTunnelDown"\n    target_matchers:\n' +
+        '      - alertname =~ "^(HostOrServiceDown|ServiceFlapping)$"\n' +
+        "    equal: ['instance']"
+    );
   });
 });
 
@@ -650,11 +720,13 @@ describe('the Alertmanager template', () => {
     expect(section).toContain('alertname = "ServiceFlapping"');
     expect(section).toContain('alertname = "MySQLUnreachable"');
     expect(section).toContain('alertname = "MailHostDown"');
+    expect(section).toContain('alertname = "ReplicaTunnelDown"');
     const rules = section.split('  - source_matchers:').slice(1);
-    expect(rules).toHaveLength(3);
+    expect(rules).toHaveLength(4);
     expect(rules[0]).toContain("equal: ['instance']");
     expect(rules[1]).toContain("equal: ['instance']");
-    expect(rules[2]).not.toContain('equal:');
+    expect(rules[2]).toContain("equal: ['instance']");
+    expect(rules[3]).not.toContain('equal:');
   });
 
   it('does not send a resolved notification to the mailhost-deadman receiver', () => {
