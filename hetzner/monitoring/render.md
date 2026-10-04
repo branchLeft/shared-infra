@@ -24,20 +24,11 @@ record a cutover has to hunt for. Every hostname below is derived.
 ## MonitoredHost / MONITORED_NODE_HOSTS
 
 The estate hosts this stack watches, and whether each node_exporter target
-is expected to answer today. `app1` is base-provisioned but carries no
-node_exporter yet -- provisioning it is a separate story -- so only the
-edge1, db1 and ops1 node targets contribute to the `HostOrServiceDown` alert
-`renderAlertRules` emits below.
-
-**`db1` is expected up because its node_exporter reads the nightly dump's
-textfile directory.** The dump writes its lock wait, hold and abort gauges
-under `tenant="db1-all-databases"`, and only a node_exporter on db1 can
-publish them; the backup alerts then see db1 with no rule change. The flag
-flips in the same change as the install step, which is why
-`RUNBOOK-monitoring.md` §17 puts the install and its read-back first and
-the config redeploy last: the flag takes effect only when the rendered
-config reaches edge1, so installing first means the target is never
-expected-up while absent. A target that has never been available must not page anyone;
+is expected to answer today. `app1` and `db1` are base-provisioned but
+carry no node_exporter yet -- provisioning their exporters is a separate
+story -- so `up{job="node", expected_up="true"} == 0` and only edge1's
+node target contributes to the `HostOrServiceDown` alert `renderAlertRules`
+emits below. A target that has never been available must not page anyone;
 a target that stops answering after being available must.
 
 **`ops1` joins the list once the host it names has actually been renamed,
@@ -53,7 +44,7 @@ volumes), which is why `hetzner/nextcloud1/` and this repository's
 only the host's own identity moved. `expectedUp` is `true` only because
 `RUNBOOK-monitoring.md`'s ops1 section read the exporter back answering
 live first: a target that has never answered must not page anyone the
-moment its config deploys, which is why app1 stays `false`. The flip
+moment its config deploys, which is why app1/db1 stay `false`. The flip
 is a reviewed change, never a hand edit -- a hand edit of this flag, on a
 different host's exporter, once hid a four-day outage (see this file's
 `MONITORED_MYSQLD_HOST` comment below).

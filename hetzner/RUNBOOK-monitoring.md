@@ -506,9 +506,10 @@ and `blackbox_mail`'s labels are what catch the exporter itself being down --
 a dead exporter runs no probe, so there is no `probe_success` series for
 `BlackboxProbeFailed` or `MailHostDown` to see; those alerts instead cover a
 live exporter reporting a failed probe, on `probe_success` rather than `up`.
-Only `node` for `app1` is expected `down`: its exporter is not provisioned
-yet. `db1`'s node target carries `expected_up: 'true'` once §17 below has
-installed its exporter and the config is redeployed (see `render.ts`'s
+Only `node` for `app1`, `node` for `db1` and `node` for `ops1` are expected
+`down`: `app1`'s exporter is not provisioned, `db1`'s is installed by §17 and
+`ops1`'s by §15, and each carries `expected_up: 'false'` until its own
+follow-up change flips the label after the read-back (see `render.ts`'s
 `MONITORED_NODE_HOSTS` docstring). A `down` target with `expected_up: 'true'` in its labels is the
 only one worth investigating -- but an `up` target with `expected_up: 'false'`
 is worth one too: `ExpectedDownTargetAnswering` pages on exactly that, because
@@ -1131,23 +1132,42 @@ is the same script and unit as §15: it binds the host's own `10.20.1.x`
 address and refuses to start with none, and the unit already reads that
 directory. Nothing is added to the unit.
 
-Executed by the owner, or by the granted monitoring SSH session (`db1` is
-reached through `edge1`, as in §15a). `$EDGE1_IPV4` is set in section 5.
+**Who runs what.** 17a (the install), the stop command in 17b and 17e (the
+`edge1` redeploy) change a host and are the owner's alone. The granted
+monitoring SSH session is non-mutating, so it may run only the read-only
+checks: 17-pre, the `ss` and `is-active` reads in 17b, 17c, 17d, 17f.
+`db1` is reached through `edge1`, as in §15a. `$EDGE1_IPV4` is set in
+section 5.
 
-**Order is the whole point: install, read back, only then redeploy the
-config.** This change's `render.ts` flips `db1`'s `expectedUp` to `true`, and
-that flag reaches `edge1` only when the rendered `prometheus.yml` is rsynced
-and Prometheus restarted (step 7b, as in §15c). Merging this change deploys
-nothing by itself. If the config were redeployed before the exporter
-answered, `HostOrServiceDown` would page for a target that was never up. So
-steps 17a to 17c run first, and 17d is the gate to 17e.
+**Order is the whole point: install, read back, only then flip the flag.**
+`db1`'s node target is in the scrape config as `expected_up: 'false'`, and
+this change leaves it so. The flip to `'true'` is a separate follow-up change,
+the same shape as §15e, opened as a draft marked do-not-merge. It is merged
+only after 17c passes on the real host. Merging it before that would arm the
+critical `HostOrServiceDown` for an exporter that was never up, the moment any
+monitoring deploy next reached `edge1`.
 
-### 17a. Install
+### 17-pre. Stop if db1's disk is already past 70%
+
+`HostDiskSpaceLow` has no `expected_up` selector. It evaluates `db1` from the
+first scrape in 17c and fires 15 minutes later whatever 17e does, so check
+before installing anything:
+
+```bash
+HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # db1's private address, read from Hetzner rather than typed
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'df -hP -x tmpfs -x overlay'
+```
+
+Keep that shell open: 17a and 17b reuse `HOST_PRIVATE_IP` and `JUMP`.
+
+**STOP if any `Use%` reads 70% or more.** Free or grow the volume first, then
+come back. Do not run 17a.
+
+### 17a. Install (owner only)
 
 ```bash
 cd ~/branchLeft/shared-infra
-HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # db1's private address, read from Hetzner rather than typed
-JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
 scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@"$HOST_PRIVATE_IP":/root/platform-provision
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && install -d -m 0755 -o root -g root /var/lib/branchleft/backup-worker-exporter && /root/platform-provision/40-install-node-exporter.sh'
 ```
@@ -1157,23 +1177,23 @@ Expect the closing line `40-install-node-exporter: done, listening on
 itself creates the directory with. If the script prints `no address in
 10.20.1.0/24 found on this host`, stop: this ran against the wrong host.
 
-### 17b. Confirm it listens on the private address only
+### 17b. Confirm it listens on the private address only (owner for the stop command)
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'ss -ltnH | grep :9100; systemctl is-active node_exporter.service'
 ```
 
 Expect exactly one `:9100` listener, on `10.20.1.20:9100`, and `active`. A
-`0.0.0.0:9100` or `*:9100` line means stop and `systemctl stop
-node_exporter.service`. `db1` has no public address, and the Cloud Firewall
+`0.0.0.0:9100` or `*:9100` line means stop, and the owner runs `systemctl
+stop node_exporter.service` on db1 (this is a mutating step). `db1` has no public address, and the Cloud Firewall
 filters the public interface only, so a private bind is the whole exposure
 control, as for `ops1` in §15b.
 
 ### 17c. Read it back from edge1's Prometheus
 
 `db1`'s node target already exists in the scrape config with `expected_up:
-'false'`, so Prometheus is scraping it the moment the exporter starts. Over the
-tunnel from step 8:
+'false'`, so Prometheus is scraping it the moment the exporter starts. These queries
+run on `edge1` over ssh, reading its Prometheus on 127.0.0.1:9090:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'curl -s --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=up{host=\"db1\",job=\"node\"}"'
@@ -1190,28 +1210,23 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'curl -s --get http://127.0.
 Expect one series, value `0`. A `1` means the directory is missing or
 unreadable by the `node-exporter` user: re-run 17a, which creates it. While the
 label is still `false` and the target answers, `ExpectedDownTargetAnswering`
-may raise a warning. That is the stale label this change corrects; it clears
-after 17e.
+(a warning, not a page) will fire. That is the stale label the follow-up flip
+corrects. After the flip is deployed it may linger up to 15 minutes, because
+the rule looks back over a 15 minute window.
 
 ### 17d. Gate
 
 Do not go on unless 17b showed the private bind only and 17c returned `up` `1`
-and `node_textfile_scrape_error` `0`. Also check `db1`'s disk is not already
-past the `HostDiskSpaceLow` threshold, because that rule starts evaluating
-against `db1` as soon as the target answers:
+and `node_textfile_scrape_error` `0`. Passing 17c is the condition for
+opening the follow-up change out of draft: read the `up` value into that
+change's description and ask for its merge.
 
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'curl -s --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=1 - node_filesystem_avail_bytes{host=\"db1\",fstype!~\"tmpfs|overlay\"} / node_filesystem_size_bytes{host=\"db1\",fstype!~\"tmpfs|overlay\"}"'
-```
+### 17e. Flip `expected_up` and redeploy (owner only)
 
-Every value should be under `0.70`. At or over it, `HostDiskSpaceLow` fires
-after 15 minutes of that; decide that is acceptable before 17e.
-
-### 17e. Redeploy the config that expects `db1` up
-
-Merge this change, then redeploy the monitoring config exactly as §15c does
-(step 7b: rsync `hetzner/monitoring/stack/`, restart the stack).
-Re-read:
+Merge the follow-up change (it flips `db1`'s `expectedUp` to `true` and
+regenerates `prometheus.yml`), then redeploy the monitoring config to `edge1`
+exactly as §15c does (step 7b: rsync `hetzner/monitoring/stack/`, restart the
+stack). The owner runs this. Re-read from `edge1`:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'curl -s --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=up{host=\"db1\",job=\"node\",expected_up=\"true\"}"'
@@ -1219,8 +1234,8 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'curl -s --get http://127.0.
 
 Expect one series, value `1`, now with `expected_up="true"`. Run it twice a
 few seconds apart and trust the second: the first scrape after a restart can
-read `unknown`. `HostOrServiceDown` now covers `db1`'s exporter, and
-`alert_rules_test.yml` proves that rule fires against exactly this label shape.
+read `unknown`. `HostOrServiceDown` now covers `db1`'s exporter. A leftover
+`ExpectedDownTargetAnswering` warning clears within 15 minutes.
 
 ### 17f. Prove the backup metrics and alerts see `db1`
 
@@ -1254,9 +1269,11 @@ listed, that is the gap to chase, not a pass.
 
 ### 17g. Rolling back
 
-Stop the exporter and flip the flag back in the same order as it went on:
-change `db1`'s `expectedUp` to `false`, `npm run render`, redeploy (§15c), then
-`systemctl stop node_exporter.service` on `db1`. Stopping first would page.
+If the follow-up flip has been merged and deployed, undo it in the same order
+it went on: change `db1`'s `expectedUp` to `false`, `npm run render`, redeploy
+(§15c), then the owner runs `systemctl stop node_exporter.service` on `db1`.
+Stopping first would page. If the flip was never deployed, the stop alone is
+safe.
 
 ## Responding to the mail-delivery alerts
 
