@@ -20,6 +20,10 @@
 # it. NO_DB_EXCEPTION_ADDRESSES is that self-identification, the same
 # pattern GATEWAY_PRIVATE_IP below already uses to recognise edge1.
 #
+# It also confines the per-host mail spool's drain bridge (below): a
+# container on that bridge opens no connection off it, whether forwarded or to
+# the host itself. A host with no such bridge carries rules that match nothing.
+#
 # Idempotent: every rule is checked before it is added.
 #
 # App hosts only. Refuses to run on the estate's NAT gateway, edge1, which
@@ -45,6 +49,12 @@ GATEWAY_PRIVATE_IP="${BRANCHLEFT_DOCKER_USER_POLICY_GATEWAY_IP:-10.20.1.10}"
 # purely from recognising its own address -- see the header comment for why
 # that, and not an env var a caller passes once, is what has to decide this.
 NO_DB_EXCEPTION_ADDRESSES="${BRANCHLEFT_DOCKER_USER_POLICY_NO_DB_EXCEPTION_ADDRESSES:-10.20.1.50}"
+
+# The spool's one non-internal network, a bridge with this fixed name so a
+# host rule can match it (render-core's MAIL_SPOOL_DRAIN_BRIDGE). Docker needs
+# it only to publish the spool's drain port on host loopback; the spool opens
+# no connection of its own, so everything it opens off this bridge is refused.
+MAIL_SPOOL_BRIDGE="${BRANCHLEFT_DOCKER_USER_POLICY_MAIL_SPOOL_BRIDGE:-br-mailspool}"
 
 # The metadata service's own address, hardcoded because it is Hetzner's, not
 # the estate's -- the same reasoning branchleft_host_egress.sh uses for it.
@@ -160,6 +170,19 @@ ensure_rule filter DOCKER-USER -d "$SUBNET" -j DROP
 if [[ -n "$DB_HOST" ]]; then
     ensure_rule filter DOCKER-USER -d "$DB_HOST" -p tcp --dport "$DB_PORT" -j ACCEPT
 fi
+
+# The mail spool's drain bridge may open nothing off itself. Matches by
+# interface only, so it cannot touch any other container's traffic, and sits
+# above the db1 accept so the spool cannot use that exception either.
+ensure_rule filter DOCKER-USER -i "$MAIL_SPOOL_BRIDGE" ! -o "$MAIL_SPOOL_BRIDGE" -j DROP
+
+# Connections to the host itself are delivered through INPUT, which DOCKER-USER
+# never sees, so the bridge needs its own pair there: refuse everything that
+# arrives from it except replies to a connection the host opened, such as the
+# drain request reaching the published loopback port. Both rules match this
+# one interface and nothing else.
+ensure_rule filter INPUT -i "$MAIL_SPOOL_BRIDGE" -j DROP
+ensure_rule filter INPUT -i "$MAIL_SPOOL_BRIDGE" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
 # Has to be the first rule DOCKER-USER evaluates. A published port is a DNAT,
 # so an inbound flow's reply (edge1 -> a tenant's Ghost, or a scrape -> a

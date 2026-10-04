@@ -492,6 +492,19 @@ that needs an `INPUT` rule with a different blast radius and is out of scope
 here. Traffic to `169.254.169.254` _is_ forwarded, so that half of the drop
 is real.
 
+**One interface is the exception to that limit: `br-mailspool`.** A host that
+runs the per-host mail spool has a Docker bridge of that exact name, which
+exists only so the spool's drain port can be published on host loopback. The
+spool opens no connection of its own, so the reconciler refuses everything a
+container on that bridge opens: forwarded traffic off the bridge (a
+`DOCKER-USER` drop above the `db1` accept, below the conntrack accept) and
+traffic to the host itself (an `INPUT` drop for that interface, behind a
+conntrack accept for replies). Every one of those rules matches that one
+interface, so a host without the spool, `app1` today, carries rules that match
+nothing and no other container's traffic changes. The proof against a real
+dockerd is `hetzner/scripts/test-spool-bridge-egress.sh`. A spool is not
+delivered to an app host before this reconciler has run there.
+
 Run it the same way as step 5, on each app host. `app1`, at `10.20.1.100`, is
 the only one that exists today; the command is otherwise unchanged for a
 future `app2`/`app3`, substituting that host's own private IP. `$EDGE1_IPV4`
