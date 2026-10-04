@@ -201,6 +201,20 @@ groups:
             reads the replica status series, so this is the one that sees
             them vanish.
 
+      - alert: ReplicaTunnelPastDeadline
+        expr: >-
+          up{job="db_t1_replica", expected_up="true"} == 1
+          and on() (vector(time()) > 1793491200)
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The tunnel from db1 to db-t1 is still up after the cutover deadline."
+          description: >-
+            The tunnel was accepted only until 2026-11-01T00:00:00Z.
+            Finish the cutover and tear the tunnel down, or have the owner
+            move REPLICA_TUNNEL_DEADLINE in hetzner/monitoring/render.ts.
+
   - name: backup
     rules:
       - alert: TenantBackupAgeHigh

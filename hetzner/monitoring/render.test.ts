@@ -11,10 +11,13 @@ import {
   MONITORED_NODE_HOSTS,
   MONITORED_REPLICA_HOST,
   NODE_EXPORTER_PORT,
+  REPLICA_TUNNEL_DEADLINE,
   REPLICA_TUNNEL_JOB,
+  replicaDeadlineEpoch,
   REPLICA_TUNNEL_METRICS_PORT,
   renderAlertmanagerTemplate,
   renderAlertRules,
+  renderAlertRulesWithDeadline,
   renderPrometheusConfig,
 } from './render';
 import { HOST_IPS } from '@branchleft/hetzner-host';
@@ -500,14 +503,15 @@ describe('the replica tunnel', () => {
     expect(Number(forward![1])).toBe(REPLICA_TUNNEL_METRICS_PORT);
   });
 
-  it('names four rules, each selecting only the replica job and only once it is expected up', () => {
+  it('names five rules, each selecting only the replica job and only once it is expected up', () => {
     expect([...group.matchAll(/- alert: (\w+)/g)].map((m) => m[1])).toEqual([
       'ReplicaTunnelDown',
       'ReplicaNotReplicating',
       'ReplicaLagHigh',
       'ReplicaStatusMissing',
+      'ReplicaTunnelPastDeadline',
     ]);
-    expect(exprs).toHaveLength(4);
+    expect(exprs).toHaveLength(5);
     for (const expr of exprs) {
       const selectors = [...expr.matchAll(/\{([^}]*)\}/g)].map((m) => m[1]);
       expect(selectors.length).toBeGreaterThan(0);
@@ -515,6 +519,28 @@ describe('the replica tunnel', () => {
         expect(selector).toBe(`job="${REPLICA_TUNNEL_JOB}", expected_up="true"`);
       }
     }
+  });
+
+  it('renders the deadline as epoch seconds into the past-deadline rule', () => {
+    expect(replicaDeadlineEpoch('2026-11-01T00:00:00Z')).toBe(1793491200);
+    expect(renderAlertRulesWithDeadline('2030-01-01T00:00:00Z')).toContain(
+      'and on() (vector(time()) > 1893456000)'
+    );
+    expect(rules).toContain(`vector(time()) > ${replicaDeadlineEpoch(REPLICA_TUNNEL_DEADLINE)}`);
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['null', null],
+    ['empty', ''],
+    ['a number', 1793491200],
+    ['a date without a zone', '2026-11-01T00:00:00'],
+    ['an offset instead of Z', '2026-11-01T00:00:00+01:00'],
+    ['a date only', '2026-11-01'],
+    ['an impossible date', '2026-02-31T00:00:00Z'],
+    ['text', 'soon'],
+  ])('refuses to render when the deadline is %s', (_label, value) => {
+    expect(() => renderAlertRulesWithDeadline(value)).toThrow(/REPLICA_TUNNEL_DEADLINE/);
   });
 
   it('keeps db1-named MySQL rules off the replica job', () => {

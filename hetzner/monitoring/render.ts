@@ -71,6 +71,31 @@ export const MONITORED_REPLICA_HOST: MonitoredHost = {
 };
 export const REPLICA_TUNNEL_JOB = 'db_t1_replica';
 export const REPLICA_TUNNEL_METRICS_PORT = 9105;
+
+/**
+ * The instant after which the tunnel is no longer accepted: UTC, second
+ * precision, `YYYY-MM-DDTHH:MM:SSZ`. Set in the same reviewed change that
+ * flips `MONITORED_REPLICA_HOST.expectedUp`; see
+ * render.md#replica_tunnel_deadline. Rendering refuses anything else.
+ */
+export const REPLICA_TUNNEL_DEADLINE = '2026-11-01T00:00:00Z';
+
+/** Whole seconds since the epoch for a deadline, or a thrown error: never a rule that cannot fire. */
+export function replicaDeadlineEpoch(deadline: unknown): number {
+  const ms = typeof deadline === 'string' ? Date.parse(deadline) : Number.NaN;
+  // The round trip rejects every spelling but the one documented above,
+  // including impossible dates that Date.parse rolls over.
+  if (
+    Number.isNaN(ms) ||
+    new Date(ms).toISOString() !== (deadline as string).replace('Z', '.000Z')
+  ) {
+    throw new Error(
+      `REPLICA_TUNNEL_DEADLINE must be a UTC timestamp like 2026-11-01T00:00:00Z, got ${String(deadline)}`
+    );
+  }
+  return ms / 1000;
+}
+
 const REPLICA_SELECTOR = `job="${REPLICA_TUNNEL_JOB}", expected_up="true"`;
 
 export const NODE_EXPORTER_PORT = 9100;
@@ -303,6 +328,11 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
 }
 
 export function renderAlertRules(): string {
+  return renderAlertRulesWithDeadline(REPLICA_TUNNEL_DEADLINE);
+}
+
+export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
+  const deadlineEpoch = replicaDeadlineEpoch(replicaDeadline);
   return `${[
     ...GENERATED_BANNER,
     'groups:',
@@ -519,6 +549,20 @@ export function renderAlertRules(): string {
     '            replication channel configured. Every other rule in this group',
     '            reads the replica status series, so this is the one that sees',
     '            them vanish.',
+    '',
+    '      - alert: ReplicaTunnelPastDeadline',
+    '        expr: >-',
+    `          up{${REPLICA_SELECTOR}} == 1`,
+    `          and on() (vector(time()) > ${deadlineEpoch})`,
+    '        for: 0m',
+    '        labels:',
+    '          severity: critical',
+    '        annotations:',
+    '          summary: "The tunnel from db1 to db-t1 is still up after the cutover deadline."',
+    '          description: >-',
+    `            The tunnel was accepted only until ${replicaDeadline as string}.`,
+    '            Finish the cutover and tear the tunnel down, or have the owner',
+    '            move REPLICA_TUNNEL_DEADLINE in hetzner/monitoring/render.ts.',
     '',
     '  - name: backup',
     // One group, not two -- both alerts watch the same producer.
