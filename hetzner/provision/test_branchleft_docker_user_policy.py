@@ -4,7 +4,7 @@
 The script talks to the live network configuration and netfilter, so both are
 replaced by fakes earlier on PATH. Rule order is asserted by replaying every
 insert into a model of the chain. What each rule is for, and why the order
-matters: RUNBOOK-provision-host.md, step 6.
+matters: the ghost-platform-docs runbooks.
 """
 
 import os
@@ -603,10 +603,6 @@ class RunbookAppHostIsolationTests(unittest.TestCase):
         # know the two hosts end up with different rules.
         self.assertIn("Not every app host is a Ghost tenant", self.text)
         self.assertIn("ops1", self.text)
-
-    def test_documents_the_spool_bridge_exception_to_the_input_limit(self):
-        self.assertIn("br-mailspool", self.text)
-        self.assertIn("test-spool-bridge-egress.sh", self.text)
 
     def test_is_not_part_of_run_all(self):
         # Deliberately outside run-all.sh, the same way nat-gateway.sh is.

@@ -4,7 +4,7 @@
 # everything a container on the mail spool's drain bridge opens, over IPv4 and
 # IPv6. Installed by app-host-isolation.sh, re-run at boot by its unit with no
 # arguments or environment. Refuses to run on edge1. Idempotent.
-# Rationale, rule order, scope limits and the undo step: RUNBOOK-provision-host.md, step 6.
+# Procedures (re-run, read-back, undo) live in ghost-platform-docs, not here.
 set -euo pipefail
 
 # Overridable so the tests can drive different values; production always
