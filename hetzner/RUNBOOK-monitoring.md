@@ -517,6 +517,12 @@ it is the label going stale in the other direction (a target shipped and
 nobody flipped it), the shape that hid the `db1` `mysqld_exporter` crash loop
 for four days.
 
+`db_t1_replica` is the migration replica's mysqld_exporter on `db-t1`, read
+through `db1`'s tunnel on `10.20.1.20:9105`
+(`provision/45-install-db-tunnel.md`). It carries `expected_up: 'false'`, and
+reads `down`, until that tunnel is installed and the label flipped. It exists
+only for the length of the migration.
+
 `stalwart` is the one target here whose credential is not in this repo and
 not in the container image. It is `basic_auth` with a `password_file`, written
 onto the host by `render_alertmanager_config.py` from

@@ -53,6 +53,11 @@ inhibit_rules:
       - alertname = "MySQLConnectionsHigh"
     equal: ['instance']
   - source_matchers:
+      - alertname = "ReplicaTunnelDown"
+    target_matchers:
+      - alertname =~ "^(HostOrServiceDown|ServiceFlapping)$"
+    equal: ['instance']
+  - source_matchers:
       - alertname = "MailHostDown"
     target_matchers:
       - alertname =~ "^(MailDeliveryFailureRatioHigh|MailDeliveryVolumeSpike|MailDeliveryMetricsMissing)$"

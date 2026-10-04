@@ -54,6 +54,11 @@ scrape_configs:
       - targets: ['10.20.1.20:9104']
         labels: {host: db1, expected_up: 'true'}
 
+  - job_name: db_t1_replica
+    static_configs:
+      - targets: ['10.20.1.20:9105']
+        labels: {host: db-t1, expected_up: 'false'}
+
   - job_name: cadvisor
     static_configs:
       - targets: ['cadvisor:8080']

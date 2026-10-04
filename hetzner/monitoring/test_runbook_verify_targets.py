@@ -58,6 +58,7 @@ class RunbookVerifyTargetsTests(unittest.TestCase):
                     "website",
                     "node",
                     "mysqld",
+                    "db_t1_replica",
                     "cadvisor",
                     "blackbox_http",
                     "blackbox_mail",

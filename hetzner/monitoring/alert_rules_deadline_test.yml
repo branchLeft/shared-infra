@@ -1,0 +1,49 @@
+# Cases for ReplicaTunnelPastDeadline, kept apart from alert_rules_test.yml
+# because the rule compares time() with a real calendar instant, and
+# promtool's clock starts at the epoch. The evaluation interval is set to
+# 1000h so reaching that instant (1793491200s, 2026-11-01T00:00:00Z, the
+# deadline in render.ts) costs a few hundred evaluations, not hundreds of
+# millions. Run it on its own, never beside alert_rules_test.yml: promtool
+# would apply that file's 30s interval to it. `rule_files` is relative to
+# this file's own directory.
+evaluation_interval: 1000h
+
+rule_files:
+  - stack/prometheus/alerts.yml
+
+tests:
+  # Tunnel up the whole time. 400000h is before the deadline (498192h):
+  # silent. 500000h is after it: fires. A target still labelled
+  # expected_up="false" stays silent even after the deadline.
+  - interval: 1000h
+    input_series:
+      - series: 'up{job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true"}'
+        values: '1x600'
+      - series: 'up{job="db_t1_replica", instance="10.20.1.20:9106", host="db-t1", expected_up="false"}'
+        values: '1x600'
+    alert_rule_test:
+      - eval_time: 400000h
+        alertname: ReplicaTunnelPastDeadline
+        exp_alerts: []
+      - eval_time: 500000h
+        alertname: ReplicaTunnelPastDeadline
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: db_t1_replica
+              instance: 10.20.1.20:9105
+              host: db-t1
+              expected_up: 'true'
+            exp_annotations:
+              summary: 'The tunnel from db1 to db-t1 is still up after the cutover deadline.'
+              description: 'The tunnel was accepted only until 2026-11-01T00:00:00Z. Finish the cutover and tear the tunnel down, or have the owner move REPLICA_TUNNEL_DEADLINE in hetzner/monitoring/render.ts.'
+
+  # Tunnel down after the deadline: ReplicaTunnelDown's job, not this rule's.
+  - interval: 1000h
+    input_series:
+      - series: 'up{job="db_t1_replica", instance="10.20.1.20:9105", host="db-t1", expected_up="true"}'
+        values: '0x600'
+    alert_rule_test:
+      - eval_time: 500000h
+        alertname: ReplicaTunnelPastDeadline
+        exp_alerts: []
