@@ -2,7 +2,7 @@
 
 ## Module overview
 
-This is the installer `RUNBOOK-monitoring.md` runs against ops1, and its two
+This is the installer `RUNBOOK-monitoring.md` runs against ops1 (section 15) and db1 (section 17), and its two
 silent failure modes are exactly the ones worth a test rather
 than a smoke check: a corrupted or substituted download getting installed
 anyway, and a host with no estate-private address getting node_exporter
