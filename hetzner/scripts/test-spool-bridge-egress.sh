@@ -138,9 +138,18 @@ expect_reach "the IPv6 forward drop is the first rule, above any RETURN" \
 # Behaviour: a packet forwarded from the drain bridge to an off-bridge IPv6
 # destination must hit the drop (its counter moves) and so must be dropped.
 on_host "ip link add proofdummy type dummy && ip link set proofdummy up && ip -6 route add 2001:db8:1::/64 dev proofdummy"
+# The policy's own IPv6 INPUT drop also blocks neighbour discovery (types 135
+# and 136), so the probe could never find its gateway and forward a packet.
+# Allow just those two for the probe, then remove them. Production is untouched.
+for nd in 135 136; do
+    on_host "ip6tables -I INPUT 1 -i br-mailspool -p icmpv6 --icmpv6-type $nd -j ACCEPT"
+done
 V6_BEFORE="$(on_host "ip6tables -nvxL DOCKER-USER 1 | awk '{print \$1}'")"
 on_host "docker run --rm --network drain $PROBE_IMAGE ping -6 -c 1 -W 2 2001:db8:1::1" >/dev/null 2>&1 || true
 V6_AFTER="$(on_host "ip6tables -nvxL DOCKER-USER 1 | awk '{print \$1}'")"
+for nd in 135 136; do
+    on_host "ip6tables -D INPUT -i br-mailspool -p icmpv6 --icmpv6-type $nd -j ACCEPT"
+done
 if [ "$V6_AFTER" -gt "$V6_BEFORE" ]; then
     pass "a forwarded IPv6 packet from the drain bridge hit the drop ($V6_BEFORE -> $V6_AFTER)"
 else
