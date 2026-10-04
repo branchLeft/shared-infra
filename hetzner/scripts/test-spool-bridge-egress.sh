@@ -124,6 +124,15 @@ else
     fail "a second run changed the drain-bridge rule count from $FIRST to $SECOND"
 fi
 
+# A host that already has the policy: drop the spool's forward rule and re-run;
+# it must come back directly under the conntrack accept, as it does at boot.
+on_host "iptables -D DOCKER-USER -i br-mailspool ! -o br-mailspool -j DROP"
+on_host "bash /policy/branchleft_docker_user_policy.sh" >/dev/null
+expect_reach "a re-run puts the forward drop second, under the conntrack accept" \
+    "on_host \"iptables -S DOCKER-USER | sed -n 2p | grep -q ctstate && iptables -S DOCKER-USER | sed -n 3p | grep -q 'br-mailspool'\""
+expect_reach "the IPv6 family carries the INPUT rules (rule presence only; no IPv6 traffic is sent)" \
+    "on_host \"ip6tables -S INPUT | grep -q -- '-i br-mailspool -j DROP' && ip6tables -S INPUT | grep -Eq -- '-i br-mailspool .*ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j ACCEPT'\""
+
 echo "== after the policy"
 expect_blocked "a container on the drain bridge cannot reach the outside" "probe drain \"$TO_OUTSIDE\""
 expect_blocked "a container on the drain bridge cannot reach a host service" "probe drain \"$TO_HOST\""

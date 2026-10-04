@@ -1,36 +1,10 @@
 #!/usr/bin/env bash
-# Confines the forwarded reach of every container on an app host to db1:3306
-# -- the one exception a Ghost tenant legitimately needs -- closing off the
-# co-tenant containers, edge1's metrics/CrowdSec surfaces and the Hetzner
-# metadata service that a published port would otherwise leave reachable
-# across the whole private subnet. A host in NO_DB_EXCEPTION_ADDRESSES below
-# is not a Ghost tenant and has no legitimate reason to reach db1 -- for it,
-# the db1 exception is skipped entirely, leaving a deny-all-to-the-subnet
-# policy with no carve-out.
-#
-# Installed as /usr/local/sbin/branchleft-docker-user-policy by
-# app-host-isolation.sh and re-run at every boot by
-# branchleft-docker-user-policy.service, with no arguments and no
-# environment of its own -- that unit carries no Environment= line, by
-# design, so every app host runs this file byte-identically. Which behaviour
-# a given host gets can therefore only come from something the host can
-# prove about itself on every run, not from anything a one-off invocation
-# happened to set: an env var passed by hand to a manual first run does not
-# survive to the next boot, when the unit re-execs this script with none of
-# it. NO_DB_EXCEPTION_ADDRESSES is that self-identification, the same
-# pattern GATEWAY_PRIVATE_IP below already uses to recognise edge1.
-#
-# It also confines the per-host mail spool's drain bridge (below): a
-# container on that bridge opens no connection off it, whether forwarded or to
-# the host itself. A host with no such bridge carries rules that match nothing.
-#
-# Idempotent: every rule is checked before it is added.
-#
-# App hosts only. Refuses to run on the estate's NAT gateway, edge1, which
-# forwards every private-only host's own internet egress plus its own
-# reverse-proxy connections into the subnet. DOCKER-USER matches on address
-# alone, not on which script wrote the rule, so installing this policy there
-# would drop edge1's path to every app host and to db1.
+# App-host DOCKER-USER isolation: confines every container's forwarded reach to
+# db1:3306 (skipped on hosts in NO_DB_EXCEPTION_ADDRESSES), and refuses
+# everything a container on the mail spool's drain bridge opens, over IPv4 and
+# IPv6. Installed by app-host-isolation.sh, re-run at boot by its unit with no
+# arguments or environment. Refuses to run on edge1. Idempotent.
+# Rationale, rule order, scope limits and the undo step: RUNBOOK-provision-host.md, step 6.
 set -euo pipefail
 
 # Overridable so the tests can drive different values; production always
@@ -68,20 +42,9 @@ if ! command -v iptables >/dev/null 2>&1; then
     exit 1
 fi
 
-# The role guard. "Does this host hold a public address" is NOT the test:
-# app1 is also created with publicNetworking: true, deliberately, so that
-# GitHub-hosted CI runners can reach it over SSH to deploy
-# (ghost-platform/infra/hosts/index.ts) -- a host with no public address
-# cannot be reached by a runner at all, and first provisioning needs the same
-# door before the deploy account exists. So the estate has at least two hosts
-# with a public interface, and only one of them is the gateway.
-#
-# What actually identifies edge1 is its address: 10.20.1.10 is assigned to
-# it alone (hetzner-host/addressPlan.ts's HOST_IPS.edge1), the same address
-# RUNBOOK-provision-host.md's own gateway instructions and `hetzner/network.ts`'s
-# route already name it by. Checking for that address is checking the one
-# fact about this host that is actually load-bearing for "is this the
-# gateway", rather than a network property two different roles both have.
+# The role guard. "Holds a public address" is not the test: app1 has one too,
+# for CI SSH deploys. What identifies edge1 is its address, 10.20.1.10
+# (hetzner-host/addressPlan.ts HOST_IPS.edge1), which no app host holds.
 holds_gateway_address=0
 holds_no_db_exception_address=0
 while read -r address; do
@@ -96,18 +59,10 @@ if [[ "$holds_gateway_address" -eq 1 ]]; then
     exit 1
 fi
 
-# `${VAR+x}`, not `-v`: `-v` is bash 4.2+, and this script is invoked
-# directly by its own tests under macOS's system bash (3.2), the same
-# constraint install-systemd-drop-ins.sh already documents. `${VAR+x}`
-# expands to `x` when the variable is set -- even to an empty string -- and
-# to nothing when it is unset, which is the one distinction this branch
-# needs and the one every shell back to POSIX sh has always supported.
-#
-# An explicit caller override -- including a deliberate empty string, for a
-# test or a one-off exception -- always wins over self-identification.
-# Self-identification only supplies a default for a host that was never
-# told anything, which on a freshly booted host is every run this policy
-# ever makes.
+# `${VAR+x}`, not `-v`: bash 3.2 (the tests run under macOS) has no `-v`. It
+# separates "set, even to empty" from "unset". An explicit caller override,
+# empty included, wins over self-identification, which only supplies the
+# default for a host that was never told anything (every real boot).
 if [[ -n "${BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST+x}" ]]; then
     DB_HOST="$BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST"
 elif [[ "$holds_no_db_exception_address" -eq 1 ]]; then
@@ -131,15 +86,21 @@ if ! iptables -t filter -S DOCKER-USER >/dev/null 2>&1; then
     exit 1
 fi
 
+ensure_rule_at() {
+    local tool="$1" pos="$2" table="$3" chain="$4"
+    shift 4
+    if "$tool" -t "$table" -C "$chain" "$@" 2>/dev/null; then
+        echo "branchleft-docker-user-policy: $tool $table/$chain already carries: $*"
+    else
+        "$tool" -t "$table" -I "$chain" "$pos" "$@"
+        echo "branchleft-docker-user-policy: $tool inserted into $table/$chain at $pos: $*"
+    fi
+}
+
 ensure_rule() {
     local table="$1" chain="$2"
     shift 2
-    if iptables -t "$table" -C "$chain" "$@" 2>/dev/null; then
-        echo "branchleft-docker-user-policy: $table/$chain already carries: $*"
-    else
-        iptables -t "$table" -I "$chain" 1 "$@"
-        echo "branchleft-docker-user-policy: inserted into $table/$chain: $*"
-    fi
+    ensure_rule_at iptables 1 "$table" "$chain" "$@"
 }
 
 # Written in the reverse of the order the rules must be evaluated in: each
@@ -171,19 +132,6 @@ if [[ -n "$DB_HOST" ]]; then
     ensure_rule filter DOCKER-USER -d "$DB_HOST" -p tcp --dport "$DB_PORT" -j ACCEPT
 fi
 
-# The mail spool's drain bridge may open nothing off itself. Matches by
-# interface only, so it cannot touch any other container's traffic, and sits
-# above the db1 accept so the spool cannot use that exception either.
-ensure_rule filter DOCKER-USER -i "$MAIL_SPOOL_BRIDGE" ! -o "$MAIL_SPOOL_BRIDGE" -j DROP
-
-# Connections to the host itself are delivered through INPUT, which DOCKER-USER
-# never sees, so the bridge needs its own pair there: refuse everything that
-# arrives from it except replies to a connection the host opened, such as the
-# drain request reaching the published loopback port. Both rules match this
-# one interface and nothing else.
-ensure_rule filter INPUT -i "$MAIL_SPOOL_BRIDGE" -j DROP
-ensure_rule filter INPUT -i "$MAIL_SPOOL_BRIDGE" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-
 # Has to be the first rule DOCKER-USER evaluates. A published port is a DNAT,
 # so an inbound flow's reply (edge1 -> a tenant's Ghost, or a scrape -> a
 # tenant's metrics port) leaves the container with dst inside this subnet --
@@ -192,5 +140,26 @@ ensure_rule filter INPUT -i "$MAIL_SPOOL_BRIDGE" -m conntrack --ctstate ESTABLIS
 # co-tenant. Reversing this against the drops is the outage this script
 # exists to not ship.
 ensure_rule filter DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# The spool's drain bridge may open nothing, forwarded or to the host itself.
+# Written after the conntrack accept so a failure here cannot drop replies, and
+# the forward drop is inserted at position 2, directly beneath it, so a re-run
+# on a host that already has the policy gives the same order as a boot.
+ensure_spool_rules() {
+    local tool="$1"
+    command -v "$tool" >/dev/null 2>&1 || {
+        echo "branchleft-docker-user-policy: $tool is not installed" >&2
+        return 1
+    }
+    if "$tool" -t filter -S DOCKER-USER >/dev/null 2>&1; then
+        ensure_rule_at "$tool" 2 filter DOCKER-USER -i "$MAIL_SPOOL_BRIDGE" ! -o "$MAIL_SPOOL_BRIDGE" -j DROP
+    else
+        echo "branchleft-docker-user-policy: no $tool DOCKER-USER chain, so Docker forwards no such traffic yet; forward drop skipped"
+    fi
+    ensure_rule_at "$tool" 1 filter INPUT -i "$MAIL_SPOOL_BRIDGE" -j DROP
+    ensure_rule_at "$tool" 1 filter INPUT -i "$MAIL_SPOOL_BRIDGE" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+}
+ensure_spool_rules iptables
+ensure_spool_rules ip6tables
 
 echo "branchleft-docker-user-policy: app-host isolation applied in DOCKER-USER"

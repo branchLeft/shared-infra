@@ -496,14 +496,42 @@ is real.
 runs the per-host mail spool has a Docker bridge of that exact name, which
 exists only so the spool's drain port can be published on host loopback. The
 spool opens no connection of its own, so the reconciler refuses everything a
-container on that bridge opens: forwarded traffic off the bridge (a
-`DOCKER-USER` drop above the `db1` accept, below the conntrack accept) and
-traffic to the host itself (an `INPUT` drop for that interface, behind a
-conntrack accept for replies). Every one of those rules matches that one
-interface, so a host without the spool, `app1` today, carries rules that match
-nothing and no other container's traffic changes. The proof against a real
-dockerd is `hetzner/scripts/test-spool-bridge-egress.sh`. A spool is not
-delivered to an app host before this reconciler has run there.
+container on that bridge opens, over both IPv4 and IPv6 (`app1` holds a public
+IPv6 address, and nothing here assumes the spool's networks stay IPv4-only):
+
+- forwarded traffic off the bridge: a `DOCKER-USER` drop, inserted at position
+  2 so it sits directly under the conntrack accept and above the `db1`
+  accept, the same order on a boot and on a re-run on a host that already has
+  the policy;
+- traffic to the host itself: an `INPUT` drop for that interface, behind a
+  conntrack accept for replies. For IPv6 the `DOCKER-USER` rule is skipped
+  with a message while `ip6tables` has no such chain, and the `INPUT` pair is
+  always written.
+
+These calls run after the conntrack accept is written, so a failure in them can
+never leave the other drops without it. Every rule matches that one interface,
+so a host without the spool, `app1` today, carries rules that match nothing
+and no other container's traffic changes. The proof against a real dockerd is
+`hetzner/scripts/test-spool-bridge-egress.sh`. A spool is not delivered to an
+app host before this reconciler has run there.
+
+**Undo, exactly.** Run as root on the host, once per family (`iptables`, then
+`ip6tables`; the `DOCKER-USER` line errors harmlessly if that chain or rule is
+absent):
+
+```sh
+iptables -D DOCKER-USER -i br-mailspool ! -o br-mailspool -j DROP
+iptables -D INPUT -i br-mailspool -j DROP
+iptables -D INPUT -i br-mailspool -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+ip6tables -D DOCKER-USER -i br-mailspool ! -o br-mailspool -j DROP
+ip6tables -D INPUT -i br-mailspool -j DROP
+ip6tables -D INPUT -i br-mailspool -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+```
+
+The reconciler puts them back at the next boot or `docker` restart, so to keep
+them off, first re-stage the previous `branchleft_docker_user_policy.sh` from
+`git show <previous-commit>:hetzner/provision/branchleft_docker_user_policy.sh`
+over `/usr/local/sbin/branchleft-docker-user-policy`.
 
 Run it the same way as step 5, on each app host. `app1`, at `10.20.1.100`, is
 the only one that exists today; the command is otherwise unchanged for a
