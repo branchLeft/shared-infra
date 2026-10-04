@@ -507,10 +507,10 @@ a dead exporter runs no probe, so there is no `probe_success` series for
 `BlackboxProbeFailed` or `MailHostDown` to see; those alerts instead cover a
 live exporter reporting a failed probe, on `probe_success` rather than `up`.
 Only `node` for `app1`, `node` for `db1` and `node` for `ops1` are expected
-`down`: `app1`'s exporter is not provisioned, `db1`'s is installed by §17 and
-`ops1`'s by §15, and each carries `expected_up: 'false'` until its own
-follow-up change flips the label after the read-back (see `render.ts`'s
-`MONITORED_NODE_HOSTS` docstring). A `down` target with `expected_up: 'true'` in its labels is the
+`down`: `app1`/`db1`'s exporters are not provisioned yet, and `ops1`'s carries
+`expected_up: 'false'` until §15 below confirms it live and flips that label
+in its own follow-up PR (see `render.ts`'s `MONITORED_NODE_HOSTS`
+docstring). A `down` target with `expected_up: 'true'` in its labels is the
 only one worth investigating -- but an `up` target with `expected_up: 'false'`
 is worth one too: `ExpectedDownTargetAnswering` pages on exactly that, because
 it is the label going stale in the other direction (a target shipped and
@@ -1118,162 +1118,6 @@ route is trusted with anything that matters.
 An entry marked `dormant` in the register (appeal latency, until a target
 is set) renders no route at all; flip the flag in the same change that sets
 the target.
-
-## 17. Install node_exporter on db1 so the nightly dump's backup metrics are scraped
-
-The nightly dump on `db1` (`branchleft-db-dump.timer`, 03:10) writes
-`dump_nightly_lock_bound.prom` into `/var/lib/branchleft/backup-worker-exporter`
-with `backup_worker_lock_wait_seconds`, `backup_worker_lock_hold_seconds` and
-`backup_worker_lock_aborts_total`, all labelled `tenant="db1-all-databases"`.
-Only a node_exporter with its textfile collector on that directory can publish
-them, and until this section `db1` had none, so `BackupLockWaitHigh` (and the
-aborts alert, once it is on `main`) could not see `db1` at all. The installer
-is the same script and unit as §15: it binds the host's own `10.20.1.x`
-address and refuses to start with none, and the unit already reads that
-directory. Nothing is added to the unit.
-
-**Who runs what.** 17a (the install), the stop command in 17b and 17e (the
-`edge1` redeploy) change a host and are the owner's alone. The granted
-monitoring SSH session is non-mutating, so it may run only the read-only
-checks: 17-pre, the `ss` and `is-active` reads in 17b, 17c, 17d, 17f.
-`db1` is reached through `edge1`, as in §15a. `$EDGE1_IPV4` is set in
-section 5.
-
-**Order is the whole point: install, read back, only then flip the flag.**
-`db1`'s node target is in the scrape config as `expected_up: 'false'`, and
-this change leaves it so. The flip to `'true'` is a separate follow-up change,
-the same shape as §15e, opened as a draft marked do-not-merge. It is merged
-only after 17c passes on the real host. Merging it before that would arm the
-critical `HostOrServiceDown` for an exporter that was never up, the moment any
-monitoring deploy next reached `edge1`.
-
-### 17-pre. Stop if db1's disk is already past 70%
-
-`HostDiskSpaceLow` has no `expected_up` selector. It evaluates `db1` from the
-first scrape in 17c and fires 15 minutes later whatever 17e does, so check
-before installing anything:
-
-```bash
-HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # db1's private address, read from Hetzner rather than typed
-JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'df -hP -x tmpfs -x overlay'
-```
-
-Keep that shell open: 17a and 17b reuse `HOST_PRIVATE_IP` and `JUMP`.
-
-**STOP if any `Use%` reads 70% or more.** Free or grow the volume first, then
-come back. Do not run 17a.
-
-### 17a. Install (owner only)
-
-```bash
-cd ~/branchLeft/shared-infra
-scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@"$HOST_PRIVATE_IP":/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && install -d -m 0755 -o root -g root /var/lib/branchleft/backup-worker-exporter && /root/platform-provision/40-install-node-exporter.sh'
-```
-
-Expect the closing line `40-install-node-exporter: done, listening on
-10.20.1.20:9100`. The `install -d` is idempotent and matches the mode the dump
-itself creates the directory with. If the script prints `no address in
-10.20.1.0/24 found on this host`, stop: this ran against the wrong host.
-
-### 17b. Confirm it listens on the private address only (owner for the stop command)
-
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'ss -ltnH | grep :9100; systemctl is-active node_exporter.service'
-```
-
-Expect exactly one `:9100` listener, on `10.20.1.20:9100`, and `active`. A
-`0.0.0.0:9100` or `*:9100` line means stop, and the owner runs `systemctl
-stop node_exporter.service` on db1 (this is a mutating step). `db1` has no public address, and the Cloud Firewall
-filters the public interface only, so a private bind is the whole exposure
-control, as for `ops1` in §15b.
-
-### 17c. Read it back from edge1's Prometheus
-
-`db1`'s node target already exists in the scrape config with `expected_up:
-'false'`, so Prometheus is scraping it the moment the exporter starts. These queries
-run on `edge1` over ssh, reading its Prometheus on 127.0.0.1:9090:
-
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'curl -s --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=up{host=\"db1\",job=\"node\"}"'
-```
-
-Expect one series, value `1`, labelled `expected_up="false"`. Wait one scrape
-interval (30s) and run it again if the first read is empty. Then confirm the
-textfile collector is healthy on that directory:
-
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'curl -s --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=node_textfile_scrape_error{host=\"db1\"}"'
-```
-
-Expect one series, value `0`. A `1` means the directory is missing or
-unreadable by the `node-exporter` user: re-run 17a, which creates it. While the
-label is still `false` and the target answers, `ExpectedDownTargetAnswering`
-(a warning, not a page) will fire. That is the stale label the follow-up flip
-corrects. After the flip is deployed it may linger up to 15 minutes, because
-the rule looks back over a 15 minute window.
-
-### 17d. Gate
-
-Do not go on unless 17b showed the private bind only and 17c returned `up` `1`
-and `node_textfile_scrape_error` `0`. Passing 17c is the condition for
-opening the follow-up change out of draft: read the `up` value into that
-change's description and ask for its merge.
-
-### 17e. Flip `expected_up` and redeploy (owner only)
-
-Merge the follow-up change (it flips `db1`'s `expectedUp` to `true` and
-regenerates `prometheus.yml`), then redeploy the monitoring config to `edge1`
-exactly as §15c does (step 7b: rsync `hetzner/monitoring/stack/`, restart the
-stack). The owner runs this. Re-read from `edge1`:
-
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'curl -s --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=up{host=\"db1\",job=\"node\",expected_up=\"true\"}"'
-```
-
-Expect one series, value `1`, now with `expected_up="true"`. Run it twice a
-few seconds apart and trust the second: the first scrape after a restart can
-read `unknown`. `HostOrServiceDown` now covers `db1`'s exporter. A leftover
-`ExpectedDownTargetAnswering` warning clears within 15 minutes.
-
-### 17f. Prove the backup metrics and alerts see `db1`
-
-The file does not exist until the first dump run after the lock-bounded dump
-has been installed on `db1` (the ghost-platform change that writes it). Before
-then `node_textfile_scrape_error` is `0` and the series below are empty: that
-is not a fault. Do not start the dump by hand to speed this up; wait for the
-03:10 run, then the next morning:
-
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'ls -l /var/lib/branchleft/backup-worker-exporter/ && cat /var/lib/branchleft/backup-worker-exporter/dump_nightly_lock_bound.prom'
-for q in 'backup_worker_lock_wait_seconds' 'backup_worker_lock_hold_seconds' 'backup_worker_lock_aborts_total'; do
-  ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" "curl -s --get http://127.0.0.1:9090/api/v1/query --data-urlencode 'query=${q}{tenant=\"db1-all-databases\",host=\"db1\"}'"
-done
-```
-
-Expect the file mode `-rw-r--r--` and each of the three queries to return one
-series with `host="db1"`. Then show that the alert rule evaluates against it
-rather than around it. `> bool 5` is the rule's own comparison, returning `0`
-for a healthy wait instead of dropping the series:
-
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'curl -s --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=backup_worker_lock_wait_seconds{tenant=\"db1-all-databases\"} > bool 5"'
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'curl -s http://127.0.0.1:9090/api/v1/rules | python3 -c "import json,sys; [print(r[\"name\"], r[\"health\"], r[\"state\"]) for g in json.load(sys.stdin)[\"data\"][\"groups\"] for r in g[\"rules\"] if \"backup_worker_lock\" in r.get(\"query\",\"\")]"'
-```
-
-Expect one series valued `0` (a lock wait of 5s or less) and each backup lock
-rule listed with health `ok`. The aborts rule from the backup alert work
-appears in that list only once it is on `main` and deployed. If it is not
-listed, that is the gap to chase, not a pass.
-
-### 17g. Rolling back
-
-If the follow-up flip has been merged and deployed, undo it in the same order
-it went on: change `db1`'s `expectedUp` to `false`, `npm run render`, redeploy
-(§15c), then the owner runs `systemctl stop node_exporter.service` on `db1`.
-Stopping first would page. If the flip was never deployed, the stop alone is
-safe.
 
 ## Responding to the mail-delivery alerts
 
