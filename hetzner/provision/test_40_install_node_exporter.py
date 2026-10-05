@@ -262,6 +262,18 @@ class InstallNodeExporterTests(unittest.TestCase):
         self.assertIn("does not match the pinned checksum", result.stderr)
         self.assertFalse(os.path.exists(self.bin_path))
 
+    def test_db1_private_address_is_the_only_bind_and_the_unit_never_hardcodes_a_host(self):
+        db1_ip_output = IP_OUTPUT_WITH_PRIVATE.replace("10.20.1.50", "10.20.1.20")
+        result = self.run_script(ip_output=db1_ip_output)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with open(self.env_file, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "NODE_EXPORTER_LISTEN_ADDRESS=10.20.1.20\n")
+        self.assertIn("listening on 10.20.1.20:9100", result.stdout)
+        with open(UNIT, encoding="utf-8") as handle:
+            exec_start = [line for line in handle if line.startswith("ExecStart=")][0]
+        self.assertIn("--web.listen-address=${NODE_EXPORTER_LISTEN_ADDRESS}:9100", exec_start)
+        self.assertNotIn("0.0.0.0", exec_start)
+
     def test_no_private_subnet_address_refuses_rather_than_binding_public(self):
         result = self.run_script(ip_output=IP_OUTPUT_NO_PRIVATE)
         self.assertNotEqual(result.returncode, 0)

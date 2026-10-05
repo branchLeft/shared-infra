@@ -1218,6 +1218,21 @@ tests:
           - labels: 'ALERTS{alertname="TenantBackupAgeHigh", alertstate="firing", severity="warning"}'
             value: 1
 
+  # The dump's gauge, as db1's node_exporter publishes it, trips the same
+  # lock-wait alert under the dump's own tenant label.
+  - interval: 1m
+    input_series:
+      - series: 'backup_worker_lock_wait_seconds{tenant="db1-all-databases", job="node", instance="10.20.1.20:9100", host="db1"}'
+        values: '7.5+0x10'
+      - series: 'backup_worker_lock_wait_seconds{tenant="blog"}'
+        values: '0.2+0x10'
+    promql_expr_test:
+      - expr: ALERTS{alertname="BackupLockWaitHigh", alertstate="firing"}
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="BackupLockWaitHigh", alertstate="firing", severity="warning", tenant="db1-all-databases", job="node", instance="10.20.1.20:9100", host="db1"}'
+            value: 1
+
   # BackupLockWaitHigh: a single tenant's gauge over the 1s threshold
   # fires, carrying that tenant's own label -- backup_worker_lock_wait_seconds
   # is a textfile-collector gauge (see backup_worker.py in
