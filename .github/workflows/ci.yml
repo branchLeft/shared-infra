@@ -253,7 +253,7 @@ jobs:
     name: Lint + test (hetzner/provision)
     runs-on: ubuntu-latest
     # Observed 0.1-0.17min over the last 20 successful runs (p95 0.17min).
-    timeout-minutes: 10
+    timeout-minutes: 15
     # branchleft_deploy.py is the only command the CI deploy account may run
     # as root on a platform host, so its argument validation is the boundary
     # between a scoped deploy key and a root shell. These tests are the proof
@@ -278,6 +278,16 @@ jobs:
 
       - name: Python unit tests
         run: python3 -m unittest discover -s hetzner/provision -p 'test_*.py' -v
+
+      - name: Shellcheck the spool bridge egress proof
+        run: shellcheck hetzner/scripts/test-spool-bridge-egress.sh
+
+      # Runs the reconciler against a real dockerd in a privileged
+      # Docker-in-Docker stand-in, with a container on a bridge named like the
+      # spool's, so the drain-bridge rules are shown to bite, not just to be
+      # written.
+      - name: Spool bridge egress proof
+        run: ./hetzner/scripts/test-spool-bridge-egress.sh
 
       # probe-object-storage.py signs its own requests, and a wrong signature
       # is an opaque 403 against this endpoint -- indistinguishable from a
