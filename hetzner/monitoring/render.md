@@ -94,14 +94,17 @@ source-pinned rather than merely enabled.
 
 ## The `backup` rule group
 
-Both alerts in this group watch the same producer, `backup_worker.py` in
+Every alert in this group watches the same producer, `backup_worker.py` in
 `branchLeft/ghost-platform` -- one on-demand call, one nightly loop, never
 a second code path (see that repo's `backup_worker.md`). One group, not
 two, since a reader hunting "the backup alerts" should find both without
 also having to remember which of two similarly-named groups holds which:
 `TenantBackupAgeHigh` (is a tenant's backup happening at all) and
-`BackupLockWaitHigh` (is the dump that DID happen taking too long to get
-past db1's lock).
+`BackupLockWaitHigh` (did the dump that DID happen wait over the 1 s
+server bound for its tenant's table lock) and `BackupLockAbortsRising`
+(did any lock attempt get abandoned on a bound in the last day, even when a
+retry then succeeded). The worker measures the wait in the lock's own
+session; see ghost-platform's `db/provision/bounded_snapshot.md`.
 
 `TenantBackupAgeHigh` is the producer-side signal, not a liveness check:
 the worker advances this gauge only after a floor-verified successful

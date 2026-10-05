@@ -248,31 +248,33 @@ groups:
             alert_rules_test.yml.
 
       - alert: BackupLockWaitHigh
-        expr: backup_worker_lock_wait_seconds > 5
+        expr: backup_worker_lock_wait_seconds > 1
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.tenant }}'s dump took over 5s from dial-in to its first byte."
+          summary: "{{ $labels.tenant }}'s dump waited over 1s for its table lock."
           description: >-
-            mysqldump --source-data=2 takes a brief, server-wide FLUSH TABLES
-            WITH READ LOCK to record the binlog position point-in-time recovery
-            depends on. This gauge is a PROXY for that wait, not a direct MySQL
-            read: it times from starting mysqldump to its first byte, which
-            also includes mysqldump's own TCP+TLS+auth connection to db1 --
-            a known, bounded overhead now that the real transport is wired
-            (RemoteMysqldumpTransport, a local subprocess with no separate
-            dial-in layer), but still not measured directly, so still a
-            proxy, not a settled lock-wait read (see
-            branchLeft/ghost-platform infra/provisioning/scripts/backup_worker.md#_lockwaittimer).
-            Dumping tenants strictly one at a time means two tenants' own
-            locks never queue against each OTHER, but a lock can still queue
-            behind ordinary write traffic on ANY tenant while it waits to be
-            granted -- this alert is that wait, per tenant, written whether or
-            not the dump that eventually ran past it also went on to pass its
-            own floor check. 5s is well past the sub-second wait
-            09-backup-and-recovery.html measured at toy scale; re-tune once
-            real-estate figures exist, the same as this group's own SNDS
-            thresholds.
+            Each tenant's nightly dump locks only that tenant's tables, READ,
+            and measures the wait in the lock's own session, from LOCK TABLES
+            to its grant. The server gives the wait up after 1s and the worker
+            after 1.2s, so a recorded wait over 1s means a write transaction
+            on this tenant held the lock off almost to the bound, and this
+            tenant's writers queued for that long. See branchLeft/ghost-platform
+            db/provision/bounded_snapshot.md.
+
+      - alert: BackupLockAbortsRising
+        expr: increase(backup_worker_lock_aborts_total[1d]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.tenant }}'s dump gave up a lock attempt in the last day."
+          description: >-
+            The worker abandons a tenant's table lock when the wait or the
+            hold passes its bound, then backs off and retries, so a night can
+            end in a stored dump and still have aborted. Repeated aborts mean
+            something on this tenant keeps write transactions open for over
+            a second; the worker log names each abort and its reason. See
+            branchLeft/ghost-platform db/provision/bounded_snapshot.md.
 
   - name: probes
     rules:
