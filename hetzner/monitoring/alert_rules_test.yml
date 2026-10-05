@@ -1218,7 +1218,7 @@ tests:
           - labels: 'ALERTS{alertname="TenantBackupAgeHigh", alertstate="firing", severity="warning"}'
             value: 1
 
-  # BackupLockWaitHigh: a single tenant's gauge over the 5s threshold
+  # BackupLockWaitHigh: a single tenant's gauge over the 1s threshold
   # fires, carrying that tenant's own label -- backup_worker_lock_wait_seconds
   # is a textfile-collector gauge (see backup_worker.py in
   # branchLeft/ghost-platform), so a flat value is the realistic input: it
@@ -1227,7 +1227,7 @@ tests:
   - interval: 1m
     input_series:
       - series: 'backup_worker_lock_wait_seconds{tenant="blog"}'
-        values: '7.5+0x10'
+        values: '1.5+0x10'
     alert_rule_test:
       - eval_time: 5m
         alertname: BackupLockWaitHigh
@@ -1236,13 +1236,12 @@ tests:
               severity: warning
               tenant: blog
             exp_annotations:
-              summary: "blog's dump took over 5s from dial-in to its first byte."
+              summary: "blog's dump waited over 1s for its table lock."
               description: >-
-                mysqldump --source-data=2 takes a brief, server-wide FLUSH TABLES WITH READ LOCK to record the binlog position point-in-time recovery depends on. This gauge is a PROXY for that wait, not a direct MySQL read: it times from starting mysqldump to its first byte, which also includes mysqldump's own TCP+TLS+auth connection to db1 -- a known, bounded overhead now that the real transport is wired (RemoteMysqldumpTransport, a local subprocess with no separate dial-in layer), but still not measured directly, so still a proxy, not a settled lock-wait read (see branchLeft/ghost-platform infra/provisioning/scripts/backup_worker.md#_lockwaittimer). Dumping tenants strictly one at a time means two tenants' own locks never queue against each OTHER, but a lock can still queue behind ordinary write traffic on ANY tenant while it waits to be granted -- this alert is that wait, per tenant, written whether or not the dump that eventually ran past it also went on to pass its own floor check. 5s is well past the sub-second wait 09-backup-and-recovery.html measured at toy scale; re-tune once real-estate figures exist, the same as this group's own SNDS thresholds.
+                Each tenant's nightly dump locks only that tenant's tables, READ, and measures the wait in the lock's own session, from LOCK TABLES to its grant. The server gives the wait up after 1s and the worker after 1.2s, so a recorded wait over 1s means a write transaction on this tenant held the lock off almost to the bound, and this tenant's writers queued for that long. See branchLeft/ghost-platform db/provision/bounded_snapshot.md.
 
-  # A wait comfortably under the threshold -- the ordinary case every night,
-  # since 09-backup-and-recovery.html measured sub-second waits at toy
-  # scale -- must stay silent.
+  # A wait comfortably under the threshold -- the ordinary case every night
+  # -- must stay silent.
   - interval: 1m
     input_series:
       - series: 'backup_worker_lock_wait_seconds{tenant="blog"}'
@@ -1252,13 +1251,12 @@ tests:
         alertname: BackupLockWaitHigh
         exp_alerts: []
 
-  # The boundary itself: exactly 5s must NOT fire (`>`, not `>=`) -- a
-  # regression to `>=` would first show up here, one tenth of a second
-  # before it would on the case above.
+  # The boundary itself: exactly 1s must NOT fire (`>`, not `>=`) -- a
+  # regression to `>=` would first show up here.
   - interval: 1m
     input_series:
       - series: 'backup_worker_lock_wait_seconds{tenant="blog"}'
-        values: '5+0x10'
+        values: '1+0x10'
     alert_rule_test:
       - eval_time: 5m
         alertname: BackupLockWaitHigh
@@ -1293,6 +1291,46 @@ tests:
     alert_rule_test:
       - eval_time: 5m
         alertname: BackupLockWaitHigh
+        exp_alerts: []
+
+  # BackupLockAbortsRising: the counter moving at all in a day fires, for
+  # the tenant whose counter moved, even though that night's dump succeeded.
+  - interval: 1h
+    input_series:
+      - series: 'backup_worker_lock_aborts_total{tenant="blog"}'
+        values: '0x5 2x20'
+      - series: 'backup_worker_lock_aborts_total{tenant="shop"}'
+        values: '0x25'
+    alert_rule_test:
+      - eval_time: 8h
+        alertname: BackupLockAbortsRising
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: blog
+            exp_annotations:
+              summary: "blog's dump gave up a lock attempt in the last day."
+              description: >-
+                The worker abandons a tenant's table lock when the wait or the hold passes its bound, then backs off and retries, so a night can end in a stored dump and still have aborted. Repeated aborts mean something on this tenant keeps write transactions open for over a second; the worker log names each abort and its reason. See branchLeft/ghost-platform db/provision/bounded_snapshot.md.
+
+  # A counter written at 0 every night and never moving stays silent.
+  - interval: 1h
+    input_series:
+      - series: 'backup_worker_lock_aborts_total{tenant="blog"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 26h
+        alertname: BackupLockAbortsRising
+        exp_alerts: []
+
+  # A day after the last abort the window has moved past it: silent again.
+  - interval: 1h
+    input_series:
+      - series: 'backup_worker_lock_aborts_total{tenant="blog"}'
+        values: '0x2 1x40'
+    alert_rule_test:
+      - eval_time: 30h
+        alertname: BackupLockAbortsRising
         exp_alerts: []
 
   # The replica tunnel group. Series names and labels are the ones a live

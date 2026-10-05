@@ -261,6 +261,7 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   // open (LLD-9 names only the project, never a host); nothing here assumes
   // one.
   backup_worker_lock_wait_seconds: 'backup_worker.py, in branchLeft/ghost-platform, in org/control',
+  backup_worker_lock_aborts_total: 'backup_worker.py, in branchLeft/ghost-platform, in org/control',
 };
 
 /**
