@@ -1,20 +1,10 @@
 #!/usr/bin/env python3
 """Unit tests for branchleft_docker_user_policy.sh.
 
-The script bounds what a compromised tenant container can reach on the
-private subnet, and getting it wrong is not a smaller version of the same
-mistake in either direction: writing the drop before the conntrack accept
-takes every tenant site down (DOCKER-USER matches post-DNAT addresses, so an
-inbound flow's own reply matches the drop), and running it on the estate's
-NAT gateway cuts that host's own forwarding path to every app host and to
-db1. Three behaviours are asserted directly rather than smoke-tested by a
-real run: the final rule order after every insert has landed, the refusal on
-a host with a public interface, and the fail-closed refusal when DOCKER-USER
-does not exist.
-
-The script talks to the live network configuration and netfilter, neither of
-which a test process may do. Both are replaced by fakes earlier on `PATH`,
-the same shape test_branchleft_nat.py uses for the same reason.
+The script talks to the live network configuration and netfilter, so both are
+replaced by fakes earlier on PATH. Rule order is asserted by replaying every
+insert into a model of the chain. What each rule is for, and why the order
+matters: the ghost-platform-docs runbooks.
 """
 
 import os
@@ -41,7 +31,9 @@ args="$*"
 printf '%s\\n' "$args" >> "$FAKE_IPTABLES_LOG"
 case "$args" in
     *"-S DOCKER-USER"*) exit "${FAKE_IPTABLES_DOCKER_USER_EXIT:-1}" ;;
-    *" -C "*) exit "${FAKE_IPTABLES_CHECK_EXIT:-1}" ;;
+    *" -C "*)
+        case "$args" in *"${FAKE_ABSENT:-@@none@@}"*) exit 1 ;; esac
+        exit "${FAKE_IPTABLES_CHECK_EXIT:-1}" ;;
     *" -I "*) exit "${FAKE_IPTABLES_INSERT_EXIT:-0}" ;;
 esac
 exit 0
@@ -92,9 +84,16 @@ class DockerUserPolicyTests(unittest.TestCase):
         os.makedirs(bin_dir)
         self._write_fake(os.path.join(bin_dir, "ip"), FAKE_IP)
         self._write_fake(os.path.join(bin_dir, "iptables"), FAKE_IPTABLES)
+        self._write_fake(
+            os.path.join(bin_dir, "ip6tables"),
+            FAKE_IPTABLES.replace("FAKE_IPTABLES_LOG", "FAKE_IP6TABLES_LOG").replace(
+                "FAKE_IPTABLES_DOCKER_USER_EXIT", "FAKE_IP6TABLES_DOCKER_USER_EXIT"
+            ),
+        )
         self.bin_dir = bin_dir
 
         self.iptables_log = os.path.join(self.tmp.name, "iptables.log")
+        self.ip6tables_log = os.path.join(self.tmp.name, "ip6tables.log")
 
     @staticmethod
     def _write_fake(path, content):
@@ -115,15 +114,23 @@ class DockerUserPolicyTests(unittest.TestCase):
         no_db_exception_addresses=None,
         drop_iptables=False,
         insert_exit="0",
+        spool_bridge=None,
+        ip6_present=True,
+        ip6_docker_user=True,
+        absent=None,
     ):
         if drop_iptables:
             os.remove(os.path.join(self.bin_dir, "iptables"))
+        if not ip6_present:
+            os.remove(os.path.join(self.bin_dir, "ip6tables"))
         env = dict(os.environ)
         env.update(
             {
                 "PATH": f"{self.bin_dir}:/usr/bin:/bin",
                 "FAKE_IP_ADDR": addresses,
                 "FAKE_IPTABLES_LOG": self.iptables_log,
+                "FAKE_IP6TABLES_LOG": self.ip6tables_log,
+                "FAKE_IP6TABLES_DOCKER_USER_EXIT": "0" if ip6_docker_user else "1",
                 "FAKE_IPTABLES_DOCKER_USER_EXIT": "0" if docker_user else "1",
                 "FAKE_IPTABLES_CHECK_EXIT": "0" if rule_present else "1",
                 "FAKE_IPTABLES_INSERT_EXIT": insert_exit,
@@ -134,12 +141,16 @@ class DockerUserPolicyTests(unittest.TestCase):
         # it here guards against it leaking in from this test process's own
         # environment, which os.environ was just copied from above.
         env.pop("BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST", None)
+        if absent is not None:
+            env["FAKE_ABSENT"] = absent
         if subnet is not None:
             env["BRANCHLEFT_DOCKER_USER_POLICY_SUBNET"] = subnet
         if db_host is not None:
             env["BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST"] = db_host
         if db_port is not None:
             env["BRANCHLEFT_DOCKER_USER_POLICY_DB_PORT"] = db_port
+        if spool_bridge is not None:
+            env["BRANCHLEFT_DOCKER_USER_POLICY_MAIL_SPOOL_BRIDGE"] = spool_bridge
         if gateway_ip is not None:
             env["BRANCHLEFT_DOCKER_USER_POLICY_GATEWAY_IP"] = gateway_ip
         if no_db_exception_addresses is not None:
@@ -154,35 +165,149 @@ class DockerUserPolicyTests(unittest.TestCase):
             check=False,
         )
 
-    def iptables_calls(self):
-        if not os.path.exists(self.iptables_log):
+    def _calls(self, path):
+        if not os.path.exists(path):
             return []
-        with open(self.iptables_log, encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             return [line.rstrip("\n") for line in handle]
+
+    def iptables_calls(self):
+        return self._calls(self.iptables_log)
+
+    def ip6tables_calls(self):
+        return self._calls(self.ip6tables_log)
 
     def inserted(self):
         return [call for call in self.iptables_calls() if " -I " in call]
 
-    def final_chain_order(self):
-        # Every insert lands at position 1, so the call made *last* ends up
-        # matched *first* -- the final top-to-bottom order is the reverse of
-        # the order the script issued the inserts in.
-        return list(reversed(self.inserted()))
+    def inserted6(self):
+        return [call for call in self.ip6tables_calls() if " -I " in call]
+
+    def inserted_into(self, chain):
+        return [call for call in self.inserted() if f" -I {chain} " in call]
+
+    @staticmethod
+    def replay(calls, chain, start=None):
+        """The chain's final top-to-bottom order after every insert lands."""
+        rules = list(start or [])
+        for call in calls:
+            parts = call.split()
+            if " -I " in call and parts[3] == chain:
+                rules.insert(int(parts[4]) - 1, " ".join(parts[5:]))
+        return rules
+
+    def final_chain_order(self, chain="DOCKER-USER", calls=None):
+        return self.replay(self.inserted() if calls is None else calls, chain)
 
     # -- Trap 1: rule order is load-bearing -----------------------------
 
-    def test_installs_the_three_rules_in_the_decided_order(self):
+    EXISTING_POLICY = [
+        "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+        "-d 10.20.1.20 -p tcp --dport 3306 -j ACCEPT",
+        "-d 10.20.1.0/24 -j DROP",
+        "-d 169.254.169.254 -j DROP",
+    ]
+    SPOOL_RULES = [
+        "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+        "-i br-mailspool ! -o br-mailspool -j DROP",
+        "-d 10.20.1.20 -p tcp --dport 3306 -j ACCEPT",
+        "-d 10.20.1.0/24 -j DROP",
+        "-d 169.254.169.254 -j DROP",
+    ]
+    INPUT_RULES = [
+        "-i br-mailspool -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+        "-i br-mailspool -j DROP",
+    ]
+
+    def test_installs_the_rules_in_the_decided_order(self):
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.final_chain_order(), self.SPOOL_RULES)
+        self.assertEqual(self.final_chain_order("INPUT"), self.INPUT_RULES)
+
+    def test_a_rerun_on_a_host_with_the_policy_gives_the_same_order_as_a_boot(self):
+        # Only the spool rules are missing: the forward drop must land at
+        # position 2, directly under the conntrack accept, not above it.
+        result = self.run_script(rule_present=True, absent="mailspool")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.replay(self.inserted(), "DOCKER-USER", self.EXISTING_POLICY),
+            self.SPOOL_RULES,
+        )
+
+    def test_the_spool_rules_are_written_after_the_conntrack_accept(self):
+        # A failure in the new calls must never leave the drops without the
+        # reply accept ahead of them.
+        self.run_script()
+        calls = self.inserted()
+        conntrack = next(
+            i for i, c in enumerate(calls) if "DOCKER-USER 1 -m conntrack" in c
+        )
+        first_spool = next(i for i, c in enumerate(calls) if "br-mailspool" in c)
+        self.assertLess(conntrack, first_spool)
+
+    def test_a_failing_spool_insert_leaves_the_conntrack_accept_in_place(self):
+        result = self.run_script(rule_present=True, absent="mailspool", insert_exit="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            self.replay(self.inserted(), "DOCKER-USER", self.EXISTING_POLICY)[0],
+            self.EXISTING_POLICY[0],
+        )
+
+    # -- IPv6: app1 holds a public IPv6 address --------------------------
+
+    FORWARD_DROP = "-i br-mailspool ! -o br-mailspool -j DROP"
+
+    def test_ipv6_forward_drop_sits_above_dockers_own_return(self):
+        # On Docker 27 the chain's only rule is its RETURN; a drop inserted
+        # beneath it is never reached, so it must land at position 1.
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            self.final_chain_order(),
-            [
-                "-t filter -I DOCKER-USER 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
-                "-t filter -I DOCKER-USER 1 -d 10.20.1.20 -p tcp --dport 3306 -j ACCEPT",
-                "-t filter -I DOCKER-USER 1 -d 10.20.1.0/24 -j DROP",
-                "-t filter -I DOCKER-USER 1 -d 169.254.169.254 -j DROP",
-            ],
+            self.replay(self.inserted6(), "DOCKER-USER", ["-j RETURN"]),
+            [self.FORWARD_DROP, "-j RETURN"],
         )
+
+    def test_ipv6_forward_drop_works_on_an_empty_chain(self):
+        self.run_script()
+        self.assertEqual(
+            self.replay(self.inserted6(), "DOCKER-USER", []), [self.FORWARD_DROP]
+        )
+
+    def test_ipv6_input_pair_is_replies_then_drop(self):
+        self.run_script()
+        self.assertEqual(self.replay(self.inserted6(), "INPUT"), self.INPUT_RULES)
+
+    def test_ipv4_forward_drop_stays_under_the_conntrack_accept(self):
+        self.run_script(rule_present=True, absent="mailspool")
+        self.assertEqual(
+            self.replay(self.inserted(), "DOCKER-USER", self.EXISTING_POLICY)[:2],
+            [self.EXISTING_POLICY[0], self.FORWARD_DROP],
+        )
+
+    def test_ipv6_rules_name_the_spool_bridge_alone(self):
+        self.run_script()
+        self.assertEqual(len(self.inserted6()), 3)
+        for call in self.inserted6():
+            self.assertIn(" -i br-mailspool", call)
+
+    def test_ipv6_adds_nothing_when_already_present(self):
+        result = self.run_script(rule_present=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.inserted6(), [])
+
+    def test_ipv6_without_a_docker_user_chain_still_gets_the_input_rules(self):
+        result = self.run_script(ip6_docker_user=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.replay(self.inserted6(), "INPUT"), self.INPUT_RULES)
+        self.assertFalse(any("DOCKER-USER" in c for c in self.inserted6()))
+        self.assertIn("forward drop skipped", result.stdout)
+
+    def test_a_missing_ip6tables_fails_after_the_ipv4_policy_is_in_place(self):
+        result = self.run_script(ip6_present=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ip6tables is not installed", result.stderr)
+        self.assertEqual(self.final_chain_order(), self.SPOOL_RULES)
 
     def test_conntrack_established_is_evaluated_before_either_drop(self):
         # This is the outage the naive form of this policy causes: a
@@ -230,7 +355,11 @@ class DockerUserPolicyTests(unittest.TestCase):
         # tenant's own outbound traffic to the public internet -- the
         # outbound-egress rule this programme has ruled out on cost grounds.
         self.run_script()
-        drops = [call for call in self.inserted() if call.endswith("-j DROP")]
+        drops = [
+            call
+            for call in self.inserted_into("DOCKER-USER")
+            if call.endswith("-j DROP") and "-i " not in call
+        ]
         self.assertEqual(len(drops), 2)
         self.assertTrue(any("10.20.1.0/24" in call for call in drops))
         self.assertTrue(any("169.254.169.254" in call for call in drops))
@@ -248,7 +377,7 @@ class DockerUserPolicyTests(unittest.TestCase):
         result = self.run_script(db_host=None)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(any("10.20.1.20" in call for call in self.inserted()))
-        self.assertEqual(len(self.inserted()), 4)
+        self.assertEqual(len(self.inserted()), 7)
 
     def test_db_host_explicitly_empty_skips_the_db_accept_rule_entirely(self):
         # The fix for a real reachability defect: an app host with no
@@ -258,12 +387,65 @@ class DockerUserPolicyTests(unittest.TestCase):
         result = self.run_script(db_host="")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(any("--dport" in call for call in self.inserted()))
-        self.assertEqual(len(self.inserted()), 3)
+        self.assertEqual(len(self.inserted()), 6)
         # The two drops and the conntrack accept still land -- this host
         # still needs its own reply traffic to work, just no forward exception.
         self.assertTrue(any("10.20.1.0/24" in call for call in self.inserted()))
         self.assertTrue(any("169.254.169.254" in call for call in self.inserted()))
         self.assertTrue(any("ESTABLISHED,RELATED" in call for call in self.inserted()))
+
+    # -- The mail spool's drain bridge ------------------------------------
+
+    SPOOL_FORWARD_DROP = "-i br-mailspool ! -o br-mailspool -j DROP"
+
+    def test_spool_bridge_forward_drop_is_between_conntrack_and_db1_accept(self):
+        # Above the db1 accept so the spool cannot borrow Ghost's exception,
+        # below conntrack so the drain reply on the published port still flows.
+        self.run_script()
+        order = self.final_chain_order()
+        spool = next(i for i, c in enumerate(order) if self.SPOOL_FORWARD_DROP in c)
+        established = next(i for i, c in enumerate(order) if "ESTABLISHED" in c)
+        db = next(i for i, c in enumerate(order) if "--dport 3306" in c)
+        subnet = next(i for i, c in enumerate(order) if "-d 10.20.1.0/24 -j DROP" in c)
+        self.assertLess(established, spool)
+        self.assertLess(spool, db)
+        self.assertLess(spool, subnet)
+
+    def test_spool_bridge_forward_drop_exists_even_with_no_db_exception(self):
+        result = self.run_script(db_host="")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any(self.SPOOL_FORWARD_DROP in c for c in self.inserted()))
+
+    def test_spool_bridge_input_returns_replies_before_dropping_the_rest(self):
+        # INPUT sees a connection to the host itself. The reply to the drain
+        # request must be accepted ahead of the blanket drop for the bridge.
+        self.run_script()
+        order = self.final_chain_order("INPUT")
+        self.assertEqual(len(order), 2)
+        self.assertIn("--ctstate ESTABLISHED,RELATED -j ACCEPT", order[0])
+        self.assertEqual(order[1], "-i br-mailspool -j DROP")
+
+    def test_every_spool_rule_matches_the_spool_bridge_interface_alone(self):
+        # The rules reach into INPUT, so each must name the one interface: an
+        # unscoped INPUT drop would cut the host off, and this guards it.
+        self.run_script()
+        for call in self.inserted_into("INPUT"):
+            self.assertIn("-i br-mailspool", call)
+        for call in self.inserted():
+            if "br-mailspool" in call:
+                self.assertTrue(" -i br-mailspool" in call, call)
+
+    def test_spool_bridge_name_is_overridable_for_testing(self):
+        result = self.run_script(spool_bridge="br-other")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any("-i br-other ! -o br-other -j DROP" in c for c in self.inserted()))
+        self.assertFalse(any("br-mailspool" in c for c in self.inserted()))
+
+    def test_spool_bridge_is_the_name_the_spool_renderer_gives_it(self):
+        # The fixed name is a contract with ghost-platform's render-core
+        # (MAIL_SPOOL_DRAIN_BRIDGE); a rename on either side must be loud.
+        with open(SCRIPT, encoding="utf-8") as handle:
+            self.assertIn(":-br-mailspool}", handle.read())
 
     # -- Trap 4: self-identification, not a one-off env var, must decide it -
 
@@ -275,7 +457,7 @@ class DockerUserPolicyTests(unittest.TestCase):
         result = self.run_script(addresses=OPS1_ADDRESSES, db_host=None)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(any("--dport" in call for call in self.inserted()))
-        self.assertEqual(len(self.inserted()), 3)
+        self.assertEqual(len(self.inserted()), 6)
 
     def test_explicit_db_host_override_wins_over_self_identification(self):
         # An explicit caller value, even on a self-identifying host, is
@@ -283,7 +465,7 @@ class DockerUserPolicyTests(unittest.TestCase):
         result = self.run_script(addresses=OPS1_ADDRESSES, db_host="10.20.1.20")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(any("10.20.1.20" in call for call in self.inserted()))
-        self.assertEqual(len(self.inserted()), 4)
+        self.assertEqual(len(self.inserted()), 7)
 
     def test_ordinary_app_host_is_not_self_identified_as_non_tenant(self):
         # The discriminating case: app1's own address must not trip the
@@ -292,7 +474,7 @@ class DockerUserPolicyTests(unittest.TestCase):
         result = self.run_script(addresses=APP_HOST_ADDRESSES, db_host=None)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(any("10.20.1.20" in call for call in self.inserted()))
-        self.assertEqual(len(self.inserted()), 4)
+        self.assertEqual(len(self.inserted()), 7)
 
     def test_no_db_exception_addresses_is_overridable_for_testing(self):
         result = self.run_script(
@@ -302,7 +484,7 @@ class DockerUserPolicyTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(any("--dport" in call for call in self.inserted()))
-        self.assertEqual(len(self.inserted()), 3)
+        self.assertEqual(len(self.inserted()), 6)
 
     def test_subnet_is_overridable_for_testing(self):
         result = self.run_script(subnet="10.30.1.0/24")
@@ -313,7 +495,7 @@ class DockerUserPolicyTests(unittest.TestCase):
         result = self.run_script(rule_present=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.inserted(), [])
-        self.assertEqual(len([c for c in self.iptables_calls() if " -C " in c]), 4)
+        self.assertEqual(len([c for c in self.iptables_calls() if " -C " in c]), 7)
 
     def test_fails_when_a_rule_cannot_be_inserted(self):
         # `set -e` is what carries this: a host that half-applied its rules
