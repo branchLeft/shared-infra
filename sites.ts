@@ -111,6 +111,18 @@ export const sites: EdgeSite[] = [
     // deliberately if a real bulk-upload use case shows up.
     requestBodyMaxSize: '100MiB',
   },
+
+  {
+    // The owner's pager. Subscribers reach it here over TLS; publishers
+    // inside the estate use the monitoring stack's own network instead. Auth
+    // is on and anonymous access is denied by the instance itself, so this
+    // entry exposes a login wall, not a topic.
+    name: 'ntfy',
+    hostnames: ['ntfy.branchleft.co.uk'],
+    privateUpstream: { host: 'edge1', port: 2586 },
+    // A page and a subscription request are a few hundred bytes.
+    requestBodyMaxSize: '64KiB',
+  },
 ];
 
 /**

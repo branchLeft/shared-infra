@@ -78,6 +78,17 @@ describe('resolvePrivateAddress', () => {
     expect(() => resolvePrivateAddress('mx1', 443)).toThrow(/not a backend this edge proxies to/);
   });
 
+  it.each([80, 443])(
+    "refuses edge1 on this edge's own listener port %s -- a proxy loop",
+    (port) => {
+      expect(() => resolvePrivateAddress('edge1', port)).toThrow(/this edge's own listener/);
+    }
+  );
+
+  it('allows edge1 on any other port: a service another stack publishes on this host', () => {
+    expect(resolvePrivateAddress('edge1', 2586)).toBe('10.20.1.10:2586');
+  });
+
   it.each([0, -1, 65536, 1.5, Number.NaN])('refuses port %s', (port) => {
     expect(() => resolvePrivateAddress('app1', port)).toThrow(/between 1 and 65535/);
   });

@@ -1,0 +1,44 @@
+# Rendered into server.yml by render_alertmanager_config.py before every
+# start. This file is never read directly: its __TOKENS__ are secrets.
+#
+# The one pager for the owner's phone. Anonymous access is denied, there is
+# one topic, and two machine publishers (Alertmanager and the scheduled
+# upstream-release watcher) may write to it but not read it back; only the
+# owner's login may read it.
+base-url: https://ntfy.branchleft.co.uk
+listen-http: ':80'
+
+# Caddy on this host terminates TLS and sets X-Forwarded-For. Without this
+# every visitor shares one rate-limit bucket.
+behind-proxy: true
+proxy-forwarded-header: X-Forwarded-For
+
+cache-file: /var/lib/ntfy/cache.db
+# Long enough that a phone switched off overnight still receives the page
+# when it reconnects.
+cache-duration: 48h
+
+auth-file: /var/lib/ntfy/user.db
+auth-default-access: deny-all
+enable-login: true
+enable-signup: false
+# The two machine users authenticate by token only. ntfy insists every user
+# carry a password hash, so they share the hash of a random password nobody
+# ever kept.
+auth-users:
+  - 'owner:__NTFY_OWNER_PASSWORD_HASH__:user'
+  - 'alertmanager:__NTFY_MACHINE_PASSWORD_HASH__:user'
+  - 'watcher:__NTFY_MACHINE_PASSWORD_HASH__:user'
+auth-access:
+  - 'owner:branchleft-pages:read-only'
+  - 'alertmanager:branchleft-pages:write-only'
+  - 'watcher:branchleft-pages:write-only'
+auth-tokens:
+  - 'alertmanager:__NTFY_PAGER_TOKEN__:alertmanager'
+  - 'watcher:__NTFY_WATCHER_TOKEN__:release-watcher'
+
+# Deliberately absent: upstream-base-url. Setting it would forward a poll
+# request for every message to a third-party server (ntfy.sh) for iOS push.
+# Android needs no relay: the app holds its own connection to this server.
+# No attachment-cache-dir either, so attachments are off.
+log-level: info

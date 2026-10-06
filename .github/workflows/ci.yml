@@ -485,6 +485,10 @@ jobs:
           HEALTHCHECKS_PING_URL: https://hc-ping.com/validation-only
           ALERT_RECIPIENT_EMAIL: ops@example.invalid
           MAILHOST_PING_URL: https://hc-ping.com/validation-only/fail
+          NTFY_PAGER_TOKEN: tk_vvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+          NTFY_WATCHER_TOKEN: tk_wwwwwwwwwwwwwwwwwwwwwwwwwwwww
+          NTFY_OWNER_PASSWORD_HASH: $2a$10$ovvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+          NTFY_MACHINE_PASSWORD_HASH: $2a$10$mwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
         run: python3 hetzner/monitoring/stack/render_alertmanager_config.py
 
       - name: Validate the Alertmanager config
@@ -528,10 +532,13 @@ jobs:
           route mailhost-deadman,email alertname=MailHostDown
           route heartbeat alertname=Watchdog
           # The page register (hetzner/monitoring/pageRegister.ts): every
-          # live entry pages the placeholder receiver.
-          route PAGE_RECEIVER_TBD alertname=TierTwoSafetyMatch severity=page tenant=acme
-          route PAGE_RECEIVER_TBD alertname=TenantFailedUnsafe severity=page tenant=acme
-          route PAGE_RECEIVER_TBD alertname=ReadersCannotRead severity=page tenant=acme
+          # live entry pages the ntfy receiver and nothing else.
+          route ntfy-page alertname=TierTwoSafetyMatch severity=page tenant=acme
+          route ntfy-page alertname=TenantFailedUnsafe severity=page tenant=acme
+          route ntfy-page alertname=ReadersCannotRead severity=page tenant=acme
+          # The pager's own death must not page the pager: its external probe
+          # failing takes the email path.
+          route email alertname=BlackboxProbeFailed severity=critical instance=https://ntfy.branchleft.co.uk
           # The dormant entry (no target set) reaches no route at all.
           route email alertname=AppealLatencyBreach severity=page
           # A page-severity alertname the register has never heard of
@@ -540,6 +547,42 @@ jobs:
           # is the other half: it fails the build before a rule like this one
           # is ever rendered for real.
           route email alertname=SomeUnregisteredPagingAlert severity=page
+
+      # Starts the pinned ntfy image on the rendered config, so a config the
+      # server would refuse fails here and not at the next deploy, then reads
+      # the access rules back from the server itself: anonymous holds nothing,
+      # the owner reads, both publishers only write, and the tokens exist.
+      - name: Validate the ntfy config and its access rules
+        run: |
+          image=docker.io/binwiederhier/ntfy:v2.28.0@sha256:6ef4b819f722fccdc036af611c4774cfdc2de821ab74fdd48bbf4c9d6f8973da
+          cid=$(docker run -d --rm --label branchleft.agent=ci-ntfy-validate \
+            --tmpfs /var/lib/ntfy \
+            -v "$PWD/hetzner/monitoring/stack/ntfy/server.yml:/etc/ntfy/server.yml:ro" \
+            "$image" serve)
+          trap 'docker rm -f -v "$cid" >/dev/null' EXIT
+          for _ in $(seq 1 20); do
+            docker exec "$cid" wget -q -O /dev/null http://127.0.0.1:80/v1/health && break
+            sleep 1
+          done
+          health=$(docker exec "$cid" wget -q -O - http://127.0.0.1:80/v1/health)
+          grep -q '"healthy":true' <<<"$health"
+          access=$(docker exec "$cid" ntfy access)
+          echo "$access"
+          grep -q 'user \* (role: anonymous, tier: none)' <<<"$access"
+          grep -q 'no access to any (other) topics' <<<"$access"
+          grep -q 'read-only access to topic branchleft-pages' <<<"$access"
+          [ "$(grep -c 'write-only access to topic branchleft-pages' <<<"$access")" = 2 ]
+          [ "$(grep -c 'read-write' <<<"$access" || true)" = 0 ]
+          tokens=$(docker exec "$cid" ntfy token list)
+          grep -q 'tk_vvvvvvvvvvvvvvvvvvvvvvvvvvvvv' <<<"$tokens"
+          grep -q 'tk_wwwwwwwwwwwwwwwwwwwwwwwwwwwww' <<<"$tokens"
+          # Anonymous read of the topic is refused by the server itself.
+          anon=$(docker exec "$cid" sh -c 'wget -S -q -O /dev/null http://127.0.0.1:80/branchleft-pages/json?poll=1 2>&1 | head -1')
+          grep -q '403' <<<"$anon"
+
+      - name: Remove the rendered ntfy config
+        if: always()
+        run: rm -f hetzner/monitoring/stack/ntfy/server.yml
 
       # Never committed: it carries the placeholder secrets rendered above,
       # and the real thing carries real ones -- the same reason RUNBOOK-monitoring.md

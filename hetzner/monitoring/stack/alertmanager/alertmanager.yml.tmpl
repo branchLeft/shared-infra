@@ -38,7 +38,7 @@ route:
     - matchers:
         - severity = "page"
         - alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead)$"
-      receiver: PAGE_RECEIVER_TBD
+      receiver: ntfy-page
       group_by: ['tenant']
 
 inhibit_rules:
@@ -63,11 +63,14 @@ inhibit_rules:
       - alertname =~ "^(MailDeliveryFailureRatioHigh|MailDeliveryVolumeSpike|MailDeliveryMetricsMissing)$"
 
 receivers:
-  - name: PAGE_RECEIVER_TBD
-    # No supplier chosen for this receiver yet -- see RUNBOOK-monitoring.md.
-    # An empty receiver is valid Alertmanager config: every alert routed
-    # here is accepted and dropped, not refused, so this route validates
-    # in CI without paging anyone.
+  - name: ntfy-page
+    webhook_configs:
+      - url: 'http://ntfy:80/branchleft-pages?template=alertmanager&priority=5&tags=rotating_light'
+        send_resolved: false
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: '__NTFY_PAGER_TOKEN__'
 
   - name: email
     email_configs:

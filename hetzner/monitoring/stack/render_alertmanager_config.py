@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import sys
 
 # Maps the template's placeholder token to the environment variable it comes
@@ -39,10 +40,25 @@ PLACEHOLDERS: dict[str, str] = {
     "__HEALTHCHECKS_PING_URL__": "HEALTHCHECKS_PING_URL",
     "__ALERT_RECIPIENT_EMAIL__": "ALERT_RECIPIENT_EMAIL",
     "__MAILHOST_PING_URL__": "MAILHOST_PING_URL",
+    "__NTFY_PAGER_TOKEN__": "NTFY_PAGER_TOKEN",
+    "__NTFY_WATCHER_TOKEN__": "NTFY_WATCHER_TOKEN",
+    "__NTFY_OWNER_PASSWORD_HASH__": "NTFY_OWNER_PASSWORD_HASH",
+    "__NTFY_MACHINE_PASSWORD_HASH__": "NTFY_MACHINE_PASSWORD_HASH",
 }
+
+# ntfy refuses a token that is not `tk_` plus 29 lowercase alphanumerics, and a
+# password slot holding anything but a bcrypt hash would put a plaintext
+# password in the config. Checked here so the mistake fails at render, loudly,
+# instead of as an ntfy that exits at start and takes the pager with it.
+NTFY_TOKEN_VARS = ("NTFY_PAGER_TOKEN", "NTFY_WATCHER_TOKEN")
+NTFY_TOKEN_PATTERN = re.compile(r"tk_[a-z0-9]{29}")
+NTFY_HASH_VARS = ("NTFY_OWNER_PASSWORD_HASH", "NTFY_MACHINE_PASSWORD_HASH")
+NTFY_HASH_PATTERN = re.compile(r"\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}")
 
 TEMPLATE_NAME = "alertmanager.yml.tmpl"
 OUTPUT_NAME = "alertmanager.yml"
+NTFY_TEMPLATE_NAME = "server.yml.tmpl"
+NTFY_OUTPUT_NAME = "server.yml"
 
 # Prometheus has no `{env.X}` of its own either, and `prometheus.yml` is
 # committed to a public repository, so the credential reaches it as a
@@ -61,6 +77,24 @@ def render(template: str, env: dict[str, str]) -> str:
             "missing required environment variable(s): "
             + ", ".join(missing)
             + " -- set them in /etc/branchleft/monitoring.env"
+        )
+    bad = [v for v in NTFY_TOKEN_VARS if not NTFY_TOKEN_PATTERN.fullmatch(env[v])]
+    bad += [v for v in NTFY_HASH_VARS if not NTFY_HASH_PATTERN.fullmatch(env[v])]
+    if bad:
+        raise ValueError(
+            "malformed ntfy credential(s): "
+            + ", ".join(bad)
+            + " -- a token is tk_ plus 29 lowercase letters or digits; the owner "
+            "password is a bcrypt hash from `ntfy user hash`, never the password itself"
+        )
+    if env["NTFY_PAGER_TOKEN"] == env["NTFY_WATCHER_TOKEN"]:
+        raise ValueError(
+            "NTFY_PAGER_TOKEN and NTFY_WATCHER_TOKEN must differ -- one token per publisher"
+        )
+    if env["NTFY_OWNER_PASSWORD_HASH"] == env["NTFY_MACHINE_PASSWORD_HASH"]:
+        raise ValueError(
+            "NTFY_OWNER_PASSWORD_HASH and NTFY_MACHINE_PASSWORD_HASH must differ -- "
+            "the machine users must not share the owner's password"
         )
     rendered = template
     for placeholder, var in PLACEHOLDERS.items():
@@ -166,6 +200,19 @@ def main(argv: list[str]) -> int:
     if os.geteuid() == 0:
         os.chown(output_path, ALERTMANAGER_UID, ALERTMANAGER_UID)
     print(f"render_alertmanager_config: wrote {output_path}")
+
+    # ntfy runs as root inside its container, so a root-owned 0600 file is
+    # readable by the one process it exists for and by nothing else: no chown.
+    ntfy_dir = stack_dir / "ntfy"
+    try:
+        ntfy_rendered = render((ntfy_dir / NTFY_TEMPLATE_NAME).read_text(), dict(os.environ))
+    except ValueError as exc:
+        print(f"render_alertmanager_config: {exc}", file=sys.stderr)
+        return 1
+    ntfy_output = ntfy_dir / NTFY_OUTPUT_NAME
+    ntfy_output.write_text(ntfy_rendered)
+    ntfy_output.chmod(0o600)
+    print(f"render_alertmanager_config: wrote {ntfy_output}")
 
     write_prometheus_password(stack_dir, dict(os.environ))
     return 0

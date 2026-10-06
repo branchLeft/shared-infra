@@ -1104,16 +1104,28 @@ Healthchecks.io dead-man's switch directly, so it renders no Alertmanager
 route at all; it is listed in the register purely so the register still
 names every path that can reach a phone.
 
-**The receiver is `PAGE_RECEIVER_TBD`, and it carries no `*_configs`.** No
-supplier has been chosen for it yet -- an empty receiver is valid
-Alertmanager config, so this route, and every test above it, validates
-without paging anyone. Choosing the receiver (SMS, push, a paging service)
-is a supplier decision. Once one is chosen: rename the receiver away from
-`_TBD` in `pageRegister.ts`, give it its own `*_configs` block (the same
-`__TOKEN__` placeholder-and-substitute pattern `render_alertmanager_config.py`
-already uses for the other receivers), and repeat this file's §12 proof
-standard end to end -- a real page, reaching the real receiver, before this
-route is trusted with anything that matters.
+**The receiver is `ntfy-page`: a webhook to the self-hosted ntfy in this
+stack.** Alertmanager publishes over the stack's own network to
+`http://ntfy:80/branchleft-pages`, authenticated with a bearer token, at
+ntfy's maximum priority. ntfy denies all access by default; the owner's phone
+reads the one topic with its own login, and Alertmanager and the upstream
+release watcher can only write to it. The phone subscribes at
+`ntfy.branchleft.co.uk` through the edge. `upstream-base-url` is unset on
+purpose, so no message is relayed to a third-party server.
+
+The secrets reach the host the way the other receivers' do: four variables in
+`/etc/branchleft/monitoring.env` (`NTFY_PAGER_TOKEN`, `NTFY_WATCHER_TOKEN`,
+`NTFY_OWNER_PASSWORD_HASH`, `NTFY_MACHINE_PASSWORD_HASH`), substituted by
+`render_alertmanager_config.py` into `alertmanager.yml` and `ntfy/server.yml`.
+The script refuses to render if any is missing or malformed, so set them
+before the stack is next restarted. The install and phone steps, with the
+test page and its read-back, are in the ghost-platform-docs page
+`ntfy-pager-install-runbook.md`.
+
+The pager's own death is caught by the external probe every public hostname
+gets: `BlackboxProbeFailed` for `https://ntfy.branchleft.co.uk` is critical
+and routes to email, not to ntfy. That is a quieter path than a page; the gap
+is that a dead pager is reported by email only.
 
 An entry marked `dormant` in the register (appeal latency, until a target
 is set) renders no route at all; flip the flag in the same change that sets

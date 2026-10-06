@@ -30,6 +30,10 @@ TEMPLATE = (
     "ping: '__HEALTHCHECKS_PING_URL__'\n"
     "to: '__ALERT_RECIPIENT_EMAIL__'\n"
     "mailhost_ping: '__MAILHOST_PING_URL__'\n"
+    "pager: '__NTFY_PAGER_TOKEN__'\n"
+    "watcher: '__NTFY_WATCHER_TOKEN__'\n"
+    "owner: '__NTFY_OWNER_PASSWORD_HASH__'\n"
+    "machine: '__NTFY_MACHINE_PASSWORD_HASH__'\n"
 )
 
 FULL_ENV = {
@@ -38,6 +42,10 @@ FULL_ENV = {
     "HEALTHCHECKS_PING_URL": "https://hc-ping.com/deadbeef",
     "ALERT_RECIPIENT_EMAIL": "ops@branchleft.co.uk",
     "MAILHOST_PING_URL": "https://hc-ping.com/deadbeef/fail",
+    "NTFY_PAGER_TOKEN": "tk_" + "a" * 29,
+    "NTFY_WATCHER_TOKEN": "tk_" + "b" * 29,
+    "NTFY_OWNER_PASSWORD_HASH": "$2a$10$" + "O" * 53,
+    "NTFY_MACHINE_PASSWORD_HASH": "$2a$10$" + "M" * 53,
 }
 
 
@@ -86,6 +94,98 @@ class RenderTests(unittest.TestCase):
 
 
 
+class NtfyCredentialTests(unittest.TestCase):
+    """The pager's secrets are checked for shape before anything is written.
+
+    A malformed token or a plaintext password in the hash slot makes ntfy exit
+    at start, which takes the pager down while the rest of the stack looks
+    healthy -- so each is refused here, by name, instead.
+    """
+
+    def test_substitutes_all_four_ntfy_credentials(self) -> None:
+        rendered = render(TEMPLATE, FULL_ENV)
+        for var in (
+            "NTFY_PAGER_TOKEN",
+            "NTFY_WATCHER_TOKEN",
+            "NTFY_OWNER_PASSWORD_HASH",
+            "NTFY_MACHINE_PASSWORD_HASH",
+        ):
+            self.assertIn(FULL_ENV[var], rendered)
+
+    def test_refuses_a_token_that_is_not_tk_plus_29_lowercase_alphanumerics(self) -> None:
+        for bad in ("", "tk_short", "tk_" + "A" * 29, "tk_" + "a" * 30, "x_" + "a" * 29,
+                    "tk_" + "a" * 28 + "-"):
+            for var in ("NTFY_PAGER_TOKEN", "NTFY_WATCHER_TOKEN"):
+                with self.assertRaises(ValueError, msg=f"{var}={bad!r}"):
+                    render(TEMPLATE, dict(FULL_ENV, **{var: bad}))
+
+    def test_refuses_a_plaintext_password_in_a_hash_slot(self) -> None:
+        for var in ("NTFY_OWNER_PASSWORD_HASH", "NTFY_MACHINE_PASSWORD_HASH"):
+            for bad in ("correct-horse-battery-staple", "$2a$10$tooshort", "!"):
+                with self.assertRaises(ValueError, msg=f"{var}={bad!r}") as ctx:
+                    render(TEMPLATE, dict(FULL_ENV, **{var: bad}))
+                self.assertIn(var, str(ctx.exception))
+
+    def test_the_error_never_echoes_the_rejected_value(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            render(TEMPLATE, dict(FULL_ENV, NTFY_OWNER_PASSWORD_HASH="hunter2-plaintext"))
+        self.assertNotIn("hunter2-plaintext", str(ctx.exception))
+
+    def test_refuses_two_publishers_sharing_one_token(self) -> None:
+        with self.assertRaises(ValueError):
+            render(TEMPLATE, dict(FULL_ENV, NTFY_WATCHER_TOKEN=FULL_ENV["NTFY_PAGER_TOKEN"]))
+
+    def test_refuses_machine_users_sharing_the_owner_hash(self) -> None:
+        with self.assertRaises(ValueError):
+            render(
+                TEMPLATE,
+                dict(FULL_ENV, NTFY_MACHINE_PASSWORD_HASH=FULL_ENV["NTFY_OWNER_PASSWORD_HASH"]),
+            )
+
+
+class NtfyOutputTests(unittest.TestCase):
+    def test_writes_server_yml_0600_beside_its_template_with_no_chown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            (directory / "alertmanager").mkdir()
+            (directory / "ntfy").mkdir()
+            (directory / "alertmanager" / render_alertmanager_config.TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            (directory / "ntfy" / render_alertmanager_config.NTFY_TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            with mock.patch.object(
+                render_alertmanager_config, "__file__", str(directory / "render.py")
+            ), mock.patch.dict(os.environ, FULL_ENV, clear=False), mock.patch.object(
+                os, "geteuid", return_value=0
+            ), mock.patch.object(os, "chown") as chown:
+                self.assertEqual(render_alertmanager_config.main([]), 0)
+            output = (directory / "ntfy" / render_alertmanager_config.NTFY_OUTPUT_NAME).resolve()
+            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+            self.assertIn(FULL_ENV["NTFY_PAGER_TOKEN"], output.read_text(encoding="utf-8"))
+            chowned = [call.args[0] for call in chown.call_args_list]
+            self.assertNotIn(output, chowned)
+
+    def test_main_fails_without_writing_when_a_credential_is_malformed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            (directory / "alertmanager").mkdir()
+            (directory / "ntfy").mkdir()
+            (directory / "alertmanager" / render_alertmanager_config.TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            (directory / "ntfy" / render_alertmanager_config.NTFY_TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            env = dict(FULL_ENV, NTFY_PAGER_TOKEN="nope")
+            with mock.patch.object(
+                render_alertmanager_config, "__file__", str(directory / "render.py")
+            ), mock.patch.dict(os.environ, env, clear=False):
+                self.assertEqual(render_alertmanager_config.main([]), 1)
+            self.assertFalse((directory / "ntfy" / "server.yml").exists())
+
+
 class OutputPermissionsTests(unittest.TestCase):
     """The rendered file must be readable by the process it exists for.
 
@@ -106,7 +206,11 @@ class OutputPermissionsTests(unittest.TestCase):
     def _render_into(self, directory: pathlib.Path) -> pathlib.Path:
         """Run `main()` with the module rooted at `directory`."""
         (directory / "alertmanager").mkdir()
+        (directory / "ntfy").mkdir()
         (directory / "alertmanager" / render_alertmanager_config.TEMPLATE_NAME).write_text(
+            TEMPLATE, encoding="utf-8"
+        )
+        (directory / "ntfy" / render_alertmanager_config.NTFY_TEMPLATE_NAME).write_text(
             TEMPLATE, encoding="utf-8"
         )
         with mock.patch.object(
@@ -241,7 +345,11 @@ class PrometheusPasswordTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             directory = pathlib.Path(tmp)
             (directory / "alertmanager").mkdir()
+            (directory / "ntfy").mkdir()
             (directory / "alertmanager" / render_alertmanager_config.TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            (directory / "ntfy" / render_alertmanager_config.NTFY_TEMPLATE_NAME).write_text(
                 TEMPLATE, encoding="utf-8"
             )
             env = dict(FULL_ENV)

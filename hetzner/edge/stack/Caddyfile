@@ -134,6 +134,35 @@ book.branchleft.co.uk {
 	}
 }
 
+ntfy.branchleft.co.uk {
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	@members_magic_link {
+		method POST
+		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
+	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		request_body {
+			max_size 64KiB
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 5
+			}
+		}
+		appsec
+		reverse_proxy 10.20.1.10:2586
+	}
+}
+
 publicpress.co.uk {
 	log {
 		output file /var/log/caddy/access.log
