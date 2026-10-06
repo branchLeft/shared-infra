@@ -189,6 +189,90 @@ book.branchleft.co.uk {
 	}
 }
 
+portal.publicpress.co.uk {
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	@members_magic_link {
+		method POST
+		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
+	@ghost_setup {
+		method POST PUT
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
+	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		request_body {
+			max_size 1MiB
+		}
+		rate_limit {
+			zone tenant-portal_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 5
+			}
+		}
+		crowdsec
+		appsec
+		respond @ghost_setup 403
+		reverse_proxy 10.20.1.50:8301
+	}
+}
+
+console.branchleft.co.uk {
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	@members_magic_link {
+		method POST
+		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
+	@ghost_setup {
+		method POST PUT
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
+	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		request_body {
+			max_size 1MiB
+		}
+		rate_limit {
+			zone owner-console_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 5
+			}
+		}
+		crowdsec
+		appsec
+		respond @ghost_setup 403
+		reverse_proxy 10.20.1.50:8302
+	}
+}
+
 publicpress.co.uk {
 	log {
 		output file /var/log/caddy/access.log

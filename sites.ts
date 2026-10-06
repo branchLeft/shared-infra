@@ -111,6 +111,30 @@ export const sites: EdgeSite[] = [
     // deliberately if a real bulk-upload use case shows up.
     requestBodyMaxSize: '100MiB',
   },
+
+  {
+    // The platform's customer-facing sign-in surface. The hostname is a
+    // ruling (portal.publicpress.co.uk), not a choice made here.
+    name: 'tenant-portal',
+    hostnames: ['portal.publicpress.co.uk'],
+    // Upstream port is the tenant portal's `PORT` on ops1; its compose file
+    // must publish this value on ops1's private address, and the two move
+    // together. The application defaults to 8080, which both portal apps
+    // would share, so each is given its own number there.
+    privateUpstream: { host: 'ops1', port: 8301 },
+    // Form posts at sign-in and sign-out only; no upload surface exists.
+    requestBodyMaxSize: '1MiB',
+  },
+
+  {
+    // Staff-only, but reachable like any other site: the sign-in gate is the
+    // application's, not a network ACL. Hostname is a ruling.
+    name: 'owner-console',
+    hostnames: ['console.branchleft.co.uk'],
+    // The owner console's `PORT` on ops1; see the tenant-portal entry.
+    privateUpstream: { host: 'ops1', port: 8302 },
+    requestBodyMaxSize: '1MiB',
+  },
 ];
 
 /**
