@@ -31,6 +31,10 @@ authoring.invalid {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
+	@ghost_setup {
+		method POST PUT
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		request_body {
@@ -52,6 +56,7 @@ authoring.invalid {
 		}
 		crowdsec
 		appsec @inspected
+		respond @ghost_setup 403
 		reverse_proxy 10.20.1.100:2368
 	}
 }
@@ -64,6 +69,10 @@ http://edge-probe.invalid:8080 {
 	@members_magic_link {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
+	@ghost_setup {
+		method POST PUT
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
 	route {
 		rate_limit {
@@ -82,6 +91,7 @@ http://edge-probe.invalid:8080 {
 		}
 		crowdsec
 		appsec
+		respond @ghost_setup 403
 		header X-Edge-Probe host-routed
 		respond 204
 	}
@@ -95,6 +105,10 @@ http://edge-probe.invalid:8080 {
 	@members_magic_link {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
+	@ghost_setup {
+		method POST PUT
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
 	route {
 		rate_limit {
@@ -113,6 +127,7 @@ http://edge-probe.invalid:8080 {
 		}
 		crowdsec
 		appsec
+		respond @ghost_setup 403
 		header X-Edge-Probe bare-port
 		respond 204
 	}
