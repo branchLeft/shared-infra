@@ -1,7 +1,5 @@
 # The site registry
 
-The site registry — everything this load balancer serves.
-
 **Hostnames and service addressing only.** Nothing else about a site belongs
 in this file: no member counts, no commercial terms, no contact details, no
 personal data. A site appears here only if whoever it belongs to is content
@@ -35,18 +33,19 @@ itself -- is a `StaticSite` in `staticSites` below instead, never an
 `EdgeSite` with `privateUpstream` left out: that combination already means
 "not rendered at all" here.
 
-## The blog entry's port and request-body ceiling
+## Copying a tenant's port and ceiling
 
-Both values below belong to the tenant's own stack and neither is chosen
-here. They are read differently, which matters when copying them:
+Both values on a tenant's entry belong to that tenant's own stack and neither
+is chosen in `sites.ts`. They are read differently, which matters when copying
+them:
 
-port -- `blog-infra:hostPort` in that repo's Pulumi.<slug>.yaml.
-It is NOT a stack output; `pulumi stack output hostPort`
-returns nothing. Read the config.
-ceiling -- `pulumi stack output edgeRequestBodyMaxSize`, derived in
-the tenant component as half the container's tmpfs ceiling.
+- **port**: `blog-infra:hostPort` in that repository's `Pulumi.<slug>.yaml`.
+  It is not a stack output; `pulumi stack output hostPort` returns nothing.
+  Read the config.
+- **ceiling**: `pulumi stack output edgeRequestBodyMaxSize`, derived in the
+  tenant component as half the container's tmpfs ceiling.
 
-The copy into this file is an unchecked transcription, so the two can
-drift: if this tenant ever sets `uploadCeilingMib`, the output moves and
-this line does not, and the edge then admits more than the container can
-hold. Nothing compares them -- re-read both on any change to either.
+The copy into `sites.ts` is an unchecked transcription, so the two can drift:
+if the tenant ever sets `uploadCeilingMib`, the output moves and the entry does
+not, and the edge then admits more than the container can hold. Nothing
+compares them. Re-read both on any change to either.

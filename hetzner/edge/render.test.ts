@@ -833,7 +833,7 @@ describe('the CrowdSec acquisition files', () => {
 
 describe('the publicpress.co.uk holding page', () => {
   const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
-  const block = () => rendered.split('publicpress.co.uk {')[1]?.split('\n}')[0] ?? '';
+  const block = () => rendered.split('\npublicpress.co.uk {')[1]?.split('\n}')[0] ?? '';
 
   it('serves exactly the apex hostname -- no www, no sites.* subdomain, no wildcard', () => {
     expect(rendered).toContain('\npublicpress.co.uk {');
@@ -985,7 +985,7 @@ describe('the publicpress.co.uk holding page', () => {
 
   it('carries the general throttle and AppSec once the posture enforces them', () => {
     const enforcingBlock = renderCaddyfile(sites, hostRedirects, ENFORCING, staticSites)
-      .split('publicpress.co.uk {')[1]
+      .split('\npublicpress.co.uk {')[1]
       ?.split('\n}')[0];
     expect(enforcingBlock).toContain('rate_limit {');
     expect(enforcingBlock).toContain('appsec');
@@ -1034,6 +1034,158 @@ describe('the fully enforcing posture', () => {
     await expect(renderCaddyfile([authoring], [], ENFORCING)).toMatchFileSnapshot(
       './validation/Caddyfile.authoring'
     );
+  });
+});
+
+const PORTAL_HOSTNAMES = ['portal.publicpress.co.uk', 'console.branchleft.co.uk'];
+
+const blockOf = (rendered: string, hostname: string): string =>
+  rendered.split(`\n${hostname} {`)[1]?.split('\n}')[0] ?? '';
+
+/** The blog's site block exactly as it was served before the portal hostnames existed. */
+const BLOG_BLOCK = `
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	@inspected not path /ghost/api/*
+	@members_magic_link {
+		method POST
+		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
+	@ghost_setup {
+		method POST PUT
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
+	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		request_body {
+			max_size 64MiB
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 5
+			}
+		}
+		appsec @inspected
+		respond @ghost_setup 403
+		reverse_proxy 10.20.1.100:8101
+	}`;
+
+describe('the owner console and tenant portal routes', () => {
+  const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
+  const withoutPortal = renderCaddyfile(
+    sites.filter((entry) => !PORTAL_HOSTNAMES.some((name) => entry.hostnames.includes(name))),
+    hostRedirects,
+    POSTURE,
+    staticSites
+  );
+
+  it('registers both hostnames, each to its own ops1 port, with TLS 1.2 floor and nothing else on the name', () => {
+    expect(blockOf(rendered, 'portal.publicpress.co.uk')).toContain(
+      'reverse_proxy 10.20.1.50:8301'
+    );
+    expect(blockOf(rendered, 'console.branchleft.co.uk')).toContain(
+      'reverse_proxy 10.20.1.50:8302'
+    );
+    for (const name of PORTAL_HOSTNAMES) {
+      expect(blockOf(rendered, name)).toContain('protocols tls1.2 tls1.3');
+      expect(
+        rendered.match(new RegExp(`(^|, )${name.replace(/\./g, '\\.')}[ ,{]`, 'gm'))
+      ).toHaveLength(1);
+    }
+  });
+
+  it('sets HSTS first in the route for both hostnames, ahead of the body limit and the proxy', () => {
+    for (const name of PORTAL_HOSTNAMES) {
+      const block = blockOf(rendered, name);
+      const hsts = block.indexOf(
+        'header Strict-Transport-Security "max-age=31536000; includeSubDomains"'
+      );
+      expect(hsts).toBeGreaterThan(-1);
+      expect(hsts).toBeLessThan(block.indexOf('request_body'));
+      expect(hsts).toBeLessThan(block.indexOf('reverse_proxy'));
+    }
+  });
+
+  it('puts the general per-site throttle and AppSec in front of both, so a sign-in flood is shed at the edge', () => {
+    const enforcing = renderCaddyfile(sites, hostRedirects, ENFORCING, staticSites);
+    for (const name of PORTAL_HOSTNAMES) {
+      const block = blockOf(enforcing, name);
+      expect(block).toContain('rate_limit {');
+      expect(block).toContain('crowdsec');
+      expect(block).toContain('appsec\n');
+      expect(block.indexOf('rate_limit {')).toBeLessThan(block.indexOf('reverse_proxy'));
+    }
+  });
+
+  it('exposes no other upstream port on ops1 and gives each app its own port', () => {
+    const ops1 = sites.filter((entry) => entry.privateUpstream?.host === 'ops1');
+    const names = ops1.map((entry) => entry.name).sort();
+    expect(names).toEqual(['nextcloud1', 'owner-console', 'tenant-portal']);
+    const ports = ops1.map((entry) => entry.privateUpstream?.port);
+    expect(new Set(ports).size).toBe(ports.length);
+  });
+
+  it('serves no hostname that is not in the registry: the identity provider is not routed here', () => {
+    expect(rendered).not.toContain('id.publicpress.co.uk');
+  });
+
+  describe('the blog is untouched (its admin, sign-in, members sign-up and magic link)', () => {
+    it('renders the blog block byte for byte as it was before these routes existed', () => {
+      expect(blockOf(rendered, 'blog.branchleft.co.uk')).toBe(BLOG_BLOCK);
+    });
+
+    it('renders every pre-existing block identically with and without the new entries', () => {
+      for (const name of [
+        'branchleft.co.uk',
+        'blog.branchleft.co.uk',
+        'cloud.branchleft.co.uk',
+        'book.branchleft.co.uk',
+      ]) {
+        expect(blockOf(rendered, name)).toBe(blockOf(withoutPortal, name));
+        expect(blockOf(rendered, name)).not.toBe('');
+      }
+    });
+
+    it('keeps the blog admin API outside AppSec so author-written HTML is not blocked', () => {
+      const blog = blockOf(rendered, 'blog.branchleft.co.uk');
+      expect(blog).toContain('@inspected not path /ghost/api/*');
+      expect(blog).toContain('appsec @inspected');
+    });
+
+    it('keeps sign-in and members sign-up proxied to the blog with no refusal in front of them', () => {
+      const blog = blockOf(rendered, 'blog.branchleft.co.uk');
+      expect(blog).toContain('reverse_proxy 10.20.1.100:8101');
+      expect(blog).not.toMatch(/respond [^@\n]/);
+      expect(blog).not.toContain('/members/api/member');
+      expect(blog).not.toContain('/ghost/signin');
+      expect(blog).not.toContain('abort');
+    });
+
+    it('keeps the magic-link throttle on the blog at the committed budget, in the shared zone only', () => {
+      const blog = blockOf(rendered, 'blog.branchleft.co.uk');
+      expect(blog).toContain('rate_limit @members_magic_link {');
+      expect(blog).toContain(`events ${MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS}`);
+      expect(blog).toContain(`window ${MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS}s`);
+      expect(blog).not.toContain('portal');
+      expect(blog).not.toContain('console');
+    });
+
+    it('never lets a portal hostname share the blog address or its upstream', () => {
+      const blog = sites.find((entry) => entry.name === 'blog');
+      for (const name of ['tenant-portal', 'owner-console']) {
+        const entry = sites.find((candidate) => candidate.name === name);
+        expect(entry?.privateUpstream).toBeDefined();
+        expect(entry?.privateUpstream).not.toEqual(blog?.privateUpstream);
+        expect(entry?.hostnames.some((host) => host.endsWith('blog.branchleft.co.uk'))).toBe(false);
+      }
+    });
   });
 });
 

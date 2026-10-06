@@ -1,9 +1,11 @@
 import type { EdgeSite, HostRedirect, StaticSite } from './siteTypes';
 
 /**
- * The site registry -- everything this load balancer serves. Hostnames and
- * service addressing only: nothing else about a site belongs in this file.
- * What reads it, and how to onboard a site, is in `sites.md`.
+ * The site registry: everything the Hetzner edge serves. Hostnames and service
+ * addressing only; nothing else about a site belongs in this file.
+ *
+ * What the registry may hold, which renderers read it, why `cloudRunService`
+ * and `region` linger, and how to onboard a site: see `sites.md`.
  */
 export const sites: EdgeSite[] = [
   {
@@ -30,8 +32,8 @@ export const sites: EdgeSite[] = [
     // than stripped as a side effect of that deletion; pruning it is its
     // own pass.
     cloudRunService: 'ghost-tenant-blog',
-    // Port and ceiling belong to the tenant's own stack; where each is read
-    // from, and why they can drift, is in `sites.md`.
+    // Port and ceiling both belong to the tenant's own stack and are copied
+    // here by hand: see "Copying a tenant's port and ceiling" in `sites.md`.
     privateUpstream: { host: 'app1', port: 8101 },
     requestBodyMaxSize: '64MiB',
     // Ghost-backed: its admin API carries author-written HTML and code, which
@@ -67,6 +69,30 @@ export const sites: EdgeSite[] = [
     // Calendar/Talk attachments and avatars, not general file sync. Raise
     // deliberately if a real bulk-upload use case shows up.
     requestBodyMaxSize: '100MiB',
+  },
+
+  {
+    // The platform's customer-facing sign-in surface. The hostname is a
+    // ruling (portal.publicpress.co.uk), not a choice made here.
+    name: 'tenant-portal',
+    hostnames: ['portal.publicpress.co.uk'],
+    // Upstream port is the tenant portal's `PORT` on ops1; its compose file
+    // must publish this value on ops1's private address, and the two move
+    // together. The application defaults to 8080, which both portal apps
+    // would share, so each is given its own number there.
+    privateUpstream: { host: 'ops1', port: 8301 },
+    // Form posts at sign-in and sign-out only; no upload surface exists.
+    requestBodyMaxSize: '1MiB',
+  },
+
+  {
+    // Staff-only, but reachable like any other site: the sign-in gate is the
+    // application's, not a network ACL. Hostname is a ruling.
+    name: 'owner-console',
+    hostnames: ['console.branchleft.co.uk'],
+    // The owner console's `PORT` on ops1; see the tenant-portal entry.
+    privateUpstream: { host: 'ops1', port: 8302 },
+    requestBodyMaxSize: '1MiB',
   },
 
   {
