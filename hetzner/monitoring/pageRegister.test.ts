@@ -212,6 +212,36 @@ describe('the ntfy server config', () => {
   });
 });
 
+describe('every critical alert pages the phone', () => {
+  const rendered = renderAlertmanagerTemplate();
+  const criticalRoute =
+    '        - severity = "critical"\n      receiver: ntfy-page\n      continue: true';
+
+  it('routes severity=critical to ntfy-page and continues to the later routes', () => {
+    expect(rendered).toContain(criticalRoute);
+  });
+
+  it('keeps the off-host email for criticals, but never for the mail pair or on-host alerts', () => {
+    expect(rendered).toContain(
+      '        - severity = "critical"\n' +
+        '        - alertname !~ "^(MailHostDown|AlertEmailDeliveryFailing)$"\n' +
+        '        - notify != "on-host"\n' +
+        '      receiver: email'
+    );
+  });
+
+  it('puts the critical route after Watchdog and before every route that stops the walk', () => {
+    const at = (needle: string) => rendered.indexOf(needle);
+    expect(at('alertname = "Watchdog"')).toBeLessThan(at(criticalRoute));
+    expect(at(criticalRoute)).toBeLessThan(at('notify = "on-host"'));
+    expect(at(criticalRoute)).toBeLessThan(at('receiver: mailhost-deadman'));
+  });
+
+  it('does not page for warnings', () => {
+    expect(rendered).not.toContain('severity = "warning"\n      receiver: ntfy-page');
+  });
+});
+
 describe('renderAlertmanagerTemplate wired to the page register', () => {
   it('uses PAGE_REGISTER by default', () => {
     const rendered = renderAlertmanagerTemplate();

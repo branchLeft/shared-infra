@@ -782,7 +782,7 @@ FORCE_RECREATE_START = "ExecStart=/usr/bin/docker compose up -d --remove-orphans
 
 
 class MonitoringForceRecreateTests(unittest.TestCase):
-    """`branchLeft/workspace#666`: a bind-mounted config change is invisible to
+    """A bind-mounted config change is invisible to
 
     Full reasoning: `test_compose_unit_contract.md`.
     """
@@ -828,7 +828,7 @@ class MonitoringForceRecreateTests(unittest.TestCase):
     def test_edge_stays_selective(self):
         """`edge` keeps the template's default: no ExecStart override at all.
 
-        It restarts on every per-tenant image bump (branchLeft/shared-infra#171),
+        It restarts on every per-tenant image bump,
         and force-recreating the whole stack on each one is exactly the
         every-tenant-offline-to-change-one regression that PR fixed -- so
         `edge.override.conf` must not pick up `monitoring`'s override by

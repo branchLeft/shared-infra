@@ -23,6 +23,15 @@ route:
       group_interval: 1m
       repeat_interval: 1m
     - matchers:
+        - severity = "critical"
+      receiver: ntfy-page
+      continue: true
+    - matchers:
+        - severity = "critical"
+        - alertname !~ "^(MailHostDown|AlertEmailDeliveryFailing)$"
+        - notify != "on-host"
+      receiver: email
+    - matchers:
         - notify = "on-host"
       receiver: email-on-host
     - matchers:

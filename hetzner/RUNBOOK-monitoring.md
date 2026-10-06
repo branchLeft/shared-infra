@@ -1117,15 +1117,25 @@ The secrets reach the host the way the other receivers' do: four variables in
 `/etc/branchleft/monitoring.env` (`NTFY_PAGER_TOKEN`, `NTFY_WATCHER_TOKEN`,
 `NTFY_OWNER_PASSWORD_HASH`, `NTFY_MACHINE_PASSWORD_HASH`), substituted by
 `render_alertmanager_config.py` into `alertmanager.yml` and `ntfy/server.yml`.
-The script refuses to render if any is missing or malformed, so set them
-before the stack is next restarted. The install and phone steps, with the
-test page and its read-back, are in the ghost-platform-docs page
-`ntfy-pager-install-runbook.md`.
+**They are optional to the stack, not to the pager.** If any is missing or
+malformed the script prints a `WARNING ... ntfy pager is DISABLED` line naming
+the variable, writes a locked ntfy config (deny-all, no users) and carries on:
+email and the rest of monitoring keep running, and page alerts reach nobody
+until the variables are fixed and the unit restarted. The install and phone
+steps, with the test page and its read-back, are in the ghost-platform-docs
+page `ntfy-pager-install-runbook.md`.
+
+**Every `severity=critical` alert also pages the phone** (the owner's ruling:
+critical alerts only, over self-hosted ntfy). A critical alert goes to
+`ntfy-page` and to the off-host email it reached before; the two mail-host
+alerts keep their dead-man route as well, and an on-host critical alert pages
+the phone but never leaves mx1 by email. Warnings never page.
 
 The pager's own death is caught by the external probe every public hostname
-gets: `BlackboxProbeFailed` for `https://ntfy.branchleft.co.uk` is critical
-and routes to email, not to ntfy. That is a quieter path than a page; the gap
-is that a dead pager is reported by email only.
+gets: `BlackboxProbeFailed` for `https://ntfy.branchleft.co.uk` is critical,
+so it tries the pager (which is the thing that is down) and also emails the
+off-host mailbox. The email is the path that arrives. That is a quieter path
+than a page; the gap is that a dead pager is reported by email only.
 
 An entry marked `dormant` in the register (appeal latency, until a target
 is set) renders no route at all; flip the flag in the same change that sets

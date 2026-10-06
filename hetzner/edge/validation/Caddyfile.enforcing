@@ -201,6 +201,10 @@ ntfy.branchleft.co.uk {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
+	@ghost_setup {
+		method POST PUT
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		request_body {
@@ -222,6 +226,7 @@ ntfy.branchleft.co.uk {
 		}
 		crowdsec
 		appsec
+		respond @ghost_setup 403
 		reverse_proxy 10.20.1.10:2586
 	}
 }

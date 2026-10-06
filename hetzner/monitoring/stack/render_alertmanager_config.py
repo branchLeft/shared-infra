@@ -21,11 +21,18 @@ PLACEHOLDERS: dict[str, str] = {
     "__HEALTHCHECKS_PING_URL__": "HEALTHCHECKS_PING_URL",
     "__ALERT_RECIPIENT_EMAIL__": "ALERT_RECIPIENT_EMAIL",
     "__MAILHOST_PING_URL__": "MAILHOST_PING_URL",
+}
+
+# The pager's credentials are optional here: a missing or malformed one disables
+# the pager with a warning and never stops the rest of monitoring, email
+# included. See `ntfy_problems` and `render_alertmanager_config.md`.
+NTFY_PLACEHOLDERS: dict[str, str] = {
     "__NTFY_PAGER_TOKEN__": "NTFY_PAGER_TOKEN",
     "__NTFY_WATCHER_TOKEN__": "NTFY_WATCHER_TOKEN",
     "__NTFY_OWNER_PASSWORD_HASH__": "NTFY_OWNER_PASSWORD_HASH",
     "__NTFY_MACHINE_PASSWORD_HASH__": "NTFY_MACHINE_PASSWORD_HASH",
 }
+NTFY_DISABLED_VALUE = "ntfy-not-configured"
 
 # ntfy refuses a token that is not `tk_` plus 29 lowercase alphanumerics, and a
 # password slot holding anything but a bcrypt hash would put a plaintext
@@ -59,28 +66,70 @@ def render(template: str, env: dict[str, str]) -> str:
             + ", ".join(missing)
             + " -- set them in /etc/branchleft/monitoring.env"
         )
-    bad = [v for v in NTFY_TOKEN_VARS if not NTFY_TOKEN_PATTERN.fullmatch(env[v])]
-    bad += [v for v in NTFY_HASH_VARS if not NTFY_HASH_PATTERN.fullmatch(env[v])]
-    if bad:
-        raise ValueError(
-            "malformed ntfy credential(s): "
-            + ", ".join(bad)
-            + " -- a token is tk_ plus 29 lowercase letters or digits; the owner "
-            "password is a bcrypt hash from `ntfy user hash`, never the password itself"
-        )
-    if env["NTFY_PAGER_TOKEN"] == env["NTFY_WATCHER_TOKEN"]:
-        raise ValueError(
-            "NTFY_PAGER_TOKEN and NTFY_WATCHER_TOKEN must differ -- one token per publisher"
-        )
-    if env["NTFY_OWNER_PASSWORD_HASH"] == env["NTFY_MACHINE_PASSWORD_HASH"]:
-        raise ValueError(
-            "NTFY_OWNER_PASSWORD_HASH and NTFY_MACHINE_PASSWORD_HASH must differ -- "
-            "the machine users must not share the owner's password"
-        )
+    problems = ntfy_problems(env)
+    ntfy_values = (
+        {ph: env[var] for ph, var in NTFY_PLACEHOLDERS.items()}
+        if not problems
+        else {ph: NTFY_DISABLED_VALUE for ph in NTFY_PLACEHOLDERS}
+    )
     rendered = template
     for placeholder, var in PLACEHOLDERS.items():
         rendered = rendered.replace(placeholder, env[var])
+    for placeholder, value in ntfy_values.items():
+        rendered = rendered.replace(placeholder, value)
     return rendered
+
+
+def ntfy_problems(env: dict[str, str]) -> list[str]:
+    """Why the pager cannot be configured, or an empty list when it can.
+
+    Values are never echoed: only the variable names and the rule broken.
+    """
+    problems = [
+        f"{var} is not set"
+        for var in NTFY_PLACEHOLDERS.values()
+        if not env.get(var)
+    ]
+    if problems:
+        return problems
+    problems = [
+        f"{v} is malformed (a token is tk_ plus 29 lowercase letters or digits)"
+        for v in NTFY_TOKEN_VARS
+        if not NTFY_TOKEN_PATTERN.fullmatch(env[v])
+    ]
+    problems += [
+        f"{v} is malformed (it must be a bcrypt hash from `ntfy user hash`, never the password)"
+        for v in NTFY_HASH_VARS
+        if not NTFY_HASH_PATTERN.fullmatch(env[v])
+    ]
+    if env["NTFY_PAGER_TOKEN"] == env["NTFY_WATCHER_TOKEN"]:
+        problems.append("NTFY_PAGER_TOKEN and NTFY_WATCHER_TOKEN must differ")
+    if env["NTFY_OWNER_PASSWORD_HASH"] == env["NTFY_MACHINE_PASSWORD_HASH"]:
+        problems.append("NTFY_OWNER_PASSWORD_HASH and NTFY_MACHINE_PASSWORD_HASH must differ")
+    return problems
+
+
+NTFY_AUTH_KEYS = ("auth-users:", "auth-access:", "auth-tokens:")
+
+
+def lock_ntfy_config(template: str) -> str:
+    """The template with every user, grant and token removed.
+
+    What is left still denies all access by default, so a pager with no
+    credentials starts healthy and answers 403 to everyone: it fails closed
+    rather than crash-looping or opening up.
+    """
+    kept: list[str] = []
+    dropping = False
+    for line in template.split("\n"):
+        if line.startswith(NTFY_AUTH_KEYS):
+            dropping = True
+            continue
+        if dropping and line.startswith((" ", "-")):
+            continue
+        dropping = False
+        kept.append(line)
+    return "\n".join(kept)
 
 
 # The image runs as `nobody`; the rendered file moves to that uid rather than
@@ -165,11 +214,17 @@ def main(argv: list[str]) -> int:
     # ntfy runs as root inside its container, so a root-owned 0600 file is
     # readable by the one process it exists for and by nothing else: no chown.
     ntfy_dir = stack_dir / "ntfy"
-    try:
-        ntfy_rendered = render((ntfy_dir / NTFY_TEMPLATE_NAME).read_text(), dict(os.environ))
-    except ValueError as exc:
-        print(f"render_alertmanager_config: {exc}", file=sys.stderr)
-        return 1
+    ntfy_template = (ntfy_dir / NTFY_TEMPLATE_NAME).read_text()
+    problems = ntfy_problems(dict(os.environ))
+    if problems:
+        print(
+            "render_alertmanager_config: WARNING the ntfy pager is DISABLED, so page alerts "
+            "reach nobody (email and the rest of monitoring are unaffected): "
+            + "; ".join(problems),
+            file=sys.stderr,
+        )
+        ntfy_template = lock_ntfy_config(ntfy_template)
+    ntfy_rendered = render(ntfy_template, dict(os.environ))
     ntfy_output = ntfy_dir / NTFY_OUTPUT_NAME
     # An unrendered start leaves Docker's empty directory at a bind-mount
     # source; clear it so the next start self-heals instead of failing here.

@@ -2,6 +2,7 @@ import { APP_HOST_IPS, HOST_IPS } from '@branchleft/hetzner-host';
 
 import type { EdgeSite } from '../../siteTypes';
 import {
+  PAGE_RECEIVER_NAME,
   PAGE_REGISTER,
   renderPageReceiverBlock,
   renderPageRoute,
@@ -998,6 +999,22 @@ export function renderAlertmanagerTemplate(
     '      group_wait: 0s',
     '      group_interval: 1m',
     '      repeat_interval: 1m',
+    // Every critical alert pages the owner's phone, as well as going where it
+    // went before. `continue: true` lets the walk go on to the routes below,
+    // and the email route that follows exists because a matching child stops
+    // the root receiver from applying: without it a plain critical alert
+    // would reach ntfy only. It excludes the two mail-host alerts, which have
+    // their own email pair below, and on-host alerts, which must never leave
+    // mx1.
+    '    - matchers:',
+    '        - severity = "critical"',
+    `      receiver: ${PAGE_RECEIVER_NAME}`,
+    '      continue: true',
+    '    - matchers:',
+    '        - severity = "critical"',
+    '        - alertname !~ "^(MailHostDown|AlertEmailDeliveryFailing)$"',
+    '        - notify != "on-host"',
+    '      receiver: email',
     // No `continue`: an on-host alert must never also reach the root email
     // receiver, whose recipient is off-host. See the notify label's rules.
     '    - matchers:',

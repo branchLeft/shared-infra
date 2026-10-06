@@ -157,22 +157,23 @@ const PRIVATE_ADDRESSES: Record<string, string> = { ...HOST_IPS, ...APP_HOST_IPS
 const NOT_AN_UPSTREAM = new Set(['mx1']);
 
 /**
- * `edge1` is this host. Proxying to its own private address on the ports this
- * edge itself listens on produces a proxy loop that answers every request with
- * a timeout after exhausting the connection pool, so those ports fail the
- * render. Any other port is a service published on this host's private address
- * by a different Compose stack (the monitoring stack's pager), which is a
- * backend like any other.
+ * `edge1` is this host, so it is refused as an upstream except on the one
+ * port a service on this host is deliberately published for: the monitoring
+ * stack's pager. Any other port on its own address is the edge's own listener
+ * (a proxy loop) or an internal service (Grafana, Prometheus) that must not be
+ * exposed by a registry typo. Widening this is a decision, not a convenience.
  */
 const EDGE_HOST = 'edge1';
-const EDGE_LISTEN_PORTS = new Set([80, 443]);
+export const EDGE_HOST_ALLOWED_PORTS: ReadonlySet<number> = new Set([2586]);
 
 export function resolvePrivateAddress(host: string, port: number): string {
   if (NOT_AN_UPSTREAM.has(host)) {
     throw new Error(`${host} is not a backend this edge proxies to`);
   }
-  if (host === EDGE_HOST && EDGE_LISTEN_PORTS.has(port)) {
-    throw new Error(`${host}:${port} is this edge's own listener, not a backend it proxies to`);
+  if (host === EDGE_HOST && !EDGE_HOST_ALLOWED_PORTS.has(port)) {
+    throw new Error(
+      `${host}:${port} is not a backend this edge proxies to: only ${[...EDGE_HOST_ALLOWED_PORTS].join(', ')} is published on this host for it`
+    );
   }
   const address = PRIVATE_ADDRESSES[host];
   if (address === undefined) {

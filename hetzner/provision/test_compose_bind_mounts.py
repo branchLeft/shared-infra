@@ -18,7 +18,7 @@ RELATIVE_BIND_MOUNT = re.compile(r"\A\s*-\s+(?P<source>\./[^:\s]+):")
 # The crowdsec acquisition mount specifically, captured with its target this
 # time: `- ./crowdsec/acquis.d:/target:ro`. Its target has to match
 # `crowdsec_service.acquisition_dir` in the sibling `config.yaml.local`, and
-# nothing else ties those two files together (branchLeft/shared-infra#85).
+# nothing else ties those two files together.
 CROWDSEC_ACQUIS_MOUNT = re.compile(r"\A\s*-\s+\./crowdsec/acquis\.d:(?P<target>[^:\s]+):ro\s*\Z")
 
 # `crowdsec_service:` is the only block this repository's config.yaml.local

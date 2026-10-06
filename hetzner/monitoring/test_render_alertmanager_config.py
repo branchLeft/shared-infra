@@ -7,7 +7,9 @@ provisioning scripts in this repo are tested (e.g.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import os
 import pathlib
 import stat
@@ -61,7 +63,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("https://hc-ping.com/deadbeef/fail", rendered)
 
     def test_refuses_each_missing_variable_in_turn(self) -> None:
-        for missing in FULL_ENV:
+        for missing in (k for k in FULL_ENV if not k.startswith("NTFY_")):
             env = {k: v for k, v in FULL_ENV.items() if k != missing}
             with self.assertRaises(ValueError) as ctx:
                 render(TEMPLATE, env)
@@ -95,52 +97,69 @@ class RenderTests(unittest.TestCase):
 
 
 class NtfyCredentialTests(unittest.TestCase):
-    """The pager's secrets are checked for shape before anything is written.
+    """The pager is optional: a missing or malformed credential disables it
+    with a warning and never stops the rest of monitoring.
 
-    A malformed token or a plaintext password in the hash slot makes ntfy exit
-    at start, which takes the pager down while the rest of the stack looks
-    healthy -- so each is refused here, by name, instead.
+    Stopping the whole stack for a pager problem would take email alerting
+    down with it, so each problem is reported by variable name and the pager's
+    own config is locked instead.
     """
 
     def test_substitutes_all_four_ntfy_credentials(self) -> None:
         rendered = render(TEMPLATE, FULL_ENV)
-        for var in (
-            "NTFY_PAGER_TOKEN",
-            "NTFY_WATCHER_TOKEN",
-            "NTFY_OWNER_PASSWORD_HASH",
-            "NTFY_MACHINE_PASSWORD_HASH",
-        ):
+        for var in render_alertmanager_config.NTFY_PLACEHOLDERS.values():
             self.assertIn(FULL_ENV[var], rendered)
+        self.assertEqual(render_alertmanager_config.ntfy_problems(FULL_ENV), [])
 
-    def test_refuses_a_token_that_is_not_tk_plus_29_lowercase_alphanumerics(self) -> None:
-        for bad in ("", "tk_short", "tk_" + "A" * 29, "tk_" + "a" * 30, "x_" + "a" * 29,
-                    "tk_" + "a" * 28 + "-"):
-            for var in ("NTFY_PAGER_TOKEN", "NTFY_WATCHER_TOKEN"):
-                with self.assertRaises(ValueError, msg=f"{var}={bad!r}"):
-                    render(TEMPLATE, dict(FULL_ENV, **{var: bad}))
+    def test_a_missing_credential_never_raises_and_disables_every_ntfy_placeholder(self) -> None:
+        for var in render_alertmanager_config.NTFY_PLACEHOLDERS.values():
+            env = {k: v for k, v in FULL_ENV.items() if k != var}
+            rendered = render(TEMPLATE, env)
+            self.assertNotIn("__NTFY_", rendered)
+            self.assertIn(render_alertmanager_config.NTFY_DISABLED_VALUE, rendered)
+            for other in render_alertmanager_config.NTFY_PLACEHOLDERS.values():
+                if other != var:
+                    self.assertNotIn(FULL_ENV[other], rendered)
+            problems = render_alertmanager_config.ntfy_problems(env)
+            self.assertEqual(len(problems), 1)
+            self.assertIn(var, problems[0])
 
-    def test_refuses_a_plaintext_password_in_a_hash_slot(self) -> None:
-        for var in ("NTFY_OWNER_PASSWORD_HASH", "NTFY_MACHINE_PASSWORD_HASH"):
-            for bad in ("correct-horse-battery-staple", "$2a$10$tooshort", "!"):
-                with self.assertRaises(ValueError, msg=f"{var}={bad!r}") as ctx:
-                    render(TEMPLATE, dict(FULL_ENV, **{var: bad}))
-                self.assertIn(var, str(ctx.exception))
+    def test_a_malformed_token_or_hash_disables_the_pager_without_echoing_it(self) -> None:
+        cases = {
+            "NTFY_PAGER_TOKEN": ["", "tk_short", "tk_" + "A" * 29, "tk_" + "a" * 30, "x_" + "a" * 29],
+            "NTFY_WATCHER_TOKEN": ["tk_" + "a" * 28 + "-"],
+            "NTFY_OWNER_PASSWORD_HASH": ["plaintext-owner-pw", "$2a$10$tooshort", "!"],
+            "NTFY_MACHINE_PASSWORD_HASH": ["hunter2-plaintext"],
+        }
+        for var, bads in cases.items():
+            for bad in bads:
+                env = dict(FULL_ENV, **{var: bad})
+                problems = render_alertmanager_config.ntfy_problems(env)
+                self.assertTrue(problems, msg=f"{var}={bad!r}")
+                self.assertIn(var, " ".join(problems))
+                if bad:
+                    self.assertNotIn(bad, " ".join(problems))
+                    self.assertNotIn(bad, render(TEMPLATE, env))
 
-    def test_the_error_never_echoes_the_rejected_value(self) -> None:
-        with self.assertRaises(ValueError) as ctx:
-            render(TEMPLATE, dict(FULL_ENV, NTFY_OWNER_PASSWORD_HASH="hunter2-plaintext"))
-        self.assertNotIn("hunter2-plaintext", str(ctx.exception))
+    def test_two_publishers_sharing_one_token_disables_the_pager(self) -> None:
+        env = dict(FULL_ENV, NTFY_WATCHER_TOKEN=FULL_ENV["NTFY_PAGER_TOKEN"])
+        self.assertTrue(render_alertmanager_config.ntfy_problems(env))
 
-    def test_refuses_two_publishers_sharing_one_token(self) -> None:
-        with self.assertRaises(ValueError):
-            render(TEMPLATE, dict(FULL_ENV, NTFY_WATCHER_TOKEN=FULL_ENV["NTFY_PAGER_TOKEN"]))
+    def test_machine_users_sharing_the_owner_hash_disables_the_pager(self) -> None:
+        env = dict(FULL_ENV, NTFY_MACHINE_PASSWORD_HASH=FULL_ENV["NTFY_OWNER_PASSWORD_HASH"])
+        self.assertTrue(render_alertmanager_config.ntfy_problems(env))
 
-    def test_refuses_machine_users_sharing_the_owner_hash(self) -> None:
-        with self.assertRaises(ValueError):
-            render(
-                TEMPLATE,
-                dict(FULL_ENV, NTFY_MACHINE_PASSWORD_HASH=FULL_ENV["NTFY_OWNER_PASSWORD_HASH"]),
-            )
+    def test_the_locked_config_keeps_deny_all_and_drops_every_user_grant_and_token(self) -> None:
+        template = (
+            pathlib.Path(MODULE_PATH).parent / "ntfy" / "server.yml.tmpl"
+        ).read_text(encoding="utf-8")
+        locked = render_alertmanager_config.lock_ntfy_config(template)
+        self.assertIn("auth-default-access: deny-all", locked)
+        self.assertIn("auth-file:", locked)
+        for key in ("auth-users:", "auth-access:", "auth-tokens:", "__NTFY_", "write-only"):
+            self.assertNotIn(key, locked)
+        active = "\n".join(l for l in locked.split("\n") if not l.lstrip().startswith("#"))
+        self.assertNotIn("upstream-base-url", active)
 
 
 class NtfyOutputTests(unittest.TestCase):
@@ -184,7 +203,12 @@ class NtfyOutputTests(unittest.TestCase):
                 self.assertEqual(render_alertmanager_config.main([]), 0)
             self.assertTrue((directory / "ntfy" / "server.yml").is_file())
 
-    def test_main_fails_without_writing_when_a_credential_is_malformed(self) -> None:
+    def test_main_with_no_ntfy_secrets_still_succeeds_warns_and_writes_a_locked_config(
+        self,
+    ) -> None:
+        ntfy_template = (
+            pathlib.Path(MODULE_PATH).parent / "ntfy" / "server.yml.tmpl"
+        ).read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             directory = pathlib.Path(tmp)
             (directory / "alertmanager").mkdir()
@@ -193,14 +217,23 @@ class NtfyOutputTests(unittest.TestCase):
                 TEMPLATE, encoding="utf-8"
             )
             (directory / "ntfy" / render_alertmanager_config.NTFY_TEMPLATE_NAME).write_text(
-                TEMPLATE, encoding="utf-8"
+                ntfy_template, encoding="utf-8"
             )
-            env = dict(FULL_ENV, NTFY_PAGER_TOKEN="nope")
+            env = {k: v for k, v in FULL_ENV.items() if not k.startswith("NTFY_")}
+            stderr = io.StringIO()
             with mock.patch.object(
                 render_alertmanager_config, "__file__", str(directory / "render.py")
-            ), mock.patch.dict(os.environ, env, clear=False):
-                self.assertEqual(render_alertmanager_config.main([]), 1)
-            self.assertFalse((directory / "ntfy" / "server.yml").exists())
+            ), mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stderr(stderr):
+                self.assertEqual(render_alertmanager_config.main([]), 0)
+            self.assertIn("DISABLED", stderr.getvalue())
+            self.assertIn("NTFY_PAGER_TOKEN is not set", stderr.getvalue())
+            alertmanager = directory / "alertmanager" / render_alertmanager_config.OUTPUT_NAME
+            self.assertTrue(alertmanager.exists())
+            self.assertIn(FULL_ENV["SMTP_PASSWORD"], alertmanager.read_text(encoding="utf-8"))
+            ntfy = (directory / "ntfy" / "server.yml").read_text(encoding="utf-8")
+            self.assertIn("auth-default-access: deny-all", ntfy)
+            self.assertNotIn("auth-tokens", ntfy)
+            self.assertNotIn("__NTFY_", ntfy)
 
 
 class OutputPermissionsTests(unittest.TestCase):
