@@ -117,6 +117,53 @@ class ControlPlaneStackTests(unittest.TestCase):
                 with self.subTest(service=name, port=port):
                     self.assertRegex(port, rf"\A({OPS1_PRIVATE_IP}|127\.0\.0\.1):\d+:\d+\Z")
 
+    def test_every_ports_entry_is_short_form_on_a_private_or_loopback_address(self):
+        """A long-form mapping or an inline list slips past the address check above."""
+        short = re.compile(rf"\A      - '({OPS1_PRIVATE_IP}|127\.0\.0\.1):\d+:\d+'\Z")
+        for name, block in service_blocks(compose_text()).items():
+            in_ports = False
+            for line in block:
+                if re.match(r"\A    ports:", line):
+                    with self.subTest(service=name, line=line):
+                        self.assertEqual(line, "    ports:", "ports must be a block list")
+                    in_ports = True
+                elif in_ports and re.match(r"\A      ", line):
+                    with self.subTest(service=name, line=line):
+                        self.assertRegex(line, short)
+                elif in_ports:
+                    in_ports = False
+
+    def test_no_service_shares_the_host_namespaces_or_runs_privileged(self):
+        forbidden = re.compile(
+            r"\A    (network_mode|pid|ipc|uts|userns_mode|privileged|cap_add|devices|security_opt):"
+        )
+        for name, block in service_blocks(compose_text()).items():
+            for line in block:
+                with self.subTest(service=name, line=line):
+                    self.assertIsNone(forbidden.match(line))
+
+    def test_every_service_is_first_in_line_for_an_out_of_memory_kill(self):
+        for name, block in service_blocks(compose_text()).items():
+            with self.subTest(service=name):
+                values = [
+                    int(m.group(1))
+                    for line in block
+                    if (m := re.match(r"\A    oom_score_adj:\s*(\d+)\s*\Z", line))
+                ]
+                self.assertEqual(len(values), 1, f"{name} has no oom_score_adj")
+                self.assertGreaterEqual(values[0], 500)
+
+    def test_the_master_key_is_a_secret_file_and_never_in_any_environment(self):
+        text = compose_text()
+        blocks = service_blocks(text)
+        self.assertIn("--masterkeyFile /run/secrets/zitadel-masterkey", "\n".join(blocks["zitadel"]))
+        self.assertNotIn("masterkeyFromEnv", text)
+        self.assertIn("      - zitadel-masterkey", blocks["zitadel"])
+        for name, block in blocks.items():
+            for line in block:
+                with self.subTest(service=name, line=line):
+                    self.assertNotRegex(line.upper(), r"MASTERKEY\w*:")
+
     def test_the_database_publishes_nothing(self):
         self.assertEqual(published_ports(service_blocks(compose_text())["db"]), [])
 

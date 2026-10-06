@@ -48,6 +48,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    # Raised so a host-wide out-of-memory kill takes this stack's containers
+    # before Nextcloud's, whose data is not rebuildable from configuration.
+    oom_score_adj: 500
     mem_limit: 512m
     cpu_shares: 512
 
@@ -57,7 +60,7 @@ services:
     # `external`: the edge terminates TLS for id.publicpress.co.uk and proxies
     # plain HTTP to the private listener below. start-from-init is idempotent:
     # it creates the database and login on first start and migrates after.
-    command: start-from-init --masterkeyFromEnv --tlsMode external
+    command: start-from-init --masterkeyFile /run/secrets/zitadel-masterkey --tlsMode external
     depends_on:
       db:
         condition: service_healthy
@@ -69,7 +72,6 @@ services:
       # The first start writes the service account's access token here.
       - /var/lib/branchleft/control-plane/zitadel-state:/state
     environment:
-      ZITADEL_MASTERKEY: ${CONTROL_PLANE_ZITADEL_MASTERKEY:?set CONTROL_PLANE_ZITADEL_MASTERKEY in /etc/branchleft/control-plane.env}
       ZITADEL_DATABASE_POSTGRES_HOST: db
       ZITADEL_DATABASE_POSTGRES_PORT: 5432
       ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
@@ -104,12 +106,17 @@ services:
       ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: 'false'
       # The Go runtime's soft ceiling, under the container's hard limit.
       GOMEMLIMIT: 512MiB
+    secrets:
+      - zitadel-masterkey
     healthcheck:
       test: ['CMD', '/app/zitadel', 'ready']
       interval: 15s
       timeout: 10s
       retries: 5
       start_period: 90s
+    # Raised so a host-wide out-of-memory kill takes this stack's containers
+    # before Nextcloud's, whose data is not rebuildable from configuration.
+    oom_score_adj: 500
     mem_limit: 640m
     cpu_shares: 768
 
@@ -147,6 +154,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+    # Raised so a host-wide out-of-memory kill takes this stack's containers
+    # before Nextcloud's, whose data is not rebuildable from configuration.
+    oom_score_adj: 500
     mem_limit: 256m
     cpu_shares: 256
 
@@ -184,6 +194,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+    # Raised so a host-wide out-of-memory kill takes this stack's containers
+    # before Nextcloud's, whose data is not rebuildable from configuration.
+    oom_score_adj: 500
     mem_limit: 256m
     cpu_shares: 256
 
@@ -192,6 +205,8 @@ services:
 # members of one portal role each, so the tenant-facing application cannot
 # assume the owner role.
 secrets:
+  zitadel-masterkey:
+    file: /etc/branchleft/control-plane/zitadel-masterkey
   identity-outputs:
     file: /etc/branchleft/control-plane/identity-outputs.json
   portal-database-url:
