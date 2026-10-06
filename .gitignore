@@ -22,7 +22,6 @@ Pulumi.*.yaml.bak
 .env
 __pycache__/
 
-graphify-out/
 
 # This repo tracks package-lock.json and CI runs `npm ci`; a pnpm install
 # here is a mistake, and its lockfile must not get committed.
