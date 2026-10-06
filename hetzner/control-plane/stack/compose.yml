@@ -1,0 +1,203 @@
+# The control-plane Compose stack, deployed as `control-plane` under
+# /opt/branchleft/control-plane on `ops1`: the sign-in service (Zitadel), its
+# PostgreSQL, the tenant portal and the owner console.
+#
+# A separate Compose project from `nextcloud1`, on purpose. Nothing here names a
+# Nextcloud service, volume or network, so deploying, restarting or removing
+# this stack cannot touch Nextcloud's data, and the reverse. The unit instance,
+# the env file and the volumes all follow this stack's own name.
+#
+# `${IMAGE}` is the applications' image (one image, two entry points), written
+# by /usr/local/sbin/branchleft-deploy and always a digest. Zitadel and
+# PostgreSQL are pinned by digest here because nothing writes those for us.
+#
+# The two applications sit behind the `apps` profile. They cannot start until
+# the identity reconciler has produced its outputs file and the database has
+# been provisioned, both of which need Zitadel and PostgreSQL already running.
+# The runbook starts `db` and `zitadel` alone first; the env file then sets
+# COMPOSE_PROFILES=apps, so every later unit start brings up all four.
+#
+# Published ports bind ops1's own private address (hetzner-host/addressPlan.ts's
+# HOST_IPS.ops1), never 0.0.0.0. 8301 and 8302 match sites.ts's privateUpstream
+# for the tenant portal and the owner console; the two must move together. The
+# sign-in service additionally binds loopback, because the owner recovery
+# command refuses any other address. PostgreSQL publishes nothing.
+#
+# No service mounts /var/run/docker.sock.
+#
+# Every service has a `mem_limit`: ops1 has no swap, and Nextcloud shares it.
+# hetzner/provision/test_control_plane_stack.py holds the sum of these limits
+# under the host's measured available memory with a margin.
+name: control-plane
+
+services:
+  db:
+    image: docker.io/library/postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${CONTROL_PLANE_DB_ADMIN_PASSWORD:?set CONTROL_PLANE_DB_ADMIN_PASSWORD in /etc/branchleft/control-plane.env}
+    # Small on purpose: three connection pools and Zitadel's, on a shared
+    # 4GB host. shared_buffers is a quarter of this container's limit.
+    command: ['postgres', '-c', 'shared_buffers=96MB', '-c', 'max_connections=60']
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d postgres']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    mem_limit: 512m
+    cpu_shares: 512
+
+  zitadel:
+    image: ghcr.io/zitadel/zitadel@sha256:90a3045b80a2b5b395e1e770302076906af3a5911225af7c464b4f3bd00d0a1b
+    restart: unless-stopped
+    # `external`: the edge terminates TLS for id.publicpress.co.uk and proxies
+    # plain HTTP to the private listener below. start-from-init is idempotent:
+    # it creates the database and login on first start and migrates after.
+    command: start-from-init --masterkeyFromEnv --tlsMode external
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - '10.20.1.50:8300:8080'
+      - '127.0.0.1:8300:8080'
+    volumes:
+      # Host directory, created by the runbook owned by the container's user.
+      # The first start writes the service account's access token here.
+      - /var/lib/branchleft/control-plane/zitadel-state:/state
+    environment:
+      ZITADEL_MASTERKEY: ${CONTROL_PLANE_ZITADEL_MASTERKEY:?set CONTROL_PLANE_ZITADEL_MASTERKEY in /etc/branchleft/control-plane.env}
+      ZITADEL_DATABASE_POSTGRES_HOST: db
+      ZITADEL_DATABASE_POSTGRES_PORT: 5432
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: ${CONTROL_PLANE_ZITADEL_DB_PASSWORD:?set CONTROL_PLANE_ZITADEL_DB_PASSWORD in /etc/branchleft/control-plane.env}
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: postgres
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${CONTROL_PLANE_DB_ADMIN_PASSWORD}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      # Fixed when the instance is first initialised, and not changeable
+      # afterwards without a new instance.
+      ZITADEL_EXTERNALDOMAIN: id.publicpress.co.uk
+      ZITADEL_EXTERNALPORT: 443
+      ZITADEL_EXTERNALSECURE: 'true'
+      ZITADEL_PORT: 8080
+      # Also read by the `ready` healthcheck below, which does not see the
+      # `--tlsMode external` flag and otherwise probes over https, so the
+      # container would never report healthy.
+      ZITADEL_TLS_ENABLED: 'false'
+      # The service account the reconciler signs in as, created by this first
+      # start rather than by hand. Its token lands in /state.
+      ZITADEL_FIRSTINSTANCE_PATPATH: /state/reconciler.pat
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: reconciler
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: reconciler
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: '2030-01-01T00:00:00Z'
+      # The first human administrator gets a generated password, never the
+      # vendor's published default, and must change it at first sign-in.
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: ${CONTROL_PLANE_ZITADEL_FIRST_ADMIN_USERNAME:?set CONTROL_PLANE_ZITADEL_FIRST_ADMIN_USERNAME in /etc/branchleft/control-plane.env}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${CONTROL_PLANE_ZITADEL_FIRST_ADMIN_PASSWORD:?set CONTROL_PLANE_ZITADEL_FIRST_ADMIN_PASSWORD in /etc/branchleft/control-plane.env}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: 'true'
+      # The bundled sign-in pages, so no second container is needed.
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: 'false'
+      # The Go runtime's soft ceiling, under the container's hard limit.
+      GOMEMLIMIT: 512MiB
+    healthcheck:
+      test: ['CMD', '/app/zitadel', 'ready']
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    mem_limit: 640m
+    cpu_shares: 768
+
+  portal:
+    image: ${IMAGE}
+    profiles: [apps]
+    restart: unless-stopped
+    command: ['node', 'dist/tenant/main.js']
+    depends_on:
+      db:
+        condition: service_healthy
+      zitadel:
+        condition: service_healthy
+    ports:
+      - '10.20.1.50:8301:8301'
+    environment:
+      PORT: '8301'
+      PORTAL_ISSUER_URL: https://id.publicpress.co.uk
+      PORTAL_PUBLIC_ORIGIN: https://portal.publicpress.co.uk
+      PORTAL_OUTPUTS_FILE: /run/secrets/identity-outputs
+      PORTAL_DATABASE_URL_FILE: /run/secrets/portal-database-url
+      NODE_OPTIONS: --max-old-space-size=192
+    secrets:
+      - identity-outputs
+      - portal-database-url
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8301/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    mem_limit: 256m
+    cpu_shares: 256
+
+  console:
+    image: ${IMAGE}
+    profiles: [apps]
+    restart: unless-stopped
+    command: ['node', 'dist/console/main.js']
+    depends_on:
+      db:
+        condition: service_healthy
+      zitadel:
+        condition: service_healthy
+    ports:
+      - '10.20.1.50:8302:8302'
+    environment:
+      PORT: '8302'
+      CONSOLE_ISSUER_URL: https://id.publicpress.co.uk
+      CONSOLE_PUBLIC_ORIGIN: https://console.branchleft.co.uk
+      CONSOLE_OUTPUTS_FILE: /run/secrets/identity-outputs
+      CONSOLE_DATABASE_URL_FILE: /run/secrets/console-database-url
+      NODE_OPTIONS: --max-old-space-size=192
+    secrets:
+      - identity-outputs
+      - console-database-url
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8302/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    mem_limit: 256m
+    cpu_shares: 256
+
+# Placed on the host by the runbook, root-owned, mode 0600 through 0640 as it
+# states; never committed. The two database URLs are for logins that are
+# members of one portal role each, so the tenant-facing application cannot
+# assume the owner role.
+secrets:
+  identity-outputs:
+    file: /etc/branchleft/control-plane/identity-outputs.json
+  portal-database-url:
+    file: /etc/branchleft/control-plane/portal-database-url
+  console-database-url:
+    file: /etc/branchleft/control-plane/console-database-url
+
+volumes:
+  db-data:
