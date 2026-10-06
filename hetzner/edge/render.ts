@@ -152,16 +152,28 @@ const PRIVATE_ADDRESSES: Record<string, string> = { ...HOST_IPS, ...APP_HOST_IPS
  * project, and networks do not span projects, so it has no address on the
  * plan this renderer resolves against. Named here anyway, because it is a
  * plausible thing to type and the message it earns says why rather than
- * `unknown upstream host`. `edge1` is this host, so naming it produces a proxy
- * loop that answers every request with a timeout after exhausting the
- * connection pool. Both are registry mistakes worth failing on rather than
- * rendering.
+ * `unknown upstream host`.
  */
-const NOT_AN_UPSTREAM = new Set(['mx1', 'edge1']);
+const NOT_AN_UPSTREAM = new Set(['mx1']);
+
+/**
+ * `edge1` is this host, so it is refused as an upstream except on the one
+ * port a service on this host is deliberately published for: the monitoring
+ * stack's pager. Any other port on its own address is the edge's own listener
+ * (a proxy loop) or an internal service (Grafana, Prometheus) that must not be
+ * exposed by a registry typo. Widening this is a decision, not a convenience.
+ */
+const EDGE_HOST = 'edge1';
+export const EDGE_HOST_ALLOWED_PORTS: ReadonlySet<number> = new Set([2586]);
 
 export function resolvePrivateAddress(host: string, port: number): string {
   if (NOT_AN_UPSTREAM.has(host)) {
     throw new Error(`${host} is not a backend this edge proxies to`);
+  }
+  if (host === EDGE_HOST && !EDGE_HOST_ALLOWED_PORTS.has(port)) {
+    throw new Error(
+      `${host}:${port} is not a backend this edge proxies to: only ${[...EDGE_HOST_ALLOWED_PORTS].join(', ')} is published on this host for it`
+    );
   }
   const address = PRIVATE_ADDRESSES[host];
   if (address === undefined) {

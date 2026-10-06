@@ -1,20 +1,7 @@
 /**
  * The page register: the single, committed list of what may page a phone.
- *
- * Adding an entry here is a decision, not a configuration change -- the
- * register exists to stay short, so it is reviewed by hand rather than
- * derived from anything else. `render.ts`'s `renderAlertmanagerTemplate`
- * renders the page route from this list and nothing else: a producer that
- * starts raising `severity: "page"` without an entry here must not reach a
- * phone by accident, and `findUnregisteredPageSeverityAlerts` below is what
- * makes that a build failure rather than a silent gap.
- *
- * Alerts group on the cause, not the entry -- the page route's `group_by`
- * is the `tenant` label, deliberately not `alertname`, so two different
- * entries firing for the same tenant collapse into one notification. An
- * entry with no tenant of its own (the estate-wide ones) still has a
- * `tenant` label of the empty string, which groups those alerts with each
- * other the same way.
+ * Adding an entry is a decision, not a configuration change. The reasoning,
+ * and why alerts group on the cause, is in `pageRegister.md`.
  */
 
 export type PageRegisterDeliveryPath = 'alertmanager' | 'healthchecks';
@@ -109,11 +96,25 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
   },
 ] as const;
 
-/** The name Alertmanager route-tree tests and CI's `amtool` step verify
- * against. ALL CAPS and `_TBD` on purpose: no supplier has been chosen for
- * this receiver, and this name must not be mistaken for a real one -- see
- * `renderPageReceiverBlock` below and `RUNBOOK-monitoring.md`. */
-export const PAGE_RECEIVER_NAME = 'PAGE_RECEIVER_TBD';
+/** The receiver Alertmanager route-tree tests and CI's `amtool` step verify
+ * against: the self-hosted ntfy instance in this stack. */
+export const PAGE_RECEIVER_NAME = 'ntfy-page';
+
+/** The one topic pages are published to. Not a secret: the instance denies
+ * all access by default, so knowing the name grants nothing -- only the
+ * publisher token and the owner's login can write or read it. */
+export const NTFY_PAGE_TOPIC = 'branchleft-pages';
+
+/** Where Alertmanager reaches ntfy: the Compose service name on the stack's
+ * own network, never the public hostname, so a page does not depend on the
+ * edge or on DNS. `priority=5` is ntfy's maximum, the level that bypasses
+ * do-not-disturb on the phone. `template=alertmanager` is ntfy's built-in
+ * reader of Alertmanager's webhook payload. */
+export const NTFY_PAGE_URL = `http://ntfy:80/${NTFY_PAGE_TOPIC}?template=alertmanager&priority=5&tags=rotating_light`;
+
+/** The placeholder `render_alertmanager_config.py` fills with the
+ * publisher's access token on the host. */
+export const NTFY_PAGER_TOKEN_PLACEHOLDER = '__NTFY_PAGER_TOKEN__';
 
 /** The alertnames the page route actually matches: every entry that (a)
  * routes through Alertmanager and (b) is not dormant, in register order.
@@ -146,35 +147,26 @@ export function renderPageRoute(register: readonly PageRegisterEntry[]): string 
 }
 
 /**
- * The placeholder receiver block. No `*_configs` at all -- an Alertmanager
- * receiver with none is valid config and accepts every alert routed to it
- * silently, rather than refusing to start, which is what lets CI validate
- * this route before a supplier is chosen. Never add a real integration here
- * without renaming the receiver away from `_TBD`: the name is the signal
- * that nothing sent here today reaches anyone.
+ * The page receiver: a webhook to the stack's own ntfy, authenticated with
+ * the publisher's bearer token. `send_resolved: false` -- a page that clears
+ * itself is not a second page.
  */
 export function renderPageReceiverBlock(): string {
   return [
     `  - name: ${PAGE_RECEIVER_NAME}`,
-    '    # No supplier chosen for this receiver yet -- see RUNBOOK-monitoring.md.',
-    '    # An empty receiver is valid Alertmanager config: every alert routed',
-    '    # here is accepted and dropped, not refused, so this route validates',
-    '    # in CI without paging anyone.',
+    '    webhook_configs:',
+    `      - url: '${NTFY_PAGE_URL}'`,
+    '        send_resolved: false',
+    '        http_config:',
+    '          authorization:',
+    '            type: Bearer',
+    `            credentials: '${NTFY_PAGER_TOKEN_PLACEHOLDER}'`,
   ].join('\n');
 }
 
 /**
- * The metric-crosscheck discipline applied to severity, not to a metric
- * name: every `alert:` block in `rulesYamlText` that carries `severity:
- * page` must name an alertname `pageAlertNames(register)` already covers,
- * or the route rendered from the register can never have been reachable by
- * it in the first place -- a producer that raises `severity: page` under an
- * alertname the register does not know is a page with nowhere to go, not a
- * page that reaches a phone by some other, unaudited route.
- *
- * A small hand-rolled reader over the rendered YAML text, matching
- * `metricCrosscheck.ts`'s own reasoning for not taking a YAML dependency:
- * the shape read here is exactly the shape `renderAlertRules` produces.
+ * Every `alert:` block carrying `severity: page` must name an alertname the
+ * register covers. The reasoning is in `pageRegister.md`.
  */
 export function findUnregisteredPageSeverityAlerts(
   rulesYamlText: string,

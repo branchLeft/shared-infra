@@ -7,7 +7,9 @@ provisioning scripts in this repo are tested (e.g.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import os
 import pathlib
 import stat
@@ -30,6 +32,10 @@ TEMPLATE = (
     "ping: '__HEALTHCHECKS_PING_URL__'\n"
     "to: '__ALERT_RECIPIENT_EMAIL__'\n"
     "mailhost_ping: '__MAILHOST_PING_URL__'\n"
+    "pager: '__NTFY_PAGER_TOKEN__'\n"
+    "watcher: '__NTFY_WATCHER_TOKEN__'\n"
+    "owner: '__NTFY_OWNER_PASSWORD_HASH__'\n"
+    "machine: '__NTFY_MACHINE_PASSWORD_HASH__'\n"
 )
 
 FULL_ENV = {
@@ -38,6 +44,10 @@ FULL_ENV = {
     "HEALTHCHECKS_PING_URL": "https://hc-ping.com/deadbeef",
     "ALERT_RECIPIENT_EMAIL": "ops@branchleft.co.uk",
     "MAILHOST_PING_URL": "https://hc-ping.com/deadbeef/fail",
+    "NTFY_PAGER_TOKEN": "tk_" + "a" * 29,
+    "NTFY_WATCHER_TOKEN": "tk_" + "b" * 29,
+    "NTFY_OWNER_PASSWORD_HASH": "$2a$10$" + "O" * 53,
+    "NTFY_MACHINE_PASSWORD_HASH": "$2a$10$" + "M" * 53,
 }
 
 
@@ -53,7 +63,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("https://hc-ping.com/deadbeef/fail", rendered)
 
     def test_refuses_each_missing_variable_in_turn(self) -> None:
-        for missing in FULL_ENV:
+        for missing in (k for k in FULL_ENV if not k.startswith("NTFY_")):
             env = {k: v for k, v in FULL_ENV.items() if k != missing}
             with self.assertRaises(ValueError) as ctx:
                 render(TEMPLATE, env)
@@ -86,27 +96,160 @@ class RenderTests(unittest.TestCase):
 
 
 
+class NtfyCredentialTests(unittest.TestCase):
+    """The pager is optional: a missing or malformed credential disables it
+    with a warning and never stops the rest of monitoring.
+
+    Stopping the whole stack for a pager problem would take email alerting
+    down with it, so each problem is reported by variable name and the pager's
+    own config is locked instead.
+    """
+
+    def test_substitutes_all_four_ntfy_credentials(self) -> None:
+        rendered = render(TEMPLATE, FULL_ENV)
+        for var in render_alertmanager_config.NTFY_PLACEHOLDERS.values():
+            self.assertIn(FULL_ENV[var], rendered)
+        self.assertEqual(render_alertmanager_config.ntfy_problems(FULL_ENV), [])
+
+    def test_a_missing_credential_never_raises_and_disables_every_ntfy_placeholder(self) -> None:
+        for var in render_alertmanager_config.NTFY_PLACEHOLDERS.values():
+            env = {k: v for k, v in FULL_ENV.items() if k != var}
+            rendered = render(TEMPLATE, env)
+            self.assertNotIn("__NTFY_", rendered)
+            self.assertIn(render_alertmanager_config.NTFY_DISABLED_VALUE, rendered)
+            for other in render_alertmanager_config.NTFY_PLACEHOLDERS.values():
+                if other != var:
+                    self.assertNotIn(FULL_ENV[other], rendered)
+            problems = render_alertmanager_config.ntfy_problems(env)
+            self.assertEqual(len(problems), 1)
+            self.assertIn(var, problems[0])
+
+    def test_a_malformed_token_or_hash_disables_the_pager_without_echoing_it(self) -> None:
+        cases = {
+            "NTFY_PAGER_TOKEN": ["", "tk_short", "tk_" + "A" * 29, "tk_" + "a" * 30, "x_" + "a" * 29],
+            "NTFY_WATCHER_TOKEN": ["tk_" + "a" * 28 + "-"],
+            "NTFY_OWNER_PASSWORD_HASH": ["plaintext-owner-pw", "$2a$10$tooshort", "!"],
+            "NTFY_MACHINE_PASSWORD_HASH": ["hunter2-plaintext"],
+        }
+        for var, bads in cases.items():
+            for bad in bads:
+                env = dict(FULL_ENV, **{var: bad})
+                problems = render_alertmanager_config.ntfy_problems(env)
+                self.assertTrue(problems, msg=f"{var}={bad!r}")
+                self.assertIn(var, " ".join(problems))
+                if bad:
+                    self.assertNotIn(bad, " ".join(problems))
+                    self.assertNotIn(bad, render(TEMPLATE, env))
+
+    def test_two_publishers_sharing_one_token_disables_the_pager(self) -> None:
+        env = dict(FULL_ENV, NTFY_WATCHER_TOKEN=FULL_ENV["NTFY_PAGER_TOKEN"])
+        self.assertTrue(render_alertmanager_config.ntfy_problems(env))
+
+    def test_machine_users_sharing_the_owner_hash_disables_the_pager(self) -> None:
+        env = dict(FULL_ENV, NTFY_MACHINE_PASSWORD_HASH=FULL_ENV["NTFY_OWNER_PASSWORD_HASH"])
+        self.assertTrue(render_alertmanager_config.ntfy_problems(env))
+
+    def test_the_locked_config_keeps_deny_all_and_drops_every_user_grant_and_token(self) -> None:
+        template = (
+            pathlib.Path(MODULE_PATH).parent / "ntfy" / "server.yml.tmpl"
+        ).read_text(encoding="utf-8")
+        locked = render_alertmanager_config.lock_ntfy_config(template)
+        self.assertIn("auth-default-access: deny-all", locked)
+        self.assertIn("auth-file:", locked)
+        for key in ("auth-users:", "auth-access:", "auth-tokens:", "__NTFY_", "write-only"):
+            self.assertNotIn(key, locked)
+        active = "\n".join(l for l in locked.split("\n") if not l.lstrip().startswith("#"))
+        self.assertNotIn("upstream-base-url", active)
+
+
+class NtfyOutputTests(unittest.TestCase):
+    def test_writes_server_yml_0600_beside_its_template_with_no_chown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            (directory / "alertmanager").mkdir()
+            (directory / "ntfy").mkdir()
+            (directory / "alertmanager" / render_alertmanager_config.TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            (directory / "ntfy" / render_alertmanager_config.NTFY_TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            with mock.patch.object(
+                render_alertmanager_config, "__file__", str(directory / "render.py")
+            ), mock.patch.dict(os.environ, FULL_ENV, clear=False), mock.patch.object(
+                os, "geteuid", return_value=0
+            ), mock.patch.object(os, "chown") as chown:
+                self.assertEqual(render_alertmanager_config.main([]), 0)
+            output = (directory / "ntfy" / render_alertmanager_config.NTFY_OUTPUT_NAME).resolve()
+            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+            self.assertIn(FULL_ENV["NTFY_PAGER_TOKEN"], output.read_text(encoding="utf-8"))
+            chowned = [call.args[0] for call in chown.call_args_list]
+            self.assertNotIn(output, chowned)
+
+    def test_clears_the_empty_directory_docker_leaves_at_the_mount_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            (directory / "alertmanager").mkdir()
+            (directory / "ntfy" / "server.yml").mkdir(parents=True)
+            (directory / "alertmanager" / render_alertmanager_config.TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            (directory / "ntfy" / render_alertmanager_config.NTFY_TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            with mock.patch.object(
+                render_alertmanager_config, "__file__", str(directory / "render.py")
+            ), mock.patch.dict(os.environ, FULL_ENV, clear=False):
+                self.assertEqual(render_alertmanager_config.main([]), 0)
+            self.assertTrue((directory / "ntfy" / "server.yml").is_file())
+
+    def test_main_with_no_ntfy_secrets_still_succeeds_warns_and_writes_a_locked_config(
+        self,
+    ) -> None:
+        ntfy_template = (
+            pathlib.Path(MODULE_PATH).parent / "ntfy" / "server.yml.tmpl"
+        ).read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            (directory / "alertmanager").mkdir()
+            (directory / "ntfy").mkdir()
+            (directory / "alertmanager" / render_alertmanager_config.TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            (directory / "ntfy" / render_alertmanager_config.NTFY_TEMPLATE_NAME).write_text(
+                ntfy_template, encoding="utf-8"
+            )
+            env = {k: v for k, v in FULL_ENV.items() if not k.startswith("NTFY_")}
+            stderr = io.StringIO()
+            with mock.patch.object(
+                render_alertmanager_config, "__file__", str(directory / "render.py")
+            ), mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stderr(stderr):
+                self.assertEqual(render_alertmanager_config.main([]), 0)
+            self.assertIn("DISABLED", stderr.getvalue())
+            self.assertIn("NTFY_PAGER_TOKEN is not set", stderr.getvalue())
+            alertmanager = directory / "alertmanager" / render_alertmanager_config.OUTPUT_NAME
+            self.assertTrue(alertmanager.exists())
+            self.assertIn(FULL_ENV["SMTP_PASSWORD"], alertmanager.read_text(encoding="utf-8"))
+            ntfy = (directory / "ntfy" / "server.yml").read_text(encoding="utf-8")
+            self.assertIn("auth-default-access: deny-all", ntfy)
+            self.assertNotIn("auth-tokens", ntfy)
+            self.assertNotIn("__NTFY_", ntfy)
+
+
 class OutputPermissionsTests(unittest.TestCase):
-    """The rendered file must be readable by the process it exists for.
-
-    Alertmanager reads it through a bind mount, which is read as the
-    container-side user (`nobody`) regardless of who wrote the file on the host.
-    A root-owned 0600 file is unreadable to it, and Alertmanager exits with
-    `error loading configuration file: ... permission denied` on every start --
-    while the unit still reports success, because `docker compose up -d --wait`
-    does not catch a container that starts and then dies.
-
-    So the mode must stay 0600 -- the file holds an SMTP password in plaintext,
-    and 0644 would expose it to every other account on the host, including the
-    CI deploy account -- *and* ownership must move to that uid. Both halves are
-    asserted, because either alone leaves the file unreadable or the password
-    over-exposed.
+    """The rendered file must be readable by the process it exists for, and
+    no one else: mode 0600 and the container's uid. Why both halves are
+    asserted is in `stack/render_alertmanager_config.md`.
     """
 
     def _render_into(self, directory: pathlib.Path) -> pathlib.Path:
         """Run `main()` with the module rooted at `directory`."""
         (directory / "alertmanager").mkdir()
+        (directory / "ntfy").mkdir()
         (directory / "alertmanager" / render_alertmanager_config.TEMPLATE_NAME).write_text(
+            TEMPLATE, encoding="utf-8"
+        )
+        (directory / "ntfy" / render_alertmanager_config.NTFY_TEMPLATE_NAME).write_text(
             TEMPLATE, encoding="utf-8"
         )
         with mock.patch.object(
@@ -241,7 +384,11 @@ class PrometheusPasswordTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             directory = pathlib.Path(tmp)
             (directory / "alertmanager").mkdir()
+            (directory / "ntfy").mkdir()
             (directory / "alertmanager" / render_alertmanager_config.TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            (directory / "ntfy" / render_alertmanager_config.NTFY_TEMPLATE_NAME).write_text(
                 TEMPLATE, encoding="utf-8"
             )
             env = dict(FULL_ENV)

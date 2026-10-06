@@ -1,6 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
+  NTFY_PAGE_TOPIC,
+  NTFY_PAGE_URL,
+  NTFY_PAGER_TOKEN_PLACEHOLDER,
   PAGE_REGISTER,
   PAGE_RECEIVER_NAME,
   findUnregisteredPageSeverityAlerts,
@@ -134,10 +140,105 @@ describe('renderPageRoute', () => {
 });
 
 describe('renderPageReceiverBlock', () => {
-  it('names the placeholder receiver and carries no *_configs -- no supplier chosen yet', () => {
+  it('is a webhook to the stack-internal ntfy, never the public hostname', () => {
     const block = renderPageReceiverBlock();
     expect(block).toContain(`name: ${PAGE_RECEIVER_NAME}`);
-    expect(block).not.toContain('_configs');
+    expect(block).toContain('webhook_configs:');
+    expect(block).toContain(`url: '${NTFY_PAGE_URL}'`);
+    expect(NTFY_PAGE_URL.startsWith('http://ntfy:80/')).toBe(true);
+    expect(NTFY_PAGE_URL).toContain(`/${NTFY_PAGE_TOPIC}?`);
+    expect(NTFY_PAGE_URL).toContain('template=alertmanager');
+    expect(NTFY_PAGE_URL).toContain('priority=5');
+  });
+
+  it('authenticates with the publisher token placeholder and carries no literal credential', () => {
+    const block = renderPageReceiverBlock();
+    expect(block).toContain('type: Bearer');
+    expect(block).toContain(`credentials: '${NTFY_PAGER_TOKEN_PLACEHOLDER}'`);
+    expect(block).not.toMatch(/tk_[a-z0-9]{29}/);
+  });
+
+  it('does not send a resolved notice -- a page that clears itself is not a second page', () => {
+    expect(renderPageReceiverBlock()).toContain('send_resolved: false');
+  });
+
+  it('is no longer the placeholder receiver', () => {
+    expect(PAGE_RECEIVER_NAME).not.toMatch(/TBD/);
+    expect(renderAlertmanagerTemplate()).not.toContain('PAGE_RECEIVER_TBD');
+  });
+});
+
+describe('the ntfy server config', () => {
+  const template = readFileSync(join(__dirname, 'stack', 'ntfy', 'server.yml.tmpl'), 'utf8');
+  const active = template
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n');
+
+  it('denies all access by default and has signup off', () => {
+    expect(active).toMatch(/^auth-default-access: deny-all$/m);
+    expect(active).toMatch(/^enable-signup: false$/m);
+    expect(active).toMatch(/^auth-file: /m);
+  });
+
+  it('never sets upstream-base-url, so no message is relayed to a third-party server', () => {
+    expect(active).not.toMatch(/upstream-base-url/);
+  });
+
+  it('grants the two publishers write-only and the owner read-only, on the one topic', () => {
+    expect(active).toContain(`'alertmanager:${NTFY_PAGE_TOPIC}:write-only'`);
+    expect(active).toContain(`'watcher:${NTFY_PAGE_TOPIC}:write-only'`);
+    expect(active).toContain(`'owner:${NTFY_PAGE_TOPIC}:read-only'`);
+    const grants = active.match(/^\s+- '[a-z]+:[^:']+:(read-only|write-only|read-write)'$/gm) ?? [];
+    expect(grants).toHaveLength(3);
+  });
+
+  it('commits only placeholders for every secret', () => {
+    expect(active).not.toMatch(/tk_[a-z0-9]{29}/);
+    expect(active).not.toMatch(/\$2[aby]\$/);
+    for (const token of [
+      '__NTFY_PAGER_TOKEN__',
+      '__NTFY_WATCHER_TOKEN__',
+      '__NTFY_OWNER_PASSWORD_HASH__',
+      '__NTFY_MACHINE_PASSWORD_HASH__',
+    ]) {
+      expect(active).toContain(token);
+    }
+  });
+
+  it('serves behind the edge on the public hostname the registry names', () => {
+    expect(active).toMatch(/^base-url: https:\/\/ntfy\.branchleft\.co\.uk$/m);
+    expect(active).toMatch(/^behind-proxy: true$/m);
+  });
+});
+
+describe('every critical alert pages the phone', () => {
+  const rendered = renderAlertmanagerTemplate();
+  const criticalRoute =
+    '        - severity = "critical"\n      receiver: ntfy-page\n      continue: true';
+
+  it('routes severity=critical to ntfy-page and continues to the later routes', () => {
+    expect(rendered).toContain(criticalRoute);
+  });
+
+  it('keeps the off-host email for criticals, but never for the mail pair or on-host alerts', () => {
+    expect(rendered).toContain(
+      '        - severity = "critical"\n' +
+        '        - alertname !~ "^(MailHostDown|AlertEmailDeliveryFailing)$"\n' +
+        '        - notify != "on-host"\n' +
+        '      receiver: email'
+    );
+  });
+
+  it('puts the critical route after Watchdog and before every route that stops the walk', () => {
+    const at = (needle: string) => rendered.indexOf(needle);
+    expect(at('alertname = "Watchdog"')).toBeLessThan(at(criticalRoute));
+    expect(at(criticalRoute)).toBeLessThan(at('notify = "on-host"'));
+    expect(at(criticalRoute)).toBeLessThan(at('receiver: mailhost-deadman'));
+  });
+
+  it('does not page for warnings', () => {
+    expect(rendered).not.toContain('severity = "warning"\n      receiver: ntfy-page');
   });
 });
 

@@ -7,7 +7,8 @@
 # `docker ps`, the digest is what actually gets pulled.
 #
 # `render_alertmanager_config.py` must have already written `alertmanager.yml`
-# from `alertmanager.yml.tmpl` before `alertmanager` starts -- the systemd
+# from `alertmanager.yml.tmpl` (and `ntfy/server.yml` from its `.tmpl`) before
+# `alertmanager` and `ntfy` start -- the systemd
 # drop-in in `../systemd/monitoring.override.conf` runs it as an
 # `ExecStartPre`, so a plain `docker compose up` run by hand needs it run
 # first too. See RUNBOOK-monitoring.md.
@@ -102,6 +103,41 @@ services:
       start_period: 30s
     mem_limit: 128m
     # Second-highest: the other half of "still evaluate and dispatch".
+    cpu_shares: 512
+
+  # The one pager for the owner's phone. Alertmanager publishes to it over this
+  # stack's own network (see pageRegister.ts) and the phone subscribes through
+  # the edge at the hostname registered in sites.ts, which proxies to the
+  # private-address port below. Deliberately no `depends_on` from
+  # alertmanager: a dead pager must not stop the email route from alerting.
+  #
+  # `server.yml` is rendered beside its `.tmpl` by render_alertmanager_config.py
+  # (it carries the access tokens and a password hash) and is root-owned 0600;
+  # ntfy runs as root in its container, so nothing else on the host reads it.
+  # Everything the container does not need is dropped: no capabilities, a
+  # read-only root filesystem, writable state only in the volume and /tmp.
+  ntfy:
+    image: docker.io/binwiederhier/ntfy:v2.28.0@sha256:6ef4b819f722fccdc036af611c4774cfdc2de821ab74fdd48bbf4c9d6f8973da
+    restart: unless-stopped
+    command: [serve]
+    ports:
+      - '10.20.1.10:2586:80'
+    volumes:
+      - ./ntfy/server.yml:/etc/ntfy/server.yml:ro
+      - ntfy-data:/var/lib/ntfy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:80/v1/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    mem_limit: 128m
     cpu_shares: 512
 
   grafana:
@@ -204,3 +240,4 @@ volumes:
   prometheus-data:
   alertmanager-data:
   grafana-data:
+  ntfy-data:

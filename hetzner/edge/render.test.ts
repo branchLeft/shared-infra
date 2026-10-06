@@ -20,6 +20,7 @@ import {
   renderAppsecAcquisition,
   renderCaddyfile,
   renderCaddyLogAcquisition,
+  EDGE_HOST_ALLOWED_PORTS,
   resolvePrivateAddress,
   servableSites,
   staticSiteCsp,
@@ -76,6 +77,20 @@ describe('resolvePrivateAddress', () => {
 
   it('refuses the mail host, which this edge never fronts', () => {
     expect(() => resolvePrivateAddress('mx1', 443)).toThrow(/not a backend this edge proxies to/);
+  });
+
+  it.each([80, 443, 3000, 9090, 9093, 2587, 25860])(
+    'refuses edge1 on port %s: only the pager port is published for the edge',
+    (port) => {
+      expect(() => resolvePrivateAddress('edge1', port)).toThrow(
+        /not a backend this edge proxies to/
+      );
+    }
+  );
+
+  it('allows edge1 only on the pager port', () => {
+    expect([...EDGE_HOST_ALLOWED_PORTS]).toEqual([2586]);
+    expect(resolvePrivateAddress('edge1', 2586)).toBe('10.20.1.10:2586');
   });
 
   it.each([0, -1, 65536, 1.5, Number.NaN])('refuses port %s', (port) => {
