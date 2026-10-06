@@ -75,6 +75,8 @@ scrape_configs:
           - https://blog.branchleft.co.uk
           - https://cloud.branchleft.co.uk
           - https://book.branchleft.co.uk
+          - https://portal.publicpress.co.uk
+          - https://console.branchleft.co.uk
         labels: {host: edge1, expected_up: 'true'}
     relabel_configs:
       - source_labels: [__address__]
