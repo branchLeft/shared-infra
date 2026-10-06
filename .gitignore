@@ -22,7 +22,6 @@ Pulumi.*.yaml.bak
 .env
 __pycache__/
 
-graphify-out/
 
 # This repo tracks package-lock.json and CI runs `npm ci`; a pnpm install
 # here is a mistake, and its lockfile must not get committed.
@@ -43,4 +42,5 @@ pnpm-workspace.yaml
 # ever committed. The committed inputs are alertmanager.yml.tmpl and
 # prometheus.yml, which carry placeholders and a file path respectively.
 /hetzner/monitoring/stack/alertmanager/alertmanager.yml
+/hetzner/monitoring/stack/ntfy/server.yml
 /hetzner/monitoring/stack/prometheus/mx1-metrics-password

@@ -195,7 +195,7 @@ spending the very reputation these rules watch.
 
 Alertmanager's config template. `__SMTP_USERNAME__`, `__SMTP_PASSWORD__`,
 `__HEALTHCHECKS_PING_URL__`, `__ALERT_RECIPIENT_EMAIL__` and
-`__MAILHOST_PING_URL__` are substituted by
+`__MAILHOST_PING_URL__`, with `__NTFY_PAGER_TOKEN__` in the page receiver, are substituted by
 `stack/render_alertmanager_config.py` from `/etc/branchleft/monitoring.env`
 before every start -- see that script's docstring for why this file cannot
 just read the environment itself.

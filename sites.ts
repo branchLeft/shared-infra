@@ -1,40 +1,11 @@
 import type { EdgeSite, HostRedirect, StaticSite } from './siteTypes';
 
 /**
- * The site registry — everything this load balancer serves.
+ * The site registry: everything the Hetzner edge serves. Hostnames and service
+ * addressing only; nothing else about a site belongs in this file.
  *
- * **Hostnames and service addressing only.** Nothing else about a site belongs
- * in this file: no member counts, no commercial terms, no contact details, no
- * personal data. A site appears here only if whoever it belongs to is content
- * to be served from a hostname anyone can read, and the entry says nothing
- * about them beyond the hostname itself.
- *
- * ## One edge reads this file now
- *
- * `hetzner/edge/render.ts` derives the Caddy and CrowdSec configuration for
- * the Hetzner edge VM from these entries; `hetzner/monitoring/render.ts`
- * derives blackbox probe targets from them too. A second edge used to read
- * it — `edge.ts` declared a GCP load balancer from the same registry — until
- * the GCP estate was destroyed and that program was deleted once it
- * described infrastructure that no longer existed.
- *
- * `cloudRunService` and `region` below are what `edge.ts` used to read; no
- * code reads them any more. They are left on existing entries rather than
- * stripped as part of that deletion — pruning them, and the GCP-specific
- * onboarding steps that used to follow this comment, is its own pass, not a
- * side effect of removing the program that read them.
- *
- * ## Onboarding a site to the Hetzner edge
- *
- * One entry with a `privateUpstream` — see that type's own doc comment in
- * `siteTypes.ts` for what it needs, and `hetzner/edge/render.ts` for how the
- * renderer turns it into a Caddy site block. There is no GCP-side step any
- * more.
- *
- * A hostname with nowhere to proxy to -- a fixed page the edge answers
- * itself -- is a `StaticSite` in `staticSites` below instead, never an
- * `EdgeSite` with `privateUpstream` left out: that combination already means
- * "not rendered at all" here.
+ * What the registry may hold, which renderers read it, why `cloudRunService`
+ * and `region` linger, and how to onboard a site: see `sites.md`.
  */
 export const sites: EdgeSite[] = [
   {
@@ -61,20 +32,8 @@ export const sites: EdgeSite[] = [
     // than stripped as a side effect of that deletion; pruning it is its
     // own pass.
     cloudRunService: 'ghost-tenant-blog',
-    //
-    // Both values below belong to the tenant's own stack and neither is chosen
-    // here. They are read differently, which matters when copying them:
-    //
-    //   port    -- `blog-infra:hostPort` in that repo's Pulumi.<slug>.yaml.
-    //              It is NOT a stack output; `pulumi stack output hostPort`
-    //              returns nothing. Read the config.
-    //   ceiling -- `pulumi stack output edgeRequestBodyMaxSize`, derived in
-    //              the tenant component as half the container's tmpfs ceiling.
-    //
-    // The copy into this file is an unchecked transcription, so the two can
-    // drift: if this tenant ever sets `uploadCeilingMib`, the output moves and
-    // this line does not, and the edge then admits more than the container can
-    // hold. Nothing compares them -- re-read both on any change to either.
+    // Port and ceiling both belong to the tenant's own stack and are copied
+    // here by hand: see "Copying a tenant's port and ceiling" in `sites.md`.
     privateUpstream: { host: 'app1', port: 8101 },
     requestBodyMaxSize: '64MiB',
     // Ghost-backed: its admin API carries author-written HTML and code, which
@@ -110,6 +69,42 @@ export const sites: EdgeSite[] = [
     // Calendar/Talk attachments and avatars, not general file sync. Raise
     // deliberately if a real bulk-upload use case shows up.
     requestBodyMaxSize: '100MiB',
+  },
+
+  {
+    // The platform's customer-facing sign-in surface. The hostname is a
+    // ruling (portal.publicpress.co.uk), not a choice made here.
+    name: 'tenant-portal',
+    hostnames: ['portal.publicpress.co.uk'],
+    // Upstream port is the tenant portal's `PORT` on ops1; its compose file
+    // must publish this value on ops1's private address, and the two move
+    // together. The application defaults to 8080, which both portal apps
+    // would share, so each is given its own number there.
+    privateUpstream: { host: 'ops1', port: 8301 },
+    // Form posts at sign-in and sign-out only; no upload surface exists.
+    requestBodyMaxSize: '1MiB',
+  },
+
+  {
+    // Staff-only, but reachable like any other site: the sign-in gate is the
+    // application's, not a network ACL. Hostname is a ruling.
+    name: 'owner-console',
+    hostnames: ['console.branchleft.co.uk'],
+    // The owner console's `PORT` on ops1; see the tenant-portal entry.
+    privateUpstream: { host: 'ops1', port: 8302 },
+    requestBodyMaxSize: '1MiB',
+  },
+
+  {
+    // The owner's pager. Subscribers reach it here over TLS; publishers
+    // inside the estate use the monitoring stack's own network instead. Auth
+    // is on and anonymous access is denied by the instance itself, so this
+    // entry exposes a login wall, not a topic.
+    name: 'ntfy',
+    hostnames: ['ntfy.branchleft.co.uk'],
+    privateUpstream: { host: 'edge1', port: 2586 },
+    // A page and a subscription request are a few hundred bytes.
+    requestBodyMaxSize: '64KiB',
   },
 ];
 

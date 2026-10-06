@@ -67,6 +67,21 @@ describe('blackboxTargets', () => {
   });
 });
 
+describe("the pager's own liveness", () => {
+  it('is probed from outside by the same external probe every public hostname gets', () => {
+    expect(blackboxTargets(sites)).toContain('https://ntfy.branchleft.co.uk');
+    expect(renderPrometheusConfig(sites)).toContain('https://ntfy.branchleft.co.uk');
+  });
+
+  it('pages by another path when it is dead: BlackboxProbeFailed is critical and routes to email, not to ntfy', () => {
+    const rules = renderAlertRules();
+    expect(rules).toMatch(
+      /alert: BlackboxProbeFailed\n\s+expr: probe_success\{job!="blackbox_mail"\} == 0/
+    );
+    expect(rules).toMatch(/alert: BlackboxProbeFailed[\s\S]*?severity: critical/);
+  });
+});
+
 describe('the rendered Prometheus config', () => {
   it('names every estate host membership, address-plan-derived rather than typed twice', () => {
     expect(MONITORED_NODE_HOSTS.map((host) => host.name)).toEqual(['edge1', 'app1', 'db1', 'ops1']);
