@@ -489,6 +489,22 @@ half of the contract it falls under. Deploying a new image to one of these means
 editing the committed digest and re-copying `stack/`, not calling
 `branchleft-deploy`.
 
+### The `control-plane` stack
+
+`hetzner/control-plane/stack/compose.yml` runs the sign-in service (Zitadel), its
+PostgreSQL, the tenant portal and the owner console on `ops1`, as its own
+Compose project beside `nextcloud1`: nothing in it names a Nextcloud service,
+volume or network. It is an `${IMAGE}` stack (one applications image, two entry
+points) with the two applications behind the `apps` profile, because they cannot
+start until the identity reconciler has run against a running Zitadel. Every
+container has a `mem_limit`, and `provision/test_control_plane_stack.py` holds
+their sum under the host's measured available memory with a margin.
+PostgreSQL's `pg_hba.conf` is mounted beside the Compose file and selected at
+start: each login reaches only its own database, with `scram-sha-256` and a
+final `reject`, pinned by the same test file. The
+delivery procedure is in the private `branchLeft/ghost-platform-docs`
+repository.
+
 ### Which instances the health-wait contract actually reaches
 
 `--wait` is a deploy signal only for a service that declares a `healthcheck:`.
@@ -508,6 +524,7 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | `branchleft-compose@edge`                                  | here, `hetzner/edge/stack/`                                                  | yes               |
 | `branchleft-compose@monitoring`                            | here, `hetzner/monitoring/stack/`                                            | yes               |
 | `branchleft-compose@nextcloud1`                            | here, `hetzner/nextcloud1/stack/`                                            | yes               |
+| `branchleft-compose@control-plane`                         | here, `hetzner/control-plane/stack/`                                         | yes               |
 | `branchleft-compose@website`                               | `branchLeft/website`, `deploy/compose.yml`                                   | no                |
 | `branchleft-compose@db`                                    | `branchLeft/ghost-platform`, `db/stack/compose.yml`                          | no                |
 | `branchleft-compose@blog`, and one per further tenant slug | nowhere: rendered by `branchLeft/ghost-platform`'s `infra/tenant/compose.ts` | no                |

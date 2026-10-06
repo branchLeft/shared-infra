@@ -78,6 +78,7 @@ EXPECTED_SERVICES: dict[str, set[str]] = {
         "ntfy",
     },
     "nextcloud1": {"app", "db", "redis"},
+    "control-plane": {"db", "zitadel", "portal", "console"},
 }
 
 # The stacks every assertion above is about: exactly the ones whose Compose file

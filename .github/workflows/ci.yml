@@ -636,6 +636,32 @@ jobs:
           NEXTCLOUD_ADMIN_PASSWORD: validation-only
         run: docker compose -f hetzner/nextcloud1/stack/compose.yml config -q
 
+  control-plane-config-validate:
+    name: Validate (control-plane stack config)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Same reasoning as nextcloud1-config-validate above: a hand-delivered
+    # Compose stack, so this gates review rather than any apply. It resolves
+    # the file twice, because the two applications sit behind a profile and a
+    # bad value in them would pass a check that never enabled it.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the Compose file resolves, with and without the applications
+        env:
+          IMAGE: ghcr.io/branchleft/portal-apps@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          CONTROL_PLANE_DB_ADMIN_PASSWORD: validation-only
+          CONTROL_PLANE_ZITADEL_DB_PASSWORD: validation-only
+          CONTROL_PLANE_ZITADEL_MASTERKEY: validation-only
+          CONTROL_PLANE_ZITADEL_FIRST_ADMIN_USERNAME: validation-only
+          CONTROL_PLANE_ZITADEL_FIRST_ADMIN_PASSWORD: validation-only
+        run: |
+          docker compose -f hetzner/control-plane/stack/compose.yml config -q
+          COMPOSE_PROFILES=apps docker compose -f hetzner/control-plane/stack/compose.yml config -q
+
   scripts-tests:
     name: Test (scripts)
     runs-on: ubuntu-latest
