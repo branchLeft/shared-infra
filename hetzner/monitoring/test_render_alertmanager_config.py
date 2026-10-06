@@ -167,6 +167,23 @@ class NtfyOutputTests(unittest.TestCase):
             chowned = [call.args[0] for call in chown.call_args_list]
             self.assertNotIn(output, chowned)
 
+    def test_clears_the_empty_directory_docker_leaves_at_the_mount_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            (directory / "alertmanager").mkdir()
+            (directory / "ntfy" / "server.yml").mkdir(parents=True)
+            (directory / "alertmanager" / render_alertmanager_config.TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            (directory / "ntfy" / render_alertmanager_config.NTFY_TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            with mock.patch.object(
+                render_alertmanager_config, "__file__", str(directory / "render.py")
+            ), mock.patch.dict(os.environ, FULL_ENV, clear=False):
+                self.assertEqual(render_alertmanager_config.main([]), 0)
+            self.assertTrue((directory / "ntfy" / "server.yml").is_file())
+
     def test_main_fails_without_writing_when_a_credential_is_malformed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             directory = pathlib.Path(tmp)

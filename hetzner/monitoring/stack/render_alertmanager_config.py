@@ -171,6 +171,10 @@ def main(argv: list[str]) -> int:
         print(f"render_alertmanager_config: {exc}", file=sys.stderr)
         return 1
     ntfy_output = ntfy_dir / NTFY_OUTPUT_NAME
+    # An unrendered start leaves Docker's empty directory at a bind-mount
+    # source; clear it so the next start self-heals instead of failing here.
+    if ntfy_output.is_dir() and not ntfy_output.is_symlink():
+        ntfy_output.rmdir()
     ntfy_output.write_text(ntfy_rendered)
     ntfy_output.chmod(0o600)
     print(f"render_alertmanager_config: wrote {ntfy_output}")
