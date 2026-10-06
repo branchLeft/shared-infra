@@ -1037,7 +1037,12 @@ describe('the fully enforcing posture', () => {
   });
 });
 
-const PORTAL_HOSTNAMES = ['portal.publicpress.co.uk', 'console.branchleft.co.uk'];
+const IDENTITY_HOSTNAME = 'id.publicpress.co.uk';
+const PORTAL_HOSTNAMES = [
+  'portal.publicpress.co.uk',
+  'console.branchleft.co.uk',
+  IDENTITY_HOSTNAME,
+];
 
 const blockOf = (rendered: string, hostname: string): string =>
   rendered.split(`\n${hostname} {`)[1]?.split('\n}')[0] ?? '';
@@ -1127,13 +1132,23 @@ describe('the owner console and tenant portal routes', () => {
   it('exposes no other upstream port on ops1 and gives each app its own port', () => {
     const ops1 = sites.filter((entry) => entry.privateUpstream?.host === 'ops1');
     const names = ops1.map((entry) => entry.name).sort();
-    expect(names).toEqual(['nextcloud1', 'owner-console', 'tenant-portal']);
+    expect(names).toEqual(['identity', 'nextcloud1', 'owner-console', 'tenant-portal']);
     const ports = ops1.map((entry) => entry.privateUpstream?.port);
     expect(new Set(ports).size).toBe(ports.length);
   });
 
-  it('serves no hostname that is not in the registry: the identity provider is not routed here', () => {
-    expect(rendered).not.toContain('id.publicpress.co.uk');
+  it('routes the sign-in service hostname to its private listener on ops1, port 8300, and no other port', () => {
+    const block = blockOf(rendered, IDENTITY_HOSTNAME);
+    expect(block).toContain('reverse_proxy 10.20.1.50:8300');
+    expect(block.match(/reverse_proxy/g)).toHaveLength(1);
+    expect(block).toContain('max_size 1MiB');
+    expect(rendered).not.toContain('id.branchleft.co.uk');
+  });
+
+  it('adds nothing that serves a name beside the registry: one new block, no wildcard', () => {
+    const count = (text: string) => (text.match(/^\S.* \{$/gm) ?? []).length;
+    expect(count(rendered)).toBe(count(withoutPortal) + PORTAL_HOSTNAMES.length);
+    expect(rendered).not.toContain('*.publicpress.co.uk');
   });
 
   describe('the blog is untouched (its admin, sign-in, members sign-up and magic link)', () => {
@@ -1179,7 +1194,7 @@ describe('the owner console and tenant portal routes', () => {
 
     it('never lets a portal hostname share the blog address or its upstream', () => {
       const blog = sites.find((entry) => entry.name === 'blog');
-      for (const name of ['tenant-portal', 'owner-console']) {
+      for (const name of ['tenant-portal', 'owner-console', 'identity']) {
         const entry = sites.find((candidate) => candidate.name === name);
         expect(entry?.privateUpstream).toBeDefined();
         expect(entry?.privateUpstream).not.toEqual(blog?.privateUpstream);

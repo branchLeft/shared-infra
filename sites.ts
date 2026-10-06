@@ -96,6 +96,18 @@ export const sites: EdgeSite[] = [
   },
 
   {
+    // The sign-in service (Zitadel). Both applications fetch the issuer's keys
+    // from this hostname, so it must stay reachable from outside. Hostname is
+    // a ruling. Upstream is the sign-in service's private listener on ops1;
+    // its compose file must publish this port, and the two move together.
+    name: 'identity',
+    hostnames: ['id.publicpress.co.uk'],
+    privateUpstream: { host: 'ops1', port: 8300 },
+    // Login form posts and token requests only; no upload surface exists.
+    requestBodyMaxSize: '1MiB',
+  },
+
+  {
     // The owner's pager. Subscribers reach it here over TLS; publishers
     // inside the estate use the monitoring stack's own network instead. Auth
     // is on and anonymous access is denied by the instance itself, so this
