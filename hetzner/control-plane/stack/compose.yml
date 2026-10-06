@@ -39,9 +39,21 @@ services:
       POSTGRES_PASSWORD: ${CONTROL_PLANE_DB_ADMIN_PASSWORD:?set CONTROL_PLANE_DB_ADMIN_PASSWORD in /etc/branchleft/control-plane.env}
     # Small on purpose: three connection pools and Zitadel's, on a shared
     # 4GB host. shared_buffers is a quarter of this container's limit.
-    command: ['postgres', '-c', 'shared_buffers=96MB', '-c', 'max_connections=60']
+    # hba_file points at the mounted pg_hba.conf, so per-database access is
+    # enforced from the first start and cannot be skipped by a runbook step.
+    command:
+      [
+        'postgres',
+        '-c',
+        'shared_buffers=96MB',
+        '-c',
+        'max_connections=60',
+        '-c',
+        'hba_file=/etc/postgresql/pg_hba.conf',
+      ]
     volumes:
       - db-data:/var/lib/postgresql/data
+      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres -d postgres']
       interval: 10s

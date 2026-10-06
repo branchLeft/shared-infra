@@ -19,6 +19,7 @@ HETZNER = pathlib.Path(__file__).resolve().parent.parent
 REPOSITORY = HETZNER.parent
 COMPOSE = HETZNER / "control-plane" / "stack" / "compose.yml"
 SITES = REPOSITORY / "sites.ts"
+PG_HBA = HETZNER / "control-plane" / "stack" / "pg_hba.conf"
 
 OPS1_PRIVATE_IP = "10.20.1.50"
 
@@ -89,6 +90,19 @@ def published_ports(block: list[str]) -> list[str]:
         elif in_ports:
             in_ports = False
     return ports
+
+
+def hba_rules() -> list[list[str]]:
+    """Each pg_hba.conf rule as its whitespace-separated fields, comments dropped."""
+    rules = []
+    for raw in PG_HBA.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            rules.append(line.split())
+    return rules
+
+
+PORTAL_LOGINS = {"portal_tenant_login", "portal_owner_login"}
 
 
 class ControlPlaneStackTests(unittest.TestCase):
@@ -245,6 +259,46 @@ class ControlPlaneStackTests(unittest.TestCase):
         ports = published_ports(service_blocks(compose_text())["zitadel"])
         self.assertIn("127.0.0.1:8300:8080", ports)
         self.assertIn(f"{OPS1_PRIVATE_IP}:8300:8080", ports)
+
+    def test_the_database_mounts_the_hba_file_and_selects_it_at_start(self):
+        block = "\n".join(service_blocks(compose_text())["db"])
+        self.assertIn("      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf:ro", block)
+        self.assertIn("'hba_file=/etc/postgresql/pg_hba.conf'", block)
+        self.assertTrue(PG_HBA.is_file())
+
+    def test_the_hba_file_ends_in_a_reject_for_host_and_local(self):
+        rules = hba_rules()
+        self.assertEqual(rules[-2], ["local", "all", "all", "reject"])
+        self.assertEqual(rules[-1], ["host", "all", "all", "all", "reject"])
+
+    def test_the_hba_file_never_uses_trust_and_always_uses_scram(self):
+        for rule in hba_rules():
+            with self.subTest(rule=rule):
+                self.assertIn(rule[-1], {"scram-sha-256", "reject"})
+        self.assertNotRegex(PG_HBA.read_text(encoding="utf-8"), r"(?im)^[^#]*\b(trust|peer|md5|password)\b")
+
+    def test_each_login_reaches_only_its_own_database(self):
+        allowed: dict[str, set[str]] = {}
+        for rule in hba_rules():
+            if rule[-1] != "scram-sha-256" or rule[0] != "host":
+                continue
+            databases, user = rule[1].split(","), rule[2]
+            with self.subTest(rule=rule):
+                self.assertNotIn("all", databases)
+                self.assertNotEqual(user, "all")
+                self.assertNotIn(rule[3], {"all", "0.0.0.0/0", "::/0"})
+            allowed.setdefault(user, set()).update(databases)
+        self.assertEqual(allowed["zitadel"], {"zitadel"})
+        for login in PORTAL_LOGINS:
+            self.assertEqual(allowed[login], {"portal"})
+        self.assertEqual(set(allowed), {"zitadel", "postgres"} | PORTAL_LOGINS)
+
+    def test_the_local_socket_admits_only_the_administrator(self):
+        local = [r for r in hba_rules() if r[0] == "local" and r[-1] != "reject"]
+        self.assertEqual(local, [["local", "all", "postgres", "scram-sha-256"]])
+
+    def test_the_hba_file_carries_no_secret(self):
+        self.assertNotRegex(PG_HBA.read_text(encoding="utf-8"), r"(?i)password\s*[:=]")
 
 
 if __name__ == "__main__":

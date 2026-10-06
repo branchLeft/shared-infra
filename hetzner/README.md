@@ -498,7 +498,10 @@ volume or network. It is an `${IMAGE}` stack (one applications image, two entry
 points) with the two applications behind the `apps` profile, because they cannot
 start until the identity reconciler has run against a running Zitadel. Every
 container has a `mem_limit`, and `provision/test_control_plane_stack.py` holds
-their sum under the host's measured available memory with a margin. The
+their sum under the host's measured available memory with a margin.
+PostgreSQL's `pg_hba.conf` is mounted beside the Compose file and selected at
+start: each login reaches only its own database, with `scram-sha-256` and a
+final `reject`, pinned by the same test file. The
 delivery procedure is in the private `branchLeft/ghost-platform-docs`
 repository.
 
