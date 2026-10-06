@@ -185,12 +185,16 @@ either leaves a dangling reference or an orphan matcher.
 ## `siteBlock`: Ghost first-run setup refusal
 
 A freshly started Ghost has no owner, and its setup route (`POST
-/ghost/api/admin/authentication/setup/`, and the `GET` that reports whether setup is
-done) creates the owner account for whoever reaches it first. For a paying tenant that is
-an account takeover before the real owner has done anything. The edge therefore answers
-that route with 403 on every site block and on the probe listener. The owner account is
-created on the app host, not through this edge, so nothing legitimate needs the route
-here.
+/ghost/api/admin/authentication/setup/`) creates the owner account for whoever reaches it
+first. For a paying tenant that is an account takeover before the real owner has done
+anything. The edge therefore answers a POST or PUT to that route with 403 on every site
+block and on the probe listeners. The owner account is created on the app host, not
+through this edge, so nothing legitimate needs the write here.
+
+`GET` is deliberately not refused. Ghost's admin (v6.55.0, `unauthenticated.js` in the
+Ember admin) reads the setup status before it shows sign-in, reset, signup or
+signin-verify, so refusing the read breaks every tenant's admin login. The read only
+reports whether setup is done and claims nothing.
 
 Defined for every site, unconditionally, for the same reason as the magic-link matcher
 above: it is inert on a non-Ghost site and applies to a future tenant by construction.

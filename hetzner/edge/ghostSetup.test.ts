@@ -61,6 +61,8 @@ describe('the Ghost first-run setup refusal in a rendered site block', () => {
   it('matches the unversioned and versioned paths, with and without a trailing slash', () => {
     const block = blockOf(render(ENFORCING), 'tenant-one.test');
     const pathLine = block.split('\n').find((l) => l.includes('/authentication/setup'));
+    const methodLine = block.slice(block.indexOf(MATCHER)).split('\n')[1];
+    expect(methodLine?.trim()).toBe('method POST PUT');
     expect(pathLine?.trim().split(/\s+/)).toEqual([
       'path',
       '/ghost/api/admin/authentication/setup',
@@ -145,14 +147,19 @@ function setupSnippet(rendered: string): string {
   return `${matcher}\n\t${refusal!.trim()}`;
 }
 
-function get(port: number, rawPath: string, method = 'GET'): Promise<number> {
+function get(
+  port: number,
+  rawPath: string,
+  method = 'GET',
+  headers: Record<string, string> = {}
+): Promise<number> {
   return new Promise((resolve, reject) => {
-    const req = request({ host: '127.0.0.1', port, path: rawPath, method }, (res) => {
+    const req = request({ host: '127.0.0.1', port, path: rawPath, method, headers }, (res) => {
       res.resume();
       resolve(res.statusCode ?? 0);
     });
     req.on('error', reject);
-    req.end(method === 'POST' ? '{}' : undefined);
+    req.end(method === 'POST' || method === 'PUT' ? '{}' : undefined);
   });
 }
 
@@ -232,9 +239,41 @@ describe.skipIf(!dockerUp)('the refusal under a real Caddy', { timeout: 180_000 
     await waitUp();
   });
 
-  it.each(REFUSED)('refuses %s, for a read and for the owner-creating write', async (path) => {
-    expect(await get(port, path, 'GET')).toBe(403);
+  it.each(REFUSED)('refuses a POST and a PUT to %s', async (path) => {
     expect(await get(port, path, 'POST')).toBe(403);
+    expect(await get(port, path, 'PUT')).toBe(403);
+  });
+
+  // Ghost's own admin reads the setup status before it shows sign-in, reset,
+  // signup or signin-verify. Refusing the read locks every tenant out.
+  it.each(REFUSED)('lets a GET to %s through: the admin sign-in page needs it', async (path) => {
+    expect(await get(port, path, 'GET')).toBe(200);
+  });
+
+  it('refuses the claim whatever Host it arrives under, trailing dot included', async () => {
+    for (const host of [
+      'tenant-one.test',
+      'tenant-one.test.',
+      'TENANT-ONE.TEST.',
+      'tenant-one.test:443',
+    ]) {
+      const path = '/ghost/api/admin/authentication/setup/';
+      expect(await get(port, path, 'POST', { host }), host).toBe(403);
+    }
+  });
+
+  it.each([
+    ['GET', '/ghost/'],
+    ['GET', '/ghost/api/admin/authentication/setup-status/'],
+    ['POST', '/ghost/api/admin/authentication/session/'],
+    ['POST', '/ghost/api/admin/authentication/password_reset/'],
+    ['POST', '/members/api/send-magic-link/'],
+    ['POST', '/members/api/send-magic-link'],
+    ['PUT', '/ghost/api/admin/authentication/password_reset/'],
+    ['GET', '/members/api/member/'],
+    ['POST', '/ghost/api/admin/authentication/'],
+  ])('does not match the blog path: %s %s', async (method, path) => {
+    expect(await get(port, path, method)).toBe(200);
   });
 
   it.each(PASSED)('leaves %s reachable', async (path) => {
@@ -244,10 +283,11 @@ describe.skipIf(!dockerUp)('the refusal under a real Caddy', { timeout: 180_000 
   // The sabotage case: with the rule removed the same probe reaches the
   // upstream. Without this, a green run above would also be what a Caddy that
   // ignored the config produced.
-  it('SABOTAGE: with the rule removed, the owner-creating request reaches the upstream', async () => {
+  it('SABOTAGE: with the rule removed, the owner-creating requests reach the upstream', async () => {
     stop();
     start('');
     await waitUp();
     expect(await get(port, '/ghost/api/admin/authentication/setup/', 'POST')).toBe(200);
+    expect(await get(port, '/ghost/api/admin/authentication/setup/', 'PUT')).toBe(200);
   });
 });

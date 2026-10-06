@@ -33,7 +33,7 @@ const AUTHORING_API_PATHS = ['/ghost/api/*'];
 const MEMBERS_MAGIC_LINK_PATHS = ['/members/api/send-magic-link', '/members/api/send-magic-link/'];
 
 /**
- * Ghost's first-run owner setup, status check included, in the unversioned
+ * Ghost's first-run owner setup, in the unversioned
  * form and the versioned form (`/ghost/api/<version>/admin/...`). A fresh
  * Ghost has no owner, and this route creates one for whoever calls it first.
  * Caddy's path matcher lowercases, cleans dot segments and decodes escapes
@@ -46,6 +46,13 @@ const GHOST_SETUP_PATHS = [
   '/ghost/api/*/admin/authentication/setup',
   '/ghost/api/*/admin/authentication/setup/*',
 ];
+
+/**
+ * POST is the claim and PUT is the second setup step. GET is the status read
+ * Ghost's own admin sign-in makes before it shows a form, so refusing it would
+ * break every tenant's admin login.
+ */
+const GHOST_SETUP_METHODS = ['POST', 'PUT'];
 
 const GHOST_SETUP_REFUSAL_STATUS = 403;
 
@@ -281,7 +288,12 @@ function membersMagicLinkMatcher(): string[] {
 
 /** Named matcher for Ghost's first-run owner setup, defined at site-block scope. */
 function ghostSetupMatcher(): string[] {
-  return ['@ghost_setup {', `\tpath ${GHOST_SETUP_PATHS.join(' ')}`, '}'];
+  return [
+    '@ghost_setup {',
+    `\tmethod ${GHOST_SETUP_METHODS.join(' ')}`,
+    `\tpath ${GHOST_SETUP_PATHS.join(' ')}`,
+    '}',
+  ];
 }
 
 /**

@@ -31,6 +31,7 @@ branchleft.co.uk {
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
 	@ghost_setup {
+		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
 	route {
@@ -79,6 +80,7 @@ blog.branchleft.co.uk {
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
 	@ghost_setup {
+		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
 	route {
@@ -112,6 +114,7 @@ cloud.branchleft.co.uk {
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
 	@ghost_setup {
+		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
 	route {
@@ -176,6 +179,7 @@ http://edge-probe.invalid:8080 {
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
 	@ghost_setup {
+		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
 	route {
@@ -203,6 +207,7 @@ http://edge-probe.invalid:8080 {
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
 	@ghost_setup {
+		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
 	route {
