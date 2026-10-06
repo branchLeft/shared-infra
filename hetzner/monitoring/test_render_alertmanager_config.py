@@ -187,20 +187,9 @@ class NtfyOutputTests(unittest.TestCase):
 
 
 class OutputPermissionsTests(unittest.TestCase):
-    """The rendered file must be readable by the process it exists for.
-
-    Alertmanager reads it through a bind mount, which is read as the
-    container-side user (`nobody`) regardless of who wrote the file on the host.
-    A root-owned 0600 file is unreadable to it, and Alertmanager exits with
-    `error loading configuration file: ... permission denied` on every start --
-    while the unit still reports success, because `docker compose up -d --wait`
-    does not catch a container that starts and then dies.
-
-    So the mode must stay 0600 -- the file holds an SMTP password in plaintext,
-    and 0644 would expose it to every other account on the host, including the
-    CI deploy account -- *and* ownership must move to that uid. Both halves are
-    asserted, because either alone leaves the file unreadable or the password
-    over-exposed.
+    """The rendered file must be readable by the process it exists for, and
+    no one else: mode 0600 and the container's uid. Why both halves are
+    asserted is in `stack/render_alertmanager_config.md`.
     """
 
     def _render_into(self, directory: pathlib.Path) -> pathlib.Path:
