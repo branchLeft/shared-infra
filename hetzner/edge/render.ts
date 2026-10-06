@@ -32,6 +32,30 @@ const AUTHORING_API_PATHS = ['/ghost/api/*'];
  */
 const MEMBERS_MAGIC_LINK_PATHS = ['/members/api/send-magic-link', '/members/api/send-magic-link/'];
 
+/**
+ * Ghost's first-run owner setup, in the unversioned
+ * form and the versioned form (`/ghost/api/<version>/admin/...`). A fresh
+ * Ghost has no owner, and this route creates one for whoever calls it first.
+ * Caddy's path matcher lowercases, cleans dot segments and decodes escapes
+ * before matching, and `*` stops at a slash, hence the `/*` forms for deeper
+ * paths. Why: `render.md`.
+ */
+const GHOST_SETUP_PATHS = [
+  '/ghost/api/admin/authentication/setup',
+  '/ghost/api/admin/authentication/setup/*',
+  '/ghost/api/*/admin/authentication/setup',
+  '/ghost/api/*/admin/authentication/setup/*',
+];
+
+/**
+ * POST is the claim and PUT is the second setup step. GET is the status read
+ * Ghost's own admin sign-in makes before it shows a form, so refusing it would
+ * break every tenant's admin login.
+ */
+const GHOST_SETUP_METHODS = ['POST', 'PUT'];
+
+const GHOST_SETUP_REFUSAL_STATUS = 403;
+
 // Why: zone name re-declared per-site for shared counter via mholt/caddy-ratelimit's
 // LoadOrStore. See render.md §"MEMBERS_MAGIC_LINK_ZONE".
 const MEMBERS_MAGIC_LINK_ZONE = 'members_magic_link_per_ip';
@@ -262,6 +286,25 @@ function membersMagicLinkMatcher(): string[] {
   ];
 }
 
+/** Named matcher for Ghost's first-run owner setup, defined at site-block scope. */
+function ghostSetupMatcher(): string[] {
+  return [
+    '@ghost_setup {',
+    `\tmethod ${GHOST_SETUP_METHODS.join(' ')}`,
+    `\tpath ${GHOST_SETUP_PATHS.join(' ')}`,
+    '}',
+  ];
+}
+
+/**
+ * Answers the matcher above with a refusal and nothing else. After the
+ * protection chain on purpose: a client probing for an open setup is
+ * throttled, and CrowdSec still sees it, rather than being answered for free.
+ */
+function ghostSetupRefusal(): string {
+  return `respond @ghost_setup ${GHOST_SETUP_REFUSAL_STATUS}`;
+}
+
 /**
  * The tighter, second throttle on top of the general per-site one above.
  * Independent zone, independent counter: a client can spend its general
@@ -361,6 +404,9 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   if (posture.membersMagicLinkRateLimit === 'enforcing') {
     body.push(...membersMagicLinkMatcher());
   }
+  // Unconditional, unlike the throttle matcher: it is a refusal, not a
+  // posture, so no posture setting may switch it off.
+  body.push(...ghostSetupMatcher());
   body.push(
     'route {',
     // Ahead of everything else, including request_body -- see hstsDirective's
@@ -373,6 +419,7 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
       appsec: site.injectionWafPreviewOnly ? 'except-authoring' : 'all',
       membersMagicLink: true,
     }).map((line) => `\t${line}`),
+    `\t${ghostSetupRefusal()}`,
     `\treverse_proxy ${resolvePrivateAddress(upstream.host, upstream.port)}`,
     '}'
   );
@@ -443,12 +490,16 @@ function probeBlock(
   if (posture.membersMagicLinkRateLimit === 'enforcing') {
     body.push(...membersMagicLinkMatcher());
   }
+  // Same refusal as a real site, so a loopback `curl` can prove it before any
+  // hostname serves the path for real.
+  body.push(...ghostSetupMatcher());
   body.push(
     'route {',
     ...protectionChain(posture, generalZone, {
       appsec: 'all',
       membersMagicLink: true,
     }).map((line) => `\t${line}`),
+    `\t${ghostSetupRefusal()}`,
     // Names which block answered. Without it the two probes are
     // indistinguishable on the wire: a bare `:port` address matches every
     // Host, so it answers a request for the host-qualified name identically
