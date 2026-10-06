@@ -1134,8 +1134,11 @@ the phone but never leaves mx1 by email. Warnings never page.
 The pager's own death is caught by the external probe every public hostname
 gets: `BlackboxProbeFailed` for `https://ntfy.branchleft.co.uk` is critical,
 so it tries the pager (which is the thing that is down) and also emails the
-off-host mailbox. The email is the path that arrives. That is a quieter path
-than a page; the gap is that a dead pager is reported by email only.
+off-host mailbox. The email is the path that arrives. The owner ruled that
+enough: there is deliberately no second route and no failed-delivery alert.
+
+The phone is Android only, with no relay: `upstream-base-url` stays unset, and
+`pageRegister.test.ts` fails the build if it is set.
 
 An entry marked `dormant` in the register (appeal latency, until a target
 is set) renders no route at all; flip the flag in the same change that sets
