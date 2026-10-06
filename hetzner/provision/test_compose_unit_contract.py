@@ -129,6 +129,7 @@ EXPECTED_SERVICES: dict[str, set[str]] = {
         "node-exporter",
         "blackbox-exporter",
         "cadvisor",
+        "ntfy",
     },
     "nextcloud1": {"app", "db", "redis"},
 }
