@@ -25,8 +25,8 @@ groups:
         annotations:
           summary: "{{ $labels.job }} on {{ $labels.host }} has been unreachable for 5 minutes."
           description: >-
-            Scoped to expected_up="true" targets only -- app1 and db1 carry
-            expected_up="false" until their node exporters are provisioned,
+            Scoped to expected_up="true" targets only -- app1 carries
+            expected_up="false" until its node exporter is provisioned,
             so targets without exporters do not page anyone.
 
       - alert: ServiceFlapping

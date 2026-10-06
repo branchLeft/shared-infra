@@ -94,7 +94,7 @@ describe('the rendered Prometheus config', () => {
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'ops1')?.address).toBe(HOST_IPS.ops1);
   });
 
-  it('marks edge1 and ops1 node_exporter expected up -- app1 and db1 still have none', () => {
+  it('marks edge1, db1 and ops1 node_exporter expected up -- app1 still has none', () => {
     // Verified against edge1's own target list on 2026-08-28: `node` on app1
     // and db1 both report `down`, so `false` is a current fact here rather
     // than an assumption inherited from when the constant was written. ops1
@@ -102,8 +102,16 @@ describe('the rendered Prometheus config', () => {
     // exporter back answering live before this flag flipped.
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'edge1')?.expectedUp).toBe(true);
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'app1')?.expectedUp).toBe(false);
-    expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'db1')?.expectedUp).toBe(false);
+    expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'db1')?.expectedUp).toBe(true);
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'ops1')?.expectedUp).toBe(true);
+  });
+
+  it("renders db1's node target expected up, on its private address only, so the nightly dump's textfile gauges are scraped and watched", () => {
+    const rendered = renderPrometheusConfig(sites);
+    expect(rendered).toContain(
+      `targets: ['${HOST_IPS.db1}:${NODE_EXPORTER_PORT}']\n        labels: {host: db1, expected_up: 'true'}`
+    );
+    expect(rendered).not.toContain(`0.0.0.0:${NODE_EXPORTER_PORT}`);
   });
 
   it('marks the db1 mysqld_exporter expected up, because it is live', () => {

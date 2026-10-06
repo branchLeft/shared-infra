@@ -665,7 +665,7 @@ tests:
             exp_annotations:
               summary: 'stalwart on mx1 has been unreachable for 5 minutes.'
               description: >-
-                Scoped to expected_up="true" targets only -- app1 and db1 carry expected_up="false" until their node exporters are provisioned, so targets without exporters do not page anyone.
+                Scoped to expected_up="true" targets only -- app1 carries expected_up="false" until its node exporter is provisioned, so targets without exporters do not page anyone.
 
   # The mirror of the case above, and not redundant with it: either counter
   # can be the one that has never fired, and a numerator defaulted on only one
@@ -1216,6 +1216,20 @@ tests:
         eval_time: 1h
         exp_samples:
           - labels: 'ALERTS{alertname="TenantBackupAgeHigh", alertstate="firing", severity="warning"}'
+            value: 1
+
+  # db1's node target is expected up so the nightly dump's textfile gauges
+  # are scraped. A dead db1 node_exporter must page like any other host's,
+  # and the label text is the one nodeTarget() renders for db1.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node", instance="10.20.1.20:9100", host="db1", expected_up="true"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    promql_expr_test:
+      - expr: ALERTS{alertname="HostOrServiceDown", alertstate="firing", host="db1", job="node"}
+        eval_time: 5m30s
+        exp_samples:
+          - labels: 'ALERTS{alertname="HostOrServiceDown", alertstate="firing", severity="critical", job="node", instance="10.20.1.20:9100", host="db1", expected_up="true"}'
             value: 1
 
   # The dump's gauge, as db1's node_exporter publishes it, trips the same
