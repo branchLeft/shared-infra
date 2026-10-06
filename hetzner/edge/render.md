@@ -182,6 +182,31 @@ Gated on the magic-link field, not the general one: the matcher exists only to b
 referenced by `rate_limit @members_magic_link`, so emitting it under the wrong condition
 either leaves a dangling reference or an orphan matcher.
 
+## `siteBlock`: Ghost first-run setup refusal
+
+A freshly started Ghost has no owner, and its setup route (`POST
+/ghost/api/admin/authentication/setup/`, and the `GET` that reports whether setup is
+done) creates the owner account for whoever reaches it first. For a paying tenant that is
+an account takeover before the real owner has done anything. The edge therefore answers
+that route with 403 on every site block and on the probe listener. The owner account is
+created on the app host, not through this edge, so nothing legitimate needs the route
+here.
+
+Defined for every site, unconditionally, for the same reason as the magic-link matcher
+above: it is inert on a non-Ghost site and applies to a future tenant by construction.
+Unlike the throttle it is not keyed on posture, because a refusal is not a posture; no
+setting in `posture.ts` can switch it off.
+
+Four path patterns, not one. Measured against Caddy v2.11.4: the matcher lowercases,
+cleans `.` and `..` segments, collapses a double slash and decodes percent-escapes before
+matching, so `/GHOST/...`, `//ghost/...`, `/%73etup/` and `setup/../setup/` all match.
+What it does not do is let `*` cross a slash: a trailing `/` and any deeper path need
+the `setup/*` form, and Ghost's versioned API (`/ghost/api/<version>/admin/...`) needs
+the `*` version segment.
+
+After the protection chain, before `reverse_proxy`: a client probing for an open setup is
+throttled and seen by CrowdSec rather than answered for free.
+
 ## `siteBlock`: `request_body` ordering
 
 Ahead of everything else, including request_body -- see hstsDirective's own comment for

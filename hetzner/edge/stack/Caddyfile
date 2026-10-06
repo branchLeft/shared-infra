@@ -30,6 +30,9 @@ branchleft.co.uk {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
+	@ghost_setup {
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		request_body {
@@ -43,6 +46,7 @@ branchleft.co.uk {
 			}
 		}
 		appsec
+		respond @ghost_setup 403
 		reverse_proxy 10.20.1.100:8080
 	}
 }
@@ -74,6 +78,9 @@ blog.branchleft.co.uk {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
+	@ghost_setup {
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		request_body {
@@ -87,6 +94,7 @@ blog.branchleft.co.uk {
 			}
 		}
 		appsec @inspected
+		respond @ghost_setup 403
 		reverse_proxy 10.20.1.100:8101
 	}
 }
@@ -103,6 +111,9 @@ cloud.branchleft.co.uk {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
+	@ghost_setup {
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		request_body {
@@ -116,6 +127,7 @@ cloud.branchleft.co.uk {
 			}
 		}
 		appsec
+		respond @ghost_setup 403
 		reverse_proxy 10.20.1.50:11000
 	}
 }
@@ -163,6 +175,9 @@ http://edge-probe.invalid:8080 {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
+	@ghost_setup {
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
 	route {
 		rate_limit @members_magic_link {
 			zone members_magic_link_per_ip {
@@ -172,6 +187,7 @@ http://edge-probe.invalid:8080 {
 			}
 		}
 		appsec
+		respond @ghost_setup 403
 		header X-Edge-Probe host-routed
 		respond 204
 	}
@@ -186,6 +202,9 @@ http://edge-probe.invalid:8080 {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
 	}
+	@ghost_setup {
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
 	route {
 		rate_limit @members_magic_link {
 			zone members_magic_link_per_ip {
@@ -195,6 +214,7 @@ http://edge-probe.invalid:8080 {
 			}
 		}
 		appsec
+		respond @ghost_setup 403
 		header X-Edge-Probe bare-port
 		respond 204
 	}
