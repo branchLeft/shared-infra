@@ -1124,7 +1124,8 @@ describe('the owner console and tenant portal routes', () => {
       const block = blockOf(enforcing, name);
       expect(block).toContain('rate_limit {');
       expect(block).toContain('crowdsec');
-      expect(block).toContain('appsec\n');
+      // The console exempts only its discard path, via the same matcher form.
+      expect(block).toMatch(/\tappsec( @inspected)?\n/);
       expect(block.indexOf('rate_limit {')).toBeLessThan(block.indexOf('reverse_proxy'));
     }
   });
@@ -1215,5 +1216,78 @@ describe('the committed stack directory', () => {
     await expect(renderCaddyLogAcquisition()).toMatchFileSnapshot(
       './stack/crowdsec/acquis.d/caddy.yaml'
     );
+  });
+});
+
+describe('a site discard route', () => {
+  const PATH = '/_github/reviewer-app-webhook-a91f3c07';
+  const consoleSite = sites.find((entry) => entry.name === 'owner-console') as EdgeSite;
+  const enforcing = renderCaddyfile(sites, hostRedirects, ENFORCING, staticSites);
+  const block = blockOf(enforcing, 'console.branchleft.co.uk');
+  const lines = block.split('\n').map((line) => line.trim());
+  const at = (text: string) => lines.indexOf(text);
+
+  it('is registered on the owner console and nowhere else', () => {
+    expect(consoleSite.discardRoute).toBe(PATH);
+    expect(sites.filter((entry) => entry.discardRoute !== undefined)).toHaveLength(1);
+    expect(enforcing.split(PATH).length - 1).toBe(3);
+  });
+
+  it('answers POST with an empty 204 and any other method with 405, before the proxy', () => {
+    expect(block).toContain(`@discard_post {\n\t\tmethod POST\n\t\tpath ${PATH}\n\t}`);
+    expect(block).toContain(`@discard {\n\t\tpath ${PATH}\n\t}`);
+    const post = at('respond @discard_post 204');
+    const other = at('respond @discard 405');
+    expect(post).toBeGreaterThan(-1);
+    expect(other).toBeGreaterThan(post);
+    expect(at('header @discard Allow POST')).toBeGreaterThan(-1);
+    expect(other).toBeLessThan(lines.findIndex((line) => line.startsWith('reverse_proxy')));
+  });
+
+  it('keeps HSTS, the 1 MiB ceiling, the throttle and CrowdSec in front, and exempts only AppSec', () => {
+    const post = at('respond @discard_post 204');
+    expect(
+      at('header Strict-Transport-Security "max-age=31536000; includeSubDomains"')
+    ).toBeLessThan(at('request_body {'));
+    expect(block).toContain('max_size 1MiB');
+    expect(at('rate_limit {')).toBeLessThan(post);
+    expect(at('crowdsec')).toBeLessThan(post);
+    expect(at('appsec @inspected')).toBeGreaterThan(-1);
+    expect(block).toContain(`@inspected not path ${PATH}`);
+    expect(lines).not.toContain('appsec');
+  });
+
+  it('leaves every other console route as it was', () => {
+    const without = renderCaddyfile(
+      sites.map((entry) => ({ ...entry, discardRoute: undefined })),
+      hostRedirects,
+      ENFORCING,
+      staticSites
+    );
+    const withoutBlock = blockOf(without, 'console.branchleft.co.uk');
+    const withBlock = blockOf(enforcing, 'console.branchleft.co.uk');
+    expect(withoutBlock).toContain('reverse_proxy 10.20.1.50:8302');
+    expect(withoutBlock).toContain('\t\tappsec\n');
+    expect(withoutBlock).toContain('respond @ghost_setup 403');
+    expect(withBlock).toContain('respond @ghost_setup 403');
+    expect(withBlock).toContain('reverse_proxy 10.20.1.50:8302');
+    const stripped = withBlock
+      .replace(/\t@(discard|discard_post|inspected) \{\n[^}]*\}\n/g, '')
+      .replace(/\t@inspected not path [^\n]*\n/g, '')
+      .replace(/\t\theader @discard Allow POST\n/, '')
+      .replace(/\t\trespond @discard(_post)? \d+\n/g, '')
+      .replace('appsec @inspected', 'appsec');
+    expect(stripped).toBe(withoutBlock);
+  });
+
+  it('refuses a path that is not a plain literal', () => {
+    for (const bad of ['/a/*', 'nope', '/a b', '/a{http.request.uri}']) {
+      const broken = sites.map((entry) =>
+        entry.name === 'owner-console' ? { ...entry, discardRoute: bad } : entry
+      );
+      expect(() => renderCaddyfile(broken, hostRedirects, ENFORCING, staticSites)).toThrow(
+        /discardRoute/
+      );
+    }
   });
 });

@@ -239,6 +239,14 @@ console.branchleft.co.uk {
 	tls {
 		protocols tls1.2 tls1.3
 	}
+	@inspected not path /_github/reviewer-app-webhook-a91f3c07
+	@discard {
+		path /_github/reviewer-app-webhook-a91f3c07
+	}
+	@discard_post {
+		method POST
+		path /_github/reviewer-app-webhook-a91f3c07
+	}
 	@members_magic_link {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
@@ -267,7 +275,10 @@ console.branchleft.co.uk {
 			}
 		}
 		crowdsec
-		appsec
+		appsec @inspected
+		header @discard Allow POST
+		respond @discard_post 204
+		respond @discard 405
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.50:8302
 	}

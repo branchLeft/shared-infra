@@ -211,6 +211,23 @@ the `*` version segment.
 After the protection chain, before `reverse_proxy`: a client probing for an open setup is
 throttled and seen by CrowdSec rather than answered for free.
 
+## `siteBlock`: discard route
+
+`EdgeSite.discardRoute` is one literal path the edge answers itself: `POST` gets an empty
+204, any other method gets 405 with `Allow: POST`, and nothing reaches the upstream. It
+exists because GitHub requires an active webhook URL before an App may subscribe to the
+deployment-protection event, while our approval script polls and reads nothing from it.
+The path carries a short suffix to stay out of drive-by scans; it is not a secret, and the
+webhook secret the owner sets is what authenticates a real delivery should one ever be read.
+
+Placement inside the route: after HSTS, the 1 MiB body ceiling, the throttle and the
+CrowdSec decision, so a flood is still shed and a banned address still refused, and
+before the Ghost setup refusal and `reverse_proxy`. AppSec is the one control the path is
+exempt from (the existing `@inspected` matcher gains the path): GitHub's JSON payloads
+would otherwise be at the mercy of rules built for form posts, and nothing is parsed or
+stored here, so there is nothing for a rule to protect. The renderer accepts only a plain
+literal path, so a wildcard cannot widen the exemption.
+
 ## `siteBlock`: `request_body` ordering
 
 Ahead of everything else, including request_body -- see hstsDirective's own comment for

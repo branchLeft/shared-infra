@@ -394,6 +394,29 @@ function requestBodyDirective(site: EdgeSite): string[] {
   return ['request_body {', `\tmax_size ${size}`, '}'];
 }
 
+/**
+ * A site's discard route (`EdgeSite.discardRoute`): matchers for the one path.
+ * Why the path is exempt from AppSec only, and where the answers sit: `render.md`.
+ */
+function discardRouteMatchers(path: string): string[] {
+  if (!/^\/[A-Za-z0-9_\-/]+$/.test(path)) {
+    throw new Error(`discardRoute ${path} must be a plain literal path (letters, digits, _ - /)`);
+  }
+  return [
+    '@discard {',
+    `\tpath ${path}`,
+    '}',
+    '@discard_post {',
+    '\tmethod POST',
+    `\tpath ${path}`,
+    '}',
+  ];
+}
+
+function discardRouteResponses(): string[] {
+  return ['header @discard Allow POST', 'respond @discard_post 204', 'respond @discard 405'];
+}
+
 function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): Block {
   const upstream = site.privateUpstream;
   if (upstream === undefined) {
@@ -401,8 +424,15 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   }
 
   const body: string[] = [...logDirective(ACCESS_LOG), ...tlsDirective()];
-  if (site.injectionWafPreviewOnly) {
-    body.push(`@inspected not path ${AUTHORING_API_PATHS.join(' ')}`);
+  const appsecExempt = [
+    ...(site.injectionWafPreviewOnly ? AUTHORING_API_PATHS : []),
+    ...(site.discardRoute === undefined ? [] : [site.discardRoute]),
+  ];
+  if (appsecExempt.length > 0) {
+    body.push(`@inspected not path ${appsecExempt.join(' ')}`);
+  }
+  if (site.discardRoute !== undefined) {
+    body.push(...discardRouteMatchers(site.discardRoute));
   }
   // Defined for every site, not only Ghost tenants: the matcher only ever
   // matches Ghost's own path, so a non-Ghost site (e.g. the marketing site)
@@ -428,9 +458,10 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
     // caps at appsec_max_body_bytes anyway. See render.md §"siteBlock: request_body ordering".
     ...requestBodyDirective(site).map((line) => `\t${line}`),
     ...protectionChain(posture, `${site.name}_per_ip`, {
-      appsec: site.injectionWafPreviewOnly ? 'except-authoring' : 'all',
+      appsec: appsecExempt.length > 0 ? 'except-authoring' : 'all',
       membersMagicLink: true,
     }).map((line) => `\t${line}`),
+    ...(site.discardRoute === undefined ? [] : discardRouteResponses()).map((line) => `\t${line}`),
     `\t${ghostSetupRefusal()}`,
     `\treverse_proxy ${resolvePrivateAddress(upstream.host, upstream.port)}`,
     '}'
