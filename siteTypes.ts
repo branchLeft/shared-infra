@@ -41,41 +41,15 @@ export interface EdgeSite {
    */
   region?: string;
   /**
-   * Keep the injection WAF rules (sqli/xss/rce) in preview for this site's
-   * hostnames instead of enforcing them. Set it for any site with an
-   * authenticated authoring surface: a Ghost admin API request body carries
-   * author-written HTML, code samples and SQL, which is indistinguishable from
-   * an injection payload at sensitivity 1. A false positive there locks the
-   * owner out of publishing rather than degrading a page.
-   *
-   * The Hetzner edge honours this as one path prefix rather than a whole
-   * hostname, and on that prefix it removes *every* AppSec rule, `lfi`
-   * included — the handler is per-request, so a rule family cannot be kept
-   * back individually.
+   * Set for any site with an authenticated authoring surface: the edge then
+   * drops all AppSec rules on the admin API path prefix only. Why, and what
+   * it costs: `sites.md` section "The authoring exemption".
    */
   injectionWafPreviewOnly?: boolean;
   /**
-   * Maximum request body this edge will accept for the site, as a Caddy size
-   * string — the tenant stack's `edgeRequestBodyMaxSize` output, copied
-   * verbatim. `RUNBOOK-tenant-onboarding.md` §9 in `branchLeft/ghost-platform`
-   * is where it comes from; it is derived there from the same input as the
-   * container's `/tmp` ceiling so the two cannot disagree, and setting a
-   * different number here by hand defeats that.
-   *
-   * **Binary units only — `MiB`, never `MB`.** Caddy reads `MB` as a power of
-   * ten while every other number in that derivation is a power of two, and a
-   * ~4.4% disagreement in a set of values whose whole purpose is that they
-   * cannot disagree is still a disagreement. The renderer rejects `MB`.
-   *
-   * **Required for every site this edge serves**, and the renderer refuses to
-   * emit a site block without it. For a Ghost tenant it is the only bound that
-   * exists on the image, media, file and content-import paths — Ghost's
-   * generic upload middleware sets none, and the tmpfs `size=` is a backstop
-   * that fails one upload with `ENOSPC` rather than a control. For a
-   * non-tenant site it is a bound chosen from that site's own request shapes.
-   *
-   * Optional in the type because a site with no `privateUpstream` is not
-   * rendered by this edge at all and needs none.
+   * Maximum request body the edge accepts, as a Caddy size string in binary
+   * units (`MiB`, never `MB`). Required for every site served. Why and where
+   * the value comes from: `sites.md` section "The request body ceiling".
    */
   requestBodyMaxSize?: string;
   /**
@@ -103,15 +77,8 @@ export interface HostRedirect {
 
 /**
  * A hostname the Hetzner edge answers directly with a fixed page, proxying
- * nowhere. Distinct from `EdgeSite` rather than an `EdgeSite` with an absent
- * `privateUpstream`, because that combination already means something else
- * here: `privateUpstream` absent is how a site is *skipped* by the renderer
- * (see its own doc comment). A static site is the opposite -- always
- * rendered, never proxied.
- *
- * Hostname and addressing only, same rule as the rest of this registry: the
- * page content itself lives in a file under `hetzner/edge/`, keyed by `name`,
- * so that changing the words on the page never touches this file.
+ * nowhere. Always rendered, never proxied; hostname and addressing only.
+ * Why it is distinct from `EdgeSite`: `sites.md` section "Static sites".
  */
 export interface StaticSite {
   /** This site's identifier in generated config and log output, and the key its page content is looked up by. */
