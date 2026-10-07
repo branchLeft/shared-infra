@@ -220,13 +220,16 @@ deployment-protection event, while our approval script polls and reads nothing f
 The path carries a short suffix to stay out of drive-by scans; it is not a secret, and the
 webhook secret the owner sets is what authenticates a real delivery should one ever be read.
 
-Placement inside the route: after HSTS, the 1 MiB body ceiling, the throttle and the
-CrowdSec decision, so a flood is still shed and a banned address still refused, and
-before the Ghost setup refusal and `reverse_proxy`. AppSec is the one control the path is
-exempt from (the existing `@inspected` matcher gains the path): GitHub's JSON payloads
-would otherwise be at the mercy of rules built for form posts, and nothing is parsed or
-stored here, so there is nothing for a rule to protect. The renderer accepts only a plain
-literal path, so a wildcard cannot widen the exemption.
+Placement inside the route: after HSTS, the 1 MiB body ceiling and whatever throttle and
+CrowdSec the posture renders for the site, and immediately before `appsec`. The path
+therefore inherits exactly what the console route has: under the enforcing posture a flood
+is shed and a banned address refused; the shipped posture renders neither, and the path
+has neither then. The answers are `respond`s, which end the route, so a discard request
+never reaches AppSec or the upstream, while every other path still reaches the unchanged
+`appsec` line. Nothing is parsed or stored here, so AppSec has nothing to protect on this
+path, and GitHub's JSON payloads are not exposed to rules built for form posts. Emitting the
+answers ahead of the `appsec` line, rather than editing that line, keeps the rendered change
+additions-only. The renderer accepts only a plain literal path.
 
 ## `siteBlock`: `request_body` ordering
 

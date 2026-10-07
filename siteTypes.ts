@@ -79,12 +79,8 @@ export interface EdgeSite {
    */
   requestBodyMaxSize?: string;
   /**
-   * One fixed path the edge answers itself and never proxies: `POST` gets an
-   * empty 204, every other method a 405. It exists for a third party that
-   * insists on an active webhook URL we have no use for. It keeps the site's
-   * TLS, HSTS, body ceiling, throttle and CrowdSec decision, and is exempt
-   * from AppSec only, so a vendor's JSON body is not WAF-blocked. See
-   * `hetzner/edge/render.md`.
+   * One literal path the edge answers itself, never proxied: `POST` gets an
+   * empty 204, any other method 405. It runs before AppSec. See `render.md`.
    */
   discardRoute?: string;
   /**

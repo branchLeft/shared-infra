@@ -1124,8 +1124,7 @@ describe('the owner console and tenant portal routes', () => {
       const block = blockOf(enforcing, name);
       expect(block).toContain('rate_limit {');
       expect(block).toContain('crowdsec');
-      // The console exempts only its discard path, via the same matcher form.
-      expect(block).toMatch(/\tappsec( @inspected)?\n/);
+      expect(block).toContain('appsec\n');
       expect(block.indexOf('rate_limit {')).toBeLessThan(block.indexOf('reverse_proxy'));
     }
   });
@@ -1230,7 +1229,7 @@ describe('a site discard route', () => {
   it('is registered on the owner console and nowhere else', () => {
     expect(consoleSite.discardRoute).toBe(PATH);
     expect(sites.filter((entry) => entry.discardRoute !== undefined)).toHaveLength(1);
-    expect(enforcing.split(PATH).length - 1).toBe(3);
+    expect(enforcing.split(PATH).length - 1).toBe(2);
   });
 
   it('answers POST with an empty 204 and any other method with 405, before the proxy', () => {
@@ -1244,7 +1243,7 @@ describe('a site discard route', () => {
     expect(other).toBeLessThan(lines.findIndex((line) => line.startsWith('reverse_proxy')));
   });
 
-  it('keeps HSTS, the 1 MiB ceiling, the throttle and CrowdSec in front, and exempts only AppSec', () => {
+  it('answers after HSTS, the 1 MiB ceiling, the throttle and CrowdSec, and before AppSec, which stays plain', () => {
     const post = at('respond @discard_post 204');
     expect(
       at('header Strict-Transport-Security "max-age=31536000; includeSubDomains"')
@@ -1252,9 +1251,9 @@ describe('a site discard route', () => {
     expect(block).toContain('max_size 1MiB');
     expect(at('rate_limit {')).toBeLessThan(post);
     expect(at('crowdsec')).toBeLessThan(post);
-    expect(at('appsec @inspected')).toBeGreaterThan(-1);
-    expect(block).toContain(`@inspected not path ${PATH}`);
-    expect(lines).not.toContain('appsec');
+    expect(post).toBeLessThan(at('appsec'));
+    expect(at('respond @discard 405')).toBeLessThan(at('appsec'));
+    expect(block).not.toContain('@inspected');
   });
 
   it('leaves every other console route as it was', () => {
@@ -1272,11 +1271,9 @@ describe('a site discard route', () => {
     expect(withBlock).toContain('respond @ghost_setup 403');
     expect(withBlock).toContain('reverse_proxy 10.20.1.50:8302');
     const stripped = withBlock
-      .replace(/\t@(discard|discard_post|inspected) \{\n[^}]*\}\n/g, '')
-      .replace(/\t@inspected not path [^\n]*\n/g, '')
+      .replace(/\t@(discard|discard_post) \{\n[^}]*\}\n/g, '')
       .replace(/\t\theader @discard Allow POST\n/, '')
-      .replace(/\t\trespond @discard(_post)? \d+\n/g, '')
-      .replace('appsec @inspected', 'appsec');
+      .replace(/\t\trespond @discard(_post)? \d+\n/g, '');
     expect(stripped).toBe(withoutBlock);
   });
 

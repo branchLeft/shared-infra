@@ -340,7 +340,11 @@ function membersMagicLinkRateLimitDirective(): string[] {
 function protectionChain(
   posture: EdgePosture,
   zone: string,
-  options: { appsec: 'none' | 'all' | 'except-authoring'; membersMagicLink?: boolean }
+  options: {
+    appsec: 'none' | 'all' | 'except-authoring';
+    membersMagicLink?: boolean;
+    beforeAppsec?: string[];
+  }
 ): string[] {
   const lines: string[] = [];
   // Two independent conditions, not one nested in the other. The magic-link
@@ -357,6 +361,7 @@ function protectionChain(
   if (posture.crowdsec === 'enforcing') {
     lines.push('crowdsec');
   }
+  lines.push(...(options.beforeAppsec ?? []));
   if (options.appsec === 'all') {
     lines.push('appsec');
   } else if (options.appsec === 'except-authoring') {
@@ -424,12 +429,8 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   }
 
   const body: string[] = [...logDirective(ACCESS_LOG), ...tlsDirective()];
-  const appsecExempt = [
-    ...(site.injectionWafPreviewOnly ? AUTHORING_API_PATHS : []),
-    ...(site.discardRoute === undefined ? [] : [site.discardRoute]),
-  ];
-  if (appsecExempt.length > 0) {
-    body.push(`@inspected not path ${appsecExempt.join(' ')}`);
+  if (site.injectionWafPreviewOnly) {
+    body.push(`@inspected not path ${AUTHORING_API_PATHS.join(' ')}`);
   }
   if (site.discardRoute !== undefined) {
     body.push(...discardRouteMatchers(site.discardRoute));
@@ -458,10 +459,10 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
     // caps at appsec_max_body_bytes anyway. See render.md §"siteBlock: request_body ordering".
     ...requestBodyDirective(site).map((line) => `\t${line}`),
     ...protectionChain(posture, `${site.name}_per_ip`, {
-      appsec: appsecExempt.length > 0 ? 'except-authoring' : 'all',
+      appsec: site.injectionWafPreviewOnly ? 'except-authoring' : 'all',
       membersMagicLink: true,
+      beforeAppsec: site.discardRoute === undefined ? [] : discardRouteResponses(),
     }).map((line) => `\t${line}`),
-    ...(site.discardRoute === undefined ? [] : discardRouteResponses()).map((line) => `\t${line}`),
     `\t${ghostSetupRefusal()}`,
     `\treverse_proxy ${resolvePrivateAddress(upstream.host, upstream.port)}`,
     '}'
