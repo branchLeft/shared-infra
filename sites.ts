@@ -93,6 +93,11 @@ export const sites: EdgeSite[] = [
     // The owner console's `PORT` on ops1; see the tenant-portal entry.
     privateUpstream: { host: 'ops1', port: 8302 },
     requestBodyMaxSize: '1MiB',
+    // The reviewer GitHub App's webhook target: GitHub requires an active
+    // URL before the App may subscribe to the deployment-protection event,
+    // and nothing is read from it (the approval script polls). The suffix
+    // keeps the path out of drive-by scans; it is not a secret.
+    discardRoute: '/_github/reviewer-app-webhook-a91f3c07',
   },
 
   {

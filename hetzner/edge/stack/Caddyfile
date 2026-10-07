@@ -191,6 +191,13 @@ console.branchleft.co.uk {
 	tls {
 		protocols tls1.2 tls1.3
 	}
+	@discard {
+		path /_github/reviewer-app-webhook-a91f3c07
+	}
+	@discard_post {
+		method POST
+		path /_github/reviewer-app-webhook-a91f3c07
+	}
 	@members_magic_link {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
@@ -211,6 +218,9 @@ console.branchleft.co.uk {
 				events 5
 			}
 		}
+		header @discard Allow POST
+		respond @discard_post 204
+		respond @discard 405
 		appsec
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.50:8302
