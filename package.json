@@ -14,6 +14,6 @@
     "@branchleft/tsconfig": "^0.3.1",
     "@types/node": "^26",
     "prettier": "^3.9.6",
-    "typescript": "^5.9.0"
+    "typescript": "^7.0.2"
   }
 }
