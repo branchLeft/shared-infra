@@ -145,6 +145,7 @@ SCANNED_SUFFIXES = frozenset(
         ".authoring",
         ".conf",
         ".enforcing",
+        ".gotmpl",
         ".json",
         ".local",
         ".md",
