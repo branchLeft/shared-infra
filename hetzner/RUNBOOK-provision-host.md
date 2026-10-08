@@ -457,6 +457,12 @@ rather than an argument or an environment variable passed to this step:
 whatever this script decides on a one-off manual run here is not what it
 decides again at the next boot unless the script itself can re-derive it.
 
+**`ops1` also gets a source rule on its published control-plane ports.** The
+same self-identification adds, on `ops1` only, a drop of every new connection
+to ports 8301 and 8302 from any source but `edge1`, matched on the original
+destination because a published port is a DNAT
+([ISSUE branchLeft/workspace#1284](https://github.com/branchLeft/workspace/issues/1284)).
+
 **App hosts only, and the reconciler enforces that itself.** `edge1` is the
 estate's NAT gateway: it forwards every private-only host's own internet
 egress, and it originates its own reverse-proxy connections into the subnet.
