@@ -1468,6 +1468,29 @@ How it works, what it refuses and why it is not in `run-all.sh`:
 steps for running it on this host are kept in the private operations
 repository, not here.
 
+## Zitadel submission credential
+
+`68-provision-zitadel-submission-credential.sh` gives the sign-in service
+(Zitadel, on `ops1`) its submission credential. It sends as
+`noreply@publicpress.co.uk` and nothing else, using Stalwart's shipped
+exact-address rule, so unlike the collector's it edits no server-wide setting
+and never restarts Stalwart. It needs the sending domain first:
+
+```bash
+python3 /root/mail-provision/provision_sending_domain.py publicpress.co.uk --dkim-only
+```
+
+Publish the DKIM record it prints (and a DMARC record if the zone has none),
+then run the wrapper over `ssh -t`. It records the secret on this host and
+shows it once, only on a terminal; the owner stores it as
+`mx1 stalwart / publicpress / zitadel-smtp-submission` and places it on `ops1`
+(`ghost-platform-docs`, `control-plane-delivery-runbook.md`, step 7a).
+`check_zitadel_sender_scope.py` proves the scope on the live server with no
+message body sent. `--dry-run` and `--revoke` behave as the collector's do.
+
+How it works, what it refuses and what a leaked credential can do:
+`mail/provision/provision_zitadel_submission_credential.md`.
+
 ## How to re-run safely
 
 Every script in `mail/provision/` is idempotent by design — see the table
