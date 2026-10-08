@@ -94,6 +94,8 @@ services:
       # rendered one so a stack started without that step first fails to find
       # it rather than loading placeholder tokens as literal config values.
       - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Hand-free: rendered by render.ts, not by the host script, so it ships in the tree.
+      - ./alertmanager/email.gotmpl:/etc/alertmanager/templates/email.gotmpl:ro
       - alertmanager-data:/alertmanager
     healthcheck:
       test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:9093/-/healthy']

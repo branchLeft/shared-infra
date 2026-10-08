@@ -2,6 +2,8 @@
 # Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
 # Rendered into alertmanager.yml at container start by
 # render_alertmanager_config.py. This file is never read directly.
+templates:
+  - '/etc/alertmanager/templates/*.gotmpl'
 global:
   smtp_smarthost: 'mx1.branchleft.co.uk:587'
   smtp_from: 'alerts@branchleft.co.uk'
@@ -31,6 +33,12 @@ route:
         - alertname !~ "^(MailHostDown|AlertEmailDeliveryFailing)$"
         - notify != "on-host"
       receiver: email
+      continue: true
+    - matchers:
+        - severity = "critical"
+        - alertname !~ "^(MailHostDown|AlertEmailDeliveryFailing)$"
+        - notify != "on-host"
+      receiver: email-on-host
     - matchers:
         - notify = "on-host"
       receiver: email-on-host
@@ -84,11 +92,13 @@ receivers:
   - name: email
     email_configs:
       - to: '__ALERT_RECIPIENT_EMAIL__'
+        html: '{{ template "branchleft.email.html" . }}'
         send_resolved: false
 
   - name: email-on-host
     email_configs:
       - to: 'rob@branchleft.co.uk'
+        html: '{{ template "branchleft.email.html" . }}'
         send_resolved: true
 
   - name: heartbeat

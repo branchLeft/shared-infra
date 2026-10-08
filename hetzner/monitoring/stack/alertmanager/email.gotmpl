@@ -1,0 +1,13 @@
+{{/* Generated from hetzner/monitoring/render.ts. Hand edits are overwritten. */}}
+{{ define "branchleft.email.html" }}
+<html><body>
+<p>{{ .Status | toUpper }}: {{ .Alerts.Firing | len }} firing, {{ .Alerts.Resolved | len }} resolved.</p>
+{{ range .Alerts }}
+<p><b>{{ .Labels.alertname }}</b> ({{ .Labels.severity }}), {{ .Status }}<br/>
+{{ .Annotations.summary }}<br/>
+{{ .Annotations.description }}<br/>
+Started: {{ .StartsAt.Format "2006-01-02 15:04:05 MST" }}<br/>
+{{ range .Labels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}</p>
+{{ end }}
+</body></html>
+{{ end }}
