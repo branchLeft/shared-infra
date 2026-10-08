@@ -23,9 +23,8 @@ SERVICE_CREDENTIALS_PATH = os.environ.get(
 MAIN_DOMAIN = "branchleft.co.uk"
 
 # The only address this credential may send as. The product domain, not the
-# main one: customers see the product's name (the owner's ruling of 2026-09-24
-# on branchLeft/workspace#1282). The domain must already exist on the server
-# (provision_sending_domain.py publicpress.co.uk --dkim-only).
+# main one: customers see the product's name. The domain must already exist on
+# the server (provision_sending_domain.py publicpress.co.uk --dkim-only).
 ACCOUNT_LOCAL = "noreply"
 ACCOUNT_DOMAIN = "publicpress.co.uk"
 ACCOUNT_DESCRIPTION = "Sign-in service submission account (no mailbox access)"
