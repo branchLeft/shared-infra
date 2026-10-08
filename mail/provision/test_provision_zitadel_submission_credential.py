@@ -40,6 +40,19 @@ class AddressTests(unittest.TestCase):
                 pz.account_address(local, domain)
 
 
+class VersionPinTests(unittest.TestCase):
+    def test_the_pinned_stalwart_is_the_version_the_exact_address_rule_was_read_on(self):
+        compose = pathlib.Path(__file__).resolve().parent / "docker-compose.yml"
+        pins = re.findall(r"image:\s*stalwartlabs/stalwart:(\S+)", compose.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            pins,
+            [pz.VERIFIED_STALWART_VERSION],
+            "the Stalwart pin changed: re-run check_zitadel_sender_scope.py once on the mail "
+            "host, then update VERIFIED_STALWART_VERSION. See provision_zitadel_submission_credential.md.",
+        )
+
+
 class CheckMustMatchSenderTests(unittest.TestCase):
     def test_the_shipped_default_passes(self):
         pz.check_must_match_sender({"match": {}, "else": "true"}, ADDRESS)

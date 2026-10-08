@@ -59,6 +59,15 @@ case: reported, exit 1. `--revoke` destroys it and its local record; the
 account stays, and cannot sign in without it. `--dry-run` performs every read
 and every refusal and writes nothing.
 
+## After a Stalwart upgrade
+
+The exact-address rule is Stalwart's shipped default, read from its source at
+`v0.16.17` and not yet proven on the live host. A unit test fails when
+`docker-compose.yml` pins another version, and says to re-run
+`check_zitadel_sender_scope.py` once on the mail host, then update
+`VERIFIED_STALWART_VERSION`. The first run of that check, after this credential
+is created, is the proof that the rule holds here.
+
 ## What the credential can and cannot do, if it leaks
 
 - **Can:** authenticate to `mx1` on 587 and submit mail whose `MAIL FROM` is

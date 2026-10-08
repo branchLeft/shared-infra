@@ -43,6 +43,12 @@ CREDENTIAL_PERMISSIONS = ("authenticate", "emailSend")
 # authenticated account's own address (or an alias; this account has none).
 DEFAULT_MUST_MATCH_SENDER = "true"
 
+# The Stalwart version whose exact-address rule this relies on, read from its
+# source; test_provision_zitadel_submission_credential.py fails when
+# docker-compose.yml pins another one. After an upgrade, re-run
+# check_zitadel_sender_scope.py on the mail host, then update this.
+VERIFIED_STALWART_VERSION = "v0.16.17"
+
 # The password manager entry the owner stores the secret under.
 PASSWORD_MANAGER_ENTRY = "mx1 stalwart / publicpress / zitadel-smtp-submission"
 
