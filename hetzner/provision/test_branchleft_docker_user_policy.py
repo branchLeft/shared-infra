@@ -118,6 +118,8 @@ class DockerUserPolicyTests(unittest.TestCase):
         ip6_present=True,
         ip6_docker_user=True,
         absent=None,
+        protected_address=None,
+        protected_ports=None,
     ):
         if drop_iptables:
             os.remove(os.path.join(self.bin_dir, "iptables"))
@@ -151,6 +153,10 @@ class DockerUserPolicyTests(unittest.TestCase):
             env["BRANCHLEFT_DOCKER_USER_POLICY_DB_PORT"] = db_port
         if spool_bridge is not None:
             env["BRANCHLEFT_DOCKER_USER_POLICY_MAIL_SPOOL_BRIDGE"] = spool_bridge
+        if protected_address is not None:
+            env["BRANCHLEFT_DOCKER_USER_POLICY_PROTECTED_ADDRESS"] = protected_address
+        if protected_ports is not None:
+            env["BRANCHLEFT_DOCKER_USER_POLICY_PROTECTED_PORTS"] = protected_ports
         if gateway_ip is not None:
             env["BRANCHLEFT_DOCKER_USER_POLICY_GATEWAY_IP"] = gateway_ip
         if no_db_exception_addresses is not None:
@@ -447,6 +453,94 @@ class DockerUserPolicyTests(unittest.TestCase):
         with open(SCRIPT, encoding="utf-8") as handle:
             self.assertIn(":-br-mailspool}", handle.read())
 
+    # -- ops1's published control-plane ports: the gateway only -----------
+
+    PORT_8301 = "-p tcp -m conntrack --ctorigdst 10.20.1.50 --ctorigdstport 8301 ! -s 10.20.1.10 -j DROP"
+    PORT_8302 = PORT_8301.replace("8301", "8302")
+
+    def test_ops1_refuses_every_source_but_the_gateway_on_8301_and_8302(self):
+        result = self.run_script(addresses=OPS1_ADDRESSES)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        order = self.final_chain_order()
+        self.assertIn(self.PORT_8301, order)
+        self.assertIn(self.PORT_8302, order)
+
+    def test_the_port_drops_sit_under_the_conntrack_accept_on_a_boot(self):
+        # Above the accept they would drop the replies of the gateway's own
+        # allowed connections: the outage, not the tightening.
+        self.run_script(addresses=OPS1_ADDRESSES)
+        order = self.final_chain_order()
+        established = next(i for i, c in enumerate(order) if "ESTABLISHED" in c)
+        for rule in (self.PORT_8301, self.PORT_8302):
+            self.assertLess(established, order.index(rule))
+        self.assertEqual(established, 0)
+
+    def test_a_rerun_with_only_the_port_drops_missing_keeps_the_accept_first(self):
+        result = self.run_script(
+            addresses=OPS1_ADDRESSES, rule_present=True, absent="ctorigdstport"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        order = self.replay(self.inserted(), "DOCKER-USER", self.EXISTING_POLICY)
+        self.assertEqual(order[0], self.EXISTING_POLICY[0])
+        self.assertIn(self.PORT_8301, order[:3])
+        self.assertIn(self.PORT_8302, order[:3])
+
+    def test_the_port_drops_name_tcp_and_one_original_port_each_not_the_host(self):
+        # Nextcloud's published port (and every other) must match nothing.
+        self.run_script(addresses=OPS1_ADDRESSES)
+        drops = [c for c in self.inserted() if "ctorigdstport" in c]
+        self.assertEqual(len(drops), 2)
+        for call in drops:
+            self.assertIn("-p tcp", call)
+            self.assertIn("--ctorigdst 10.20.1.50", call)
+            self.assertNotIn("11000", call)
+            self.assertNotIn("8300", call)
+
+    def test_an_ordinary_app_host_gets_no_port_drops(self):
+        # The discriminating case: app1 must not lose anything to ops1's rule.
+        for addresses in (APP_HOST_ADDRESSES, APP_HOST_WITH_PUBLIC_IP_ADDRESSES):
+            self.setUp()
+            result = self.run_script(addresses=addresses)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(any("ctorigdst" in c for c in self.iptables_calls()))
+
+    def test_the_port_drops_are_idempotent(self):
+        result = self.run_script(addresses=OPS1_ADDRESSES, rule_present=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.inserted(), [])
+
+    def test_the_gateway_source_exempt_is_the_gateway_address(self):
+        self.run_script(addresses=OPS1_ADDRESSES, gateway_ip="10.20.1.11")
+        self.assertTrue(
+            any("! -s 10.20.1.11 -j DROP" in c for c in self.inserted())
+        )
+
+    def test_protected_address_and_ports_are_overridable_for_testing(self):
+        self.run_script(
+            addresses=APP_HOST_ADDRESSES,
+            protected_address="10.20.1.100",
+            protected_ports="9001",
+        )
+        self.assertTrue(
+            any("--ctorigdst 10.20.1.100 --ctorigdstport 9001" in c for c in self.inserted())
+        )
+        self.assertFalse(any("8301" in c for c in self.inserted()))
+
+    def test_the_protected_address_default_is_ops1s(self):
+        with open(SCRIPT, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn(":-10.20.1.50}", text)
+        self.assertIn(":-8301 8302}", text)
+
+    def test_the_ports_match_the_compose_publishes_and_the_edge_upstreams(self):
+        stack = os.path.join(
+            os.path.dirname(__file__), "..", "control-plane", "stack", "compose.yml"
+        )
+        with open(stack, encoding="utf-8") as handle:
+            compose = handle.read()
+        for port in ("8301", "8302"):
+            self.assertIn(f"'10.20.1.50:{port}:{port}'", compose)
+
     # -- Trap 4: self-identification, not a one-off env var, must decide it -
 
     def test_self_identified_non_tenant_host_skips_the_db_accept_by_default(self):
@@ -457,7 +551,8 @@ class DockerUserPolicyTests(unittest.TestCase):
         result = self.run_script(addresses=OPS1_ADDRESSES, db_host=None)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(any("--dport" in call for call in self.inserted()))
-        self.assertEqual(len(self.inserted()), 6)
+        # 6 as for any host with no db1 exception, plus the two port drops.
+        self.assertEqual(len(self.inserted()), 8)
 
     def test_explicit_db_host_override_wins_over_self_identification(self):
         # An explicit caller value, even on a self-identifying host, is
@@ -465,7 +560,7 @@ class DockerUserPolicyTests(unittest.TestCase):
         result = self.run_script(addresses=OPS1_ADDRESSES, db_host="10.20.1.20")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(any("10.20.1.20" in call for call in self.inserted()))
-        self.assertEqual(len(self.inserted()), 7)
+        self.assertEqual(len(self.inserted()), 9)
 
     def test_ordinary_app_host_is_not_self_identified_as_non_tenant(self):
         # The discriminating case: app1's own address must not trip the

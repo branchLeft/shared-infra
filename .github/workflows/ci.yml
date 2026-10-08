@@ -289,6 +289,16 @@ jobs:
       - name: Spool bridge egress proof
         run: ./hetzner/scripts/test-spool-bridge-egress.sh
 
+      - name: Shellcheck the control-plane port policy proof
+        run: shellcheck hetzner/scripts/test-control-plane-port-policy.sh
+
+      # Runs the reconciler against a real dockerd in a privileged
+      # Docker-in-Docker stand-in for ops1, with outside containers standing
+      # in for edge1 and db1, so the 8301/8302 refusal is shown to bite on a
+      # published port, and to stop biting when its rule is removed.
+      - name: Control-plane port policy proof
+        run: ./hetzner/scripts/test-control-plane-port-policy.sh
+
       # probe-object-storage.py signs its own requests, and a wrong signature
       # is an opaque 403 against this endpoint -- indistinguishable from a
       # wrong key or a wrong region, and debugged in the wrong place.
