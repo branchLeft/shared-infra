@@ -535,14 +535,14 @@ jobs:
           route email-on-host alertname=SNDSCollectorStale notify=on-host
           route email-on-host alertname=MailDeliveryDeferred notify=on-host
           # The owner's ruling: every critical alert pages the phone through
-          # ntfy, and still reaches the off-host mailbox. Warnings never page.
-          route ntfy-page,email alertname=HostOrServiceDown severity=critical
-          route ntfy-page,email alertname=BlackboxProbeFailed severity=critical
+          # ntfy, and still reaches the off-host mailbox and the owner-read one on mx1. Warnings never page.
+          route ntfy-page,email,email-on-host alertname=HostOrServiceDown severity=critical
+          route ntfy-page,email,email-on-host alertname=BlackboxProbeFailed severity=critical
           # The pager's own death: the page attempt cannot arrive, so the email
           # in the same set is the path that does.
-          route ntfy-page,email alertname=BlackboxProbeFailed severity=critical instance=https://ntfy.branchleft.co.uk
-          route ntfy-page,email alertname=HostDiskSpaceLow severity=critical
-          route ntfy-page,email alertname=SomeFutureCriticalAlert severity=critical
+          route ntfy-page,email,email-on-host alertname=BlackboxProbeFailed severity=critical instance=https://ntfy.branchleft.co.uk
+          route ntfy-page,email,email-on-host alertname=HostDiskSpaceLow severity=critical
+          route ntfy-page,email,email-on-host alertname=SomeFutureCriticalAlert severity=critical
           # An on-host critical alert pages the phone but never leaves mx1 by email.
           route ntfy-page,email-on-host alertname=SomeOnHostCritical severity=critical notify=on-host
           # Warnings stay on mx1 and never page.

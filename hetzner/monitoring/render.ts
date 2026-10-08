@@ -961,6 +961,34 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
   ].join('\n')}\n`;
 }
 
+/** The name both email receivers' `html:` field points at. */
+export const EMAIL_TEMPLATE_NAME = 'branchleft.email.html';
+
+/**
+ * The alert email body. Alertmanager's own default template links to
+ * `.ExternalURL`, which without --web.external-url is the container's
+ * hostname (an address no mail client can open), and to each alert's
+ * `GeneratorURL`, which is Prometheus's equally unreachable one. Neither
+ * service is exposed, so this body carries no link at all.
+ */
+export function renderAlertmanagerEmailTemplate(): string {
+  return `${[
+    '{{/* Generated from hetzner/monitoring/render.ts. Hand edits are overwritten. */}}',
+    `{{ define "${EMAIL_TEMPLATE_NAME}" }}`,
+    '<html><body>',
+    '<p>{{ .Status | toUpper }}: {{ .Alerts.Firing | len }} firing, {{ .Alerts.Resolved | len }} resolved.</p>',
+    '{{ range .Alerts }}',
+    '<p><b>{{ .Labels.alertname }}</b> ({{ .Labels.severity }}), {{ .Status }}<br/>',
+    '{{ .Annotations.summary }}<br/>',
+    '{{ .Annotations.description }}<br/>',
+    'Started: {{ .StartsAt.Format "2006-01-02 15:04:05 MST" }}<br/>',
+    '{{ range .Labels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}</p>',
+    '{{ end }}',
+    '</body></html>',
+    '{{ end }}',
+  ].join('\n')}\n`;
+}
+
 /**
  * Alertmanager's config template, its placeholder tokens substituted by
  * `stack/render_alertmanager_config.py` on the host before every start.
@@ -975,6 +1003,8 @@ export function renderAlertmanagerTemplate(
     ...GENERATED_BANNER,
     '# Rendered into alertmanager.yml at container start by',
     '# render_alertmanager_config.py. This file is never read directly.',
+    'templates:',
+    "  - '/etc/alertmanager/templates/*.gotmpl'",
     'global:',
     "  smtp_smarthost: 'mx1.branchleft.co.uk:587'",
     "  smtp_from: 'alerts@branchleft.co.uk'",
@@ -1015,6 +1045,18 @@ export function renderAlertmanagerTemplate(
     '        - alertname !~ "^(MailHostDown|AlertEmailDeliveryFailing)$"',
     '        - notify != "on-host"',
     '      receiver: email',
+    // `continue: true` on the route above, and this sibling after it: the
+    // off-host recipient is host-supplied (ALERT_RECIPIENT_EMAIL) and a
+    // critical alert reached no mailbox the owner reads through it. The
+    // owner-read mailbox is the local one on mx1 that warnings already
+    // reach, so a critical alert also lands there. Mail-host alerts are
+    // excluded: they fire when mx1 is down, and have their own pair below.
+    '      continue: true',
+    '    - matchers:',
+    '        - severity = "critical"',
+    '        - alertname !~ "^(MailHostDown|AlertEmailDeliveryFailing)$"',
+    '        - notify != "on-host"',
+    '      receiver: email-on-host',
     // No `continue`: an on-host alert must never also reach the root email
     // receiver, whose recipient is off-host. See the notify label's rules.
     '    - matchers:',
@@ -1078,6 +1120,7 @@ export function renderAlertmanagerTemplate(
     '  - name: email',
     '    email_configs:',
     "      - to: '__ALERT_RECIPIENT_EMAIL__'",
+    `        html: '{{ template "${EMAIL_TEMPLATE_NAME}" . }}'`,
     // false: a resolved notice is a second external delivery per incident,
     // and a flapping alert would send one for every flap.
     '        send_resolved: false',
@@ -1087,6 +1130,7 @@ export function renderAlertmanagerTemplate(
     '  - name: email-on-host',
     '    email_configs:',
     "      - to: 'rob@branchleft.co.uk'",
+    `        html: '{{ template "${EMAIL_TEMPLATE_NAME}" . }}'`,
     '        send_resolved: true',
     '',
     '  - name: heartbeat',

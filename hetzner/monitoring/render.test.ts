@@ -15,6 +15,7 @@ import {
   REPLICA_TUNNEL_JOB,
   replicaDeadlineEpoch,
   REPLICA_TUNNEL_METRICS_PORT,
+  renderAlertmanagerEmailTemplate,
   renderAlertmanagerTemplate,
   renderAlertRules,
   renderAlertRulesWithDeadline,
@@ -760,6 +761,26 @@ describe('the Alertmanager template', () => {
     expect(warningRoute.split('- matchers:')[0]).toContain('receiver: email-on-host');
   });
 
+  it('emails every ordinary critical alert to the owner-read mailbox as well as the off-host one', () => {
+    const routeSection = rendered.split('receivers:')[0];
+    const criticalRoutes = routeSection
+      .split('    - matchers:')
+      .filter((r) => r.includes('severity = "critical"'));
+    const emailRoute = criticalRoutes.find((r) => r.includes('receiver: email\n'));
+    const onHostRoute = criticalRoutes.find((r) => r.includes('receiver: email-on-host'));
+    expect(emailRoute).toContain('continue: true');
+    expect(onHostRoute).toContain('notify != "on-host"');
+    expect(onHostRoute).toContain('alertname !~ "^(MailHostDown|AlertEmailDeliveryFailing)$"');
+  });
+
+  it('sends a body with no link: neither Alertmanager nor Prometheus has a reachable URL', () => {
+    const body = renderAlertmanagerEmailTemplate();
+    expect(body).not.toMatch(/https?:|href|ExternalURL|GeneratorURL/);
+    expect(rendered).toContain("- '/etc/alertmanager/templates/*.gotmpl'");
+    const html = `html: '{{ template "branchleft.email.html" . }}'`;
+    expect(rendered.split(html).length - 1).toBe(2);
+  });
+
   it('inhibits alerts whose cause is already firing', () => {
     const section = rendered.slice(
       rendered.indexOf('inhibit_rules:'),
@@ -794,6 +815,9 @@ describe('the committed stack directory', () => {
       './stack/prometheus/prometheus.yml'
     );
     await expect(renderAlertRules()).toMatchFileSnapshot('./stack/prometheus/alerts.yml');
+    await expect(renderAlertmanagerEmailTemplate()).toMatchFileSnapshot(
+      './stack/alertmanager/email.gotmpl'
+    );
     await expect(renderAlertmanagerTemplate()).toMatchFileSnapshot(
       './stack/alertmanager/alertmanager.yml.tmpl'
     );
