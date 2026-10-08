@@ -839,7 +839,7 @@ jobs:
     # in mail/Pulumi.yaml — no `pulumi login` step, per
     # hetzner/RUNBOOK-new-stack.md §7 — and its Object Storage credential pair
     # arrives as the AWS_* variables the S3 backend reads. The bucket's
-    # location is `hel1` (not the servers' `nbg1`); a mismatch fails as an
+    # location is `fsn1` (not the servers' `nbg1`); a mismatch fails as an
     # opaque 403.
     env:
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_MAIL }}
@@ -847,7 +847,7 @@ jobs:
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_MAIL }}
       AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
-      AWS_REGION: hel1
+      AWS_REGION: fsn1
 
     steps:
       - name: Checkout
@@ -952,7 +952,7 @@ jobs:
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_MAIL }}
       AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
-      AWS_REGION: hel1
+      AWS_REGION: fsn1
 
     steps:
       # If the job is running and no required-reviewer rule exists, nothing
@@ -1081,7 +1081,7 @@ jobs:
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_ESTATE }}
       AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
-      AWS_REGION: hel1
+      AWS_REGION: fsn1
 
     steps:
       - name: Checkout
@@ -1177,7 +1177,7 @@ jobs:
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_ESTATE }}
       AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
-      AWS_REGION: hel1
+      AWS_REGION: fsn1
 
     steps:
       # If the job is running and no required-reviewer rule exists, nothing
@@ -1315,7 +1315,7 @@ jobs:
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_ESTATE }}
       AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
-      AWS_REGION: hel1
+      AWS_REGION: fsn1
 
     steps:
       - name: Checkout
@@ -1413,7 +1413,7 @@ jobs:
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_ESTATE }}
       AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
-      AWS_REGION: hel1
+      AWS_REGION: fsn1
 
     steps:
       - name: Refuse to apply through an ungated environment
