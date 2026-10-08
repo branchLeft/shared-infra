@@ -50,12 +50,12 @@ expect_blocked() {
 docker image inspect "$PROBE_IMAGE" >/dev/null 2>&1 || docker pull -q "$PROBE_IMAGE" >/dev/null
 docker image inspect "$DIND_IMAGE" >/dev/null 2>&1 || docker pull -q "$DIND_IMAGE" >/dev/null
 
-docker network create "$NET" >/dev/null
-docker run -d --name "$EDGE" --network "$NET" "$PROBE_IMAGE" sleep 3600 >/dev/null
-docker run -d --name "$OTHER" --network "$NET" "$PROBE_IMAGE" sleep 3600 >/dev/null
+docker network create --label branchleft.agent=port-policy-proof "$NET" >/dev/null
+docker run -d --label branchleft.agent=port-policy-proof --name "$EDGE" --network "$NET" "$PROBE_IMAGE" sleep 3600 >/dev/null
+docker run -d --label branchleft.agent=port-policy-proof --name "$OTHER" --network "$NET" "$PROBE_IMAGE" sleep 3600 >/dev/null
 EDGE_IP="$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NET\").IPAddress}}" "$EDGE")"
 
-docker run -d --privileged --name "$HOST" --hostname ops1-proof --network "$NET" \
+docker run -d --privileged --label branchleft.agent=port-policy-proof --name "$HOST" --hostname ops1-proof --network "$NET" \
     -e DOCKER_TLS_CERTDIR= \
     -v "$HERE/provision:/policy:ro" \
     "$DIND_IMAGE" >/dev/null
@@ -90,11 +90,14 @@ done
 POLICY_ENV="BRANCHLEFT_DOCKER_USER_POLICY_PROTECTED_ADDRESS=$HOST_IP BRANCHLEFT_DOCKER_USER_POLICY_GATEWAY_IP=$EDGE_IP BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST="
 run_policy() { on_host "env $POLICY_ENV bash /policy/branchleft_docker_user_policy.sh"; }
 
-tries=0
-until docker exec "$OTHER" wget -q -T 2 -O /dev/null "http://$HOST_IP:8301/" 2>/dev/null; do
-    tries=$((tries + 1))
-    [ "$tries" -lt 30 ] || { echo "the stand-in portal never answered"; exit 1; }
-    sleep 1
+# Every server answers before any control runs, so no control races a start.
+for port in 8301 8302 11000; do
+    tries=0
+    until docker exec "$OTHER" wget -q -T 2 -O /dev/null "http://$HOST_IP:$port/" 2>/dev/null; do
+        tries=$((tries + 1))
+        [ "$tries" -lt 30 ] || { echo "the stand-in server on $port never answered"; exit 1; }
+        sleep 1
+    done
 done
 
 from() { docker exec "$1" wget -q -T 3 -O /dev/null "http://$HOST_IP:$2/"; }
@@ -107,9 +110,9 @@ expect_reach "the other host reaches the unrelated port" "from $OTHER 11000"
 
 echo "== the policy"
 run_policy
-FIRST="$(on_host "iptables-save" | grep -c ctorigdstport)"
+FIRST="$(on_host "iptables-save" | grep -c ctorigdstport || true)"
 run_policy >/dev/null
-SECOND="$(on_host "iptables-save" | grep -c ctorigdstport)"
+SECOND="$(on_host "iptables-save" | grep -c ctorigdstport || true)"
 if [ "$FIRST" = "$SECOND" ] && [ "$FIRST" -eq 2 ]; then
     pass "a second run leaves the same $FIRST port rules"
 else
