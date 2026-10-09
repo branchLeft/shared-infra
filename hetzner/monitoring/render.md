@@ -121,6 +121,14 @@ it by design -- routing carries no `notify: on-host` label either, since
 the producer host is not mx1, so this reaches the same off-host email
 receiver `HostMemoryPressure` and `HostDiskSpaceLow` already use.
 
+`StateCopyStale` sits in the same group because its producer is the same host
+and the same exporter directory: `state_copy.py` in `branchLeft/ghost-platform`
+copies the two Pulumi state buckets into backup copy 1 each night and writes
+`state_copy_last_success_timestamp_seconds` and `state_copy_bucket_configured`
+per bucket. It has three branches, so a stale gauge, a configured bucket that
+has never succeeded, and a vanished family each fire. Warning, never page,
+same receiver as `TenantBackupAgeHigh`.
+
 ## The `replica-tunnel` rule group
 
 Watches the blog's migration replica on `db-t1`, which receives `db1`'s
