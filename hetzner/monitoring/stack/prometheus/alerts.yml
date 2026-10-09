@@ -91,6 +91,7 @@ groups:
         for: 24h
         labels:
           severity: warning
+          owner_action: "true"
         annotations:
           summary: "{{ $labels.instance }} has used over 75% of memory for 24 hours."
           description: "doc 14 §4 scale-out trigger: app-host memory >75% sustained 24h -> provision the next host."
@@ -102,6 +103,7 @@ groups:
         for: 15m
         labels:
           severity: warning
+          owner_action: "true"
         annotations:
           summary: "{{ $labels.instance }} filesystem {{ $labels.mountpoint }} is over 70% full."
           description: "doc 14 §4 scale-out trigger: disk >70% anywhere -> grow the volume."
@@ -111,6 +113,7 @@ groups:
         for: 10m
         labels:
           severity: warning
+          owner_action: "true"
         annotations:
           summary: "db1 is using over 70% of its MySQL connection budget."
           description: >-
@@ -556,6 +559,7 @@ groups:
         labels:
           severity: warning
           notify: on-host
+          owner_action: "true"
         annotations:
           summary: "The SNDS automated-access link is approaching its 30-day expiry."
           description: >-

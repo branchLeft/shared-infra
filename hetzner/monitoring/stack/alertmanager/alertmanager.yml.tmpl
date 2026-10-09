@@ -40,6 +40,11 @@ route:
         - notify != "on-host"
       receiver: email-on-host
     - matchers:
+        - owner_action = "true"
+        - severity != "critical"
+      receiver: email
+      continue: true
+    - matchers:
         - notify = "on-host"
       receiver: email-on-host
     - matchers:

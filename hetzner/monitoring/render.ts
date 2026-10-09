@@ -437,6 +437,7 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '        for: 24h',
     '        labels:',
     '          severity: warning',
+    '          owner_action: "true"',
     '        annotations:',
     '          summary: "{{ $labels.instance }} has used over 75% of memory for 24 hours."',
     '          description: "doc 14 §4 scale-out trigger: app-host memory >75% sustained 24h -> provision the next host."',
@@ -448,6 +449,7 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '        for: 15m',
     '        labels:',
     '          severity: warning',
+    '          owner_action: "true"',
     '        annotations:',
     '          summary: "{{ $labels.instance }} filesystem {{ $labels.mountpoint }} is over 70% full."',
     '          description: "doc 14 §4 scale-out trigger: disk >70% anywhere -> grow the volume."',
@@ -457,6 +459,7 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '        for: 10m',
     '        labels:',
     '          severity: warning',
+    '          owner_action: "true"',
     '        annotations:',
     '          summary: "db1 is using over 70% of its MySQL connection budget."',
     '          description: >-',
@@ -941,6 +944,7 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '        labels:',
     '          severity: warning',
     '          notify: on-host',
+    '          owner_action: "true"',
     '        annotations:',
     '          summary: "The SNDS automated-access link is approaching its 30-day expiry."',
     '          description: >-',
@@ -1057,6 +1061,19 @@ export function renderAlertmanagerTemplate(
     '        - alertname !~ "^(MailHostDown|AlertEmailDeliveryFailing)$"',
     '        - notify != "on-host"',
     '      receiver: email-on-host',
+    // An alert whose fix needs the owner's own hands (a portal visit, a
+    // spend, a dated expiry) also reaches the off-host mailbox, which the
+    // owner reads; the on-host mailbox alone is one they do not. Label
+    // driven (`owner_action`), so adding a rule never touches this tree.
+    // `continue: true` sends the walk on to the on-host and warning routes
+    // below, which still deliver exactly as before. Criticals are excluded:
+    // they reach the off-host mailbox already, and a second route to the
+    // same receiver would send the group twice.
+    '    - matchers:',
+    '        - owner_action = "true"',
+    '        - severity != "critical"',
+    '      receiver: email',
+    '      continue: true',
     // No `continue`: an on-host alert must never also reach the root email
     // receiver, whose recipient is off-host. See the notify label's rules.
     '    - matchers:',

@@ -689,6 +689,47 @@ describe('the notify="on-host" label', () => {
   });
 });
 
+describe('the owner_action="true" label', () => {
+  // Exact set, both directions: a missing label leaves an owner-only chore in
+  // a mailbox the owner does not read; a stray one sends routine mail off-host.
+  it('is carried by the rules whose fix needs the owner, and nothing else', () => {
+    const labelled = renderAlertRules()
+      .split('- alert: ')
+      .slice(1)
+      .filter((rule) => /\n\s+owner_action: "true"(\n|$)/.test(rule.split(/\n\s+annotations:/)[0]))
+      .map((rule) => rule.split('\n')[0]);
+    expect(labelled).toEqual([
+      'HostMemoryPressure',
+      'HostDiskSpaceLow',
+      'MySQLConnectionsHigh',
+      'SNDSAccessLinkExpiringSoon',
+    ]);
+  });
+
+  it('is never set on a critical rule, which the route excludes', () => {
+    const critical = renderAlertRules()
+      .split('- alert: ')
+      .slice(1)
+      .filter((rule) => rule.split(/\n\s+annotations:/)[0].includes('owner_action'))
+      .filter((rule) => rule.split(/\n\s+annotations:/)[0].includes('severity: critical'));
+    expect(critical).toEqual([]);
+  });
+
+  it('routes it to the off-host receiver with continue, ahead of the on-host and warning routes', () => {
+    const routeSection = renderAlertmanagerTemplate().split('receivers:')[0];
+    const route = routeSection
+      .split('    - matchers:')
+      .find((r) => r.includes('owner_action = "true"'));
+    expect(route).toContain('severity != "critical"');
+    expect(route).toContain('receiver: email\n');
+    expect(route).toContain('continue: true');
+    const at = routeSection.indexOf('owner_action = "true"');
+    expect(at).toBeGreaterThan(routeSection.indexOf('notify != "on-host"'));
+    expect(at).toBeLessThan(routeSection.indexOf('notify = "on-host"'));
+    expect(at).toBeLessThan(routeSection.indexOf('severity = "warning"'));
+  });
+});
+
 describe('the Alertmanager template', () => {
   const rendered = renderAlertmanagerTemplate();
 
