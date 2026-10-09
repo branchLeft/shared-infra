@@ -1218,6 +1218,55 @@ tests:
           - labels: 'ALERTS{alertname="TenantBackupAgeHigh", alertstate="firing", severity="warning"}'
             value: 1
 
+  # StateCopyStale: the issue's sabotage line, stopping the nightly copy fires
+  # it. The estate series keeps advancing; the tenant series is frozen, so only
+  # the tenant bucket fires.
+  - interval: 1h
+    input_series:
+      - series: 'state_copy_bucket_configured{bucket="estate"}'
+        values: '1x60'
+      - series: 'state_copy_bucket_configured{bucket="tenant"}'
+        values: '1x60'
+      - series: 'state_copy_last_success_timestamp_seconds{bucket="estate"}'
+        values: '0+3600x60'
+      - series: 'state_copy_last_success_timestamp_seconds{bucket="tenant"}'
+        values: '0x60'
+    promql_expr_test:
+      - expr: ALERTS{alertname="StateCopyStale", alertstate="firing", bucket="tenant"}
+        eval_time: 40h
+        exp_samples:
+          - labels: 'ALERTS{alertname="StateCopyStale", alertstate="firing", severity="warning", bucket="tenant"}'
+            value: 1
+      - expr: ALERTS{alertname="StateCopyStale", alertstate="firing", bucket="estate"}
+        eval_time: 40h
+        exp_samples: []
+      - expr: ALERTS{alertname="StateCopyStale", alertstate="firing", bucket="tenant"}
+        eval_time: 35h
+        exp_samples: []
+
+  # A configured bucket that has never succeeded has a configured series and
+  # no success series: the stale branch cannot see it, the unless branch does.
+  - interval: 1h
+    input_series:
+      - series: 'state_copy_bucket_configured{bucket="estate"}'
+        values: '1x5'
+    promql_expr_test:
+      - expr: ALERTS{alertname="StateCopyStale", alertstate="firing", bucket="estate"}
+        eval_time: 2h
+        exp_samples:
+          - labels: 'ALERTS{alertname="StateCopyStale", alertstate="firing", severity="warning", bucket="estate"}'
+            value: 1
+
+  # Nothing at all: the job never ran, or the file is gone.
+  - interval: 1h
+    input_series: []
+    promql_expr_test:
+      - expr: ALERTS{alertname="StateCopyStale", alertstate="firing"}
+        eval_time: 1h
+        exp_samples:
+          - labels: 'ALERTS{alertname="StateCopyStale", alertstate="firing", severity="warning"}'
+            value: 1
+
   # db1's node target is expected up so the nightly dump's textfile gauges
   # are scraped. A dead db1 node_exporter must page like any other host's,
   # and the label text is the one nodeTarget() renders for db1.
