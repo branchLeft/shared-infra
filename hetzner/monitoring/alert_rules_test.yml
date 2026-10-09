@@ -957,6 +957,7 @@ tests:
           - exp_labels:
               severity: warning
               notify: on-host
+              owner_action: 'true'
             exp_annotations:
               summary: 'The SNDS automated-access link is approaching its 30-day expiry.'
               description: >-
