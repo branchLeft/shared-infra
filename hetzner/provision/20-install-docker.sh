@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Installs Docker CE from Docker's own apt repo (Debian ships no docker.io
-# package on trixie's stable branch at time of writing, and the distro
-# package lags upstream releases regardless). Idempotent: every step checks
-# current state before acting.
+# Installs Docker CE from Docker's own apt repo (trixie's stable branch ships
+# no docker.io package, and the distro package lags upstream). Idempotent.
 #
 # Versions are deliberately unpinned. That is only defensible because
 # 10-harden-updates-fail2ban.sh adds Docker's origin to the
@@ -29,6 +27,22 @@ install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/debian/gpg -o "$TMP_KEY"
 if [[ ! -s "$TMP_KEY" ]]; then
     echo "20-install-docker: fetched an empty signing key, refusing to install it" >&2
+    exit 1
+fi
+
+# The primary key fingerprint is pinned: a key served over HTTPS that is not
+# this one is refused. A rotated Docker key therefore stops this script until
+# EXPECTED_FPR is updated from the new key, deliberately.
+EXPECTED_FPR="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+if ! command -v gpg >/dev/null 2>&1; then
+    apt-get update -qq
+    apt-get install -yqq gnupg
+fi
+GNUPG_HOME="$(mktemp -d)"
+trap 'rm -rf "$GNUPG_HOME"; rm -f "$TMP_KEY"' EXIT
+actual_fpr="$(gpg --homedir "$GNUPG_HOME" --batch --with-colons --show-keys "$TMP_KEY" 2>/dev/null | awk -F: '/^fpr:/ {print $10; exit}')"
+if [[ "$actual_fpr" != "$EXPECTED_FPR" ]]; then
+    echo "20-install-docker: signing key fingerprint is '${actual_fpr:-unreadable}', expected $EXPECTED_FPR; refusing to install it" >&2
     exit 1
 fi
 
