@@ -169,6 +169,10 @@ UNSCANNED_SUFFIXES: dict[str, str] = {
         "compiled bytecode. The source it was compiled from is scanned, and a "
         "name reachable only through a stale .pyc is not one anybody wrote down."
     ),
+    ".asc": (
+        "ASCII-armored OpenPGP key material copied verbatim from the publisher "
+        "(Docker's apt signing key). This repository authored none of it."
+    ),
 }
 
 # Pruned during the walk, not filtered after it: `node_modules` alone holds more

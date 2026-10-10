@@ -40,9 +40,11 @@ if ! command -v gpg >/dev/null 2>&1; then
 fi
 GNUPG_HOME="$(mktemp -d)"
 trap 'rm -rf "$GNUPG_HOME"; rm -f "$TMP_KEY"' EXIT
-actual_fpr="$(gpg --homedir "$GNUPG_HOME" --batch --with-colons --show-keys "$TMP_KEY" 2>/dev/null | awk -F: '/^fpr:/ {print $10; exit}')"
-if [[ "$actual_fpr" != "$EXPECTED_FPR" ]]; then
-    echo "20-install-docker: signing key fingerprint is '${actual_fpr:-unreadable}', expected $EXPECTED_FPR; refusing to install it" >&2
+key_listing="$(gpg --homedir "$GNUPG_HOME" --batch --with-colons --show-keys "$TMP_KEY" 2>/dev/null || true)"
+key_count="$(printf '%s\n' "$key_listing" | awk -F: '$1 == "pub" {n++} END {print n + 0}')"
+actual_fpr="$(printf '%s\n' "$key_listing" | awk -F: '/^fpr:/ {print $10; exit}' | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')"
+if [[ "$key_count" != "1" || "$actual_fpr" != "$EXPECTED_FPR" ]]; then
+    echo "20-install-docker: signing key holds $key_count key(s), primary fingerprint '${actual_fpr:-unreadable}', expected exactly one key with $EXPECTED_FPR; refusing to install it" >&2
     exit 1
 fi
 

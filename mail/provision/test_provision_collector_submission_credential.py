@@ -60,7 +60,7 @@ class MainDomainNeverAllowedTests(unittest.TestCase):
 class VersionPinTests(unittest.TestCase):
     def test_the_pinned_stalwart_is_the_version_the_scope_was_proven_on(self):
         compose = pathlib.Path(__file__).resolve().parent / "docker-compose.yml"
-        pins = re.findall(r"image:\s*stalwartlabs/stalwart:(\S+)", compose.read_text(encoding="utf-8"))
+        pins = re.findall(r"image:\s*stalwartlabs/stalwart:([^@\s]+)", compose.read_text(encoding="utf-8"))
 
         self.assertEqual(
             pins,
