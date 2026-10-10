@@ -547,6 +547,12 @@ jobs:
           route ntfy-page,email-on-host alertname=SomeOnHostCritical severity=critical notify=on-host
           # Warnings stay on mx1 and never page.
           route email-on-host alertname=TenantBackupAgeHigh severity=warning
+          # db1's own dump and binlog shipping, same group, same route.
+          route email-on-host alertname=DbNightlyDumpStale severity=warning host=db1
+          route email-on-host alertname=DbNightlyDumpFailed severity=warning host=db1
+          route email-on-host alertname=DbNightlyDumpMetricAbsent severity=warning host=db1
+          route email-on-host alertname=DbBinlogShipStale severity=warning host=db1
+          route email-on-host alertname=DbBinlogShipMetricAbsent severity=warning host=db1
           route email-on-host alertname=HostMemoryPressure severity=warning
           # An alert whose fix needs the owner's hands carries owner_action and
           # reaches both mailboxes: the off-host one the owner reads, and mx1's.

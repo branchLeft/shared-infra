@@ -262,6 +262,15 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   // one.
   backup_worker_lock_wait_seconds: 'backup_worker.py, in branchLeft/ghost-platform, in org/control',
   backup_worker_lock_aborts_total: 'backup_worker.py, in branchLeft/ghost-platform, in org/control',
+  // db1's own dump and binlog shipper, written by the two scripts named
+  // here to the textfile directory db1's node_exporter reads. The source
+  // is branchLeft/ghost-platform's db/provision, not scannable from here.
+  db_nightly_dump_last_success_timestamp_seconds:
+    'dump_nightly.py, in branchLeft/ghost-platform db/provision, on db1',
+  db_nightly_dump_last_run_success:
+    'dump_nightly.py, in branchLeft/ghost-platform db/provision, on db1',
+  db_binlog_ship_last_success_timestamp_seconds:
+    'ship_binlogs.py, in branchLeft/ghost-platform db/provision, on db1',
 };
 
 /**

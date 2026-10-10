@@ -1363,6 +1363,177 @@ tests:
         alertname: BackupLockAbortsRising
         exp_alerts: []
 
+  # db1's own nightly dump (DbNightlyDump*). The series are the ones db1's
+  # node_exporter publishes from dump_nightly.py's status file; the rules
+  # select on host="db1". A success time frozen at 0 and a run that last
+  # succeeded: 29h old is inside the 30h margin, exactly 30h (108000s) is not
+  # over it (`>`, not `>=`), 31h is. The three eval times pin the threshold
+  # from both sides, so neither 100000 nor 129600 passes.
+  - interval: 1h
+    input_series:
+      - series: 'db_nightly_dump_last_success_timestamp_seconds{job="node", host="db1"}'
+        values: '0x40'
+      - series: 'db_nightly_dump_last_run_success{job="node", host="db1"}'
+        values: '1x40'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DbNightlyDumpStale", alertstate="firing"}
+        eval_time: 29h
+        exp_samples: []
+      - expr: ALERTS{alertname="DbNightlyDumpStale", alertstate="firing"}
+        eval_time: 30h
+        exp_samples: []
+      - expr: ALERTS{alertname="DbNightlyDumpStale", alertstate="firing"}
+        eval_time: 31h
+        exp_samples:
+          - labels: 'ALERTS{alertname="DbNightlyDumpStale", alertstate="firing", severity="warning", job="node", host="db1"}'
+            value: 1
+      # The run gauge says the last run succeeded, so only the stale rule
+      # speaks; the series exist, so the absent rule is quiet too.
+      - expr: ALERTS{alertname=~"DbNightlyDumpFailed|DbNightlyDumpMetricAbsent", alertstate="firing"}
+        eval_time: 40h
+        exp_samples: []
+
+  # A dump that succeeds every night: the success time advances with the
+  # clock, the age never passes a few hours, and none of the three dump rules
+  # fires over 40 hours.
+  - interval: 1h
+    input_series:
+      - series: 'db_nightly_dump_last_success_timestamp_seconds{job="node", host="db1"}'
+        values: '0+3600x40'
+      - series: 'db_nightly_dump_last_run_success{job="node", host="db1"}'
+        values: '1x40'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"DbNightlyDump.*", alertstate="firing"}
+        eval_time: 40h
+        exp_samples: []
+
+  # The latest run failed: DbNightlyDumpFailed fires on the first failed
+  # run, 27h before the stale rule could (the success time is fresh), and
+  # stays silent while the gauge reads 1.
+  - interval: 1h
+    input_series:
+      - series: 'db_nightly_dump_last_success_timestamp_seconds{job="node", host="db1"}'
+        values: '0+3600x6'
+      - series: 'db_nightly_dump_last_run_success{job="node", host="db1"}'
+        values: '1 1 0 0 0 0 0'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DbNightlyDumpFailed", alertstate="firing"}
+        eval_time: 1h
+        exp_samples: []
+      - expr: ALERTS{alertname="DbNightlyDumpFailed", alertstate="firing"}
+        eval_time: 3h
+        exp_samples:
+          - labels: 'ALERTS{alertname="DbNightlyDumpFailed", alertstate="firing", severity="warning", job="node", host="db1"}'
+            value: 1
+      - expr: ALERTS{alertname="DbNightlyDumpStale", alertstate="firing"}
+        eval_time: 6h
+        exp_samples: []
+
+  # The series gone: only the control host's copy gauge exists, and one
+  # dump-shaped series from another host, which must not satisfy db1's
+  # selector. The absent rule is pending for its 30h and then fires with the
+  # host label. At 29h it has not fired; at 31h it has.
+  - interval: 1h
+    input_series:
+      - series: 'backup_worker_last_success_timestamp_seconds{tenant="tenant-a", job="node", host="ops1"}'
+        values: '0+3600x40'
+      - series: 'db_nightly_dump_last_success_timestamp_seconds{job="node", host="ops1"}'
+        values: '0+3600x40'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DbNightlyDumpMetricAbsent", alertstate="firing"}
+        eval_time: 29h
+        exp_samples: []
+      - expr: ALERTS{alertname="DbNightlyDumpMetricAbsent", alertstate="firing"}
+        eval_time: 31h
+        exp_samples:
+          - labels: 'ALERTS{alertname="DbNightlyDumpMetricAbsent", alertstate="firing", severity="warning", host="db1"}'
+            value: 1
+
+  # The rule deployed before the script: the series appears at 24h, the
+  # first nightly run after delivery, inside the 30h wait, so the absent
+  # rule never fires. At 10h it is pending, not firing.
+  - interval: 1h
+    input_series:
+      - series: 'db_nightly_dump_last_success_timestamp_seconds{job="node", host="db1"}'
+        values: '_x23 86400+3600x20'
+      - series: 'db_nightly_dump_last_run_success{job="node", host="db1"}'
+        values: '_x23 1x20'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"DbNightlyDump.*", alertstate="firing"}
+        eval_time: 10h
+        exp_samples: []
+      - expr: ALERTS{alertname=~"DbNightlyDump.*", alertstate="firing"}
+        eval_time: 40h
+        exp_samples: []
+
+  # db1's binlog shipping (DbBinlogShip*), a success time every 5 minutes in
+  # the test where the timer is 15: frozen at 0, 55m old is silent, exactly
+  # 1h (3600s) is not over it, 65m is. Pins 3600 from both sides.
+  - interval: 5m
+    input_series:
+      - series: 'db_binlog_ship_last_success_timestamp_seconds{job="node", host="db1"}'
+        values: '0x30'
+      - series: 'db_binlog_ship_last_run_success{job="node", host="db1"}'
+        values: '0x30'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DbBinlogShipStale", alertstate="firing"}
+        eval_time: 55m
+        exp_samples: []
+      - expr: ALERTS{alertname="DbBinlogShipStale", alertstate="firing"}
+        eval_time: 1h
+        exp_samples: []
+      - expr: ALERTS{alertname="DbBinlogShipStale", alertstate="firing"}
+        eval_time: 65m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DbBinlogShipStale", alertstate="firing", severity="warning", job="node", host="db1"}'
+            value: 1
+      - expr: ALERTS{alertname="DbBinlogShipMetricAbsent", alertstate="firing"}
+        eval_time: 2h
+        exp_samples: []
+
+  # Shipping that keeps up: the success time advances every 15 minutes, so
+  # the age never passes 15 minutes and no binlog rule fires over 3 hours.
+  - interval: 15m
+    input_series:
+      - series: 'db_binlog_ship_last_success_timestamp_seconds{job="node", host="db1"}'
+        values: '0+900x12'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"DbBinlogShip.*", alertstate="firing"}
+        eval_time: 3h
+        exp_samples: []
+
+  # The series gone (db1's own dump series are present and must not hide
+  # it): pending for 1h, fires after, carrying the host label.
+  - interval: 5m
+    input_series:
+      - series: 'db_nightly_dump_last_success_timestamp_seconds{job="node", host="db1"}'
+        values: '0+300x40'
+      - series: 'db_nightly_dump_last_run_success{job="node", host="db1"}'
+        values: '1x40'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DbBinlogShipMetricAbsent", alertstate="firing"}
+        eval_time: 50m
+        exp_samples: []
+      - expr: ALERTS{alertname="DbBinlogShipMetricAbsent", alertstate="firing"}
+        eval_time: 70m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DbBinlogShipMetricAbsent", alertstate="firing", severity="warning", host="db1"}'
+            value: 1
+
+  # The rule deployed before the script: the series appears at 30m, inside
+  # the 1h wait, so the absent rule is pending at 20m and never fires.
+  - interval: 5m
+    input_series:
+      - series: 'db_binlog_ship_last_success_timestamp_seconds{job="node", host="db1"}'
+        values: '_x6 1800+300x40'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DbBinlogShipMetricAbsent", alertstate="firing"}
+        eval_time: 20m
+        exp_samples: []
+      - expr: ALERTS{alertname="DbBinlogShipMetricAbsent", alertstate="firing"}
+        eval_time: 3h
+        exp_samples: []
+
   # The replica tunnel group. Series names and labels are the ones a live
   # mysqld_exporter v0.20.0 published through the tunnel in the container
   # proof (ghost-platform db/tunnel/prove-replica-tunnel.sh). Empty labels
