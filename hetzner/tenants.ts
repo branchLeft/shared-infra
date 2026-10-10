@@ -6,7 +6,11 @@ import { checkProjectResults } from './projectGuard';
 
 /**
  * The tenants project's network and its one database host, db-t1.
- * Every resource here waits on the project guard.
+ * Gated on the project check: the network and subnet, the Host's network
+ * wiring, and the Host's firewall, server and PrimaryIp (the transformation
+ * below). A resource declared outside the Host must depend on the verified
+ * value itself, because an ungated resource is created even when the check
+ * refuses.
  */
 
 const TENANTS_PROJECT_FIX =
@@ -31,12 +35,13 @@ const verified = <T>(value: pulumi.Input<T>): pulumi.Output<T> =>
  * Makes the firewall's name and the server's type wait on the check, so a
  * refused check registers neither. Applied to the Host's children below.
  */
-const GATED_PROPERTY: Record<string, string> = {
+export const GATED_PROPERTY: Record<string, string> = {
   'hcloud:index/firewall:Firewall': 'name',
   'hcloud:index/server:Server': 'serverType',
+  'hcloud:index/primaryIp:PrimaryIp': 'name',
 };
 
-const gateRegistration: pulumi.ResourceTransformation = (args) => {
+export const gateRegistration: pulumi.ResourceTransformation = (args) => {
   const property = GATED_PROPERTY[args.type];
   if (property === undefined) {
     return undefined;
