@@ -5,33 +5,12 @@ import * as pulumi from '@pulumi/pulumi';
 import { checkProjectResults } from './projectGuard';
 
 /**
- * The tenants project's own network and its one database host, db-t1.
- *
- * The tenants project is a separate Hetzner project from the estate project.
- * A Hetzner network does not span projects, so this program declares a network
- * of its own rather than attaching to the estate's `platform` network. Nothing
- * in the estate can reach db-t1 by private address: the only way in is through
- * the tenants project's own hosts, or through the tunnel, which is a separate
- * decision. That isolation is a property of the network boundary, not of a
- * firewall rule, and the network is created here so it cannot be shared by
- * accident.
- *
- * The estate's stack reads the platform network from another stack's outputs.
- * This stack does not: the tenants network is created here, and its only
- * consumer is the host below.
- *
- * The program file sits in the package root while its Pulumi project sits in
- * `tenants/`, matching `estate.ts`, so both projects share one `node_modules`.
+ * The tenants project's network and its one database host, db-t1.
+ * Every resource here waits on the project guard.
  */
 
-/**
- * Refuses the whole program unless `hcloud:token` addresses the tenants
- * project. The tenants project is new and empty, so the check also requires
- * its own marker firewall to be visible: an empty tenants project and an empty
- * demos project look identical without it. See `projectGuard.ts`.
- */
 const TENANTS_PROJECT_FIX =
-  'Point hcloud:token at the tenants project, and create the project-marker-tenants firewall there if it is missing';
+  'Point hcloud:token at the tenants project, and create project-marker-tenants there if missing';
 
 export function checkTenantsProject(
   servers: { servers: { name: string }[] },
@@ -44,24 +23,42 @@ export const tenantsProjectVerified = pulumi
   .all([pulumi.output(hcloud.getServers()), pulumi.output(hcloud.getFirewalls())])
   .apply(([servers, firewalls]) => checkTenantsProject(servers, firewalls));
 
+/** Resolves to `value` only once the project check has passed. */
+const verified = <T>(value: pulumi.Input<T>): pulumi.Output<T> =>
+  pulumi.all([tenantsProjectVerified, value]).apply(([, resolved]) => resolved as T);
+
+/**
+ * Makes the firewall's name and the server's type wait on the check, so a
+ * refused check registers neither. Applied to the Host's children below.
+ */
+const GATED_PROPERTY: Record<string, string> = {
+  'hcloud:index/firewall:Firewall': 'name',
+  'hcloud:index/server:Server': 'serverType',
+};
+
+const gateRegistration: pulumi.ResourceTransformation = (args) => {
+  const property = GATED_PROPERTY[args.type];
+  if (property === undefined) {
+    return undefined;
+  }
+  return {
+    props: { ...args.props, [property]: verified(args.props[property]) },
+    opts: args.opts,
+  };
+};
+
 const config = new pulumi.Config();
 
 const image = config.require('image');
 
-/** Names of keys already registered in the tenants project, not key material.
- * A key registered only in the estate project fails the apply, because the
- * SSH key list is per project and create-time-only on the server. */
+/** Names of keys registered in the tenants project, not key material. */
 const ownerSshKeyNames = config.requireObject<string[]>('ownerSshKeyNames');
 
-/**
- * The tenants network. Its address range is the same as the estate's, which is
- * deliberate and harmless: the two networks are in different projects and are
- * never joined, so no route can carry an address from one into the other.
- */
+/** The tenants network. A network does not span projects, so this is its own. */
 export const tenantsNetwork = new hcloud.Network(
   'tenants',
   {
-    name: 'tenants',
+    name: verified('tenants'),
     ipRange: NETWORK_CIDR,
     exposeRoutesToVswitch: false,
     deleteProtection: true,
@@ -76,7 +73,7 @@ export const tenantsNetwork = new hcloud.Network(
 export const tenantsSubnet = new hcloud.NetworkSubnet(
   'tenants-eu-central',
   {
-    networkId: tenantsNetwork.id.apply((id) => Number(id)),
+    networkId: verified(tenantsNetwork.id).apply((id) => Number(id)),
     type: 'cloud',
     networkZone: 'eu-central',
     ipRange: SUBNET_CIDR,
@@ -84,38 +81,33 @@ export const tenantsSubnet = new hcloud.NetworkSubnet(
   { protect: true, parent: tenantsNetwork }
 );
 
-/**
- * db-t1's fixed private address on the tenants network. Listed here rather
- * than derived, for the same reason every host's address is listed in the
- * address plan: a rule or a client config that names it must match on grep.
- */
+/** db-t1's fixed private address on the tenants network. */
 export const TENANTS_DB_PRIVATE_IP = '10.20.1.20';
 
 /**
- * The shared MySQL host for every paid tenant instance. Private only: it has no
- * public address of its own, and `publicNetworking` is fixed at creation, so
- * the shape cannot be changed later without a two-step apply.
- *
- * The network id is routed through the subnet so the server cannot be created
- * before the subnet it attaches to. A component's `dependsOn` does not reach
- * its children, so the dependency is carried by the value itself.
+ * The shared MySQL host. Private only; `publicNetworking` is fixed at creation.
+ * The network id waits on the subnet so the server cannot be created first.
  */
-export const dbT1 = new Host({
-  name: 'db-t1',
-  role: 'db',
-  location: ESTATE_LOCATION,
-  image,
-  ownerSshKeyNames,
-  networkId: pulumi.all([tenantsNetwork.id, tenantsSubnet.id]).apply(([networkId]) => networkId),
-  serverType: config.require('dbt1ServerType'),
-  privateIp: TENANTS_DB_PRIVATE_IP,
-  deployPublicKey: config.require('dbt1DeployPublicKey'),
-  publicNetworking: false,
-  environment: 'production',
-  protection: true,
-  backups: false,
-});
+export const dbT1 = new Host(
+  {
+    name: 'db-t1',
+    role: 'db',
+    location: ESTATE_LOCATION,
+    image,
+    ownerSshKeyNames,
+    networkId: pulumi
+      .all([tenantsProjectVerified, tenantsNetwork.id, tenantsSubnet.id])
+      .apply(([, networkId]) => networkId),
+    serverType: config.require('dbt1ServerType'),
+    privateIp: TENANTS_DB_PRIVATE_IP,
+    deployPublicKey: config.require('dbt1DeployPublicKey'),
+    publicNetworking: false,
+    environment: 'production',
+    protection: true,
+    backups: false,
+  },
+  { transformations: [gateRegistration] }
+);
 
-/** Read from the applied server, so a later stack reads where db-t1 actually is. */
 export const dbT1Location = dbT1.server.location;
 export const dbT1PrivateIp = TENANTS_DB_PRIVATE_IP;

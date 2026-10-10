@@ -76,8 +76,21 @@ describe('tenants program', () => {
     const db = ofType('hcloud:index/server:Server').find(
       (server) => server.inputs.name === 'db-t1'
     );
-    const publicNets = db?.inputs.publicNets as { ipv4Enabled: boolean }[] | undefined;
+    const publicNets = db?.inputs.publicNets as
+      { ipv4Enabled: boolean; ipv6Enabled: boolean }[] | undefined;
     expect(publicNets?.[0]?.ipv4Enabled).toBe(false);
+    expect(publicNets?.[0]?.ipv6Enabled).toBe(false);
+  });
+
+  it('gives db-t1 a firewall with only the SSH and ICMP inbound rules', async () => {
+    await load();
+
+    const firewall = ofType('hcloud:index/firewall:Firewall').find(
+      (resource) => resource.inputs.name === 'db-t1'
+    );
+    const rules = firewall?.inputs.rules as { port?: string; protocol: string }[] | undefined;
+    expect(rules?.map((rule) => rule.protocol)).toEqual(['tcp', 'icmp']);
+    expect(rules?.[0]?.port).toBe('22');
   });
 
   it('attaches db-t1 inline to the tenants network at its fixed address', async () => {
