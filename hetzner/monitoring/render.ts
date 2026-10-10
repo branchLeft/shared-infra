@@ -566,11 +566,12 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            move REPLICA_TUNNEL_DEADLINE in hetzner/monitoring/render.ts.',
     '',
     '  - name: backup',
-    // One group, not two -- both alerts watch the same producer.
-    // TenantBackupAgeHigh is the producer-side signal, not a liveness
-    // check; the or absent(...) branch covers the metric family vanishing
-    // entirely. Warning, never page, off-host receiver. See
-    // render.md#the-backup-rule-group.
+    // One group, not two. The backup_worker.py alerts watch db1;
+    // StateCopyStale watches state_copy.py on ops1, a different producer
+    // on a different host. TenantBackupAgeHigh is the producer-side signal,
+    // not a liveness check; the or absent(...) branch covers the metric
+    // family vanishing entirely. Warning, never page, off-host receiver.
+    // See render.md#the-backup-rule-group.
     '    rules:',
     '      - alert: TenantBackupAgeHigh',
     '        expr: >-',
@@ -615,7 +616,7 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            state_copy_last_success_timestamp_seconds advances only after a',
     '            copy is encrypted and written to backup copy 1, so a stopped',
     '            timer, a refused bucket read or an empty-looking listing leaves',
-    '            that bucket\'s gauge frozen. Three branches: a stale gauge; a',
+    "            that bucket's gauge frozen. Three branches: a stale gauge; a",
     '            bucket the job is configured for that has never succeeded',
     '            (state_copy_bucket_configured is written before any copy); and',
     '            the whole family absent, which means the job has never run or the',
