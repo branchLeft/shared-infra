@@ -142,6 +142,7 @@ REPOSITORY = HETZNER.parent
 SCANNED_SUFFIXES = frozenset(
     {
         "",
+        ".asc",
         ".authoring",
         ".conf",
         ".enforcing",
@@ -168,10 +169,6 @@ UNSCANNED_SUFFIXES: dict[str, str] = {
     ".pyc": (
         "compiled bytecode. The source it was compiled from is scanned, and a "
         "name reachable only through a stale .pyc is not one anybody wrote down."
-    ),
-    ".asc": (
-        "ASCII-armored OpenPGP key material copied verbatim from the publisher "
-        "(Docker's apt signing key). This repository authored none of it."
     ),
 }
 
