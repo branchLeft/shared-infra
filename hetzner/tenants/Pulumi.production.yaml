@@ -1,0 +1,25 @@
+# Stack configuration for the tenants project's network and db-t1.
+#
+# No `encryptionsalt` is committed here. CI appends it from its own repository
+# secret, or an operator appends it from their own copy for a hand-gated
+# operation, and never commits the result. See `estate/Pulumi.production.yaml`.
+#
+# `dbt1DeployPublicKey` is deliberately absent. It is the public half of a key
+# generated for db-t1 at the time of the first apply, and no value for it exists
+# in the repository yet. A preview without it fails on the missing key, which is
+# the intended result: it is set with `pulumi config set` by the operator who
+# generates the key, and the public half is then committed in a follow-up.
+#
+# `location` is not a key here, for the reason `estate/Pulumi.production.yaml`
+# gives: it is `ESTATE_LOCATION` in the address plan.
+config:
+  # Matches the estate's hosts. Ignored by the component after creation.
+  branchleft-hetzner-tenants:image: debian-13
+  # The smallest current shared-x86 type, the same type as the other hosts in
+  # this estate. Check `Available:` and never `Recommended:` immediately before
+  # an apply, as the estate stack's own comment describes.
+  branchleft-hetzner-tenants:dbt1ServerType: cx23
+  # The name the key is registered under in the tenants project. A key that is
+  # registered only in the estate project fails the apply.
+  branchleft-hetzner-tenants:ownerSshKeyNames:
+    - rob@branchleft.co.uk

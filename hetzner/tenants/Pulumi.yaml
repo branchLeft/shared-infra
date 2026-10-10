@@ -1,0 +1,13 @@
+name: branchleft-hetzner-tenants
+runtime: nodejs
+
+# `main` is mandatory, for the reason `estate/Pulumi.yaml` gives: this
+# directory holds a Pulumi project but no npm package, and without the line
+# below Pulumi reads the package root's `"main"` and runs the wrong program.
+main: ../tenants.ts
+
+# Pinned to the same backend as the estate stack, so `pulumi login` on a
+# workstation cannot point this stack at a different state store.
+backend:
+  url: 's3://branchleft-pulumi-state?endpoint=hel1.your-objectstorage.com&s3ForcePathStyle=true&region=hel1'
+description: The tenants project's own network and the shared MySQL host, db-t1. Separate from the estate stack because the tenants project is a different Hetzner project, and a network does not span projects.
