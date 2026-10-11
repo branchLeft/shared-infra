@@ -150,6 +150,7 @@ SCANNED_SUFFIXES = frozenset(
         ".json",
         ".local",
         ".md",
+        ".mjs",
         ".mode",
         ".py",
         ".service",
