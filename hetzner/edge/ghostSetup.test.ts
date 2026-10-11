@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -8,6 +7,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { hostRedirects, sites, staticSites } from '../../sites';
 import type { EdgeSite } from '../../siteTypes';
+import {
+  ensureImage,
+  probeEngineSync,
+  removeByName,
+  startContainer,
+  takeSlot,
+  type Slot,
+} from './dockerHarness';
 import { POSTURE, type EdgePosture } from './posture';
 import { renderCaddyfile } from './render';
 
@@ -128,13 +135,18 @@ const CADDY_IMAGE =
   'caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648';
 const LABEL = 'branchleft.agent=edge-ghost-setup-test';
 
-function docker(...args: string[]) {
-  return spawnSync('docker', args, { encoding: 'utf8', timeout: 120_000 });
-}
-
-const dockerUp = spawnSync('docker', ['info'], { timeout: 30_000 }).status === 0;
+// The docker calls are bounded and killed by dockerHarness: a silent engine
+// fails this block in seconds with a message, it does not hold the commit.
+const engine = probeEngineSync();
+const dockerUp = engine.up;
 if (!dockerUp && process.env.CI) {
-  throw new Error('docker is required for the live-Caddy refusal check in CI');
+  throw new Error(`docker is required for the live-Caddy refusal check in CI: ${engine.reason}`);
+}
+if (!dockerUp) {
+  console.warn(
+    `SKIPPED: the live-Caddy refusal check did not run (${engine.reason}). ` +
+      'The rendered-output tests above still ran; CI runs this block.'
+  );
 }
 
 /** Extract the matcher and refusal exactly as the renderer emits them. */
@@ -154,10 +166,14 @@ function get(
   headers: Record<string, string> = {}
 ): Promise<number> {
   return new Promise((resolve, reject) => {
-    const req = request({ host: '127.0.0.1', port, path: rawPath, method, headers }, (res) => {
-      res.resume();
-      resolve(res.statusCode ?? 0);
-    });
+    const req = request(
+      { host: '127.0.0.1', port, path: rawPath, method, headers, timeout: 5_000 },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('no answer from the container within 5s')));
     req.on('error', reject);
     req.end(method === 'POST' || method === 'PUT' ? '{}' : undefined);
   });
@@ -167,33 +183,26 @@ describe.skipIf(!dockerUp)('the refusal under a real Caddy', { timeout: 180_000 
   const dir = mkdtempSync(join(tmpdir(), 'ghost-setup-'));
   const name = `bl-ghost-setup-${process.pid}`;
   let port = 0;
+  let slot: Slot | undefined;
 
-  const start = (snippet: string) => {
+  const start = async (snippet: string) => {
     writeFileSync(
       join(dir, 'Caddyfile'),
       `{\n\tadmin off\n\tauto_https off\n}\n:8081 {\n\t${snippet.replace(/\n/g, '\n\t')}\n\trespond "reached the upstream" 200\n}\n`
     );
-    const run = docker(
-      'run',
-      '--rm',
-      '-d',
-      '--name',
+    port = await startContainer({
       name,
-      '--label',
-      LABEL,
-      '-p',
-      '127.0.0.1::8081',
-      '-v',
-      `${join(dir, 'Caddyfile')}:/etc/caddy/Caddyfile:ro`,
-      CADDY_IMAGE
-    );
-    expect(run.status, run.stderr).toBe(0);
-    const mapped = docker('port', name, '8081/tcp').stdout.trim().split('\n')[0] ?? '';
-    port = Number(mapped.split(':').pop());
+      label: LABEL,
+      image: CADDY_IMAGE,
+      containerPort: 8081,
+      mountSource: join(dir, 'Caddyfile'),
+      mountTarget: '/etc/caddy/Caddyfile',
+    });
     expect(port).toBeGreaterThan(0);
   };
-  const stop = () => {
-    docker('rm', '-f', '-v', name);
+  const stop = async () => {
+    const left = await removeByName(name);
+    expect(left, 'the container must be removed by name').toBeUndefined();
   };
 
   async function waitUp() {
@@ -208,9 +217,13 @@ describe.skipIf(!dockerUp)('the refusal under a real Caddy', { timeout: 180_000 
     throw new Error('caddy did not start');
   }
 
-  afterAll(() => {
-    stop();
-    rmSync(dir, { recursive: true, force: true });
+  afterAll(async () => {
+    try {
+      await removeByName(name);
+    } finally {
+      slot?.release();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   const REFUSED = [
@@ -234,10 +247,14 @@ describe.skipIf(!dockerUp)('the refusal under a real Caddy', { timeout: 180_000 
     '/ghost/api/content/posts/',
   ];
 
+  // 90 s for a slot, up to 150 s for the image, 30 s each to create and start:
+  // the hook timeout is the sum, and every step inside is bounded on its own.
   beforeAll(async () => {
-    start(setupSnippet(render(ENFORCING)));
+    slot = await takeSlot({ waitMs: 90_000, label: 'edge-ghost-setup-test' });
+    await ensureImage(CADDY_IMAGE);
+    await start(setupSnippet(render(ENFORCING)));
     await waitUp();
-  });
+  }, 330_000);
 
   it.each(REFUSED)('refuses a POST and a PUT to %s', async (path) => {
     expect(await get(port, path, 'POST')).toBe(403);
@@ -284,8 +301,8 @@ describe.skipIf(!dockerUp)('the refusal under a real Caddy', { timeout: 180_000 
   // upstream. Without this, a green run above would also be what a Caddy that
   // ignored the config produced.
   it('SABOTAGE: with the rule removed, the owner-creating requests reach the upstream', async () => {
-    stop();
-    start('');
+    await stop();
+    await start('');
     await waitUp();
     expect(await get(port, '/ghost/api/admin/authentication/setup/', 'POST')).toBe(200);
     expect(await get(port, '/ghost/api/admin/authentication/setup/', 'PUT')).toBe(200);
