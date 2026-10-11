@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,12 +23,56 @@ export interface DockerResult {
   elapsedMs: number;
 }
 
+// Clients still running, and containers created and not yet confirmed removed.
+// An interrupt or a process exit sweeps both, so neither outlives the run.
+const live = new Set<ChildProcess>();
+const owned = new Map<string, NodeJS.ProcessEnv | undefined>();
+const held = new Set<() => void>();
+let armed = false;
+
+/** SIGKILL the client's whole process group (it is spawned as a group leader). */
+function killGroup(child: ChildProcess) {
+  try {
+    if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    child.kill('SIGKILL');
+  }
+}
+
+function sweep() {
+  live.forEach(killGroup);
+  live.clear();
+  for (const [name, env] of owned) {
+    spawnSync('docker', ['rm', '-f', '-v', name], {
+      env: env ?? process.env,
+      timeout: 5_000,
+      killSignal: 'SIGKILL',
+      stdio: 'ignore',
+    });
+  }
+  owned.clear();
+  [...held].forEach((release) => release());
+}
+
+function arm() {
+  if (armed) return;
+  armed = true;
+  process.on('exit', sweep);
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    process.once(signal, () => {
+      sweep();
+      process.kill(process.pid, signal);
+    });
+  }
+}
+
 /** Run the docker client with a hard deadline. Never rejects, never hangs. */
 export function docker(
   args: string[],
   deadlineMs: number,
   ctx: DockerContext = {}
 ): Promise<DockerResult> {
+  arm();
   return new Promise((resolve) => {
     const started = Date.now();
     let stdout = '';
@@ -40,12 +84,15 @@ export function docker(
     const child = spawn('docker', args, {
       env: ctx.env ?? process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
     });
+    live.add(child);
 
     const finish = (status: number | null) => {
       if (settled) return;
       settled = true;
       timers.forEach(clearTimeout);
+      live.delete(child);
       child.stdout.destroy();
       child.stderr.destroy();
       resolve({ status, stdout, stderr, timedOut, elapsedMs: Date.now() - started });
@@ -65,7 +112,7 @@ export function docker(
     timers.push(
       setTimeout(() => {
         timedOut = true;
-        child.kill('SIGKILL');
+        killGroup(child);
         timers.push(setTimeout(() => finish(null), 2_000));
       }, deadlineMs)
     );
@@ -88,19 +135,21 @@ export interface EngineProbe {
 
 const INFO_ARGS = ['info', '--format', '{{.ServerVersion}}'];
 
+// Exit status is not enough: with `--format`, client 27 exits 0 with an empty
+// stdout when no daemon is reachable. Only a printed server version is "up".
 const probeVerdict = (
   status: number | null,
   timedOut: boolean,
+  stdout: string,
   stderr: string,
   deadlineMs: number
 ): EngineProbe => {
-  if (status === 0) return { up: true, reason: 'engine answered' };
-  return {
-    up: false,
-    reason: timedOut
-      ? `\`docker info\` gave no answer within ${seconds(deadlineMs)}`
-      : `\`docker info\` failed: ${firstLine(stderr)}`,
-  };
+  if (status === 0 && /^\d/.test(stdout.trim())) return { up: true, reason: 'engine answered' };
+  if (timedOut) {
+    return { up: false, reason: `\`docker info\` gave no answer within ${seconds(deadlineMs)}` };
+  }
+  const why = status === 0 ? `no server version printed (${firstLine(stderr)})` : firstLine(stderr);
+  return { up: false, reason: `\`docker info\` found no engine: ${why}` };
 };
 
 /** Whether the engine answers `docker info` within a short deadline. */
@@ -109,7 +158,7 @@ export async function probeEngine(
   deadlineMs = 10_000
 ): Promise<EngineProbe> {
   const r = await docker(INFO_ARGS, deadlineMs, ctx);
-  return probeVerdict(r.status, r.timedOut, r.stderr, deadlineMs);
+  return probeVerdict(r.status, r.timedOut, r.stdout, r.stderr, deadlineMs);
 }
 
 /** The same probe where nothing can await (`describe.skipIf`); blocks at most `deadlineMs`. */
@@ -123,7 +172,7 @@ export function probeEngineSync(ctx: DockerContext = {}, deadlineMs = 10_000): E
   });
   const timedOut = (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT';
   const stderr = r.error && !timedOut ? r.error.message : (r.stderr ?? '');
-  return probeVerdict(r.status, timedOut, stderr, deadlineMs);
+  return probeVerdict(r.status, timedOut, r.stdout ?? '', stderr, deadlineMs);
 }
 
 export interface ImageLimits {
@@ -149,6 +198,12 @@ export async function ensureImage(
     throw new DockerFailure(
       `The Docker engine is not answering: \`docker image inspect ${image}\` gave no answer within ` +
         `${seconds(limits.inspectMs)}. No container was started. Do not retry in a loop: report the engine as wedged.`
+    );
+  }
+  if (/Cannot connect to the Docker daemon/i.test(have.stderr)) {
+    throw new DockerFailure(
+      `No Docker engine is reachable: ${firstLine(have.stderr)}. No container was started. ` +
+        'Start Docker and re-run, or leave it stopped to skip this check locally.'
     );
   }
   const pull = await docker(['pull', '--quiet', image], limits.pullMs, ctx);
@@ -183,7 +238,7 @@ export const CONTAINER_LIMITS: ContainerLimits = {
   createMs: 30_000,
   startMs: 30_000,
   portMs: 15_000,
-  removeMs: 20_000,
+  removeMs: 10_000,
 };
 
 /**
@@ -196,7 +251,10 @@ export async function removeByName(
   deadlineMs = CONTAINER_LIMITS.removeMs
 ): Promise<string | undefined> {
   const r = await docker(['rm', '-f', '-v', name], deadlineMs, ctx);
-  if (r.status === 0 || /No such container/i.test(r.stderr)) return undefined;
+  if (r.status === 0 || /No such container/i.test(r.stderr)) {
+    owned.delete(name);
+    return undefined;
+  }
   const cause = r.timedOut ? `no answer within ${seconds(deadlineMs)}` : firstLine(r.stderr);
   return `The container ${name} could not be removed (${cause}). Remove it by hand: docker rm -f -v ${name}`;
 }
@@ -222,6 +280,8 @@ export async function startContainer(
     );
   };
 
+  arm();
+  owned.set(spec.name, ctx.env);
   const created = await docker(
     [
       'create',
@@ -324,18 +384,20 @@ export async function takeSlot(opts: SlotOptions): Promise<Slot> {
       const release = () => {
         if (released) return;
         released = true;
+        held.delete(release);
         if (readOwner(path) === mine) rmSync(path, { recursive: true, force: true });
       };
-      process.once('exit', release);
+      arm();
+      held.add(release);
       return { name, release };
     }
     if (Date.now() >= until) {
-      const held = readdirSync(dir)
+      const holders = readdirSync(dir)
         .filter((n) => n.startsWith('slot-'))
         .map((n) => `${n}: ${readOwner(join(dir, n)) || 'owner unreadable'}`)
         .join('; ');
       throw new DockerFailure(
-        `No Docker slot became free within ${seconds(opts.waitMs)} in ${dir} (${held}). ` +
+        `No Docker slot became free within ${seconds(opts.waitMs)} in ${dir} (${holders}). ` +
           `Another Docker proof is running; wait for it to finish and re-run. Nothing was started.`
       );
     }

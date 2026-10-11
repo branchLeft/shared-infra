@@ -179,7 +179,10 @@ function get(
   });
 }
 
-describe.skipIf(!dockerUp)('the refusal under a real Caddy', { timeout: 180_000 }, () => {
+// The reason rides in the title so every listing of skipped tests carries it.
+const caddyTitle = `the refusal under a real Caddy${dockerUp ? '' : ` (SKIPPED: ${engine.reason})`}`;
+
+describe.skipIf(!dockerUp)(caddyTitle, { timeout: 180_000 }, () => {
   const dir = mkdtempSync(join(tmpdir(), 'ghost-setup-'));
   const name = `bl-ghost-setup-${process.pid}`;
   let port = 0;
@@ -224,7 +227,8 @@ describe.skipIf(!dockerUp)('the refusal under a real Caddy', { timeout: 180_000 
       slot?.release();
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+    // One 10 s removal plus the 2 s kill grace, so 30 s is above any path here.
+  }, 30_000);
 
   const REFUSED = [
     '/ghost/api/admin/authentication/setup',
@@ -247,14 +251,14 @@ describe.skipIf(!dockerUp)('the refusal under a real Caddy', { timeout: 180_000 
     '/ghost/api/content/posts/',
   ];
 
-  // 90 s for a slot, up to 150 s for the image, 30 s each to create and start:
-  // the hook timeout is the sum, and every step inside is bounded on its own.
+  // Worst case, every step silent: 90 s slot, 120 s pull, 30 s each to create and
+  // start, then removals; each step is bounded on its own and the sum is under this.
   beforeAll(async () => {
     slot = await takeSlot({ waitMs: 90_000, label: 'edge-ghost-setup-test' });
     await ensureImage(CADDY_IMAGE);
     await start(setupSnippet(render(ENFORCING)));
     await waitUp();
-  }, 330_000);
+  }, 360_000);
 
   it.each(REFUSED)('refuses a POST and a PUT to %s', async (path) => {
     expect(await get(port, path, 'POST')).toBe(403);
