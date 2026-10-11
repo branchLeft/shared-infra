@@ -1481,3 +1481,104 @@ tests:
       - eval_time: 10m30s
         alertname: MySQLUnreachable
         exp_alerts: []
+
+  # The scanner group. The series come from each tenant's Ghost process via
+  # the node target's textfile collector, so they carry that target's labels;
+  # `expected_up="false"` hosts must stay silent, and a host with no scanner
+  # series at all must raise nothing (the group uses no absent()). Read
+  # through ALERTS for the reason given at the top of the backup cases.
+  #
+  # ScannerNotConfigured: tenant-a is unconfigured with a fresh file and
+  # fires once `for: 10m` is met. tenant-b is configured (0). tenant-c is
+  # unconfigured on a host not yet expected up. tenant-d is unconfigured but
+  # its file stopped being rewritten (timestamp frozen at 0), so the
+  # freshness clause drops it before `for` can accumulate.
+  - interval: 30s
+    input_series:
+      - series: 'scanning_storage_unconfigured_instances{job="node", instance="10.20.1.30:9100", host="app1", expected_up="true", tenant="tenant-a"}'
+        values: '1x40'
+      - series: 'scanning_storage_metrics_written_timestamp_seconds{job="node", instance="10.20.1.30:9100", host="app1", expected_up="true", tenant="tenant-a"}'
+        values: '0+30x40'
+      - series: 'scanning_storage_unconfigured_instances{job="node", instance="10.20.1.30:9100", host="app1", expected_up="true", tenant="tenant-b"}'
+        values: '0x40'
+      - series: 'scanning_storage_metrics_written_timestamp_seconds{job="node", instance="10.20.1.30:9100", host="app1", expected_up="true", tenant="tenant-b"}'
+        values: '0+30x40'
+      - series: 'scanning_storage_unconfigured_instances{job="node", instance="10.20.1.31:9100", host="app2", expected_up="false", tenant="tenant-c"}'
+        values: '1x40'
+      - series: 'scanning_storage_metrics_written_timestamp_seconds{job="node", instance="10.20.1.31:9100", host="app2", expected_up="false", tenant="tenant-c"}'
+        values: '0+30x40'
+      - series: 'scanning_storage_unconfigured_instances{job="node", instance="10.20.1.30:9100", host="app1", expected_up="true", tenant="tenant-d"}'
+        values: '1x40'
+      - series: 'scanning_storage_metrics_written_timestamp_seconds{job="node", instance="10.20.1.30:9100", host="app1", expected_up="true", tenant="tenant-d"}'
+        values: '0x40'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ScannerNotConfigured", alertstate="firing"}
+        eval_time: 5m
+        exp_samples: []
+      - expr: ALERTS{alertname="ScannerNotConfigured", alertstate="firing"}
+        eval_time: 11m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ScannerNotConfigured", alertstate="firing", severity="warning", job="node", instance="10.20.1.30:9100", host="app1", expected_up="true", tenant="tenant-a"}'
+            value: 1
+
+  # ScannerUploadsRefused: tenant-a is refused once, at 2m, and clears when
+  # the 15m window moves past it. tenant-b's refusal is by verdict (the
+  # control working) and tenant-c's is on a host not yet expected up.
+  # tenant-d is the clean-upload control: its counter is present and flat.
+  - interval: 30s
+    input_series:
+      - series: 'scanning_storage_uploads_refused_total{job="node", instance="10.20.1.30:9100", host="app1", expected_up="true", tenant="tenant-a", reason="unconfigured"}'
+        values: '0 0 0 0 1x60'
+      - series: 'scanning_storage_uploads_refused_total{job="node", instance="10.20.1.30:9100", host="app1", expected_up="true", tenant="tenant-b", reason="verdict"}'
+        values: '0 0 0 0 1x60'
+      - series: 'scanning_storage_uploads_refused_total{job="node", instance="10.20.1.31:9100", host="app2", expected_up="false", tenant="tenant-c", reason="unconfigured"}'
+        values: '0 0 0 0 1x60'
+      - series: 'scanning_storage_uploads_refused_total{job="node", instance="10.20.1.30:9100", host="app1", expected_up="true", tenant="tenant-d", reason="unconfigured"}'
+        values: '0x64'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ScannerUploadsRefused", alertstate="firing"}
+        eval_time: 3m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ScannerUploadsRefused", alertstate="firing", severity="warning", job="node", instance="10.20.1.30:9100", host="app1", expected_up="true", tenant="tenant-a", reason="unconfigured"}'
+            value: 1
+      - expr: ALERTS{alertname="ScannerUploadsRefused", alertstate="firing"}
+        eval_time: 25m
+        exp_samples: []
+
+  # ScannerVerdictChannelFailing: tenant-a keeps timing out for 15 minutes,
+  # then the channel answers again. It fires once the 10m `for` is met and is
+  # gone five minutes after the last error. tenant-b has one isolated
+  # timeout, which is above zero for only 5m and never fires. tenant-c is
+  # failing on a host not yet expected up.
+  - interval: 30s
+    input_series:
+      - series: 'scanning_storage_verdict_errors_total{job="node", instance="10.20.1.30:9100", host="app1", expected_up="true", tenant="tenant-a", kind="timeout"}'
+        values: '0+1x30 30x60'
+      - series: 'scanning_storage_verdict_errors_total{job="node", instance="10.20.1.30:9100", host="app1", expected_up="true", tenant="tenant-b", kind="timeout"}'
+        values: '0 0 0 1x90'
+      - series: 'scanning_storage_verdict_errors_total{job="node", instance="10.20.1.31:9100", host="app2", expected_up="false", tenant="tenant-c", kind="timeout"}'
+        values: '0+1x30 30x60'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ScannerVerdictChannelFailing", alertstate="firing"}
+        eval_time: 5m
+        exp_samples: []
+      - expr: ALERTS{alertname="ScannerVerdictChannelFailing", alertstate="firing"}
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ScannerVerdictChannelFailing", alertstate="firing", severity="warning", job="node", instance="10.20.1.30:9100", host="app1", expected_up="true", tenant="tenant-a", kind="timeout"}'
+            value: 1
+      - expr: ALERTS{alertname="ScannerVerdictChannelFailing", alertstate="firing"}
+        eval_time: 25m
+        exp_samples: []
+
+  # No scanner series at all, only the host's own `up`: the group raises
+  # nothing. A host that never exported, or an adapter with export off, is
+  # not a fault.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node", instance="10.20.1.30:9100", host="app1", expected_up="true"}'
+        values: '1x80'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"Scanner.*", alertstate="firing"}
+        eval_time: 30m
+        exp_samples: []
