@@ -21,12 +21,14 @@ name: CI
 #      aborts before `pulumi up` if it would destroy protected infrastructure
 #      (scripts/assert-no-hetzner-deletes.py).
 #   4. Every apply job declares an `environment` and a concurrency group. The
-#      environment's required-reviewer rule is what pauses the apply until a
-#      human has read the plan job's summary — the delete guard catches the
+#      environment's protection rule is what pauses the apply until the plan
+#      job's summary has been read and approved — the delete guard catches the
 #      destruction class mechanically, the reviewer catches the plan that is
 #      green, non-destructive and still wrong. An environment with no
 #      protection rule pauses nothing and says nothing; verify the rule via
-#      the API before trusting the gate.
+#      the API before trusting the gate. The mail apply is in its own
+#      environment, `production-mail`, so no approval meant for another
+#      stack's apply can release it.
 #   5. The apply job re-runs preview and the guard immediately before
 #      `pulumi up`: what was approved and what is applied can diverge only
 #      inside one run's window, and never past the guard.
@@ -738,8 +740,9 @@ jobs:
   # ---------------------------------------------------------------------------
   # Deploy pipelines. Each stack gets a plan job and an apply job: the plan job
   # writes the real `pulumi preview` plan for this exact commit to its job
-  # summary, and the apply job — gated by the `production` environment's
-  # required-reviewer rule — runs only after a human has read it. The apply job
+  # summary, and the apply job — gated by its environment's protection rules
+  # (`production`, or `production-mail` for the mail stack alone) — runs only
+  # after the plan has been read and approved. The apply job
   # re-runs preview and the delete guard itself, so the approved window can
   # never smuggle a plan past the gate.
   #
@@ -760,14 +763,22 @@ jobs:
   # rather than the individual files inside it — because a coarse filter's
   # failure mode is an unnecessary plan and a precise one's is a missed apply.
   #
-  # Two things the machinery cannot enforce, on the approver:
+  # Three things the machinery cannot enforce, on the approver:
   #   - Approve each queued apply individually, with its own plan summary open.
   #     The pending-deployments screen offers a multi-select approve, and using
   #     it signs off plans nobody read.
   #   - The environment rule itself lives in repo settings. Each apply job's
-  #     first step verifies via the API that a required-reviewer rule is live
-  #     and fails the apply if not, so an unconfigured gate is a red run, not a
-  #     silent unattended apply.
+  #     first step verifies via the API that its environment pauses it and
+  #     fails the apply if not, so an unconfigured gate is a red run, not a
+  #     silent unattended apply. `production-mail` must have a
+  #     required-reviewer rule; `production` may have that or an enabled
+  #     custom deployment protection rule of the reviewer App (integration
+  #     id 5090756).
+  #   - A newer push run cancels older runs of this workflow still `waiting`
+  #     for approval, from each plan job (first step). No `concurrency`
+  #     group does this job: a run paused for approval counts as in progress,
+  #     so a workflow-level group would queue the newer run behind it (and
+  #     cancel-in-progress would also cancel an apply that had started).
   # ---------------------------------------------------------------------------
 
   changes:
@@ -848,6 +859,14 @@ jobs:
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.changes.outputs.mail == 'true'
 
+    # `actions: write` is only for the first step, which cancels older runs
+    # still waiting for approval; contents and packages repeat the workflow
+    # default because a job-level block replaces it.
+    permissions:
+      contents: read
+      packages: read
+      actions: write
+
     defaults:
       run:
         working-directory: mail
@@ -869,6 +888,47 @@ jobs:
       AWS_REGION: hel1
 
     steps:
+      # Older runs of this workflow that are still paused for approval have
+      # applied nothing. Cancel the ones this run supersedes: never a run with
+      # a job in progress or an apply that started, and never a run paused on
+      # a stack this push did not plan (that change would then never apply).
+      # Hygiene, not a gate: a failure here must not block the plan.
+      - name: Cancel older runs that are still waiting for approval
+        continue-on-error: true
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLANS_MAIL: ${{ needs.changes.outputs.mail }}
+          PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
+          PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
+        run: |
+          api="repos/${GITHUB_REPOSITORY}/actions"
+          older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
+            jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
+              '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
+          for run in ${older}; do
+            verdict=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              jq -r --arg m "${PLANS_MAIL}" --arg n "${PLANS_NETWORK}" --arg e "${PLANS_ESTATE}" '
+                def planned:
+                  if startswith("Apply (mail,") then $m == "true"
+                  elif startswith("Apply (hetzner network,") then $n == "true"
+                  elif startswith("Apply (hetzner estate,") then $e == "true"
+                  else false end;
+                [.jobs[] | select(.name | startswith("Apply ("))] as $applies
+                | if ($applies | length) == 0 then "keep"
+                  elif ([.jobs[] | select(.status == "in_progress")] | length) > 0 then "keep"
+                  elif ([$applies[] | select(.status == "completed" and .conclusion != "skipped")] | length) > 0 then "keep"
+                  elif ([$applies[] | select(.status != "completed" and ((.name | planned) | not))] | length) > 0 then "keep"
+                  elif ([$applies[] | select(.status == "waiting")] | length) == 0 then "keep"
+                  else "cancel" end')
+            if [ "${verdict}" = "cancel" ]; then
+              gh api --method POST "${api}/runs/${run}/cancel" --silent
+              echo "cancelled superseded run ${run}"
+            else
+              echo "kept run ${run}"
+            fi
+          done
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -953,9 +1013,12 @@ jobs:
     needs: [mail-plan]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
-    # Same environment as the edge apply, so one required-reviewer rule pauses
-    # every production apply in this repository.
-    environment: production
+    # The mail apply has an environment of its own. An approval releases every
+    # job waiting in one environment for the run, so sharing `production` with
+    # the Hetzner applies would let an approval meant for them release this
+    # one. `production-mail` carries the owner's required-reviewer rule and
+    # nothing else, and the gate step below refuses to run without it.
+    environment: production-mail
 
     concurrency:
       group: pulumi-mail-deploy
@@ -982,10 +1045,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          reviewers=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production" \
+          reviewers=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production-mail" \
             --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
           if [ "${reviewers:-0}" -eq 0 ]; then
-            echo "::error::the production environment has no required-reviewer rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+            echo "::error::the production-mail environment has no required-reviewer rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
             exit 1
           fi
 
@@ -1085,6 +1148,12 @@ jobs:
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.changes.outputs.hetzner_network == 'true'
 
+    # See mail-plan: `actions: write` is only for the cancel step.
+    permissions:
+      contents: read
+      packages: read
+      actions: write
+
     defaults:
       run:
         working-directory: hetzner
@@ -1103,6 +1172,47 @@ jobs:
       AWS_REGION: hel1
 
     steps:
+      # Older runs of this workflow that are still paused for approval have
+      # applied nothing. Cancel the ones this run supersedes: never a run with
+      # a job in progress or an apply that started, and never a run paused on
+      # a stack this push did not plan (that change would then never apply).
+      # Hygiene, not a gate: a failure here must not block the plan.
+      - name: Cancel older runs that are still waiting for approval
+        continue-on-error: true
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLANS_MAIL: ${{ needs.changes.outputs.mail }}
+          PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
+          PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
+        run: |
+          api="repos/${GITHUB_REPOSITORY}/actions"
+          older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
+            jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
+              '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
+          for run in ${older}; do
+            verdict=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              jq -r --arg m "${PLANS_MAIL}" --arg n "${PLANS_NETWORK}" --arg e "${PLANS_ESTATE}" '
+                def planned:
+                  if startswith("Apply (mail,") then $m == "true"
+                  elif startswith("Apply (hetzner network,") then $n == "true"
+                  elif startswith("Apply (hetzner estate,") then $e == "true"
+                  else false end;
+                [.jobs[] | select(.name | startswith("Apply ("))] as $applies
+                | if ($applies | length) == 0 then "keep"
+                  elif ([.jobs[] | select(.status == "in_progress")] | length) > 0 then "keep"
+                  elif ([$applies[] | select(.status == "completed" and .conclusion != "skipped")] | length) > 0 then "keep"
+                  elif ([$applies[] | select(.status != "completed" and ((.name | planned) | not))] | length) > 0 then "keep"
+                  elif ([$applies[] | select(.status == "waiting")] | length) == 0 then "keep"
+                  else "cancel" end')
+            if [ "${verdict}" = "cancel" ]; then
+              gh api --method POST "${api}/runs/${run}/cancel" --silent
+              echo "cancelled superseded run ${run}"
+            else
+              echo "kept run ${run}"
+            fi
+          done
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1178,8 +1288,8 @@ jobs:
     needs: [hetzner-network-plan]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
-    # Same environment as every other production apply, so one
-    # required-reviewer rule pauses them all.
+    # The Hetzner applies share `production`; the mail apply is in
+    # `production-mail`, so an approval here cannot release it.
     environment: production
 
     concurrency:
@@ -1199,18 +1309,31 @@ jobs:
       AWS_REGION: hel1
 
     steps:
-      # If the job is running and no required-reviewer rule exists, nothing
-      # paused it — the environment key is silently inert without one. Fail
-      # here, before any credential is touched, rather than apply unattended.
+      # If the job is running and nothing paused it — no required-reviewer
+      # rule and no enabled custom deployment protection rule of the reviewer
+      # App (integration id 5090756) — the environment key is silently
+      # inert. Fail here, before any credential is touched, rather than apply
+      # unattended. The custom rule is not listed
+      # in the environment object's `protection_rules`; it has its own
+      # endpoint, read below. Any failure to read it counts as no rule, so
+      # this stays fail-closed.
       - name: Refuse to apply through an ungated environment
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          reviewers=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production" \
+          api="repos/${GITHUB_REPOSITORY}/environments/production"
+          reviewers=$(gh api "${api}" \
             --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
-          if [ "${reviewers:-0}" -eq 0 ]; then
-            echo "::error::the production environment has no required-reviewer rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+          custom=0
+          if out=$(gh api "${api}/deployment_protection_rules" \
+            --jq '[.custom_deployment_protection_rules[]? | select(.enabled == true and .app.id == 5090756)] | length' 2>/dev/null); then
+            custom="${out}"
+          fi
+          case "${reviewers}" in '' | *[!0-9]*) reviewers=0 ;; esac
+          case "${custom}" in '' | *[!0-9]*) custom=0 ;; esac
+          if [ "${reviewers}" -eq 0 ] && [ "${custom}" -eq 0 ]; then
+            echo "::error::the production environment has neither a required-reviewer rule nor an enabled custom deployment protection rule of the reviewer App -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
             exit 1
           fi
 
@@ -1324,6 +1447,12 @@ jobs:
       needs.changes.outputs.hetzner_estate == 'true' &&
       !failure() && !cancelled()
 
+    # See mail-plan: `actions: write` is only for the cancel step.
+    permissions:
+      contents: read
+      packages: read
+      actions: write
+
     defaults:
       run:
         working-directory: hetzner/estate
@@ -1337,6 +1466,47 @@ jobs:
       AWS_REGION: hel1
 
     steps:
+      # Older runs of this workflow that are still paused for approval have
+      # applied nothing. Cancel the ones this run supersedes: never a run with
+      # a job in progress or an apply that started, and never a run paused on
+      # a stack this push did not plan (that change would then never apply).
+      # Hygiene, not a gate: a failure here must not block the plan.
+      - name: Cancel older runs that are still waiting for approval
+        continue-on-error: true
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLANS_MAIL: ${{ needs.changes.outputs.mail }}
+          PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
+          PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
+        run: |
+          api="repos/${GITHUB_REPOSITORY}/actions"
+          older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
+            jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
+              '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
+          for run in ${older}; do
+            verdict=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              jq -r --arg m "${PLANS_MAIL}" --arg n "${PLANS_NETWORK}" --arg e "${PLANS_ESTATE}" '
+                def planned:
+                  if startswith("Apply (mail,") then $m == "true"
+                  elif startswith("Apply (hetzner network,") then $n == "true"
+                  elif startswith("Apply (hetzner estate,") then $e == "true"
+                  else false end;
+                [.jobs[] | select(.name | startswith("Apply ("))] as $applies
+                | if ($applies | length) == 0 then "keep"
+                  elif ([.jobs[] | select(.status == "in_progress")] | length) > 0 then "keep"
+                  elif ([$applies[] | select(.status == "completed" and .conclusion != "skipped")] | length) > 0 then "keep"
+                  elif ([$applies[] | select(.status != "completed" and ((.name | planned) | not))] | length) > 0 then "keep"
+                  elif ([$applies[] | select(.status == "waiting")] | length) == 0 then "keep"
+                  else "cancel" end')
+            if [ "${verdict}" = "cancel" ]; then
+              gh api --method POST "${api}/runs/${run}/cancel" --silent
+              echo "cancelled superseded run ${run}"
+            else
+              echo "kept run ${run}"
+            fi
+          done
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1435,15 +1605,30 @@ jobs:
       AWS_REGION: hel1
 
     steps:
+      # The environment must pause this job: a required-reviewer rule, or an
+      # enabled custom deployment protection rule of the reviewer App
+      # (integration id 5090756), either of which holds the job until
+      # something answers. The
+      # custom rule is not listed in the environment object's
+      # `protection_rules`; it has its own endpoint, read below. Any failure
+      # to read it counts as no rule, so this stays fail-closed.
       - name: Refuse to apply through an ungated environment
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          reviewers=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production" \
+          api="repos/${GITHUB_REPOSITORY}/environments/production"
+          reviewers=$(gh api "${api}" \
             --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
-          if [ "${reviewers:-0}" -eq 0 ]; then
-            echo "::error::the production environment has no required-reviewer rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+          custom=0
+          if out=$(gh api "${api}/deployment_protection_rules" \
+            --jq '[.custom_deployment_protection_rules[]? | select(.enabled == true and .app.id == 5090756)] | length' 2>/dev/null); then
+            custom="${out}"
+          fi
+          case "${reviewers}" in '' | *[!0-9]*) reviewers=0 ;; esac
+          case "${custom}" in '' | *[!0-9]*) custom=0 ;; esac
+          if [ "${reviewers}" -eq 0 ] && [ "${custom}" -eq 0 ]; then
+            echo "::error::the production environment has neither a required-reviewer rule nor an enabled custom deployment protection rule of the reviewer App -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
             exit 1
           fi
 
