@@ -1,24 +1,5 @@
 #!/usr/bin/env python3
-"""Pin tests for the apply environments and stale-run handling in ci.yml.
-
-What is pinned, and why each is a control rather than a style choice:
-
-* The mail apply sits in its own environment, `production-mail`, and the two
-  Hetzner applies in `production`. An approval releases every job waiting in
-  one environment for a run, so a mail apply left in `production` would be
-  released by an approval meant for the Hetzner applies.
-* Each apply job's first step refuses to run through an environment that
-  pauses nothing. `production-mail` must have a required-reviewer rule and
-  nothing else counts; `production` accepts that or an enabled custom
-  deployment protection rule. Every unreadable or malformed answer must
-  count as "no rule" (fail closed).
-* Each plan job's first step cancels older runs still waiting for approval,
-  and only those, with `actions: write` granted to those three jobs alone.
-
-The workflow is read as text (no YAML parser is installed in CI's scripts
-job), and the two shell steps are extracted and run against a stub `gh`, so
-the tests exercise the behaviour and not only the wording.
-"""
+"""Pin tests for ci.yml's apply environments, gates and cancel step (stub gh)."""
 
 from __future__ import annotations
 
@@ -42,12 +23,16 @@ APPLY_JOBS = {
 }
 PLAN_JOBS = ["mail-plan", "hetzner-network-plan", "hetzner-estate-plan"]
 
+# The reviewer App's integration id, as `app.id` on the live rule object.
+REVIEWER_APP_ID = 5090756
+
 GATE_NAME = "Refuse to apply through an ungated environment"
 CANCEL_NAME = "Cancel older runs that are still waiting for approval"
 
 # A stand-in for `gh api`: logs every call, answers from fixture files named
 # by the environment, applies --jq with jq, and mimics gh's failure mode (the
-# error body on stdout, a non-zero exit) when a fixture is absent.
+# error body on stdout, a non-zero exit) when a fixture is absent. A `.raw`
+# file beside a fixture is printed as is, exit 0, ignoring --jq.
 STUB_GH = r"""#!/usr/bin/env bash
 shift
 method=GET
@@ -70,6 +55,10 @@ case "${url}" in
   */workflows/ci.yml/runs*) file="${STUB_DIR}/runs.json" ;;
   *) file="" ;;
 esac
+if [ -n "${file}" ] && [ -f "${file%.json}.raw" ]; then
+  cat "${file%.json}.raw"
+  exit 0
+fi
 if [ -z "${file}" ] || [ ! -f "${file}" ]; then
   echo '{"message":"Resource not accessible by integration","status":"403"}'
   exit 1
@@ -259,11 +248,12 @@ class GateBehaviourTests(unittest.TestCase):
         self.stub = StubGh(self)
 
     @staticmethod
-    def rules(*enabled: bool) -> dict:
+    def rules(*enabled: bool, app_id: int = REVIEWER_APP_ID) -> dict:
         return {
             "total_count": len(enabled),
             "custom_deployment_protection_rules": [
-                {"id": i, "enabled": e} for i, e in enumerate(enabled)
+                {"id": i, "enabled": e, "app": {"id": app_id}}
+                for i, e in enumerate(enabled)
             ],
         }
 
@@ -319,11 +309,32 @@ class GateBehaviourTests(unittest.TestCase):
         result = self.stub.run(self.prod)
         self.assertEqual(result.returncode, 1)
 
-    def test_production_fails_closed_on_a_non_numeric_answer(self):
+    def test_production_ignores_another_apps_custom_rule(self):
         self.stub.put("environment.json", environment_object(reviewers=False))
-        self.stub.put("rules.json", {"custom_deployment_protection_rules": "x"})
-        result = self.stub.run(self.prod)
-        self.assertEqual(result.returncode, 1)
+        self.stub.put("rules.json", self.rules(True, app_id=REVIEWER_APP_ID + 1))
+        self.assertEqual(self.stub.run(self.prod).returncode, 1)
+
+    def test_a_non_numeric_rules_answer_with_a_zero_exit_counts_as_no_rule(self):
+        # What a stub that applies the real jq never produces: a successful
+        # answer that is not a number. The numeric guard must still refuse.
+        self.stub.put("environment.json", environment_object(reviewers=False))
+        (self.stub.dir / "rules.raw").write_text('{"message":"x"}\n', encoding="utf-8")
+        for script in (self.prod, self.estate):
+            result = self.stub.run(script)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("neither a required-reviewer rule", result.stderr)
+
+    def test_a_non_numeric_reviewer_answer_with_a_zero_exit_counts_as_no_rule(self):
+        (self.stub.dir / "environment.raw").write_text("x\n", encoding="utf-8")
+        self.stub.put("rules.json", self.rules())
+        for script in (self.prod, self.estate):
+            result = self.stub.run(script)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("neither a required-reviewer rule", result.stderr)
+
+    def test_the_gate_pins_the_reviewer_app_by_integration_id(self):
+        for script in (self.prod, self.estate):
+            self.assertIn(f".app.id == {REVIEWER_APP_ID}", script)
 
     def test_unreadable_rules_endpoint_does_not_break_a_reviewer_gate(self):
         self.stub.put("environment.json", environment_object(reviewers=True))
@@ -486,6 +497,24 @@ class CancelBehaviourTests(unittest.TestCase):
             {101: [self.job("Apply (somewhere else, pulumi up)", "waiting")]},
         )
         self.assertEqual(posts, [])
+
+    def test_keeps_a_run_with_no_apply_actually_waiting(self):
+        # Nothing here is paused on an approval, so there is nothing a newer
+        # run supersedes; the run is listed as waiting for another reason.
+        every_apply_skipped = [
+            self.job(self.MAIL, "completed", "skipped"),
+            self.job(self.NETWORK, "completed", "skipped"),
+            self.job(self.ESTATE, "completed", "skipped"),
+            self.job("Plan (mail, pulumi preview)", "waiting"),
+        ]
+        every_apply_queued = [
+            self.job(self.MAIL, "queued"),
+            self.job(self.NETWORK, "pending"),
+        ]
+        for jobs in (every_apply_skipped, every_apply_queued):
+            self.stub.log.write_text("", encoding="utf-8")
+            posts = self.run_with([self.run_row(101)], {101: jobs})
+            self.assertEqual(posts, [])
 
     def test_a_queued_downstream_apply_needs_its_own_stack_planned(self):
         jobs = [

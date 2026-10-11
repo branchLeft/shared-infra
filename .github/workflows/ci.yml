@@ -763,7 +763,7 @@ jobs:
   # rather than the individual files inside it — because a coarse filter's
   # failure mode is an unnecessary plan and a precise one's is a missed apply.
   #
-  # Two things the machinery cannot enforce, on the approver:
+  # Three things the machinery cannot enforce, on the approver:
   #   - Approve each queued apply individually, with its own plan summary open.
   #     The pending-deployments screen offers a multi-select approve, and using
   #     it signs off plans nobody read.
@@ -772,7 +772,8 @@ jobs:
   #     fails the apply if not, so an unconfigured gate is a red run, not a
   #     silent unattended apply. `production-mail` must have a
   #     required-reviewer rule; `production` may have that or an enabled
-  #     custom deployment protection rule.
+  #     custom deployment protection rule of the reviewer App (integration
+  #     id 5090756).
   #   - A newer push run cancels older runs of this workflow still `waiting`
   #     for approval, from each plan job (first step). No `concurrency`
   #     group does this job: a run paused for approval counts as in progress,
@@ -1309,9 +1310,10 @@ jobs:
 
     steps:
       # If the job is running and nothing paused it — no required-reviewer
-      # rule and no enabled custom deployment protection rule — the
-      # environment key is silently inert. Fail here, before any credential is
-      # touched, rather than apply unattended. The custom rule is not listed
+      # rule and no enabled custom deployment protection rule of the reviewer
+      # App (integration id 5090756) — the environment key is silently
+      # inert. Fail here, before any credential is touched, rather than apply
+      # unattended. The custom rule is not listed
       # in the environment object's `protection_rules`; it has its own
       # endpoint, read below. Any failure to read it counts as no rule, so
       # this stays fail-closed.
@@ -1325,13 +1327,13 @@ jobs:
             --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
           custom=0
           if out=$(gh api "${api}/deployment_protection_rules" \
-            --jq '[.custom_deployment_protection_rules[]? | select(.enabled == true)] | length' 2>/dev/null); then
+            --jq '[.custom_deployment_protection_rules[]? | select(.enabled == true and .app.id == 5090756)] | length' 2>/dev/null); then
             custom="${out}"
           fi
           case "${reviewers}" in '' | *[!0-9]*) reviewers=0 ;; esac
           case "${custom}" in '' | *[!0-9]*) custom=0 ;; esac
           if [ "${reviewers}" -eq 0 ] && [ "${custom}" -eq 0 ]; then
-            echo "::error::the production environment has neither a required-reviewer rule nor an enabled custom deployment protection rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+            echo "::error::the production environment has neither a required-reviewer rule nor an enabled custom deployment protection rule of the reviewer App -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
             exit 1
           fi
 
@@ -1604,8 +1606,9 @@ jobs:
 
     steps:
       # The environment must pause this job: a required-reviewer rule, or an
-      # enabled custom deployment protection rule (a deployment-protection
-      # App), either of which holds the job until something answers. The
+      # enabled custom deployment protection rule of the reviewer App
+      # (integration id 5090756), either of which holds the job until
+      # something answers. The
       # custom rule is not listed in the environment object's
       # `protection_rules`; it has its own endpoint, read below. Any failure
       # to read it counts as no rule, so this stays fail-closed.
@@ -1619,13 +1622,13 @@ jobs:
             --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
           custom=0
           if out=$(gh api "${api}/deployment_protection_rules" \
-            --jq '[.custom_deployment_protection_rules[]? | select(.enabled == true)] | length' 2>/dev/null); then
+            --jq '[.custom_deployment_protection_rules[]? | select(.enabled == true and .app.id == 5090756)] | length' 2>/dev/null); then
             custom="${out}"
           fi
           case "${reviewers}" in '' | *[!0-9]*) reviewers=0 ;; esac
           case "${custom}" in '' | *[!0-9]*) custom=0 ;; esac
           if [ "${reviewers}" -eq 0 ] && [ "${custom}" -eq 0 ]; then
-            echo "::error::the production environment has neither a required-reviewer rule nor an enabled custom deployment protection rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+            echo "::error::the production environment has neither a required-reviewer rule nor an enabled custom deployment protection rule of the reviewer App -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
             exit 1
           fi
 
