@@ -569,12 +569,12 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            move REPLICA_TUNNEL_DEADLINE in hetzner/monitoring/render.ts.',
     '',
     '  - name: backup',
-    // One group, not two. The backup_worker.py alerts watch db1;
-    // StateCopyStale watches state_copy.py on ops1, a different producer
-    // on a different host. TenantBackupAgeHigh is the producer-side signal,
-    // not a liveness check; the or absent(...) branch covers the metric
-    // family vanishing entirely. Warning, never page, off-host receiver.
-    // See render.md#the-backup-rule-group.
+    // One group, not two. Producers: backup_worker.py and state_copy.py,
+    // both on ops1, and dump_nightly.py on db1 (the lock gauges only).
+    // TenantBackupAgeHigh is the producer-side signal, not a liveness
+    // check; the or absent(...) branch covers the metric family vanishing
+    // entirely. Warning, never page, off-host receiver. See
+    // render.md#the-backup-rule-group.
     '    rules:',
     '      - alert: TenantBackupAgeHigh',
     '        expr: >-',

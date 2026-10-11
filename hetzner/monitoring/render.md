@@ -94,13 +94,17 @@ source-pinned rather than merely enabled.
 
 ## The `backup` rule group
 
-Three alerts in this group watch the same producer, `backup_worker.py` in
-`branchLeft/ghost-platform`, which runs on `db1` -- one on-demand call, one
-nightly loop, never a second code path (see that repo's `backup_worker.md`).
-The fourth, `StateCopyStale`, watches a different producer on a different
-host and is described below. One group, not two, since a reader hunting
-"the backup alerts" should find them all without also having to remember
-which of two similarly-named groups holds which:
+The producers are `backup_worker.py` in `branchLeft/ghost-platform` -- one
+on-demand call, one nightly loop, never a second code path (see that repo's
+`backup_worker.md`) -- which runs on `ops1`, the control host; `dump_nightly.py`,
+which runs on `db1`; and, for `StateCopyStale`, `state_copy.py`, also on
+`ops1`. `TenantBackupAgeHigh` has one producer, on `ops1`: `db1`'s dump
+writes no last-success gauge. `BackupLockWaitHigh` and `BackupLockAbortsRising`
+have two, one on each host: the same lock gauge names come from `ops1`'s
+per-tenant worker and from `db1`'s dump under `tenant="db1-all-databases"`.
+One group, not two, since a reader hunting "the backup alerts" should find
+them all without also having to remember which of two similarly-named
+groups holds which:
 `TenantBackupAgeHigh` (is a tenant's backup happening at all) and
 `BackupLockWaitHigh` (did the dump that DID happen wait over the 1 s
 server bound for its tenant's table lock) and `BackupLockAbortsRising`
@@ -124,15 +128,17 @@ the producer host is not mx1, so this reaches the same off-host email
 receiver `HostMemoryPressure` and `HostDiskSpaceLow` already use.
 
 `StateCopyStale` sits in the same group because it is the same kind of
-signal, a backup that has stopped, but its producer is a different one on a
-different host. `state_copy.py` in `branchLeft/ghost-platform` runs on `ops1`,
-not `db1` (the dump's host). It copies the two Pulumi state buckets into
-backup copy 1 each night and writes `state_copy_last_success_timestamp_seconds`
-and `state_copy_bucket_configured` per bucket to a textfile directory of the
-same name as the dump's, `/var/lib/branchleft/backup-worker-exporter`, which
-`ops1`'s node_exporter reads (`hetzner/provision/node-exporter.service`). It has three branches, so a stale gauge, a configured bucket that
-has never succeeded, and a vanished family each fire. Warning, never page,
-same receiver as `TenantBackupAgeHigh`.
+signal, a backup that has stopped, and shares `TenantBackupAgeHigh`'s host.
+`state_copy.py` in `branchLeft/ghost-platform` runs on `ops1` as the
+`backup-worker` account, from the same staged release as the backup worker.
+It copies the two Pulumi state buckets into backup copy 1 each night and
+writes `state_copy_last_success_timestamp_seconds` and
+`state_copy_bucket_configured` per bucket to `state_copy.prom` in the
+worker's exporter directory, `/var/lib/branchleft/backup-worker-exporter`,
+which `ops1`'s node_exporter reads
+(`hetzner/provision/node-exporter.service`). It has three branches, so a
+stale gauge, a configured bucket that has never succeeded, and a vanished
+family each fire. Warning, never page, same receiver as `TenantBackupAgeHigh`.
 
 ## The `replica-tunnel` rule group
 
