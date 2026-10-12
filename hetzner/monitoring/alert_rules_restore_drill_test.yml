@@ -1,0 +1,130 @@
+# Cases for the three restore-drill rules, kept apart from alert_rules_test.yml
+# because the staleness threshold is eight days: at that file's 30s evaluation
+# interval each case would cost over twenty thousand evaluations of every rule.
+# The evaluation interval here is 1h, the same as the series interval, so a
+# case reaches 195h in under two hundred. Run it on its own, never beside
+# alert_rules_test.yml: promtool would apply that file's 30s interval to it.
+# `rule_files` is relative to this file's own directory.
+#
+# Each case seeds the drill's own gauges as the control host's node_exporter
+# publishes them. One sample per hour of test time makes a value's index its
+# age: '0+3600x200' is a timestamp that tracks the clock (a run that happened
+# just now), '0x200' one frozen at the start (a run that stopped happening).
+# Checked via ALERTS rather than exp_annotations, as in alert_rules_test.yml,
+# to keep the assertion on the expression and the firing state.
+evaluation_interval: 1h
+
+rule_files:
+  - stack/prometheus/alerts.yml
+
+tests:
+  # The control case: a drill that passes every week, fresh on every gauge,
+  # raises none of the three, in any state, however long it is watched.
+  - interval: 1h
+    input_series:
+      - series: 'restore_drill_last_run_success{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '1x200'
+      - series: 'restore_drill_last_run_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '0+3600x200'
+      - series: 'restore_drill_last_success_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '0+3600x200'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"RestoreDrill.*"}
+        eval_time: 2h
+        exp_samples: []
+      - expr: ALERTS{alertname=~"RestoreDrill.*"}
+        eval_time: 100h
+        exp_samples: []
+
+  # It ran and failed last night: the gauge every run records reads 0 and the
+  # alert fires on the day it fails, not eight days later. The last pass is
+  # recent, so the other two stay silent -- this is the only one of the three
+  # that can see a failure inside the eight-day window.
+  - interval: 1h
+    input_series:
+      - series: 'restore_drill_last_run_success{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '1 0x4'
+      - series: 'restore_drill_last_run_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '0+3600x5'
+      - series: 'restore_drill_last_success_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '0x5'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"RestoreDrill.*", alertstate="firing"}
+        eval_time: 0h
+        exp_samples: []
+      - expr: ALERTS{alertname=~"RestoreDrill.*", alertstate="firing"}
+        eval_time: 3h
+        exp_samples:
+          - labels: 'ALERTS{alertname="RestoreDrillFailed", alertstate="firing", severity="warning", owner_action="true", job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+            value: 1
+
+  # Never passed: the run gauge is there and reads 0, but there is no
+  # last-success series at all, because the drill omits it until a first
+  # pass. `time() - <absent>` yields nothing, so only the `or absent(...)`
+  # half can see this. Not firing at 0h (pending: the 1h hold), firing by 2h,
+  # and carrying no host label because absent() has none to carry.
+  - interval: 1h
+    input_series:
+      - series: 'restore_drill_last_run_success{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '0x10'
+      - series: 'restore_drill_last_run_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '0+3600x10'
+    promql_expr_test:
+      - expr: ALERTS{alertname="RestoreDrillLastSuccessStale", alertstate="firing"}
+        eval_time: 0h
+        exp_samples: []
+      - expr: ALERTS{alertname="RestoreDrillLastSuccessStale", alertstate="firing"}
+        eval_time: 2h
+        exp_samples:
+          - labels: 'ALERTS{alertname="RestoreDrillLastSuccessStale", alertstate="firing", severity="warning", owner_action="true"}'
+            value: 1
+      - expr: ALERTS{alertname="RestoreDrillNotRunning"}
+        eval_time: 2h
+        exp_samples: []
+
+  # Stopped running: both timestamps frozen at the start and the last run
+  # reads 1, as a drill whose timer was switched off would leave them. The
+  # threshold is load-bearing in both directions: at exactly 8 days (192h)
+  # neither fires (`>`, not `>=`), and past it (195h, beyond the staleness
+  # rule's own 1h hold) both do.
+  - interval: 1h
+    input_series:
+      - series: 'restore_drill_last_run_success{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '1x200'
+      - series: 'restore_drill_last_run_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '0x200'
+      - series: 'restore_drill_last_success_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '0x200'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"RestoreDrill.*"}
+        eval_time: 192h
+        exp_samples: []
+      - expr: ALERTS{alertname=~"RestoreDrill.*", alertstate="firing"}
+        eval_time: 195h
+        exp_samples:
+          - labels: 'ALERTS{alertname="RestoreDrillNotRunning", alertstate="firing", severity="warning", owner_action="true", job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+            value: 1
+          - labels: 'ALERTS{alertname="RestoreDrillLastSuccessStale", alertstate="firing", severity="warning", owner_action="true", job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+            value: 1
+
+  # Failing every week for over eight days: the run timestamp is fresh (it
+  # records the failed runs too) while the last pass is long gone. Failed and
+  # staleness fire, NotRunning stays silent -- the case that proves
+  # NotRunning reads the run timestamp and not the success one, which a rule
+  # pointed at the wrong gauge would get wrong.
+  - interval: 1h
+    input_series:
+      - series: 'restore_drill_last_run_success{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '0x200'
+      - series: 'restore_drill_last_run_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '0+3600x200'
+      - series: 'restore_drill_last_success_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+        values: '0x200'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"RestoreDrill.*", alertstate="firing"}
+        eval_time: 195h
+        exp_samples:
+          - labels: 'ALERTS{alertname="RestoreDrillFailed", alertstate="firing", severity="warning", owner_action="true", job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+            value: 1
+          - labels: 'ALERTS{alertname="RestoreDrillLastSuccessStale", alertstate="firing", severity="warning", owner_action="true", job="node", instance="10.20.1.50:9100", host="ops1", expected_up="true"}'
+            value: 1
