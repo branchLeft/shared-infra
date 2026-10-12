@@ -17,6 +17,11 @@
 # The runbook starts `db` and `zitadel` alone first; the env file then sets
 # COMPOSE_PROFILES=apps, so every later unit start brings up all four.
 #
+# The database administrator's credential is given to the `db` service alone.
+# The sign-in service runs as its own unprivileged login and holds no
+# administrator credential: the one phase that needs it, Zitadel's `init`, runs
+# once from compose.init.yml, which the unit never reads.
+#
 # Published ports bind ops1's own private address (hetzner-host/addressPlan.ts's
 # HOST_IPS.ops1), never 0.0.0.0. 8301 and 8302 match sites.ts's privateUpstream
 # for the tenant portal and the owner console; the two must move together. The
@@ -70,9 +75,13 @@ services:
     image: ghcr.io/zitadel/zitadel@sha256:90a3045b80a2b5b395e1e770302076906af3a5911225af7c464b4f3bd00d0a1b
     restart: unless-stopped
     # `external`: the edge terminates TLS for id.publicpress.co.uk and proxies
-    # plain HTTP to the private listener below. start-from-init is idempotent:
-    # it creates the database and login on first start and migrates after.
-    command: start-from-init --masterkeyFile /run/secrets/zitadel-masterkey --tlsMode external
+    # plain HTTP to the private listener below. start-from-setup is idempotent:
+    # it applies the setup phase (migrations, the first instance when none
+    # exists) and then serves. It never runs the init phase, which is the only
+    # phase that needs the database administrator: that phase is a one-off run
+    # from compose.init.yml, which is the only file that holds the administrator
+    # credential for this service.
+    command: start-from-setup --masterkeyFile /run/secrets/zitadel-masterkey --tlsMode external
     depends_on:
       db:
         condition: service_healthy
@@ -84,15 +93,14 @@ services:
       # The first start writes the service account's access token here.
       - /var/lib/branchleft/control-plane/zitadel-state:/state
     environment:
+      # The application login only. It is created by the init phase and is
+      # not a superuser.
       ZITADEL_DATABASE_POSTGRES_HOST: db
       ZITADEL_DATABASE_POSTGRES_PORT: 5432
       ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
       ZITADEL_DATABASE_POSTGRES_USER_USERNAME: zitadel
       ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: ${CONTROL_PLANE_ZITADEL_DB_PASSWORD:?set CONTROL_PLANE_ZITADEL_DB_PASSWORD in /etc/branchleft/control-plane.env}
       ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
-      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: postgres
-      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${CONTROL_PLANE_DB_ADMIN_PASSWORD}
-      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
       # Fixed when the instance is first initialised, and not changeable
       # afterwards without a new instance.
       ZITADEL_EXTERNALDOMAIN: id.publicpress.co.uk
