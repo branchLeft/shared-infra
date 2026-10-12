@@ -233,6 +233,7 @@ export function emittedMetricsUnder(rootDir: string): Map<string, Set<string>> {
 export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   up: 'built into Prometheus itself, for every scrape target',
   probe_success: 'blackbox_exporter',
+  probe_ssl_earliest_cert_expiry: 'blackbox_exporter',
   caddy_rate_limit_declined_requests_total: "Caddy's own rate-limit module",
   node_memory_MemAvailable_bytes: 'node_exporter',
   node_memory_MemTotal_bytes: 'node_exporter',

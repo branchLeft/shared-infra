@@ -657,6 +657,22 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '          summary: "{{ $labels.instance }} failed its external probe for 5 minutes."',
     '          description: "The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below."',
     '',
+    // Warns before the certificate expires: Caddy renews automatically, so a
+    // failed renewal shows only at hard expiry, when probe_success drops and
+    // BlackboxProbeFailed fires. Warning, not critical: the certificate still
+    // serves until expiry, so this is a chore with a deadline, not an outage.
+    '      - alert: TLSCertificateExpiringSoon',
+    '        expr: probe_ssl_earliest_cert_expiry{job="blackbox_http"} - time() < 14*86400',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "{{ $labels.instance }}\'s TLS certificate expires in under 14 days."',
+    '          description: >-',
+    '            Caddy renews certificates automatically, so a failed renewal shows',
+    '            only when the certificate reaches hard expiry and probe_success',
+    '            drops. This fires earlier, while there is still time to fix the',
+    '            renewal. Scoped to blackbox_http, the public HTTPS probes.',
+    '',
     '      - alert: MailHostDown',
     '        expr: probe_success{job="blackbox_mail"} == 0',
     '        for: 5m',
