@@ -1481,3 +1481,73 @@ tests:
       - eval_time: 10m30s
         alertname: MySQLUnreachable
         exp_alerts: []
+
+  # ScanningStorageUploadsRefused and ScanningStorageUnconfigured: the scanning
+  # storage adapter's refusal metrics. The adapter's textfile export names
+  # tenant and reason; the rule must fire on an unconfigured refusal and stay
+  # silent on the other refusal reasons and on a counter that is not moving.
+  - interval: 1m
+    input_series:
+      - series: 'scanning_storage_uploads_refused_total{tenant="t-fire", reason="unconfigured"}'
+        values: '0 0 0 0 1 2 3 3 3 3 3 3'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ScanningStorageUploadsRefused
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: t-fire
+              reason: unconfigured
+            exp_annotations:
+              summary: 'The upload scanner refused uploads because it has no verdict source.'
+              description: >-
+                The adapter refuses every new upload while it has no verdict
+                source configured, so a tenant on that image cannot upload at all.
+                Counts only refusals with reason="unconfigured". The rule reads the
+                counter, so it fires on a refusal that happened within the last
+                15 minutes and clears once none has happened for that long.
+
+  - interval: 1m
+    input_series:
+      - series: 'scanning_storage_uploads_refused_total{tenant="t-quiet", reason="unconfigured"}'
+        values: '5 5 5 5 5 5 5 5 5 5 5 5'
+      - series: 'scanning_storage_uploads_refused_total{tenant="t-other", reason="verdict"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11'
+      - series: 'scanning_storage_uploads_refused_total{tenant="t-other", reason="sealed"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11'
+    alert_rule_test:
+      # A flat counter: the refusal happened long ago, not within the window.
+      # The rising series with reason="verdict" and reason="sealed" are other
+      # refusal reasons, which the selector must not read.
+      - eval_time: 10m
+        alertname: ScanningStorageUploadsRefused
+        exp_alerts: []
+
+  # ScanningStorageUnconfigured: the gauge is held for 5m before it fires, so a
+  # starting instance is not reported.
+  - interval: 1m
+    input_series:
+      - series: 'scanning_storage_unconfigured_instances{tenant="t-fire"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'scanning_storage_unconfigured_instances{tenant="t-configured"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      # Pending at 3m: active for under the 5m hold, so silent.
+      - eval_time: 3m
+        alertname: ScanningStorageUnconfigured
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ScanningStorageUnconfigured
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: t-fire
+            exp_annotations:
+              summary: 'An upload scanner instance has no verdict source configured.'
+              description: >-
+                The gauge counts adapter instances in the process with no verdict
+                source. It is the metric form of the SCANNER_UNCONFIGURED boot line,
+                which no alert can read because no log shipper is running. The
+                instance refuses every upload until it is configured, so this
+                fires before a tenant reports the refusal. for: 5m rides out an
+                instance that is still starting.

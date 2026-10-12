@@ -962,6 +962,39 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            sized to absorb a normal one, not a link pasted a week late. This',
     '            is the only alert in this group that fires BEFORE an outage rather',
     '            than after one; treat it as a chore, not an incident.',
+    '',
+    // Refusals from the scanning storage adapter (ghost-platform, exported as
+    // a textfile). A refused upload is a tenant-facing failure that nothing
+    // else here sees, so this warns before the tenant reports it. Warning,
+    // not critical: the refusal is deliberate, and the fix is a configuration
+    // change, not an outage. No owner_action: this is not a dated chore.
+    '      - alert: ScanningStorageUploadsRefused',
+    '        expr: increase(scanning_storage_uploads_refused_total{reason="unconfigured"}[15m]) > 0',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The upload scanner refused uploads because it has no verdict source."',
+    '          description: >-',
+    '            The adapter refuses every new upload while it has no verdict',
+    '            source configured, so a tenant on that image cannot upload at all.',
+    '            Counts only refusals with reason="unconfigured". The rule reads the',
+    '            counter, so it fires on a refusal that happened within the last',
+    '            15 minutes and clears once none has happened for that long.',
+    '',
+    '      - alert: ScanningStorageUnconfigured',
+    '        expr: scanning_storage_unconfigured_instances > 0',
+    '        for: 5m',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "An upload scanner instance has no verdict source configured."',
+    '          description: >-',
+    '            The gauge counts adapter instances in the process with no verdict',
+    '            source. It is the metric form of the SCANNER_UNCONFIGURED boot line,',
+    '            which no alert can read because no log shipper is running. The',
+    '            instance refuses every upload until it is configured, so this',
+    '            fires before a tenant reports the refusal. for: 5m rides out an',
+    '            instance that is still starting.',
   ].join('\n')}\n`;
 }
 

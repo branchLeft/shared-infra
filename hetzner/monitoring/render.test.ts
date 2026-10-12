@@ -496,6 +496,21 @@ describe('the rendered alert rules', () => {
     const block = rendered.slice(start, end === -1 ? undefined : end);
     expect(block).toContain('or absent(backup_worker_last_success_timestamp_seconds)');
   });
+
+  it('warns when the upload scanner refuses an upload for having no verdict source, and when an instance has none configured -- see alert_rules_test.yml for the promtool proof both fire and stay silent on the other refusal reasons', () => {
+    expect(rendered).toContain('alert: ScanningStorageUploadsRefused');
+    expect(rendered).toContain(
+      'expr: increase(scanning_storage_uploads_refused_total{reason="unconfigured"}[15m]) > 0'
+    );
+    expect(rendered).toContain('alert: ScanningStorageUnconfigured');
+    expect(rendered).toContain('expr: scanning_storage_unconfigured_instances > 0');
+    const start = rendered.indexOf('alert: ScanningStorageUploadsRefused');
+    const end = rendered.indexOf('- alert:', start + 1);
+    const block = rendered.slice(start, end === -1 ? undefined : end);
+    expect(block).toContain('severity: warning');
+    expect(block).not.toContain('owner_action');
+    expect(block).not.toContain('notify: on-host');
+  });
 });
 
 describe('the replica tunnel', () => {
