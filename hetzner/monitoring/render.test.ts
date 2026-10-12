@@ -689,6 +689,71 @@ describe('the notify="on-host" label', () => {
   });
 });
 
+describe('the restore-drill rule group', () => {
+  const rules = renderAlertRules();
+  const group = rules.slice(
+    rules.indexOf('- name: restore-drill'),
+    rules.indexOf('- name: probes')
+  );
+  const ruleBlock = (alertname: string): string => {
+    const start = group.indexOf(`- alert: ${alertname}`);
+    expect(start).toBeGreaterThan(-1);
+    const end = group.indexOf('- alert:', start + 1);
+    return group.slice(start, end === -1 ? undefined : end);
+  };
+
+  it('holds exactly the three rules, one per failure shape', () => {
+    expect([...group.matchAll(/- alert: (\w+)/g)].map((m) => m[1])).toEqual([
+      'RestoreDrillFailed',
+      'RestoreDrillLastSuccessStale',
+      'RestoreDrillNotRunning',
+    ]);
+  });
+
+  it('alerts when the last run failed, off the gauge every run records', () => {
+    expect(ruleBlock('RestoreDrillFailed')).toContain('expr: restore_drill_last_run_success == 0');
+  });
+
+  it('alerts when the last success is over 8 days old or the series is absent, the never-passed case', () => {
+    const block = ruleBlock('RestoreDrillLastSuccessStale');
+    expect(block).toContain('(time() - restore_drill_last_success_timestamp_seconds > 691200)');
+    expect(block).toContain('or absent(restore_drill_last_success_timestamp_seconds)');
+  });
+
+  it('alerts when the drill stopped running, off the run timestamp rather than the success one', () => {
+    expect(ruleBlock('RestoreDrillNotRunning')).toContain(
+      'expr: time() - restore_drill_last_run_timestamp_seconds > 691200'
+    );
+  });
+
+  it('warns and never pages, and reaches the owner-read mailbox: severity warning plus owner_action, no notify', () => {
+    for (const alertname of [
+      'RestoreDrillFailed',
+      'RestoreDrillLastSuccessStale',
+      'RestoreDrillNotRunning',
+    ]) {
+      const block = ruleBlock(alertname);
+      expect(block).toContain('severity: warning');
+      expect(block).toContain('owner_action: "true"');
+      expect(block).not.toContain('notify:');
+      expect(block).not.toContain('severity: critical');
+      expect(block).not.toContain('severity: page');
+    }
+  });
+
+  it('gives every rule a summary and a what-to-do note', () => {
+    for (const alertname of [
+      'RestoreDrillFailed',
+      'RestoreDrillLastSuccessStale',
+      'RestoreDrillNotRunning',
+    ]) {
+      const block = ruleBlock(alertname);
+      expect(block).toContain('summary: "');
+      expect(block).toContain('What to do:');
+    }
+  });
+});
+
 describe('the owner_action="true" label', () => {
   // Exact set, both directions: a missing label leaves an owner-only chore in
   // a mailbox the owner does not read; a stray one sends routine mail off-host.
@@ -702,6 +767,9 @@ describe('the owner_action="true" label', () => {
       'HostMemoryPressure',
       'HostDiskSpaceLow',
       'MySQLConnectionsHigh',
+      'RestoreDrillFailed',
+      'RestoreDrillLastSuccessStale',
+      'RestoreDrillNotRunning',
       'SNDSAccessLinkExpiringSoon',
     ]);
   });

@@ -121,6 +121,46 @@ it by design -- routing carries no `notify: on-host` label either, since
 the producer host is not mx1, so this reaches the same off-host email
 receiver `HostMemoryPressure` and `HostDiskSpaceLow` already use.
 
+## The `restore-drill` rule group
+
+Watches the weekly restore drill, `restore_drill.py` in
+`branchLeft/ghost-platform`, through the gauges it writes to the textfile
+directory the backup worker already uses and the host's node_exporter
+already reads. A separate group from `backup`: that one is one producer's
+three signals, and this is a second producer. Three rules, one per way the
+drill can go quiet:
+
+| Alert                          | Fires when                                                                   | For |
+| ------------------------------ | ---------------------------------------------------------------------------- | --- |
+| `RestoreDrillFailed`           | the last run recorded a failure (`restore_drill_last_run_success == 0`)      | 0   |
+| `RestoreDrillLastSuccessStale` | no pass for over 8 days, or no last-success series at all (never passed)     | 1h  |
+| `RestoreDrillNotRunning`       | no run recorded for over 8 days (`restore_drill_last_run_timestamp_seconds`) | 0   |
+
+The drill advances its last-success gauge only on a pass, and leaves that
+series out entirely until the first pass. So a drill that has never passed
+exports nothing the subtraction can read, which is why the staleness rule
+carries the same `or absent(...)` half `TenantBackupAgeHigh` does. Its
+`for: 1h` is there because one failed scrape of the exporter also reads as
+absent.
+
+The failed-run gauge is what catches a drill that ran and failed on the day
+it failed; without it the first signal would be the staleness rule, over
+a week later. The run-timestamp rule is the only one that sees a drill that
+stopped before it wrote anything (an image pull, the tmpfs check, a refused
+configuration, a disabled timer): the unit is then failed, but node_exporter
+runs without its systemd collector here, so a failed unit is not visible to
+Prometheus and its stale timestamp is. Until that collector is on, a drill
+that dies before it writes is noticed after 8 days, not on the night.
+
+**Where the warning arrives.** Warning, never a page. All three carry
+`owner_action: "true"`, which is the label the Alertmanager route reads to
+send a warning to the off-host mailbox the owner reads as well as the
+on-host one. Without it a warning stays on the on-host mailbox alone. The
+promtool cases in `alert_rules_restore_drill_test.yml` seed each failure
+shape and a healthy drill, in a file of their own because eight days at the
+main file's 30s interval is too many evaluations. `render.test.ts` pins the
+label set and `ci.yml` walks the route.
+
 ## The `replica-tunnel` rule group
 
 Watches the blog's migration replica on `db-t1`, which receives `db1`'s

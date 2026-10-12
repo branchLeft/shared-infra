@@ -262,6 +262,14 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   // one.
   backup_worker_lock_wait_seconds: 'backup_worker.py, in branchLeft/ghost-platform, in org/control',
   backup_worker_lock_aborts_total: 'backup_worker.py, in branchLeft/ghost-platform, in org/control',
+  // restore_drill.py's render_metrics, in branchLeft/ghost-platform: the
+  // weekly drill's textfile gauges, prefixed restore_drill_, written beside
+  // the backup worker's. Not a collector this repository owns or can scan.
+  restore_drill_last_run_success: 'restore_drill.py, in branchLeft/ghost-platform, in org/control',
+  restore_drill_last_success_timestamp_seconds:
+    'restore_drill.py, in branchLeft/ghost-platform, in org/control',
+  restore_drill_last_run_timestamp_seconds:
+    'restore_drill.py, in branchLeft/ghost-platform, in org/control',
 };
 
 /**
