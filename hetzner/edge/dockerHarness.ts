@@ -378,8 +378,7 @@ const readOwner = (path: string) => {
 
 /**
  * A slot directory with no owner file is a holder that died between `mkdir` and
- * writing its owner, or one still writing it. The write takes microseconds, so
- * a directory this much older than now has no live holder.
+ * writing its owner, or one still writing it, which takes microseconds.
  */
 export const ORPHAN_SLOT_AGE_MS = 10_000;
 
