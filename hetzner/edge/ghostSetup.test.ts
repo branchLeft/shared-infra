@@ -8,6 +8,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { hostRedirects, sites, staticSites } from '../../sites';
 import type { EdgeSite } from '../../siteTypes';
 import {
+  CONTAINER_LIMITS,
+  IMAGE_LIMITS,
   ensureImage,
   probeEngineSync,
   removeByName,
@@ -251,14 +253,25 @@ describe.skipIf(!dockerUp)(caddyTitle, { timeout: 180_000 }, () => {
     '/ghost/api/content/posts/',
   ];
 
-  // Worst case, every step silent: 90 s slot, 120 s pull, 30 s each to create and
-  // start, then removals; each step is bounded on its own and the sum is under this.
+  // Worst case, every step silent: the slot wait, the image inspection, the pull,
+  // create, start and port read, then one removal; each step is bounded on its
+  // own, so the sum of the bounds (plus a margin) is what this hook may take.
+  const SLOT_WAIT_MS = 90_000;
+  const setupBudgetMs =
+    SLOT_WAIT_MS +
+    IMAGE_LIMITS.inspectMs +
+    IMAGE_LIMITS.pullMs +
+    CONTAINER_LIMITS.createMs +
+    CONTAINER_LIMITS.startMs +
+    CONTAINER_LIMITS.portMs +
+    CONTAINER_LIMITS.removeMs +
+    30_000;
   beforeAll(async () => {
-    slot = await takeSlot({ waitMs: 90_000, label: 'edge-ghost-setup-test' });
+    slot = await takeSlot({ waitMs: SLOT_WAIT_MS, label: 'edge-ghost-setup-test' });
     await ensureImage(CADDY_IMAGE);
     await start(setupSnippet(render(ENFORCING)));
     await waitUp();
-  }, 360_000);
+  }, setupBudgetMs);
 
   it.each(REFUSED)('refuses a POST and a PUT to %s', async (path) => {
     expect(await get(port, path, 'POST')).toBe(403);

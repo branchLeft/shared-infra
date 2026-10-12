@@ -1,12 +1,26 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // Helpers for tests that start a container. Every call has a hard deadline and
 // a SIGKILL: the docker client traps SIGTERM and forwards it to the container,
 // so a polite signal never ends a client stuck on a silent daemon. A container
-// is removed by its exact name on every exit path.
+// is removed by its exact name on every exit path. The bounds, the slot rules
+// and the limits left in place are in dockerHarness.md, beside this file.
+
+/** The environment variable that sets the bound on one engine call that inspects, creates or starts. */
+export const STEP_DEADLINE_ENV = 'BRANCHLEFT_DOCKER_STEP_MS';
+export const DEFAULT_STEP_DEADLINE_MS = 30_000;
+
+/**
+ * The bound, in milliseconds, on a single `image inspect`, `create` or `start`.
+ * A whole number of at least one second, otherwise the default applies.
+ */
+export function stepDeadlineMs(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number((env[STEP_DEADLINE_ENV] ?? '').trim());
+  return Number.isInteger(n) && n >= 1_000 ? n : DEFAULT_STEP_DEADLINE_MS;
+}
 
 export class DockerFailure extends Error {}
 
@@ -128,6 +142,12 @@ const firstLine = (text: string) =>
 
 const seconds = (ms: number) => `${Math.round(ms / 100) / 10}s`;
 
+// A busy engine can answer `docker info` and still take longer than a step's
+// bound, so a silent step is not proof of a wedged engine.
+const loadedEngineNote = (ms: number) =>
+  `A loaded engine can look wedged: if the machine was busy, re-run once it is idle, or raise ` +
+  `${STEP_DEADLINE_ENV} above ${seconds(ms)}.`;
+
 export interface EngineProbe {
   up: boolean;
   reason: string;
@@ -180,7 +200,7 @@ export interface ImageLimits {
   pullMs: number;
 }
 
-export const IMAGE_LIMITS: ImageLimits = { inspectMs: 30_000, pullMs: 120_000 };
+export const IMAGE_LIMITS: ImageLimits = { inspectMs: stepDeadlineMs(), pullMs: 120_000 };
 
 /** The image is present locally, or has been pulled within a deadline. */
 export async function ensureImage(
@@ -197,7 +217,8 @@ export async function ensureImage(
   if (have.timedOut) {
     throw new DockerFailure(
       `The Docker engine is not answering: \`docker image inspect ${image}\` gave no answer within ` +
-        `${seconds(limits.inspectMs)}. No container was started. Do not retry in a loop: report the engine as wedged.`
+        `${seconds(limits.inspectMs)}. No container was started. Do not retry in a loop. ` +
+        `${loadedEngineNote(limits.inspectMs)} Otherwise report the engine as wedged.`
     );
   }
   if (/Cannot connect to the Docker daemon/i.test(have.stderr)) {
@@ -235,8 +256,8 @@ export interface ContainerLimits {
 }
 
 export const CONTAINER_LIMITS: ContainerLimits = {
-  createMs: 30_000,
-  startMs: 30_000,
+  createMs: stepDeadlineMs(),
+  startMs: stepDeadlineMs(),
   portMs: 15_000,
   removeMs: 10_000,
 };
@@ -276,7 +297,9 @@ export async function startContainer(
     throw new DockerFailure(
       `\`docker ${step} ${spec.name}\` ${cause}. ` +
         (left ? left : `The container ${spec.name} was removed by name.`) +
-        (r.timedOut ? ' Do not retry in a loop: report the engine as wedged.' : '')
+        (r.timedOut
+          ? ` Do not retry in a loop. ${loadedEngineNote(ms)} Otherwise report the engine as wedged.`
+          : '')
     );
   };
 
@@ -353,8 +376,72 @@ const readOwner = (path: string) => {
 };
 
 /**
- * Take one of `max` Docker slots (an atomic `mkdir`). Reclaims only a dead
- * `pid=` owner this function wrote; refuses, naming holders, after `waitMs`.
+ * A slot directory with no owner file is a holder that died between `mkdir` and
+ * writing its owner, or one still writing it. The write takes microseconds, so
+ * a directory this much older than now has no live holder.
+ */
+export const ORPHAN_SLOT_AGE_MS = 10_000;
+
+/** How long ago the slot directory was last changed; 0 when it cannot be read. */
+const ageMs = (path: string) => {
+  try {
+    return Math.max(0, Date.now() - statSync(path).mtimeMs);
+  } catch {
+    return 0;
+  }
+};
+
+interface Holder {
+  name: string;
+  path: string;
+  /** What the slot's state means for the caller. */
+  state: 'running' | 'unowned' | 'stuck';
+  text: string;
+}
+
+function describeHolder(dir: string, name: string): Holder {
+  const path = join(dir, name);
+  const owner = readOwner(path);
+  if (owner === '') {
+    const age = seconds(ageMs(path));
+    const text = `${name}: no owner file (${age} old, reclaimed once older than ${seconds(ORPHAN_SLOT_AGE_MS)})`;
+    return { name, path, state: 'unowned', text };
+  }
+  const pid = /^pid=(\d+) /.exec(owner)?.[1];
+  const running = pid !== undefined && alive(Number(pid));
+  return { name, path, state: running ? 'running' : 'stuck', text: `${name}: ${owner}` };
+}
+
+/** The advice that is true of every state a held slot can be in. */
+function slotAdvice(holders: Holder[]): string {
+  const named = (state: Holder['state']) => holders.filter((h) => h.state === state);
+  const running = named('running');
+  const unowned = named('unowned');
+  const stuck = named('stuck');
+  const parts: string[] = [];
+  if (running.length > 0) {
+    parts.push('Another Docker proof is running; wait for it to finish and re-run.');
+  }
+  if (unowned.length > 0) {
+    parts.push(
+      `${unowned.map((h) => h.name).join(', ')} has no owner file yet and is reclaimed ` +
+        `once it is older than ${seconds(ORPHAN_SLOT_AGE_MS)}; re-run shortly.`
+    );
+  }
+  if (stuck.length > 0) {
+    parts.push(
+      `${stuck.map((h) => h.name).join(', ')} names no running process and this harness will not ` +
+        `reclaim it; when no Docker proof is running, clear it with: ` +
+        `${stuck.map((h) => `rm -r '${h.path}'`).join(' && ')}`
+    );
+  }
+  return parts.join(' ');
+}
+
+/**
+ * Take one of `max` Docker slots (an atomic `mkdir`). Reclaims a dead `pid=`
+ * owner this function wrote, and a slot with no owner file older than
+ * `ORPHAN_SLOT_AGE_MS`; refuses, naming holders, after `waitMs`.
  */
 export async function takeSlot(opts: SlotOptions): Promise<Slot> {
   const dir = opts.dir ?? slotDir();
@@ -371,8 +458,11 @@ export async function takeSlot(opts: SlotOptions): Promise<Slot> {
         mkdirSync(path);
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-        const pid = /^pid=(\d+) /.exec(readOwner(path))?.[1];
-        if (pid !== undefined && !alive(Number(pid))) {
+        const owner = readOwner(path);
+        const pid = /^pid=(\d+) /.exec(owner)?.[1];
+        const dead = pid !== undefined && !alive(Number(pid));
+        const orphaned = owner === '' && ageMs(path) > ORPHAN_SLOT_AGE_MS;
+        if (dead || orphaned) {
           rmSync(path, { recursive: true, force: true });
           i -= 1;
         }
@@ -394,11 +484,10 @@ export async function takeSlot(opts: SlotOptions): Promise<Slot> {
     if (Date.now() >= until) {
       const holders = readdirSync(dir)
         .filter((n) => n.startsWith('slot-'))
-        .map((n) => `${n}: ${readOwner(join(dir, n)) || 'owner unreadable'}`)
-        .join('; ');
+        .map((n) => describeHolder(dir, n));
       throw new DockerFailure(
-        `No Docker slot became free within ${seconds(opts.waitMs)} in ${dir} (${holders}). ` +
-          `Another Docker proof is running; wait for it to finish and re-run. Nothing was started.`
+        `No Docker slot became free within ${seconds(opts.waitMs)} in ${dir} ` +
+          `(${holders.map((h) => h.text).join('; ')}). ${slotAdvice(holders)} Nothing was started.`
       );
     }
     await new Promise((r) => setTimeout(r, poll));

@@ -6,22 +6,29 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  CONTAINER_LIMITS,
+  DEFAULT_STEP_DEADLINE_MS,
   DockerFailure,
+  IMAGE_LIMITS,
+  ORPHAN_SLOT_AGE_MS,
+  STEP_DEADLINE_ENV,
   docker,
   ensureImage,
   probeEngine,
   probeEngineSync,
   removeByName,
   startContainer,
+  stepDeadlineMs,
   takeSlot,
   type ContainerLimits,
   type ContainerSpec,
@@ -199,6 +206,32 @@ describe.skipIf(!hasCli)(
       expect(Date.now() - t0, 'fails in seconds, not minutes').toBeLessThan(8_000);
       expect(removals(f)).toHaveLength(1);
       expect(removals(f)[0]).toMatch(/force=1/);
+    }, 20_000);
+
+    it('says that a loaded engine can look wedged, and names the bound that raises it', async () => {
+      const f = await daemon({ create: 'ok', start: 'stall', remove: 'ok' });
+      const failure = await startContainer(spec, { env: f.env }, fast).catch((e: unknown) => e);
+      const message = (failure as Error).message;
+      expect(message).toContain('A loaded engine can look wedged');
+      expect(message).toContain(`${STEP_DEADLINE_ENV} above 1.5s`);
+      expect(message).toContain('Otherwise report the engine as wedged');
+    }, 20_000);
+
+    it('says the same of a silent image inspection', async () => {
+      const f = await daemon({ inspectImage: 'stall' });
+      const failure = await ensureImage(
+        'caddy:test',
+        { env: f.env },
+        { inspectMs: 1_500, pullMs: 1_500 }
+      ).catch((e: unknown) => e);
+      expect((failure as Error).message).toContain('A loaded engine can look wedged');
+      expect((failure as Error).message).toContain(`${STEP_DEADLINE_ENV} above 1.5s`);
+    }, 20_000);
+
+    it('does not blame the load when the engine answered with a refusal', async () => {
+      const f = await daemon({ create: 'ok', start: 'fail', remove: 'ok' });
+      const failure = await startContainer(spec, { env: f.env }, fast).catch((e: unknown) => e);
+      expect((failure as Error).message).not.toContain('loaded engine');
     }, 20_000);
 
     it('bounds the removal too, and says how to remove the container by hand', async () => {
@@ -408,6 +441,48 @@ describe.skipIf(!real.up)('an absent image against the real engine', () => {
   }, 150_000);
 });
 
+describe('the bound on one engine step', () => {
+  it('is 30 s unless the environment says otherwise', () => {
+    expect(DEFAULT_STEP_DEADLINE_MS).toBe(30_000);
+    expect(stepDeadlineMs({})).toBe(30_000);
+    expect(stepDeadlineMs({ [STEP_DEADLINE_ENV]: '' })).toBe(30_000);
+  });
+
+  it('takes a whole number of milliseconds from the environment', () => {
+    expect(stepDeadlineMs({ [STEP_DEADLINE_ENV]: '75000' })).toBe(75_000);
+    expect(stepDeadlineMs({ [STEP_DEADLINE_ENV]: ' 45000 ' })).toBe(45_000);
+  });
+
+  it('falls back to the default for a value it cannot honour', () => {
+    for (const bad of ['abc', '-5', '0', '999', '1.5e3x', '12.5', 'Infinity']) {
+      expect(stepDeadlineMs({ [STEP_DEADLINE_ENV]: bad }), bad).toBe(30_000);
+    }
+  });
+
+  it('is the bound image inspection, create and start run under', () => {
+    const bound = stepDeadlineMs();
+    expect(IMAGE_LIMITS.inspectMs).toBe(bound);
+    expect(CONTAINER_LIMITS.createMs).toBe(bound);
+    expect(CONTAINER_LIMITS.startMs).toBe(bound);
+  });
+
+  it('reaches those three limits when the environment sets it', async () => {
+    vi.stubEnv(STEP_DEADLINE_ENV, '75000');
+    vi.resetModules();
+    try {
+      const fresh = await import('./dockerHarness.js');
+      expect(fresh.IMAGE_LIMITS.inspectMs).toBe(75_000);
+      expect(fresh.CONTAINER_LIMITS.createMs).toBe(75_000);
+      expect(fresh.CONTAINER_LIMITS.startMs).toBe(75_000);
+      expect(fresh.CONTAINER_LIMITS.portMs).toBe(15_000);
+      expect(fresh.IMAGE_LIMITS.pullMs).toBe(120_000);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+});
+
 describe('a Docker slot', { timeout: 20_000 }, () => {
   const made: string[] = [];
   const fresh = () => {
@@ -480,13 +555,77 @@ describe('a Docker slot', { timeout: 20_000 }, () => {
     expect(readdirSync(dir)).toEqual(['slot-1']);
   });
 
-  it('leaves a slot alone when the owner file is not in this format', async () => {
+  it('leaves a slot with no owner file alone while it is young, and says it will be reclaimed', async () => {
+    const dir = fresh();
+    mkdirSync(join(dir, 'slot-1'));
+    const failure = await takeSlot({ dir, max: 1, waitMs: 200, pollMs: 50, label: 'a' }).catch(
+      (e: unknown) => e
+    );
+    expect(failure).toBeInstanceOf(DockerFailure);
+    const message = (failure as Error).message;
+    expect(message).toMatch(/slot-1: no owner file/);
+    expect(message).toMatch(/reclaimed once it is older than 10s; re-run shortly/);
+    expect(message).not.toContain('wait for it to finish');
+    expect(readdirSync(dir)).toEqual(['slot-1']);
+  });
+
+  it('reclaims a slot with no owner file once it is older than the stated age', async () => {
+    const dir = fresh();
+    mkdirSync(join(dir, 'slot-1'));
+    const old = new Date(Date.now() - ORPHAN_SLOT_AGE_MS - 5_000);
+    utimesSync(join(dir, 'slot-1'), old, old);
+    const slot = await takeSlot({ dir, max: 1, waitMs: 300, pollMs: 50, label: 'a' });
+    expect(slot.name).toBe('slot-1');
+    expect(readFileSync(join(dir, 'slot-1', 'owner'), 'utf8')).toBe(`pid=${process.pid} a\n`);
+    slot.release();
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('reclaims an aged slot whose owner file was left empty', async () => {
+    const dir = fresh();
+    mkdirSync(join(dir, 'slot-1'));
+    writeFileSync(join(dir, 'slot-1', 'owner'), '');
+    const old = new Date(Date.now() - ORPHAN_SLOT_AGE_MS - 5_000);
+    utimesSync(join(dir, 'slot-1'), old, old);
+    const slot = await takeSlot({ dir, max: 1, waitMs: 300, pollMs: 50, label: 'a' });
+    expect(slot.name).toBe('slot-1');
+    slot.release();
+  });
+
+  it('does not reclaim a slot with no owner file that was made just now', async () => {
     const dir = fresh();
     mkdirSync(join(dir, 'slot-1'));
     await expect(takeSlot({ dir, max: 1, waitMs: 200, pollMs: 50, label: 'a' })).rejects.toThrow(
-      /owner unreadable/
+      /No Docker slot became free/
     );
     expect(readdirSync(dir)).toEqual(['slot-1']);
+  });
+
+  it('tells the truth for a holder it cannot reclaim: how to clear it, not to wait', async () => {
+    const dir = fresh();
+    mkdirSync(join(dir, 'slot-1'));
+    writeFileSync(join(dir, 'slot-1', 'owner'), 'got slot-1 (by hand)\n');
+    const failure = await takeSlot({ dir, max: 1, waitMs: 200, pollMs: 50, label: 'a' }).catch(
+      (e: unknown) => e
+    );
+    const message = (failure as Error).message;
+    expect(message).toContain(`rm -r '${join(dir, 'slot-1')}'`);
+    expect(message).toContain('names no running process');
+    expect(message).not.toContain('wait for it to finish');
+    expect(readdirSync(dir)).toEqual(['slot-1']);
+  });
+
+  it('says to wait only when a holder is a running process', async () => {
+    const dir = fresh();
+    mkdirSync(join(dir, 'slot-1'));
+    writeFileSync(join(dir, 'slot-1', 'owner'), `pid=${process.pid} other-proof\n`);
+    const failure = await takeSlot({ dir, max: 1, waitMs: 200, pollMs: 50, label: 'a' }).catch(
+      (e: unknown) => e
+    );
+    const message = (failure as Error).message;
+    expect(message).toContain(`slot-1: pid=${process.pid} other-proof`);
+    expect(message).toContain('wait for it to finish and re-run');
+    expect(message).not.toContain('rm -r');
   });
 
   it('never removes a slot another holder has since taken', async () => {
