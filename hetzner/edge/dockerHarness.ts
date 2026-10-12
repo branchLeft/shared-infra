@@ -6,8 +6,9 @@ import { join } from 'node:path';
 // Helpers for tests that start a container. Every call has a hard deadline and
 // a SIGKILL: the docker client traps SIGTERM and forwards it to the container,
 // so a polite signal never ends a client stuck on a silent daemon. A container
-// is removed by its exact name on every exit path. The bounds, the slot rules
-// and the limits left in place are in dockerHarness.md, beside this file.
+// is removed by its exact name on every exit path.
+
+// The bounds, the slot rules and the limits left in place: dockerHarness.md.
 
 /** The environment variable that sets the bound on one engine call that inspects, creates or starts. */
 export const STEP_DEADLINE_ENV = 'BRANCHLEFT_DOCKER_STEP_MS';
