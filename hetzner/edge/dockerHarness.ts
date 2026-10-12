@@ -13,14 +13,17 @@ import { join } from 'node:path';
 /** The environment variable that sets the bound on one engine call that inspects, creates or starts. */
 export const STEP_DEADLINE_ENV = 'BRANCHLEFT_DOCKER_STEP_MS';
 export const DEFAULT_STEP_DEADLINE_MS = 30_000;
+// The largest delay a timer honours; a larger one fires after 1 ms.
+const MAX_TIMER_MS = 2_147_483_647;
 
 /**
  * The bound, in milliseconds, on a single `image inspect`, `create` or `start`.
- * A whole number of at least one second, otherwise the default applies.
+ * A whole number from one second to the timer ceiling, otherwise the default applies.
  */
 export function stepDeadlineMs(env: NodeJS.ProcessEnv = process.env): number {
   const n = Number((env[STEP_DEADLINE_ENV] ?? '').trim());
-  return Number.isInteger(n) && n >= 1_000 ? n : DEFAULT_STEP_DEADLINE_MS;
+  const ok = Number.isInteger(n) && n >= 1_000 && n <= MAX_TIMER_MS;
+  return ok ? n : DEFAULT_STEP_DEADLINE_MS;
 }
 
 export class DockerFailure extends Error {}
@@ -368,13 +371,21 @@ const alive = (pid: number) => {
   }
 };
 
-const readOwner = (path: string) => {
+/** The owner text; '' when there is no owner file; null when it exists and cannot be read. */
+const readOwner = (path: string): string | null => {
   try {
     return readFileSync(join(path, 'owner'), 'utf8').trim();
-  } catch {
-    return '';
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? '' : null;
   }
 };
+
+const ownerPid = (owner: string | null) => {
+  const pid = /^pid=(\d+)(?: |$)/.exec(owner ?? '')?.[1];
+  return pid === undefined ? undefined : Number(pid);
+};
+
+const shellQuote = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
 
 /**
  * A slot directory with no owner file is a holder that died between `mkdir` and
@@ -382,12 +393,22 @@ const readOwner = (path: string) => {
  */
 export const ORPHAN_SLOT_AGE_MS = 10_000;
 
-/** How long ago the slot directory was last changed; 0 when it cannot be read. */
-const ageMs = (path: string) => {
+// Errors from writing the owner file that mean another session took or removed the slot
+// (EINVAL is what macOS gives for a create inside a directory that is being removed).
+const LOST_SLOT_ERRORS = new Set(['EEXIST', 'ENOENT', 'ENOTDIR', 'EINVAL']);
+// Errors from removing a stale slot that will not clear by themselves.
+const HARD_REMOVE_ERRORS = new Set(['EACCES', 'EPERM', 'EROFS']);
+
+// A directory dated further ahead than this is not "just made": clock skew.
+const FUTURE_SLACK_MS = 1_000;
+
+/** How long ago the slot directory was last changed; undefined when that cannot be told. */
+const ageMs = (path: string): number | undefined => {
   try {
-    return Math.max(0, Date.now() - statSync(path).mtimeMs);
+    const age = Date.now() - statSync(path).mtimeMs;
+    return age < -FUTURE_SLACK_MS ? undefined : Math.max(0, age);
   } catch {
-    return 0;
+    return undefined;
   }
 };
 
@@ -395,22 +416,32 @@ interface Holder {
   name: string;
   path: string;
   /** What the slot's state means for the caller. */
-  state: 'running' | 'unowned' | 'stuck';
+  state: 'running' | 'unowned' | 'stuck' | 'unreadable';
   text: string;
 }
 
 function describeHolder(dir: string, name: string): Holder {
   const path = join(dir, name);
   const owner = readOwner(path);
-  if (owner === '') {
-    const age = seconds(ageMs(path));
-    const text = `${name}: no owner file (${age} old, reclaimed once older than ${seconds(ORPHAN_SLOT_AGE_MS)})`;
-    return { name, path, state: 'unowned', text };
+  const age = ageMs(path);
+  if (owner === null) {
+    return { name, path, state: 'unreadable', text: `${name}: owner file cannot be read` };
   }
-  const pid = /^pid=(\d+) /.exec(owner)?.[1];
-  const running = pid !== undefined && alive(Number(pid));
+  if (owner === '' && age === undefined) {
+    const text = `${name}: no owner file (its age cannot be told)`;
+    return { name, path, state: 'unreadable', text };
+  }
+  if (owner === '') {
+    const note = `${seconds(age ?? 0)} old, reclaimed once older than ${seconds(ORPHAN_SLOT_AGE_MS)}`;
+    return { name, path, state: 'unowned', text: `${name}: no owner file (${note})` };
+  }
+  const pid = ownerPid(owner);
+  const running = pid !== undefined && alive(pid);
   return { name, path, state: running ? 'running' : 'stuck', text: `${name}: ${owner}` };
 }
+
+const clearCommand = (holders: Holder[]) =>
+  holders.map((h) => `rm -r ${shellQuote(h.path)}`).join(' && ');
 
 /** The advice that is true of every state a held slot can be in. */
 function slotAdvice(holders: Holder[]): string {
@@ -418,6 +449,7 @@ function slotAdvice(holders: Holder[]): string {
   const running = named('running');
   const unowned = named('unowned');
   const stuck = named('stuck');
+  const unreadable = named('unreadable');
   const parts: string[] = [];
   if (running.length > 0) {
     parts.push('Another Docker proof is running; wait for it to finish and re-run.');
@@ -431,8 +463,14 @@ function slotAdvice(holders: Holder[]): string {
   if (stuck.length > 0) {
     parts.push(
       `${stuck.map((h) => h.name).join(', ')} names no running process and this harness will not ` +
-        `reclaim it; when no Docker proof is running, clear it with: ` +
-        `${stuck.map((h) => `rm -r '${h.path}'`).join(' && ')}`
+        `reclaim it; when no Docker proof is running, clear it with: ${clearCommand(stuck)}`
+    );
+  }
+  if (unreadable.length > 0) {
+    parts.push(
+      `${unreadable.map((h) => h.name).join(', ')} cannot be classified (its owner file cannot be ` +
+        `read, or its age cannot be told) so it is left alone; when no Docker proof is running, ` +
+        `clear it with: ${clearCommand(unreadable)}`
     );
   }
   return parts.join(' ');
@@ -458,17 +496,37 @@ export async function takeSlot(opts: SlotOptions): Promise<Slot> {
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
         const owner = readOwner(path);
-        const pid = /^pid=(\d+) /.exec(owner)?.[1];
-        const dead = pid !== undefined && !alive(Number(pid));
-        const orphaned = owner === '' && ageMs(path) > ORPHAN_SLOT_AGE_MS;
+        const pid = ownerPid(owner);
+        const dead = pid !== undefined && !alive(pid);
+        const age = ageMs(path);
+        const orphaned = owner === '' && age !== undefined && age > ORPHAN_SLOT_AGE_MS;
         if (dead || orphaned) {
-          rmSync(path, { recursive: true, force: true });
+          try {
+            rmSync(path, { recursive: true, force: true });
+          } catch (err) {
+            const code = (err as NodeJS.ErrnoException).code;
+            // Another session removing the same slot is not a failure: look again at the next poll.
+            if (!HARD_REMOVE_ERRORS.has(code ?? '')) continue;
+            throw new DockerFailure(
+              `Docker slot ${name} in ${dir} is stale but could not be removed (${code}). ` +
+                `Nothing was started. When no Docker proof is running, clear it with: ` +
+                `rm -r ${shellQuote(path)}`
+            );
+          }
           i -= 1;
         }
         continue;
       }
-      const mine = `pid=${process.pid} ${opts.label}`;
-      writeFileSync(join(path, 'owner'), `${mine}\n`);
+      const mine = `pid=${process.pid} ${opts.label}`.trim();
+      try {
+        // `wx`: a holder suspended since its `mkdir` may have been reclaimed meanwhile; it
+        // must then lose the slot, never overwrite the owner file of the one that took it.
+        writeFileSync(join(path, 'owner'), `${mine}\n`, { flag: 'wx' });
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code ?? '';
+        if (LOST_SLOT_ERRORS.has(code)) continue;
+        throw err;
+      }
       let released = false;
       const release = () => {
         if (released) return;
@@ -486,7 +544,7 @@ export async function takeSlot(opts: SlotOptions): Promise<Slot> {
         .map((n) => describeHolder(dir, n));
       throw new DockerFailure(
         `No Docker slot became free within ${seconds(opts.waitMs)} in ${dir} ` +
-          `(${holders.map((h) => h.text).join('; ')}). ${slotAdvice(holders)} Nothing was started.`
+          `(${holders.map((h) => h.text).join('; ')}). Nothing was started. ${slotAdvice(holders)}`
       );
     }
     await new Promise((r) => setTimeout(r, poll));

@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -14,6 +15,37 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// A hook run just before the harness writes a slot's owner file, to put another
+// session's reclaim exactly between that holder's `mkdir` and its owner write.
+const ownerWrite = vi.hoisted(() => ({
+  before: undefined as (() => void) | undefined,
+  beforeRemove: undefined as (() => void) | undefined,
+}));
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      const hook = ownerWrite.before;
+      if (hook && String(args[0]).endsWith('/owner')) {
+        ownerWrite.before = undefined;
+        hook();
+      }
+      return actual.writeFileSync(...args);
+    },
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+      const hook = ownerWrite.beforeRemove;
+      if (hook) {
+        ownerWrite.beforeRemove = undefined;
+        hook();
+      }
+      return actual.rmSync(...args);
+    },
+  };
+});
+
+const errno = (code: string) => Object.assign(new Error(`${code}: injected`), { code });
 
 import {
   CONTAINER_LIMITS,
@@ -454,9 +486,14 @@ describe('the bound on one engine step', () => {
   });
 
   it('falls back to the default for a value it cannot honour', () => {
-    for (const bad of ['abc', '-5', '0', '999', '1.5e3x', '12.5', 'Infinity']) {
+    for (const bad of ['abc', '-5', '0', '999', '1.5e3x', '12.5', 'Infinity', '2147483648']) {
       expect(stepDeadlineMs({ [STEP_DEADLINE_ENV]: bad }), bad).toBe(30_000);
     }
+  });
+
+  it('stops at the largest delay a timer honours: a larger one would fire after 1 ms', () => {
+    expect(stepDeadlineMs({ [STEP_DEADLINE_ENV]: '2147483647' })).toBe(2_147_483_647);
+    expect(stepDeadlineMs({ [STEP_DEADLINE_ENV]: '3000000000' })).toBe(30_000);
   });
 
   it('is the bound image inspection, create and start run under', () => {
@@ -491,8 +528,18 @@ describe('a Docker slot', { timeout: 20_000 }, () => {
     return dir;
   };
   afterEach(() => {
-    made.splice(0).forEach((d) => rmSync(d, { recursive: true, force: true }));
+    ownerWrite.before = undefined;
+    ownerWrite.beforeRemove = undefined;
+    made.splice(0).forEach((d) => {
+      try {
+        chmodSync(d, 0o755);
+      } catch {
+        // already gone
+      }
+      rmSync(d, { recursive: true, force: true });
+    });
   });
+  const isRoot = process.getuid?.() === 0;
 
   it('is taken by exact name and released', async () => {
     const dir = fresh();
@@ -635,4 +682,126 @@ describe('a Docker slot', { timeout: 20_000 }, () => {
     slot.release();
     expect(readdirSync(dir)).toEqual(['slot-1']);
   });
+
+  it('never overwrites the owner of a slot reclaimed while its first holder was suspended', async () => {
+    const dir = fresh();
+    ownerWrite.before = () => {
+      rmSync(join(dir, 'slot-1'), { recursive: true });
+      mkdirSync(join(dir, 'slot-1'));
+      writeFileSync(join(dir, 'slot-1', 'owner'), `pid=${process.pid} newer-holder\n`);
+    };
+    await expect(takeSlot({ dir, max: 1, waitMs: 200, pollMs: 50, label: 'a' })).rejects.toThrow(
+      /No Docker slot became free/
+    );
+    expect(readFileSync(join(dir, 'slot-1', 'owner'), 'utf8')).toBe(
+      `pid=${process.pid} newer-holder\n`
+    );
+  });
+
+  it('takes the slot again when it was reclaimed and not yet taken by another', async () => {
+    const dir = fresh();
+    ownerWrite.before = () => rmSync(join(dir, 'slot-1'), { recursive: true });
+    const slot = await takeSlot({ dir, max: 1, waitMs: 2_000, pollMs: 50, label: 'a' });
+    expect(slot.name).toBe('slot-1');
+    expect(readFileSync(join(dir, 'slot-1', 'owner'), 'utf8')).toBe(`pid=${process.pid} a\n`);
+    slot.release();
+  });
+
+  it('looks again when its own owner write fails because the slot is being removed', async () => {
+    const dir = fresh();
+    ownerWrite.before = () => {
+      rmSync(join(dir, 'slot-1'), { recursive: true });
+      throw errno('EINVAL');
+    };
+    const slot = await takeSlot({ dir, max: 1, waitMs: 2_000, pollMs: 50, label: 'a' });
+    expect(slot.name).toBe('slot-1');
+    slot.release();
+  });
+
+  it('looks again when another session is already removing the stale slot', async () => {
+    const dir = fresh();
+    mkdirSync(join(dir, 'slot-1'));
+    writeFileSync(join(dir, 'slot-1', 'owner'), 'pid=2147483646 gone\n');
+    ownerWrite.beforeRemove = () => {
+      throw errno('ENOTEMPTY');
+    };
+    const slot = await takeSlot({ dir, max: 1, waitMs: 2_000, pollMs: 50, label: 'a' });
+    expect(slot.name).toBe('slot-1');
+    slot.release();
+  });
+
+  it('leaves a slot alone whose owner file exists but cannot be read, and says how to clear it', async () => {
+    const dir = fresh();
+    mkdirSync(join(dir, 'slot-1', 'owner'), { recursive: true });
+    const old = new Date(Date.now() - ORPHAN_SLOT_AGE_MS - 60_000);
+    utimesSync(join(dir, 'slot-1'), old, old);
+    const failure = await takeSlot({ dir, max: 1, waitMs: 200, pollMs: 50, label: 'a' }).catch(
+      (e: unknown) => e
+    );
+    expect(failure).toBeInstanceOf(DockerFailure);
+    const message = (failure as Error).message;
+    expect(message).toContain('slot-1: owner file cannot be read');
+    expect(message).toContain(`rm -r '${join(dir, 'slot-1')}'`);
+    expect(message).not.toContain('re-run shortly');
+    expect(message).not.toContain('wait for it to finish');
+    expect(readdirSync(dir)).toEqual(['slot-1']);
+  });
+
+  it('keeps a holder with an empty label running: taken, found, and released', async () => {
+    const dir = fresh();
+    const slot = await takeSlot({ dir, max: 1, waitMs: 200, label: '' });
+    expect(readFileSync(join(dir, 'slot-1', 'owner'), 'utf8')).toBe(`pid=${process.pid}\n`);
+    const failure = await takeSlot({ dir, max: 1, waitMs: 200, pollMs: 50, label: 'b' }).catch(
+      (e: unknown) => e
+    );
+    expect((failure as Error).message).toContain('wait for it to finish and re-run');
+    expect((failure as Error).message).not.toContain('rm -r');
+    slot.release();
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('quotes a slot path that holds a single quote so the shell reads it back whole', async () => {
+    const dir = join(fresh(), "it's a dir");
+    mkdirSync(join(dir, 'slot-1'), { recursive: true });
+    writeFileSync(join(dir, 'slot-1', 'owner'), 'got slot-1 (by hand)\n');
+    const failure = await takeSlot({ dir, max: 1, waitMs: 200, pollMs: 50, label: 'a' }).catch(
+      (e: unknown) => e
+    );
+    const message = (failure as Error).message;
+    const quoted = message.slice(message.indexOf('rm -r ') + 'rm -r '.length);
+    const printed = spawnSync('sh', ['-c', `printf %s ${quoted}`], { encoding: 'utf8' });
+    expect(printed.stdout).toBe(join(dir, 'slot-1'));
+  });
+
+  it('does not promise a reclaim for a slot whose age cannot be told', async () => {
+    const dir = fresh();
+    symlinkSync(join(dir, 'nowhere'), join(dir, 'slot-1'));
+    mkdirSync(join(dir, 'slot-2'));
+    const future = new Date(Date.now() + 3_600_000);
+    utimesSync(join(dir, 'slot-2'), future, future);
+    const failure = await takeSlot({ dir, max: 2, waitMs: 200, pollMs: 50, label: 'a' }).catch(
+      (e: unknown) => e
+    );
+    const message = (failure as Error).message;
+    expect(message).toContain('slot-1: no owner file (its age cannot be told)');
+    expect(message).toContain('slot-2: no owner file (its age cannot be told)');
+    expect(message).not.toContain('re-run shortly');
+    expect(message).toContain(`rm -r '${join(dir, 'slot-1')}' && rm -r '${join(dir, 'slot-2')}'`);
+  });
+
+  it.skipIf(isRoot)(
+    'names a stale slot it cannot remove, with the command, not a raw error',
+    async () => {
+      const dir = fresh();
+      mkdirSync(join(dir, 'slot-1'));
+      writeFileSync(join(dir, 'slot-1', 'owner'), 'pid=2147483646 gone\n');
+      chmodSync(dir, 0o555);
+      const failure = await takeSlot({ dir, max: 1, waitMs: 200, pollMs: 50, label: 'a' }).catch(
+        (e: unknown) => e
+      );
+      expect(failure).toBeInstanceOf(DockerFailure);
+      expect((failure as Error).message).toMatch(/slot-1 in .* is stale but could not be removed/);
+      expect((failure as Error).message).toContain(`rm -r '${join(dir, 'slot-1')}'`);
+    }
+  );
 });
