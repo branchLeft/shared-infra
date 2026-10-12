@@ -35,7 +35,7 @@ repos:
       # node_modules and sibling worktrees.
       - id: prettier
         name: prettier
-        entry: npm run format:check --silent
+        entry: scripts/nvmrc-node-exec.sh npm run format:check --silent
         language: system
         files: \.(ts|js|json|md|ya?ml)$
         pass_filenames: false
@@ -50,7 +50,7 @@ repos:
       # project's result for a change under mail/ and say nothing about it.
       - id: typecheck
         name: typecheck (root)
-        entry: npm run typecheck --silent
+        entry: scripts/nvmrc-node-exec.sh npm run typecheck --silent
         language: system
         files: \.ts$
         exclude: ^(mail|hetzner)/
@@ -58,14 +58,14 @@ repos:
 
       - id: typecheck-mail
         name: typecheck (mail)
-        entry: sh -c 'cd mail && npm run typecheck --silent'
+        entry: scripts/nvmrc-node-exec.sh sh -c 'cd mail && npm run typecheck --silent'
         language: system
         files: ^mail/.*\.ts$
         pass_filenames: false
 
       - id: typecheck-hetzner
         name: typecheck (hetzner)
-        entry: sh -c 'cd hetzner && npm run typecheck --silent'
+        entry: scripts/nvmrc-node-exec.sh sh -c 'cd hetzner && npm run typecheck --silent'
         language: system
         files: ^hetzner/.*\.ts$
         pass_filenames: false
@@ -113,7 +113,7 @@ repos:
       # regression here is permanent and invisible to every later diff.
       - id: hetzner-unit-tests
         name: hetzner unit tests (vitest)
-        entry: sh -c 'cd hetzner && npm test --silent'
+        entry: scripts/nvmrc-node-exec.sh sh -c 'cd hetzner && npm test --silent'
         language: system
         # `edge/` and `monitoring/` are both included, and so is the root
         # `sites.ts` both render from: each suite asserts its committed
