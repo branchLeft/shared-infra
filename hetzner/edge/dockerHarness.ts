@@ -439,9 +439,8 @@ function slotAdvice(holders: Holder[]): string {
 }
 
 /**
- * Take one of `max` Docker slots (an atomic `mkdir`). Reclaims a dead `pid=`
- * owner this function wrote, and a slot with no owner file older than
- * `ORPHAN_SLOT_AGE_MS`; refuses, naming holders, after `waitMs`.
+ * Take one of `max` Docker slots (an atomic `mkdir`). Reclaims a dead `pid=` owner
+ * or an owner-less slot older than `ORPHAN_SLOT_AGE_MS`; refuses after `waitMs`.
  */
 export async function takeSlot(opts: SlotOptions): Promise<Slot> {
   const dir = opts.dir ?? slotDir();
