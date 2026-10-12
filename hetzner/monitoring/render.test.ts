@@ -709,6 +709,7 @@ describe('the owner_action="true" label', () => {
       'HostMemoryPressure',
       'HostDiskSpaceLow',
       'MySQLConnectionsHigh',
+      'TLSCertificateExpiringSoon',
       'SNDSAccessLinkExpiringSoon',
     ]);
   });

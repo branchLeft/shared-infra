@@ -665,6 +665,7 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '        expr: probe_ssl_earliest_cert_expiry{job="blackbox_http"} - time() < 14*86400',
     '        labels:',
     '          severity: warning',
+    '          owner_action: "true"',
     '        annotations:',
     '          summary: "{{ $labels.instance }}\'s TLS certificate expires in under 14 days."',
     '          description: >-',

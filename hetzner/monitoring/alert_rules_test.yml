@@ -312,12 +312,25 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              owner_action: 'true'
               job: blackbox_http
               instance: https://example.branchleft.co.uk
             exp_annotations:
               summary: "https://example.branchleft.co.uk's TLS certificate expires in under 14 days."
               description: >-
                 Caddy renews certificates automatically, so a failed renewal shows only when the certificate reaches hard expiry and probe_success drops. This fires earlier, while there is still time to fix the renewal. Scoped to blackbox_http, the public HTTPS probes.
+
+  # The boundary: a certificate exactly 14 days from expiry is silent, because
+  # the comparison is strict. A `<` written as `<=` would fire here and nowhere
+  # in the cases above. 1209660 is 14 days plus the 60s of the 1m evaluation.
+  - interval: 30s
+    input_series:
+      - series: 'probe_ssl_earliest_cert_expiry{job="blackbox_http", instance="https://edge.branchleft.co.uk"}'
+        values: '1209660 1209660 1209660 1209660 1209660 1209660'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: TLSCertificateExpiringSoon
+        exp_alerts: []
 
   # MailHostDown: mx1's SMTP-banner target failing continuously for over 5m
   # fires, on the same probe_success metric BlackboxProbeFailed above reads,
