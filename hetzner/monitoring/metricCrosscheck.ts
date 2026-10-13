@@ -261,8 +261,12 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   // this module's own limitation above. Which host in org/control is still
   // open (LLD-9 names only the project, never a host); nothing here assumes
   // one.
-  backup_worker_lock_wait_seconds: 'backup_worker.py, in branchLeft/ghost-platform, in org/control',
-  backup_worker_lock_aborts_total: 'backup_worker.py, in branchLeft/ghost-platform, in org/control',
+  state_copy_last_success_timestamp_seconds: 'state_copy.py, in branchLeft/ghost-platform, on ops1',
+  state_copy_bucket_configured: 'state_copy.py, in branchLeft/ghost-platform, on ops1',
+  backup_worker_lock_wait_seconds:
+    'backup_worker.py, in branchLeft/ghost-platform, in org/control; dump_nightly.py, on db1',
+  backup_worker_lock_aborts_total:
+    'backup_worker.py, in branchLeft/ghost-platform, in org/control; dump_nightly.py, on db1',
   // db1's own dump and binlog shipper, written by the two scripts named
   // here to the textfile directory db1's node_exporter reads. The source
   // is branchLeft/ghost-platform's db/provision, not scannable from here.

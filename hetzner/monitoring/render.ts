@@ -592,7 +592,10 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            move REPLICA_TUNNEL_DEADLINE in hetzner/monitoring/render.ts.',
     '',
     '  - name: backup',
-    // One group, not two -- both alerts watch the same producer.
+    // One group, not two. Producers: backup_worker.py and state_copy.py,
+    // both on ops1; dump_nightly.py on db1 writes the lock gauges under
+    // tenant="db1-all-databases" and its own run-status pair, never
+    // backup_worker_last_success_timestamp_seconds.
     // TenantBackupAgeHigh is the producer-side signal, not a liveness
     // check; the or absent(...) branch covers the metric family vanishing
     // entirely. Warning, never page, off-host receiver. See
@@ -627,6 +630,28 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            change; see RUNBOOK-monitoring.md for the bring-up shape once',
     '            that host is chosen. Per-tenant coverage is proved in',
     '            alert_rules_test.yml.',
+    '',
+    '      - alert: StateCopyStale',
+    '        expr: >-',
+    '          (time() - state_copy_last_success_timestamp_seconds > 129600)',
+    '          or (state_copy_bucket_configured unless on(bucket) state_copy_last_success_timestamp_seconds)',
+    '          or absent(state_copy_bucket_configured)',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The nightly copy of the {{ $labels.bucket }} state bucket into backup copy 1 is over 36 hours old."',
+    '          description: >-',
+    '            state_copy_last_success_timestamp_seconds advances only after a',
+    '            copy is encrypted and written to backup copy 1, so a stopped',
+    '            timer, a refused bucket read or an empty-looking listing leaves',
+    "            that bucket's gauge frozen. Three branches: a stale gauge; a",
+    '            bucket the job is configured for that has never succeeded',
+    '            (state_copy_bucket_configured is written before any copy); and',
+    '            the whole family absent, which means the job has never run or the',
+    '            exporter file is gone and carries no bucket label. 129600s (36h)',
+    '            is 1.5x the nightly cadence, as for TenantBackupAgeHigh. Warning,',
+    '            never page. The estate state has no other off-host copy until',
+    '            this runs.',
     '',
     // Not `notify: on-host`: unlike an SNDS or mail-deferral alert, nothing
     // about this signal depends on a route that avoids mx1.
