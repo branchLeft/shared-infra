@@ -1,5 +1,32 @@
 # test_runbook_rsync_commands.py
 
+## Module overview
+
+The runbooks' `rsync` commands must not carry workstation permissions onto a host.
+
+`rsync -a` implies `-p`, `-o` and `-g`, and the last two take effect because the
+receiving side is `root`. So a plain `rsync -av` reproduces the *workstation's*
+file modes and uid/gid on the host — while every container in both stacks reads
+its config through a bind mount **as the container-side user**, not as root.
+
+That combination broke a real deploy. `prometheus.yml` is written by
+`npm run render` (a Vitest file snapshot), which left it `0600` in one
+workstation checkout. Git records `100644` and cannot see the difference — it
+tracks only the executable bit — so the mode is invisible to review, to
+`git status`, and to CI, which checks out its own copy at `0644`. `rsync -av`
+copied `0600 uid=501 gid=20` onto the host and Prometheus, running as `nobody`,
+crash-looped on `permission denied`.
+
+Additionally, `rsync --no-owner --no-group` does not modify the ownership of
+files that already exist on the receiving host. Files copied with incorrect
+ownership must be corrected with an explicit `chown -R root:root` after the
+rsync.
+
+Nothing available to CI can observe a workstation's file modes, so the deploy
+command itself has to be immune to them. That makes the command *shape* the
+control, and this asserts the shape — the same reasoning, and the same
+technique, as `RunbookScpCommandTests` in `test_branchleft_nat.py`.
+
 ## The placeholder and fixed-host checks
 
 Moved here from the comment above `COMMAND_FENCE_LANGS` in the test module.
