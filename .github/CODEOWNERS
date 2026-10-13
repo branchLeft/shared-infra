@@ -17,9 +17,12 @@
 **/scripts/              @branchLeft/branchleft-admin
 
 # Guard, approval and deploy files by name: the merge script's word rule (gate 6, any path segment).
-**/*[Gg]uard*            @branchLeft/branchleft-admin
-**/*[Aa]pprov*           @branchLeft/branchleft-admin
-**/*[Dd]eploy*           @branchLeft/branchleft-admin
+**/*guard*               @branchLeft/branchleft-admin
+**/*Guard*               @branchLeft/branchleft-admin
+**/*approv*              @branchLeft/branchleft-admin
+**/*Approv*              @branchLeft/branchleft-admin
+**/*deploy*              @branchLeft/branchleft-admin
+**/*Deploy*              @branchLeft/branchleft-admin
 
 # Named gates: the DNS cutover stop check and its test, the suite-size pin.
 /hetzner/dns/zonecheck.py                @branchLeft/branchleft-admin
