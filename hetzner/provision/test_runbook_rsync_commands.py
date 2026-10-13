@@ -301,60 +301,52 @@ class RunbookRsyncCommandTests(unittest.TestCase):
                 f"unreadable to Alertmanager and crash the service.",
             )
 
-    def test_the_monitoring_copy_step_says_a_restart_is_mandatory(self):
-        """A copy step whose effect depends on a later restart must say so in its
-        own body, not only at the step that eventually restarts.
+    def test_the_monitoring_delivery_step_names_the_workflow_and_offers_no_hand_copy(self):
+        """The monitoring stack is delivered by a gated workflow run, not copied by hand.
 
-        Prometheus and Alertmanager read their config files at container start
-        only, and this stack does not pass --web.enable-lifecycle, so nothing
-        short of `systemctl restart branchleft-compose@monitoring` makes a
-        copied change take effect. A reader who stops after the copy step
-        alone must not be able to conclude the change is deployed -- a prose
-        fix at the step that restarts is not enough, because that is not the
-        step the reader is reading.
+        This replaces the guard on the old hand-copy step (which had to say a
+        restart was mandatory, because the copy alone deployed nothing). The
+        delivery restarts for itself, so the property to hold is the other
+        way round: the step names the workflow and the restart it performs,
+        and contains no command that copies the directory from a workstation.
         """
         text = (HETZNER / "RUNBOOK-monitoring.md").read_text(encoding="utf-8")
         match = re.search(
-            r"## \d+\. Copy the monitoring stack directory onto the host\n.*?"
-            r"(?=\n## \d+\.)",
+            r"## \d+\. Deliver the monitoring stack directory\n.*?(?=\n## \d+\.)",
             text,
             re.DOTALL,
         )
         self.assertIsNotNone(
-            match, "RUNBOOK-monitoring.md: the monitoring stack's copy step was not found"
+            match, "RUNBOOK-monitoring.md: the monitoring stack's delivery step was not found"
         )
         section = match.group(0)
-        # Markdown prose wraps at ~80 columns, so a multi-word phrase can carry
-        # an internal newline that a plain substring check would miss.
         normalized = " ".join(section.split())
 
+        self.assertIn("Deliver monitoring", normalized)
+        self.assertIn("deliver-monitoring.yml", normalized)
+        self.assertIn("production-monitoring", normalized)
         self.assertIn(
             "systemctl restart branchleft-compose@monitoring",
             normalized,
-            "the copy step must name the restart command inline, not only at a later step",
+            "the delivery step must say which restart makes a change take effect",
         )
-        self.assertRegex(
-            normalized,
-            r"(?i)changes nothing|is inert|does not deploy",
-            "the copy step must say plainly that the copy alone does not deploy the change",
-        )
-        self.assertIn(
-            "--delete",
+        self.assertRegex(normalized, r"(?i)only if a file changed")
+        self.assertNotRegex(
             section,
-            "sanity: expected to find the rsync --delete flag inside the copy step",
+            r"(?m)^\s*(rsync|scp)\s",
+            "the delivery step must not offer a hand copy of the stack to the host",
         )
-        self.assertIn(
-            "alertmanager.yml",
-            section,
-            "the --delete/missing-alertmanager.yml window must be explained where the "
-            "reader meets --delete, i.e. inside the copy step itself",
-        )
-        self.assertIn(
-            "on disk at all",
-            normalized,
-            "the copy step must state that an un-restarted copy leaves no "
-            "alertmanager.yml on disk at all, not just that it gets deleted",
-        )
+        self.assertNotIn("/opt/branchleft/monitoring/ &&", section)
+
+    def test_no_runbook_command_copies_the_monitoring_stack_by_hand(self):
+        for runbook in (HETZNER / "RUNBOOK-monitoring.md", HETZNER / "RUNBOOK-edge.md"):
+            text = runbook.read_text(encoding="utf-8")
+            with self.subTest(runbook=runbook.name):
+                self.assertNotRegex(
+                    text,
+                    r"rsync[^\n]*(\\\n[^\n]*)*hetzner/monitoring/stack/?\s",
+                    f"{runbook.name}: a command that copies hetzner/monitoring/stack/ by hand",
+                )
 
 
 class RunbookFixedHostPlaceholderTests(unittest.TestCase):

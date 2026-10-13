@@ -543,6 +543,13 @@ down in no file here at all, so nothing here can discover it.
 sum total of the CI account's privilege, so its argument validation and its
 rollback path are unit-tested rather than left to a live deploy to discover.
 
+`branchleft_sync_stack.py` is the second such piece: the forced command of the
+one key that delivers `monitoring/stack/` to `edge1` for the **Deliver
+monitoring** workflow (`branchleft_sync_stack.md`). The deploy account cannot do
+that job, since it can pin an image and restart a stack but writes no files, and
+the monitoring stack is refused by `branchleft-deploy` anyway. Install it, and
+grant its key, with `provision/50-install-stack-sync.sh`.
+
 ```bash
 python3 -m unittest discover -s provision -p 'test_*.py'
 ```

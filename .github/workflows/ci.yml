@@ -260,6 +260,10 @@ jobs:
     # as root on a platform host, so its argument validation is the boundary
     # between a scoped deploy key and a root shell. These tests are the proof
     # that boundary still holds.
+    # branchleft_sync_stack.py is the forced command of the one key that
+    # delivers the monitoring stack's files; its archive validation is the
+    # boundary between that key and arbitrary writes as root, and
+    # test_deliver_monitoring_workflow.py runs the delivery's gate step.
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -267,7 +271,7 @@ jobs:
           persist-credentials: false
 
       - name: Shellcheck
-        run: shellcheck -x hetzner/provision/*.sh
+        run: shellcheck -x hetzner/provision/*.sh hetzner/scripts/monitoring-stack-archive.sh hetzner/scripts/rehearse-monitoring-delivery.sh
 
       # test_compose_unit_contract.py uses a `X | None` return annotation
       # with no `from __future__ import annotations` guard, so under Python
@@ -434,6 +438,14 @@ jobs:
         env:
           GRAFANA_ADMIN_PASSWORD: validation-only
         run: docker compose -f hetzner/monitoring/stack/compose.yml config -q
+
+      # The delivery to edge1 (deliver-monitoring.yml) with no host and no
+      # credential: the real archive through the real wrapper into a scratch
+      # directory, a repeat sync that must change nothing, and a truncated
+      # archive that must be refused. A stack the wrapper would refuse fails
+      # the pull request, not the post-merge delivery.
+      - name: Rehearse the delivery to edge1
+        run: ./hetzner/scripts/rehearse-monitoring-delivery.sh
 
       # The renderer's own tests are string assertions over their own output;
       # this is what tells a directive Prometheus/Alertmanager/blackbox_exporter

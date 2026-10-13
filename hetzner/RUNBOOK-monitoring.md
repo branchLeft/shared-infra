@@ -128,6 +128,10 @@ _not_ nested under either systemd unit's cgroup.
 
 ## Why every `rsync` here carries `--no-owner --no-group --chmod`
 
+Only step 1's copy of the edge stack is still an `rsync`. The monitoring stack
+goes by the delivery workflow (step 4), whose host-side wrapper sets the same
+modes and ownership itself; the reasoning below is why it does.
+
 `-a` implies `-p`, `-o` and `-g`, and the last two take effect because the
 receiving side is `root`. A plain `rsync -av` therefore reproduces the
 _workstation's_ file modes and uid/gid on the host -- and every container in
@@ -305,52 +309,64 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 
 Expect `-rw------- 1 root root`. Do not print the file.
 
-## 4. Copy the monitoring stack directory onto the host
+## 4. Deliver the monitoring stack directory
 
-`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
-first if you are entering here independently.
+`hetzner/monitoring/stack/` reaches `edge1` by the **Deliver monitoring**
+workflow (`.github/workflows/deliver-monitoring.yml`), never by a copy from a
+workstation. It runs on a push to `main` that touches that directory, and on
+demand from the Actions tab (Run workflow, branch `main`). The job waits in the
+`production-monitoring` environment until a required reviewer approves it, then
+sends the directory to the host and restarts `branchleft-compose@monitoring`
+only if a file changed. Approve each run with its own log open.
 
-```bash
-rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
-  -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/monitoring/stack/ root@"$EDGE1_IPV4":/opt/branchleft/monitoring/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
-  'chown -R root:root /opt/branchleft/monitoring/'
-```
+What the host does with it is `hetzner/provision/branchleft_sync_stack.py`
+(design: `branchleft_sync_stack.md`), reached through one SSH key whose
+`authorized_keys` line forces that command:
 
-**This copy alone changes nothing in the running stack.** Prometheus and
-Alertmanager both read their config only from what is on disk when their
-container starts. Prometheus's reload endpoint is disabled outright -- this
-stack does not pass `--web.enable-lifecycle`, so `POST /-/reload` is refused
-and there is no way to make it pick up a new file short of restarting it.
-Alertmanager's own reload mechanism does not help either: the file it would
-reload is `alertmanager/alertmanager.yml`, which this same rsync deletes (see
-below) and only a restart's `ExecStartPre` regenerates -- there is nothing on
-disk to reload until that has run. All three mounts -- `prometheus.yml`,
-`alerts.yml`, `alertmanager.yml` -- are `:ro`, so the bytes on disk change the
-instant `rsync` finishes while the running containers go on serving whatever
-they last read. The change is not deployed until `systemctl restart
-branchleft-compose@monitoring` runs, in step 7 below -- first-time bring-up
-starts it there for the first time; every later update to this directory
-restarts it the same way, in step 7's "Updating an already-running stack".
+- every file ends up `0644` (`0755` where the repository marks it executable),
+  every directory `0755`, all `root:root`, whatever the sender's modes were;
+- files on the host that are not in the repository are removed;
+- the three files the host renders from its secrets
+  (`alertmanager/alertmanager.yml`, `ntfy/server.yml`,
+  `prometheus/mx1-metrics-password`) are never sent, never deleted and never
+  re-moded, and an archive that carries one is refused;
+- an archive that is truncated, unreadable or tries to leave the directory is
+  refused with the host untouched;
+- the restart happens only when something was written, removed or re-moded, so
+  a re-run of an already-delivered commit does nothing.
 
-`--delete` matters here specifically: `render_alertmanager_config.py` writes
-`alertmanager/alertmanager.yml` on the host, which does not exist in the
-committed tree, so every copy deletes the previous render. That restart is
-what puts it back: step 7's `ExecStartPre` runs
-`render_alertmanager_config.py` before every start, first or otherwise. **A
-copy that is not followed by that restart leaves the host with no
-`alertmanager.yml` on disk at all.** Nothing looks wrong -- the running
-Alertmanager container holds its own file open and keeps serving it -- so the
-gap is invisible until the container is next recreated for any unrelated
-reason and fails to start against a missing file. The `chown` here corrects
-ownership on whatever `--delete` left behind; it never touches
-`alertmanager.yml`, because `--delete` has already removed it by the time
-`chown` runs.
+The job summary lists what changed. `unchanged, no restart` is a success: that
+commit is already on the host. `NOT RESTARTED` means the unit is not enabled,
+so the files are in place and first-time bring-up (7a) is still to do.
+
+**A delivery that ran is deployed.** Prometheus and Alertmanager read their
+config only when their container starts, and this stack does not pass
+`--web.enable-lifecycle`, so there is no reload; the restart the wrapper
+performs after a change (the same `systemctl restart
+branchleft-compose@monitoring` as 7b) is what makes it take effect, and it is
+what regenerates `alertmanager/alertmanager.yml` from the current template and
+`/etc/branchleft/monitoring.env`. Nothing here needs running afterwards except
+step 8's verification.
 
 **Note: `alertmanager/alertmanager.yml` must remain owned by uid 65534.** See
-`render_alertmanager_config.py` — Alertmanager runs as `nobody` and a bind mount
-is read as the container-side user, so a root-owned file becomes unreadable.
+`render_alertmanager_config.py`. The delivery never touches it, which is why a
+change that fails to restart cannot leave the host without one.
+
+If the run is red, fix the cause and run it again; do not copy the directory by
+hand. A refusal names the archive member or the missing setting. The
+one-time settings the job needs are listed in "What the delivery needs once"
+below.
+
+### What the delivery needs once
+
+Set by the platform owner, in the repository's `production-monitoring`
+environment (Settings, Environments): a required reviewer, deployment branches
+limited to `main`, the variable `EDGE1_SSH_HOST` and the secrets
+`EDGE1_MONITORING_SYNC_KEY` and `EDGE1_SSH_KNOWN_HOSTS`. On the host, run
+`hetzner/provision/50-install-stack-sync.sh --grant-key <public key file>` as
+root once, which installs the wrapper and writes the key's forced-command line.
+The job's first step fails, naming the missing piece, if the environment lacks
+its reviewer or branch rule or the job lacks a setting.
 
 ## 5. Install the systemd cgroup drop-ins
 
@@ -393,9 +409,9 @@ for a reason unrelated to this stack.
 
 First-time bring-up enables and starts the unit (7a). Every later change
 under `hetzner/monitoring/stack/` -- a rules edit, a new scrape target, an
-Alertmanager template change, an image bump -- is step 4 followed by 7b: copy,
-then restart, nothing else. The unit is already enabled, so 7b never runs
-`enable` again.
+Alertmanager template change, an image bump -- is step 4 alone: the delivery
+copies and restarts. 7b is the same restart by hand, for the case where no file
+changed. The unit is already enabled, so neither runs `enable` again.
 
 ### 7a. First-time bring-up
 
@@ -436,11 +452,13 @@ or blank `/etc/branchleft/monitoring.env` cannot produce it -- the drop-in
 re-adds that file with a leading dash precisely so the failure comes from
 `ExecStartPre` or from Compose, naming the variable.
 
-### 7b. Updating an already-running stack
+### 7b. Restarting an already-running stack
 
-Run this immediately after step 4's copy -- the copy on its own has changed
-nothing, per step 4's note above. `$EDGE1_IPV4` is set under "What has to be
-true first" above; re-set it first if you are entering here independently.
+Not needed after a change under `stack/`: step 4's delivery restarts the unit
+itself. Use this when the stack must restart with no file changed, for example
+after editing `/etc/branchleft/monitoring.env` (step 3), because the delivery
+restarts only on a change. `$EDGE1_IPV4` is set under "What has to be true
+first" above; re-set it first if you are entering here independently.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
@@ -456,7 +474,7 @@ recreates only the service whose _resolved_ Compose definition changed
 are. Without that override this restart would regenerate `alertmanager.yml`
 on disk and leave every running container, `alertmanager` included, still
 serving what it read at its last start -- `prometheus.yml` and `alerts.yml`
-are read fresh from what step 4 just wrote only because `--force-recreate` is
+are read fresh from what step 4 wrote only because `--force-recreate` is
 there to force it. `enable` is not repeated -- it is idempotent but pointless
 once the unit is already enabled -- and the systemd drop-in install (step 5)
 only needs re-running when a drop-in file itself changes, not for an ordinary config
@@ -712,30 +730,23 @@ handover steps rather than performed by CI or by an agent.
 
 ## 13. Rolling back
 
-Same shape as `RUNBOOK-edge.md` §12: restore the previous `stack/` from git,
-re-copy, restart. `$EDGE1_IPV4` is set under "What has to be true first"
-above; re-set it first if you are entering here independently -- this is
-the section most likely to be entered mid-incident, days after the deploy.
+A monitoring rollback is a revert merged to `main`: the revert changes
+`hetzner/monitoring/stack/`, so step 4's delivery runs for it, and its approval
+puts the previous files back and restarts. This is the section most likely to
+be entered mid-incident, days after the deploy; if the revert is already on
+`main` and the push run did not start, run **Deliver monitoring** from the
+Actions tab on `main`.
 
-```bash
-git checkout <PREVIOUS_MERGED_SHA> -- hetzner/monitoring/stack
-rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
-  -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/monitoring/stack/ root@"$EDGE1_IPV4":/opt/branchleft/monitoring/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
-  'chown -R root:root /opt/branchleft/monitoring/ &&
-   systemctl restart branchleft-compose@monitoring'
-```
-
-Then `git checkout HEAD -- hetzner/monitoring/stack` on the workstation. If
-the rollback also needs to undo an edge-side change (the metrics endpoints
-or the cgroup containment), the same pattern applies to
-`hetzner/edge/stack`, followed by `systemctl restart branchleft-compose@edge`.
+If the rollback also needs to undo an edge-side change (the metrics endpoints
+or the cgroup containment), the edge stack still has no workflow, so restore
+`hetzner/edge/stack` from git and repeat step 1's copy, followed by `systemctl
+restart branchleft-compose@edge`. `$EDGE1_IPV4` is set under "What has to be
+true first" above.
 
 ## 14. Deploy the SNDS complaint-rate collector
 
-`snds/collect_snds_metrics.py` is copied to the host as part of step 4's
-`hetzner/monitoring/stack/` rsync (it lives under that directory). This
+`snds/collect_snds_metrics.py` is delivered to the host as part of step 4's
+`hetzner/monitoring/stack/` delivery (it lives under that directory). This
 section is everything specific to it on top of that: the automated-access
 URL, node-exporter's textfile-collector mount, and the systemd timer that
 actually runs it.
@@ -1009,9 +1020,8 @@ touched that chain.
 
 ### 15c. Deploy the updated scrape config and reload
 
-Standard config-only redeploy of the monitoring stack, same command as any
-other `render.ts` change — see "1. Copy the updated edge stack" and "7b.
-Updating an already-running stack" above for the full rsync/restart shape.
+Standard config-only redeploy of the monitoring stack, the same delivery as
+any other `render.ts` change — step 4 above delivers and restarts.
 The new target is additive (`ops1`'s `node` entry, `expected_up: 'false'`),
 so this redeploy pages nobody on its own.
 
