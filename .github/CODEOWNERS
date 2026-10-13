@@ -2,15 +2,16 @@
 # branchLeft/workspace#2265; source list: branchLeft/workspace#2314). Every
 # other path is merged on the reviewer App's approval, with no catch-all line.
 
-# Standards config: the modes, floors and ignore lists the standards gate reads.
-/.standardsignore        @branchLeft/branchleft-admin
-/.standards.mode         @branchLeft/branchleft-admin
-/.docs-lint*             @branchLeft/branchleft-admin
-/tools/floors.tsv        @branchLeft/branchleft-admin
-/.standards-db-tooling   @branchLeft/branchleft-admin
+# Estate files the merge script refuses at gate 6: mail/ runs under plan credentials on push, and every credentialed plan job installs from the lockfiles and .npmrc files below.
+/mail/                                   @branchLeft/branchleft-admin
+/package-lock.json                       @branchLeft/branchleft-admin
+/hetzner/package-lock.json               @branchLeft/branchleft-admin
+/hetzner-host/package-lock.json          @branchLeft/branchleft-admin
+/.npmrc                                  @branchLeft/branchleft-admin
+/hetzner/.npmrc                          @branchLeft/branchleft-admin
+/hetzner-host/.npmrc                     @branchLeft/branchleft-admin
 
-# Workflows, actions and CODEOWNERS: CI decides pass or fail here (ci.yml, standards.yml).
-/.github/                @branchLeft/branchleft-admin
+# The review rule itself, at any depth. Workflows and actions are /.github/, at the foot of this file.
 **/CODEOWNERS            @branchLeft/branchleft-admin
 
 # CI gate scripts and their tests: ci.yml runs the scripts/ and hetzner/scripts/ checks to pass or fail.
@@ -36,3 +37,10 @@
 # Hook set and format skip rules: they decide which checks run and which files they skip.
 /.pre-commit-config.yaml                 @branchLeft/branchleft-admin
 /.prettierignore                         @branchLeft/branchleft-admin
+
+/.standardsignore        @branchLeft/branchleft-admin
+/.standards.mode         @branchLeft/branchleft-admin
+/.docs-lint*             @branchLeft/branchleft-admin
+/tools/floors.tsv        @branchLeft/branchleft-admin
+/.standards-db-tooling   @branchLeft/branchleft-admin
+/.github/                @branchLeft/branchleft-admin
