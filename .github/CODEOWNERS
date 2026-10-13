@@ -1,8 +1,35 @@
-* @branchLeft/branchleft-admin
+# Owner-only files are the ones that judge or gate a merge or a deploy (m14,
+# branchLeft/workspace#2265; source list: branchLeft/workspace#2314). Every
+# other path is merged on the reviewer App's approval, with no catch-all line.
 
+# Standards config: the modes, floors and ignore lists the standards gate reads.
 /.standardsignore        @branchLeft/branchleft-admin
 /.standards.mode         @branchLeft/branchleft-admin
 /.docs-lint*             @branchLeft/branchleft-admin
 /tools/floors.tsv        @branchLeft/branchleft-admin
 /.standards-db-tooling   @branchLeft/branchleft-admin
+
+# Workflows, actions and CODEOWNERS: CI decides pass or fail here (ci.yml, standards.yml).
 /.github/                @branchLeft/branchleft-admin
+**/CODEOWNERS            @branchLeft/branchleft-admin
+
+# CI gate scripts and their tests: ci.yml runs the scripts/ and hetzner/scripts/ checks to pass or fail.
+**/scripts/              @branchLeft/branchleft-admin
+
+# Guard, approval and deploy files by name: the merge script's word rule (gate 6, any path segment).
+**/*[Gg]uard*            @branchLeft/branchleft-admin
+**/*[Aa]pprov*           @branchLeft/branchleft-admin
+**/*[Dd]eploy*           @branchLeft/branchleft-admin
+
+# Named gates: the DNS cutover stop check and its test, the suite-size pin.
+/hetzner/dns/zonecheck.py                @branchLeft/branchleft-admin
+/hetzner/dns/test_zonecheck.py           @branchLeft/branchleft-admin
+/hetzner/provision/test_suite_size.py    @branchLeft/branchleft-admin
+
+# Test runner and coverage configs: they set the coverage scope and the exclusions that skip files.
+/hetzner/vitest.config.ts                @branchLeft/branchleft-admin
+/hetzner-host/vitest.config.ts           @branchLeft/branchleft-admin
+
+# Hook set and format skip rules: they decide which checks run and which files they skip.
+/.pre-commit-config.yaml                 @branchLeft/branchleft-admin
+/.prettierignore                         @branchLeft/branchleft-admin
