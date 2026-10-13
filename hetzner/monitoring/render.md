@@ -153,6 +153,50 @@ raise a false alert; the rules are still best applied once the scripts are on
 db1. The series are named for db1,
 not for the control host's worker, so the worker's series can never hide db1's
 absence.
+## The `scanner` rule group
+
+Watches the upload scanner inside each tenant's Ghost process. The series are
+the scanning storage adapter's own, written as a node_exporter textfile by that
+process on its app host and read by the host's node target, so they carry that
+target's `job="node"`, `host` and `expected_up` labels plus the adapter's
+`tenant` label. The names, types and label values are a contract owned by
+`branchLeft/ghost-platform` (`adapters/scanning-storage/src/metrics.md`);
+`metricCrosscheck.ts` lists them under `EXTERNAL_METRICS` for that reason, since
+this repository cannot scan JavaScript in another one.
+
+| Alert                          | Fires when                                                              | Severity |
+| ------------------------------ | ----------------------------------------------------------------------- | -------- |
+| `ScannerNotConfigured`         | an adapter has no verdict source for 10m (fresh file only)              | warning  |
+| `ScannerUploadsRefused`        | an upload was refused for want of a verdict source in the last 15m      | warning  |
+| `ScannerVerdictChannelFailing` | verdict requests time out or throw in every 5m window for 10m, per kind | warning  |
+
+Why nothing here can fire from absence. Every rule selects
+`job="node", expected_up="true"`, so a host whose exporter is not yet confirmed
+live (`app1` today, `expected_up="false"`) is silent however its series look,
+and none uses `absent()`: a host or tenant with no scanner series, or with
+export switched off, is not a fault. The flip is the same reviewed hand edit as
+every other `expectedUp`, in `MONITORED_NODE_HOSTS`, and it is a claim that
+the textfile directory is mounted into the tenant containers as well as that
+the exporter answers. Until the mount exists no series is produced and the
+group is inert.
+
+Why there is no threshold here. The latency, error-rate and held-age bounds
+are the owner's targets (`SLO_VERDICT_P95_MS`, `SLO_ERROR_RATE`,
+`SLO_HELD_AGE_MAX`, placeholders until set), and a rule rendered with an
+invented number would page on it. The three rules above need none: refusal and
+unconfigured are binary, and sustained errors are a pattern, not a level. A
+rule that reads a target is added in the change that sets the target.
+
+`ScannerNotConfigured` ends in a freshness clause on the file's own
+`scanning_storage_metrics_written_timestamp_seconds`. A textfile outlives its
+writer, so without it a torn-down tenant's last `1` would hold the alert open
+forever. The counter rules need no such clause: a frozen counter has no
+`increase()`.
+
+Routing is the default for a warning (the on-host mailbox) and none of these
+carries `owner_action` or a page register entry. Both are the owner's to decide
+and are one reviewed line each; see `pageRegister.md` and the
+`owner_action` test in `render.test.ts`.
 
 ## The `replica-tunnel` rule group
 
