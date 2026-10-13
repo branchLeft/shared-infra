@@ -174,6 +174,7 @@ raise a false alert; the rules are still best applied once the scripts are on
 db1. The series are named for db1,
 not for the control host's worker, so the worker's series can never hide db1's
 absence.
+
 ## The `scanner` rule group
 
 Watches the upload scanner inside each tenant's Ghost process. The series are
