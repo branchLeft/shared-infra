@@ -269,6 +269,16 @@ jobs:
       - name: Shellcheck
         run: shellcheck -x hetzner/provision/*.sh
 
+      # A managed Python, so the YAML parser the stack-keys check uses can be
+      # installed without touching the system interpreter.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the YAML parser the stack-keys check uses
+        run: python3 -m pip install --quiet pyyaml==6.0.3
+
       # test_compose_unit_contract.py uses a `X | None` return annotation
       # with no `from __future__ import annotations` guard, so under Python
       # 3.9 `unittest discover` doesn't refuse to run -- it swallows the
@@ -705,15 +715,25 @@ jobs:
           echo "$init" | jq -e '.services.zitadel.environment.ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD == "ADMIN_SENTINEL_VALUE"'
           echo "$init" | jq -e '.services.zitadel.command == ["init"]'
 
-      # The raw source, not the render: `docker compose config` inlines an
-      # env_file's contents and drops a missing optional one, so a file pulled
-      # in whole never shows in the rendered config. grep exit 1 is no match
-      # (pass); 0 is a match (fail); anything else is an error (fail).
-      - name: Check no stack file pulls in another file by env_file, include or extends
+      # The parsed keys, not the render and not the text: `docker compose config`
+      # inlines an env_file's contents and drops a missing optional one, and a
+      # text match misses a quoted key. The control case must exit 1 exactly,
+      # so a checker that stopped matching cannot pass the step silently.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the YAML parser the stack-keys check uses
+        run: python3 -m pip install --quiet pyyaml==6.0.3
+
+      - name: Check the stack files' parsed keys, and that the check still rejects a quoted env_file
         run: |
+          checker=hetzner/provision/stack_keys_check.py
           stack=hetzner/control-plane/stack
+          python3 "$checker" "$stack/compose.yml" "$stack/compose.init.yml"
           set +e
-          grep -nE '(^|[^[:alnum:]_])(env_file|include|extends)[[:space:]]*:' "$stack/compose.yml" "$stack/compose.init.yml"
+          python3 "$checker" hetzner/provision/fixtures/stack-keys-quoted-env-file.yml
           status=$?
           set -e
           test "$status" -eq 1
