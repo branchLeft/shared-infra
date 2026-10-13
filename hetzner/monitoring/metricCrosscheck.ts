@@ -263,6 +263,18 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   // one.
   backup_worker_lock_wait_seconds: 'backup_worker.py, in branchLeft/ghost-platform, in org/control',
   backup_worker_lock_aborts_total: 'backup_worker.py, in branchLeft/ghost-platform, in org/control',
+  // The scanning storage adapter's textfile export, written by each tenant's
+  // Ghost process on its app host. Names and label values are the contract in
+  // branchLeft/ghost-platform adapters/scanning-storage/src/metrics.md; the
+  // source is JavaScript in another repository, so nothing here can scan it.
+  scanning_storage_unconfigured_instances:
+    "the scanning storage adapter's textfile export, branchLeft/ghost-platform (src/metrics.md)",
+  scanning_storage_metrics_written_timestamp_seconds:
+    "the scanning storage adapter's textfile export, branchLeft/ghost-platform (src/metrics.md)",
+  scanning_storage_uploads_refused_total:
+    "the scanning storage adapter's textfile export, branchLeft/ghost-platform (src/metrics.md)",
+  scanning_storage_verdict_errors_total:
+    "the scanning storage adapter's textfile export, branchLeft/ghost-platform (src/metrics.md)",
 };
 
 /**

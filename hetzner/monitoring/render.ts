@@ -99,6 +99,14 @@ export function replicaDeadlineEpoch(deadline: unknown): number {
 
 const REPLICA_SELECTOR = `job="${REPLICA_TUNNEL_JOB}", expected_up="true"`;
 
+/**
+ * The scanner series reach Prometheus through a host's node_exporter textfile
+ * collector, so they carry that node target's labels. `expected_up="true"`
+ * is what keeps every scanner rule silent for a host (today `app1`) whose
+ * exporter has not been confirmed live; see render.md#the-scanner-rule-group.
+ */
+const SCANNER_SELECTOR = 'job="node", expected_up="true"';
+
 export const NODE_EXPORTER_PORT = 9100;
 export const MYSQLD_EXPORTER_PORT = 9104;
 export const CADVISOR_PORT = 8080;
@@ -642,6 +650,72 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            something on this tenant keeps write transactions open for over',
     '            a second; the worker log names each abort and its reason. See',
     '            branchLeft/ghost-platform db/provision/bounded_snapshot.md.',
+    '',
+    // The scanning storage adapter's own metrics, written by each tenant's
+    // Ghost process as a node_exporter textfile. Every rule is scoped to
+    // expected_up="true" on the node target, so nothing fires for a host
+    // whose exporter is not yet confirmed live, and none uses absent():
+    // a host with no scanner series is not a fault. See
+    // render.md#the-scanner-rule-group for the series contract.
+    '  - name: scanner',
+    '    rules:',
+    '      - alert: ScannerNotConfigured',
+    '        expr: >-',
+    `          scanning_storage_unconfigured_instances{${SCANNER_SELECTOR}} > 0`,
+    `          and on(instance, tenant) (time() - scanning_storage_metrics_written_timestamp_seconds{${SCANNER_SELECTOR}} < 600)`,
+    '        for: 10m',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "{{ $labels.tenant }} has an upload scanner with no verdict source, so every new upload is refused."',
+    '          description: >-',
+    '            The adapter booted with no verdict source configured, which',
+    '            it treats as a refusal of every new upload rather than an',
+    '            allow. This is the metric form of the SCANNER_UNCONFIGURED',
+    '            boot line, so it is known before anyone uploads. The',
+    '            freshness clause drops a series whose file has stopped',
+    '            being rewritten, so a tenant that was torn down cannot hold',
+    '            it open. A warning, never a page: it goes to the on-host',
+    '            mailbox like every warning, and whether it is carried by',
+    "            owner_action or the page register is the owner's call.",
+    '',
+    '      - alert: ScannerUploadsRefused',
+    '        expr: >-',
+    `          increase(scanning_storage_uploads_refused_total{reason="unconfigured", ${SCANNER_SELECTOR}}[15m]) > 0`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "{{ $labels.tenant }} refused an upload in the last 15 minutes for want of a verdict source."',
+    '          description: >-',
+    '            A person tried to upload and was told no. This is the',
+    '            UPLOAD_REFUSED_SCANNER_UNCONFIGURED log line as a counter.',
+    '            The adapter writes the counter at zero from boot, so the',
+    '            first refusal is visible to increase(). It also stops a',
+    '            resized image variant that does not exist yet, which',
+    '            errors instead of falling back to the original, so a',
+    '            tenant can see broken images without uploading anything.',
+    '            Refusals by verdict and repeats of a sealed digest are the',
+    '            control working and are deliberately not alerted here.',
+    '',
+    '      - alert: ScannerVerdictChannelFailing',
+    '        expr: >-',
+    `          increase(scanning_storage_verdict_errors_total{${SCANNER_SELECTOR}}[5m]) > 0`,
+    '        for: 10m',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "{{ $labels.tenant }}\'s verdict requests have been timing out or failing for 10 minutes."',
+    '          description: >-',
+    '            Each failed request accepts the upload and holds it',
+    '            unserved, so an outage looks like images that never appear',
+    '            and nothing else. A request error or timeout in every',
+    '            5-minute window for 10 minutes is sustained, where one',
+    '            slow answer is not. Held retries keep asking, so a held',
+    '            upload keeps this firing until the channel answers; a',
+    '            tenant with nothing held and nobody uploading makes no',
+    '            requests and so raises none. No threshold is set here: the',
+    '            owner sets the targets that would add a rate or an age',
+    '            bound. One alert per kind (timeout, error) per tenant.',
     '',
     '  - name: probes',
     '    rules:',
