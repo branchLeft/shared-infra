@@ -177,9 +177,10 @@ class StructureTests(unittest.TestCase):
             with self.subTest(job=job):
                 self.assertEqual(environment_of(job_block(self.text, job)), expected)
 
-    def test_only_the_three_applies_declare_an_environment(self):
+    def test_only_the_three_applies_and_mail_plan_declare_an_environment(self):
+        # mail-plan has its own environment since #2195 (no reviewer, main only).
         declared = re.findall(r"^    environment: (\S+)", self.text, re.M)
-        self.assertEqual(sorted(declared), sorted(APPLY_JOBS.values()))
+        self.assertEqual(sorted(declared), sorted([*APPLY_JOBS.values(), "mail-plan"]))
 
     def test_mail_apply_is_the_only_job_in_production_mail(self):
         self.assertEqual(

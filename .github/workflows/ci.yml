@@ -865,6 +865,12 @@ jobs:
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.changes.outputs.mail == 'true'
 
+    # The plan reads the mail credentials, so it has an environment of its own
+    # (issue #2195). `mail-plan` carries no reviewer and deploys from `main`
+    # only; its secrets live there, not at repository level, so a job without
+    # this environment reads them empty.
+    environment: mail-plan
+
     # `actions: write` is only for the first step, which cancels older runs
     # still waiting for approval; contents and packages repeat the workflow
     # default because a job-level block replaces it.
