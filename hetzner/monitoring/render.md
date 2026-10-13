@@ -121,6 +121,38 @@ it by design -- routing carries no `notify: on-host` label either, since
 the producer host is not mx1, so this reaches the same off-host email
 receiver `HostMemoryPressure` and `HostDiskSpaceLow` already use.
 
+### db1's own dump and binlog shipping
+
+`TenantBackupAgeHigh` reads the control host's copy. Five more rules in the
+same group read db1 itself, from the two status files db1's `dump_nightly.py`
+and `ship_binlogs.py` write to the textfile directory db1's node_exporter
+reads (`db/provision/dump_nightly.md` and `ship_binlogs.md` in
+branchLeft/ghost-platform). All five select on `host="db1"`, the label the db1
+node target carries, and are warnings on the same route as the rest of the group.
+
+| Alert                       | Fires when                                           | `for:` |
+| --------------------------- | ---------------------------------------------------- | ------ |
+| `DbNightlyDumpStale`        | the last stored dump is over 108000s (30h) old       | none   |
+| `DbNightlyDumpFailed`       | the latest dump run's status gauge reads 0           | none   |
+| `DbNightlyDumpMetricAbsent` | no dump success time is published for db1            | 30h    |
+| `DbBinlogShipStale`         | the last fully shipped run is over 3600s (1h) old    | none   |
+| `DbBinlogShipMetricAbsent`  | no binlog shipping success time is published for db1 | 1h     |
+
+The thresholds follow the two timers. The dump fires at 03:10 UTC with up to 5
+minutes of random delay and its unit stops at 30 minutes, so two healthy
+successes are at most 24h35m (88500s) apart and 30h leaves 5h25m of margin. The
+shipper fires every 15 minutes and its unit stops at 10, so a healthy run
+completes within about 25 minutes of the last; 1h is three runs in a row failed
+or missed. The stale rules carry no `for:` because the files are written once
+per run and are otherwise flat, the same reasoning as `BackupLockWaitHigh`.
+
+The `absent` rules wait as long as the matching stale threshold. A script
+delivered after its rule writes its first status inside that wait (within about
+24h35m for the dump, 25 minutes for the shipper), so the order of delivery cannot
+raise a false alert; the rules are still best applied once the scripts are on
+db1. The series are named for db1,
+not for the control host's worker, so the worker's series can never hide db1's
+absence.
 ## The `scanner` rule group
 
 Watches the upload scanner inside each tenant's Ghost process. The series are
