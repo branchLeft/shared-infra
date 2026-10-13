@@ -233,6 +233,7 @@ export function emittedMetricsUnder(rootDir: string): Map<string, Set<string>> {
 export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   up: 'built into Prometheus itself, for every scrape target',
   probe_success: 'blackbox_exporter',
+  probe_ssl_earliest_cert_expiry: 'blackbox_exporter',
   caddy_rate_limit_declined_requests_total: "Caddy's own rate-limit module",
   node_memory_MemAvailable_bytes: 'node_exporter',
   node_memory_MemTotal_bytes: 'node_exporter',
@@ -262,8 +263,31 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   // one.
   state_copy_last_success_timestamp_seconds: 'state_copy.py, in branchLeft/ghost-platform, on ops1',
   state_copy_bucket_configured: 'state_copy.py, in branchLeft/ghost-platform, on ops1',
-  backup_worker_lock_wait_seconds: 'backup_worker.py, in branchLeft/ghost-platform, in org/control',
-  backup_worker_lock_aborts_total: 'backup_worker.py, in branchLeft/ghost-platform, in org/control',
+  backup_worker_lock_wait_seconds:
+    'backup_worker.py, in branchLeft/ghost-platform, in org/control; dump_nightly.py, on db1',
+  backup_worker_lock_aborts_total:
+    'backup_worker.py, in branchLeft/ghost-platform, in org/control; dump_nightly.py, on db1',
+  // db1's own dump and binlog shipper, written by the two scripts named
+  // here to the textfile directory db1's node_exporter reads. The source
+  // is branchLeft/ghost-platform's db/provision, not scannable from here.
+  db_nightly_dump_last_success_timestamp_seconds:
+    'dump_nightly.py, in branchLeft/ghost-platform db/provision, on db1',
+  db_nightly_dump_last_run_success:
+    'dump_nightly.py, in branchLeft/ghost-platform db/provision, on db1',
+  db_binlog_ship_last_success_timestamp_seconds:
+    'ship_binlogs.py, in branchLeft/ghost-platform db/provision, on db1',
+  // The scanning storage adapter's textfile export, written by each tenant's
+  // Ghost process on its app host. Names and label values are the contract in
+  // branchLeft/ghost-platform adapters/scanning-storage/src/metrics.md; the
+  // source is JavaScript in another repository, so nothing here can scan it.
+  scanning_storage_unconfigured_instances:
+    "the scanning storage adapter's textfile export, branchLeft/ghost-platform (src/metrics.md)",
+  scanning_storage_metrics_written_timestamp_seconds:
+    "the scanning storage adapter's textfile export, branchLeft/ghost-platform (src/metrics.md)",
+  scanning_storage_uploads_refused_total:
+    "the scanning storage adapter's textfile export, branchLeft/ghost-platform (src/metrics.md)",
+  scanning_storage_verdict_errors_total:
+    "the scanning storage adapter's textfile export, branchLeft/ghost-platform (src/metrics.md)",
 };
 
 /**

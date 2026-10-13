@@ -60,7 +60,7 @@ class MainDomainNeverAllowedTests(unittest.TestCase):
 class VersionPinTests(unittest.TestCase):
     def test_the_pinned_stalwart_is_the_version_the_scope_was_proven_on(self):
         compose = pathlib.Path(__file__).resolve().parent / "docker-compose.yml"
-        pins = re.findall(r"image:\s*stalwartlabs/stalwart:(\S+)", compose.read_text(encoding="utf-8"))
+        pins = re.findall(r"image:\s*stalwartlabs/stalwart:([^@\s]+)", compose.read_text(encoding="utf-8"))
 
         self.assertEqual(
             pins,
@@ -69,6 +69,23 @@ class VersionPinTests(unittest.TestCase):
             "silently to its default, which can open the collector's scope. After the "
             "upgrade, re-run check_collector_sender_scope.py once on the mail host, then "
             "update VERIFIED_STALWART_VERSION. See provision_collector_submission_credential.md.",
+        )
+
+    def test_the_pinned_stalwart_image_is_its_verified_tag_at_a_sha256_digest(self):
+        compose = pathlib.Path(__file__).resolve().parent / "docker-compose.yml"
+        refs = re.findall(r"image:\s*stalwartlabs/stalwart:(\S+)", compose.read_text(encoding="utf-8"))
+
+        self.assertEqual(len(refs), 1, "exactly one Stalwart image reference must be pinned")
+        tag, _, digest = refs[0].partition("@")
+        self.assertEqual(
+            tag,
+            pc.VERIFIED_STALWART_VERSION,
+            "the tag before '@' must be the verified version",
+        )
+        self.assertRegex(
+            digest,
+            r"^sha256:[0-9a-f]{64}$",
+            "the Stalwart image must be pinned by sha256 digest after the tag, so a re-pushed tag cannot change what runs",
         )
 
 

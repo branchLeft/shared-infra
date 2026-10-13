@@ -7,6 +7,10 @@ import { sites } from '../../sites';
 import type { EdgeSite } from '../../siteTypes';
 import {
   blackboxTargets,
+  DB_BINLOG_ABSENT_FOR,
+  DB_BINLOG_STALE_SECONDS,
+  DB_DUMP_ABSENT_FOR,
+  DB_DUMP_STALE_SECONDS,
   MONITORED_MYSQLD_HOST,
   MONITORED_NODE_HOSTS,
   MONITORED_REPLICA_HOST,
@@ -458,6 +462,13 @@ describe('the rendered alert rules', () => {
     expect(rendered).toContain('expr: probe_success{job!="blackbox_mail"} == 0');
   });
 
+  it('warns when a public HTTPS certificate is within 14 days of expiry, before the probe itself fails', () => {
+    expect(rendered).toContain('alert: TLSCertificateExpiringSoon');
+    expect(rendered).toContain(
+      'expr: probe_ssl_earliest_cert_expiry{job="blackbox_http"} - time() < 14*86400'
+    );
+  });
+
   it('alerts on a failed mail liveness probe, scoped to the mail job so the alertname names the path', () => {
     expect(rendered).toContain('alert: MailHostDown');
     expect(rendered).toContain('expr: probe_success{job="blackbox_mail"} == 0');
@@ -495,6 +506,91 @@ describe('the rendered alert rules', () => {
     const end = rendered.indexOf('- alert:', start + 1);
     const block = rendered.slice(start, end === -1 ? undefined : end);
     expect(block).toContain('or absent(backup_worker_last_success_timestamp_seconds)');
+  });
+
+  // The five rules that read db1's own dump and binlog shipping. promtool
+  // proves their behaviour in alert_rules_test.yml; these pin the rendered
+  // shape, so a threshold or a selector cannot move without a failing test.
+  const ruleBlock = (name: string): string => {
+    const start = rendered.indexOf(`- alert: ${name}`);
+    expect(start).toBeGreaterThan(-1);
+    const end = rendered.indexOf('- alert:', start + 1);
+    return rendered.slice(start, end === -1 ? undefined : end);
+  };
+  const dbRules = [
+    'DbNightlyDumpStale',
+    'DbNightlyDumpFailed',
+    'DbNightlyDumpMetricAbsent',
+    'DbBinlogShipStale',
+    'DbBinlogShipMetricAbsent',
+  ];
+
+  it("watches db1's own dump and binlog shipping inside the backup group, as warnings that never page", () => {
+    const group = rendered.slice(
+      rendered.indexOf('- name: backup'),
+      rendered.indexOf('- name: probes')
+    );
+    for (const name of dbRules) {
+      expect(group).toContain(`- alert: ${name}`);
+      const block = ruleBlock(name);
+      expect(block).toContain('severity: warning');
+      expect(block).not.toContain('notify: on-host');
+      expect(block).not.toContain('owner_action');
+    }
+  });
+
+  it("selects every db1 backup series on the host label db1's node target carries", () => {
+    const promConfig = renderPrometheusConfig(sites);
+    expect(promConfig).toContain(`labels: {host: db1, expected_up: 'true'}`);
+    for (const name of dbRules) {
+      expect(ruleBlock(name)).toContain('{host="db1"}');
+    }
+  });
+
+  it("alerts when db1's own dump is older than its schedule plus a margin, with no for: since the gauge is flat between nights", () => {
+    const block = ruleBlock('DbNightlyDumpStale');
+    expect(DB_DUMP_STALE_SECONDS).toBe(108000);
+    expect(block).toContain(
+      'time() - db_nightly_dump_last_success_timestamp_seconds{host="db1"} > 108000'
+    );
+    expect(block).not.toContain('for:');
+    // The longest healthy gap is 24h35m (03:10 timer, 5m random delay, 30m
+    // unit timeout); the threshold must clear it.
+    expect(DB_DUMP_STALE_SECONDS).toBeGreaterThan(24 * 3600 + 35 * 60);
+  });
+
+  it('alerts on the first failed dump run, not only after the 30h margin', () => {
+    const block = ruleBlock('DbNightlyDumpFailed');
+    expect(block).toContain('expr: db_nightly_dump_last_run_success{host="db1"} == 0');
+    expect(block).not.toContain('for:');
+  });
+
+  it('covers the series being absent for as long as the stale threshold, so a rule deployed before its script stays quiet', () => {
+    const dump = ruleBlock('DbNightlyDumpMetricAbsent');
+    expect(dump).toContain('absent(db_nightly_dump_last_success_timestamp_seconds{host="db1"})');
+    expect(DB_DUMP_ABSENT_FOR).toBe(`${DB_DUMP_STALE_SECONDS / 3600}h`);
+    expect(dump).toContain(`for: ${DB_DUMP_ABSENT_FOR}`);
+    const binlog = ruleBlock('DbBinlogShipMetricAbsent');
+    expect(binlog).toContain('absent(db_binlog_ship_last_success_timestamp_seconds{host="db1"})');
+    expect(DB_BINLOG_ABSENT_FOR).toBe(`${DB_BINLOG_STALE_SECONDS / 3600}h`);
+    expect(binlog).toContain(`for: ${DB_BINLOG_ABSENT_FOR}`);
+  });
+
+  it("alerts when db1's binlog shipping is older than its 15 minute timer plus a margin", () => {
+    const block = ruleBlock('DbBinlogShipStale');
+    expect(DB_BINLOG_STALE_SECONDS).toBe(3600);
+    expect(block).toContain(
+      'time() - db_binlog_ship_last_success_timestamp_seconds{host="db1"} > 3600'
+    );
+    expect(block).not.toContain('for:');
+    // One healthy gap is the 15m period plus the 10m unit timeout.
+    expect(DB_BINLOG_STALE_SECONDS).toBeGreaterThan(25 * 60);
+  });
+
+  it('keeps the existing worker-copy alert untouched beside them', () => {
+    const block = ruleBlock('TenantBackupAgeHigh');
+    expect(block).toContain('time() - backup_worker_last_success_timestamp_seconds > 129600');
+    expect(block).not.toContain('db_nightly_dump');
   });
 });
 
@@ -702,6 +798,7 @@ describe('the owner_action="true" label', () => {
       'HostMemoryPressure',
       'HostDiskSpaceLow',
       'MySQLConnectionsHigh',
+      'TLSCertificateExpiringSoon',
       'SNDSAccessLinkExpiringSoon',
     ]);
   });

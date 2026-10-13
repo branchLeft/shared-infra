@@ -99,9 +99,11 @@ on-demand call, one nightly loop, never a second code path (see that repo's
 `backup_worker.md`) -- which runs on `ops1`, the control host; `dump_nightly.py`,
 which runs on `db1`; and, for `StateCopyStale`, `state_copy.py`, also on
 `ops1`. `TenantBackupAgeHigh` has one producer, on `ops1`: `db1`'s dump
-writes no last-success gauge. `BackupLockWaitHigh` and `BackupLockAbortsRising`
-have two, one on each host: the same lock gauge names come from `ops1`'s
-per-tenant worker and from `db1`'s dump under `tenant="db1-all-databases"`.
+never writes `backup_worker_last_success_timestamp_seconds` (it publishes its
+own `db_nightly_dump_last_success_timestamp_seconds`, which no rule in this
+group reads). `BackupLockWaitHigh` and `BackupLockAbortsRising` have two, one
+on each host: the same lock gauge names come from `ops1`'s per-tenant worker
+and from `db1`'s dump under `tenant="db1-all-databases"`.
 One group, not two, since a reader hunting "the backup alerts" should find
 them all without also having to remember which of two similarly-named
 groups holds which:
@@ -139,6 +141,83 @@ which `ops1`'s node_exporter reads
 (`hetzner/provision/node-exporter.service`). It has three branches, so a
 stale gauge, a configured bucket that has never succeeded, and a vanished
 family each fire. Warning, never page, same receiver as `TenantBackupAgeHigh`.
+
+### db1's own dump and binlog shipping
+
+`TenantBackupAgeHigh` reads the control host's copy. Five more rules in the
+same group read db1 itself, from the two status files db1's `dump_nightly.py`
+and `ship_binlogs.py` write to the textfile directory db1's node_exporter
+reads (`db/provision/dump_nightly.md` and `ship_binlogs.md` in
+branchLeft/ghost-platform). All five select on `host="db1"`, the label the db1
+node target carries, and are warnings on the same route as the rest of the group.
+
+| Alert                       | Fires when                                           | `for:` |
+| --------------------------- | ---------------------------------------------------- | ------ |
+| `DbNightlyDumpStale`        | the last stored dump is over 108000s (30h) old       | none   |
+| `DbNightlyDumpFailed`       | the latest dump run's status gauge reads 0           | none   |
+| `DbNightlyDumpMetricAbsent` | no dump success time is published for db1            | 30h    |
+| `DbBinlogShipStale`         | the last fully shipped run is over 3600s (1h) old    | none   |
+| `DbBinlogShipMetricAbsent`  | no binlog shipping success time is published for db1 | 1h     |
+
+The thresholds follow the two timers. The dump fires at 03:10 UTC with up to 5
+minutes of random delay and its unit stops at 30 minutes, so two healthy
+successes are at most 24h35m (88500s) apart and 30h leaves 5h25m of margin. The
+shipper fires every 15 minutes and its unit stops at 10, so a healthy run
+completes within about 25 minutes of the last; 1h is three runs in a row failed
+or missed. The stale rules carry no `for:` because the files are written once
+per run and are otherwise flat, the same reasoning as `BackupLockWaitHigh`.
+
+The `absent` rules wait as long as the matching stale threshold. A script
+delivered after its rule writes its first status inside that wait (within about
+24h35m for the dump, 25 minutes for the shipper), so the order of delivery cannot
+raise a false alert; the rules are still best applied once the scripts are on
+db1. The series are named for db1,
+not for the control host's worker, so the worker's series can never hide db1's
+absence.
+## The `scanner` rule group
+
+Watches the upload scanner inside each tenant's Ghost process. The series are
+the scanning storage adapter's own, written as a node_exporter textfile by that
+process on its app host and read by the host's node target, so they carry that
+target's `job="node"`, `host` and `expected_up` labels plus the adapter's
+`tenant` label. The names, types and label values are a contract owned by
+`branchLeft/ghost-platform` (`adapters/scanning-storage/src/metrics.md`);
+`metricCrosscheck.ts` lists them under `EXTERNAL_METRICS` for that reason, since
+this repository cannot scan JavaScript in another one.
+
+| Alert                          | Fires when                                                              | Severity |
+| ------------------------------ | ----------------------------------------------------------------------- | -------- |
+| `ScannerNotConfigured`         | an adapter has no verdict source for 10m (fresh file only)              | warning  |
+| `ScannerUploadsRefused`        | an upload was refused for want of a verdict source in the last 15m      | warning  |
+| `ScannerVerdictChannelFailing` | verdict requests time out or throw in every 5m window for 10m, per kind | warning  |
+
+Why nothing here can fire from absence. Every rule selects
+`job="node", expected_up="true"`, so a host whose exporter is not yet confirmed
+live (`app1` today, `expected_up="false"`) is silent however its series look,
+and none uses `absent()`: a host or tenant with no scanner series, or with
+export switched off, is not a fault. The flip is the same reviewed hand edit as
+every other `expectedUp`, in `MONITORED_NODE_HOSTS`, and it is a claim that
+the textfile directory is mounted into the tenant containers as well as that
+the exporter answers. Until the mount exists no series is produced and the
+group is inert.
+
+Why there is no threshold here. The latency, error-rate and held-age bounds
+are the owner's targets (`SLO_VERDICT_P95_MS`, `SLO_ERROR_RATE`,
+`SLO_HELD_AGE_MAX`, placeholders until set), and a rule rendered with an
+invented number would page on it. The three rules above need none: refusal and
+unconfigured are binary, and sustained errors are a pattern, not a level. A
+rule that reads a target is added in the change that sets the target.
+
+`ScannerNotConfigured` ends in a freshness clause on the file's own
+`scanning_storage_metrics_written_timestamp_seconds`. A textfile outlives its
+writer, so without it a torn-down tenant's last `1` would hold the alert open
+forever. The counter rules need no such clause: a frozen counter has no
+`increase()`.
+
+Routing is the default for a warning (the on-host mailbox) and none of these
+carries `owner_action` or a page register entry. Both are the owner's to decide
+and are one reviewed line each; see `pageRegister.md` and the
+`owner_action` test in `render.test.ts`.
 
 ## The `replica-tunnel` rule group
 

@@ -139,6 +139,14 @@
       ]
     },
     {
+      "name": "ntfy",
+      "type": "A",
+      "ttl": 3600,
+      "values": [
+        "46.225.95.167"
+      ]
+    },
+    {
       "name": "v1-ed25519-20260811._domainkey",
       "type": "TXT",
       "ttl": 3600,
@@ -254,6 +262,7 @@
     "newsletter",
     "nextcloud",
     "nextcloud1",
+    "ntfy",
     "ok",
     "ops1",
     "other",

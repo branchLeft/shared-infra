@@ -1,7 +1,6 @@
-# Stalwart on mx1. Pinned to an exact patch version, not `latest` or the
-# floating `v0.16` tag -- an unattended minor bump on a mail server that
-# signs and receives production traffic is not a surprise worth having.
-# Bump deliberately, re-running 30-deploy-stalwart.sh after editing the tag,
+# Stalwart on mx1. Pinned to an exact patch version AND its image digest, not
+# `latest` or the floating `v0.16` tag: a re-pushed tag cannot change what runs.
+# Bump deliberately, editing the tag and digest together, re-running 30-deploy-stalwart.sh,
 # then re-run check_collector_sender_scope.py once on the host and update
 # VERIFIED_STALWART_VERSION: provision_collector_submission_credential.md.
 #
@@ -11,7 +10,7 @@
 # a port must be added there before it does anything being reachable here.
 services:
   stalwart:
-    image: stalwartlabs/stalwart:v0.16.17
+    image: stalwartlabs/stalwart:v0.16.17@sha256:a8108e19bd927e172d4d8c128907b8dfc93fd180ae8ee07dccdd42cb97eb9dfa
     container_name: stalwart
     restart: unless-stopped
     environment:

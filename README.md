@@ -72,8 +72,9 @@ inputs. Do not hand-apply any of them** — general rule and rationale:
 `.github/workflows/ci.yml` traces each program's actual import graph to a
 per-stack `paths:` filter, so an unrelated merge plans and applies nothing.
 Each apply is a plan job whose `pulumi preview` output lands in the job
-summary, then an apply job paused by the `production` environment's
-required-reviewer rule until a human has read that plan —
+summary, then an apply job paused by its environment's approval rule
+(`production`, or `production-mail` for the mail stack alone) until the plan
+has been read and approved —
 `scripts/assert-no-hetzner-deletes.py` catches the destruction class
 mechanically, the reviewer catches the plan that is green and still wrong.
 
