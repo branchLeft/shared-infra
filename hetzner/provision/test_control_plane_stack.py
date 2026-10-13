@@ -27,6 +27,8 @@ UNIT = HETZNER / "provision" / "branchleft-compose@.service"
 # variables that carry it and the env-file variable it is read from.
 ADMIN_REFERENCE = re.compile(r"POSTGRES_ADMIN|DB_ADMIN")
 ADMIN_PASSWORD_VARIABLE = "CONTROL_PLANE_DB_ADMIN_PASSWORD"
+# Any key that pulls in a file whole, in either the short or long form.
+FILE_ROUTE = re.compile(r"\b(env_file|include|extends)\s*:")
 
 # The names `docker compose` reads from a directory when no -f is given.
 COMPOSE_DEFAULT_FILES = frozenset(
@@ -337,6 +339,18 @@ class ControlPlaneStackTests(unittest.TestCase):
             1,
             "the administrator's password variable is read somewhere other than the db service",
         )
+
+    def test_no_stack_file_pulls_in_another_file_that_could_carry_the_administrator_credential(self):
+        """The named-variable checks above match names; a file pulled in whole is read past them."""
+        for path in (COMPOSE, INIT_OVERLAY):
+            for line in code_lines(path.read_text(encoding="utf-8")):
+                match = FILE_ROUTE.search(line)
+                with self.subTest(file=path.name, line=line.strip()):
+                    self.assertIsNone(
+                        match,
+                        f"{path.name} uses '{match.group(1) if match else ''}': env_file would reach "
+                        "the administrator credential past the named-variable check",
+                    )
 
     def test_the_runtime_command_runs_the_setup_phase_and_never_the_init_phase(self):
         block = service_blocks(compose_text())["zitadel"]
