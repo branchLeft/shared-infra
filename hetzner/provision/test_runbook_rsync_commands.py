@@ -1,28 +1,7 @@
 #!/usr/bin/env python3
 """The runbooks' `rsync` commands must not carry workstation permissions onto a host.
 
-`rsync -a` implies `-p`, `-o` and `-g`, and the last two take effect because the
-receiving side is `root`. So a plain `rsync -av` reproduces the *workstation's*
-file modes and uid/gid on the host — while every container in both stacks reads
-its config through a bind mount **as the container-side user**, not as root.
-
-That combination broke a real deploy. `prometheus.yml` is written by
-`npm run render` (a Vitest file snapshot), which left it `0600` in one
-workstation checkout. Git records `100644` and cannot see the difference — it
-tracks only the executable bit — so the mode is invisible to review, to
-`git status`, and to CI, which checks out its own copy at `0644`. `rsync -av`
-copied `0600 uid=501 gid=20` onto the host and Prometheus, running as `nobody`,
-crash-looped on `permission denied`.
-
-Additionally, `rsync --no-owner --no-group` does not modify the ownership of
-files that already exist on the receiving host. Files copied with incorrect
-ownership must be corrected with an explicit `chown -R root:root` after the
-rsync.
-
-Nothing available to CI can observe a workstation's file modes, so the deploy
-command itself has to be immune to them. That makes the command *shape* the
-control, and this asserts the shape — the same reasoning, and the same
-technique, as `RunbookScpCommandTests` in `test_branchleft_nat.py`.
+Why, and the history: test_runbook_rsync_commands.md.
 """
 
 import pathlib
@@ -40,47 +19,7 @@ REQUIRED_FLAGS = ("--no-owner", "--no-group", "--chmod=u=rwX,go=rX")
 # A fenced command may be wrapped over several lines with trailing backslashes.
 RSYNC_COMMAND = re.compile(r"^rsync .*?(?:\\\n.*?)*$", re.MULTILINE)
 
-# A command that looks copy-pasteable but silently is not breaks every
-# command that reaches it, in either of two ways: an unresolved placeholder
-# standing in for an address, or the real address pasted in its place. Both
-# are checked below, over the same fenced blocks: a committed file must not
-# carry a concrete operational value, and a pasteable command must not carry
-# an unsubstituted placeholder either. The fix in both directions is
-# threading the value through an environment variable, populated by a lookup
-# the operator runs.
-#
-# The placeholder check does not scope by hostname or by where in the line
-# the placeholder sits. Both restrictions were tried and each left a gap: a
-# host-name scope misses a placeholder for a host it does not name, and an
-# assignment-shaped scope misses the identical placeholder used inline, or
-# assigned via `export`/`local`, or quoted. The property that actually makes
-# a placeholder wrong is simpler than either restriction: it reads as an
-# address (see `ADDRESS_WORD`) and nothing has substituted it. That is what
-# `address_placeholders` checks, independent of host, variable name, quoting
-# or position in the line.
-#
-# Deliberately narrower than "no `<...>` anywhere in a fenced block" or "no
-# IPv4-shaped token anywhere in a fenced block":
-# - Only a `bash` fence counts as a command block in these runbooks —
-#   `json`, `text` and `yaml` fences hold illustrative sample output, and a
-#   `console` fence is a captured transcript (a `$ ` prompt plus what it
-#   printed, sometimes with a placeholder inside the printed command itself)
-#   rather than something pasted and run.
-# - The address word must be *trailing*, not merely present, so a resource
-#   id such as `<edge1-ipv4-id>` is left alone: a destructive deletion is
-#   deliberately worked by id, looked up fresh, rather than by a hardcoded
-#   literal that could be stale or simply mistyped.
-# - A token that legitimately varies per invocation (`<stack>`, `<host>`,
-#   `<repo>`, `<image>`, `<digest>`) is not address-shaped and never matches,
-#   whether it is an assignment's whole value or an argument inside a larger
-#   command (`hcloud server describe <host> -o json | ...` is the corrected
-#   form of the anti-pattern this file used to carry).
-# - The literal check below (`fixed_host_literals`) is a genuinely different
-#   property from the placeholder check, and stays separate: it matches only
-#   the *bare* form of a specific, known address, never a `/32` (a
-#   verification block reading real remote state renders one back that way)
-#   and never a CIDR. A threaded `$VARIABLE` reference holds no such literal
-#   and is never flagged, by construction.
+# Why the placeholder and fixed-host checks are shaped as they are: test_runbook_rsync_commands.md.
 COMMAND_FENCE_LANGS = {"bash"}
 FENCE_LANG = re.compile(r"^```([a-zA-Z0-9_-]*)\s*$")
 PLACEHOLDER = re.compile(r"<[^<>\n]+>")
@@ -301,60 +240,52 @@ class RunbookRsyncCommandTests(unittest.TestCase):
                 f"unreadable to Alertmanager and crash the service.",
             )
 
-    def test_the_monitoring_copy_step_says_a_restart_is_mandatory(self):
-        """A copy step whose effect depends on a later restart must say so in its
-        own body, not only at the step that eventually restarts.
+    def test_the_monitoring_delivery_step_names_the_workflow_and_offers_no_hand_copy(self):
+        """The monitoring stack is delivered by a gated workflow run, not copied by hand.
 
-        Prometheus and Alertmanager read their config files at container start
-        only, and this stack does not pass --web.enable-lifecycle, so nothing
-        short of `systemctl restart branchleft-compose@monitoring` makes a
-        copied change take effect. A reader who stops after the copy step
-        alone must not be able to conclude the change is deployed -- a prose
-        fix at the step that restarts is not enough, because that is not the
-        step the reader is reading.
+        This replaces the guard on the old hand-copy step (which had to say a
+        restart was mandatory, because the copy alone deployed nothing). The
+        delivery restarts for itself, so the property to hold is the other
+        way round: the step names the workflow and the restart it performs,
+        and contains no command that copies the directory from a workstation.
         """
         text = (HETZNER / "RUNBOOK-monitoring.md").read_text(encoding="utf-8")
         match = re.search(
-            r"## \d+\. Copy the monitoring stack directory onto the host\n.*?"
-            r"(?=\n## \d+\.)",
+            r"## \d+\. Deliver the monitoring stack directory\n.*?(?=\n## \d+\.)",
             text,
             re.DOTALL,
         )
         self.assertIsNotNone(
-            match, "RUNBOOK-monitoring.md: the monitoring stack's copy step was not found"
+            match, "RUNBOOK-monitoring.md: the monitoring stack's delivery step was not found"
         )
         section = match.group(0)
-        # Markdown prose wraps at ~80 columns, so a multi-word phrase can carry
-        # an internal newline that a plain substring check would miss.
         normalized = " ".join(section.split())
 
+        self.assertIn("Deliver monitoring", normalized)
+        self.assertIn("deliver-monitoring.yml", normalized)
+        self.assertIn("production-monitoring", normalized)
         self.assertIn(
             "systemctl restart branchleft-compose@monitoring",
             normalized,
-            "the copy step must name the restart command inline, not only at a later step",
+            "the delivery step must say which restart makes a change take effect",
         )
-        self.assertRegex(
-            normalized,
-            r"(?i)changes nothing|is inert|does not deploy",
-            "the copy step must say plainly that the copy alone does not deploy the change",
-        )
-        self.assertIn(
-            "--delete",
+        self.assertRegex(normalized, r"(?i)only if a file changed")
+        self.assertNotRegex(
             section,
-            "sanity: expected to find the rsync --delete flag inside the copy step",
+            r"(?m)^\s*(rsync|scp)\s",
+            "the delivery step must not offer a hand copy of the stack to the host",
         )
-        self.assertIn(
-            "alertmanager.yml",
-            section,
-            "the --delete/missing-alertmanager.yml window must be explained where the "
-            "reader meets --delete, i.e. inside the copy step itself",
-        )
-        self.assertIn(
-            "on disk at all",
-            normalized,
-            "the copy step must state that an un-restarted copy leaves no "
-            "alertmanager.yml on disk at all, not just that it gets deleted",
-        )
+        self.assertNotIn("/opt/branchleft/monitoring/ &&", section)
+
+    def test_no_runbook_command_copies_the_monitoring_stack_by_hand(self):
+        for runbook in (HETZNER / "RUNBOOK-monitoring.md", HETZNER / "RUNBOOK-edge.md"):
+            text = runbook.read_text(encoding="utf-8")
+            with self.subTest(runbook=runbook.name):
+                self.assertNotRegex(
+                    text,
+                    r"rsync[^\n]*(\\\n[^\n]*)*hetzner/monitoring/stack/?\s",
+                    f"{runbook.name}: a command that copies hetzner/monitoring/stack/ by hand",
+                )
 
 
 class RunbookFixedHostPlaceholderTests(unittest.TestCase):

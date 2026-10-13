@@ -1,0 +1,122 @@
+name: Deliver monitoring
+
+# Delivers hetzner/monitoring/stack/ to edge1 and restarts
+# branchleft-compose@monitoring when, and only when, a file changed. Replaces
+# the hand rsync of hetzner/RUNBOOK-monitoring.md step 4.
+#
+# Gated like the CI applies: the job waits in the `production-monitoring`
+# environment for a required reviewer, and its first step refuses to go on if
+# that environment has no reviewer rule. Its credential is an SSH key whose
+# authorized_keys line forces `branchleft-sync-stack monitoring`
+# (hetzner/provision/branchleft_sync_stack.md). The key and the host live in
+# that environment only, never in the repository. Runs on `main`, never on a
+# pull request.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'hetzner/monitoring/stack/**'
+      - 'hetzner/provision/branchleft_sync_stack.py'
+      - 'hetzner/scripts/monitoring-stack-archive.sh'
+      - '.github/workflows/deliver-monitoring.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One delivery at a time. A newer push replaces a run still waiting for
+# approval, which is right here: every run ships the whole stack from its own
+# commit, so the older pending one is superseded, not skipped. A run already
+# delivering is never cancelled.
+concurrency:
+  group: deliver-monitoring
+  cancel-in-progress: false
+
+jobs:
+  deliver:
+    name: Deliver (monitoring stack to edge1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.ref == 'refs/heads/main'
+    environment: production-monitoring
+
+    steps:
+      # A job that is running was paused by nothing if the environment has no
+      # reviewer rule: the `environment` key is silently inert without one. The
+      # key must also be unusable from any branch but the ones the environment
+      # names. Fail before any credential is read; any failure to read the
+      # environment counts as no rule, so this stays fail-closed.
+      - name: Refuse to deliver through an ungated environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          settings=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production-monitoring" || echo '{}')
+          reviewers=$(jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length' <<<"${settings}")
+          branch_policy=$(jq '.deployment_branch_policy != null' <<<"${settings}")
+          case "${reviewers}" in '' | *[!0-9]*) reviewers=0 ;; esac
+          if [ "${reviewers}" -eq 0 ]; then
+            echo "::error::the production-monitoring environment has no required-reviewer rule -- the delivery gate is not real. Configure it in repo settings before any delivery." >&2
+            exit 1
+          fi
+          if [ "${branch_policy}" != "true" ]; then
+            echo "::error::the production-monitoring environment is open to every branch -- restrict its deployment branches to main in repo settings before any delivery." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The same archive and the same wrapper as the delivery below, into a
+      # scratch directory: a stack the wrapper would refuse fails here, before
+      # the key is touched.
+      - name: Rehearse the delivery with no host
+        run: ./hetzner/scripts/rehearse-monitoring-delivery.sh
+
+      - name: Verify the environment's settings are present
+        env:
+          EDGE1_SSH_HOST: ${{ vars.EDGE1_SSH_HOST }}
+          EDGE1_SSH_KNOWN_HOSTS: ${{ secrets.EDGE1_SSH_KNOWN_HOSTS }}
+          EDGE1_MONITORING_SYNC_KEY: ${{ secrets.EDGE1_MONITORING_SYNC_KEY }}
+        run: |
+          fail=0
+          [ -n "$EDGE1_SSH_HOST" ] || { echo "::error::variable EDGE1_SSH_HOST is empty or unset in production-monitoring"; fail=1; }
+          [ -n "$EDGE1_SSH_KNOWN_HOSTS" ] || { echo "::error::secret EDGE1_SSH_KNOWN_HOSTS is empty or unset in production-monitoring"; fail=1; }
+          [ -n "$EDGE1_MONITORING_SYNC_KEY" ] || { echo "::error::secret EDGE1_MONITORING_SYNC_KEY is empty or unset in production-monitoring"; fail=1; }
+          exit "$fail"
+
+      # StrictHostKeyChecking with only the pinned line: a host that is not
+      # edge1 is refused, not trusted on first use. No remote command is given;
+      # the key's forced command decides what runs.
+      - name: Deliver the stack
+        env:
+          EDGE1_SSH_HOST: ${{ vars.EDGE1_SSH_HOST }}
+          EDGE1_SSH_KNOWN_HOSTS: ${{ secrets.EDGE1_SSH_KNOWN_HOSTS }}
+          EDGE1_MONITORING_SYNC_KEY: ${{ secrets.EDGE1_MONITORING_SYNC_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key="${RUNNER_TEMP}/edge1_sync_key"
+          known_hosts="${RUNNER_TEMP}/edge1_known_hosts"
+          trap 'rm -f "$key" "$known_hosts"' EXIT
+          printf '%s\n' "$EDGE1_MONITORING_SYNC_KEY" > "$key"
+          printf '%s\n' "$EDGE1_SSH_KNOWN_HOSTS" > "$known_hosts"
+          ./hetzner/scripts/monitoring-stack-archive.sh \
+            | ssh -i "$key" \
+              -o IdentitiesOnly=yes \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$known_hosts" \
+              -o GlobalKnownHostsFile=/dev/null \
+              -o ConnectTimeout=20 \
+              "root@${EDGE1_SSH_HOST}" \
+            | tee "${RUNNER_TEMP}/sync.log"
+          {
+            echo "### Monitoring stack delivery"
+            echo
+            echo '```'
+            cat "${RUNNER_TEMP}/sync.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
