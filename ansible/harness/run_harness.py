@@ -137,7 +137,14 @@ def refuse_remote_engine(env: Mapping[str, str]) -> str | None:
 
 
 def static_steps(role: Path, tools: Path) -> list[Step]:
-    """Return the two lint steps for a role."""
+    """Return the two lint steps for a role.
+
+    ansible-lint decides what is role content from the path it is given, so a
+    role inside the repository is linted from the repository root, as CI and
+    the standard run it. From any other directory it skips the variable-prefix
+    rule for the role's Molecule files.
+    """
+    lint_dir = REPO_ROOT if role.is_relative_to(REPO_ROOT) else role.parent
     return [
         Step(
             "ansible-lint",
@@ -148,7 +155,7 @@ def static_steps(role: Path, tools: Path) -> list[Step]:
                 str(REPO_ROOT / ".ansible-lint"),
                 str(role),
             ),
-            role.parent,
+            lint_dir,
         ),
         Step(
             "yamllint",

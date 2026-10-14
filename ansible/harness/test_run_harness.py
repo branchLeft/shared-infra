@@ -137,6 +137,12 @@ class RunHarnessTests(unittest.TestCase):
         outcomes = dict(run_harness.run_role(role, TOOLS, run, ENV))
         self.assertEqual(outcomes["argument-specs"], run_harness.FAIL)
 
+    def test_a_role_in_the_repository_is_linted_from_the_repository_root(self) -> None:
+        inside = run_harness.REPO_ROOT / "ansible" / "roles" / "demo_role"
+        outside = Path("/elsewhere/demo_role")
+        self.assertEqual(run_harness.static_steps(inside, TOOLS)[0].cwd, run_harness.REPO_ROOT)
+        self.assertEqual(run_harness.static_steps(outside, TOOLS)[0].cwd, outside.parent)
+
     def test_min_version_must_equal_the_pinned_core(self) -> None:
         pinned = run_harness.pinned_version(run_harness.REQUIREMENTS, "ansible-core") or ""
         self.assertIsNone(run_harness.check_min_version(self.make_role(pinned), pinned))
