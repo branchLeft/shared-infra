@@ -37,9 +37,9 @@ def step_name(argv: Sequence[str]) -> str:
 
 
 def fake_runner(
-    failing: Sequence[str] = (), specs: str | None = None
+    failing: Sequence[str] = (), specs: str | None = None, changing: Sequence[str] = ()
 ) -> tuple[run_harness.Runner, list[tuple[str, ...]]]:
-    """Return a runner that fails the named steps, and the list it records calls in."""
+    """Return a runner that fails or reports changes for the named steps, and its call list."""
     calls: list[tuple[str, ...]] = []
 
     def run(
@@ -49,7 +49,8 @@ def fake_runner(
         if Path(argv[0]).name == "ansible-doc":
             return completed(0, specs or spec_document(cwd.name, ["main"]))
         name = step_name(argv)
-        return completed(1 if name in failing else 0, f"output of {name}\n")
+        recap = f"host : ok=3 changed={1 if name in changing else 0} unreachable=0 failed=0\n"
+        return completed(1 if name in failing else 0, f"output of {name}\n{recap}")
 
     return run, calls
 
@@ -121,6 +122,22 @@ class RunHarnessTests(unittest.TestCase):
         outcomes = self.outcomes(failing=["check-configured"])
         self.assertEqual(outcomes["check-configured"], run_harness.FAIL)
         self.assertEqual(outcomes["check-fresh"], run_harness.SKIP)
+
+    def test_changes_reported_by_the_configured_check_fail_it(self) -> None:
+        run, _ = fake_runner(changing=["check-configured"])
+        outcomes = dict(run_harness.run_role(self.make_role(), TOOLS, run, ENV))
+        self.assertEqual(outcomes["check-configured"], run_harness.FAIL)
+        self.assertEqual(outcomes["check-fresh"], run_harness.SKIP)
+
+    def test_changes_in_the_converge_step_are_expected_and_pass(self) -> None:
+        run, _ = fake_runner(changing=["converge", "check-fresh"])
+        outcomes = dict(run_harness.run_role(self.make_role(), TOOLS, run, ENV))
+        self.assertEqual(outcomes["converge"], run_harness.OK)
+        self.assertEqual(outcomes["check-fresh"], run_harness.OK)
+
+    def test_changed_tasks_sums_the_recap_lines_only(self) -> None:
+        output = "TASK changed=9\nhost-a : ok=2 changed=1 unreachable=0\nhost-b : ok=1 changed=2\n"
+        self.assertEqual(run_harness.changed_tasks(output), 3)
 
     def test_the_configured_check_runs_the_converge_playbook_with_check_and_diff(self) -> None:
         run, calls = fake_runner()

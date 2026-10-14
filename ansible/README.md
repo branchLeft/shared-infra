@@ -74,7 +74,8 @@ For each role it runs, in this order, and prints one line per step at the end:
 6. `idempotence`: a second converge that must report zero changed tasks.
 7. `verify`: the scenario's `verify.yml` asserts the outcome.
 8. `check-configured`: the converge playbook under `--check --diff` against
-   the already configured container.
+   the already configured container. It fails if any task would change, because
+   an already configured host must show no drift.
 9. `check-fresh`: Molecule's own `check` action, which recreates the container
    and runs the converge playbook under `--check` against an unconfigured one.
 10. `destroy`: always runs, after a failure too.

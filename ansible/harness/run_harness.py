@@ -9,7 +9,8 @@ For each role directory given, the harness runs, in this order:
   ansible-core;
 * Molecule against containers on the local Docker daemon: create, prepare,
   converge, idempotence, verify, a check-mode run against the configured
-  instance, Molecule's own ``check`` action against a fresh one, and destroy.
+  instance (which must report no changed task), Molecule's own ``check``
+  action against a fresh one, and destroy.
 
 The static steps are independent of each other and of Molecule. A failed
 Molecule step skips the later Molecule steps except destroy, which always
@@ -53,6 +54,7 @@ class Step:
     argv: tuple[str, ...]
     cwd: Path
     always: bool = False
+    no_changes: bool = False
 
 
 Runner = Callable[[Sequence[str], Path, Mapping[str, str]], "subprocess.CompletedProcess[str]"]
@@ -183,7 +185,10 @@ def molecule_steps(role: Path, tools: Path) -> list[Step]:
         ("check-configured", ("converge", "--", "--check", "--diff")),
         ("check-fresh", ("check",)),
     ]
-    steps = [Step(name, (molecule, *args), role) for name, args in commands]
+    steps = [
+        Step(name, (molecule, *args), role, no_changes=name == "check-configured")
+        for name, args in commands
+    ]
     steps.append(Step("destroy", (molecule, "destroy"), role, always=True))
     return steps
 
@@ -209,11 +214,28 @@ def role_environment(
     return env
 
 
+def changed_tasks(output: str) -> int:
+    """Return the number of changed tasks in the PLAY RECAP lines of ``output``."""
+    recap = re.findall(r"^\S+\s*:\s+ok=\d+\s+changed=(\d+)", output, re.MULTILINE)
+    return sum(int(count) for count in recap)
+
+
 def report(step: Step, done: subprocess.CompletedProcess[str]) -> str:
-    """Print a finished step's output and return its status."""
+    """Print a finished step's output and return its status.
+
+    A step marked ``no_changes`` also fails when its run reports changed tasks:
+    a check-mode run against an instance that is already configured must show
+    no drift, or the dry run an approver reads is wrong.
+    """
+    output = done.stdout + done.stderr
     status = OK if done.returncode == 0 else FAIL
+    changed = changed_tasks(output) if step.no_changes else 0
+    if status == OK and changed:
+        status = FAIL
     print(f"::group::{step.name} {status}")
-    print(done.stdout + done.stderr, end="")
+    print(output, end="")
+    if step.no_changes and changed:
+        print(f"{step.name}: {changed} task(s) would change an instance that is already configured")
     print("::endgroup::")
     return status
 
