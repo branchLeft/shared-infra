@@ -559,6 +559,12 @@ jobs:
           route ntfy-page,email-on-host alertname=SomeOnHostCritical severity=critical notify=on-host
           # Warnings stay on mx1 and never page.
           route email-on-host alertname=TenantBackupAgeHigh severity=warning
+          # db1's own dump and binlog shipping, same group, same route.
+          route email-on-host alertname=DbNightlyDumpStale severity=warning host=db1
+          route email-on-host alertname=DbNightlyDumpFailed severity=warning host=db1
+          route email-on-host alertname=DbNightlyDumpMetricAbsent severity=warning host=db1
+          route email-on-host alertname=DbBinlogShipStale severity=warning host=db1
+          route email-on-host alertname=DbBinlogShipMetricAbsent severity=warning host=db1
           route email-on-host alertname=HostMemoryPressure severity=warning
           # An alert whose fix needs the owner's hands carries owner_action and
           # reaches both mailboxes: the off-host one the owner reads, and mx1's.
@@ -913,6 +919,12 @@ jobs:
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.changes.outputs.mail == 'true'
+
+    # The plan reads the mail credentials, so it has an environment of its own
+    # (issue #2195). `mail-plan` carries no reviewer and deploys from `main`
+    # only; its secrets live there, not at repository level, so a job without
+    # this environment reads them empty.
+    environment: mail-plan
 
     # `actions: write` is only for the first step, which cancels older runs
     # still waiting for approval; contents and packages repeat the workflow

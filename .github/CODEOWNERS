@@ -1,4 +1,42 @@
-* @branchLeft/branchleft-admin
+# Owner-only files are the ones that judge or gate a merge or a deploy (m14,
+# branchLeft/workspace#2265; source list: branchLeft/workspace#2314). Every
+# other path is merged on the reviewer App's approval, with no catch-all line.
+
+# Estate files the merge script refuses at gate 6: mail/ runs under plan credentials on push, and every credentialed plan job installs from the lockfiles and .npmrc files below.
+/mail/                                   @branchLeft/branchleft-admin
+/package-lock.json                       @branchLeft/branchleft-admin
+/hetzner/package-lock.json               @branchLeft/branchleft-admin
+/hetzner-host/package-lock.json          @branchLeft/branchleft-admin
+/.npmrc                                  @branchLeft/branchleft-admin
+/hetzner/.npmrc                          @branchLeft/branchleft-admin
+/hetzner-host/.npmrc                     @branchLeft/branchleft-admin
+
+# The review rule itself, at any depth. Workflows and actions are /.github/, at the foot of this file.
+**/CODEOWNERS            @branchLeft/branchleft-admin
+
+# CI gate scripts and their tests: ci.yml runs the scripts/ and hetzner/scripts/ checks to pass or fail.
+**/scripts/              @branchLeft/branchleft-admin
+
+# Guard, approval and deploy files by name: the merge script's word rule (gate 6, any path segment).
+**/*guard*               @branchLeft/branchleft-admin
+**/*Guard*               @branchLeft/branchleft-admin
+**/*approv*              @branchLeft/branchleft-admin
+**/*Approv*              @branchLeft/branchleft-admin
+**/*deploy*              @branchLeft/branchleft-admin
+**/*Deploy*              @branchLeft/branchleft-admin
+
+# Named gates: the DNS cutover stop check and its test, the suite-size pin.
+/hetzner/dns/zonecheck.py                @branchLeft/branchleft-admin
+/hetzner/dns/test_zonecheck.py           @branchLeft/branchleft-admin
+/hetzner/provision/test_suite_size.py    @branchLeft/branchleft-admin
+
+# Test runner and coverage configs: they set the coverage scope and the exclusions that skip files.
+/hetzner/vitest.config.ts                @branchLeft/branchleft-admin
+/hetzner-host/vitest.config.ts           @branchLeft/branchleft-admin
+
+# Hook set and format skip rules: they decide which checks run and which files they skip.
+/.pre-commit-config.yaml                 @branchLeft/branchleft-admin
+/.prettierignore                         @branchLeft/branchleft-admin
 
 /.standardsignore        @branchLeft/branchleft-admin
 /.standards.mode         @branchLeft/branchleft-admin

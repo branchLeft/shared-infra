@@ -105,7 +105,7 @@ Option A is the one to use if you want the token available every time you
 never appears in this repo, in a commit, or in a PR — only its ciphertext
 (Option A) or your own shell environment (Option B).
 
-**The token also lives in CI, as the `HCLOUD_TOKEN_MAIL` repository secret.**
+**The token also lives in CI, as the `HCLOUD_TOKEN_MAIL` secret of the `mail-plan` and `production-mail` environments (not a repository secret).**
 Doc 14 §3.5 decided that this stack applies from CI on merge to `main` —
 Hetzner's API is a plain bearer token with no OIDC equivalent, and that trade
 is accepted with per-project, per-pipeline token scoping as the compensating

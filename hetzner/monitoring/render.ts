@@ -99,6 +99,29 @@ export function replicaDeadlineEpoch(deadline: unknown): number {
 
 const REPLICA_SELECTOR = `job="${REPLICA_TUNNEL_JOB}", expected_up="true"`;
 
+/**
+ * db1's own backup freshness rules select on the `host` label its node
+ * target carries (`nodeTarget` renders it from `MONITORED_NODE_HOSTS`), so a
+ * series that merely shares a metric name never satisfies them.
+ */
+const DB_BACKUP_HOST = 'db1';
+const DB1_SERIES = `host="${DB_BACKUP_HOST}"`;
+/** 24h35m is the longest healthy gap between two dumps (timer 03:10 plus 5m of random delay, 30m unit timeout); 30h leaves 5h25m. */
+export const DB_DUMP_STALE_SECONDS = 108000;
+/** The stale threshold in hours: one run is always due inside it, so a rule deployed before its metric exists stays quiet. */
+export const DB_DUMP_ABSENT_FOR = '30h';
+/** The binlog timer fires every 15m and the unit stops at 10m: 25m is healthy; 1h is three runs in a row failed or missed. */
+export const DB_BINLOG_STALE_SECONDS = 3600;
+export const DB_BINLOG_ABSENT_FOR = '1h';
+
+/**
+ * The scanner series reach Prometheus through a host's node_exporter textfile
+ * collector, so they carry that node target's labels. `expected_up="true"`
+ * is what keeps every scanner rule silent for a host (today `app1`) whose
+ * exporter has not been confirmed live; see render.md#the-scanner-rule-group.
+ */
+const SCANNER_SELECTOR = 'job="node", expected_up="true"';
+
 export const NODE_EXPORTER_PORT = 9100;
 export const MYSQLD_EXPORTER_PORT = 9104;
 export const CADVISOR_PORT = 8080;
@@ -569,7 +592,10 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            move REPLICA_TUNNEL_DEADLINE in hetzner/monitoring/render.ts.',
     '',
     '  - name: backup',
-    // One group, not two -- both alerts watch the same producer.
+    // One group, not two. Producers: backup_worker.py and state_copy.py,
+    // both on ops1; dump_nightly.py on db1 writes the lock gauges under
+    // tenant="db1-all-databases" and its own run-status pair, never
+    // backup_worker_last_success_timestamp_seconds.
     // TenantBackupAgeHigh is the producer-side signal, not a liveness
     // check; the or absent(...) branch covers the metric family vanishing
     // entirely. Warning, never page, off-host receiver. See
@@ -604,6 +630,28 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            change; see RUNBOOK-monitoring.md for the bring-up shape once',
     '            that host is chosen. Per-tenant coverage is proved in',
     '            alert_rules_test.yml.',
+    '',
+    '      - alert: StateCopyStale',
+    '        expr: >-',
+    '          (time() - state_copy_last_success_timestamp_seconds > 129600)',
+    '          or (state_copy_bucket_configured unless on(bucket) state_copy_last_success_timestamp_seconds)',
+    '          or absent(state_copy_bucket_configured)',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The nightly copy of the {{ $labels.bucket }} state bucket into backup copy 1 is over 36 hours old."',
+    '          description: >-',
+    '            state_copy_last_success_timestamp_seconds advances only after a',
+    '            copy is encrypted and written to backup copy 1, so a stopped',
+    '            timer, a refused bucket read or an empty-looking listing leaves',
+    "            that bucket's gauge frozen. Three branches: a stale gauge; a",
+    '            bucket the job is configured for that has never succeeded',
+    '            (state_copy_bucket_configured is written before any copy); and',
+    '            the whole family absent, which means the job has never run or the',
+    '            exporter file is gone and carries no bucket label. 129600s (36h)',
+    '            is 1.5x the nightly cadence, as for TenantBackupAgeHigh. Warning,',
+    '            never page. The estate state has no other off-host copy until',
+    '            this runs.',
     '',
     // Not `notify: on-host`: unlike an SNDS or mail-deferral alert, nothing
     // about this signal depends on a route that avoids mx1.
@@ -643,6 +691,170 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            a second; the worker log names each abort and its reason. See',
     '            branchLeft/ghost-platform db/provision/bounded_snapshot.md.',
     '',
+    // The source side of db1's own backups: its nightly dump and its binlog
+    // shipping, from the status files those two scripts write to db1's
+    // textfile directory (branchLeft/ghost-platform db/provision). The rules
+    // above read the control host's copy; these read db1 itself. Same
+    // severity and route as the rest of this group. Thresholds follow the
+    // two systemd timers; the arithmetic is in each description.
+    '      - alert: DbNightlyDumpStale',
+    '        expr: >-',
+    `          time() - db_nightly_dump_last_success_timestamp_seconds{${DB1_SERIES}} > ${DB_DUMP_STALE_SECONDS}`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "db1 has stored no nightly dump for over 30 hours."',
+    '          description: >-',
+    '            db_nightly_dump_last_success_timestamp_seconds is written by',
+    "            db1's own dump_nightly.py once the encrypted dump has uploaded,",
+    '            so this reads the source, not the copy TenantBackupAgeHigh reads',
+    '            on the control host. The timer fires at 03:10 UTC with up to 5',
+    '            minutes of random delay and the unit is stopped at 30 minutes,',
+    '            so a healthy run is finished by about 03:45 and two successes',
+    '            are never more than about 24h35m (88500s) apart. 108000s (30h)',
+    '            leaves about 5h25m of margin, so this fires about 6 hours after',
+    '            the first missed run was due, well before the 36h copy alert. Warning,',
+    '            never page: the previous dump still stands. On db1, read',
+    '            journalctl -u branchleft-db-dump.service; the gauge',
+    '            db_nightly_dump_last_run_success separates a failed run from a',
+    '            run that never started.',
+    '',
+    // Written once a night and flat otherwise, so no for: -- the same
+    // reasoning as BackupLockWaitHigh above. Fires on the first failed run,
+    // about 5 hours before the 30h rule would.
+    '      - alert: DbNightlyDumpFailed',
+    `        expr: db_nightly_dump_last_run_success{${DB1_SERIES}} == 0`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "db1\'s latest nightly dump run failed."',
+    '          description: >-',
+    '            dump_nightly.py ended without storing a dump: a refused lock, a',
+    '            broken key, a full disk, an unreachable bucket or a missing',
+    '            setting all land here, as does an unexpected crash. The next run',
+    '            is 24 hours away and overwrites this gauge, so the dump is',
+    '            missing until then unless it is run by hand. On db1, read',
+    '            journalctl -u branchleft-db-dump.service for the reason.',
+    '',
+    '      - alert: DbNightlyDumpMetricAbsent',
+    '        expr: >-',
+    `          absent(db_nightly_dump_last_success_timestamp_seconds{${DB1_SERIES}})`,
+    `        for: ${DB_DUMP_ABSENT_FOR}`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "db1 publishes no nightly dump success time."',
+    '          description: >-',
+    '            The series is not there at all, which time() minus a series',
+    "            cannot see: db1's node_exporter is down or does not read the",
+    '            textfile directory, the status file was removed, the dump script',
+    '            on db1 predates the metric, or no dump has ever succeeded. for:',
+    '            30h is the stale threshold: a script delivered after this rule',
+    '            writes its first status within about 24h35m, so delivery order',
+    '            does not raise a false alert. If db1 itself is down,',
+    '            HostOrServiceDown pages first.',
+    '',
+    '      - alert: DbBinlogShipStale',
+    '        expr: >-',
+    `          time() - db_binlog_ship_last_success_timestamp_seconds{${DB1_SERIES}} > ${DB_BINLOG_STALE_SECONDS}`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "db1 has shipped no binary logs for over an hour."',
+    '          description: >-',
+    '            The point-in-time window between two dumps is only as complete',
+    '            as the shipped binary logs. branchleft-db-binlog-ship.timer',
+    '            fires every 15 minutes and the unit is stopped at 10, so a',
+    '            healthy run completes within about 25 minutes (1500s) of the',
+    '            last. 3600s (1h) fires after three runs in a row have failed or',
+    '            not run. db_binlog_ship_last_run_success 0 means runs are',
+    '            failing (journalctl -u branchleft-db-binlog-ship.service on',
+    '            db1); 1 with a stale time means the timer has stopped. Warning,',
+    '            never page: db1 keeps its own binary logs for 7 days, so nothing',
+    '            is lost yet, but the off-host copy is falling behind.',
+    '',
+    '      - alert: DbBinlogShipMetricAbsent',
+    '        expr: >-',
+    `          absent(db_binlog_ship_last_success_timestamp_seconds{${DB1_SERIES}})`,
+    `        for: ${DB_BINLOG_ABSENT_FOR}`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "db1 publishes no binlog shipping success time."',
+    '          description: >-',
+    "            The series is not there at all: db1's node_exporter is down or",
+    '            does not read the textfile directory, the status file was',
+    '            removed, the shipping script on db1 predates the metric, or no',
+    '            run has ever succeeded. for: 1h matches the stale threshold; a',
+    '            script delivered after this rule writes its first status within',
+    '            one 15 minute timer period. If db1 itself is down,',
+    '            HostOrServiceDown pages first.',
+    // The scanning storage adapter's own metrics, written by each tenant's
+    // Ghost process as a node_exporter textfile. Every rule is scoped to
+    // expected_up="true" on the node target, so nothing fires for a host
+    // whose exporter is not yet confirmed live, and none uses absent():
+    // a host with no scanner series is not a fault. See
+    // render.md#the-scanner-rule-group for the series contract.
+    '  - name: scanner',
+    '    rules:',
+    '      - alert: ScannerNotConfigured',
+    '        expr: >-',
+    `          scanning_storage_unconfigured_instances{${SCANNER_SELECTOR}} > 0`,
+    `          and on(instance, tenant) (time() - scanning_storage_metrics_written_timestamp_seconds{${SCANNER_SELECTOR}} < 600)`,
+    '        for: 10m',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "{{ $labels.tenant }} has an upload scanner with no verdict source, so every new upload is refused."',
+    '          description: >-',
+    '            The adapter booted with no verdict source configured, which',
+    '            it treats as a refusal of every new upload rather than an',
+    '            allow. This is the metric form of the SCANNER_UNCONFIGURED',
+    '            boot line, so it is known before anyone uploads. The',
+    '            freshness clause drops a series whose file has stopped',
+    '            being rewritten, so a tenant that was torn down cannot hold',
+    '            it open. A warning, never a page: it goes to the on-host',
+    '            mailbox like every warning, and whether it is carried by',
+    "            owner_action or the page register is the owner's call.",
+    '',
+    '      - alert: ScannerUploadsRefused',
+    '        expr: >-',
+    `          increase(scanning_storage_uploads_refused_total{reason="unconfigured", ${SCANNER_SELECTOR}}[15m]) > 0`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "{{ $labels.tenant }} refused an upload in the last 15 minutes for want of a verdict source."',
+    '          description: >-',
+    '            A person tried to upload and was told no. This is the',
+    '            UPLOAD_REFUSED_SCANNER_UNCONFIGURED log line as a counter.',
+    '            The adapter writes the counter at zero from boot, so the',
+    '            first refusal is visible to increase(). It also stops a',
+    '            resized image variant that does not exist yet, which',
+    '            errors instead of falling back to the original, so a',
+    '            tenant can see broken images without uploading anything.',
+    '            Refusals by verdict and repeats of a sealed digest are the',
+    '            control working and are deliberately not alerted here.',
+    '',
+    '      - alert: ScannerVerdictChannelFailing',
+    '        expr: >-',
+    `          increase(scanning_storage_verdict_errors_total{${SCANNER_SELECTOR}}[5m]) > 0`,
+    '        for: 10m',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "{{ $labels.tenant }}\'s verdict requests have been timing out or failing for 10 minutes."',
+    '          description: >-',
+    '            Each failed request accepts the upload and holds it',
+    '            unserved, so an outage looks like images that never appear',
+    '            and nothing else. A request error or timeout in every',
+    '            5-minute window for 10 minutes is sustained, where one',
+    '            slow answer is not. Held retries keep asking, so a held',
+    '            upload keeps this firing until the channel answers; a',
+    '            tenant with nothing held and nobody uploading makes no',
+    '            requests and so raises none. No threshold is set here: the',
+    '            owner sets the targets that would add a rate or an age',
+    '            bound. One alert per kind (timeout, error) per tenant.',
+    '',
     '  - name: probes',
     '    rules:',
     '      - alert: BlackboxProbeFailed',
@@ -656,6 +868,23 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '        annotations:',
     '          summary: "{{ $labels.instance }} failed its external probe for 5 minutes."',
     '          description: "The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below."',
+    '',
+    // Warns before the certificate expires: Caddy renews automatically, so a
+    // failed renewal shows only at hard expiry, when probe_success drops and
+    // BlackboxProbeFailed fires. Warning, not critical: the certificate still
+    // serves until expiry, so this is a chore with a deadline, not an outage.
+    '      - alert: TLSCertificateExpiringSoon',
+    '        expr: probe_ssl_earliest_cert_expiry{job="blackbox_http"} - time() < 14*86400',
+    '        labels:',
+    '          severity: warning',
+    '          owner_action: "true"',
+    '        annotations:',
+    '          summary: "{{ $labels.instance }}\'s TLS certificate expires in under 14 days."',
+    '          description: >-',
+    '            Caddy renews certificates automatically, so a failed renewal shows',
+    '            only when the certificate reaches hard expiry and probe_success',
+    '            drops. This fires earlier, while there is still time to fix the',
+    '            renewal. Scoped to blackbox_http, the public HTTPS probes.',
     '',
     '      - alert: MailHostDown',
     '        expr: probe_success{job="blackbox_mail"} == 0',
