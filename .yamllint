@@ -1,0 +1,20 @@
+---
+# The YAML floor for everything under ansible/ (ANS-6): the settings
+# ansible-lint's `yaml` rule requires, and the two values its own default
+# configuration sets. A pull request does not loosen this file.
+extends: default
+rules:
+  line-length:
+    max: 160
+  document-start: disable
+  comments:
+    min-spaces-from-content: 1
+  # ansible-lint requires this off: its checks list it beside the five below,
+  # and its documentation page for the yaml rule does not.
+  comments-indentation: false
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true

@@ -1,0 +1,5 @@
+---
+example_config_state: present
+example_config_config_path: /etc/example_config.conf
+example_config_notice_path: /etc/example_config.notice
+example_config_greeting: EXAMPLE_GREETING

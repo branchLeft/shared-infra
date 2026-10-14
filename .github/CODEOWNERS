@@ -38,8 +38,13 @@
 /.pre-commit-config.yaml                 @branchLeft/branchleft-admin
 /.prettierignore                         @branchLeft/branchleft-admin
 
+# The Ansible lint floors are exemption files (ANS-5, ANS-6), and the harness is the gate that runs them: a role pull request does not loosen them.
+/.ansible-lint                           @branchLeft/branchleft-admin
+/.yamllint                               @branchLeft/branchleft-admin
+/ansible/harness/                        @branchLeft/branchleft-admin
+
 /.standardsignore        @branchLeft/branchleft-admin
-/.standards.mode         @branchLeft/branchleft-admin
+/.standards.mode        @branchLeft/branchleft-admin
 /.docs-lint*             @branchLeft/branchleft-admin
 /tools/floors.tsv        @branchLeft/branchleft-admin
 /.standards-db-tooling   @branchLeft/branchleft-admin

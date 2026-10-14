@@ -1,0 +1,9 @@
+---
+# The Ansible lint floor (ANS-5). A pull request does not loosen this file to
+# make its own gate pass: it is an exemption file, and CODEOWNERS covers it.
+profile: production
+strict: true
+warn_list:
+  - experimental
+enable_list:
+  - no-log-password

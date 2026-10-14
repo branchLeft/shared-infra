@@ -1,0 +1,82 @@
+name: Ansible
+
+# Runs the role test harness (ansible/harness) on a runner that holds no
+# credentials and reaches no host: the roles are applied to containers on the
+# runner's own Docker daemon, and nothing else.
+#
+# It is a gate on pull requests and on push to `main` (CI-3), and it runs only
+# when a file that can change its result changes. It is not a required check:
+# a path-filtered workflow reports nothing on a pull request that touches none
+# of these paths, and a required check that never reports blocks the merge.
+#
+# The tools install from ansible/requirements.txt at exact versions and the
+# collections from ansible/requirements.yml at exact versions (ANS-4).
+# DOCKER_HOST is deliberately left unset (ANS-15).
+
+on:
+  pull_request:
+    paths:
+      - 'ansible/**'
+      - '.ansible-lint'
+      - '.yamllint'
+      - '.github/workflows/ansible.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'ansible/**'
+      - '.ansible-lint'
+      - '.yamllint'
+      - '.github/workflows/ansible.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  roles:
+    name: Lint and test the Ansible roles
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Create the tool environment
+        run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
+
+      - name: Install the pinned tools
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv -r ansible/requirements.txt'
+
+      - name: yamllint every YAML file under ansible/
+        run: '"$RUNNER_TEMP/ansible-venv/bin/yamllint" --strict -c .yamllint ansible'
+
+      - name: ansible-lint at the production profile
+        run: '"$RUNNER_TEMP/ansible-venv/bin/ansible-lint" --strict ansible'
+
+      - name: Type-check the harness
+        working-directory: ansible
+        run: '"$RUNNER_TEMP/ansible-venv/bin/mypy" harness'
+
+      - name: Lint the harness
+        working-directory: ansible
+        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" check harness'
+
+      - name: Check the harness formatting
+        working-directory: ansible
+        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" format --check harness'
+
+      - name: Test the harness
+        run: python3 -m unittest discover -b -s ansible/harness -p 'test_*.py'
+
+      - name: Run the harness over every role
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py ansible/roles/*'
+
+      - name: Create a role from the skeleton
+        run: >-
+          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" role init
+          --role-skeleton ansible/role_skeleton
+          --init-path "$RUNNER_TEMP/skeleton-probe" skeleton_probe
+
+      - name: Run the harness over the new role with no edits
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py "$RUNNER_TEMP/skeleton-probe/skeleton_probe"'
