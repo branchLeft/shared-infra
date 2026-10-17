@@ -1,0 +1,19 @@
+---
+argument_specs:
+  main:
+    short_description: Deliver one file and two units, then enable and start them
+    description: Copies one configuration file, renders a service unit and a timer with its oneshot service, then enables and starts the service and the timer.
+    author: AUTHOR_NAME
+    options:
+      files_and_units_config_path:
+        type: str
+        description: Absolute path of the configuration file.
+        default: /etc/files_and_units.conf
+      files_and_units_unit_description:
+        type: str
+        description: Description written into the service and the timer's service. A change to it edits both units and triggers one daemon reload.
+        default: EXAMPLE_UNIT_DESCRIPTION
+      files_and_units_tick_calendar:
+        type: str
+        description: OnCalendar value of the timer.
+        default: hourly

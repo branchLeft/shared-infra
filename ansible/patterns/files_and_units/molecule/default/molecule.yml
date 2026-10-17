@@ -1,0 +1,37 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party systemd test base, chosen by the orchestrator ruling and
+    # trusted by digest (see the role README). The image runs systemd as PID 1,
+    # so the platform is one the author justifies here, per ANS-15.
+    # Privileged: systemd must mount and manage the cgroup tree and its units.
+    privileged: true
+    # Host cgroup namespace: systemd reads and writes the host's cgroup v2 tree.
+    cgroupns_mode: host
+    # The cgroup tree systemd manages, mounted read-write from this host's daemon.
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    # systemd's runtime and lock directories are tmpfs in a real boot.
+    tmpfs:
+      - /run
+      - /run/lock
+    # Start systemd as the init process, the image's own CMD.
+    command: /lib/systemd/systemd
+    image: geerlingguy/docker-debian12-ansible@sha256:541b6cff5ec8c9fb0a926853400db0abab8b73c2912a2f4a4ef06137416605f1
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+verifier:
+  name: ansible

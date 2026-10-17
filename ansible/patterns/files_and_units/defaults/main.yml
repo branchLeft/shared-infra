@@ -1,0 +1,4 @@
+---
+files_and_units_config_path: /etc/files_and_units.conf
+files_and_units_unit_description: EXAMPLE_UNIT_DESCRIPTION
+files_and_units_tick_calendar: hourly
