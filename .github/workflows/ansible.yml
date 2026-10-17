@@ -72,38 +72,6 @@ jobs:
         if: steps.changes.outputs.ansible == 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv -r ansible/requirements.txt'
 
-      - name: Diagnostic (temporary) why the default container exits, then the pattern with a host cgroup namespace
-        if: steps.changes.outputs.ansible == 'true'
-        run: |
-          set +e
-          image='geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372'
-          mounts=(-v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock)
-          echo "::group::default namespace with systemd debug logging"
-          docker run -d --name diag-a --label branchleft.agent=ci2392diag "${mounts[@]}" "$image" /lib/systemd/systemd --log-level=debug --log-target=console
-          sleep 8
-          docker ps -a --filter name=diag-a --format '{{.Names}} {{.Status}}'
-          docker logs --tail 40 diag-a 2>&1
-          docker rm -f -v diag-a >/dev/null 2>&1
-          echo "::endgroup::"
-          echo "::group::host namespace: failed units and the cgroup this container sees"
-          docker run -d --name diag-b --label branchleft.agent=ci2392diag "${mounts[@]}" --cgroupns=host "$image" /lib/systemd/systemd
-          sleep 8
-          docker exec diag-b systemctl --failed --no-legend --no-pager
-          docker exec diag-b cat /proc/1/cgroup
-          docker exec diag-b systemctl is-system-running
-          docker rm -f -v diag-b >/dev/null 2>&1
-          echo "::endgroup::"
-          echo "::group::harness over a copy of the pattern with cgroupns_mode host added"
-          copy="$RUNNER_TEMP/diag/files_and_units"
-          mkdir -p "$RUNNER_TEMP/diag"
-          cp -R ansible/patterns/files_and_units "$copy"
-          sed -i 's|^    pre_build_image: true$|    pre_build_image: true\n    # Diagnostic copy only.\n    cgroupns_mode: host|' "$copy/molecule/default/molecule.yml"
-          grep -n -B1 -A1 cgroupns_mode "$copy/molecule/default/molecule.yml"
-          "$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py "$copy"
-          echo "harness exit status: $?"
-          echo "::endgroup::"
-          exit 1
-
       - name: yamllint every YAML file under ansible/
         if: steps.changes.outputs.ansible == 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/yamllint" --strict -c .yamllint ansible'
