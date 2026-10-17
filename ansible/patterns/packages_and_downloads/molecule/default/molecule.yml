@@ -15,8 +15,9 @@ platforms:
   - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
     # A Debian 12 base with /usr/bin/python3 and python3-apt installed, which
     # the apt module needs on the target. Pre-built, so the reference can carry
-    # a digest; the tag is a label only.
-    image: geerlingguy/docker-debian12-ansible@sha256:541b6cff5ec8c9fb0a926853400db0abab8b73c2912a2f4a4ef06137416605f1
+    # a digest. The digest is the pin; the tag is informational only, because
+    # upstream rebuilds weekly and moves "latest" while the digest stays put.
+    image: geerlingguy/docker-debian12-ansible:latest@sha256:541b6cff5ec8c9fb0a926853400db0abab8b73c2912a2f4a4ef06137416605f1
     pre_build_image: true
     labels:
       branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'

@@ -10,18 +10,15 @@
         name: branchleft.packages_and_downloads
       vars:
         packages_and_downloads_downloads:
-          - url: file:///srv/packages-and-downloads/example-tool-1.0.0
+          # Sets only the mode: owner and group come from the role's variables.
+          - url: file:///srv/packages-and-downloads/example-tool-v1
             dest: /usr/local/bin/example-tool
-            checksum: a3bd5f9c3e07f25cedd25229122fb95c63ebfc7b4358efdf2bae2e1c708bf1f7
-            owner: root
-            group: root
+            checksum: sha256:a3bd5f9c3e07f25cedd25229122fb95c63ebfc7b4358efdf2bae2e1c708bf1f7
             mode: '0755'
+          # Sets no owner, group or mode.
           - url: file:///srv/packages-and-downloads/example-pinned-tool_1.0.0_all.deb
             dest: /usr/local/share/example-pinned-tool_1.0.0_all.deb
-            checksum: f08da6f1324d3b976acf59ab192e4ee737dfa27bcf692c443693e4c2a7929131
-            owner: root
-            group: root
-            mode: '0644'
+            checksum: sha256:be2c9046c6a34366cee101daf5ad4c8871a8103443fd979bce08bc3dbdae22e9
         packages_and_downloads_debs:
           - /usr/local/share/example-pinned-tool_1.0.0_all.deb
         packages_and_downloads_apt_packages:
@@ -29,3 +26,4 @@
         packages_and_downloads_repository_present: true
         packages_and_downloads_repository_uri: file:/srv/packages-and-downloads/repo
         packages_and_downloads_repository_suite: stable
+        packages_and_downloads_repository_key_sha256: b9455ba3da2490c6b3d16dd05287f4bd28e6d7a41715fd8f674a7dc6b60b8d8c

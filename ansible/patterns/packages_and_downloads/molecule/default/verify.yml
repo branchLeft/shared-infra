@@ -2,42 +2,58 @@
 - name: Verify
   hosts: all
   gather_facts: false
+  vars:
+    packages_and_downloads_verify_role_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY', default='') }}"
   tasks:
-    # Enforcement of the checksum rule. The role's tasks file is read on the
-    # controller, so a get_url task that drops its checksum fails this play
-    # even though the download itself would still succeed.
+    # Enforcement of the checksum rule, second layer. The first layer is the
+    # role's own assertions, which run on every real run. This layer reads the
+    # role's task and handler files on the controller, so a download task that
+    # drops its pin fails this play even though the download itself would
+    # still succeed. scan-downloads.j2 says exactly what it accepts.
     - name: Assert Molecule names the role directory
       ansible.builtin.assert:
         that:
-          - lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY', default='') | length > 0
-        fail_msg: MOLECULE_PROJECT_DIRECTORY is not set, so the tasks file cannot be read.
+          - packages_and_downloads_verify_role_dir | length > 0
+        fail_msg: MOLECULE_PROJECT_DIRECTORY is not set, so the task files cannot be read.
 
-    - name: Read the role tasks file on the controller
-      ansible.builtin.slurp:
-        src: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY', default='') }}/tasks/main.yml"
+    # The whole role directory is listed and the template keeps the files under
+    # tasks/ and handlers/, so a role without a handlers directory raises no
+    # warning and a file in a nested directory is found at any depth.
+    - name: List every file in the role directory
+      ansible.builtin.find:
+        paths:
+          - '{{ packages_and_downloads_verify_role_dir }}'
+        file_type: any
+        recurse: true
+        hidden: true
       delegate_to: localhost
       run_once: true
-      register: packages_and_downloads_verify_tasks
+      register: packages_and_downloads_verify_files
 
-    - name: Parse the role tasks file
+    - name: Scan every file under tasks and handlers for download tasks
       ansible.builtin.set_fact:
-        packages_and_downloads_role_tasks: '{{ packages_and_downloads_verify_tasks.content | b64decode | from_yaml }}'
+        packages_and_downloads_verify_scan: >-
+          {{ lookup('ansible.builtin.template', playbook_dir ~ '/scan-downloads.j2',
+          template_vars={'scan_files': packages_and_downloads_verify_files.files,
+          'role_dir': packages_and_downloads_verify_role_dir, 'prefix': 'packages_and_downloads'}) | from_json }}
 
-    - name: Assert the role tasks file names at least one get_url task
+    - name: Assert the scan read the role's main tasks file
       ansible.builtin.assert:
         that:
-          - packages_and_downloads_role_tasks | map('string') | select('search', 'ansible.builtin.get_url') | list | length > 0
+          - packages_and_downloads_verify_scan.files | select('search', '/tasks/main[.]yml$') | list | length == 1
+        fail_msg: The scan did not read tasks/main.yml, so it proves nothing.
+
+    - name: Assert the role has at least one get_url task
+      ansible.builtin.assert:
+        that:
+          - packages_and_downloads_verify_scan.seen > 0
         fail_msg: No get_url task was found, so the checksum rule has nothing to check.
 
-    - name: Assert every get_url task in the role passes a checksum
+    - name: Assert no download task in the role lacks a pin
       ansible.builtin.assert:
         that:
-          - item['ansible.builtin.get_url'].checksum is defined
-        fail_msg: A get_url task in the role has no checksum.
-      loop: '{{ packages_and_downloads_role_tasks }}'
-      loop_control:
-        label: "{{ item.name | default('unnamed task') }}"
-      when: item['ansible.builtin.get_url'] is defined
+          - packages_and_downloads_verify_scan.failures | length == 0
+        fail_msg: "Unpinned download in the role: {{ packages_and_downloads_verify_scan.failures | join('; ') }}"
 
     - name: Read the downloaded tool
       ansible.builtin.stat:
@@ -54,6 +70,20 @@
           - packages_and_downloads_verify_tool.stat.pw_name == 'root'
         success_msg: The tool matches its pinned sha256 and is executable by root.
 
+    - name: Read the downloaded package file
+      ansible.builtin.stat:
+        path: /usr/local/share/example-pinned-tool_1.0.0_all.deb
+      register: packages_and_downloads_verify_deb
+
+    - name: Assert the entry that set no owner, group or mode got the role defaults
+      ansible.builtin.assert:
+        that:
+          - packages_and_downloads_verify_deb.stat.exists
+          - packages_and_downloads_verify_deb.stat.mode == '0644'
+          - packages_and_downloads_verify_deb.stat.pw_name == 'root'
+          - packages_and_downloads_verify_deb.stat.gr_name == 'root'
+        success_msg: The omitted owner, group and mode fell back to the role's variables.
+
     - name: Gather the installed apt packages
       ansible.builtin.package_facts:
         manager: apt
@@ -68,6 +98,7 @@
     - name: Read the repository key file
       ansible.builtin.stat:
         path: /etc/apt/keyrings/packages-and-downloads.asc
+        checksum_algorithm: sha256
       register: packages_and_downloads_verify_key
 
     - name: Read the repository source
@@ -80,5 +111,6 @@
         that:
           - packages_and_downloads_verify_key.stat.exists
           - packages_and_downloads_verify_key.stat.mode == '0644'
+          - packages_and_downloads_verify_key.stat.checksum == 'b9455ba3da2490c6b3d16dd05287f4bd28e6d7a41715fd8f674a7dc6b60b8d8c'
           - "'Signed-By: /etc/apt/keyrings/packages-and-downloads.asc' in (packages_and_downloads_verify_source.content | b64decode)"
-        success_msg: The key is a file and the source names it with Signed-By.
+        success_msg: The key is a file with its pinned digest and the source names it with Signed-By.
