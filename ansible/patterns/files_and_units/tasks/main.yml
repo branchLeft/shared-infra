@@ -3,6 +3,8 @@
   ansible.builtin.copy:
     src: example.json
     dest: '{{ files_and_units_config_path }}'
+    owner: '{{ files_and_units_config_owner }}'
+    group: '{{ files_and_units_config_group }}'
     mode: '0640'
     validate: python3 -m json.tool %s
 
