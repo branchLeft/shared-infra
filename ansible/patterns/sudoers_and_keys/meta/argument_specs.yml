@@ -39,7 +39,10 @@ argument_specs:
           key:
             type: str
             required: true
-            description: One public key on one line, as ssh-keygen writes it, with no options in front.
+            description: >-
+              One public key on one line, as ssh-keygen writes it, with no
+              options in front. The role refuses a key of an unknown type or of
+              a body length that type cannot have, and never prints it.
           command:
             type: str
             default: ''
@@ -51,4 +54,7 @@ argument_specs:
             type: list
             elements: str
             default: []
-            description: Addresses or CIDR ranges the key may connect from. Written as the from option.
+            description: >-
+              Addresses, CIDR ranges or host patterns the key may connect from,
+              one per item, written as the from option. Letters, digits and the
+              characters . : / * ? ! _ - only; no space, quote, comma or empty item.

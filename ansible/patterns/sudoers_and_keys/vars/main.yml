@@ -20,8 +20,27 @@ sudoers_and_keys_name_pattern: '^[A-Za-z0-9_-]+\Z'
 sudoers_and_keys_newline_pattern: '[\n\r]'
 sudoers_and_keys_command_forbidden_pattern: '["\n\r]'
 
-# One public key on one line: a key type, the base64 body and an optional
-# comment, and nothing in front. Options come only from the structured fields,
-# so a key value cannot carry its own options or a second key behind a newline.
-sudoers_and_keys_key_types: 'ssh-ed25519|sk-ssh-ed25519@openssh\.com|ecdsa-sha2-nistp(256|384|521)|sk-ecdsa-sha2-nistp256@openssh\.com|ssh-rsa'
-sudoers_and_keys_key_pattern: '^({{ sudoers_and_keys_key_types }}) [A-Za-z0-9+/]+={0,3}( [^\n\r]*)?\Z'
+# One public key on one line: a key type, a base64 body of a length that type
+# can have, an optional comment, and nothing in front. Options come only from
+# the structured fields, so a key value cannot carry its own options or a second
+# key behind a newline. The lengths count base64 characters, padding included
+# where the type always has it: ed25519, and the three NIST curves, have a fixed
+# length, so a truncated or padded-out paste fails. RSA and the security-key
+# types vary, so those have a floor (RSA 1024 bits is 202 characters before the
+# padding), not an exact length. A one-character typo inside a body still
+# passes: the shape is checked, not the key.
+sudoers_and_keys_key_shapes:
+  - 'ssh-ed25519 [A-Za-z0-9+/]{68}'
+  - 'ecdsa-sha2-nistp256 [A-Za-z0-9+/]{139}='
+  - 'ecdsa-sha2-nistp384 [A-Za-z0-9+/]{182}=='
+  - 'ecdsa-sha2-nistp521 [A-Za-z0-9+/]{230}=='
+  - 'ssh-rsa [A-Za-z0-9+/]{200,}={0,2}'
+  - 'sk-ssh-ed25519@openssh\.com [A-Za-z0-9+/]{90,}={0,2}'
+  - 'sk-ecdsa-sha2-nistp256@openssh\.com [A-Za-z0-9+/]{160,}={0,2}'
+sudoers_and_keys_key_pattern: '^({{ sudoers_and_keys_key_shapes | join("|") }})( [^\n\r]*)?\Z'
+
+# One entry of a from option: the characters an address, a CIDR range or a host
+# pattern uses, with the wildcards and the leading ! sshd allows. No space, no
+# quote, no comma (one list item is one entry) and no control character.
+# \Z, not $, so a trailing newline does not pass; an empty item does not match.
+sudoers_and_keys_address_pattern: '^[A-Za-z0-9.:/*?!_-]+\Z'

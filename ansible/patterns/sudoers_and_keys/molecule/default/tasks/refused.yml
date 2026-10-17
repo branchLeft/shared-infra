@@ -17,10 +17,12 @@
     - name: Record that the role accepted the input
       ansible.builtin.set_fact:
         refused_by: 'NOTHING: the role accepted the input'
+        refused_message: ''
   rescue:
     - name: Record which task refused the input
       ansible.builtin.set_fact:
         refused_by: '{{ ansible_failed_task.name }}'
+        refused_message: '{{ ansible_failed_result.msg | default("") }}'
 
 - name: Assert the role stopped at the expected task
   ansible.builtin.assert:
@@ -28,3 +30,13 @@
       - refused_by == refused_task
     fail_msg: 'Expected the role to stop at "{{ refused_task }}"; it stopped at "{{ refused_by }}".'
     quiet: true
+
+# For a refusal that must name which entry is wrong: the message holds the
+# expected words. A message that held a key would be caught by the log scan.
+- name: Assert the refusal names the entry it refused
+  ansible.builtin.assert:
+    that:
+      - refused_message_part in refused_message
+    fail_msg: 'Expected the refusal to say "{{ refused_message_part }}"; it said "{{ refused_message }}".'
+    quiet: true
+  when: refused_message_part is defined

@@ -25,12 +25,27 @@
     quiet: true
     fail_msg: Each sudoers line must be one line.
 
+# The key text is public, but a refusal must not print it: a failed check that
+# named the value would put a half-pasted key in every log. This task works the
+# key text out and keeps only the position of each entry that fails; the
+# assertion after it names those positions and never a value.
+- name: Find the key entries that are not one plausible public key
+  ansible.builtin.set_fact:
+    sudoers_and_keys_bad_key_numbers: >-
+      {{ range(1, (sudoers_and_keys_keys | length) + 1)
+      | zip(sudoers_and_keys_keys | map(attribute='key') | map('regex_search', sudoers_and_keys_key_pattern))
+      | rejectattr('1') | map(attribute='0') | list }}
+  no_log: true
+
 - name: Refuse a key entry that is not one public key on one line
   ansible.builtin.assert:
     that:
-      - sudoers_and_keys_keys | rejectattr('key', 'match', sudoers_and_keys_key_pattern) | list | length == 0
+      - sudoers_and_keys_bad_key_numbers | length == 0
     quiet: true
-    fail_msg: Each key must be one public key on one line, with no options in front.
+    fail_msg: >-
+      Key entry number {{ sudoers_and_keys_bad_key_numbers | join(', ') }} is not
+      one public key on one line: a known key type, a base64 body of the length
+      that type has, an optional comment, and no options in front.
 
 - name: Refuse a forced command that would break its own quoting
   ansible.builtin.assert:
@@ -49,10 +64,27 @@
     quiet: true
     fail_msg: A key with a forced command must say which addresses it may connect from.
 
+# An address goes into the from option between double quotes, so a space, a
+# quote, a line break or an empty item gives a line the SSH server will not
+# accept: the key stops working, and that is a lock-out for a slot key.
+- name: Refuse a source address that is not an address pattern
+  ansible.builtin.assert:
+    that:
+      - >-
+        sudoers_and_keys_keys | map(attribute='from_addresses', default=[]) | flatten
+        | reject('match', sudoers_and_keys_address_pattern) | list | length == 0
+    quiet: true
+    fail_msg: >-
+      A source address may hold only letters, digits, dots, colons, slashes,
+      hyphens, underscores, asterisks, question marks and exclamation marks, and
+      must not be empty. List one address or range per item.
+
 # The fragment is written to a temporary file, checked by visudo, and only then
 # moved over the old one. A fragment visudo refuses never replaces a good one.
-# /etc/sudoers itself is never edited: the fragment directory is what the
-# distribution's sudoers already includes.
+# -s is strict checking: without it a line that names an alias nobody defined
+# parses as fine, and the grant (or the deny in a deny list) silently does
+# nothing. /etc/sudoers itself is never edited: the fragment directory is what
+# the distribution's sudoers already includes. Check mode skips validate.
 - name: Install the sudoers fragment
   ansible.builtin.copy:
     content: "{{ sudoers_and_keys_sudoers_lines | join('\n') }}\n"
@@ -60,7 +92,7 @@
     owner: root
     group: root
     mode: '0440'
-    validate: /usr/sbin/visudo -cf %s
+    validate: /usr/sbin/visudo -csf %s
   no_log: true
   diff: false
   when: sudoers_and_keys_sudoers_lines | length > 0

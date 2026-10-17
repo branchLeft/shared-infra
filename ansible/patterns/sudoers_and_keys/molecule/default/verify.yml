@@ -7,10 +7,16 @@
     verify_interactive_public: "{{ lookup('ansible.builtin.file', scenario_key_dir ~ '/interactive.pub') }}"
     verify_stale_public: "{{ lookup('ansible.builtin.file', scenario_key_dir ~ '/stale.pub') }}"
     verify_stale_body: "{{ verify_stale_public.split(' ')[1] }}"
+    verify_interactive_type: "{{ verify_interactive_public.split(' ')[0] }}"
+    verify_interactive_body: "{{ verify_interactive_public.split(' ')[1] }}"
+    # A paste cut short, and a key type with a typo: the two mistakes the key
+    # check exists for. The role must refuse both before any module sees them.
+    verify_truncated_body: '{{ verify_interactive_body[:40] }}'
     verify_key_bodies:
       - "{{ verify_forced_public.split(' ')[1] }}"
-      - "{{ verify_interactive_public.split(' ')[1] }}"
+      - '{{ verify_interactive_body }}'
       - '{{ verify_stale_body }}'
+      - '{{ verify_truncated_body }}'
     verify_forced_options:
       - from="192.0.2.10,198.51.100.0/24"
       - command="/usr/local/bin/EXAMPLE_COMMAND --EXAMPLE_ARGUMENT"
@@ -34,6 +40,16 @@
         refused_task: Install the sudoers fragment
         refused_lines:
           - this is not valid sudoers syntax %%%
+
+    # Valid syntax, but it names an alias nobody defined: the grant would do
+    # nothing, and in a deny list the deny would do nothing. Only the strict
+    # check in the validate command refuses it.
+    - name: Refuse a fragment that names an alias nobody defined
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Install the sudoers fragment
+        refused_lines:
+          - 'example_ops ALL=(root) NOPASSWD: EXAMPLE_UNDEFINED_ALIAS'
 
     - name: Refuse a fragment name that sudo would skip
       ansible.builtin.include_tasks: tasks/refused.yml
@@ -71,6 +87,28 @@
         refused_keys:
           - key: 'command="/bin/EXAMPLE_COMMAND" {{ verify_interactive_public }}'
 
+    # The second entry is the bad one: the refusal must say which entry, and
+    # must not print the key.
+    - name: Refuse a key whose body was cut short
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key entry that is not one public key on one line
+        refused_message_part: 'entry number 2 '
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: /usr/local/bin/EXAMPLE_COMMAND
+            from_addresses:
+              - 192.0.2.10
+          - key: '{{ verify_interactive_type }} {{ verify_truncated_body }}'
+
+    - name: Refuse a key whose type has a typo
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key entry that is not one public key on one line
+        refused_message_part: 'entry number 1 '
+        refused_keys:
+          - key: 'ssh-ed25518 {{ verify_interactive_body }} PLACEHOLDER_comment'
+
     - name: Refuse a forced command that ends its own quoting
       ansible.builtin.include_tasks: tasks/refused.yml
       vars:
@@ -88,6 +126,58 @@
         refused_keys:
           - key: '{{ verify_forced_public }}'
             command: /usr/local/bin/EXAMPLE_COMMAND
+
+    # Each address below would give a from option the SSH server cannot read, or
+    # in the line-break case a second line the caller never declared.
+    - name: Refuse a source address that holds a space
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source address that is not an address pattern
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: /usr/local/bin/EXAMPLE_COMMAND
+            from_addresses:
+              - 192.0.2.10 198.51.100.7
+
+    - name: Refuse a source address that holds a double quote
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source address that is not an address pattern
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: /usr/local/bin/EXAMPLE_COMMAND
+            from_addresses:
+              - 192.0.2.10"
+
+    - name: Refuse a source address that holds a line break and a second key
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source address that is not an address pattern
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: /usr/local/bin/EXAMPLE_COMMAND
+            from_addresses:
+              - "192.0.2.10\n{{ verify_stale_public }}"
+
+    - name: Refuse a source address that holds a tab
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source address that is not an address pattern
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: /usr/local/bin/EXAMPLE_COMMAND
+            from_addresses:
+              - '192.0.2.10{{ "\x09" }}'
+
+    - name: Refuse an empty source address
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source address that is not an address pattern
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: /usr/local/bin/EXAMPLE_COMMAND
+            from_addresses:
+              - ''
 
     # The module fails on an account that does not exist, and a failed task
     # prints its arguments unless no_log hides them: the failure path of the key
@@ -137,4 +227,5 @@
           - verify_key_bodies | select('in', verify_log) | list | length == 0
           - "'NOPASSWD' not in verify_log"
           - "'this is not valid sudoers' not in verify_log"
+          - "'EXAMPLE_UNDEFINED_ALIAS' not in verify_log"
         quiet: true
