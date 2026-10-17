@@ -12,6 +12,40 @@
     # A paste cut short, and a key type with a typo: the two mistakes the key
     # check exists for. The role must refuse both before any module sees them.
     verify_truncated_body: '{{ verify_interactive_body[:40] }}'
+    # Code points: tab, line feed, vertical tab, form feed, carriage return, the
+    # three file, group and record separators, next line, line separator and
+    # paragraph separator. Python's str.splitlines splits on all of them but the
+    # tab, which sits here as the one control character that is not a line break.
+    verify_separators: [9, 10, 11, 12, 13, 28, 29, 30, 133, 8232, 8233]
+    verify_address_characters:
+      - ','
+      - ';'
+      - '\'
+    # The key types the key module reads (see vars/main.yml in the role).
+    verify_key_type_words:
+      - sk-ecdsa-sha2-nistp256@openssh.com
+      - sk-ecdsa-sha2-nistp256-cert-v01@openssh.com
+      - webauthn-sk-ecdsa-sha2-nistp256@openssh.com
+      - ecdsa-sha2-nistp256
+      - ecdsa-sha2-nistp256-cert-v01@openssh.com
+      - ecdsa-sha2-nistp384
+      - ecdsa-sha2-nistp384-cert-v01@openssh.com
+      - ecdsa-sha2-nistp521
+      - ecdsa-sha2-nistp521-cert-v01@openssh.com
+      - sk-ssh-ed25519@openssh.com
+      - sk-ssh-ed25519-cert-v01@openssh.com
+      - ssh-ed25519
+      - ssh-ed25519-cert-v01@openssh.com
+      - ssh-dss
+      - ssh-rsa
+      - ssh-xmss@openssh.com
+      - ssh-xmss-cert-v01@openssh.com
+      - rsa-sha2-256
+      - rsa-sha2-512
+      - ssh-rsa-cert-v01@openssh.com
+      - rsa-sha2-256-cert-v01@openssh.com
+      - rsa-sha2-512-cert-v01@openssh.com
+      - ssh-dss-cert-v01@openssh.com
     verify_key_bodies:
       - "{{ verify_forced_public.split(' ')[1] }}"
       - '{{ verify_interactive_body }}'
@@ -66,19 +100,54 @@
         refused_lines:
           - example_ops ALL=(root) NOPASSWD: EXAMPLE_OPS_COMMANDS
 
-    - name: Refuse a fragment line that holds a line break
+    # Each separator is built from its code point: a character typed into this
+    # file is folded to a space by YAML (U+2028) or refused by the linter (a tab).
+    # The key module splits its input on all of them but a tab, so each one is a
+    # way to bring a second line the caller never declared. The line is a valid
+    # sudoers grant to everything; the check must refuse it before visudo sees it.
+    - name: Refuse a fragment line that holds a line break or any other character that is not printable ASCII
       ansible.builtin.include_tasks: tasks/refused.yml
       vars:
-        refused_task: Refuse a sudoers line that holds a line break
+        refused_task: Refuse a sudoers line that is not printable ASCII
         refused_lines:
-          - "example_ops ALL=(root) NOPASSWD: EXAMPLE_OPS_COMMANDS\nexample_ops ALL=(ALL) NOPASSWD: ALL"
+          - "example_ops ALL=(root) NOPASSWD: EXAMPLE_OPS_COMMANDS{{ '%c' | format(verify_separator) }}example_ops ALL=(ALL) NOPASSWD: ALL"
+      loop: '{{ verify_separators }}'
+      loop_control:
+        loop_var: verify_separator
+        label: code point {{ verify_separator }}
 
-    - name: Refuse a key value that smuggles in a second key behind a line break
+    # The reviewer's reproduction: a valid key, a separator, and behind it the key
+    # this host retired, now with an option of its own. The key check must refuse
+    # it, and the keys on the host must still be exactly the converged ones: the
+    # retired key must not come back.
+    - name: Refuse a key value that smuggles in a second key behind a separator
       ansible.builtin.include_tasks: tasks/refused.yml
       vars:
         refused_task: Refuse a key entry that is not one public key on one line
+        refused_expect_keys_unchanged: true
         refused_keys:
-          - key: "{{ verify_interactive_public }}\n{{ verify_stale_public }}"
+          - key: '{{ verify_interactive_public }}{{ ''%c'' | format(verify_separator) }}command="/bin/EXAMPLE_COMMAND" {{ verify_stale_public }}'
+      loop: '{{ verify_separators }}'
+      loop_control:
+        loop_var: verify_separator
+        label: code point {{ verify_separator }}
+
+    # The line break after the key and nothing behind it: \Z refuses it, $ does not.
+    - name: Refuse a key value that ends in a line break
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key entry that is not one public key on one line
+        refused_expect_keys_unchanged: true
+        refused_keys:
+          - key: "{{ verify_interactive_public }}{{ '%c' | format(10) }}"
+
+    - name: Refuse a key value with a comment that is not printable ASCII
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key entry that is not one public key on one line
+        refused_expect_keys_unchanged: true
+        refused_keys:
+          - key: "{{ verify_interactive_public }} PLACEHOLDER_comment_{{ '%c' | format(233) }}"
 
     - name: Refuse a key value that brings its own options
       ansible.builtin.include_tasks: tasks/refused.yml
@@ -118,6 +187,65 @@
             command: '/bin/EXAMPLE_COMMAND" --EXAMPLE_OPTION'
             from_addresses:
               - 192.0.2.10
+
+    # A backslash at the end turns the closing quote into an escaped quote, and
+    # the key module rewrites \# to # in what it is given.
+    - name: Refuse a forced command that ends in a backslash
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a forced command that would break its own quoting
+        refused_expect_keys_unchanged: true
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: '/usr/local/bin/EXAMPLE_COMMAND --EXAMPLE_OPTION\'
+            from_addresses:
+              - 192.0.2.10
+
+    - name: Refuse a forced command that holds a backslash inside it
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a forced command that would break its own quoting
+        refused_expect_keys_unchanged: true
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: '/usr/local/bin/EXAMPLE_COMMAND \# EXAMPLE_ARGUMENT'
+            from_addresses:
+              - 192.0.2.10
+
+    # The reviewer's reproduction in the command: a separator, then the retired
+    # key. Refused by the quoting check for the separator, and also by the key
+    # type check for the key type word behind it.
+    - name: Refuse a forced command that smuggles in a second key behind a separator
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a forced command that would break its own quoting
+        refused_expect_keys_unchanged: true
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: "/usr/local/bin/EXAMPLE_COMMAND{{ '%c' | format(verify_separator) }}no-pty {{ verify_stale_public }}"
+            from_addresses:
+              - 192.0.2.10
+      loop: '{{ verify_separators }}'
+      loop_control:
+        loop_var: verify_separator
+        label: code point {{ verify_separator }}
+
+    # A key type as a word of its own is read by the key module as the key, and
+    # the line is rewritten wrongly on every run. Every type the module knows.
+    - name: Refuse a forced command that holds a key type word
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a forced command that holds a key type word
+        refused_expect_keys_unchanged: true
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: '/usr/local/bin/EXAMPLE_COMMAND {{ verify_type_word }} EXAMPLE_ARGUMENT'
+            from_addresses:
+              - 192.0.2.10
+      loop: '{{ verify_key_type_words }}'
+      loop_control:
+        loop_var: verify_type_word
+        label: '{{ verify_type_word }}'
 
     - name: Refuse a forced command with no source address
       ansible.builtin.include_tasks: tasks/refused.yml
@@ -193,6 +321,55 @@
             command: /usr/local/bin/EXAMPLE_COMMAND
             from_addresses:
               - ''
+
+    # One list item is one entry of the from option, so a comma inside an item
+    # would give two entries; a semicolon and a backslash are not address
+    # characters. The list is of what the character class must keep out.
+    - name: Refuse a source address that holds a comma, a semicolon or a backslash
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source address that is not an address pattern
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: /usr/local/bin/EXAMPLE_COMMAND
+            from_addresses:
+              - '192.0.2.10{{ verify_address_character }}198.51.100.7'
+      loop: '{{ verify_address_characters }}'
+      loop_control:
+        loop_var: verify_address_character
+        label: '{{ verify_address_character }}'
+
+    # The line break after the address and nothing behind it: \Z refuses it, $ does not.
+    - name: Refuse a source address that ends in a line break
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source address that is not an address pattern
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: /usr/local/bin/EXAMPLE_COMMAND
+            from_addresses:
+              - "192.0.2.10{{ '%c' | format(10) }}"
+
+    # No space in it, so the character class is the only thing that refuses it.
+    - name: Refuse a source address that holds a separator
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source address that is not an address pattern
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: /usr/local/bin/EXAMPLE_COMMAND
+            from_addresses:
+              - "192.0.2.10{{ '%c' | format(verify_separator) }}198.51.100.7"
+      loop: '{{ verify_separators }}'
+      loop_control:
+        loop_var: verify_separator
+        label: code point {{ verify_separator }}
+
+    - name: Refuse a fragment name that ends in a line break
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a sudoers fragment name that sudo would skip
+        refused_name: "example-ops{{ '%c' | format(10) }}"
 
     # The module fails on an account that does not exist, and a failed task
     # prints its arguments unless no_log hides them: the failure path of the key

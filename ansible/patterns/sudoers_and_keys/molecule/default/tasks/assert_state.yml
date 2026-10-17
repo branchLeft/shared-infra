@@ -107,6 +107,39 @@
   check_mode: false
   no_log: true
 
+# Every line the role wrote must be a line OpenSSH reads as a public key, with
+# its options. The image has no ssh-keygen, so the file is copied to the
+# controller, which has one (prepare.yml uses it). ssh-keygen -l -f prints one
+# line for each line it reads and skips a line it cannot read without failing,
+# so the count of its lines is compared with the count of lines in the file.
+- name: Copy the account's key file to the controller
+  ansible.builtin.fetch:
+    src: '/home/{{ scenario_user }}/.ssh/authorized_keys'
+    dest: '{{ scenario_key_dir }}/written-authorized_keys'
+    flat: true
+  check_mode: false
+  no_log: true
+
+- name: Ask ssh-keygen to read the key file
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -l
+      - -f
+      - '{{ scenario_key_dir }}/written-authorized_keys'
+  delegate_to: localhost
+  register: assert_state_fingerprints
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Assert ssh-keygen read every line of the key file as a public key
+  ansible.builtin.assert:
+    that:
+      - assert_state_keys.stdout_lines | length > 0
+      - assert_state_fingerprints.stdout_lines | length == assert_state_keys.stdout_lines | length
+    quiet: true
+
 # The expected lines are written out here and not built by the role's template,
 # so that dropping an option from the role fails this comparison. The forced
 # command key carries its source restriction and all four restrictive options.

@@ -24,6 +24,30 @@
         refused_by: '{{ ansible_failed_task.name }}'
         refused_message: '{{ ansible_failed_result.msg | default("") }}'
 
+# For a refusal that guards what the key module would have written: when the
+# case sets refused_expect_keys_unchanged, the key file must be exactly what the
+# converge left, and the key the host retired must not be in it. This runs before
+# the check on the task, so a check that lets the input through fails here, with
+# the key file as the evidence.
+- name: Read the account's authorised keys after the refusal
+  ansible.builtin.command:
+    argv:
+      - cat
+      - '/home/{{ scenario_user }}/.ssh/authorized_keys'
+  register: refused_keys_after
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: refused_expect_keys_unchanged | default(false)
+
+- name: Assert the retired key did not come back and the keys are as the converge left them
+  ansible.builtin.assert:
+    that:
+      - verify_stale_body not in refused_keys_after.stdout
+      - refused_keys_after.stdout_lines | sort == verify_expected_key_lines | sort
+    quiet: true
+  when: refused_expect_keys_unchanged | default(false)
+
 - name: Assert the role stopped at the expected task
   ansible.builtin.assert:
     that:

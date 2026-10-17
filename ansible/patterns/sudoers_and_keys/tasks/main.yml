@@ -18,12 +18,14 @@
     quiet: true
     fail_msg: Each sudoers line must be a quoted string. A line with a colon and a space needs quotes.
 
-- name: Refuse a sudoers line that holds a line break
+# Printable ASCII only, so a line break of any kind (not only the two the
+# fragment is joined with) cannot start a second line the caller never declared.
+- name: Refuse a sudoers line that is not printable ASCII
   ansible.builtin.assert:
     that:
-      - sudoers_and_keys_sudoers_lines | select('search', sudoers_and_keys_newline_pattern) | list | length == 0
+      - sudoers_and_keys_sudoers_lines | select('search', sudoers_and_keys_not_printable_pattern) | list | length == 0
     quiet: true
-    fail_msg: Each sudoers line must be one line.
+    fail_msg: Each sudoers line must be one line of printable ASCII (no tab, no control character, nothing outside U+0020 to U+007E).
 
 # The key text is public, but a refusal must not print it: a failed check that
 # named the value would put a half-pasted key in every log. This task works the
@@ -45,14 +47,22 @@
     fail_msg: >-
       Key entry number {{ sudoers_and_keys_bad_key_numbers | join(', ') }} is not
       one public key on one line: a known key type, a base64 body of the length
-      that type has, an optional comment, and no options in front.
+      that type has, an optional comment of printable ASCII, and no options in
+      front.
 
 - name: Refuse a forced command that would break its own quoting
   ansible.builtin.assert:
     that:
       - sudoers_and_keys_keys | map(attribute='command', default='') | select('search', sudoers_and_keys_command_forbidden_pattern) | list | length == 0
     quiet: true
-    fail_msg: A forced command may hold no double quote and no line break.
+    fail_msg: A forced command may hold printable ASCII only (U+0020 to U+007E), and no double quote and no backslash.
+
+- name: Refuse a forced command that holds a key type word
+  ansible.builtin.assert:
+    that:
+      - sudoers_and_keys_keys | map(attribute='command', default='') | select('search', sudoers_and_keys_key_type_word_pattern) | list | length == 0
+    quiet: true
+    fail_msg: A forced command may not hold a key type such as ssh-rsa or ssh-ed25519 as a word of its own, because the key module would read it as the key.
 
 - name: Refuse a forced command with no source address
   ansible.builtin.assert:

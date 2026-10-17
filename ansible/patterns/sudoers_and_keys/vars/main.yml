@@ -15,16 +15,60 @@ sudoers_and_keys_restrict_options:
 # \Z, not $, so a trailing newline does not pass.
 sudoers_and_keys_name_pattern: '^[A-Za-z0-9_-]+\Z'
 
-# A line break inside one list item would write a second line the caller never
-# declared; a double quote inside a forced command would end its option early.
-sudoers_and_keys_newline_pattern: '[\n\r]'
-sudoers_and_keys_command_forbidden_pattern: '["\n\r]'
+# Printable ASCII only, U+0020 to U+007E: a key, a forced command, a source
+# address and a sudoers line hold nothing else. Not "no \n and no \r": the key
+# module splits what it is given on every character Python's str.splitlines
+# splits on (U+000B, U+000C, U+001C to U+001E, U+0085, U+2028, U+2029 as well),
+# and each piece becomes a key line of its own, with options the caller never
+# declared. A list of the characters to refuse is a list somebody must keep
+# complete; a list of the characters to allow is not.
+sudoers_and_keys_not_printable_pattern: '[^ -~]'
+
+# A double quote ends the command option early. A backslash is refused anywhere,
+# not only at the end: one at the end turns the closing quote into an escaped
+# quote (the rest of the line is then swallowed), and the key module rewrites
+# the two characters \# to # in what it is given.
+sudoers_and_keys_command_forbidden_pattern: '["\\]|[^ -~]'
+
+# The key module reads the first whitespace-separated word of a line that is a
+# key type as the key, so a forced command holding one such word as a word of
+# its own is read as the key and the real key lands in the comment: the line is
+# rewritten wrongly on every run. This is the module's own list (collection
+# pinned in ansible/requirements.yml); a collection that adds a type adds a word.
+sudoers_and_keys_key_type_words:
+  - sk-ecdsa-sha2-nistp256@openssh\.com
+  - sk-ecdsa-sha2-nistp256-cert-v01@openssh\.com
+  - webauthn-sk-ecdsa-sha2-nistp256@openssh\.com
+  - ecdsa-sha2-nistp256
+  - ecdsa-sha2-nistp256-cert-v01@openssh\.com
+  - ecdsa-sha2-nistp384
+  - ecdsa-sha2-nistp384-cert-v01@openssh\.com
+  - ecdsa-sha2-nistp521
+  - ecdsa-sha2-nistp521-cert-v01@openssh\.com
+  - sk-ssh-ed25519@openssh\.com
+  - sk-ssh-ed25519-cert-v01@openssh\.com
+  - ssh-ed25519
+  - ssh-ed25519-cert-v01@openssh\.com
+  - ssh-dss
+  - ssh-rsa
+  - ssh-xmss@openssh\.com
+  - ssh-xmss-cert-v01@openssh\.com
+  - rsa-sha2-256
+  - rsa-sha2-512
+  - ssh-rsa-cert-v01@openssh\.com
+  - rsa-sha2-256-cert-v01@openssh\.com
+  - rsa-sha2-512-cert-v01@openssh\.com
+  - ssh-dss-cert-v01@openssh\.com
+# A word of its own: not preceded or followed by a character a type name holds, so
+# a path such as /usr/bin/ssh-rsa-helper passes and /usr/bin/ssh-rsa is refused.
+sudoers_and_keys_key_type_word_pattern: '(?<![A-Za-z0-9@._-])({{ sudoers_and_keys_key_type_words | join("|") }})(?![A-Za-z0-9@._-])'
 
 # One public key on one line: a key type, a base64 body of a length that type
-# can have, an optional comment, and nothing in front, so a key value carries no
-# options and no second key behind a newline. ed25519 and the NIST curves have a
-# fixed length (padding included); RSA and the security-key types have a floor.
-# A one-character typo inside a body still passes: the shape is checked.
+# can have, an optional comment of printable ASCII, and nothing in front, so a
+# key value carries no options and no second key behind a line break. ed25519
+# and the NIST curves have a fixed length (padding included); RSA and the
+# security-key types have a floor. A one-character typo inside a body still
+# passes: the shape is checked. \Z, not $, so a trailing newline does not pass.
 sudoers_and_keys_key_shapes:
   - 'ssh-ed25519 [A-Za-z0-9+/]{68}'
   - 'ecdsa-sha2-nistp256 [A-Za-z0-9+/]{139}='
@@ -33,7 +77,7 @@ sudoers_and_keys_key_shapes:
   - 'ssh-rsa [A-Za-z0-9+/]{200,}={0,2}'
   - 'sk-ssh-ed25519@openssh\.com [A-Za-z0-9+/]{90,}={0,2}'
   - 'sk-ecdsa-sha2-nistp256@openssh\.com [A-Za-z0-9+/]{160,}={0,2}'
-sudoers_and_keys_key_pattern: '^({{ sudoers_and_keys_key_shapes | join("|") }})( [^\n\r]*)?\Z'
+sudoers_and_keys_key_pattern: '^({{ sudoers_and_keys_key_shapes | join("|") }})( [ -~]*)?\Z'
 
 # One entry of a from option: the characters an address, a CIDR range or a host
 # pattern uses, with the wildcards and the leading ! sshd allows. No space, no
