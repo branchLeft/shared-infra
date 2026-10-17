@@ -67,7 +67,7 @@ jobs:
       - name: Diagnostic (temporary) systemd container variants on the runner
         if: steps.changes.outputs.ansible == 'true'
         run: |
-          set -uo pipefail
+          set +e
           image='geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372'
           echo "== runner"
           echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-}"
