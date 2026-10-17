@@ -72,6 +72,17 @@ jobs:
         if: steps.changes.outputs.ansible == 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv -r ansible/requirements.txt'
 
+      # The same install, command and flags as the harness runs before Molecule
+      # (ansible/harness/run_harness.py), so ansible-lint resolves a pattern's
+      # non-builtin modules. Vendoring the collections is decided elsewhere.
+      - name: Install the pinned collections
+        if: steps.changes.outputs.ansible == 'true'
+        run: |
+          set -euo pipefail
+          collections="$RUNNER_TEMP/ansible-collections"
+          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" collection install -r ansible/requirements.yml -p "$collections"
+          echo "ANSIBLE_COLLECTIONS_PATH=$collections" >> "$GITHUB_ENV"
+
       - name: yamllint every YAML file under ansible/
         if: steps.changes.outputs.ansible == 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/yamllint" --strict -c .yamllint ansible'
