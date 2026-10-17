@@ -1,0 +1,35 @@
+---
+# Test setup only, never part of the role. It makes the artefacts local and
+# marks the apt index fresh, so the test needs no network.
+- name: Prepare the local artefacts and the apt index stamp
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create the local artefact directory
+      ansible.builtin.file:
+        path: /srv/packages-and-downloads
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Place the pinned download fixtures next to the test
+      ansible.builtin.copy:
+        src: '{{ item }}'
+        dest: '/srv/packages-and-downloads/{{ item }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - example-tool-1.0.0
+        - example-pinned-tool_1.0.0_all.deb
+
+    # apt skips its index refresh while this stamp is younger than
+    # cache_valid_time, so no apt-get update runs and nothing is fetched.
+    - name: Mark the apt index as fresh so no refresh runs
+      ansible.builtin.file:
+        path: /var/lib/apt/periodic/update-success-stamp
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'

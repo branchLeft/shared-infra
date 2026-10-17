@@ -1,0 +1,60 @@
+---
+# Order matters: an artefact is fetched and checked before apt reads it, and the
+# repository source is in place before the named packages are resolved.
+
+- name: Download each pinned artefact and check its sha256
+  ansible.builtin.get_url:
+    url: '{{ item.url }}'
+    dest: '{{ item.dest }}'
+    checksum: 'sha256:{{ item.checksum }}'
+    owner: '{{ item.owner }}'
+    group: '{{ item.group }}'
+    mode: '{{ item.mode }}'
+  loop: '{{ packages_and_downloads_downloads }}'
+  loop_control:
+    label: '{{ item.dest }}'
+
+- name: Create the apt keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: packages_and_downloads_repository_present
+
+- name: Deliver the repository key as a file
+  ansible.builtin.copy:
+    src: example-archive-key.asc
+    dest: /etc/apt/keyrings/packages-and-downloads.asc
+    owner: root
+    group: root
+    mode: '0644'
+  when: packages_and_downloads_repository_present
+
+- name: Deliver the repository source, signed by that key file
+  ansible.builtin.template:
+    src: packages-and-downloads.sources.j2
+    dest: /etc/apt/sources.list.d/packages-and-downloads.sources
+    owner: root
+    group: root
+    mode: '0644'
+  when: packages_and_downloads_repository_present
+
+- name: Install the named apt packages from the cached index
+  ansible.builtin.apt:
+    name: '{{ packages_and_downloads_apt_packages }}'
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: packages_and_downloads_apt_packages | length > 0
+
+# Skipped in check mode with a stated reason (ANS-10): the file is written by
+# the download above, which check mode does not perform, so on a host that has
+# not yet been applied there is no package file to read.
+- name: Install each local package file the pinned downloads delivered
+  ansible.builtin.apt:
+    deb: '{{ item }}'
+    state: present
+  loop: '{{ packages_and_downloads_debs }}'
+  when: not ansible_check_mode

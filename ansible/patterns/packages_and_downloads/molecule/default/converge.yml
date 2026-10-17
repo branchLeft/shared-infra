@@ -1,0 +1,31 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.packages_and_downloads
+      vars:
+        packages_and_downloads_downloads:
+          - url: file:///srv/packages-and-downloads/example-tool-1.0.0
+            dest: /usr/local/bin/example-tool
+            checksum: a3bd5f9c3e07f25cedd25229122fb95c63ebfc7b4358efdf2bae2e1c708bf1f7
+            owner: root
+            group: root
+            mode: '0755'
+          - url: file:///srv/packages-and-downloads/example-pinned-tool_1.0.0_all.deb
+            dest: /usr/local/share/example-pinned-tool_1.0.0_all.deb
+            checksum: f08da6f1324d3b976acf59ab192e4ee737dfa27bcf692c443693e4c2a7929131
+            owner: root
+            group: root
+            mode: '0644'
+        packages_and_downloads_debs:
+          - /usr/local/share/example-pinned-tool_1.0.0_all.deb
+        packages_and_downloads_apt_packages:
+          - bash
+        packages_and_downloads_repository_present: true
+        packages_and_downloads_repository_uri: file:/srv/packages-and-downloads/repo
+        packages_and_downloads_repository_suite: stable

@@ -1,0 +1,84 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    # Enforcement of the checksum rule. The role's tasks file is read on the
+    # controller, so a get_url task that drops its checksum fails this play
+    # even though the download itself would still succeed.
+    - name: Assert Molecule names the role directory
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY', default='') | length > 0
+        fail_msg: MOLECULE_PROJECT_DIRECTORY is not set, so the tasks file cannot be read.
+
+    - name: Read the role tasks file on the controller
+      ansible.builtin.slurp:
+        src: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY', default='') }}/tasks/main.yml"
+      delegate_to: localhost
+      run_once: true
+      register: packages_and_downloads_verify_tasks
+
+    - name: Parse the role tasks file
+      ansible.builtin.set_fact:
+        packages_and_downloads_role_tasks: '{{ packages_and_downloads_verify_tasks.content | b64decode | from_yaml }}'
+
+    - name: Assert the role tasks file names at least one get_url task
+      ansible.builtin.assert:
+        that:
+          - packages_and_downloads_role_tasks | map('string') | select('search', 'ansible.builtin.get_url') | list | length > 0
+        fail_msg: No get_url task was found, so the checksum rule has nothing to check.
+
+    - name: Assert every get_url task in the role passes a checksum
+      ansible.builtin.assert:
+        that:
+          - item['ansible.builtin.get_url'].checksum is defined
+        fail_msg: A get_url task in the role has no checksum.
+      loop: '{{ packages_and_downloads_role_tasks }}'
+      loop_control:
+        label: "{{ item.name | default('unnamed task') }}"
+      when: item['ansible.builtin.get_url'] is defined
+
+    - name: Read the downloaded tool
+      ansible.builtin.stat:
+        path: /usr/local/bin/example-tool
+        checksum_algorithm: sha256
+      register: packages_and_downloads_verify_tool
+
+    - name: Assert the tool was written with its pinned checksum, mode and owner
+      ansible.builtin.assert:
+        that:
+          - packages_and_downloads_verify_tool.stat.exists
+          - packages_and_downloads_verify_tool.stat.checksum == 'a3bd5f9c3e07f25cedd25229122fb95c63ebfc7b4358efdf2bae2e1c708bf1f7'
+          - packages_and_downloads_verify_tool.stat.mode == '0755'
+          - packages_and_downloads_verify_tool.stat.pw_name == 'root'
+        success_msg: The tool matches its pinned sha256 and is executable by root.
+
+    - name: Gather the installed apt packages
+      ansible.builtin.package_facts:
+        manager: apt
+
+    - name: Assert bash and the local package are installed
+      ansible.builtin.assert:
+        that:
+          - "'bash' in ansible_facts.packages"
+          - "'example-pinned-tool' in ansible_facts.packages"
+        success_msg: The named package and the local package file are installed.
+
+    - name: Read the repository key file
+      ansible.builtin.stat:
+        path: /etc/apt/keyrings/packages-and-downloads.asc
+      register: packages_and_downloads_verify_key
+
+    - name: Read the repository source
+      ansible.builtin.slurp:
+        src: /etc/apt/sources.list.d/packages-and-downloads.sources
+      register: packages_and_downloads_verify_source
+
+    - name: Assert the key file exists and the source is signed by it
+      ansible.builtin.assert:
+        that:
+          - packages_and_downloads_verify_key.stat.exists
+          - packages_and_downloads_verify_key.stat.mode == '0644'
+          - "'Signed-By: /etc/apt/keyrings/packages-and-downloads.asc' in (packages_and_downloads_verify_source.content | b64decode)"
+        success_msg: The key is a file and the source names it with Signed-By.

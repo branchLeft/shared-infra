@@ -1,0 +1,26 @@
+---
+# The pattern's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container. Molecule's interpolation
+# has no "required variable" form, so when the variable is unset the name
+# falls back to one the Docker daemon rejects: the run fails at create, loudly,
+# instead of sharing a container name with another run.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # A Debian 12 base with /usr/bin/python3 and python3-apt installed, which
+    # the apt module needs on the target. Pre-built, so the reference can carry
+    # a digest; the tag is a label only.
+    image: geerlingguy/docker-debian12-ansible@sha256:541b6cff5ec8c9fb0a926853400db0abab8b73c2912a2f4a4ef06137416605f1
+    pre_build_image: true
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+verifier:
+  name: ansible
