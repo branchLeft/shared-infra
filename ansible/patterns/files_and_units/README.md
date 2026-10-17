@@ -221,9 +221,16 @@ run again on trixie:
 - CI does not run this scenario today: the Ansible workflow
   (`.github/workflows/ansible.yml`) runs the harness over `ansible/roles` only. Until
   it lists `ansible/patterns`, a change here is proven by the local run above.
-- Tested on Docker Desktop only (see the image section). A Linux CI runner may need
-  more than the settings in `molecule.yml`; if it does, add it back with the measured
-  failure as the reason.
+- The settings in `molecule.yml` are measured on two hosts: Docker Desktop (the
+  owner's machine) and a GitHub `ubuntu-24.04` runner (cgroup v2, Docker 28.0.4), where
+  the full harness passed with `cgroupns_mode: host` in place (source: the runs at
+  https://github.com/branchLeft/shared-infra/actions/runs/39073430228 and
+  https://github.com/branchLeft/shared-infra/actions/runs/39073641288). CI does not
+  run this pattern from this change alone: a later pull request adds `ansible/patterns`
+  to CI.
+- The runner image `ubuntu-latest` moves to Ubuntu 26.04 in a rollout from 19 October
+  2026 (source: https://github.com/actions/runner-images/issues/14748). This pattern has
+  not been run on Ubuntu 26.04, so that move is unproven for it.
 - The base image is Debian 13 with Python 3.13 and an `EXTERNALLY-MANAGED` marker
   that its Dockerfile tries to remove at a 3.11 path, so the marker stays and its
   unpinned `ansible` and `cryptography` installs rely on `--break-system-packages`.
@@ -314,11 +321,15 @@ The table was measured on the Debian 12 image. On the Debian 13 image only the
 scenario row was re-run, with the full harness passing; the other rows were not
 measured again on trixie.
 
-So the scenario sets no `privileged`, no capabilities and no cgroup namespace
-option: the mount, the tmpfs and the command are the whole set. That is one Docker
-Desktop daemon (version 4.32.0, engine 27.0.3, linux/arm64). A Linux runner with a
-different cgroup setup may need more, and the reason then belongs in the scenario
-file with the measured failure.
+So the scenario sets no `privileged` and no capabilities. It sets `cgroupns_mode: host`
+because on the GitHub `ubuntu-24.04` runner (cgroup v2) a private cgroup namespace over
+the read-write mount made systemd exit at once, and the full harness passed with the
+host namespace. The host namespace is a stated exception (ANS-15): it gives the
+container the host's cgroup view and, with the read-write mount, write access to the
+host cgroup tree. The test image is trusted by digest and the job holds no credentials.
+The Docker Desktop daemon used is version 4.32.0, engine 27.0.3, linux/arm64. The
+table above predates the runner evidence and shows the private namespace working on
+Docker Desktop; the runner result is the reason for the key.
 
 Named limit: the image is trusted by its digest and by review. It is not built by
 this repository, and its unpinned PyPI installs were resolved once, at its build and
