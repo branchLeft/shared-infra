@@ -64,6 +64,48 @@ jobs:
             echo "ansible=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Diagnostic (temporary) systemd container variants on the runner
+        if: steps.changes.outputs.ansible == 'true'
+        run: |
+          set -uo pipefail
+          image='geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372'
+          echo "== runner"
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-}"
+          grep PRETTY_NAME /etc/os-release
+          uname -r
+          echo "cgroup filesystem type: $(stat -fc %T /sys/fs/cgroup)"
+          docker version
+          docker info --format 'cgroup={{.CgroupVersion}} driver={{.CgroupDriver}} security={{.SecurityOptions}} runtimes={{.Runtimes}}'
+          docker pull --quiet "$image"
+          try() {
+            name="$1"
+            shift
+            echo "::group::variant $name: $*"
+            docker rm -f -v "diag-$name" >/dev/null 2>&1
+            docker run -d --name "diag-$name" --label branchleft.agent=ci2392diag "$@" "$image" /lib/systemd/systemd
+            sleep 8
+            docker ps -a --filter "name=diag-$name" --format '{{.Names}} {{.Status}}'
+            docker inspect --format 'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} cgroupns={{.HostConfig.CgroupnsMode}} privileged={{.HostConfig.Privileged}}' "diag-$name"
+            echo "-- docker logs"
+            docker logs --tail 25 "diag-$name" 2>&1
+            echo "-- exec mkdir (what the Ansible connection does first)"
+            docker exec "diag-$name" sh -c 'mkdir -p ~/.ansible/tmp && echo MKDIR_OK'
+            echo "-- exec systemctl is-system-running"
+            docker exec "diag-$name" systemctl is-system-running
+            docker rm -f -v "diag-$name" >/dev/null 2>&1
+            echo "::endgroup::"
+          }
+          mounts=(-v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock)
+          try a-as-scenario "${mounts[@]}"
+          try b-cgroupns-host "${mounts[@]}" --cgroupns=host
+          try c-privileged "${mounts[@]}" --privileged
+          try d-host-seccomp-unconfined "${mounts[@]}" --cgroupns=host --security-opt seccomp=unconfined
+          try e-sys-admin "${mounts[@]}" --cap-add SYS_ADMIN
+          try f-host-sys-admin "${mounts[@]}" --cgroupns=host --cap-add SYS_ADMIN
+          try g-host-ro-mount -v /sys/fs/cgroup:/sys/fs/cgroup:ro --tmpfs /run --tmpfs /run/lock --cgroupns=host
+          try h-private-no-cgroup-mount --tmpfs /run --tmpfs /run/lock
+          exit 1
+
       - name: Create the tool environment
         if: steps.changes.outputs.ansible == 'true'
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
