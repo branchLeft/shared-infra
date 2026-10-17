@@ -5,6 +5,6 @@ galaxy_info:
   # Molecule derives a fully qualified role name from the namespace, or from
   # the author when there is none, and refuses an upper-case author.
   namespace: branchleft
-  description: Delivers one configuration file and two systemd units, and enables and starts them.
+  description: Delivers one validated configuration file and three systemd units, and enables and starts them.
   license: LICENSE_ID
   min_ansible_version: '2.21.5'

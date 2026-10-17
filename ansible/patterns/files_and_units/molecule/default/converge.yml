@@ -3,8 +3,42 @@
   hosts: all
   gather_facts: false
   tasks:
-    # Molecule links the role under its namespace and name, the namespace from
-    # galaxy_info in meta/main.yml.
+    # An instance with no unit stands for a host that has an earlier release of
+    # the units: the role is applied once with an earlier description, so the
+    # real apply below is an update that systemd must be told about. Once the
+    # units exist this is skipped, so a second converge changes nothing.
+    - name: Read whether the service unit is already on the instance
+      ansible.builtin.stat:
+        path: /etc/systemd/system/files_and_units_svc.service
+      register: converge_existing_unit
+
+    - name: Apply an earlier release of the units on an instance with none
+      ansible.builtin.include_role:
+        # Molecule links the role under its namespace and name, the namespace
+        # from galaxy_info in meta/main.yml.
+        name: branchleft.files_and_units
+      vars:
+        files_and_units_unit_description: EARLIER_UNIT_DESCRIPTION
+      when: not converge_existing_unit.stat.exists
+
     - name: Apply the role
       ansible.builtin.include_role:
         name: branchleft.files_and_units
+
+    # Asked of systemd straight after the role, before the end of the play, so
+    # a reload that is missing or left to the end of the play fails here. A
+    # check-mode run writes no unit, so there is nothing to ask.
+    - name: Ask systemd for the service unit as soon as the role has run
+      ansible.builtin.systemd_service:
+        name: files_and_units_svc.service
+      register: converge_service
+      when: not ansible_check_mode
+
+    - name: Assert systemd has loaded the unit file the role wrote
+      ansible.builtin.assert:
+        that:
+          - converge_service.status.Description == files_and_units_unit_description
+        fail_msg: >-
+          systemd still holds the earlier unit file: the role returned before
+          the manager reloaded.
+      when: not ansible_check_mode

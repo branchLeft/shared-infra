@@ -1,11 +1,12 @@
 ---
 - name: Install the configuration file
   ansible.builtin.copy:
-    src: example.conf
+    src: example.json
     dest: '{{ files_and_units_config_path }}'
-    owner: root
-    group: root
+    owner: '{{ files_and_units_config_owner }}'
+    group: '{{ files_and_units_config_group }}'
     mode: '0640'
+    validate: python3 -m json.tool %s
 
 - name: Render the service unit
   ansible.builtin.template:
@@ -38,19 +39,18 @@
   ansible.builtin.meta: flush_handlers
 
 # Check mode writes no unit file, so on a fresh host systemd cannot know the
-# unit and the enable and start below would fail. These reads run in check mode
-# too, so the enable and start run whenever the unit file is really on disk.
+# unit and the enable and start below would fail. The stat module runs in check
+# mode as it does in a real run, so the enable and start run whenever the unit
+# file is really on disk.
 - name: Read back the service unit file
   ansible.builtin.stat:
     path: /etc/systemd/system/files_and_units_svc.service
   register: files_and_units_svc_unit
-  check_mode: false
 
 - name: Read back the timer unit file
   ansible.builtin.stat:
     path: /etc/systemd/system/files_and_units_tick.timer
   register: files_and_units_timer_unit
-  check_mode: false
 
 - name: Enable and start the service
   ansible.builtin.systemd_service:

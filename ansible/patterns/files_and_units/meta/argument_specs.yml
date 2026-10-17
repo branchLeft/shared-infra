@@ -1,17 +1,28 @@
 ---
 argument_specs:
   main:
-    short_description: Deliver one file and two units, then enable and start them
-    description: Copies one configuration file, renders a service unit and a timer with its oneshot service, then enables and starts the service and the timer.
+    short_description: Deliver one validated file and three units, then enable and start them
+    description: >-
+      Copies one JSON configuration file after validating it, renders a service
+      unit, a timer and the timer's oneshot service, then enables and starts the
+      service and the timer.
     author: AUTHOR_NAME
     options:
       files_and_units_config_path:
         type: str
         description: Absolute path of the configuration file.
-        default: /etc/files_and_units.conf
+        default: /etc/files_and_units.json
+      files_and_units_config_owner:
+        type: str
+        description: Owner of the configuration file. The user must exist before the role runs. None of the variables is a secret.
+        default: root
+      files_and_units_config_group:
+        type: str
+        description: Group of the configuration file. The group must exist before the role runs.
+        default: root
       files_and_units_unit_description:
         type: str
-        description: Description written into the service and the timer's service. A change to it edits both units and triggers one daemon reload.
+        description: Description written into all three units. A change to it edits all three unit files and triggers one daemon reload.
         default: EXAMPLE_UNIT_DESCRIPTION
       files_and_units_tick_calendar:
         type: str

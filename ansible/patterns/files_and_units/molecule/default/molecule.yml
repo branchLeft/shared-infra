@@ -10,28 +10,41 @@ driver:
   name: docker
 platforms:
   - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
-    # Third-party systemd test base, chosen by the orchestrator ruling and
-    # trusted by digest (see the role README). The image runs systemd as PID 1,
-    # so the platform is one the author justifies here, per ANS-15.
-    # Privileged: systemd must mount and manage the cgroup tree and its units.
-    privileged: true
-    # Host cgroup namespace: systemd reads and writes the host's cgroup v2 tree.
-    cgroupns_mode: host
-    # The cgroup tree systemd manages, mounted read-write from this host's daemon.
+    # Third-party systemd test base, trusted by digest (see the role README).
+    # The digest is the pin; the tag is informational and has since moved on.
+    # The image runs systemd as PID 1, so the platform is one the author
+    # justifies here, per ANS-15.
+    image: geerlingguy/docker-debian12-ansible:latest@sha256:541b6cff5ec8c9fb0a926853400db0abab8b73c2912a2f4a4ef06137416605f1
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # No privileged mode, no added capabilities and no cgroup namespace
+    # option: the two mounts and the command below are the whole set this
+    # image needs to run systemd (measured on Docker Desktop, see the role
+    # README for the runs and the limit).
+    # The cgroup tree systemd manages, mounted read-write: without it the
+    # container exits at start.
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
-    # systemd's runtime and lock directories are tmpfs in a real boot.
+    # systemd's runtime and lock directories are tmpfs in a real boot: without
+    # them the container exits at start.
     tmpfs:
       - /run
       - /run/lock
     # Start systemd as the init process, the image's own CMD.
     command: /lib/systemd/systemd
-    image: geerlingguy/docker-debian12-ansible@sha256:541b6cff5ec8c9fb0a926853400db0abab8b73c2912a2f4a4ef06137416605f1
-    # Pre-built, so that the reference can carry a digest.
-    pre_build_image: true
     labels:
       branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
 provisioner:
   name: ansible
+  inventory:
+    # The values the role runs with, read by the prepare, converge and verify
+    # plays as well. The owner and group are not root, so the test shows that
+    # the role's owner and group parameters produce the result: on a root-owned
+    # default the same assertion would pass without them.
+    group_vars:
+      all:
+        files_and_units_config_owner: example_user
+        files_and_units_config_group: example_group
+        files_and_units_unit_description: SCENARIO_UNIT_DESCRIPTION
 verifier:
   name: ansible

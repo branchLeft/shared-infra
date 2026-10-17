@@ -1,25 +1,21 @@
 ---
+# The owner, group and description come from the scenario's inventory
+# variables (molecule.yml): the same values the role was converged with.
 - name: Verify
   hosts: all
   gather_facts: false
-  vars:
-    # The description the converge rendered. The default is the role's own.
-    # The edit-proof run (see the role README) sets the environment variable
-    # to the value it passed to converge, because molecule verify takes no
-    # extra arguments.
-    files_and_units_unit_description: "{{ lookup('ansible.builtin.env', 'FILES_AND_UNITS_EXPECTED_DESCRIPTION', default='EXAMPLE_UNIT_DESCRIPTION') }}"
   tasks:
     - name: Read the configuration file
       ansible.builtin.stat:
-        path: /etc/files_and_units.conf
+        path: /etc/files_and_units.json
       register: files_and_units_verify_config
 
     - name: Assert the configuration file exists with its owner, group and mode
       ansible.builtin.assert:
         that:
           - files_and_units_verify_config.stat.exists
-          - files_and_units_verify_config.stat.pw_name == 'root'
-          - files_and_units_verify_config.stat.gr_name == 'root'
+          - files_and_units_verify_config.stat.pw_name == files_and_units_config_owner
+          - files_and_units_verify_config.stat.gr_name == files_and_units_config_group
           - files_and_units_verify_config.stat.mode == '0640'
         success_msg: The configuration file was delivered with its owner, group and mode.
 
