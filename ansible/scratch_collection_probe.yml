@@ -1,0 +1,10 @@
+---
+- name: Scratch collection probe
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Authorise a placeholder key
+      ansible.posix.authorized_key:
+        user: example_user
+        key: ssh-ed25519 AAAAPLACEHOLDER example
+        state: present
