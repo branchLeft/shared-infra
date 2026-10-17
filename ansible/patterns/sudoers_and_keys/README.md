@@ -356,6 +356,11 @@ sleep loop instead of the image's systemd. No `privileged`, no capabilities.
   was not verified.
 - The digest is read with `docker image inspect --format '{{index .RepoDigests 0}}'`
   after a pull.
+- The image declares `/sys/fs/cgroup` as a volume, so every container started from it
+  gets an anonymous volume. Molecule's destroy keeps a container's volumes by
+  default, so the platform sets `keep_volumes: false`. Without it each run leaves a
+  volume that has no label to find it by (a daemon that had run many of these
+  scenarios held hundreds on 2026-10-17). Any scenario on this image must set it.
 - Differences from Debian 12 that the test met: Python is 3.13 (Ansible found
   `/usr/bin/python3.13`); `/etc/sudoers` has `@includedir /etc/sudoers.d`; the sudo
   version is 1.9.16p2; `/etc/sudoers.d` already holds a `README` that is mode

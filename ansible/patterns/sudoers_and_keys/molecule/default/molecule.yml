@@ -20,6 +20,11 @@ platforms:
     image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
     # Pre-built, so that the reference can carry a digest.
     pre_build_image: true
+    # The image declares /sys/fs/cgroup as a volume, so Docker makes an anonymous
+    # volume for every container started from it. Molecule's destroy keeps a
+    # container's volumes unless told otherwise, and an anonymous volume carries
+    # no label to find it by, so each run would leave one behind.
+    keep_volumes: false
     labels:
       branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
 provisioner:
