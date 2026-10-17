@@ -1,20 +1,6 @@
 """Run the role test harness: lint, yamllint, interface checks and Molecule.
 
-For each role directory given, the harness runs, in this order:
-
-* ``ansible-lint`` at the production profile and ``yamllint``, both with the
-  repository's committed configuration;
-* two interface checks: ``meta/argument_specs.yml`` documents a ``main``
-  entry point for every tasks file, and ``min_ansible_version`` is the pinned
-  ansible-core;
-* Molecule against containers on the local Docker daemon: create, prepare,
-  converge, idempotence, verify, a check-mode run against the configured
-  instance (which must report no changed task), Molecule's own ``check``
-  action against a fresh one, and destroy.
-
-The static steps are independent of each other and of Molecule. A failed
-Molecule step skips the later Molecule steps except destroy, which always
-runs. The exit status is non-zero when any step failed.
+The steps, their order and the exit status are described in ansible/README.md.
 """
 
 from __future__ import annotations
@@ -102,12 +88,7 @@ def check_min_version(role: Path, pinned: str) -> str | None:
 def check_argument_specs(
     role: Path, ansible_doc: str, run: Runner, env: Mapping[str, str]
 ) -> str | None:
-    """Return a problem if the role's argument specs are missing an entry point.
-
-    ansible-doc reads ``meta/argument_specs.yml`` with Ansible's own parser. It
-    exits zero and prints an empty object for a role without one, so the
-    result is read, not the exit status.
-    """
+    """Return a problem if the argument specs lack an entry point (ansible-doc exits 0 without)."""
     done = run(
         [ansible_doc, "-t", "role", "--json", "--roles-path", str(role.parent), role.name],
         role,
@@ -139,13 +120,7 @@ def refuse_remote_engine(env: Mapping[str, str]) -> str | None:
 
 
 def static_steps(role: Path, tools: Path) -> list[Step]:
-    """Return the two lint steps for a role.
-
-    ansible-lint decides what is role content from the path it is given, so a
-    role inside the repository is linted from the repository root, as CI and
-    the standard run it. From any other directory it skips the variable-prefix
-    rule for the role's Molecule files.
-    """
+    """Return the lint steps; an in-repository role is linted from the repository root."""
     lint_dir = REPO_ROOT if role.is_relative_to(REPO_ROOT) else role.parent
     return [
         Step(
@@ -196,12 +171,7 @@ def molecule_steps(role: Path, tools: Path) -> list[Step]:
 def role_environment(
     base: Mapping[str, str], work: Path, tools: Path, run_id: str
 ) -> dict[str, str]:
-    """Return the environment one role's run uses.
-
-    Everything Ansible and Molecule would write under the home directory is
-    pointed at the run's own working directory, and the run id makes the
-    container name unique to this run.
-    """
+    """Return one role's environment: caches in the run's own directory, a unique run id."""
     env = dict(base)
     env["PATH"] = f"{tools}{os.pathsep}{base.get('PATH', '')}"
     env["ANSIBLE_HOME"] = str(work / "ansible-home")
@@ -221,12 +191,7 @@ def changed_tasks(output: str) -> int:
 
 
 def report(step: Step, done: subprocess.CompletedProcess[str]) -> str:
-    """Print a finished step's output and return its status.
-
-    A step marked ``no_changes`` also fails when its run reports changed tasks:
-    a check-mode run against an instance that is already configured must show
-    no drift, or the dry run an approver reads is wrong.
-    """
+    """Print a step's output and return its status; a no_changes step fails on a change."""
     output = done.stdout + done.stderr
     status = OK if done.returncode == 0 else FAIL
     changed = changed_tasks(output) if step.no_changes else 0
