@@ -248,8 +248,10 @@ The rule is: a download without a pin fails.
    - the `action` and `local_action` keywords, free-form module arguments and
      the `args` keyword on those modules, which hide the arguments from the
      walk;
-   - an `include_tasks` or `import_tasks` that is not a literal path inside
-     `tasks/`;
+   - an `include_tasks` or `import_tasks` whose target is not a literal file name
+     of a file under `tasks/` or `handlers/` that this same scan read (a file
+     at the role root, a missing file, a template, `..` or a leading `/` is
+     refused);
    - a scan that read no `tasks/main.yml`, or saw no `get_url` task at all, so
      the check cannot pass by finding nothing.
 
@@ -333,6 +335,18 @@ pinned in `molecule.yml`, with no network use by the test.
   never reports a package file whose package was removed. Closing it needs a
   task that reads the installed packages and compares them with the expected
   list; this pattern does not do that.
+- **A `uri` task without `dest` is not refused.** Followed by a `copy` with
+  `content:` it fetches with no pin, and the scan passes it.
+- **A rewrite of the downloads variable after the first assertions is not
+  tested.** A `set_fact` that changes it later would feed an unvalidated entry to
+  the loop. It was not reproduced: a caller's `include_role` `vars:` outranks
+  `set_fact`. It could matter when the list comes from a lower-precedence source
+  such as `group_vars`.
+- **The repository URI and suite are not checked.** They go into the source file
+  unchecked, so a caller value with a newline could add a field to the stanza.
+  The caller is trusted here.
+- **The key file name is hard-coded.** See step 4 of "How a service role copies
+  it".
 - **What the control does not cover.** A custom module that fetches. A `shell`
   task (ANS-3 forbids it, and the scan only looks for `curl` and `wget` in it).
   A fetch by another tool or a script run through `command` (`python3`, `git`,
@@ -374,7 +388,11 @@ pinned in `molecule.yml`, with no network use by the test.
    test.
 4. Put the real key file under the service role's `files/`, the real URL and
    digest in the caller's `vars`, and the key's digest in the key variable.
-   Prefer `deb822_repository` to the rendered source file.
+   The key file name `example-archive-key.asc` is hard-coded: it is also written
+   in the key-digest assertion and the key copy task in `tasks/main.yml`, so a
+   copier who renames the file must rename it in both places too (a rename in
+   `files/` alone fails the run at the assertion). Prefer `deb822_repository` to
+   the rendered source file.
 5. Keep the converge's pins and the verify's expected digests in step: a
    version bump changes both in one change.
 

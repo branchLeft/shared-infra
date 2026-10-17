@@ -18,8 +18,8 @@
                  never run curl or wget. ansible-lint refuses the free-form
                  spelling; it does not read an argv list, so this walk does.
     include_tasks, import_tasks
-                 a literal file name inside tasks/, so that every file that can
-                 run was scanned.
+                 a literal file name of a file under tasks/ or handlers/ that
+                 this scan read, so that every file that can run was scanned.
   The action and local_action keywords, a module given free-form arguments, and
   the args keyword beside a download module are refused: they hide the
   arguments from this walk.
@@ -91,8 +91,11 @@
         {%- endif -%}
       {%- elif base in ['include_tasks', 'import_tasks'] -%}
         {%- set target = value.get('file') if value is mapping else value -%}
+        {%- set scanned = scan_files | selectattr('isdir', 'equalto', false) | map(attribute='path') | list -%}
         {%- if target is not string or target is search('[{]') or target is search('[.][.]') or target is match('^/') -%}
-          {%- set _ = refuse(ns, label, base ~ ' names a file that is not a literal path inside tasks/') -%}
+          {%- set _ = refuse(ns, label, base ~ ' names ' ~ (target | string) ~ ', which is not a literal path') -%}
+        {%- elif (role_dir ~ '/tasks/' ~ target) not in scanned and (role_dir ~ '/handlers/' ~ target) not in scanned -%}
+          {%- set _ = refuse(ns, label, base ~ ' names ' ~ target ~ ', which is not a file under tasks/ or handlers/ that this scan read') -%}
         {%- endif -%}
       {%- endif -%}
       {%- set _ = inspect(ns, value, where) -%}
