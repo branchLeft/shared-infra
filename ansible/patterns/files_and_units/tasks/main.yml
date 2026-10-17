@@ -65,3 +65,9 @@
     enabled: true
     state: started
   when: files_and_units_timer_unit.stat.exists
+
+- name: Run a command that reports a change on every run
+  ansible.builtin.command:
+    argv:
+      - /bin/true
+  changed_when: true
