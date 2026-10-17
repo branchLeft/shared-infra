@@ -184,17 +184,22 @@ What each part of the scenario does:
 - `check-configured` and `molecule-check`: the configured instance shows no drift.
 
 What breaks which step. Each row was done by an edit, one harness run, and a
-restore, on 2026-10-17:
+restore, on 2026-10-17. The rows for `notify`, `flush_handlers`, owner and group,
+invalid JSON, the always-changed task and the timer's `enabled` were re-run on the
+Debian 13 image; the other rows are carried from the Debian 12 runs and were not
+run again on trixie:
 
-| Edit to the role                                        | Step that fails                                            |
-| ------------------------------------------------------- | ---------------------------------------------------------- |
-| `notify` removed from the three unit tasks              | `converge`, assertion "systemd still holds the earlier..." |
-| `meta: flush_handlers` removed                          | `converge`, the same assertion                             |
-| `owner` and `group` removed from the configuration copy | `verify`, the owner assertion                              |
-| Invalid JSON in `files/example.json`                    | `converge`, "failed to validate"                           |
-| Invalid JSON and `validate` removed                     | none: all 14 steps pass                                    |
-| The two `when` gates on the enable removed              | `check-fresh`, "Could not find the requested service"      |
-| A `command` task with `changed_when: true` added        | `idempotence`, naming the task                             |
+| Edit to the role                                                    | Step that fails                                                                                           |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `notify` removed from the three unit tasks                          | `converge`, assertion "systemd still holds the earlier..."                                                |
+| `meta: flush_handlers` removed                                      | `converge`, the same assertion                                                                            |
+| `owner` and `group` removed from the configuration copy             | `verify`, the owner assertion                                                                             |
+| Invalid JSON in `files/example.json`                                | `converge`, "failed to validate"                                                                          |
+| Invalid JSON and `validate` removed                                 | none: all 14 steps pass                                                                                   |
+| The two `when` gates on the enable removed                          | `check-fresh`, "Could not find the requested service"                                                     |
+| A `command` task with `changed_when: true` added                    | `idempotence`, naming the task                                                                            |
+| `notify` removed from the timer task only, or from its oneshot only | none: all 14 steps pass (not caught: the proof shows at least one unit task notifies, not that each does) |
+| `enabled: true` changed to `false` for the timer                    | `verify`, the timer's `enabled` assertion                                                                 |
 
 ### Named limits
 
@@ -219,6 +224,11 @@ restore, on 2026-10-17:
 - Tested on Docker Desktop only (see the image section). A Linux CI runner may need
   more than the settings in `molecule.yml`; if it does, add it back with the measured
   failure as the reason.
+- The base image is Debian 13 with Python 3.13 and an `EXTERNALLY-MANAGED` marker
+  that its Dockerfile tries to remove at a 3.11 path, so the marker stays and its
+  unpinned `ansible` and `cryptography` installs rely on `--break-system-packages`.
+  This is a fact of the image, not of this role; it is named here so a reader does
+  not take the install for a choice made by the role.
 
 ## How it is delivered
 
@@ -261,18 +271,25 @@ The skeleton's platform has no init system, so this scenario uses a third-party
 systemd base chosen by the orchestrator's ruling and recorded here as the decision
 the owner reviews.
 
-- Image: `geerlingguy/docker-debian12-ansible`, referenced in
+- Image: `geerlingguy/docker-debian13-ansible`, referenced in
   `molecule/default/molecule.yml` as `name:latest@sha256:<digest>` (CON-3). The
+  Debian 13 (trixie) release matches production, which runs Debian 13 on every
+  host, so the test is not run on a different release. The
   digest is the pin and the tag beside it is informational. Upstream rebuilds on a
   weekly schedule (its build workflow has a cron, and the image's build attestation
   names `schedule` as the trigger), so `latest` moves every week; the digest does
   not.
-- Source: the public repository `geerlingguy/docker-debian12-ansible` on GitHub
-  (MIT licence), built `FROM debian:bookworm`. Its Dockerfile installs `systemd` and
-  `systemd-sysv`, Python, `pip` and build tools from Debian's repositories, then
-  `ansible` and `cryptography` from PyPI without version pins. The image's own
-  Ansible is not used: Molecule runs the controller's pinned Ansible against the
-  container.
+- Source: the public repository `geerlingguy/docker-debian13-ansible` on GitHub
+  (MIT licence, last pushed 2025-07-31), built `FROM debian:trixie`. Its Dockerfile
+  installs `systemd` and `systemd-sysv`, Python, `pip` and build tools from Debian's
+  repositories, then `ansible` and `cryptography` from PyPI without version pins, with
+  `--break-system-packages`. The image's own Ansible is not used: Molecule runs the
+  controller's pinned Ansible against the container.
+- Trixie differences, read from the image and from the harness run on 2026-10-17. The
+  harness passed on this image with no change to the role. Python on the image is 3.13
+  (the Dockerfile's `rm -f /usr/lib/python3.11/EXTERNALLY-MANAGED` names a 3.11 path, so
+  it does not remove the marker on this image; the pip install therefore relies on
+  `--break-system-packages`). This is a base-image fact, named as a limit below.
 - It replaces `/sbin/initctl` with a small script that maps the old `initctl`
   verbs to `service`, removes the getty target from multi-user, and sets
   `VOLUME ["/sys/fs/cgroup"]` and `CMD ["/lib/systemd/systemd"]`.
@@ -292,6 +309,10 @@ with its Linux engine (cgroup v2), by creating the container and asking
 | the same with `cgroupns_mode: host` added                                     | `running`                              |
 | `cgroupns_mode: host` and the mounts, without the tmpfs                       | the container exits (code 255, no log) |
 | `cgroupns_mode: host` and the tmpfs, without the cgroup mount                 | the container exits                    |
+
+The table was measured on the Debian 12 image. On the Debian 13 image only the
+scenario row was re-run, with the full harness passing; the other rows were not
+measured again on trixie.
 
 So the scenario sets no `privileged`, no capabilities and no cgroup namespace
 option: the mount, the tmpfs and the command are the whole set. That is one Docker
