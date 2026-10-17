@@ -21,14 +21,10 @@ sudoers_and_keys_newline_pattern: '[\n\r]'
 sudoers_and_keys_command_forbidden_pattern: '["\n\r]'
 
 # One public key on one line: a key type, a base64 body of a length that type
-# can have, an optional comment, and nothing in front. Options come only from
-# the structured fields, so a key value cannot carry its own options or a second
-# key behind a newline. The lengths count base64 characters, padding included
-# where the type always has it: ed25519, and the three NIST curves, have a fixed
-# length, so a truncated or padded-out paste fails. RSA and the security-key
-# types vary, so those have a floor (RSA 1024 bits is 202 characters before the
-# padding), not an exact length. A one-character typo inside a body still
-# passes: the shape is checked, not the key.
+# can have, an optional comment, and nothing in front, so a key value carries no
+# options and no second key behind a newline. ed25519 and the NIST curves have a
+# fixed length (padding included); RSA and the security-key types have a floor.
+# A one-character typo inside a body still passes: the shape is checked.
 sudoers_and_keys_key_shapes:
   - 'ssh-ed25519 [A-Za-z0-9+/]{68}'
   - 'ecdsa-sha2-nistp256 [A-Za-z0-9+/]{139}='

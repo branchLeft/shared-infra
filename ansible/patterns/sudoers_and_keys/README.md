@@ -74,7 +74,7 @@ about what changed, and a reader must simulate it to learn the end state.
     owner: root
     group: root
     mode: '0440'
-    validate: /usr/sbin/visudo -cf %s
+    validate: /usr/sbin/visudo -csf %s
   no_log: true
   diff: false
   when: sudoers_and_keys_sudoers_lines | length > 0
@@ -93,16 +93,25 @@ about what changed, and a reader must simulate it to learn the end state.
 `templates/authorized_keys.j2` writes one line per declared key: the `from="…"`
 option when addresses are given, then, when a command is given,
 `command="…"` and the four options in `sudoers_and_keys_restrict_options`, then
-the key. Five assertion tasks at the top of `tasks/main.yml` check the inputs
-before anything changes.
+the key. The assertion tasks at the top of `tasks/main.yml` check every input
+before anything changes: the fragment name, each sudoers line, each key, each
+forced command and each source address.
 
 ### (c) Why each parameter is set
 
-- `validate: /usr/sbin/visudo -cf %s`. Ansible writes the content to a temporary
+- `validate: /usr/sbin/visudo -csf %s`. Ansible writes the content to a temporary
   file, runs the command on it, and moves it over the old file only if the command
   succeeds. A fragment `visudo` refuses fails the task and the old fragment stays.
-  `-f` makes `visudo` read `%s` and not `/etc/sudoers`; `-c` makes it check and
-  exit. The test that a weak validator is caught is in the table below.
+  The flags, from `visudo --help` on the pinned image: `-c, --check` is "check-only
+  mode", `-f, --file=sudoers` is "specify sudoers file location" (so `visudo` reads
+  `%s` and not `/etc/sudoers`), and `-s, --strict` is "strict syntax checking". The
+  `-s` matters. On the pinned image, a line that names an alias nobody defined makes
+  `-cf` print a warning (`... referenced but not defined`) and then `parsed OK` with
+  exit status 0, so `validate` passes; `-csf` prints the same warning and exits with
+  status 1, so `validate` fails. A misspelt alias would otherwise mean a grant that
+  does nothing, or a deny in a deny list that does nothing. Ansible's own documentation of
+  the `copy` module shows `-csf` for a sudoers file. The test that a weak validator
+  is caught is in the table below, and an undefined alias is one of its cases.
 - `owner`, `group`, `mode: '0440'`. `copy` keeps the owner and mode of a file that
   already exists unless told otherwise, so without them an earlier file owned by
   someone else stays theirs. The test starts from such a file.
@@ -118,12 +127,28 @@ before anything changes.
   keys go in one task as one newline-separated value (the template), never one task
   per key in a loop, which would remove each key's predecessors.
 - Options are built from structured fields, not accepted in the `key` value. The
-  key pattern allows a key type, a base64 body and a comment on one line and nothing
-  in front, so a `key` value cannot bring its own options or hide a second key
-  behind a line break.
+  key pattern allows a key type from a fixed list, a base64 body of a length that
+  type can have, and an optional comment, all on one line and nothing in front, so a
+  `key` value cannot bring its own options or hide a second key behind a line break.
+  The lengths are exact for `ssh-ed25519` and the three `ecdsa-sha2-nistp` curves
+  (fixed-size keys, checked against keys made by `ssh-keygen`) and a floor for
+  `ssh-rsa` and the two security-key types (the floors for the security-key types
+  come from the wire format, not from a real key). So a key cut short by a paste,
+  or with a typo in its type, is refused; a one-character typo inside a body of the
+  right length is not (see the named limits).
+- The key check never prints a key. A task with `no_log: true` works out which
+  entries fail and keeps only their numbers; the assertion after it says "Key entry
+  number N" and the rule, and nothing else. The check runs before the module that
+  writes the keys, so the module's own failure for a line it cannot read (which
+  repeats the whole line) is not reached by a key the check refuses.
 - A forced command must come with `from_addresses`, and gets `no-port-forwarding`,
   `no-pty`, `no-agent-forwarding` and `no-X11-forwarding`. The command may not hold
   a double quote or a line break, which would end its option early.
+- Each source address is one list item and is checked on its own: letters, digits and
+  `. : / * ? ! _ -` only. A space, a double quote, a comma, a control character, a
+  line break or an empty item would give a line the SSH server will not accept (the
+  key stops working, which locks out a slot key) or a second line the caller never
+  declared, so the role refuses it before it writes anything.
 - `when: … | length > 0` on both tasks. An empty list is "not declared". With
   `exclusive: true` an empty value would write an empty file and remove every key,
   and a variable that arrived empty by mistake is exactly how that happens.
@@ -142,7 +167,8 @@ the host out. The recipe does this:
 - It never edits `/etc/sudoers`. The test keeps a copy of the main file from before
   the role and compares checksums afterwards.
 - The fragment is validated before it replaces anything. The test applies a fragment
-  `visudo` refuses and checks that the role stopped at the install task, and that
+  with a syntax error, and one that names an undefined alias, which `visudo` refuses
+  in strict mode, and checks that the role stopped at the install task, and that
   the good fragment is afterwards still there with the same owner, group, mode and
   lines, and the directory holds no leftover file. After the refusals, `visudo -c`
   for the whole configuration still passes and lists the fragment.
@@ -184,9 +210,28 @@ harness:
 - The argument validation task printed the spec name and the role path, not the
   values it checked. That is the success path at verbosity 1 only.
 
+The key check is the one place the role refuses on key text, so it is kept out of
+the log on purpose. The module that writes the keys fails on a line it cannot read
+with `invalid key specified:` followed by the whole line, and on ansible-core 2.21.5
+that text reached the console even though the task has `no_log: true`. The role does
+not rely on `no_log` for that path: the key is checked first, and a key the check
+refuses never reaches the module. The test supplies a key that is too short and a
+key with a mistyped type, requires that the role stops at the check and that the
+refusal names the entry by number, and then scans the log for the key bodies. With
+the check made always true, the test fails at the first refused key case. With only
+the key type left open, the mistyped type reaches the module, the role stops there
+instead, and the module's `invalid key specified` line appears in the harness output
+with the key in it: the leak this design prevents. That run fails at the refused
+case, before the log scan is reached, so the log scan is shown to catch a key in the
+refusal message (the table row for the key text added to that message) and not the
+module's line.
+The `no_log: true` on the task that works out the entry numbers is reviewed, not
+tested: its result holds only numbers, so removing it leaks nothing and no test can
+fail.
+
 A consequence of `no_log: true` that a maintainer will meet: when `visudo` refuses
 a fragment, the task output says only that the output is hidden. To see why, run
-`visudo -cf` on the lines by hand on a lab host, or remove `no_log` on a copy of
+`visudo -csf` on the lines by hand on a lab host, or remove `no_log` on a copy of
 the role in a lab with a throwaway fragment.
 
 A trap the test found: a sudoers line such as `example_ops ALL=(root) NOPASSWD:
@@ -233,43 +278,71 @@ owner and mode of the account's `.ssh` directory and key file; the key file's li
 exactly, written out in `verify.yml` and not built by the role's template, so that a
 dropped option fails; and that the stale key is gone.
 
-What breaks which step. Each row was done by an edit, one harness run, and a
-`git restore`, on 2026-10-17, and the harness was green again after the restores:
+What breaks which step. Each row is an edit, one harness run, and a `git restore`;
+the harness is green again after the restores. Rows were repeated at the final
+state of this role.
 
-| Edit                                                                     | Step that fails and the assertion                                            |
-| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `validate` removed                                                       | `verify`: "Expected the role to stop at Install the sudoers fragment"        |
-| `validate` replaced by `/bin/true %s`                                    | `verify`: the same                                                           |
-| An extra comment line written after the declared lines                   | `verify`: the fragment holds the declared lines and nothing else             |
-| Mode `0644`                                                              | `verify`: the fragment mode assertion                                        |
-| `owner` and `group` removed from the fragment task                       | `verify`: the owner assertion (passes if the earlier file is owned by root)  |
-| A `lineinfile` task adding `#includedir` to `/etc/sudoers`               | `verify`: the main sudoers file is the file the image shipped                |
-| `exclusive: true` removed                                                | `verify`: the keys are exactly the declared ones                             |
-| `no-X11-forwarding` dropped from the restrictive options                 | `verify`: the same                                                           |
-| The `from` option left out of the key line                               | `verify`: the same                                                           |
-| `no_log: true` removed from the key task                                 | `verify`: no key body reached the log                                        |
-| `no_log: true` removed from the sudoers task                             | `verify`: no sudoers line reached the log (the invalid fragment's text)      |
-| The `when` that skips an empty key list removed                          | `verify`: the keys are exactly the declared ones, after the empty run        |
-| The check for a forced command without `from_addresses` made always true | `verify`: "Expected the role to stop at Refuse a forced command with no ..." |
-| The check for a double quote in a command made always true               | `verify`: the same form, naming that task                                    |
-| The key-shape check made always true                                     | `verify`: the same form, naming that task                                    |
-| The non-text-line check made always true                                 | `verify`: "stopped at Install the sudoers fragment" (`visudo` still refuses) |
-| The fragment-name check made always true                                 | `verify`: the same form, naming that task                                    |
-| The line-break check made always true                                    | `verify`: the same form, naming that task                                    |
-| A `command` task with `changed_when: true` added                         | `idempotence`                                                                |
+| Edit                                                                     | Step that fails and the assertion                                                                                          |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `validate` removed                                                       | `verify`: "Expected the role to stop at Install the sudoers fragment"                                                      |
+| `validate` replaced by `/bin/true %s`                                    | `verify`: the same                                                                                                         |
+| `validate` weakened to `visudo -cf %s` (not strict)                      | `verify`: the same, at the undefined-alias case                                                                            |
+| An extra comment line written after the declared lines                   | `verify`: the fragment holds the declared lines and nothing else                                                           |
+| Mode `0644`                                                              | `verify`: the fragment mode assertion                                                                                      |
+| `owner` and `group` removed from the fragment task                       | `verify`: the owner assertion (passes if the earlier file is owned by root)                                                |
+| A `lineinfile` task adding `#includedir` to `/etc/sudoers`               | `verify`: the main sudoers file is the file the image shipped                                                              |
+| `exclusive: true` removed                                                | `verify`: the keys are exactly the declared ones                                                                           |
+| `no-X11-forwarding` dropped from the restrictive options                 | `verify`: the same                                                                                                         |
+| The `from` option left out of the key line                               | `verify`: the same                                                                                                         |
+| `no_log: true` removed from the key task                                 | `verify`: no key body reached the log                                                                                      |
+| `no_log: true` removed from the sudoers task                             | `verify`: no sudoers line reached the log (the invalid fragment's text)                                                    |
+| The `when` that skips an empty key list removed                          | `verify`: the keys are exactly the declared ones, after the empty run                                                      |
+| The check for a forced command without `from_addresses` made always true | `verify`: "Expected the role to stop at Refuse a forced command with no ..."                                               |
+| The check for a double quote in a command made always true               | `verify`: the same form, naming that task                                                                                  |
+| The key check made always true                                           | `verify`: the same form, naming the key task                                                                               |
+| The ed25519 body length left open                                        | `verify`: the same form, at the key whose body was cut short                                                               |
+| The key type left open                                                   | `verify`: stopped at the key module, not at the key check; the module's `invalid key specified` line is then in the output |
+| A space allowed in a source address                                      | `verify`: the same form, naming the address task                                                                           |
+| A double quote allowed in a source address                               | `verify`: the same                                                                                                         |
+| A line break allowed in a source address                                 | `verify`: stopped at the key module, not at the address check                                                              |
+| A control character allowed in a source address                          | `verify`: the same form, naming the address task                                                                           |
+| An empty source address allowed                                          | `verify`: the same                                                                                                         |
+| The key text added to the key refusal message                            | `verify`: the log scan, "no key body reached the log"                                                                      |
+| `no-pty` dropped from the restrictive options                            | `verify`: the keys are exactly the declared ones                                                                           |
+| The `from` option dropped from the key line                              | `verify`: the same                                                                                                         |
+| The non-text-line check made always true                                 | `verify`: "stopped at Install the sudoers fragment" (`visudo` still refuses)                                               |
+| The fragment-name check made always true                                 | `verify`: the same form, naming that task                                                                                  |
+| The line-break check made always true                                    | `verify`: the same form, naming that task                                                                                  |
+| A `command` task with `changed_when: true` added                         | `idempotence`                                                                                                              |
 
 ### Named limits
 
 - **`visudo` checks syntax, not meaning.** A fragment that grants
-  `ALL=(ALL) NOPASSWD: ALL` passes `visudo` and the whole harness, and is installed
-  as declared (run on 2026-10-17: all steps passed). What a fragment grants is
-  decided by the declared lines and caught by review. The role does not try to judge
-  a sudoers line.
-- **A key body is not validated.** The module accepts any base64 text after a key
-  type. A typo in the body of the only declared key replaces a working key with a
-  useless one and locks the account out. The test cannot log in, because the image
-  has no SSH server. Keep a second way into the account, and read the declared keys
-  as the review step.
+  `ALL=(ALL) NOPASSWD: ALL` passes `visudo -csf` and the whole harness, and is
+  installed as declared (the grant to `ALL` was run through the harness and every step
+  passed). What a fragment grants is decided by the declared lines and caught by
+  review. The role does not try to judge a sudoers line, and a tripwire for one
+  spelling of an over-broad grant would read as a control it is not, because an alias
+  or `(ALL) ALL` gets round it.
+- **A key body is checked for shape, not for being the right key.** The role checks
+  the type, the characters and the length. A one-character change inside a body of
+  the right length is a different, valid key: it replaces a working key with a
+  useless one, and if it is the only declared key the account is locked out. The test
+  cannot log in, because the image has no SSH server. Keep a second way into the
+  account, and read the declared keys as the review step.
+- **`exclusive: true` removes every key the pattern did not write.** That includes
+  the operator's own key on the account Ansible logs in as: a role that manages that
+  account must list its key among the declared keys, or the next run locks the
+  operator out. Two roles must not both manage one account's key file, because each
+  would remove the other's keys.
+- **The fragment directory must be included by the host's sudoers.** The role does not
+  check that `/etc/sudoers` includes `/etc/sudoers.d`. The test image does, and the
+  production hosts are assumed to run Debian 13 with the stock `sudo` package.
+- **Where the failure text of the key module goes is not established.** The scenario
+  scans `ANSIBLE_LOG_PATH`, which the harness sets. The role's own default log
+  settings on a real controller (the log path, and whether the module's failure line
+  reaches it) were not examined, so the key check, which stops a bad key before the
+  module runs, is the control, and `no_log` is not relied on for that line.
 - **`from=` restricts the source address, nothing else.** What a forced command can
   be talked into doing through `SSH_ORIGINAL_COMMAND` depends on the command, which
   is outside this role.
@@ -282,16 +355,27 @@ What breaks which step. Each row was done by an edit, one harness run, and a
 - **The log scan covers the steps up to and including verify.** The
   `check-configured` and `molecule-check` steps run afterwards and are not scanned;
   they make no change, so the `--diff` they print has nothing to show.
-- **Check mode and `validate`.** The check-mode runs complete. Whether a check-mode
-  run applies `validate` was not tested here.
+- **Check mode does not run `validate`.** In the `copy` module of ansible-core 2.21.5
+  (`ansible/modules/copy.py`), the `validate` command is run inside the branch
+  `if not module.check_mode:`, so `--check` skips it. A run showed the same thing: a
+  deliberately invalid fragment passed in check mode and failed in a real run. The
+  plan job (`--check --diff`, ANS-17) therefore shows an invalid fragment as an
+  ordinary change and cannot vouch for sudoers syntax. The syntax verdict comes from
+  this scenario, which runs the same text through `visudo -csf` for real, and from
+  the validate of the live apply, which happens after the approval. The input checks
+  (names, quoting, keys, addresses) are assertions and do run in check mode. No
+  check-mode-safe validation was added: one would have to write the text to a
+  temporary file on the host in a mode that promises to change nothing.
 - **A broken fragment on a real `sudo` was not run.** The claim that `sudo` stops
   working with a file it cannot parse is sudo's documented behaviour and was not
   exercised.
 - **Only the Debian 13 image on Docker Desktop (arm64) was run**; an amd64 runner was
   not.
-- CI does not run this scenario today: the Ansible workflow runs the harness over
-  `ansible/roles` only. Until it lists `ansible/patterns`, a change here is proven
-  by the local run above.
+- CI does not run this scenario today: the Ansible workflow's harness step runs over
+  `ansible/roles` only, so a change here is proven by the local run above. The
+  workflow's lint steps do cover `ansible/`, this pattern included, and
+  `ansible-lint` resolves `ansible.posix.authorized_key` only when the pinned
+  collections are installed, so that step needs them installed first.
 
 ## How it is delivered
 
@@ -336,31 +420,37 @@ read by everyone who can see the run.
 
 The scenario needs `sudo`, `visudo`, Python and a user database. It does not need
 systemd, so it sets none of the settings that run systemd: no cgroup mount, no
-tmpfs, and no `command`. With no `command` Molecule starts the container with a
-sleep loop instead of the image's systemd. No `privileged`, no capabilities.
+cgroup namespace mode, no tmpfs. It sets `command: sleep infinity`, so systemd is
+never the first process. The image's own command starts systemd, which needs those
+settings; the container can exit at once on a host with cgroup v2 without them (this
+is the behaviour reported for a GitHub-hosted runner, and has not been observed
+from this scenario). Molecule already replaces the image command with a sleep loop
+when none is set, so the key makes explicit what the default did and does not change
+the run. No `privileged`, no capabilities.
 
 - Image: `geerlingguy/docker-debian13-ansible`, referenced in
   `molecule/default/molecule.yml` as `name:latest@sha256:<digest>` (CON-3). The
   production hosts run Debian 13, and a sudoers and SSH test should run the release
   it protects. The digest is the pin and the tag beside it is informational.
 - Source: the public repository `geerlingguy/docker-debian13-ansible` on GitHub
-  (MIT licence). Its Dockerfile, read on 2026-10-17, is `FROM debian:trixie` and
+  (MIT licence). Its Dockerfile on the default branch is `FROM debian:trixie` and
   installs `sudo`, `systemd`, `systemd-sysv`, build tools, `python3-pip`,
   `python3-apt` and a few network tools from Debian, then `ansible` and
   `cryptography` from PyPI without version pins. It does not install an SSH client
   or server. The image's own Ansible is not used: Molecule runs the controller's
   pinned Ansible against the container.
-- The image was created on 2026-10-11 (read from the pulled image). The
-  repository's last push was 2025-07-31, so the image is rebuilt from an unchanged
-  Dockerfile. Whether the published image is built from the Dockerfile on `master`
-  was not verified.
+- The image is rebuilt from an unchanged Dockerfile: the image's creation time
+  (`docker image inspect --format '{{.Created}}'`) is later than the repository's
+  last push (the `pushed_at` field of the repository on the GitHub API). Whether the
+  published image is built from the Dockerfile on the default branch is not verified.
 - The digest is read with `docker image inspect --format '{{index .RepoDigests 0}}'`
   after a pull.
 - The image declares `/sys/fs/cgroup` as a volume, so every container started from it
   gets an anonymous volume. Molecule's destroy keeps a container's volumes by
   default, so the platform sets `keep_volumes: false`. Without it each run leaves a
-  volume that has no label to find it by (a daemon that had run many of these
-  scenarios held hundreds on 2026-10-17). Any scenario on this image must set it.
+  volume that has no label to find it by, and a daemon that has run many of these
+  scenarios holds hundreds (`docker volume ls -q | wc -l` counts them). Any scenario
+  on this image must set it.
 - Differences from Debian 12 that the test met: Python is 3.13 (Ansible found
   `/usr/bin/python3.13`); `/etc/sudoers` has `@includedir /etc/sudoers.d`; the sudo
   version is 1.9.16p2; `/etc/sudoers.d` already holds a `README` that is mode

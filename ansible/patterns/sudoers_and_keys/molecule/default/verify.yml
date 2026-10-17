@@ -149,6 +149,19 @@
             from_addresses:
               - 192.0.2.10"
 
+    - name: Refuse a source address that holds a line break
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source address that is not an address pattern
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: /usr/local/bin/EXAMPLE_COMMAND
+            from_addresses:
+              - "192.0.2.10\n198.51.100.7"
+
+    # The line break with a second key behind it: the shape of the mistake the
+    # key check also guards against, one field over. It holds a space as well,
+    # so it is refused for two reasons.
     - name: Refuse a source address that holds a line break and a second key
       ansible.builtin.include_tasks: tasks/refused.yml
       vars:
@@ -159,7 +172,9 @@
             from_addresses:
               - "192.0.2.10\n{{ verify_stale_public }}"
 
-    - name: Refuse a source address that holds a tab
+    # A control character other than a line break. Not a tab: ansible-lint
+    # refuses a tab in a task's arguments.
+    - name: Refuse a source address that holds a control character
       ansible.builtin.include_tasks: tasks/refused.yml
       vars:
         refused_task: Refuse a source address that is not an address pattern
@@ -167,7 +182,7 @@
           - key: '{{ verify_forced_public }}'
             command: /usr/local/bin/EXAMPLE_COMMAND
             from_addresses:
-              - '192.0.2.10{{ "\x09" }}'
+              - "192.0.2.10\x01"
 
     - name: Refuse an empty source address
       ansible.builtin.include_tasks: tasks/refused.yml
