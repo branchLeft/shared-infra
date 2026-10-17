@@ -335,13 +335,10 @@ def report(step: Step, done: subprocess.CompletedProcess[str]) -> str:
 def run_molecule(
     steps: Sequence[Step], run: Runner, env: Mapping[str, str]
 ) -> list[tuple[str, str]]:
-    """Run the Molecule steps in order; an interrupt still destroys the instance.
-
-    Raises:
-        KeyboardInterrupt: after the always-run steps have run, when the run is interrupted.
-    """
+    """Run the Molecule steps in order; an interrupt still runs the always-run steps."""
     outcomes: list[tuple[str, str]] = []
     broken = False
+    finished = False
     try:
         for step in steps:
             if broken and not step.always:
@@ -350,11 +347,12 @@ def run_molecule(
             status = report(step, run(step.argv, step.cwd, env))
             outcomes.append((step.name, status))
             broken = broken or status == FAIL
-    except KeyboardInterrupt:
-        for step in steps:
-            if step.always:
-                run(step.argv, step.cwd, env)
-        raise
+        finished = True
+    finally:
+        if not finished:
+            for step in steps:
+                if step.always:
+                    run(step.argv, step.cwd, env)
     return outcomes
 
 
@@ -365,11 +363,7 @@ def run_role(
     env: Mapping[str, str],
     reasons: dict[str, str] | None = None,
 ) -> list[tuple[str, str]]:
-    """Run every step for one role and return (step name, status) pairs.
-
-    ``reasons`` receives, for each interface or scenario check that fails, the text that
-    explains it, so the summary can print it beside the status.
-    """
+    """Run every step for one role; ``reasons`` receives why each failed check failed."""
     outcomes: list[tuple[str, str]] = []
     reasons = {} if reasons is None else reasons
     pinned = pinned_version(REQUIREMENTS, "ansible-core")
