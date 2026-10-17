@@ -1,0 +1,26 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.sudoers_and_keys
+      vars:
+        sudoers_and_keys_user: '{{ scenario_user }}'
+        sudoers_and_keys_sudoers_name: '{{ scenario_sudoers_name }}'
+        sudoers_and_keys_sudoers_lines: '{{ scenario_sudoers_lines }}'
+        sudoers_and_keys_keys: '{{ scenario_keys }}'
+
+    # The control case for the log check in verify.yml: a task with no no_log
+    # that is given a known value. If the log did not show it, an empty result
+    # of the key scan would mean nothing.
+    - name: Run a harmless command that is given a canary argument
+      ansible.builtin.command:
+        argv:
+          - /bin/true
+          - SCENARIO_LOG_CANARY
+      changed_when: false
+      check_mode: false

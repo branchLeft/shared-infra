@@ -1,0 +1,54 @@
+---
+argument_specs:
+  main:
+    short_description: Deliver one sudoers fragment and the authorised keys of one account
+    description: >-
+      Installs one validated fragment under /etc/sudoers.d and makes the
+      authorised keys of one account exactly the declared set, with a forced
+      command and a source restriction on the keys that carry one. An empty
+      list leaves that half of the host untouched.
+    author: AUTHOR_NAME
+    options:
+      sudoers_and_keys_user:
+        type: str
+        description: Account whose authorised keys are managed. It must exist before the role runs.
+        default: example_ops
+      sudoers_and_keys_sudoers_name:
+        type: str
+        description: >-
+          File name of the fragment under /etc/sudoers.d. Letters, digits,
+          underscore and hyphen only: sudo skips a name with a dot or a tilde.
+        default: example-ops
+      sudoers_and_keys_sudoers_lines:
+        type: list
+        elements: str
+        description: >-
+          The lines of the fragment, exactly, one list item per line. The file
+          holds these lines and nothing else. An empty list installs nothing.
+        default: []
+      sudoers_and_keys_keys:
+        type: list
+        elements: dict
+        description: >-
+          The keys the account accepts, and no others. A key left out of this
+          list is removed from the account. An empty list installs nothing and
+          removes nothing. Public keys, but treated as sensitive: no task
+          prints them.
+        default: []
+        options:
+          key:
+            type: str
+            required: true
+            description: One public key on one line, as ssh-keygen writes it, with no options in front.
+          command:
+            type: str
+            default: ''
+            description: >-
+              Forced command. When set, the key runs only this command, with
+              port forwarding, a terminal, agent forwarding and X11 forwarding
+              switched off, and from_addresses must be set too.
+          from_addresses:
+            type: list
+            elements: str
+            default: []
+            description: Addresses or CIDR ranges the key may connect from. Written as the from option.

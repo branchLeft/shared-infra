@@ -1,0 +1,6 @@
+{% for entry in sudoers_and_keys_keys %}
+{% set from_option = ['from="' ~ (entry.from_addresses | join(',')) ~ '"'] if entry.from_addresses | default([]) else [] %}
+{% set command_option = (['command="' ~ entry.command ~ '"'] + sudoers_and_keys_restrict_options) if entry.command | default('') else [] %}
+{% set options = from_option + command_option %}
+{{ (options | join(',') ~ ' ') if options else '' }}{{ entry.key }}
+{% endfor %}

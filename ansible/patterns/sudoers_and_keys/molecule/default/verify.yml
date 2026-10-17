@@ -1,0 +1,140 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_forced_public: "{{ lookup('ansible.builtin.file', scenario_key_dir ~ '/forced.pub') }}"
+    verify_interactive_public: "{{ lookup('ansible.builtin.file', scenario_key_dir ~ '/interactive.pub') }}"
+    verify_stale_public: "{{ lookup('ansible.builtin.file', scenario_key_dir ~ '/stale.pub') }}"
+    verify_stale_body: "{{ verify_stale_public.split(' ')[1] }}"
+    verify_key_bodies:
+      - "{{ verify_forced_public.split(' ')[1] }}"
+      - "{{ verify_interactive_public.split(' ')[1] }}"
+      - '{{ verify_stale_body }}'
+    verify_forced_options:
+      - from="192.0.2.10,198.51.100.0/24"
+      - command="/usr/local/bin/EXAMPLE_COMMAND --EXAMPLE_ARGUMENT"
+      - no-port-forwarding
+      - no-pty
+      - no-agent-forwarding
+      - no-X11-forwarding
+    verify_expected_key_lines:
+      - "{{ verify_forced_options | join(',') }} {{ verify_forced_public }}"
+      - '{{ verify_interactive_public }}'
+  tasks:
+    - name: Assert the host is configured
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+
+    # A bad fragment is refused at the validate step of the copy, and the good
+    # fragment already on the host stays exactly as it was (checked below, in
+    # assert_state.yml).
+    - name: Refuse a fragment that visudo rejects
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Install the sudoers fragment
+        refused_lines:
+          - this is not valid sudoers syntax %%%
+
+    - name: Refuse a fragment name that sudo would skip
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a sudoers fragment name that sudo would skip
+        refused_name: example.ops
+
+    # Written unquoted on purpose: YAML reads it as a mapping, the mistake a
+    # maintainer makes with any sudoers line that holds a colon and a space.
+    - name: Refuse a fragment line that YAML read as a mapping
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a sudoers line that is not text
+        refused_lines:
+          - example_ops ALL=(root) NOPASSWD: EXAMPLE_OPS_COMMANDS
+
+    - name: Refuse a fragment line that holds a line break
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a sudoers line that holds a line break
+        refused_lines:
+          - "example_ops ALL=(root) NOPASSWD: EXAMPLE_OPS_COMMANDS\nexample_ops ALL=(ALL) NOPASSWD: ALL"
+
+    - name: Refuse a key value that smuggles in a second key behind a line break
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key entry that is not one public key on one line
+        refused_keys:
+          - key: "{{ verify_interactive_public }}\n{{ verify_stale_public }}"
+
+    - name: Refuse a key value that brings its own options
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key entry that is not one public key on one line
+        refused_keys:
+          - key: 'command="/bin/EXAMPLE_COMMAND" {{ verify_interactive_public }}'
+
+    - name: Refuse a forced command that ends its own quoting
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a forced command that would break its own quoting
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: '/bin/EXAMPLE_COMMAND" --EXAMPLE_OPTION'
+            from_addresses:
+              - 192.0.2.10
+
+    - name: Refuse a forced command with no source address
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a forced command with no source address
+        refused_keys:
+          - key: '{{ verify_forced_public }}'
+            command: /usr/local/bin/EXAMPLE_COMMAND
+
+    # The module fails on an account that does not exist, and a failed task
+    # prints its arguments unless no_log hides them: the failure path of the key
+    # task, which the log scan below reads.
+    - name: Refuse an account that does not exist
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Make the authorised keys of the account exactly the declared keys
+        refused_user: no_such_example_account
+
+    # An empty list means "this half is not declared", never "no keys": a
+    # variable that arrived empty must not remove every key of the account.
+    - name: Apply the role with no sudoers lines and no keys
+      ansible.builtin.include_role:
+        name: branchleft.sudoers_and_keys
+      vars:
+        sudoers_and_keys_user: '{{ scenario_user }}'
+        sudoers_and_keys_sudoers_name: '{{ scenario_sudoers_name }}'
+        sudoers_and_keys_sudoers_lines: []
+        sudoers_and_keys_keys: []
+
+    - name: Assert the host is still exactly as configured
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+
+    # ANS-16. The scenario sets verbosity 1 and a log path (molecule.yml), so
+    # a task that handles key material or a sudoers line without no_log prints
+    # it into this log, in its result or in the message of a failure. The scan
+    # runs last, so it covers the refused runs above too. The canary and the two
+    # task names show the scan reads the output of the converge, so that
+    # "nothing found" cannot mean "nothing read".
+    - name: Read the log of this scenario's Ansible runs
+      ansible.builtin.set_fact:
+        verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+      no_log: true
+
+    - name: Assert the log holds the converge output
+      ansible.builtin.assert:
+        that:
+          - "'SCENARIO_LOG_CANARY' in verify_log"
+          - "'Install the sudoers fragment' in verify_log"
+          - "'Make the authorised keys of the account exactly the declared keys' in verify_log"
+        quiet: true
+
+    - name: Assert no key body and no sudoers line reached the log
+      ansible.builtin.assert:
+        that:
+          - verify_key_bodies | select('in', verify_log) | list | length == 0
+          - "'NOPASSWD' not in verify_log"
+          - "'this is not valid sudoers' not in verify_log"
+        quiet: true

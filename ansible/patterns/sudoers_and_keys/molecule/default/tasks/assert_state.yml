@@ -1,0 +1,123 @@
+---
+# What a host the role has configured looks like. Included by verify.yml more
+# than once: after the converge, and again after every run that must change
+# nothing. The tasks that read a fragment or a key file carry no_log: true, so
+# that the log check in verify.yml sees only the role's own output.
+- name: Read the sudoers fragment
+  ansible.builtin.stat:
+    path: '/etc/sudoers.d/{{ scenario_sudoers_name }}'
+  register: assert_state_fragment
+
+- name: Assert the fragment is owned by root, group root, and readable only as sudo wants
+  ansible.builtin.assert:
+    that:
+      - assert_state_fragment.stat.exists
+      - assert_state_fragment.stat.pw_name == 'root'
+      - assert_state_fragment.stat.gr_name == 'root'
+      - assert_state_fragment.stat.mode == '0440'
+    quiet: true
+
+- name: Read the lines of the sudoers fragment
+  ansible.builtin.command:
+    argv:
+      - cat
+      - '/etc/sudoers.d/{{ scenario_sudoers_name }}'
+  register: assert_state_lines
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Assert the fragment holds the declared lines and nothing else
+  ansible.builtin.assert:
+    that:
+      - assert_state_lines.stdout_lines == scenario_sudoers_lines
+    quiet: true
+
+- name: List the fragment directory
+  ansible.builtin.find:
+    paths: /etc/sudoers.d
+    file_type: any
+    hidden: true
+  register: assert_state_directory
+
+# The image ships a README in the directory. Anything else beside the fragment,
+# a leftover of a refused write included, is a file sudo may read.
+- name: Assert the fragment is the only file in the directory besides the README
+  ansible.builtin.assert:
+    that:
+      - assert_state_directory.files | map(attribute='path') | map('basename') | difference(['README', scenario_sudoers_name]) | length == 0
+    quiet: true
+
+- name: Read the main sudoers file and the copy prepare.yml kept
+  ansible.builtin.stat:
+    path: '{{ item }}'
+  loop:
+    - /etc/sudoers
+    - /var/tmp/sudoers.before
+  register: assert_state_main
+
+- name: Assert the main sudoers file is the file the image shipped
+  ansible.builtin.assert:
+    that:
+      - assert_state_main.results[0].stat.checksum == assert_state_main.results[1].stat.checksum
+    quiet: true
+
+- name: Check the whole sudoers configuration, the fragment included
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/visudo
+      - -c
+  register: assert_state_visudo
+  changed_when: false
+  check_mode: false
+
+# The list visudo prints is the files the main sudoers file pulls in, so the
+# fragment being on it shows sudo reads the directory the role writes to.
+- name: Assert sudo reads the fragment
+  ansible.builtin.assert:
+    that:
+      - "'/etc/sudoers.d/' ~ scenario_sudoers_name ~ ': parsed OK' in assert_state_visudo.stdout_lines"
+    quiet: true
+
+- name: Read the account's key directory and key file
+  ansible.builtin.stat:
+    path: '{{ item }}'
+  loop:
+    - '/home/{{ scenario_user }}/.ssh'
+    - '/home/{{ scenario_user }}/.ssh/authorized_keys'
+  register: assert_state_ssh
+
+- name: Assert the key directory and the key file belong to the account and are private to it
+  ansible.builtin.assert:
+    that:
+      - assert_state_ssh.results[0].stat.mode == '0700'
+      - assert_state_ssh.results[0].stat.pw_name == scenario_user
+      - assert_state_ssh.results[1].stat.mode == '0600'
+      - assert_state_ssh.results[1].stat.pw_name == scenario_user
+      - assert_state_ssh.results[1].stat.gr_name == scenario_user
+    quiet: true
+
+- name: Read the account's authorised keys
+  ansible.builtin.command:
+    argv:
+      - cat
+      - '/home/{{ scenario_user }}/.ssh/authorized_keys'
+  register: assert_state_keys
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+# The expected lines are written out here and not built by the role's template,
+# so that dropping an option from the role fails this comparison. The forced
+# command key carries its source restriction and all four restrictive options.
+- name: Assert the keys are exactly the declared ones, with their options
+  ansible.builtin.assert:
+    that:
+      - assert_state_keys.stdout_lines | sort == verify_expected_key_lines | sort
+    quiet: true
+
+- name: Assert the key the role was given no mention of is gone
+  ansible.builtin.assert:
+    that:
+      - verify_stale_body not in assert_state_keys.stdout
+    quiet: true

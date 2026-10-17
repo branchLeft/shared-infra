@@ -1,0 +1,57 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party test base with the same Debian release as the production
+    # hosts, trusted by digest (see the role README). The digest is the pin; the
+    # tag is informational and may since have moved on. It has sudo, visudo and
+    # Python in it. The scenario does not need systemd, so it sets none of the
+    # settings that run systemd: no cgroup mount, no tmpfs and no command. With
+    # no command Molecule starts the container with a sleep loop in place of the
+    # image's systemd. No privileged mode and no added capabilities.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every Ansible run of this scenario appends its output to one log on the
+    # controller, and verify reads it. Verbosity 1 prints each task's result
+    # with the arguments it was given, so a task that handles key material and
+    # lacks no_log shows the key in the log, and verify fails (ANS-16).
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '1'
+  inventory:
+    # The values the role runs with, read by the prepare, converge and verify
+    # plays as well. Placeholders only. The keys are made by prepare.yml, for
+    # this run only, and are read from files under scenario_key_dir.
+    group_vars:
+      all:
+        scenario_user: example_ops
+        scenario_sudoers_name: example-ops
+        scenario_sudoers_lines:
+          - Cmnd_Alias EXAMPLE_OPS_COMMANDS = /usr/local/bin/EXAMPLE_COMMAND
+          # Quoted: a sudoers line holding a colon and a space is a YAML mapping
+          # when it is not.
+          - 'example_ops ALL=(root) NOPASSWD: EXAMPLE_OPS_COMMANDS'
+        scenario_key_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/throwaway-keys"
+        scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
+        scenario_keys:
+          - key: "{{ lookup('ansible.builtin.file', scenario_key_dir ~ '/forced.pub') }}"
+            command: /usr/local/bin/EXAMPLE_COMMAND --EXAMPLE_ARGUMENT
+            from_addresses:
+              - 192.0.2.10
+              - 198.51.100.0/24
+          - key: "{{ lookup('ansible.builtin.file', scenario_key_dir ~ '/interactive.pub') }}"
+verifier:
+  name: ansible

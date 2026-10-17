@@ -1,0 +1,30 @@
+---
+# Applies the role with one input made bad and requires that the role stops at
+# the task named in refused_task. Naming the task matters: a refusal for some
+# other reason, a mistyped role name included, must not count as the refusal
+# under test. Inputs left out take the scenario's good values.
+- name: Apply the role with input it must refuse
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.sudoers_and_keys
+      vars:
+        sudoers_and_keys_user: '{{ refused_user | default(scenario_user) }}'
+        sudoers_and_keys_sudoers_name: '{{ refused_name | default(scenario_sudoers_name) }}'
+        sudoers_and_keys_sudoers_lines: '{{ refused_lines | default(scenario_sudoers_lines) }}'
+        sudoers_and_keys_keys: '{{ refused_keys | default(scenario_keys) }}'
+
+    - name: Record that the role accepted the input
+      ansible.builtin.set_fact:
+        refused_by: 'NOTHING: the role accepted the input'
+  rescue:
+    - name: Record which task refused the input
+      ansible.builtin.set_fact:
+        refused_by: '{{ ansible_failed_task.name }}'
+
+- name: Assert the role stopped at the expected task
+  ansible.builtin.assert:
+    that:
+      - refused_by == refused_task
+    fail_msg: 'Expected the role to stop at "{{ refused_task }}"; it stopped at "{{ refused_by }}".'
+    quiet: true

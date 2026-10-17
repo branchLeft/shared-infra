@@ -1,0 +1,27 @@
+---
+# Not part of the interface: a caller cannot change these by setting a variable
+# of the same name in an inventory, because role vars outrank inventory vars.
+
+# Written in front of every key that has a forced command. A forced command
+# without them could still be used to forward ports, ask for a terminal or reach
+# the caller's agent.
+sudoers_and_keys_restrict_options:
+  - no-port-forwarding
+  - no-pty
+  - no-agent-forwarding
+  - no-X11-forwarding
+
+# A fragment name sudo will read: it skips a name with a dot or ending in a tilde.
+# \Z, not $, so a trailing newline does not pass.
+sudoers_and_keys_name_pattern: '^[A-Za-z0-9_-]+\Z'
+
+# A line break inside one list item would write a second line the caller never
+# declared; a double quote inside a forced command would end its option early.
+sudoers_and_keys_newline_pattern: '[\n\r]'
+sudoers_and_keys_command_forbidden_pattern: '["\n\r]'
+
+# One public key on one line: a key type, the base64 body and an optional
+# comment, and nothing in front. Options come only from the structured fields,
+# so a key value cannot carry its own options or a second key behind a newline.
+sudoers_and_keys_key_types: 'ssh-ed25519|sk-ssh-ed25519@openssh\.com|ecdsa-sha2-nistp(256|384|521)|sk-ecdsa-sha2-nistp256@openssh\.com|ssh-rsa'
+sudoers_and_keys_key_pattern: '^({{ sudoers_and_keys_key_types }}) [A-Za-z0-9+/]+={0,3}( [^\n\r]*)?\Z'
