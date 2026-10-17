@@ -47,9 +47,10 @@ sets none of the three.
 - No collection beyond `ansible.builtin` for the role itself. The test also
   uses `community.docker` and `ansible.posix`, pinned in
   `ansible/requirements.yml`.
-- A Debian 12 target with `python3` and `python3-apt`, which the `apt` module
-  needs. The test image has both and has `dpkg-deb`, which the test uses to
-  build its placeholder package.
+- A Debian 13 target with `python3` and `python3-apt`, which the `apt` module
+  needs. Debian 13 is the release every production host runs. The test image
+  has both and has `dpkg-deb`, which the test uses to build its placeholder
+  package.
 - To run the test: Docker on the machine, and network access the first time for
   the pinned collections and the image.
 
@@ -266,8 +267,11 @@ The scan is Jinja in a template file, not a module, plugin or filter, so ANS-2
 
 ## What the test proves
 
-`molecule/default/` runs the role on one container from the Debian 12 base
-pinned in `molecule.yml`, with no network use by the test.
+`molecule/default/` runs the role on one container from the Debian 13 base
+pinned in `molecule.yml`, with no network use by the test. The platform matches
+the release production runs. Its command is `sleep infinity`, not systemd: the
+pattern needs no init system, so the scenario keeps the container alive without
+one and needs no cgroup mount, no `cgroupns_mode` and no tmpfs.
 
 - **The pin is enforced at run time.** An md5 digest, an empty digest or a URL
   given as the checksum, and a URL in the package list, each fail converge at
@@ -315,7 +319,14 @@ pinned in `molecule.yml`, with no network use by the test.
   is named.
 - **The source is a template only because of the test image.** The maintained
   `deb822_repository` module needs `python3-debian`, which the test image lacks;
-  a real role prefers the module.
+  a real role prefers the module. This was checked on the Debian 13 image: the
+  module import still fails there, so the reason holds on trixie.
+- **Debian 13 differences the test meets.** The image's Python is 3.13 and its
+  apt sources are the deb822 file `/etc/apt/sources.list.d/debian.sources`, the
+  format the rendered `.sources` file uses. `dpkg-deb` builds the placeholder
+  package with the same flags as on Debian 12, and the digest in `converge.yml`
+  is unchanged: `converge` passes on this image, so the bytes it builds still
+  match the pin.
 - **Key provenance is a pin, not a trust decision.** A real role ships the
   armored key as a file under `files/` and pins its sha256 in the caller's
   variables, as this role does for its placeholder key: the role compares the
@@ -408,6 +419,6 @@ ANS-11 (second run changes nothing), ANS-14 (this README), ANS-15
 `pre_build_image: true`), ANS-16 (no secret in this role; the test values are
 placeholders). ANS-3 holds: the role has no `shell`, `raw` or `script` task.
 
-The image reference is `geerlingguy/docker-debian12-ansible:latest@sha256:...`.
+The image reference is `geerlingguy/docker-debian13-ansible:latest@sha256:...`.
 The digest is the pin and the tag is informational: upstream rebuilds weekly,
 so `latest` moves and the digest does not.
