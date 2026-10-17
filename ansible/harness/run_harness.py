@@ -14,9 +14,12 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 ANSIBLE_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = ANSIBLE_DIR.parent
@@ -30,6 +33,18 @@ SKIP = "SKIP"
 # The role test never targets a host that is not a container on this machine:
 # an engine address other than a local socket is refused before any step runs.
 LOCAL_ENGINE_PREFIX = "unix://"
+
+# What a scenario file may say (ANS-15). The driver is a container driver, no
+# key points the test at an engine or host other than the local one, the
+# scenario brings no host of its own, and every image is pre-built and pinned.
+SCENARIO_DRIVERS = frozenset({"docker", "podman"})
+CONNECTION_KEYS = frozenset(
+    {"docker_host", "ansible_host", "ansible_ssh_host", "ansible_connection"}
+)
+INVENTORY_HOST_KEYS = frozenset({"hosts", "links"})
+IMAGE_DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
+ENGINE_SOCKET = re.compile(r"(docker|podman)\.sock")
+PRIVILEGE_LINE = re.compile(r"^(privileged|capabilities):\s*(.*)$")
 
 
 @dataclass(frozen=True)
@@ -104,7 +119,9 @@ def check_argument_specs(
     points = entry.get("entry_points") if isinstance(entry, dict) else None
     if not isinstance(points, dict):
         return "meta/argument_specs.yml is missing or documents no entry point"
-    wanted = {path.stem for path in (role / "tasks").glob("*.yml")}
+    # A tasks file whose name starts with an underscore is internal to the role
+    # (included by another file), so it exposes no entry point to document.
+    wanted = {path.stem for path in (role / "tasks").glob("*.yml") if not path.name.startswith("_")}
     absent = sorted(wanted - set(points))
     if absent:
         return "meta/argument_specs.yml has no entry point for: " + ", ".join(absent)
@@ -117,6 +134,111 @@ def refuse_remote_engine(env: Mapping[str, str]) -> str | None:
     if host and not host.startswith(LOCAL_ENGINE_PREFIX):
         return f"DOCKER_HOST is set to a non-local engine ({host.split(':')[0]}://): refused"
     return None
+
+
+def walk_keys(node: object) -> Iterator[tuple[str, object]]:
+    """Yield every (key, value) pair in a parsed YAML document, at any depth."""
+    if isinstance(node, Mapping):
+        for key, value in node.items():
+            yield str(key), value
+            yield from walk_keys(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from walk_keys(item)
+
+
+def explained_privilege_lines(text: str) -> int:
+    """Count privilege keys in ``text`` that have a comment on the line above them."""
+    lines = [line.strip() for line in text.splitlines()]
+    explained = 0
+    for index, line in enumerate(lines):
+        match = PRIVILEGE_LINE.match(line)
+        if match is None or match.group(2) in ("false", "False", "[]"):
+            continue
+        before = next((prior for prior in reversed(lines[:index]) if prior), "")
+        explained += before.startswith("#")
+    return explained
+
+
+def platform_problems(platform: Mapping[str, object]) -> list[str]:
+    """Return how one scenario platform breaks the limits on what a test may reach."""
+    problems: list[str] = []
+    if platform.get("pre_build_image") is not True:
+        problems.append("sets no pre_build_image: true, so the image would be built and tagged")
+    image = platform.get("image")
+    if not isinstance(image, str) or IMAGE_DIGEST.search(image) is None:
+        problems.append("image is not pinned by digest (@sha256:<64 hex>)")
+    volumes = platform.get("volumes")
+    if isinstance(volumes, list) and any(
+        isinstance(volume, str) and ENGINE_SOCKET.search(volume) for volume in volumes
+    ):
+        problems.append("mounts a container engine socket into the platform")
+    return problems
+
+
+def privileged_platforms(platforms: Sequence[object]) -> int:
+    """Count platforms that ask for privilege or added capabilities."""
+    return sum(
+        1
+        for platform in platforms
+        if isinstance(platform, Mapping)
+        and (platform.get("privileged") is True or bool(platform.get("capabilities")))
+    )
+
+
+def scenario_problems(scenario: Path) -> list[str]:
+    """Return how a scenario's molecule.yml breaks the limits of the container-only test."""
+    text = scenario.read_text(encoding="utf-8")
+    try:
+        document: object = YAML(typ="safe").load(text)
+    except YAMLError:
+        return ["is not valid YAML"]
+    if not isinstance(document, Mapping):
+        return ["is not a YAML mapping"]
+    problems: list[str] = []
+    driver = document.get("driver")
+    driver_name = driver.get("name") if isinstance(driver, Mapping) else None
+    if driver_name not in SCENARIO_DRIVERS:
+        problems.append(
+            f"driver is {driver_name!r}: only docker or podman are allowed, "
+            "never a driver that runs against a host that already exists"
+        )
+    for key, value in walk_keys(document):
+        if key.lower() in CONNECTION_KEYS:
+            problems.append(f"sets {key}, which can reach something other than the local engine")
+        if key == "inventory":
+            for inner, _ in walk_keys(value):
+                if inner in INVENTORY_HOST_KEYS:
+                    problems.append(
+                        f"inventory defines hosts ({inner}): the platforms are the hosts"
+                    )
+    platforms = document.get("platforms")
+    if not isinstance(platforms, list) or not platforms:
+        problems.append("defines no platform")
+        return sorted(set(problems))
+    for platform in platforms:
+        if isinstance(platform, Mapping):
+            name = platform.get("name", "?")
+            problems.extend(f"platform {name}: {found}" for found in platform_problems(platform))
+    if privileged_platforms(platforms) > explained_privilege_lines(text):
+        problems.append(
+            "a platform asks for privileged or capabilities without a comment above the key "
+            "saying why"
+        )
+    return sorted(set(problems))
+
+
+def check_scenarios(role: Path) -> list[str]:
+    """Return every way the role's Molecule scenarios break the limits of ANS-15."""
+    problems = (
+        []
+        if (role / "molecule" / "default" / "molecule.yml").is_file()
+        else ["molecule/default/molecule.yml is missing"]
+    )
+    for path in sorted((role / "molecule").glob("*/molecule.yml")):
+        relative = path.relative_to(role)
+        problems.extend(f"{relative}: {found}" for found in scenario_problems(path))
+    return problems
 
 
 def static_steps(role: Path, tools: Path) -> list[Step]:
@@ -149,16 +271,21 @@ def static_steps(role: Path, tools: Path) -> list[Step]:
 
 
 def molecule_steps(role: Path, tools: Path) -> list[Step]:
-    """Return the Molecule steps for a role, in the order they run."""
+    """Return the Molecule steps for a role, in the order they run.
+
+    ``check-fresh`` precedes any real converge; ``molecule-check`` is Molecule's own action.
+    """
     molecule = str(tools / "molecule")
+    in_check_mode = ("converge", "--", "--check", "--diff")
     commands: list[tuple[str, tuple[str, ...]]] = [
         ("create", ("create",)),
         ("prepare", ("prepare",)),
+        ("check-fresh", in_check_mode),
         ("converge", ("converge",)),
         ("idempotence", ("idempotence",)),
         ("verify", ("verify",)),
-        ("check-configured", ("converge", "--", "--check", "--diff")),
-        ("check-fresh", ("check",)),
+        ("check-configured", in_check_mode),
+        ("molecule-check", ("check",)),
     ]
     steps = [
         Step(name, (molecule, *args), role, no_changes=name == "check-configured")
@@ -205,9 +332,46 @@ def report(step: Step, done: subprocess.CompletedProcess[str]) -> str:
     return status
 
 
-def run_role(role: Path, tools: Path, run: Runner, env: Mapping[str, str]) -> list[tuple[str, str]]:
-    """Run every step for one role and return (step name, status) pairs."""
+def run_molecule(
+    steps: Sequence[Step], run: Runner, env: Mapping[str, str]
+) -> list[tuple[str, str]]:
+    """Run the Molecule steps in order; an interrupt still destroys the instance.
+
+    Raises:
+        KeyboardInterrupt: after the always-run steps have run, when the run is interrupted.
+    """
     outcomes: list[tuple[str, str]] = []
+    broken = False
+    try:
+        for step in steps:
+            if broken and not step.always:
+                outcomes.append((step.name, SKIP))
+                continue
+            status = report(step, run(step.argv, step.cwd, env))
+            outcomes.append((step.name, status))
+            broken = broken or status == FAIL
+    except KeyboardInterrupt:
+        for step in steps:
+            if step.always:
+                run(step.argv, step.cwd, env)
+        raise
+    return outcomes
+
+
+def run_role(
+    role: Path,
+    tools: Path,
+    run: Runner,
+    env: Mapping[str, str],
+    reasons: dict[str, str] | None = None,
+) -> list[tuple[str, str]]:
+    """Run every step for one role and return (step name, status) pairs.
+
+    ``reasons`` receives, for each interface or scenario check that fails, the text that
+    explains it, so the summary can print it beside the status.
+    """
+    outcomes: list[tuple[str, str]] = []
+    reasons = {} if reasons is None else reasons
     pinned = pinned_version(REQUIREMENTS, "ansible-core")
     problem = (
         "ansible-core is not pinned in requirements.txt"
@@ -216,21 +380,25 @@ def run_role(role: Path, tools: Path, run: Runner, env: Mapping[str, str]) -> li
     )
     outcomes.append(("min-version", FAIL if problem else OK))
     if problem:
-        print(f"min-version FAIL: {problem}")
+        reasons["min-version"] = problem
     problem = check_argument_specs(role, str(tools / "ansible-doc"), run, env)
     outcomes.append(("argument-specs", FAIL if problem else OK))
     if problem:
-        print(f"argument-specs FAIL: {problem}")
+        reasons["argument-specs"] = problem
+    scenario = check_scenarios(role)
+    outcomes.append(("scenario-limits", FAIL if scenario else OK))
+    if scenario:
+        reasons["scenario-limits"] = "; ".join(scenario)
+    for name in ("min-version", "argument-specs", "scenario-limits"):
+        if name in reasons:
+            print(f"{name} FAIL: {reasons[name]}")
     for step in static_steps(role, tools):
         outcomes.append((step.name, report(step, run(step.argv, step.cwd, env))))
-    broken = False
-    for step in molecule_steps(role, tools):
-        if broken and not step.always:
-            outcomes.append((step.name, SKIP))
-            continue
-        status = report(step, run(step.argv, step.cwd, env))
-        outcomes.append((step.name, status))
-        broken = broken or status == FAIL
+    steps = molecule_steps(role, tools)
+    if scenario:
+        outcomes.extend((step.name, SKIP) for step in steps)
+    else:
+        outcomes.extend(run_molecule(steps, run, env))
     return outcomes
 
 
@@ -280,10 +448,13 @@ def main(
             return 1
         for role in roles:
             run_env = role_environment(environment, work, tools_dir, uuid.uuid4().hex[:12])
-            outcomes = run_role(role, tools_dir, run, run_env)
+            reasons: dict[str, str] = {}
+            outcomes = run_role(role, tools_dir, run, run_env, reasons)
             print(f"== {role.name} ==")
             for name, status in outcomes:
                 print(f"{status} {name}")
+                if status == FAIL and name in reasons:
+                    print(f"    {reasons[name]}")
             failed = failed or any(status == FAIL for _, status in outcomes)
     finally:
         shutil.rmtree(work, ignore_errors=True)

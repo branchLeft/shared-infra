@@ -22,6 +22,10 @@ Pulumi.*.yaml.bak
 .env
 __pycache__/
 
+# The virtual environment ansible/README.md tells a reader to create at the
+# repository root; Python's venv module writes no ignore file of its own.
+/.venv/
+
 
 # This repo tracks package-lock.json and CI runs `npm ci`; a pnpm install
 # here is a mistake, and its lockfile must not get committed.

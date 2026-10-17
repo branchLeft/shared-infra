@@ -147,6 +147,7 @@ SCANNED_SUFFIXES = frozenset(
         ".conf",
         ".enforcing",
         ".gotmpl",
+        ".j2",
         ".json",
         ".local",
         ".md",
@@ -157,7 +158,9 @@ SCANNED_SUFFIXES = frozenset(
         ".sh",
         ".timer",
         ".tmpl",
+        ".toml",
         ".ts",
+        ".txt",
         ".yaml",
         ".yml",
     }

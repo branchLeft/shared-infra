@@ -50,9 +50,11 @@ python3 ansible/harness/run_harness.py ansible/roles/example_config
 ```
 
 Run it with the Python of the virtual environment that holds the pinned tools.
-The test creates one container on the local Docker daemon, applies the role
-twice (the second run must change nothing), verifies the outcome, runs the role
-in check mode and removes the container. It never touches a host.
+The test creates one container on the local Docker daemon, runs the role in
+check mode against it before anything is applied, applies the role, applies it
+a second time (which must report no change), verifies the outcome, runs check
+mode again against the configured container and removes the container. It never
+touches a host.
 
 ## How it is delivered
 

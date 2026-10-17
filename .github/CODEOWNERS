@@ -42,6 +42,9 @@
 /.ansible-lint                           @branchLeft/branchleft-admin
 /.yamllint                               @branchLeft/branchleft-admin
 /ansible/harness/                        @branchLeft/branchleft-admin
+/ansible/pyproject.toml                  @branchLeft/branchleft-admin
+/ansible/requirements.txt                @branchLeft/branchleft-admin
+/ansible/requirements.yml                @branchLeft/branchleft-admin
 
 /.standardsignore        @branchLeft/branchleft-admin
 /.standards.mode         @branchLeft/branchleft-admin
