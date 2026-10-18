@@ -1,0 +1,61 @@
+---
+# Test scaffolding, not role tasks: what the role expects to find on a host
+# (the service user and group), and the stand-in for the docker CLI that the
+# instance has instead of an engine. The stand-in's files are in
+# /var/lib/compose_stack_standin: argv.log holds the arguments of every call
+# the test makes for real, dryrun.log those made with --dry-run, and ps.json is
+# what `compose ps` prints, which the verify play changes to test the health
+# check.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create the placeholder service group
+      ansible.builtin.group:
+        name: '{{ compose_stack_group }}'
+        system: true
+
+    - name: Create the placeholder service user
+      ansible.builtin.user:
+        name: '{{ compose_stack_owner }}'
+        group: '{{ compose_stack_group }}'
+        system: true
+        create_home: false
+        shell: /usr/sbin/nologin
+
+    - name: Create the stand-in's state directory
+      ansible.builtin.file:
+        path: /var/lib/compose_stack_standin
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install the stand-in as the docker command
+      ansible.builtin.copy:
+        src: docker_standin.sh
+        dest: /usr/local/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Start the stand-in's call logs empty
+      ansible.builtin.copy:
+        content: ''
+        dest: '/var/lib/compose_stack_standin/{{ item }}'
+        owner: root
+        group: root
+        mode: '0644'
+        force: true
+      loop:
+        - argv.log
+        - dryrun.log
+
+    - name: Report one healthy running container for the app service
+      ansible.builtin.copy:
+        content: |
+          {"Name":"stand-in-app-1","Service":"app","State":"running","Health":"healthy","Labels":"","Networks":"default","Publishers":null}
+        dest: /var/lib/compose_stack_standin/ps.json
+        owner: root
+        group: root
+        mode: '0644'

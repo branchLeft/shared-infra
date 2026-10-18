@@ -1,0 +1,73 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # The control for the secret scan in verify.yml: this loop prints its item,
+    # because it does not set no_log. If the scan cannot find this value in the
+    # run's log, the scan cannot see a leak either, and verify fails.
+    - name: Print a value the log scan must be able to find
+      ansible.builtin.assert:
+        that: item | length > 0
+        quiet: true
+      loop:
+        - LOG-SCAN-CONTROL-VALUE
+
+    - name: Read whether the compose file is already on the instance
+      ansible.builtin.stat:
+        path: /opt/compose_stack_example/compose.yaml
+      register: converge_existing_file
+
+    # An instance with no stack stands for a host about to be set up, then
+    # edited three ways, one file at a time. Every step ends in the state the
+    # next one starts from, and the last step is the scenario's own values, so
+    # a second converge starts from the end and changes nothing. The edits are
+    # skipped in check mode: nothing is written there to edit.
+    - name: First application on an instance with no stack
+      ansible.builtin.include_tasks: tasks/apply_phase.yml
+      vars:
+        phase_title: First application
+        phase_image: example.invalid/example-app@sha256:1111111111111111111111111111111111111111111111111111111111111111
+        phase_greeting: EARLIER_GREETING
+        phase_secret: EARLIER-{{ scenario_secret }}
+        phase_expected_ups: 1
+      when: not converge_existing_file.stat.exists
+
+    - name: Edit the configuration file only
+      ansible.builtin.include_tasks: tasks/apply_phase.yml
+      vars:
+        phase_title: Configuration file edited
+        phase_image: example.invalid/example-app@sha256:1111111111111111111111111111111111111111111111111111111111111111
+        phase_greeting: '{{ scenario_greeting }}'
+        phase_secret: EARLIER-{{ scenario_secret }}
+        phase_expected_ups: 1
+      when: not converge_existing_file.stat.exists and not ansible_check_mode
+
+    - name: Edit the secret file only
+      ansible.builtin.include_tasks: tasks/apply_phase.yml
+      vars:
+        phase_title: Secret file edited
+        phase_image: example.invalid/example-app@sha256:1111111111111111111111111111111111111111111111111111111111111111
+        phase_greeting: '{{ scenario_greeting }}'
+        phase_secret: '{{ scenario_secret }}'
+        phase_expected_ups: 1
+      when: not converge_existing_file.stat.exists and not ansible_check_mode
+
+    - name: Edit the compose file only
+      ansible.builtin.include_tasks: tasks/apply_phase.yml
+      vars:
+        phase_title: Compose file edited
+        phase_image: '{{ scenario_image }}'
+        phase_greeting: '{{ scenario_greeting }}'
+        phase_secret: '{{ scenario_secret }}'
+        phase_expected_ups: 1
+      when: not converge_existing_file.stat.exists and not ansible_check_mode
+
+    - name: Apply the scenario's values again, with no file changed
+      ansible.builtin.include_tasks: tasks/apply_phase.yml
+      vars:
+        phase_title: Nothing edited
+        phase_image: '{{ scenario_image }}'
+        phase_greeting: '{{ scenario_greeting }}'
+        phase_secret: '{{ scenario_secret }}'
+        phase_expected_ups: 0

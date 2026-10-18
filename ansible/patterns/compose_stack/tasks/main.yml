@@ -1,0 +1,121 @@
+---
+# The rendered compose file is parsed, not searched, so a tag in quotes, in a
+# flow mapping, behind an anchor or in a comment is judged by what YAML says it
+# is. A service that builds its own image has no digest to pin, so it is
+# refused too. This runs before anything is written to the host.
+- name: Refuse a compose file whose images are not all pinned by digest
+  ansible.builtin.assert:
+    that:
+      - compose_stack_rendered.services is mapping
+      - compose_stack_rendered.services | length > 0
+      - compose_stack_rendered.include is not defined
+      - compose_stack_rendered.services.values() | selectattr('build', 'defined') | list | length == 0
+      - compose_stack_rendered.services.values() | selectattr('extends', 'defined') | list | length == 0
+      - compose_stack_rendered.services.values() | rejectattr('image', 'defined') | list | length == 0
+      - compose_stack_rendered.services.values() | map(attribute='image') | reject('match', compose_stack_image_pattern) | list | length == 0
+    quiet: true
+    fail_msg: >-
+      Every service needs an image reference ending in @sha256: and 64 lower-case
+      hex digits. No service may build an image or extend another, and the file may
+      not include another. A tag alone can move.
+  vars:
+    compose_stack_rendered: "{{ lookup('ansible.builtin.template', 'compose.yaml.j2') | from_yaml }}"
+    compose_stack_image_pattern: '^[^\s@]+@sha256:[0-9a-f]{64}\Z'
+
+- name: Create the project directory
+  ansible.builtin.file:
+    path: '{{ compose_stack_project_dir }}'
+    state: directory
+    owner: root
+    group: '{{ compose_stack_group }}'
+    mode: '0750'
+
+- name: Deliver the configuration file
+  ansible.builtin.template:
+    src: app.conf.j2
+    dest: '{{ compose_stack_project_dir }}/app.conf'
+    owner: '{{ compose_stack_owner }}'
+    group: '{{ compose_stack_group }}'
+    mode: '0640'
+  notify: Bring up the compose stack
+
+# The item is not labelled: with no_log off, the loop prints the whole item, so
+# the test can see a missing no_log. With it on, the output says "censored".
+- name: Deliver the secret files
+  ansible.builtin.copy:
+    content: '{{ item.content }}'
+    dest: '{{ compose_stack_project_dir }}/{{ item.name }}'
+    owner: '{{ compose_stack_owner }}'
+    group: '{{ compose_stack_group }}'
+    mode: '0600'
+  loop: '{{ compose_stack_secret_files }}'
+  no_log: true
+  diff: false
+  notify: Bring up the compose stack
+
+# Last of the deliveries, so the files it points at are already on disk when
+# the validator reads them. The validator runs on a temporary copy before the
+# file replaces the old one.
+- name: Deliver the compose file
+  ansible.builtin.template:
+    src: compose.yaml.j2
+    dest: '{{ compose_stack_project_dir }}/compose.yaml'
+    owner: root
+    group: root
+    mode: '0644'
+    validate: docker compose --project-directory {{ compose_stack_project_dir }} --file %s config --quiet
+  notify: Bring up the compose stack
+
+# Check mode writes no compose file, so on a fresh host there is nothing for a
+# dry run of the stack, or a look at its containers, to read. Both below run
+# whenever the file is really on disk, and the skip on a fresh host is stated
+# here (ANS-10). stat runs in check mode as it does in a real run.
+- name: Read back the compose file
+  ansible.builtin.stat:
+    path: '{{ compose_stack_project_dir }}/compose.yaml'
+  register: compose_stack_compose_file_stat
+
+- name: Bring up the stack now if a delivery changed, before the health check
+  ansible.builtin.meta: flush_handlers
+
+# No module reads a compose project's container state, so this is the one
+# command: read-only, so it is also run in check mode. Its output is parsed
+# below, which ANS-9 says belongs in a module; see the README.
+- name: Read the state of the stack's containers
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --project-directory
+      - '{{ compose_stack_project_dir }}'
+      - --project-name
+      - '{{ compose_stack_project_name }}'
+      - ps
+      - --format
+      - json
+      - --all
+  register: compose_stack_ps
+  changed_when: false
+  check_mode: false
+  when: compose_stack_compose_file_stat.stat.exists
+
+- name: Refuse a stack with a service that is missing, not running or not healthy
+  ansible.builtin.assert:
+    that:
+      - compose_stack_missing | length == 0
+      - compose_stack_not_running | length == 0
+      - compose_stack_unhealthy | length == 0
+    quiet: true
+    fail_msg: >-
+      The compose stack is not healthy. Services with no container:
+      {{ compose_stack_missing }}. Not running: {{ compose_stack_not_running }}.
+      Unhealthy or still starting: {{ compose_stack_unhealthy }}.
+  vars:
+    compose_stack_containers: "{{ compose_stack_ps.stdout_lines | map('from_json') | list }}"
+    compose_stack_declared: "{{ (lookup('ansible.builtin.template', 'compose.yaml.j2') | from_yaml).services.keys() | list }}"
+    compose_stack_missing: "{{ compose_stack_declared | difference(compose_stack_containers | map(attribute='Service') | list) }}"
+    compose_stack_not_running: "{{ compose_stack_containers | rejectattr('State', 'equalto', 'running') | map(attribute='Service') | list }}"
+    compose_stack_unhealthy: >-
+      {{ compose_stack_containers | selectattr('Health', 'defined') | selectattr('Health', 'in', ['unhealthy', 'starting'])
+      | map(attribute='Service') | list }}
+  when: compose_stack_compose_file_stat.stat.exists
