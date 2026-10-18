@@ -56,7 +56,8 @@ refers to the secret files by name, so a service role that renames one renames i
   compose file can start any container as root, so the file is not theirs.
 - When any of the three kinds of file changed: the stack's containers are recreated
   and started, and the role waits up to `compose_stack_wait_timeout` seconds for them
-  to be healthy. Named volumes and anonymous volumes keep their data.
+  to be healthy. Compose keeps the data in volumes across a recreate (its documented
+  behaviour, which the test cannot show; see the limits).
 - No port, user, group, unit or firewall rule.
 
 ## The recipe
@@ -278,9 +279,32 @@ What each part of the scenario does:
     and not the secret is an all-clear that could have been red.
 - `check-configured` and `molecule-check`: the configured instance shows no drift.
 
-What breaks which step. Each row was done by an edit, one harness run, and a restore:
+What breaks which step. Each row was done by an edit, one harness run, and a restore, on
+2026-10-18, as an assertion failure and not a crash (one exception is marked):
 
-SABOTAGE_TABLE
+| Edit to the role                                                                    | Step that fails                                                                                |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| A `command` task that always reports changed and notifies the handler               | `converge`, "Nothing edited: expected 0 real up call(s), the stand-in logged 1"                |
+| `notify` removed from the compose file task                                         | `converge`, "Compose file edited: expected 1 real up call(s), the stand-in logged 0"           |
+| `notify` removed from the configuration file task                                   | `converge`, "Configuration file edited: expected 1 ..."                                        |
+| `notify` removed from the secret files task                                         | `converge`, "Secret file edited: expected 1 ..."                                               |
+| `meta: flush_handlers` removed                                                      | `converge`, "First application: expected 1 real up call(s), the stand-in logged 0"             |
+| The digest assertion removed                                                        | `verify`, "A tag alone: the role did not refuse the image with the digest check"               |
+| A second service with a literal tag, `build:`, `extends:` or a top-level `include:` | `check-fresh`, the digest check, naming the failed condition                                   |
+| `failed_when: false` on the health assertion                                        | `verify`, "A container that is unhealthy: the health check did not refuse the stack"           |
+| `ignore_errors: true` on the health assertion                                       | `ansible-lint` (`ignore-errors`) and `verify`, the same message                                |
+| The unhealthy, the not-running or the no-container condition removed, one at a time | `verify`, the case for that state                                                              |
+| `no_log: true` removed from the secret task                                         | `verify`, "the secret reached the log"                                                         |
+| `diff: false` removed from the secret task, `no_log: true` kept                     | none: all 14 steps pass (not caught; see the limits)                                           |
+| `remove_orphans: true`, or `renew_anon_volumes: true`                               | `verify`, "Every real up call must carry exactly the expected arguments"                       |
+| `state: absent` with `remove_volumes: true`                                         | `converge`, the stand-in refuses the `down` call ("Return code 64 is non-zero")                |
+| A task that always reports changed                                                  | `idempotence`, naming the task                                                                 |
+| `validate` removed from the compose file task                                       | `verify`, "The compose file must be checked with `compose config --quiet` on the temporary..." |
+| `wait: true` turned off, or `recreate: always` turned to `auto`                     | `verify`, the exact-arguments message above                                                    |
+| `check_mode: false` on the handler                                                  | `verify`, "A plan with a changed file must run `up --dry-run` and no real `up`"                |
+| The handler's `when` (the compose file is on disk) removed                          | `check-fresh`, `"/opt/compose_stack_example" is not a directory`                               |
+| `check_mode: false` removed from the `ps` command                                   | `verify`, the plan in check mode finds no container                                            |
+| Owner and group removed from the configuration file, or the secret mode loosened    | `verify`, "A delivered file or the project directory has the wrong owner, group or mode"       |
 
 ### What the test proves, and its named limits
 
