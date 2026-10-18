@@ -128,8 +128,16 @@ forced command and each source address.
   per key in a loop, which would remove each key's predecessors.
 - Options are built from structured fields, not accepted in the `key` value. The
   key pattern allows a key type from a fixed list, a base64 body of a length that
-  type can have, and an optional comment, all on one line and nothing in front, so a
-  `key` value cannot bring its own options or hide a second key behind a line break.
+  type can have, and an optional comment, all on one line and nothing in front. A
+  key value, a forced command, a source address and a sudoers line may hold printable
+  ASCII only (U+0020 to U+007E): no control character of any kind and nothing outside
+  ASCII. This is a list of what is allowed, not of what is refused, on purpose: the
+  key module splits what it is given with Python's `str.splitlines`, which breaks on
+  eight characters besides line feed and carriage return (U+000B, U+000C, U+001C to
+  U+001E, U+0085, U+2028, U+2029), and each piece becomes a key line of its own with
+  options the caller never wrote. A pattern that refuses the characters it knows
+  leaves the ones it forgot. So a `key` value cannot bring its own options or hide a
+  second key behind a line break of any of those kinds, and the test builds each one.
   The lengths are exact for `ssh-ed25519` and the three `ecdsa-sha2-nistp` curves
   (fixed-size keys, checked against keys made by `ssh-keygen`) and a floor for
   `ssh-rsa` and the two security-key types (the floors for the security-key types
@@ -142,13 +150,24 @@ forced command and each source address.
   writes the keys, so the module's own failure for a line it cannot read (which
   repeats the whole line) is not reached by a key the check refuses.
 - A forced command must come with `from_addresses`, and gets `no-port-forwarding`,
-  `no-pty`, `no-agent-forwarding` and `no-X11-forwarding`. The command may not hold
-  a double quote or a line break, which would end its option early.
+  `no-pty`, `no-agent-forwarding` and `no-X11-forwarding`. The command may hold
+  printable ASCII only, and no double quote (it would end the option early) and no
+  backslash (one at the end turns the closing quote into an escaped quote, so the
+  rest of the line is swallowed and `ssh-keygen` does not read the line as a key;
+  the key module also rewrites `\#` to `#` in what it is given). It may not hold a
+  key type as a word of its own: the key module takes the first word of a line that
+  is a key type as the key, so a command such as `/bin/x ssh-rsa y` moves the real
+  key into the comment and the line is rewritten wrongly on every run. The words
+  are the module's own list of types, in `vars/main.yml`. A word is a stretch not
+  touching a letter, digit, `@`, `.`, `_` or `-`, so `/usr/bin/ssh-rsa` is refused
+  and `/usr/bin/ssh-rsa-helper` is not.
 - Each source address is one list item and is checked on its own: letters, digits and
-  `. : / * ? ! _ -` only. A space, a double quote, a comma, a control character, a
-  line break or an empty item would give a line the SSH server will not accept (the
-  key stops working, which locks out a slot key) or a second line the caller never
-  declared, so the role refuses it before it writes anything.
+  `. : / * ? ! _ -` only. A space, a double quote, a comma, a semicolon, a backslash,
+  a control character, a line break or an empty item would give a line the SSH
+  server will not accept (the key stops working, which locks out a slot key) or a
+  second line the caller never declared, so the role refuses it before it writes
+  anything. The patterns end in `\Z`, not `$`: `$` also matches before a trailing
+  line break, so a name, an address or a key with a line break after it would pass.
 - `when: … | length > 0` on both tasks. An empty list is "not declared". With
   `exclusive: true` an empty value would write an empty file and remove every key,
   and a variable that arrived empty by mistake is exactly how that happens.
@@ -276,44 +295,74 @@ exactly; that the directory holds no other file besides the image's README; that
 main sudoers file is unchanged; that `visudo -c` passes and lists the fragment; the
 owner and mode of the account's `.ssh` directory and key file; the key file's lines,
 exactly, written out in `verify.yml` and not built by the role's template, so that a
-dropped option fails; and that the stale key is gone.
+dropped option fails; that the stale key is gone; and that `ssh-keygen -l -f`, run on
+the controller on a copy of the key file, reads as many keys as the file has lines
+(it skips a line it cannot read without failing, so the counts are compared).
+
+The refused cases build their awkward characters from code points (`'%c' | format(N)`
+in a loop over the code points), because a character typed into the YAML file is
+folded to a space (U+2028) or refused by the linter (a tab). The loops cover tab,
+line feed, vertical tab, form feed, carriage return, U+001C to U+001E, U+0085, U+2028
+and U+2029 in a key, in a forced command, in a source address and in a sudoers line.
+The cases that carry a second key (a key value, a forced command) also read the key
+file back after the refusal and require that the key the host retired is not in it
+and that the lines are those the converge left, before they check which task
+refused. The check of the key file comes first so that a check that lets the input
+through fails with the key file as the evidence.
 
 What breaks which step. Each row is an edit, one harness run, and a `git restore`;
-the harness is green again after the restores. Rows were repeated at the final
-state of this role.
+the harness is green again after the restores. The rows up to the `changed_when`
+row were run at an earlier state of this role; the rows for the key check, the
+command quote check, the address character class and the sudoers line check were
+run again at this state, and the rows after the `changed_when` row were run at
+this state only. Several of the later rows stand for a run for each character
+named in them (one harness run each).
 
-| Edit                                                                     | Step that fails and the assertion                                                                                          |
-| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `validate` removed                                                       | `verify`: "Expected the role to stop at Install the sudoers fragment"                                                      |
-| `validate` replaced by `/bin/true %s`                                    | `verify`: the same                                                                                                         |
-| `validate` weakened to `visudo -cf %s` (not strict)                      | `verify`: the same, at the undefined-alias case                                                                            |
-| An extra comment line written after the declared lines                   | `verify`: the fragment holds the declared lines and nothing else                                                           |
-| Mode `0644`                                                              | `verify`: the fragment mode assertion                                                                                      |
-| `owner` and `group` removed from the fragment task                       | `verify`: the owner assertion (passes if the earlier file is owned by root)                                                |
-| A `lineinfile` task adding `#includedir` to `/etc/sudoers`               | `verify`: the main sudoers file is the file the image shipped                                                              |
-| `exclusive: true` removed                                                | `verify`: the keys are exactly the declared ones                                                                           |
-| `no-X11-forwarding` dropped from the restrictive options                 | `verify`: the same                                                                                                         |
-| The `from` option left out of the key line                               | `verify`: the same                                                                                                         |
-| `no_log: true` removed from the key task                                 | `verify`: no key body reached the log                                                                                      |
-| `no_log: true` removed from the sudoers task                             | `verify`: no sudoers line reached the log (the invalid fragment's text)                                                    |
-| The `when` that skips an empty key list removed                          | `verify`: the keys are exactly the declared ones, after the empty run                                                      |
-| The check for a forced command without `from_addresses` made always true | `verify`: "Expected the role to stop at Refuse a forced command with no ..."                                               |
-| The check for a double quote in a command made always true               | `verify`: the same form, naming that task                                                                                  |
-| The key check made always true                                           | `verify`: the same form, naming the key task                                                                               |
-| The ed25519 body length left open                                        | `verify`: the same form, at the key whose body was cut short                                                               |
-| The key type left open                                                   | `verify`: stopped at the key module, not at the key check; the module's `invalid key specified` line is then in the output |
-| A space allowed in a source address                                      | `verify`: the same form, naming the address task                                                                           |
-| A double quote allowed in a source address                               | `verify`: the same                                                                                                         |
-| A line break allowed in a source address                                 | `verify`: stopped at the key module, not at the address check                                                              |
-| A control character allowed in a source address                          | `verify`: the same form, naming the address task                                                                           |
-| An empty source address allowed                                          | `verify`: the same                                                                                                         |
-| The key text added to the key refusal message                            | `verify`: the log scan, "no key body reached the log"                                                                      |
-| `no-pty` dropped from the restrictive options                            | `verify`: the keys are exactly the declared ones                                                                           |
-| The `from` option dropped from the key line                              | `verify`: the same                                                                                                         |
-| The non-text-line check made always true                                 | `verify`: "stopped at Install the sudoers fragment" (`visudo` still refuses)                                               |
-| The fragment-name check made always true                                 | `verify`: the same form, naming that task                                                                                  |
-| The line-break check made always true                                    | `verify`: the same form, naming that task                                                                                  |
-| A `command` task with `changed_when: true` added                         | `idempotence`                                                                                                              |
+| Edit                                                                                                                                               | Step that fails and the assertion                                                                                                                                                         |
+| -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `validate` removed                                                                                                                                 | `verify`: "Expected the role to stop at Install the sudoers fragment"                                                                                                                     |
+| `validate` replaced by `/bin/true %s`                                                                                                              | `verify`: the same                                                                                                                                                                        |
+| `validate` weakened to `visudo -cf %s` (not strict)                                                                                                | `verify`: the same, at the undefined-alias case                                                                                                                                           |
+| An extra comment line written after the declared lines                                                                                             | `verify`: the fragment holds the declared lines and nothing else                                                                                                                          |
+| Mode `0644`                                                                                                                                        | `verify`: the fragment mode assertion                                                                                                                                                     |
+| `owner` and `group` removed from the fragment task                                                                                                 | `verify`: the owner assertion (passes if the earlier file is owned by root)                                                                                                               |
+| A `lineinfile` task adding `#includedir` to `/etc/sudoers`                                                                                         | `verify`: the main sudoers file is the file the image shipped                                                                                                                             |
+| `exclusive: true` removed                                                                                                                          | `verify`: the keys are exactly the declared ones                                                                                                                                          |
+| `no-X11-forwarding` dropped from the restrictive options                                                                                           | `verify`: the same                                                                                                                                                                        |
+| The `from` option left out of the key line                                                                                                         | `verify`: the same                                                                                                                                                                        |
+| `no_log: true` removed from the key task                                                                                                           | `verify`: no key body reached the log                                                                                                                                                     |
+| `no_log: true` removed from the sudoers task                                                                                                       | `verify`: no sudoers line reached the log (the invalid fragment's text)                                                                                                                   |
+| The `when` that skips an empty key list removed                                                                                                    | `verify`: the keys are exactly the declared ones, after the empty run                                                                                                                     |
+| The check for a forced command without `from_addresses` made always true                                                                           | `verify`: "Expected the role to stop at Refuse a forced command with no ..."                                                                                                              |
+| A double quote allowed in a forced command                                                                                                         | `verify`: the same form, naming the quoting task                                                                                                                                          |
+| The key check made always true                                                                                                                     | `verify`: "the retired key did not come back", at the first key that carries a second key                                                                                                 |
+| The ed25519 body length left open                                                                                                                  | `verify`: the same form, at the key whose body was cut short                                                                                                                              |
+| The key type left open                                                                                                                             | `verify`: stopped at the key module, not at the key check; the module's `invalid key specified` line is then in the output                                                                |
+| A space allowed in a source address                                                                                                                | `verify`: the same form, naming the address task                                                                                                                                          |
+| A double quote allowed in a source address                                                                                                         | `verify`: the same                                                                                                                                                                        |
+| A line break allowed in a source address                                                                                                           | `verify`: stopped at the key module, not at the address check                                                                                                                             |
+| A control character allowed in a source address                                                                                                    | `verify`: the same form, naming the address task                                                                                                                                          |
+| An empty source address allowed                                                                                                                    | `verify`: the same                                                                                                                                                                        |
+| The key text added to the key refusal message                                                                                                      | `verify`: the log scan, "no key body reached the log"                                                                                                                                     |
+| `no-pty` dropped from the restrictive options                                                                                                      | `verify`: the keys are exactly the declared ones                                                                                                                                          |
+| The `from` option dropped from the key line                                                                                                        | `verify`: the same                                                                                                                                                                        |
+| The non-text-line check made always true                                                                                                           | `verify`: "stopped at Install the sudoers fragment" (`visudo` still refuses)                                                                                                              |
+| The fragment-name check made always true                                                                                                           | `verify`: the same form, naming that task                                                                                                                                                 |
+| The sudoers line check weakened to refuse only line feed and carriage return                                                                       | `verify`: the same form, naming the printable-ASCII task (the role then stops at the install task)                                                                                        |
+| A `command` task with `changed_when: true` added                                                                                                   | `idempotence`                                                                                                                                                                             |
+| The key comment class widened by one of tab, line feed, carriage return, vertical tab, form feed, U+001C, U+001D, U+001E, U+0085, U+2028 or U+2029 | `verify`: "the retired key did not come back" (the key file holds the retired key, with the option the case gave it, or inside the comment for a tab)                                     |
+| The key comment class set back to anything but line feed and carriage return                                                                       | `verify`: the same, at the first separator                                                                                                                                                |
+| `\Z` replaced by `$` in the key pattern                                                                                                            | `verify`: the key file differs from the converged one, at the key that ends in a line break                                                                                               |
+| `\Z` replaced by `$` in the address pattern                                                                                                        | `verify`: "Expected the role to stop at Refuse a source address ..."; the role stopped at the key module                                                                                  |
+| `\Z` replaced by `$` in the fragment-name pattern                                                                                                  | `verify`: "Expected the role to stop at Refuse a sudoers fragment name ..."; the role accepted the input                                                                                  |
+| The forced command class widened by one of the same eleven characters                                                                              | `verify`: "Expected the role to stop at Refuse a forced command that would break its own quoting"; the role stopped at the key type check, which refuses the key behind the separator too |
+| A backslash allowed in a forced command (the case ends in one)                                                                                     | `verify`: the key file differs from the converged one                                                                                                                                     |
+| A backslash refused only at the end of a forced command                                                                                            | `verify`: the key file differs from the converged one, at the case with a backslash inside                                                                                                |
+| The key type check made always true                                                                                                                | `verify`: the key file differs from the converged one, at the first key type word                                                                                                         |
+| The first, the last, or the `ssh-rsa` key type word dropped from the list                                                                          | `verify`: the key file differs from the converged one, at that word                                                                                                                       |
+| The address class widened by a comma, a semicolon, a backslash, a space, a double quote, `\x01` or an empty item                                   | `verify`: "Expected the role to stop at Refuse a source address ..."; the role accepted the input (one run each)                                                                          |
+| The address class widened by one of the eleven separators                                                                                          | `verify`: the same form; the role stopped at the key module for a line break, accepted the input for a tab (one run each)                                                                 |
+| The check on a written key file: a forced command ending in a backslash allowed, as well as in the scenario's own command                          | `verify`: "ssh-keygen read every line of the key file as a public key"                                                                                                                    |
 
 ### Named limits
 
@@ -330,6 +379,31 @@ state of this role.
   useless one, and if it is the only declared key the account is locked out. The test
   cannot log in, because the image has no SSH server. Keep a second way into the
   account, and read the declared keys as the review step.
+- **A key whose label differs from its body is accepted.** The check reads the label
+  (`ssh-rsa`) and the length and characters of the body, not the type the body
+  encodes inside it: `ssh-rsa` in front of a P-521 body passes. Such a line is, as
+  far as is known, unusable (not run), the same class as the one-character typo, so
+  it is a useless key and not a wider one.
+- **An alias defined in another file is refused.** `visudo -csf` checks the fragment
+  on its own, so a fragment that uses an alias defined in `/etc/sudoers` or in
+  another fragment is refused as undefined. That fails safe (nothing is installed);
+  put the alias in the same fragment.
+- **The length floors for RSA and the security-key types were not tested against
+  real keys.** The RSA floor and the two security-key floors come from the wire
+  format; only the ed25519 and NIST-curve lengths were checked against keys made by
+  `ssh-keygen`. A legitimate unusual key (a very short RSA key, a certificate type)
+  is refused, which fails safe.
+- **`ssh-keygen` and `sshd` acceptance is checked only as far as one assertion
+  says.** The test copies the written key file to the controller and requires that
+  `ssh-keygen -l -f` reads as many keys as the file has lines. It does not run an
+  SSH server, so it does not show that `sshd` accepts a line, and the version of
+  `ssh-keygen` on the controller may differ from the one on a host.
+- **The key type words are a copy.** The words a forced command may not hold are the
+  module's own list in the collection pinned in `ansible/requirements.yml`; a newer
+  collection that adds a key type adds a word the role does not know. Nothing in the
+  test compares the two lists.
+- **A forced command may hold no backslash** (a command that needs one must be put in
+  a script on the host and run by its path), and a sudoers line may hold no tab.
 - **`exclusive: true` removes every key the pattern did not write.** That includes
   the operator's own key on the account Ansible logs in as: a role that manages that
   account must list its key among the declared keys, or the next run locks the
