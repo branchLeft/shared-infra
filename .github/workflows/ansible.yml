@@ -191,6 +191,10 @@ jobs:
           SHARD_PATH: ${{ matrix.path }}
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py "$SHARD_PATH"'
 
+      - name: Deliberate failure for the sabotage proof
+        if: matrix.path == 'ansible/roles/example_config'
+        run: 'exit 1'
+
       - name: Create a role from the skeleton
         if: matrix.kind == 'skeleton'
         run: >-
