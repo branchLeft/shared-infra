@@ -45,10 +45,8 @@
 /ansible/pyproject.toml                  @branchLeft/branchleft-admin
 /ansible/requirements.txt                @branchLeft/branchleft-admin
 /ansible/requirements.yml                @branchLeft/branchleft-admin
-# The vendored collections are code every role runs, ansible.cfg decides where Ansible finds them, and the pin check is the gate that vouches for both (ANS-4).
-/ansible/vendor/                         @branchLeft/branchleft-admin
+# The pin check is the gate that vouches for the locked toolchain and for the update route (ANS-4).
 /ansible/checks/                         @branchLeft/branchleft-admin
-/ansible.cfg                             @branchLeft/branchleft-admin
 
 /.standardsignore        @branchLeft/branchleft-admin
 /.standards.mode         @branchLeft/branchleft-admin

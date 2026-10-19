@@ -144,7 +144,6 @@ SCANNED_SUFFIXES = frozenset(
         "",
         ".asc",
         ".authoring",
-        ".cfg",
         ".conf",
         ".enforcing",
         ".gotmpl",
@@ -171,11 +170,6 @@ SCANNED_SUFFIXES = frozenset(
 # type leaves the scan, and it has to be a claim about the file holding no text
 # this repository authored -- not a claim that it happens to name no stack.
 UNSCANNED_SUFFIXES: dict[str, str] = {
-    ".gz": (
-        "the Ansible collection archives under ansible/vendor/collections, kept "
-        "byte for byte as Galaxy publishes them. Nobody here wrote their content, "
-        "and ansible/checks/check_pins.py holds each to its recorded hash."
-    ),
     ".pyc": (
         "compiled bytecode. The source it was compiled from is scanned, and a "
         "name reachable only through a stale .pyc is not one anybody wrote down."

@@ -48,6 +48,3 @@ pnpm-workspace.yaml
 /hetzner/monitoring/stack/alertmanager/alertmanager.yml
 /hetzner/monitoring/stack/ntfy/server.yml
 /hetzner/monitoring/stack/prometheus/mx1-metrics-password
-
-# The pinned collections ansible-galaxy installs for ansible.cfg to find.
-/.ansible/

@@ -10,9 +10,9 @@ name: Ansible
 # changed, and the rest run only when they did. Where nothing changed the job
 # passes after a checkout and one diff.
 #
-# The tools install from ansible/requirements.txt at exact versions and the
-# collections from the vendored artifacts that ansible/requirements.yml names
-# at exact versions, with no network (ANS-4).
+# The tools and the `ansible` package, which carries the collections, install
+# from ansible/requirements.txt at exact versions, each file checked against its
+# recorded hash (ANS-4).
 # DOCKER_HOST is deliberately left unset (ANS-15).
 
 on:
@@ -56,7 +56,7 @@ jobs:
             echo "ansible=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          files=$(git diff --name-only "$base" HEAD -- ansible ansible.cfg .ansible-lint .yamllint .pre-commit-config.yaml .github/workflows/ansible.yml)
+          files=$(git diff --name-only "$base" HEAD -- ansible .ansible-lint .yamllint .pre-commit-config.yaml .github/dependabot.yml .github/workflows/ansible.yml)
           if [ -n "$files" ]; then
             echo "The Ansible inputs changed:"
             echo "$files"
@@ -72,30 +72,23 @@ jobs:
 
       - name: Install the pinned tools
         if: steps.changes.outputs.ansible == 'true'
-        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv -r ansible/requirements.txt'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes -r ansible/requirements.txt'
 
-      # The same install, command and flags as the harness runs before Molecule
-      # (ansible/harness/run_harness.py), so ansible-lint resolves a pattern's
-      # non-builtin modules. It installs the vendored artifacts (ANS-4), from the
-      # ansible directory because the paths in requirements.yml resolve from the
-      # current directory. The proxy points at a closed port, so an entry that
-      # needs the network fails here instead of reaching Galaxy.
-      - name: Install the pinned collections
+      # --require-hashes makes pip refuse any package without a recorded hash, so
+      # the lock must name every package. The collections the roles use come with
+      # the `ansible` package and are found by ansible-lint and Ansible with no
+      # setting (ANS-4); this lists the versions in the job log.
+      - name: Check the installed set and list the collections
         if: steps.changes.outputs.ansible == 'true'
-        working-directory: ansible
-        env:
-          HTTP_PROXY: http://127.0.0.1:9
-          HTTPS_PROXY: http://127.0.0.1:9
         run: |
           set -euo pipefail
-          collections="$RUNNER_TEMP/ansible-collections"
-          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" collection install -r requirements.yml -p "$collections"
-          echo "ANSIBLE_COLLECTIONS_PATH=$collections" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/ansible-venv/bin/pip" check
+          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" collection list
 
-      # The pins are exact, the vendored artifacts are the pinned ones and match
-      # their recorded hashes, and the pre-commit hook for ansible-lint runs the
-      # pinned version (ANS-4).
-      - name: Check the pins and the vendored collections
+      # Every requirements line is an exact, hashed pin, nothing is fetched or
+      # copied in outside the lock, Dependabot watches the lock, and the
+      # pre-commit hook for ansible-lint runs the pinned version (ANS-4).
+      - name: Check the pins and the update route
         if: steps.changes.outputs.ansible == 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/checks/check_pins.py'
 

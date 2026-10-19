@@ -1,15 +1,7 @@
----
-# The pinned collections (ANS-4). Each entry names the vendored artifact under
-# vendor/collections/ and the exact version that artifact must carry:
-# ansible-galaxy refuses an entry whose version differs from the artifact's own
-# manifest, and installing reaches no network. The paths resolve from the
-# current directory, so install from this directory. A bump changes the entry,
-# the artifact and vendor/collections/SHA256SUMS in one pull request (see
-# README.md).
-collections:
-  - name: vendor/collections/ansible-posix-2.2.2.tar.gz
-    version: 2.2.2
-  - name: vendor/collections/community-docker-5.4.0.tar.gz
-    version: 5.4.0
-  - name: vendor/collections/community-library_inventory_filtering_v1-1.1.5.tar.gz
-    version: 1.1.5
+# Intentionally empty (ANS-4). The collections the roles use arrive with the
+# `ansible` package, which requirements.txt pins by version and hash, so the one
+# lock records them for Dependabot and for an SBOM. A collection listed here
+# would be fetched from Galaxy outside that lock, so ansible/checks/check_pins.py
+# fails if this file names one. The harness still runs `ansible-galaxy collection
+# install -r requirements.yml`; with this list empty it installs nothing.
+collections: []

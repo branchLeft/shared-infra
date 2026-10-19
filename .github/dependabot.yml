@@ -84,6 +84,27 @@ updates:
     labels:
       - 'dependencies'
 
+  # The Ansible toolchain lock (ANS-4): ansible/requirements.txt pins every
+  # package with its hashes, the `ansible` package among them, which carries the
+  # collections the roles use. A new `ansible` release is how a collection
+  # update or fix reaches this repository. One group, so the packages that must
+  # move together (ansible, ansible-core) arrive in one pull request that the
+  # Ansible workflow tests; ansible/checks/check_pins.py fails if this entry goes.
+  - package-ecosystem: 'pip'
+    directory: '/ansible'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 5
+    groups:
+      ansible-toolchain:
+        applies-to: version-updates
+        update-types:
+          - 'minor'
+          - 'patch'
+    labels:
+      - 'dependencies'
+
   # GitHub Actions workflows
   - package-ecosystem: 'github-actions'
     directory: '/'
