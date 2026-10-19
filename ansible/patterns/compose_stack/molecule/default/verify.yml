@@ -99,7 +99,9 @@
         quiet: true
         fail_msg: The stamp holds a secret value or the name of a secret file in the clear.
       vars:
-        verify_stamp_secret_names: "{{ compose_stack_secret_files | ansible.builtin.map(attribute='name') | ansible.builtin.map('ansible.builtin.regex_escape') | ansible.builtin.list }}"
+        verify_stamp_secret_names: >-
+          {{ compose_stack_secret_files | ansible.builtin.map(attribute='name')
+          | ansible.builtin.map('ansible.builtin.regex_escape') | ansible.builtin.list }}
         verify_stamp_names: "{{ (['APP_SECRET'] + verify_stamp_secret_names) | ansible.builtin.join('|') }}"
 
     - name: Read the calls the stand-in has logged
