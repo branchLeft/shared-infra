@@ -1,10 +1,6 @@
 """Check the toolchain lock and the route that keeps it current (ANS-4).
 
-It fails when a line of requirements.txt is not an exact pin with a hash, when
-a named tool is missing, when requirements.yml names a collection or a copy of
-one sits under ansible/, when a Molecule scenario leaves its dependency step
-on, when Dependabot is not set to watch ansible/, and when the pre-commit hook
-for ansible-lint is not at the pinned version. ansible/README.md describes each.
+It fails on anything ansible/README.md lists under "How a check proves the lock".
 """
 
 from __future__ import annotations
