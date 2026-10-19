@@ -8,7 +8,7 @@
     # run's log, the scan cannot see a leak either, and verify fails.
     - name: Print a value the log scan must be able to find
       ansible.builtin.assert:
-        that: item | length > 0
+        that: item | ansible.builtin.length > 0
         quiet: true
       loop:
         - LOG-SCAN-CONTROL-VALUE
@@ -57,6 +57,92 @@
       ansible.builtin.include_tasks: tasks/apply_phase.yml
       vars:
         phase_title: Compose file edited
+        phase_image: '{{ scenario_image }}'
+        phase_greeting: '{{ scenario_greeting }}'
+        phase_secret: '{{ scenario_secret }}'
+        phase_expected_ups: 1
+      when: not converge_existing_file.stat.exists and not ansible_check_mode
+
+    # A run that fails after its files are delivered must be followed by a run
+    # that brings the stack up, though no file changes that time. Each pair is
+    # a failing run, which must have tried `up` once, and the same values again.
+    - name: Fail the first up after the files are delivered
+      ansible.builtin.include_tasks: tasks/apply_broken.yml
+      vars:
+        broken_title: Up fails
+        broken_mode: up
+        broken_greeting: RETRY_AFTER_UP_FAILED
+        broken_expect: the image could not be pulled
+      when: not converge_existing_file.stat.exists and not ansible_check_mode
+
+    - name: Apply the same values after the failed up
+      ansible.builtin.include_tasks: tasks/apply_phase.yml
+      vars:
+        phase_title: Retried after a failed up
+        phase_image: '{{ scenario_image }}'
+        phase_greeting: RETRY_AFTER_UP_FAILED
+        phase_secret: '{{ scenario_secret }}'
+        phase_expected_ups: 1
+      when: not converge_existing_file.stat.exists and not ansible_check_mode
+
+    - name: Fail the health check after the stack is brought up
+      ansible.builtin.include_tasks: tasks/apply_broken.yml
+      vars:
+        broken_title: Health check fails
+        broken_mode: health
+        broken_greeting: RETRY_AFTER_HEALTH_FAILED
+        broken_expect: "Unhealthy or still starting: ['app']"
+      when: not converge_existing_file.stat.exists and not ansible_check_mode
+
+    - name: Apply the same values after the failed health check
+      ansible.builtin.include_tasks: tasks/apply_phase.yml
+      vars:
+        phase_title: Retried after a failed health check
+        phase_image: '{{ scenario_image }}'
+        phase_greeting: RETRY_AFTER_HEALTH_FAILED
+        phase_secret: '{{ scenario_secret }}'
+        phase_expected_ups: 1
+      when: not converge_existing_file.stat.exists and not ansible_check_mode
+
+    - name: Apply the same values once more, with the retry done
+      ansible.builtin.include_tasks: tasks/apply_phase.yml
+      vars:
+        phase_title: Settled after the retries
+        phase_image: '{{ scenario_image }}'
+        phase_greeting: RETRY_AFTER_HEALTH_FAILED
+        phase_secret: '{{ scenario_secret }}'
+        phase_expected_ups: 0
+      when: not converge_existing_file.stat.exists and not ansible_check_mode
+
+    # Back to the scenario's values, with one service named so that the test
+    # can see the input reach the module. The name is the compose file's own.
+    - name: Edit the configuration file and scope the recreate to the app service
+      ansible.builtin.include_tasks: tasks/apply_phase.yml
+      vars:
+        phase_title: Recreate scoped to one service
+        phase_image: '{{ scenario_image }}'
+        phase_greeting: '{{ scenario_greeting }}'
+        phase_secret: '{{ scenario_secret }}'
+        phase_services: [app]
+        phase_expected_ups: 1
+      when: not converge_existing_file.stat.exists and not ansible_check_mode
+
+    # A file changed by hand and put back by the role: the content is the same
+    # as the last good content, but a container that bind-mounts the file has
+    # lost its inode when the role replaced it, so the stack is brought up.
+    - name: Change the configuration file by hand
+      ansible.builtin.copy:
+        content: "greeting = EDITED_BY_HAND\n"
+        dest: /opt/compose_stack_example/app.conf
+        owner: '{{ compose_stack_owner }}'
+        group: '{{ compose_stack_group }}'
+        mode: '0640'
+      when: not converge_existing_file.stat.exists and not ansible_check_mode
+
+    - name: Apply the scenario's values after the hand edit
+      ansible.builtin.include_tasks: tasks/apply_phase.yml
+      vars:
+        phase_title: File changed by hand and put back
         phase_image: '{{ scenario_image }}'
         phase_greeting: '{{ scenario_greeting }}'
         phase_secret: '{{ scenario_secret }}'

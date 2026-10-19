@@ -5,3 +5,4 @@ compose_stack_owner: root
 compose_stack_group: root
 compose_stack_app_greeting: EXAMPLE_GREETING
 compose_stack_wait_timeout: 120
+compose_stack_services: []

@@ -1,6 +1,7 @@
 ---
 # One application of the role, with the number of real `up` calls it must cause.
-# The caller sets phase_image, phase_greeting, phase_secret and phase_expected_ups.
+# The caller sets phase_image, phase_greeting, phase_secret and phase_expected_ups,
+# and may set phase_services (the services to recreate; none means all).
 # Counting reads the stand-in's log, which holds only calls made for real: a
 # dry run (check mode) is logged apart. Counting is skipped in check mode, where
 # nothing is brought up.
@@ -20,6 +21,7 @@
   vars:
     compose_stack_app_image: '{{ phase_image }}'
     compose_stack_app_greeting: '{{ phase_greeting }}'
+    compose_stack_services: '{{ phase_services | ansible.builtin.default([]) }}'
     compose_stack_secret_files:
       - name: app.secret.env
         content: 'APP_SECRET={{ phase_secret }}'
@@ -35,9 +37,9 @@
 - name: Assert the stack was brought up exactly as often as the files changed
   ansible.builtin.assert:
     that:
-      - (apply_phase_after.stdout | int) - (apply_phase_before.stdout | int) == phase_expected_ups | int
+      - (apply_phase_after.stdout | ansible.builtin.int) - (apply_phase_before.stdout | ansible.builtin.int) == phase_expected_ups | ansible.builtin.int
     fail_msg: >-
       {{ phase_title }}: expected {{ phase_expected_ups }} real up call(s), the
-      stand-in logged {{ (apply_phase_after.stdout | int) - (apply_phase_before.stdout | int) }}.
+      stand-in logged {{ (apply_phase_after.stdout | ansible.builtin.int) - (apply_phase_before.stdout | ansible.builtin.int) }}.
     quiet: true
   when: not ansible_check_mode

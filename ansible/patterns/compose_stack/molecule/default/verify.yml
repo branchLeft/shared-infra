@@ -8,19 +8,22 @@
     verify_dir: /opt/compose_stack_example
     verify_state: /var/lib/compose_stack_standin
     # The one shape of a real up call: the module adds the first flags, the
-    # role's handler sets the others. A flag added or taken away changes it.
+    # role's task sets the others. A flag added or taken away changes it. The
+    # compose file is always named, so an override file next to it is never
+    # read. With services named, they follow the double dash.
     verify_up_line: >-
       --host unix:///var/run/docker.sock compose --ansi never --progress json
       --project-directory /opt/compose_stack_example --project-name compose_stack_example
+      --file compose.yaml
       up --detach --no-color --quiet-pull --force-recreate --no-build --wait --wait-timeout 120 --
+    verify_up_scoped: '{{ verify_up_line | ansible.builtin.trim }} app'
     # Every call the stand-in may ever receive for real. Anything else, such as
     # down, rm, volume, a different up or another engine, is unexpected.
     verify_allowed:
       - '^--host \S+ version --format \{\{ json \. \}\}$'
       - '^--host \S+ compose version --format json$'
-      - '^--host \S+ compose --ansi never --progress json --project-directory \S+ --project-name \S+ ps --format json --all --no-trunc$'
-      - '^--host \S+ compose --ansi never --progress json --project-directory \S+ --project-name \S+ images --format json$'
-      - '^compose --project-directory \S+ --project-name \S+ ps --format json --all$'
+      - '^--host \S+ compose --ansi never --progress json --project-directory \S+ --project-name \S+ --file compose.yaml ps --format json --all --no-trunc$'
+      - '^--host \S+ compose --ansi never --progress json --project-directory \S+ --project-name \S+ --file compose.yaml images --format json$'
       - '^compose --project-directory \S+ --file \S+ config --quiet$'
   tasks:
     - name: Read the configuration file, the secret file, the compose file and the directory
@@ -62,42 +65,52 @@
     - name: Assert the stack was brought up, always with the same arguments
       ansible.builtin.assert:
         that:
-          - verify_ups | length >= 4
-          - verify_ups | unique | list == [verify_up_line | trim]
+          - verify_ups | ansible.builtin.length >= 4
+          - verify_ups | ansible.builtin.unique | ansible.builtin.sort | ansible.builtin.list == verify_up_expected
         quiet: true
         fail_msg: >-
-          Every real up call must carry exactly the expected arguments (--force-recreate,
-          --no-build, --wait, a timeout and nothing that removes data). Seen: {{ verify_ups | unique | list }}
+          Every real up call must carry exactly the expected arguments (the compose file named,
+          --force-recreate, --no-build, --wait, a timeout and nothing that removes data), once
+          for the whole project and once scoped to one service. Seen: {{ verify_ups | ansible.builtin.unique | ansible.builtin.list }}
       vars:
-        verify_ups: "{{ verify_argv.stdout_lines | select('search', ' up --detach') | list }}"
+        verify_ups: "{{ verify_argv.stdout_lines | ansible.builtin.select('ansible.builtin.search', ' up --detach') | ansible.builtin.list }}"
+        verify_up_expected: '{{ [verify_up_line | ansible.builtin.trim, verify_up_scoped] | ansible.builtin.sort }}'
 
     - name: Assert no call removed data or was unexpected
       ansible.builtin.assert:
         that:
-          - verify_removing | length == 0
-          - verify_unexpected | length == 0
+          - verify_removing | ansible.builtin.length == 0
+          - verify_unexpected | ansible.builtin.length == 0
         quiet: true
         fail_msg: >-
           A call could remove volumes or was not expected. Removing: {{ verify_removing }}.
           Unexpected: {{ verify_unexpected }}
       vars:
         verify_removing: >-
-          {{ verify_argv.stdout_lines | select('search', '(--volumes|--remove-orphans|--renew-anon-volumes|--rmi| down | rm | volume | prune| -V )') | list }}
+          {{ verify_argv.stdout_lines | ansible.builtin.select('ansible.builtin.search',
+          '(--volumes|--remove-orphans|--renew-anon-volumes|--rmi| down | rm | volume | prune| -V )')
+          | ansible.builtin.list }}
+        verify_up_patterns:
+          - '^{{ verify_up_line | ansible.builtin.trim | ansible.builtin.regex_escape }}$'
+          - '^{{ verify_up_scoped | ansible.builtin.regex_escape }}$'
         verify_unexpected: >-
           {{ verify_argv.stdout_lines
-          | reject('match', '(' ~ (verify_allowed + ['^' ~ (verify_up_line | trim | regex_escape) ~ '$']) | join('|') ~ ')') | list }}
+          | ansible.builtin.reject('ansible.builtin.match', '(' ~ (verify_allowed + verify_up_patterns)
+          | ansible.builtin.join('|') ~ ')') | ansible.builtin.list }}
 
     - name: Assert the compose file was validated as a temporary copy, before it was installed
       ansible.builtin.assert:
         that:
-          - verify_validations | length >= 1
-          - verify_validations | select('search', '--file ' ~ verify_dir ~ '/compose.yaml ') | list | length == 0
+          - verify_validations | ansible.builtin.length >= 1
+          - >-
+            verify_validations | ansible.builtin.select('ansible.builtin.search', '--file ' ~ verify_dir ~ '/compose.yaml ')
+            | ansible.builtin.list | ansible.builtin.length == 0
         quiet: true
         fail_msg: >-
           The compose file must be checked with `compose config --quiet` on the temporary copy
           Ansible makes, never on the installed file. Seen: {{ verify_validations }}
       vars:
-        verify_validations: "{{ verify_argv.stdout_lines | select('search', ' config --quiet') | list }}"
+        verify_validations: "{{ verify_argv.stdout_lines | ansible.builtin.select('ansible.builtin.search', ' config --quiet') | ansible.builtin.list }}"
 
     - name: Assert the secret never reached a call's arguments
       ansible.builtin.assert:
@@ -163,6 +176,20 @@
       loop_control:
         label: '{{ item.title }}'
 
+    # The module reads the Compose version itself, from `compose version`, and
+    # refuses one below its minimum (2.18.0) before it does anything else.
+    - name: Fail the role on a Compose version below the module's minimum
+      ansible.builtin.include_tasks: tasks/refuse_old_compose.yml
+
+    - name: Refuse a compose override file in the project directory
+      ansible.builtin.include_tasks: tasks/refuse_override.yml
+      vars:
+        override_name: '{{ item }}'
+      loop:
+        - compose.override.yaml
+        - compose.override.yml
+        - docker-compose.override.yml
+
     - name: Apply the role once more on the healthy state to show it passes again
       ansible.builtin.include_role:
         name: branchleft.compose_stack
@@ -173,6 +200,22 @@
       register: verify_plan_before
       changed_when: false
       failed_when: verify_plan_before.rc > 1
+
+    # The health check also dry-runs `up`, but without --force-recreate, so a
+    # dry run that recreates is the role's own plan.
+    - name: Count the dry runs that recreate before a plan
+      ansible.builtin.command:
+        argv:
+          [
+            grep,
+            --count,
+            --fixed-strings,
+            --regexp=--force-recreate,
+            '{{ verify_state }}/dryrun.log',
+          ]
+      register: verify_recreate_before
+      changed_when: false
+      failed_when: verify_recreate_before.rc > 1
 
     - name: Plan an edited image with check mode on
       ansible.builtin.include_role:
@@ -189,6 +232,20 @@
       changed_when: false
       failed_when: verify_plan_after.rc > 1
 
+    - name: Count the dry runs that recreate after the plan
+      ansible.builtin.command:
+        argv:
+          [
+            grep,
+            --count,
+            --fixed-strings,
+            --regexp=--force-recreate,
+            '{{ verify_state }}/dryrun.log',
+          ]
+      register: verify_recreate_after
+      changed_when: false
+      failed_when: verify_recreate_after.rc > 1
+
     - name: Read the calls the stand-in has logged as dry runs
       ansible.builtin.command:
         argv: [cat, '{{ verify_state }}/dryrun.log']
@@ -199,11 +256,28 @@
       ansible.builtin.assert:
         that:
           - verify_plan_after.stdout == verify_plan_before.stdout
-          - verify_dry.stdout_lines | select('search', ' up --detach') | select('search', '--dry-run') | list | length >= 1
+          - (verify_recreate_after.stdout | ansible.builtin.int) - (verify_recreate_before.stdout | ansible.builtin.int) == 1
+          - >-
+            verify_dry.stdout_lines | ansible.builtin.select('ansible.builtin.search', ' up --detach')
+            | ansible.builtin.select('ansible.builtin.search', '--dry-run') | ansible.builtin.list | ansible.builtin.length >= 1
         quiet: true
         fail_msg: >-
-          A plan with a changed file must run `up --dry-run` and no real `up`. Real up calls before:
-          {{ verify_plan_before.stdout }}, after: {{ verify_plan_after.stdout }}. Dry runs logged: {{ verify_dry.stdout_lines }}
+          A plan with a changed file must run one `up --dry-run` that recreates and no real `up`.
+          Real up calls before: {{ verify_plan_before.stdout }}, after: {{ verify_plan_after.stdout }}.
+          Dry runs that recreate before: {{ verify_recreate_before.stdout }}, after: {{ verify_recreate_after.stdout }}.
+          Dry runs logged: {{ verify_dry.stdout_lines }}
+
+    - name: Assert every dry run names the compose file
+      ansible.builtin.assert:
+        that:
+          - verify_dry.stdout_lines | ansible.builtin.length >= 1
+          - >-
+            verify_dry.stdout_lines | ansible.builtin.reject('ansible.builtin.search', ' --file compose.yaml ')
+            | ansible.builtin.list | ansible.builtin.length == 0
+        quiet: true
+        fail_msg: >-
+          A dry run was made without naming the compose file, so Compose would merge an override
+          file. Dry runs logged: {{ verify_dry.stdout_lines }}
 
     - name: Make the stand-in refuse the compose file
       ansible.builtin.file:
@@ -246,7 +320,7 @@
     - name: Assert the refused edit did not replace the installed compose file
       ansible.builtin.assert:
         that:
-          - verify_kept.stdout | int == 1
+          - verify_kept.stdout | ansible.builtin.int == 1
         quiet: true
         fail_msg: The compose file on the instance is not the one before the refused edit.
 
