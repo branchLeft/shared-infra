@@ -685,8 +685,8 @@ class SameStepEvidenceTests(VerdictCase):
         self.assertFalse(self.verdict(preview_of(step), plan()).has_changes)
 
     def test_a_truthy_pending_flag_on_either_side_is_a_change(self):
-        # taint, pendingReplacement, delete and initErrors: a same step that still owes work.
-        for key in noop.FLAG_STATE_KEYS:
+        # A same step that still owes work; the four names are written out, not read back.
+        for key in ("taint", "pendingReplacement", "delete", "initErrors"):
             for value in (True, 1, "x", [1], {"a": 1}):
                 for sides in (("old",), ("new",), ("old", "new")):
                     with self.subTest(key=key, value=value, sides=sides):
@@ -696,7 +696,7 @@ class SameStepEvidenceTests(VerdictCase):
                         self.assertAsks(self.verdict(self.differing(**states), plan()), "steps-changed")
 
     def test_a_falsy_pending_flag_on_both_sides_is_no_change(self):
-        for key in noop.FLAG_STATE_KEYS:
+        for key in ("taint", "pendingReplacement", "delete", "initErrors"):
             for value in (False, None, 0, [], {}):
                 with self.subTest(key=key, value=value):
                     doc = self.differing(**self.states({key: value}, {key: value}))
