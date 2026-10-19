@@ -25,7 +25,8 @@ permissions:
 jobs:
   roles:
     name: Lint and test the Ansible roles
-    runs-on: ubuntu-latest
+    # Pinned until the harness is verified on the next Ubuntu LTS image.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       # Full history, so the base commit of the diff below exists on the runner.
