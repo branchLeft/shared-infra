@@ -231,12 +231,96 @@ RESULTS_PENDING
 
 ## Rotation as a re-run
 
-RESULTS_PENDING
+Rotation is the role run again with a new value. Nothing else is needed: the file
+is replaced, the old value is gone, and a run with the same value changes nothing.
+The scenario starts from a host where an earlier release left an old value in a
+world-readable file at the place the role writes, then checks each step below by
+the inode of the file as well as by its content.
+
+- The same values again: `secrets_and_no_log_changed` is empty, the notified flag
+  is false, and every inode is the one it was (nothing was rewritten).
+- One value rotated: exactly its file and the environment file are replaced (new
+  inodes, `changed` lists the two paths, the flag is true), the other two files keep
+  their inodes, and the value it replaced is in no file under `/etc`, `/home`,
+  `/opt`, `/root`, `/srv`, `/tmp`, `/usr/local` or `/var`: `grep` reads every file
+  there, backups and temporary files included, and must find nothing. The same run
+  proves the earlier release's value is gone.
+- The rotated value again: nothing changes.
+- A secret given as a host file is rotated at its source. The plan (check mode with
+  `--diff`, as the approval gate shows it) reports that file as changed and does not
+  rewrite the delivered file; the real run does, and the old value is gone.
+- Both values are rotated back so that the host ends as the converge left it, and
+  the rotated values are gone.
+
+The scan of the host skips one directory, `.ansible` under the connection user's
+home, because Ansible keeps the arguments of a running module there for the length
+of the run and a search for the value finds that file (the copy is removed when the
+module ends; the scan does not examine it).
+
+A retired secret is a different case. A name that is no longer declared is not
+removed: the role never deletes a file it was not asked to write. See the named
+limits.
 
 ## What a failed argument check prints
 
-RESULTS_PENDING
+Ansible checks a role's `meta/argument_specs.yml` before the role's first task,
+in a task that no keyword reaches, so the role cannot put `no_log` on it. Whether
+that check prints a value it rejects is not documented by Ansible, so the scenario
+tests it, and these are facts about ansible-core 2.21.5 as the test saw them:
+
+- Handing the role a string where it expects a list of mappings, or a string as a
+  list item, fails with a message that names the option and the types
+  (`is of type str and we were unable to convert to dict`) and not the value.
+- A key the spec does not know (a misspelt `value`) and a mapping used as a list
+  entry fail with a message that prints the key names (`secrets_and_no_log_secrets.valu`).
+  It prints the keys, not their values. A mapping key is data, so a secret must
+  never be a key.
+- A value that fails `choices` is printed: `value of … must be one of: …, got: <value>`.
+- A value that cannot be converted to an integer is printed, in quotes.
+- A `no_log: true` key on the option in the spec does not stop either message. The
+  scenario runs the same option with and without the key, and both print the value.
+- The failure result also carries the whole spec, with its descriptions, as
+  `argument_spec_data`. It carries no supplied value.
+
+So the role has no secret-bearing option with `choices`, a number type or a pattern:
+every option that can hold a secret is plain text, which the check accepts, and the
+role's own checks (the name, the source, the path, the environment line) run in
+tasks that print entry numbers only. The test supplies the sentinel in each of the
+four shapes above and finds it nowhere in the log. A service role that adds an
+option of a type that can fail next to a secret must keep the secret out of that
+option, and the test of the three probes tells a maintainer when a newer
+ansible-core changes any of this: they assert that the value is printed, so they
+fail when it stops being printed and the README needs to change.
 
 ## The secret names the services will need
 
-RESULTS_PENDING
+Names only, taken by reading the scripts, compose files and runbooks under
+`hetzner/` and `mail/` for the variables that hold a credential. A name here means
+a file under those directories reads a variable of that name; it is not a check
+that the service needs it today. There are no values, no store entry names and no
+account identifiers in this list.
+
+| Name                                         | Read under                | How it is made today                                      |
+| -------------------------------------------- | ------------------------- | --------------------------------------------------------- |
+| `STALWART_PROMETHEUS_SECRET`                 | `mail/provision`          | Minted on the host by the deploy script                   |
+| `SHIM_DRAIN_TOKEN`                           | `mail/provision`          | Minted on the host by the render script                   |
+| `CROWDSEC_BOUNCER_KEY`                       | `hetzner/edge`            | Generated on the host by a runbook command                |
+| `NEXTCLOUD_DB_PASSWORD`                      | `hetzner/nextcloud1`      | Generated on the host by a runbook command                |
+| `NEXTCLOUD_REDIS_PASSWORD`                   | `hetzner/nextcloud1`      | Not read                                                  |
+| `NEXTCLOUD_ADMIN_PASSWORD`                   | `hetzner/nextcloud1`      | Not read                                                  |
+| `NTFY_PAGER_TOKEN`                           | `hetzner/monitoring`      | Not read                                                  |
+| `NTFY_WATCHER_TOKEN`                         | `hetzner/monitoring`      | Not read                                                  |
+| `GRAFANA_ADMIN_PASSWORD`                     | `hetzner/monitoring`      | Not read                                                  |
+| `CONTROL_PLANE_DB_ADMIN_PASSWORD`            | `hetzner/control-plane`   | Not read                                                  |
+| `CONTROL_PLANE_ZITADEL_DB_PASSWORD`          | `hetzner/control-plane`   | Not read                                                  |
+| `CONTROL_PLANE_ZITADEL_FIRST_ADMIN_PASSWORD` | `hetzner/control-plane`   | Not read                                                  |
+| `HCLOUD_TOKEN`                               | the provisioning runbooks | Issued in the provider's console, then typed by the owner |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | the provisioning runbooks | Issued in the provider's console, then typed by the owner |
+
+"Not read" means the creation step was not examined for this list. Under this
+pattern the owner creates the last two rows: a provider's console issues them, and
+the runbooks read them into the shell with `read -rs`. Whether any other row stays
+generated on the host or becomes an entry the owner creates is the source decision
+this pattern leaves to the owner. The last two rows are credentials of the people
+and pipelines that provision, not of a running service, and may not belong on a
+host at all; that is the owner's call too.
