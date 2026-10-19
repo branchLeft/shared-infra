@@ -75,3 +75,25 @@
     - name: Apply the role with the good set
       ansible.builtin.include_role:
         name: branchleft.firewall_nat_sysctl
+
+    # Check mode must write nothing. On a fresh instance the role's run in
+    # check mode is the one this checks: no active rules file and no drop-in.
+    - name: Read whether check mode wrote the active rules file or the drop-in
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /etc/firewall-nat-sysctl-scenario/active.nft
+        - /etc/sysctl.d/98-firewall-nat-sysctl-scenario.conf
+      register: converge_check_written
+      when: ansible_check_mode and not converge_active.stat.exists
+
+    - name: Assert check mode wrote no file on a fresh instance
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists == false
+        fail_msg: Check mode wrote {{ item.item }}, so a plan changed the host.
+        success_msg: Check mode wrote no rules file and no drop-in.
+      loop: '{{ converge_check_written.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+      when: ansible_check_mode and not converge_active.stat.exists
