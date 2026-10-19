@@ -1,0 +1,113 @@
+---
+# Order matters. The inputs are checked before anything is fetched, an artefact
+# is fetched and checked before apt reads it, and the repository source is in
+# place before the named packages are resolved.
+
+# The pin is enforced here, on every real run, by whoever copies this role: a
+# download entry whose checksum is empty, uses another algorithm, or is a URL
+# stops the role before any task changes the host. The patterns are anchored
+# with a trailing \Z because $ would also match before a final newline.
+- name: Refuse a download entry that is not pinned by a sha256 or sha512 digest
+  ansible.builtin.assert:
+    that:
+      - item.checksum is string
+      - item.checksum is match('^(sha256:[0-9a-f]{64}|sha512:[0-9a-f]{128})\Z')
+      - item.dest is string
+      - item.dest is match('^/')
+    fail_msg: >-
+      Every download entry needs a checksum of the form sha256:HEX64 or
+      sha512:HEX128 and an absolute dest. Entry refused for {{ item.dest | default('(no dest)') }}.
+    quiet: true
+  loop: '{{ packages_and_downloads_downloads }}'
+  loop_control:
+    label: "{{ item.dest | default('(no dest)') }}"
+
+# A package file is installed only from a path a pinned download wrote, so the
+# apt module can never be handed a URL or an unchecked file.
+- name: Refuse a package file that is not the destination of a pinned download
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item is match('^/')
+      - item is not search('://')
+      - item in (packages_and_downloads_downloads | map(attribute='dest') | list)
+    fail_msg: >-
+      Each entry of packages_and_downloads_debs must be an absolute local path
+      equal to the dest of an entry of packages_and_downloads_downloads, never a URL.
+    quiet: true
+  loop: '{{ packages_and_downloads_debs }}'
+
+# The repository key is a file of the role. Its digest is pinned in the
+# caller's variables and compared with the file the role ships, on the
+# controller, so the check also holds in check mode.
+- name: Refuse a repository key whose digest is not the pinned one
+  ansible.builtin.assert:
+    that:
+      - packages_and_downloads_repository_key_sha256 is match('^[0-9a-f]{64}\Z')
+      - lookup('ansible.builtin.file', 'example-archive-key.asc', rstrip=False) | hash('sha256') == packages_and_downloads_repository_key_sha256
+      - packages_and_downloads_repository_uri | length > 0
+      - packages_and_downloads_repository_suite | length > 0
+    fail_msg: >-
+      The repository key file does not match packages_and_downloads_repository_key_sha256,
+      or the repository uri or suite is empty.
+    quiet: true
+  when: packages_and_downloads_repository_present
+
+- name: Download each pinned artefact and check its digest
+  ansible.builtin.get_url:
+    url: '{{ item.url }}'
+    dest: '{{ item.dest }}'
+    checksum: '{{ item.checksum }}'
+    owner: '{{ item.owner | default(packages_and_downloads_download_owner) }}'
+    group: '{{ item.group | default(packages_and_downloads_download_group) }}'
+    mode: '{{ item.mode | default(packages_and_downloads_download_mode) }}'
+  loop: '{{ packages_and_downloads_downloads }}'
+  loop_control:
+    label: '{{ item.dest }}'
+
+- name: Create the apt keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: packages_and_downloads_repository_present
+
+- name: Deliver the repository key as a file
+  ansible.builtin.copy:
+    src: example-archive-key.asc
+    dest: /etc/apt/keyrings/packages-and-downloads.asc
+    owner: root
+    group: root
+    mode: '0644'
+  when: packages_and_downloads_repository_present
+
+- name: Deliver the repository source, signed by that key file
+  ansible.builtin.template:
+    src: packages-and-downloads.sources.j2
+    dest: /etc/apt/sources.list.d/packages-and-downloads.sources
+    owner: root
+    group: root
+    mode: '0644'
+  when: packages_and_downloads_repository_present
+
+- name: Install the named apt packages from the cached index
+  ansible.builtin.apt:
+    name: '{{ packages_and_downloads_apt_packages }}'
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: packages_and_downloads_apt_packages | length > 0
+
+# Skipped in check mode with a stated reason (ANS-10): the file is written by
+# the download above, which check mode does not perform, so on a host that has
+# not yet been applied there is no package file to read. The skip is wider than
+# that reason: it also applies to an already configured host, so a check-mode
+# run cannot see a package that was removed from it. The README names this limit.
+- name: Install each local package file the pinned downloads delivered
+  ansible.builtin.apt:
+    deb: '{{ item }}'
+    state: present
+  loop: '{{ packages_and_downloads_debs }}'
+  when: not ansible_check_mode

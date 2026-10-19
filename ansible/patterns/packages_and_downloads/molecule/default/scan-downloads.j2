@@ -1,0 +1,116 @@
+{#-
+  Read by verify.yml with the template lookup, on the controller, and never
+  copied to a host. It walks every file under the role's tasks/ and handlers/
+  directories, at any depth of block, rescue and always, and prints one JSON
+  document: which files it read, how many get_url tasks it saw, and one line
+  for every download-capable task that does not carry a pin.
+
+  What it accepts for each module (the module may be spelt with or without
+  ansible.builtin. or ansible.legacy.):
+    get_url      checksum is a literal sha256:HEX64 or sha512:HEX128, or exactly
+                 {{ item.checksum }} in a task whose loop is the role's validated
+                 downloads variable, which the role asserts at run time.
+    uri          never with dest (use get_url, which can verify).
+    unarchive    src is never a literal URL.
+    apt          deb is a literal absolute path, or exactly {{ item }} in a task
+                 whose loop is the role's validated debs variable.
+    command, shell, raw, script
+                 never run curl or wget. ansible-lint refuses the free-form
+                 spelling; it does not read an argv list, so this walk does.
+    include_tasks, import_tasks
+                 a literal file name of a file under tasks/ or handlers/ that
+                 this scan read, so that every file that can run was scanned.
+  The action and local_action keywords, a module given free-form arguments, and
+  the args keyword beside a download module are refused: they hide the
+  arguments from this walk.
+-#}
+{%- set ns = namespace(seen=0, failures=[]) -%}
+{%- set literal_pin = '^(sha256:[0-9a-f]{64}|sha512:[0-9a-f]{128})\\Z' -%}
+{%- set item_pin = '^\\{\\{\\s*item\\.checksum\\s*\\}\\}\\Z' -%}
+{%- set item_deb = '^\\{\\{\\s*item\\s*\\}\\}\\Z' -%}
+{%- set downloads_loop = '^\\{\\{\\s*' ~ prefix ~ '_downloads\\s*\\}\\}\\Z' -%}
+{%- set debs_loop = '^\\{\\{\\s*' ~ prefix ~ '_debs\\s*\\}\\}\\Z' -%}
+
+{%- macro refuse(ns, where, message) -%}
+  {%- set ns.failures = ns.failures + [(where ~ ': ' ~ message) | regex_replace('[{}]', '?')] -%}
+{%- endmacro -%}
+
+{%- macro inspect(ns, node, where) -%}
+  {%- if node is mapping -%}
+    {%- set label = where ~ ' [' ~ ((node.get('name', 'unnamed task')) | string) ~ ']' -%}
+    {%- for key, value in node.items() -%}
+      {%- set base = (key | string) | regex_replace('^ansible\\.(builtin|legacy)\\.', '') -%}
+      {%- if base in ['action', 'local_action'] -%}
+        {%- set _ = refuse(ns, label, 'the ' ~ base ~ ' keyword hides the module name') -%}
+      {%- elif base == 'get_url' -%}
+        {%- set ns.seen = ns.seen + 1 -%}
+        {%- if value is not mapping -%}
+          {%- set _ = refuse(ns, label, 'get_url has free-form arguments') -%}
+        {%- elif 'args' in node -%}
+          {%- set _ = refuse(ns, label, 'get_url has an args keyword') -%}
+        {%- else -%}
+          {%- set pin = value.get('checksum') -%}
+          {%- set loop_value = node.get('loop') -%}
+          {%- if pin is not string or (pin | trim | length) == 0 -%}
+            {%- set _ = refuse(ns, label, 'get_url has no checksum') -%}
+          {%- elif pin is match(literal_pin) -%}
+          {%- elif pin is match(item_pin) and loop_value is string and loop_value is match(downloads_loop) -%}
+          {%- else -%}
+            {%- set _ = refuse(ns, label, 'get_url checksum is not a sha256 or sha512 literal or the validated item.checksum') -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- elif base == 'uri' -%}
+        {%- if value is not mapping -%}
+          {%- set _ = refuse(ns, label, 'uri has free-form arguments') -%}
+        {%- elif 'dest' in value or 'args' in node -%}
+          {%- set _ = refuse(ns, label, 'uri downloads to a file or hides its arguments: use get_url with a checksum') -%}
+        {%- endif -%}
+      {%- elif base == 'unarchive' -%}
+        {%- if value is not mapping -%}
+          {%- set _ = refuse(ns, label, 'unarchive has free-form arguments') -%}
+        {%- elif value.get('src') is string and value.get('src') is search('://') -%}
+          {%- set _ = refuse(ns, label, 'unarchive src is a URL: download with get_url and a checksum first') -%}
+        {%- endif -%}
+      {%- elif base == 'apt' -%}
+        {%- if value is not mapping -%}
+          {%- set _ = refuse(ns, label, 'apt has free-form arguments') -%}
+        {%- elif 'deb' in value -%}
+          {%- set deb = value.get('deb') -%}
+          {%- set loop_value = node.get('loop') -%}
+          {%- if deb is not string -%}
+            {%- set _ = refuse(ns, label, 'apt deb is not a string') -%}
+          {%- elif deb is match(item_deb) and loop_value is string and loop_value is match(debs_loop) -%}
+          {%- elif deb is match('^/') and deb is not search('://') and deb is not search('[{]') -%}
+          {%- else -%}
+            {%- set _ = refuse(ns, label, 'apt deb is not a literal local path or the validated item') -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- elif base in ['command', 'shell', 'raw', 'script'] -%}
+        {%- if (value | string) is search('(^|[^A-Za-z0-9_])(curl|wget)($|[^A-Za-z0-9_])') -%}
+          {%- set _ = refuse(ns, label, base ~ ' runs curl or wget: use get_url with a checksum') -%}
+        {%- endif -%}
+      {%- elif base in ['include_tasks', 'import_tasks'] -%}
+        {%- set target = value.get('file') if value is mapping else value -%}
+        {%- set scanned = scan_files | selectattr('isdir', 'equalto', false) | map(attribute='path') | list -%}
+        {%- if target is not string or target is search('[{]') or target is search('[.][.]') or target is match('^/') -%}
+          {%- set _ = refuse(ns, label, base ~ ' names ' ~ (target | string) ~ ', which is not a literal path') -%}
+        {%- elif (role_dir ~ '/tasks/' ~ target) not in scanned and (role_dir ~ '/handlers/' ~ target) not in scanned -%}
+          {%- set _ = refuse(ns, label, base ~ ' names ' ~ target ~ ', which is not a file under tasks/ or handlers/ that this scan read') -%}
+        {%- endif -%}
+      {%- endif -%}
+      {%- set _ = inspect(ns, value, where) -%}
+    {%- endfor -%}
+  {%- elif node is iterable and node is not string -%}
+    {%- for child in node -%}
+      {%- set _ = inspect(ns, child, where) -%}
+    {%- endfor -%}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- set files = [] -%}
+{%- for entry in scan_files if not entry.isdir and (entry.path.startswith(role_dir ~ '/tasks/') or entry.path.startswith(role_dir ~ '/handlers/')) -%}
+  {%- set _ = files.append(entry.path) -%}
+  {%- set document = lookup('ansible.builtin.file', entry.path, rstrip=False) | from_yaml -%}
+  {%- set _ = inspect(ns, document, entry.path | regex_replace('^.*/(tasks|handlers)/', '\\1/')) -%}
+{%- endfor -%}
+{{ {'files': files, 'seen': ns.seen, 'failures': ns.failures} | to_json }}
