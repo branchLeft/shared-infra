@@ -270,7 +270,7 @@ logged after that line:
 - a daemon reload is the manager's `Reloading...` line;
 - "nothing else" is every other message with a `UNIT` field in that window: there must
   be none for any unit but the timer. The scenario's calendar is a time that never
-  comes (`2099-12-31 23:59:59`), so the timer cannot start the oneshot service during a
+  comes (a single instant in the year 2099, set in `molecule.yml`), so the timer cannot start the oneshot service during a
   test run; a start of the service in the window is therefore not a timer-fired run but
   something the role (or the test) did, and it fails. Five units of the base image's own
   daily timers (named in `verify.yml`) are excluded, because one of them may legitimately
