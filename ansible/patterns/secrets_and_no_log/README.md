@@ -250,9 +250,11 @@ not in `molecule.yml`, which names only the file it is read from. The scenario s
 makes Ansible print each task's result together with the arguments it was given,
 and the loop items. The verify play reads that log last, so it covers the check-mode
 run against the fresh host (which runs with `--diff`), the converge, the second
-converge, the plan with `--diff` for a rotation, every rotation, the twenty refused
-inputs (thirty cases, counting each code point), a write that fails (a directory is in the way of one secret's file), and the
-argument checks. It fails if any sentinel except one is in the log. The exception
+converge, the plan with `--diff` for a rotation, every rotation, the refused inputs (each is
+one include of `tasks/refused.yml` in `verify.yml`, so `grep -c 'tasks/refused.yml'
+ansible/patterns/secrets_and_no_log/molecule/default/verify.yml` gives their number;
+the code-point loop adds one case per code point), a write that fails (a directory
+is in the way of one secret's file), and the argument checks. It fails if any sentinel except one is in the log. The exception
 is the sentinel that Ansible's own argument validation printed (see "What a failed
 argument check prints"), which the scan uses as a positive control.
 
@@ -281,18 +283,27 @@ harness (the table at the end has every edit):
   (the one that records which files changed), the values are in the log: the loop
   over the registered results prints each item, and the items of a registered loop
   hold the values. The verify play fails at the same assertion.
-- With only `diff: false` removed from the copy, nothing leaks and the harness is
-  green: `no_log: true` also hides the diff on this version. With only `no_log`
-  removed from the environment file's template, nothing leaks either: its result
-  holds no content and `diff: false` keeps its diff out. With both removed from the
-  template, the content of the environment file is in the log, from the `--diff` of
-  the check-mode run, and the verify play fails. So the two keywords overlap, each
-  covers the other alone, and `diff: false` alone is **reviewed, not tested**. It
-  stays because ANS-16 asks for it, and because a later version may behave
-  differently.
-- With `no_log: true` removed from the host-file copy, nothing leaks and the
-  harness is green: its loop items hold a path and its module arguments hold a
-  path. It is **reviewed, not tested**; it stays so the rule has no exception.
+- The `diff: false` keyword on the value copy and on the environment file's template
+  is redundant with `no_log: true` on this version: removed alone, the harness is
+  green, because `no_log` also censors the diff. Removed together with `no_log`,
+  the verify play fails at "Assert no sentinel reached the log". The keyword stays
+  because ANS-16 asks for it and a later version may differ.
+- The `diff: false` keyword on the host-file copy is redundant the same way: removed
+  alone the harness is green, and removed with `no_log` the verify play fails.
+- `no_log: true` on the environment file's template, removed alone, is caught by the
+  digest of the whole file: the template's result carries its SHA-1 and MD5. The
+  verify play fails at "Assert no sentinel reached the log" and names the two
+  environment file texts (before and after a rotation). Before the scan searched
+  those digests, this edit was green.
+- `no_log: true` on the host-file copy, removed alone, is caught by the digests of
+  the delivered file (the copy's result carries them). The verify play fails and
+  names the host secret and its rotated value.
+- The stat that reads each source file takes no digest (`get_checksum: false`). With
+  the default restored, the SHA-1 of the host-file secret reaches the log, and the
+  same assertion fails.
+- The scan's digest control: the scan's own control sentinel is printed only as its
+  SHA-1, and "Assert the scan finds the digest control in the log" fails when the
+  digest comparison is removed from the scan.
 - The `no_log: true` on the task that works out which entries break a rule is
   **reviewed, not tested**: its result holds only numbers.
 
@@ -453,23 +464,31 @@ What breaks which step. Each row is an edit, one harness run, and a `git restore
 the harness is green again after the restores, and a last full run and a run on an
 unedited fresh role were green too.
 
-| Edit                                                                                                  | Step that fails, and the assertion                                                                                                           |
-| ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `no_log: true` removed from the copy that writes the values (a loop task)                             | `verify`: "Assert no sentinel reached the log" (four sentinels found)                                                                        |
-| `no_log: true` removed from the task that records the changed paths (it reads the registered results) | `verify`: the same assertion (three sentinels found)                                                                                         |
-| `diff: false` removed from the value copy, `no_log` kept                                              | green: `no_log` hides the diff too. Reviewed, not tested                                                                                     |
-| `no_log: true` removed from the environment file's template, `diff: false` kept                       | green: the result holds no content. Reviewed, not tested                                                                                     |
-| `no_log: true` and `diff: false` both removed from the environment file's template                    | `verify`: "Assert no sentinel reached the log" (the `--diff` output; two sentinels found)                                                    |
-| `no_log: true` removed from the host-file copy                                                        | green: it handles a path only. Reviewed, not tested                                                                                          |
-| A variable added to `defaults/main.yml`                                                               | `verify`: "Assert the defaults hold no secret and the list of secrets is empty"                                                              |
-| File mode `0644`                                                                                      | `verify`: "Assert each file is private to its owner and holds exactly its value" (all four files)                                            |
-| `owner: root` on the value copy                                                                       | `verify`: the same assertion, for the files the copy wrote                                                                                   |
-| `backup: true` on the value copy                                                                      | `verify`: "Assert the directory holds the declared files and nothing else" (a backup is listed)                                              |
-| A task that keeps a copy of the old file outside the directory, made once                             | `verify`: "Assert no file on the host holds the value" (the earlier value is in the kept copy)                                               |
-| The same task, copying again on every run                                                             | `idempotence`                                                                                                                                |
-| A `command` task with `changed_when: true` added                                                      | `idempotence`: the task is named                                                                                                             |
-| The directory task moved after the write tasks                                                        | `verify`: "Assert the directory task ran before the write tasks"                                                                             |
-| The check that a source file has no group or other permission made always true                        | `verify`: "Expected the role to stop at Refuse a source file that is missing, not a plain file, not owned by root or open to group or other" |
+| Edit                                                                                                  | Step that fails, and the assertion                                                                                                                                                                |
+| ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `no_log: true` removed from the copy that writes the values (a loop task)                             | `verify`: "Assert no sentinel reached the log" (four sentinels found)                                                                                                                             |
+| `no_log: true` removed from the task that records the changed paths (it reads the registered results) | `verify`: the same assertion (three sentinels found)                                                                                                                                              |
+| `diff: false` removed from the value copy, `no_log` kept                                              | green: `no_log` hides the diff too; redundant, see the row below                                                                                                                                  |
+| `diff: false` and `no_log: true` both removed from the value copy                                     | `verify`: "Assert no sentinel reached the log" (five sentinels found, the loop items)                                                                                                             |
+| `no_log: true` removed from the environment file's template, `diff: false` kept                       | `verify`: "Assert no sentinel reached the log" (the two environment file digests found)                                                                                                           |
+| `diff: false` removed from the environment file's template, `no_log` kept                             | green: `no_log` hides the diff too; redundant, see the row below                                                                                                                                  |
+| `no_log: true` and `diff: false` both removed from the environment file's template                    | `verify`: "Assert no sentinel reached the log" (four labels found)                                                                                                                                |
+| `no_log: true` removed from the host-file copy                                                        | `verify`: "Assert no sentinel reached the log" (the host secret and its rotation found by digest)                                                                                                 |
+| `diff: false` removed from the host-file copy, `no_log` kept                                          | green: `no_log` hides the diff too; redundant, see the row below                                                                                                                                  |
+| `no_log: true` and `diff: false` both removed from the host-file copy                                 | `verify`: "Assert no sentinel reached the log" (the host secret and its rotation found)                                                                                                           |
+| The source file's stat with its default digest (`get_checksum` true)                                  | `verify`: "Assert no sentinel reached the log" (the host secret's SHA-1 found)                                                                                                                    |
+| The scan's digest comparisons removed from its `when`                                                 | `verify`: "Assert the scan finds the digest control in the log"                                                                                                                                   |
+| The source-file mode check `% 64` changed to `% 8`                                                    | `verify`: "Expected the role to stop at Refuse a source file that is missing, not a plain file, not owned by root or open to group or other" (a source file that the group can read was accepted) |
+| The name pattern widened to allow `.` and `/`                                                         | `verify`: "Expected the role to stop at Refuse a secret name that is not an ALL_CAPS name" (the role went on to the write)                                                                        |
+| A variable added to `defaults/main.yml`                                                               | `verify`: "Assert the defaults hold no secret and the list of secrets is empty"                                                                                                                   |
+| File mode `0644`                                                                                      | `verify`: "Assert each file is private to its owner and holds exactly its value" (all four files)                                                                                                 |
+| `owner: root` on the value copy                                                                       | `verify`: the same assertion, for the files the copy wrote                                                                                                                                        |
+| `backup: true` on the value copy                                                                      | `verify`: "Assert the directory holds the declared files and nothing else" (a backup is listed)                                                                                                   |
+| A task that keeps a copy of the old file outside the directory, made once                             | `verify`: "Assert no file on the host holds the value" (the earlier value is in the kept copy)                                                                                                    |
+| The same task, copying again on every run                                                             | `idempotence`                                                                                                                                                                                     |
+| A `command` task with `changed_when: true` added                                                      | `idempotence`: the task is named                                                                                                                                                                  |
+| The directory task moved after the write tasks                                                        | `verify`: "Assert the directory task ran before the write tasks"                                                                                                                                  |
+| The check that a source file has no group or other permission made always true                        | `verify`: "Expected the role to stop at Refuse a source file that is missing, not a plain file, not owned by root or open to group or other"                                                      |
 
 ### Named limits
 
