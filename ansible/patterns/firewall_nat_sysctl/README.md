@@ -208,7 +208,7 @@ filter on the workflow. A change to this pattern is therefore tested in CI.
    uplink interface.
 5. Keep the guard. A role whose rules are a different set still needs a connection check
    and a `rescue` that restores what was there before.
-6. Run the harness on the new role. Then break each control in the proof table on the
+6. Run the harness on the new role. Then break each control named in section (d) on the
    copy and see the same step fail: a control is yours only after you have broken it.
 
 ## Platform and capability
