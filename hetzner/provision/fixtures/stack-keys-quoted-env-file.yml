@@ -1,0 +1,6 @@
+# Control case for stack_keys_check.py: a quoted env_file key is the same key
+# to YAML and to Compose, so the check must reject this file.
+services:
+  zitadel:
+    # prettier-ignore
+    "env_file": [{path: /etc/branchleft/control-plane.env, required: false}]

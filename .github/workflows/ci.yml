@@ -269,6 +269,16 @@ jobs:
       - name: Shellcheck
         run: shellcheck -x hetzner/provision/*.sh
 
+      # A managed Python, so the YAML parser the stack-keys check uses can be
+      # installed without touching the system interpreter.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the YAML parser the stack-keys check uses
+        run: python3 -m pip install --quiet pyyaml==6.0.3
+
       # test_compose_unit_contract.py uses a `X | None` return annotation
       # with no `from __future__ import annotations` guard, so under Python
       # 3.9 `unittest discover` doesn't refuse to run -- it swallows the
@@ -688,6 +698,51 @@ jobs:
         run: |
           docker compose -f hetzner/control-plane/stack/compose.yml config -q
           COMPOSE_PROFILES=apps docker compose -f hetzner/control-plane/stack/compose.yml config -q
+
+      # The rendered runtime config, not the source text: the administrator's
+      # value (a sentinel here) must appear in the database service alone. The
+      # init overlay is the control case: it must carry the sentinel, or the
+      # negative check above it could not have failed.
+      - name: Check the rendered runtime config holds no administrator credential
+        env:
+          IMAGE: ghcr.io/branchleft/portal-apps@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          COMPOSE_PROFILES: apps
+          CONTROL_PLANE_DB_ADMIN_PASSWORD: ADMIN_SENTINEL_VALUE
+          CONTROL_PLANE_ZITADEL_DB_PASSWORD: validation-only
+          CONTROL_PLANE_ZITADEL_FIRST_ADMIN_USERNAME: validation-only
+          CONTROL_PLANE_ZITADEL_FIRST_ADMIN_PASSWORD: validation-only
+        run: |
+          stack=hetzner/control-plane/stack
+          runtime=$(docker compose -f "$stack/compose.yml" config --format json)
+          echo "$runtime" | jq -e '[.services | to_entries[] | select(.key != "db") | select(tostring | contains("ADMIN_SENTINEL_VALUE"))] | length == 0'
+          echo "$runtime" | jq -e '.services.zitadel.environment | keys | map(select(test("POSTGRES_ADMIN"))) | length == 0'
+          echo "$runtime" | jq -e '.services.zitadel.command[0] == "start-from-setup"'
+          init=$(docker compose -f "$stack/compose.yml" -f "$stack/compose.init.yml" config --format json)
+          echo "$init" | jq -e '.services.zitadel.environment.ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD == "ADMIN_SENTINEL_VALUE"'
+          echo "$init" | jq -e '.services.zitadel.command == ["init"]'
+
+      # The parsed keys, not the render and not the text: `docker compose config`
+      # inlines an env_file's contents and drops a missing optional one, and a
+      # text match misses a quoted key. The control case must exit 1 exactly,
+      # so a checker that stopped matching cannot pass the step silently.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the YAML parser the stack-keys check uses
+        run: python3 -m pip install --quiet pyyaml==6.0.3
+
+      - name: Check the stack files' parsed keys, and that the check still rejects a quoted env_file
+        run: |
+          checker=hetzner/provision/stack_keys_check.py
+          stack=hetzner/control-plane/stack
+          python3 "$checker" "$stack/compose.yml" "$stack/compose.init.yml"
+          set +e
+          python3 "$checker" hetzner/provision/fixtures/stack-keys-quoted-env-file.yml
+          status=$?
+          set -e
+          test "$status" -eq 1
 
   scripts-tests:
     name: Test (scripts)

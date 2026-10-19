@@ -1,0 +1,27 @@
+# The sign-in service's one-off initialisation. An overlay on compose.yml, run
+# by hand as the second `-f` file, never by the unit.
+#
+# This is the only place the database administrator's credential reaches the
+# sign-in service. The init phase needs it to create the service's own login
+# and database; every later phase connects as that login alone. The unit runs
+# `docker compose up` in this directory, and Compose reads only compose.yml
+# and compose.override.yml when no -f is given, so this file is not read.
+#
+# Run once, on a fresh database, with the database already started:
+#
+#   IMAGE=<the applications image digest> docker compose \
+#     --env-file /etc/branchleft/control-plane.env \
+#     -f compose.yml -f compose.init.yml run --rm zitadel
+#
+# It is idempotent: an existing login and database are left as they are.
+services:
+  zitadel:
+    command: init
+    restart: 'no'
+    # The base file's `ready` probe is for the running server, not this task.
+    healthcheck:
+      disable: true
+    environment:
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: postgres
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${CONTROL_PLANE_DB_ADMIN_PASSWORD:?set CONTROL_PLANE_DB_ADMIN_PASSWORD in /etc/branchleft/control-plane.env}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
