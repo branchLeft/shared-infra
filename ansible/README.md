@@ -116,10 +116,29 @@ tools bring:
 
 CI runs the same commands, and the harness over every role. The workflow
 (`.github/workflows/ansible.yml`) runs on every pull request and every push to
-`main`, with no path filter, so its job always reports. The job's first step
-decides whether a file under `ansible/`, the two lint files or the workflow
-itself changed; when none did, the remaining steps are skipped and the job
-passes.
+`main`, with no path filter, so its jobs always report. The first job decides
+whether a file under `ansible/`, the two lint files or the workflow itself
+changed; when none did, the other jobs are skipped and the gate passes.
+
+The workflow has three kinds of job:
+
+- `discover` lists the roles and patterns that hold a `molecule/` directory,
+  plus the fresh-role skeleton, from the repository tree. It fails if the list
+  is empty, so the shard job cannot skip silently.
+- `lint` runs the static checks once: yamllint, ansible-lint, mypy, ruff and the
+  harness's unit tests.
+- `shard` runs the harness once for each entry `discover` listed, in parallel.
+  Each shard has its own time limit, so the run time does not grow with the
+  number of roles in one job.
+
+The gate job is named `Lint and test the Ansible roles`. The ruleset requires
+a check with exactly that name, and a matrix job would report its checks under
+other names, so the gate stays one job. It needs every other job and fails
+unless each of them succeeded, skipped jobs included.
+
+How to add a pattern: nothing to edit here. A directory under
+`ansible/patterns/` or `ansible/roles/` with a `molecule/` directory is picked
+up by `discover` on the next run.
 
 ## The scenario limits the harness reads
 
