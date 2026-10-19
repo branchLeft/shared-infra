@@ -817,15 +817,18 @@ jobs:
   # queued at all.
   #
   # A second, finer skip: each plan job that ran also outputs `has_changes`,
-  # and its apply job's `if:` needs it to be 'true'. A plan that changes
-  # nothing, stack outputs included, skips its apply, so no approval is asked
-  # for it and the run graph shows the apply skipped; the plan job's summary
-  # says so on its first line. `scripts/plan-has-changes.py` computes it and
-  # fails closed: only a plan that parsed and is wholly `same` is `false`. It
-  # reads preview.json and a saved update plan (a second preview, in its own
-  # step), because preview.json cannot show an outputs-only change. The
-  # environments, their reviewers and the ungated-environment refusal are
-  # untouched: only when the gate is asked changes.
+  # and its apply job's `if:` skips only on an explicit 'false'. A plan that
+  # changes nothing, stack outputs included, skips its apply, so no approval
+  # is asked for it and the run graph shows the apply skipped; the plan job's
+  # summary says so on its first line. An unset output does not skip, and a
+  # plan job that was skipped or failed still skips its apply (the implicit
+  # success() of an `if:` with no status function). `scripts/plan-has-changes.py`
+  # computes it and fails closed: only a plan that parsed and is wholly `same`
+  # is `false`. It reads preview.json and a saved update plan (a second
+  # preview, in its own step), because preview.json cannot show an
+  # outputs-only change. The environments, their reviewers and the
+  # ungated-environment refusal are untouched: only when the gate is asked
+  # changes.
   #
   # A wrong filter — a path that feeds a stack's plan but isn't listed here —
   # produces a skip with no red anywhere, which would be worse than the
@@ -1085,7 +1088,7 @@ jobs:
           fi
 
       # Fails closed: `has_changes` is `false` only for a plan that parsed and
-      # changes nothing, outputs included; the script's header says what else
+      # changes nothing, outputs included; plan-has-changes.md says what else
       # counts. It also puts the verdict on the first line of the job summary.
       - name: Decide whether the plan changes anything
         id: noop
@@ -1114,11 +1117,11 @@ jobs:
     timeout-minutes: 30
     needs: [mail-plan]
     # A plan that changes nothing skips this job, so its environment is never
-    # asked for an approval. Anything but the string 'true' skips it, and a
-    # plan the decision step could not understand outputs 'true'.
+    # asked for an approval. Only the string 'false' skips it: an unset output
+    # asks, and a plan the decision step could not understand outputs 'true'.
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      needs.mail-plan.outputs.has_changes == 'true'
+      needs.mail-plan.outputs.has_changes != 'false'
 
     # The mail apply has an environment of its own. An approval releases every
     # job waiting in one environment for the run, so sharing `production` with
@@ -1255,7 +1258,7 @@ jobs:
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.changes.outputs.hetzner_network == 'true'
 
-    # See mail-plan: the apply job starts only when this is the string 'true'.
+    # See mail-plan: the apply job is skipped only when this is the string 'false'.
     outputs:
       has_changes: ${{ steps.noop.outputs.has_changes }}
 
@@ -1411,7 +1414,7 @@ jobs:
     # See mail-apply: a no-op plan skips this job before its environment is asked.
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      needs.hetzner-network-plan.outputs.has_changes == 'true'
+      needs.hetzner-network-plan.outputs.has_changes != 'false'
 
     # The Hetzner applies share `production`; the mail apply is in
     # `production-mail`, so an approval here cannot release it.
@@ -1572,7 +1575,7 @@ jobs:
       needs.changes.outputs.hetzner_estate == 'true' &&
       !failure() && !cancelled()
 
-    # See mail-plan: the apply job starts only when this is the string 'true'.
+    # See mail-plan: the apply job is skipped only when this is the string 'false'.
     outputs:
       has_changes: ${{ steps.noop.outputs.has_changes }}
 
@@ -1727,7 +1730,7 @@ jobs:
     # See mail-apply: a no-op plan skips this job before its environment is asked.
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      needs.hetzner-estate-plan.outputs.has_changes == 'true'
+      needs.hetzner-estate-plan.outputs.has_changes != 'false'
 
     environment: production
 

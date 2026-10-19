@@ -1,18 +1,6 @@
 #!/usr/bin/env python3
-"""Unit tests for plan-has-changes.
-
-This script decides whether the owner is asked to approve an apply. The
-failure that matters is a `false` over a plan that changes something: the
-change is then never applied and nobody is asked. Every test is aimed at that
-shape: an op the rule waves through, an output-only change nothing else would
-see, or an input that cannot be read yet is treated as clean.
-
-The fixtures follow what the Pulumi CLI wrote when run against a throwaway
-local stack: a `create` plan whose root stack output diff has `adds`, a
-resource whose output diff is the empty object, the secrets-provider
-ciphertext shape for a secret output, and the sentinel string an unknown value
-is written as.
-"""
+"""Unit tests for plan-has-changes: the failure that matters is a `false` over a change.
+Fixture shapes are those the Pulumi CLI wrote for a throwaway local stack."""
 
 import contextlib
 import importlib.util
@@ -202,11 +190,13 @@ class OutputOnlyTests(VerdictCase):
         verdict = self.verdict(no_op_preview(), plan({"adds": {"id": UNKNOWN}}))
         self.assertAsks(verdict, "output-changed")
 
-    def test_an_output_change_in_a_non_root_resource_is_not_read(self):
-        # Only the root stack's output diff is the stack's outputs.
+    def test_an_output_change_in_a_non_root_resource_is_a_change(self):
+        # RegisterResourceOutputs also sets the output diff of a component's
+        # entry, so a component-only output change is a change. This test
+        # first pinned the opposite, which encoded a gap, and was corrected.
         doc = plan(others={_SERVER: ["same"]})
         doc["resourcePlans"][_SERVER]["goal"]["outputDiff"] = {"adds": {"k": "v"}}
-        self.assertFalse(self.verdict(no_op_preview(), doc).has_changes)
+        self.assertAsks(self.verdict(no_op_preview(), doc), "output-changed")
 
 
 class PlanFileShapeTests(VerdictCase):
@@ -394,8 +384,260 @@ class FailClosedTests(VerdictCase):
         self.assertAsks(verdict, "internal-error")
 
     def test_a_deeply_nested_file_is_a_change_not_a_crash(self):
-        verdict = self.verdict("[" * 100000, plan())
-        self.assertTrue(verdict.has_changes)
+        # Balanced and past the parser's own recursion limit (about a million
+        # levels on a recent Python), so the parser itself raises RecursionError.
+        verdict = self.verdict("[" * 1000000 + "]" * 1000000, plan())
+        self.assertAsks(verdict, "preview-unreadable")
+
+
+def same_step(urn, **extra):
+    return {"op": "same", "urn": urn, **extra}
+
+
+def preview_of(*steps, summary=None):
+    doc = no_op_preview()
+    doc["steps"] = list(steps)
+    if summary is not None:
+        doc["changeSummary"] = summary
+    return doc
+
+
+def plan_with(urn, entry):
+    doc = plan()
+    doc["resourcePlans"][urn] = entry
+    return doc
+
+
+class NonRootEntryTests(VerdictCase):
+    """A planned resource other than the root must be a clean `same` entry."""
+
+    def test_a_goal_type_that_is_not_the_resource_type(self):
+        entry = {"goal": {"type": "update", "outputDiff": {}}, "steps": ["same"]}
+        self.assertAsks(self.verdict(no_op_preview(), plan_with(_SERVER, entry)), "plan-shape")
+
+    def test_an_entry_with_no_steps(self):
+        entry = {"goal": {"type": "update"}}
+        self.assertAsks(self.verdict(no_op_preview(), plan_with(_SERVER, entry)), "plan-shape")
+
+    def test_an_entry_whose_steps_are_null(self):
+        entry = {"goal": {"outputDiff": {}}, "steps": None}
+        self.assertAsks(self.verdict(no_op_preview(), plan_with(_SERVER, entry)), "plan-shape")
+
+    def test_an_entry_with_empty_steps_and_an_update_goal(self):
+        entry = {"goal": {"type": "update", "outputDiff": {}}, "steps": []}
+        self.assertAsks(self.verdict(no_op_preview(), plan_with(_SERVER, entry)), "plan-shape")
+
+    def test_an_entry_with_a_non_empty_output_diff(self):
+        entry = {"goal": {"outputDiff": {"adds": {"k": "v"}}}, "steps": ["same"]}
+        self.assertAsks(self.verdict(no_op_preview(), plan_with(_SERVER, entry)), "output-changed")
+
+    def test_an_entry_with_a_non_empty_input_diff(self):
+        entry = {"goal": {"inputDiff": {"updates": {"k": "v"}}}, "steps": ["same"]}
+        self.assertAsks(self.verdict(no_op_preview(), plan_with(_SERVER, entry)), "steps-changed")
+
+    def test_a_clean_entry_with_the_resource_type_is_no_change(self):
+        goal = {"type": "hcloud:index/server:Server", "outputDiff": {}, "inputDiff": {}}
+        entry = {"goal": goal, "steps": ["same"]}
+        self.assertFalse(self.verdict(no_op_preview(), plan_with(_SERVER, entry)).has_changes)
+
+
+class NullAndMissingTests(VerdictCase):
+    """A null or absent value is not an empty one."""
+
+    def test_null_diff_collections(self):
+        for key in ("adds", "updates", "deletes"):
+            with self.subTest(key=key):
+                self.assertAsks(
+                    self.verdict(no_op_preview(), plan({key: None})), "plan-shape"
+                )
+
+    def test_a_null_input_diff_collection(self):
+        entry = {"goal": {"inputDiff": {"adds": None}}, "steps": ["same"]}
+        self.assertAsks(self.verdict(no_op_preview(), plan_with(_SERVER, entry)), "plan-shape")
+
+    def test_root_steps_missing(self):
+        doc = plan()
+        del doc["resourcePlans"][_ROOT]["steps"]
+        self.assertAsks(self.verdict(no_op_preview(), doc), "plan-shape")
+
+    def test_root_steps_null(self):
+        doc = plan()
+        doc["resourcePlans"][_ROOT]["steps"] = None
+        self.assertAsks(self.verdict(no_op_preview(), doc), "plan-shape")
+
+    def test_root_steps_empty(self):
+        doc = plan(root_steps=())
+        self.assertAsks(self.verdict(no_op_preview(), doc), "plan-shape")
+
+
+class SameStepEvidenceTests(VerdictCase):
+    """A `same` step that carries its own evidence of a difference is a change."""
+
+    def differing(self, **extra):
+        return preview_of(same_step(_ROOT, **extra))
+
+    def test_old_and_new_inputs_that_differ_on_the_root(self):
+        doc = self.differing(oldState={"inputs": {"a": 1}}, newState={"inputs": {"a": 2}})
+        self.assertAsks(self.verdict(doc, plan()), "steps-changed")
+
+    def test_old_and_new_outputs_that_differ_on_another_resource(self):
+        doc = preview_of(
+            same_step(_ROOT),
+            same_step(_SERVER, oldState={"outputs": {"a": 1}}, newState={"outputs": {"a": 2}}),
+        )
+        self.assertAsks(self.verdict(doc, plan()), "steps-changed")
+
+    def test_diffs_listed_on_a_same_step(self):
+        for key in noop.STEP_DIFF_KEYS:
+            with self.subTest(key=key):
+                doc = self.differing(**{key: ["a"] if key != "detailedDiff" else {"a": {}}})
+                self.assertAsks(self.verdict(doc, plan()), "steps-changed")
+
+    def test_equal_old_and_new_state_is_no_change(self):
+        state = {"inputs": {"a": 1}, "outputs": {"b": 2}}
+        doc = self.differing(oldState=state, newState=dict(state))
+        self.assertFalse(self.verdict(doc, plan()).has_changes)
+
+    def test_one_side_missing_leaves_the_op_rule_alone(self):
+        doc = self.differing(oldState={"inputs": {"a": 1}})
+        self.assertFalse(self.verdict(doc, plan()).has_changes)
+
+    def test_empty_diff_lists_on_a_same_step_are_no_change(self):
+        doc = self.differing(diffs=[], detailedDiff={}, diffReasons=[], replaceReasons=[])
+        self.assertFalse(self.verdict(doc, plan()).has_changes)
+
+
+class KnownKeyTests(VerdictCase):
+    """A top-level key never seen in either file reaches the gate."""
+
+    def test_an_unknown_preview_key(self):
+        for key in ("changes", "resources"):
+            self.assertNotIn(key, noop.PREVIEW_KEYS)
+            with self.subTest(key=key):
+                doc = no_op_preview()
+                doc[key] = []
+                self.assertAsks(self.verdict(doc, plan()), "preview-shape")
+
+    def test_an_unknown_plan_key(self):
+        for key in ("changes", "resources"):
+            self.assertNotIn(key, noop.PLAN_KEYS)
+            with self.subTest(key=key):
+                doc = plan()
+                doc[key] = {}
+                self.assertAsks(self.verdict(no_op_preview(), doc), "plan-shape")
+
+    def test_every_known_preview_key_is_accepted(self):
+        doc = no_op_preview()
+        for key in noop.PREVIEW_KEYS - set(doc):
+            doc[key] = None
+        self.assertFalse(self.verdict(doc, plan()).has_changes)
+
+    def test_every_known_plan_key_is_accepted(self):
+        doc = plan()
+        for key in noop.PLAN_KEYS - set(doc):
+            doc[key] = {}
+        self.assertFalse(self.verdict(no_op_preview(), doc).has_changes)
+
+
+class RootIdentityTests(VerdictCase):
+    """The root is the exact stack type, named `<project>-<stack>`."""
+
+    def test_a_preview_whose_only_stack_has_another_type(self):
+        urn = f"{_STACK}example:pulumi:Stack::branchleft-mail-production"
+        self.assertAsks(self.verdict(preview(("same", urn)), plan()), "no-root-stack")
+
+    def test_a_preview_whose_stack_type_merely_ends_like_the_root(self):
+        urn = f"{_STACK}parent$pulumi:pulumi:Stack::branchleft-mail-production"
+        self.assertAsks(self.verdict(preview(("same", urn)), plan()), "no-root-stack")
+
+    def test_a_preview_whose_root_is_named_something_else(self):
+        urn = f"{_STACK}pulumi:pulumi:Stack::spoof"
+        self.assertAsks(self.verdict(preview(("same", urn)), plan()), "no-root-stack")
+
+    def test_a_second_stack_typed_step_beside_the_root(self):
+        urn = f"{_STACK}pulumi:pulumi:Stack::other"
+        doc = preview(("same", _ROOT), ("same", urn), summary={"same": 2})
+        self.assertAsks(self.verdict(doc, plan()), "no-root-stack")
+
+    def test_a_resource_named_like_a_root_urn_in_the_preview(self):
+        urn = f"{_STACK}hcloud:index/server:Server::pulumi:pulumi:Stack::x"
+        doc = preview(("same", _ROOT), ("same", urn), summary={"same": 2})
+        self.assertAsks(self.verdict(doc, plan()), "preview-shape")
+
+    def test_a_resource_named_like_a_root_urn_in_the_plan(self):
+        entry = {"goal": {"outputDiff": {}}, "steps": ["same"]}
+        doc = plan_with(f"{_STACK}hcloud:index/server:Server::pulumi:pulumi:Stack::x", entry)
+        self.assertAsks(self.verdict(no_op_preview(), doc), "plan-shape")
+
+    def test_a_second_stack_typed_entry_beside_the_root(self):
+        entry = {"goal": {"outputDiff": {}}, "steps": ["same"]}
+        doc = plan_with(f"{_STACK}pulumi:pulumi:Stack::other", entry)
+        self.assertAsks(self.verdict(no_op_preview(), doc), "plan-shape")
+
+    def test_a_plan_whose_only_stack_has_another_type(self):
+        doc = plan(root=f"{_STACK}example:pulumi:Stack::branchleft-mail-production")
+        self.assertAsks(self.verdict(no_op_preview(), doc), "plan-shape")
+
+    def test_a_plan_whose_root_is_named_something_else(self):
+        doc = plan(root=f"{_STACK}pulumi:pulumi:Stack::spoof")
+        self.assertAsks(self.verdict(no_op_preview(), doc), "plan-shape")
+
+
+class JsonHazardTests(VerdictCase):
+    def test_a_duplicate_key_in_the_preview(self):
+        text = '{"steps": [], "steps": [], "changeSummary": {"same": 1}}'
+        self.assertAsks(self.verdict(text, plan()), "preview-unreadable")
+
+    def test_a_duplicate_key_in_the_plan(self):
+        text = json.dumps(plan()).replace('"outputDiff": {}', '"outputDiff": {}, "outputDiff": {}')
+        self.assertAsks(self.verdict(no_op_preview(), text), "plan-unreadable")
+
+    def test_nan_and_infinity_in_either_file(self):
+        for literal in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(literal=literal):
+                text = json.dumps(no_op_preview()).replace('"duration": 1', f'"duration": {literal}')
+                self.assertAsks(self.verdict(text, plan()), "preview-unreadable")
+                text = json.dumps(plan()).replace('"v0"', literal)
+                self.assertAsks(self.verdict(no_op_preview(), text), "plan-unreadable")
+
+    @staticmethod
+    def nested(levels):
+        value = {}
+        for _ in range(levels):
+            value = {"k": value}
+        return value
+
+    def test_a_file_nested_beyond_the_depth_limit(self):
+        # Deep enough to parse, so only the depth rule stops it.
+        too_deep = noop.MAX_DEPTH + 100
+        self.assertAsks(self.verdict(no_op_preview(), plan() | {"config": self.nested(too_deep)}), "plan-unreadable")
+        self.assertAsks(
+            self.verdict(no_op_preview() | {"diagnostics": self.nested(too_deep)}, plan()), "preview-unreadable"
+        )
+
+    def test_a_file_nested_within_the_depth_limit_is_no_change(self):
+        shallow = noop.MAX_DEPTH // 2
+        self.assertFalse(self.verdict(no_op_preview(), plan() | {"config": self.nested(shallow)}).has_changes)
+
+    def test_the_same_file_passed_as_preview_and_plan(self):
+        path = self.files.write("both.json", {"steps": [], "resourcePlans": {}})
+        self.assertAsks(noop.evaluate(path, path), "same-file")
+
+    def test_the_same_file_by_another_name(self):
+        path = pathlib.Path(self.files.write("both.json", no_op_preview()))
+        link = self.files.dir / "link.json"
+        link.symlink_to(path)
+        self.assertAsks(noop.evaluate(str(path), str(link)), "same-file")
+
+    def test_fewer_same_in_the_summary_than_same_steps_listed(self):
+        doc = preview_of(same_step(_ROOT), same_step(_SERVER), summary={"same": 1})
+        self.assertAsks(self.verdict(doc, plan()), "preview-shape")
+
+    def test_more_same_in_the_summary_than_steps_listed_is_the_real_no_op(self):
+        # The preview hides same steps other than the root, so the summary
+        # counts more than the steps list.
+        doc = preview_of(same_step(_ROOT), summary={"same": 4})
+        self.assertFalse(self.verdict(doc, plan()).has_changes)
 
 
 class HeadlineTests(unittest.TestCase):
@@ -416,7 +658,14 @@ class HeadlineTests(unittest.TestCase):
                 )
 
     def test_a_plan_not_understood_says_so(self):
-        for reason in ("plan-unreadable", "preview-shape", "internal-error", "no-root-stack"):
+        for reason in (
+            "plan-unreadable",
+            "plan-shape",
+            "preview-shape",
+            "internal-error",
+            "no-root-stack",
+            "same-file",
+        ):
             with self.subTest(reason=reason):
                 self.assertEqual(
                     noop.headline(noop.Verdict(True, 0, reason)),
@@ -496,10 +745,57 @@ class MainTests(unittest.TestCase):
             self.files.write("plan.json", plan()),
             "--github-output",
             str(self.files.dir / "no-such-dir" / "output"),
+            "--github-summary",
+            str(self.files.dir / "summary"),
         ]
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
             self.assertEqual(noop.main(argv), 1)
+
+    def run_with_flags(self, flags):
+        argv = [
+            "plan-has-changes.py",
+            self.files.write("preview.json", no_op_preview()),
+            self.files.write("plan.json", plan()),
+            *flags,
+        ]
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            return noop.main(argv), buffer.getvalue()
+
+    def test_an_empty_output_path_exits_one_with_a_message(self):
+        summary = self.files.dir / "summary"
+        code, stdout = self.run_with_flags(
+            ["--github-output", "", "--github-summary", str(summary)]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("::error::--github-output names no file", stdout)
+        self.assertFalse(summary.exists())
+
+    def test_an_empty_summary_path_exits_one_with_a_message(self):
+        out = self.files.dir / "output"
+        code, stdout = self.run_with_flags(["--github-output", str(out), "--github-summary", ""])
+        self.assertEqual(code, 1)
+        self.assertIn("::error::--github-summary names no file", stdout)
+        self.assertFalse(out.exists())
+
+    def test_a_missing_summary_directory_exits_one(self):
+        code, stdout = self.run_with_flags(
+            [
+                "--github-output",
+                str(self.files.dir / "output"),
+                "--github-summary",
+                str(self.files.dir / "no-such-dir" / "summary"),
+            ]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("::error::cannot write the plan verdict", stdout)
+
+    def test_a_missing_output_flag_exits_two(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                self.run_with_flags(["--github-summary", str(self.files.dir / "summary")])
+        self.assertEqual(raised.exception.code, 2)
 
     def test_a_usage_error_exits_two(self):
         with contextlib.redirect_stderr(io.StringIO()):
@@ -516,6 +812,8 @@ class MainTests(unittest.TestCase):
             self.files.write("plan.json", plan()),
             "--github-output",
             str(out),
+            "--github-summary",
+            str(self.files.dir / "summary"),
         ]
         with contextlib.redirect_stdout(io.StringIO()):
             noop.main(argv)

@@ -591,6 +591,29 @@ def job_if(job: str) -> str:
     return ""
 
 
+def and_operands(condition: str) -> list[str]:
+    """Split an `if:` expression on `&&` outside parentheses and quotes."""
+    operands, current, depth, quote, i = [], "", 0, "", 0
+    while i < len(condition):
+        char = condition[i]
+        if quote:
+            quote = "" if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0 and condition.startswith("&&", i):
+            operands.append(current.strip())
+            current, i = "", i + 2
+            continue
+        current += char
+        i += 1
+    operands.append(current.strip())
+    return operands
+
+
 def needs_of(job: str) -> list[str]:
     match = re.search(r"^    needs: \[([^\]]*)\]", job, re.M)
     if not match:
@@ -607,20 +630,55 @@ class NoOpGateStructureTests(unittest.TestCase):
         # here, so it cannot arrive without the no-op condition below.
         self.assertEqual(sorted(gated_apply_jobs(self.text)), sorted(APPLY_JOBS))
 
-    def test_every_gated_apply_job_requires_its_plans_has_changes(self):
+    def test_every_gated_apply_job_needs_only_its_plan(self):
         for job in gated_apply_jobs(self.text):
             with self.subTest(job=job):
-                block = job_block(self.text, job)
-                plan = PLAN_OF_APPLY[job]
-                self.assertEqual(needs_of(block), [plan])
-                condition = job_if(block)
-                self.assertIn(
-                    f"needs.{plan}.outputs.has_changes == 'true'",
-                    condition,
-                    f"{job} can ask for approval on a plan that changes nothing",
+                self.assertEqual(needs_of(job_block(self.text, job)), [PLAN_OF_APPLY[job]])
+
+    def test_no_gated_apply_condition_has_an_or(self):
+        # An `||` lets one operand alone start the job, whatever the others say.
+        for job in gated_apply_jobs(self.text):
+            with self.subTest(job=job):
+                condition = job_if(job_block(self.text, job))
+                self.assertNotIn("||", condition, f"{job}: an `||` in the apply condition")
+
+    def test_every_gated_apply_condition_is_the_three_exact_operands(self):
+        for job in gated_apply_jobs(self.text):
+            with self.subTest(job=job):
+                operands = and_operands(job_if(job_block(self.text, job)))
+                self.assertEqual(
+                    sorted(operands),
+                    sorted(
+                        [
+                            "github.event_name == 'push'",
+                            "github.ref == 'refs/heads/main'",
+                            f"needs.{PLAN_OF_APPLY[job]}.outputs.has_changes != 'false'",
+                        ]
+                    ),
+                    f"{job}: the apply condition is not push, main and not-an-explicit-false",
                 )
-                self.assertIn("github.event_name == 'push'", condition)
-                self.assertIn("github.ref == 'refs/heads/main'", condition)
+
+    def test_the_has_changes_operand_skips_only_on_an_explicit_false(self):
+        # Tested alone: an unset output must not skip the apply, so the
+        # operator is `!=` and the literal is 'false', not `== 'true'`.
+        for job in gated_apply_jobs(self.text):
+            with self.subTest(job=job):
+                plan = PLAN_OF_APPLY[job]
+                found = [
+                    o
+                    for o in and_operands(job_if(job_block(self.text, job)))
+                    if "has_changes" in o
+                ]
+                self.assertEqual(
+                    found,
+                    [f"needs.{plan}.outputs.has_changes != 'false'"],
+                    f"{job}: the has_changes operand is not `!= 'false'`, as one operand",
+                )
+
+    def test_the_operand_splitter_reads_top_level_and_only(self):
+        self.assertEqual(and_operands("a == 1 && (b || c) && d"), ["a == 1", "(b || c)", "d"])
+        self.assertEqual(and_operands("a == 'x && y' && b"), ["a == 'x && y'", "b"])
+        self.assertEqual(and_operands("a || b"), ["a || b"])
 
     def test_each_plan_job_outputs_has_changes_from_the_noop_step(self):
         for job in PLAN_JOBS:
