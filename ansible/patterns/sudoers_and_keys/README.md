@@ -404,6 +404,10 @@ named in them (one harness run each).
   test compares the two lists.
 - **A forced command may hold no backslash** (a command that needs one must be put in
   a script on the host and run by its path), and a sudoers line may hold no tab.
+- **A forced command keeps no run of two spaces.** The key module joins the words of
+  the command with one space, so `command="/bin/x  two spaces"` is written back as
+  `command="/bin/x two spaces"`, and a second run reports no change. A consumer must not
+  rely on a double space in a forced command, including one inside a quoted argument.
 - **`exclusive: true` removes every key the pattern did not write.** That includes
   the operator's own key on the account Ansible logs in as: a role that manages that
   account must list its key among the declared keys, or the next run locks the
@@ -445,11 +449,11 @@ named in them (one harness run each).
   exercised.
 - **Only the Debian 13 image on Docker Desktop (arm64) was run**; an amd64 runner was
   not.
-- CI does not run this scenario today: the Ansible workflow's harness step runs over
-  `ansible/roles` only, so a change here is proven by the local run above. The
-  workflow's lint steps do cover `ansible/`, this pattern included, and
-  `ansible-lint` resolves `ansible.posix.authorized_key` only when the pinned
-  collections are installed, so that step needs them installed first.
+- CI runs this scenario: the Ansible workflow on `main` installs the pinned collections
+  and runs the harness over every role and every pattern under `ansible/patterns/`, so
+  this pattern's lint, interface and container steps run on each change. The workflow
+  installs the collections before `ansible-lint`, which is what lets it resolve
+  `ansible.posix.authorized_key`.
 
 ## How it is delivered
 
@@ -497,8 +501,8 @@ systemd, so it sets none of the settings that run systemd: no cgroup mount, no
 cgroup namespace mode, no tmpfs. It sets `command: sleep infinity`, so systemd is
 never the first process. The image's own command starts systemd, which needs those
 settings; the container can exit at once on a host with cgroup v2 without them (this
-is the behaviour reported for a GitHub-hosted runner, and has not been observed
-from this scenario). Molecule already replaces the image command with a sleep loop
+is the behaviour reported for a GitHub-hosted runner; on that runner CI runs this
+scenario's 14 steps and they pass). Molecule already replaces the image command with a sleep loop
 when none is set, so the key makes explicit what the default did and does not change
 the run. No `privileged`, no capabilities.
 
