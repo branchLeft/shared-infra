@@ -1,0 +1,317 @@
+# pull_trigger
+
+Installs on a host the one program that applies an exact, signed commit of this
+repository's `main` to that host, and nothing else.
+
+This README is written for a maintainer who is new to the repository. It follows
+the order the standard sets for a role README (ANS-14).
+
+**Status: built on the gated pull (ANS-17).** The design assumes the host pulls,
+after the deployment gate, an exact commit it verifies itself. If the owner
+decides on a gated push instead, this role is not the shape that decision needs
+and the work is discarded, not adapted.
+
+## What the role does, and what it does not
+
+The role installs `pull-trigger`, a single typed Python program, at
+`/usr/local/sbin/pull-trigger`, with its configuration in
+`/etc/pull-trigger/config.json` and two private directories (state and log). It
+installs the three programs the trigger runs (`git`, `gpg`, `ssh-keygen`).
+
+The program is meant to be the only thing a CI key can run. A CI job holds an SSH
+key whose `authorized_keys` line is restricted to this one command (see "How a
+caller uses it"). The caller sends one 40-digit commit id and a mode, `apply` or
+`check`. The program then:
+
+1. Validates the request before anything else: the whole text is one commit of
+   exactly 40 lowercase hex digits. A ref name, abbreviation, option, uppercase
+   digit, whitespace, newline, second word or empty text is refused. No shell is
+   used anywhere; every command is an argument list.
+2. Takes a single-flight lock. A second request while one runs is refused at
+   once, not queued.
+3. Fetches `main`, and only `main`, from the configured read-only remote into a
+   root-owned bare cache. The host holds no credential that can write to the
+   repository.
+4. Refuses the commit unless it is an ancestor of the fetched tip of `main`. A
+   commit that only another branch holds is never fetched; a commit that `main`
+   has since moved away from is refused by the ancestor test.
+5. Refuses a commit older than the last one applied on this host (the rollback
+   floor).
+6. Verifies the commit's signature with a throwaway keyring built from the
+   allowlisted public keys. Unsigned, bad signature, and signed by a key not on
+   the allowlist are three different refusals.
+7. Checks out exactly that commit into a fresh root-owned directory (never in
+   place) and checks that the host's playbook, taken from configuration and never
+   from the caller, is on the playbook allowlist and is a regular file inside
+   `ansible/playbooks/` of that commit.
+8. Runs `ansible-playbook` on that checkout for this host only (`-i localhost,
+--connection local`), with `--check --diff` in check mode. It prints one
+   summary line on standard output and sets a distinct exit status.
+
+It does not run the second pass that proves the apply left nothing to change: the
+apply workflow asks for a second request of the same commit (ANS-17) and reads
+the exit status (0 means nothing more to change). It does not manage users, SSH
+keys or sudoers (the `sudoers_and_keys` pattern does), install `ansible-playbook`
+(the host must have one at `pull_trigger_ansible_playbook`), decide which
+playbook a host runs beyond the one configured value, or hold any private key.
+
+## Interface
+
+The variables, their types, choices and defaults are in `meta/argument_specs.yml`
+and the same defaults are in `defaults/main.yml`. Ansible checks them when the
+role starts.
+
+| Variable                        | Meaning                                                                                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `pull_trigger_remote_url`       | The read-only remote: an `https://` or `file://` URL, no credential in it.                                  |
+| `pull_trigger_signers`          | Non-empty list of `{format, key}`: `ssh` (one public key line) or `openpgp` (an armoured public key block). |
+| `pull_trigger_playbooks`        | The playbook allowlist: plain relative paths under `ansible/playbooks/`.                                    |
+| `pull_trigger_playbook`         | The one playbook this host runs; must be on the allowlist.                                                  |
+| `pull_trigger_ansible_playbook` | Absolute path of `ansible-playbook` (default `/usr/local/bin/ansible-playbook`).                            |
+| `pull_trigger_timeout_seconds`  | Time after which a playbook run is stopped (default 3600).                                                  |
+| `pull_trigger_keep_runs`        | How many runs' output files to keep (default 50).                                                           |
+
+No variable is a secret. The signers are public keys, and the configuration is
+world-readable by design, so the role leaves the diff of the configuration
+visible and sets no `no_log`. A signer entry that looks like private key
+material is not accepted by the program (the configuration names only public keys),
+and the Molecule test asserts the installed configuration holds none. If a later
+variable ever holds a secret, it must get `no_log: true` and `diff: false` on
+every task that handles it (ANS-16).
+
+The state directory is capped at 60 characters, because the GnuPG agent's socket
+lives beneath it and a Unix socket path has a short limit.
+
+## Requirements
+
+- ansible-core at the version pinned in `ansible/requirements.txt`, for the
+  role itself; the role's `min_ansible_version` is that version.
+- No collections beyond `ansible.builtin`.
+- Target system: Debian (the role installs packages with `apt`), Python 3.13 (the
+  Debian 13 release), and an `ansible-playbook` on the host for the program to run.
+
+## What it changes on a host
+
+- Installs the packages `git`, `gpg`, `gpgconf` and `openssh-client`
+  (`tasks/packages.yml`).
+- `/usr/local/sbin/pull-trigger`: the program, owner root, mode 0755.
+- `/etc/pull-trigger/` (root, 0755) and `config.json` in it (root, 0644).
+- `/var/lib/pull-trigger/` (root, 0700): the cache, work directories, the
+  rollback floor (`last-applied`), the lock and the `current` link, all made by
+  the program on its first run.
+- `/var/log/pull-trigger/` (root, 0700): `pull-trigger.log` (one line per run)
+  and `runs/` (the playbook output of each run, newest `keep_runs` kept).
+
+No services, ports or users, and no change to SSH. Wiring the forced command
+into `authorized_keys` is the job of the `sudoers_and_keys` pattern.
+
+## How a caller uses it
+
+The `authorized_keys` line for the CI key (placeholder values; the pattern
+writes it):
+
+```text
+restrict,from="ALLOWED_CIDR",command="/usr/local/sbin/pull-trigger --mode apply" ssh-ed25519 PUBLIC_KEY_PLACEHOLDER ci-apply
+```
+
+and a second key with `--mode check` for the plan job. The mode is fixed on the
+`command=` side, so the caller cannot change it. What the caller types is the
+whole content of `SSH_ORIGINAL_COMMAND`, and it must be the commit alone. For
+a person on the host, the commit may instead be one positional word, and not both.
+
+```text
+ssh CI_USER@HOST 0123456789abcdef0123456789abcdef01234567
+```
+
+The summary line on standard output has fixed fields; nothing the caller typed is
+copied into it or into the log:
+
+```text
+pull-trigger verdict=applied exit=10 reason=ok mode=apply commit=<40 hex> playbook=<path> changed=1
+```
+
+The playbook's own output is relayed on standard error and kept in `runs/`.
+
+### Exit codes
+
+| Exit | Verdict        | Meaning                                                                                                                           |
+| ---- | -------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | `unchanged`    | The playbook ran and reported zero changes.                                                                                       |
+| 10   | `applied`      | An apply ran and reported changes.                                                                                                |
+| 11   | `would-change` | Check mode ran and reports that an apply would change something.                                                                  |
+| 20   | `refused`      | Refused before any change. See the reasons below.                                                                                 |
+| 21   | `busy`         | Another trigger holds the lock. Nothing was run. Ask again later.                                                                 |
+| 30   | `failed`       | The playbook started and failed (`playbook-failed`, `no-recap`, `interrupted`).                                                   |
+| 31   | `timed-out`    | The playbook ran past `pull_trigger_timeout_seconds` and was stopped.                                                             |
+| 40   | `error`        | The program could not get as far as the playbook: invalid or unsafe configuration or state, a missing tool, a failed git command. |
+
+The `reason` field of exit 20 is one of `bad-request`, `not-on-main`, `rollback`,
+`unsigned`, `bad-signature`, `signer-not-allowed`, `playbook-not-allowed`.
+
+The apply workflow's second run: after exit 10, ask for the same commit again.
+Exit 0 means the apply left nothing to change (a clean second run, which
+runs the playbook again and changes nothing); exit 10 on the second run is a
+failure of idempotence for the workflow to report. The program never decides that
+itself, and a repeated request is never skipped as "already done".
+
+## The playbook allowlist and what the checkout is
+
+- The allowlist is in the configuration, root-owned. Every entry is a relative
+  path, already normalised (no `.`, `..`, doubled or trailing slash), under
+  `ansible/playbooks/`, of plain name parts, ending in `.yml` or `.yaml`. An
+  entry that is anything else makes the whole configuration invalid (exit 40).
+- The host's playbook is one configured value. The caller supplies no path.
+  If it is not on the allowlist the request is refused (`playbook-not-allowed`).
+- In the commit the playbook must be a regular file (read from the commit's tree
+  with `ls-tree`, so a symbolic link or a missing file is refused), and after the
+  checkout its real path must still lie inside the checkout's `ansible/playbooks/`.
+- The checkout is made from the commit's tree with `read-tree` and
+  `checkout-index` into a new directory; it holds the files and no `.git`. A failed
+  checkout removes the half-made directory. An apply replaces `current` with a
+  link to the new directory only after the rollback floor is written, then removes
+  the previous directory.
+- The program runs `ansible-playbook` on the verified local checkout, and not
+  `ansible-pull`. `ansible-pull` would fetch the repository itself, by branch or by
+  a ref, after the verification, so what it ran could differ from what was
+  verified. Running on the checkout this program made means the bytes that run
+  are the bytes that were signed. A repository's `ansible.cfg` under `ansible/` is
+  read from the checkout.
+
+## Refusals leave the host untouched
+
+All of the refusals above happen before a work directory is promoted or the
+rollback floor changes. The cache may be updated by a fetch (a cache is not what
+the host runs). The scenario takes a description of the marker the playbooks
+write, the floor, the `current` link, every file in the checkout (owner, mode, size,
+modification time, hash) before and after each refusal and asserts the two are
+equal. A failed or timed-out apply is different: it does run, so the rollback floor
+is raised when the apply starts. A commit older than a failed apply is therefore
+refused as `rollback`, and the way forward after a failed apply is a newer commit.
+
+## Named limits
+
+- **Signer key handling.** The production signer of a merge is the hosting
+  platform's own signing key. Which key goes on the allowlist, how it is
+  obtained and how a rotation is made are decisions for the owner. The program
+  checks the signature with the keys it is given and requires the verifying
+  key's fingerprint to be on the allowlist (git reports a good SSH signature by
+  an unlisted key as only "untrusted", so the fingerprint is compared as well). It
+  does not fetch or refresh keys, and it does not check expiry of an SSH key
+  (SSH keys have none); an OpenPGP key that is expired or revoked in the
+  configured block fails verification.
+- **Replay.** The commit is the whole request and a commit stays valid while it is
+  an ancestor of `main` and newer than the floor. A recorded request can be sent
+  again and will run the playbook again; it can never run anything but a
+  signed, allowlisted commit of `main`, and never an older one than the last
+  applied. A second request of the applied commit changes nothing. It cannot be
+  made impossible, because ANS-17 requires that a request can be repeated.
+- **Lock semantics.** The lock is `flock` on a file in the state directory. The
+  kernel drops it when the holder ends, however it ends, so a dead holder cannot
+  wedge the host and there is no stale-lock cleanup. A second request is
+  refused with exit 21; it does not wait. Local callers who bypass the program are
+  not covered.
+- **The first run needs the network** to reach the remote, and a remote that is
+  down is exit 40, not a refusal.
+- **A root-owned configuration is trusted.** The program refuses a configuration
+  or directory that is not owned by the user that runs it or that others can write
+  to, but anyone who can write as root can change what it does.
+- **The playbook is what is trusted.** The program makes sure that the signed
+  playbook is the one that runs. It does not judge what the playbook does.
+
+## How to test it
+
+From the repository root, with the tools installed as `ansible/README.md`
+describes, one command runs lint, yamllint, the interface checks and the
+container test (the harness refuses a remote Docker engine):
+
+```text
+python3 ansible/harness/run_harness.py ansible/roles/pull_trigger
+```
+
+Run it with the Python of the virtual environment that holds the pinned tools.
+The scenario builds, inside the container, a throwaway bare remote, throwaway
+SSH and OpenPGP keys and a signed history (`molecule/default/files/make_fixtures.py`:
+good commits, one by an unlisted SSH key, one by an unlisted OpenPGP key, an
+unsigned commit, a commit whose message was changed after signing, a commit with
+no playbook, a commit whose playbook is a link, one with a playbook that fails, and a
+branch that is not `main`). The only step that reaches outside the container is
+the refresh of the package index, once, in `prepare.yml`. Every assertion in
+`molecule/default/verify.yml` names the behaviour it proves, so a failing line says
+which control broke:
+
+- the wrapper, its directories, the configuration, the state and log directories are
+  root-owned, not writable by others, and have the documented modes;
+- check mode reports a change and changes nothing;
+- a good commit applies exactly once; the checkout is exactly the commit, with no
+  `.git`; a second request is a clean second run;
+- an OpenPGP-signed commit applies;
+- each refusal, with its reason, leaving the host byte for byte unchanged: a commit not
+  on `main`, a commit only another branch holds, unsigned, a non-allowlisted SSH key,
+  a non-allowlisted OpenPGP key, a changed message, an older commit, a commit with no
+  playbook, a playbook that is a link, a playbook off the allowlist, a playbook that
+  climbs out of `ansible/playbooks/`, an allowlist that does, a configuration
+  anyone can write to;
+- malformed requests (short hex, uppercase, a ref name, an option, two words, a
+  commit and a command, a newline, a leading space, nothing) each refused, and no text
+  from a caller run;
+- a newer commit applies and only its checkout is kept;
+- a commit that main has moved away from since it was cached is refused;
+- a failing playbook is exit 30 and still raises the rollback floor;
+- two overlapping triggers: the second is exit 21 and the playbook ran once;
+- a run past its limit is stopped, exit 31;
+- the unit tests run again on Debian 13 (see below).
+
+The harness runs the role twice, so the second converge must report no change
+(the fixtures are made once, in `prepare.yml`).
+
+The unit tests (`tests/unit/test_pull_trigger.py`) use the standard library only,
+and make real git repositories with real SSH and OpenPGP signatures. They include a
+table of hostile requests and seeded property tests of the argument validator. The
+type check and lint of the program, from `ansible/`, with the virtual environment's tools:
+
+```text
+PYTHONPATH=roles/pull_trigger/files:roles/pull_trigger/tests/unit python -m unittest discover -b -s roles/pull_trigger/tests/unit -p "test_*.py"
+mypy --config-file roles/pull_trigger/pyproject.toml roles/pull_trigger/files/pull_trigger.py
+ruff check roles/pull_trigger
+```
+
+CI runs the harness over every role. It does not run a role's unit tests, mypy or
+ruff, so run these three commands before opening a pull request. They are the
+reason this role has its own `pyproject.toml`.
+
+### The test base image (a third-party image, trusted by digest)
+
+The scenario uses the same image as the `sudoers_and_keys` pattern, for the same
+reasons, and `ansible/patterns/sudoers_and_keys/README.md` ("The test base image")
+describes the image, its source and its limits. In short:
+`geerlingguy/docker-debian13-ansible`, referenced as `name:latest@sha256:<digest>`
+(CON-3), is Debian 13 with Python and `ansible-playbook` in it. The digest is the
+pin and the tag is informational. The scenario needs no systemd, so it sets
+`command: sleep infinity`, no cgroup mount, no cgroup namespace mode, no tmpfs, no
+`privileged` and no capabilities. The image declares `/sys/fs/cgroup` as a volume, so
+the platform sets `keep_volumes: false`, or every run would leave an unlabelled
+volume behind. Named limit: the image is trusted by its digest and by review, not
+built here.
+
+## How it is delivered
+
+A role reaches a host only through the gated workflow (ANS-17), never by running
+`ansible-playbook` by hand. The program is the host's half of that: the workflow
+holds a key that can run only this command, the deployment gate approves a merge
+commit, and the host verifies the commit again by itself. Nothing applies this role
+to a host yet.
+
+## How to change it safely
+
+1. Change the tasks, the defaults and `meta/argument_specs.yml` together: the spec
+   and the defaults must agree.
+2. Change the program, its configuration check, its `Why` sentences and the
+   exit-code table in this README together. Every sentence a refusal can give is
+   fixed text in the `Why` enumeration, so that no text from a caller reaches a log;
+   keep it that way.
+3. Keep every task able to run under `--check --diff`, and keep the role idempotent.
+4. A control is changed only with its proof: weaken the control in a copy, see the
+   named assertion in `verify.yml` or the unit test fail, restore it, see it pass.
+   Removing a refusal removes a line of the list in "How to test it".
+5. Run the harness and the three commands in "How to test it" before opening a
+   pull request.

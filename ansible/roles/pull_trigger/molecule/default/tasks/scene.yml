@@ -1,0 +1,26 @@
+---
+# Write a test configuration beside the installed one: the installed
+# configuration with its own state and log directories (so one scene never
+# disturbs another) and any overrides. Takes scene_name, and optionally
+# scene_overrides, scene_mode (file mode, default 0644) and scene_fresh (remove
+# the scene's directories first, default true).
+- name: 'Remove the scene directories: {{ scene_name }}'
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - '/var/tmp/ptt/st-{{ scene_name }}'
+    - '/var/tmp/ptt/log-{{ scene_name }}'
+  when: scene_fresh | default(true)
+
+- name: 'Write the configuration: {{ scene_name }}'
+  ansible.builtin.copy:
+    content: >-
+      {{ pull_trigger_base_config
+      | ansible.builtin.combine({'state_dir': '/var/tmp/ptt/st-' ~ scene_name, 'log_dir': '/var/tmp/ptt/log-' ~ scene_name})
+      | ansible.builtin.combine(scene_overrides | default({}))
+      | ansible.builtin.to_nice_json }}
+    dest: '/var/tmp/ptt/cfg/{{ scene_name }}.json'
+    owner: root
+    group: root
+    mode: '{{ scene_mode | default("0644") }}'

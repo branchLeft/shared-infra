@@ -1,0 +1,15 @@
+---
+# Not part of the interface: a caller cannot change these by setting a variable
+# of the same name in an inventory, because role vars outrank inventory vars.
+# The program reads its paths from the configuration this role writes, and the
+# state directory is held short on purpose (see the README).
+pull_trigger_program_path: /usr/local/sbin/pull-trigger
+pull_trigger_config_dir: /etc/pull-trigger
+pull_trigger_config_path: /etc/pull-trigger/config.json
+pull_trigger_state_dir: /var/lib/pull-trigger
+pull_trigger_log_dir: /var/log/pull-trigger
+pull_trigger_packages:
+  - git
+  - gpg
+  - gpgconf
+  - openssh-client

@@ -1,0 +1,42 @@
+---
+# One refusal case: take a snapshot, make the request, take a second snapshot,
+# and assert the answer and that nothing changed. Takes the dictionary `case`:
+# name, text, rc, reason, and optionally commit (default -), mode, config, state.
+- name: 'Snapshot before: {{ case.name }}'
+  ansible.builtin.include_tasks: snapshot.yml
+  vars:
+    snap_state: '{{ case.state | default(verify_state) }}'
+
+- name: 'Keep the snapshot taken before: {{ case.name }}'
+  ansible.builtin.set_fact:
+    pull_trigger_refuse_before: '{{ pull_trigger_snapshot_result.stdout }}'
+
+- name: 'Request: {{ case.name }}'
+  ansible.builtin.include_tasks: request.yml
+  vars:
+    request_name: '{{ case.name }}'
+    request_text: '{{ case.text }}'
+    request_mode: '{{ case.mode | default("apply") }}'
+    request_config: '{{ case.config | default(verify_installed_config) }}'
+
+- name: 'Snapshot after: {{ case.name }}'
+  ansible.builtin.include_tasks: snapshot.yml
+  vars:
+    snap_state: '{{ case.state | default(verify_state) }}'
+
+- name: 'Refused with the documented exit and reason: {{ case.name }}'
+  ansible.builtin.assert:
+    that:
+      - pull_trigger_request_result.rc == case.rc
+      - >-
+        ('exit=' ~ case.rc ~ ' reason=' ~ case.reason ~ ' mode=' ~ (case.shown_mode | default(case.mode | default('apply'))) ~
+        ' commit=' ~ (case.commit | default('-')) ~ ' ') in pull_trigger_request_result.stdout
+    fail_msg: 'wrong answer for {{ case.name }}: rc={{ pull_trigger_request_result.rc }} stdout={{ pull_trigger_request_result.stdout }}'
+    success_msg: 'refused as expected: {{ case.name }}'
+
+- name: 'The host and the previous checkout are byte for byte unchanged: {{ case.name }}'
+  ansible.builtin.assert:
+    that:
+      - pull_trigger_snapshot_result.stdout == pull_trigger_refuse_before
+    fail_msg: 'the refusal changed the host: {{ case.name }}'
+    success_msg: 'nothing changed: {{ case.name }}'

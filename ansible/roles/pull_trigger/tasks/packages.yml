@@ -1,0 +1,10 @@
+---
+# git fetches and checks out, gpg and gpgconf verify an OpenPGP signature and
+# stop the agent gpg starts, and ssh-keygen (in openssh-client) verifies an SSH
+# signature. The program checks that the ones it needs are present.
+- name: Install the programs the trigger runs
+  ansible.builtin.apt:
+    name: '{{ pull_trigger_packages }}'
+    state: present
+    update_cache: true
+    cache_valid_time: 3600

@@ -1,0 +1,1352 @@
+"""Unit tests for pull_trigger: the validator, the refusals, the state it keeps and the exit codes.
+
+The end-to-end cases use real git and real signatures (SSH always, OpenPGP when
+gpg is installed) on repositories made for the run, and a stand-in for
+ansible-playbook. Nothing reaches the network or a host. The role README gives
+the command, with the files directory on PYTHONPATH.
+"""
+
+import contextlib
+import dataclasses
+import hashlib
+import io
+import json
+import os
+import random
+import shutil
+import stat
+import string
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from collections.abc import Iterator, Mapping, Sequence
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pull_trigger as trigger
+
+GIT = Path(shutil.which("git") or "/usr/bin/git")
+SSH_KEYGEN = Path(shutil.which("ssh-keygen") or "/usr/bin/ssh-keygen")
+GPG = shutil.which("gpg")
+GPGCONF = shutil.which("gpgconf")
+
+ISOLATED = {
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_AUTHOR_NAME": "TEST_AUTHOR",
+    "GIT_AUTHOR_EMAIL": "author@example.invalid",
+    "GIT_COMMITTER_NAME": "TEST_AUTHOR",
+    "GIT_COMMITTER_EMAIL": "author@example.invalid",
+    "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z",
+    "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z",
+}
+
+# Every input the caller could send that must never reach git.
+HOSTILE_COMMITS = {
+    "short hex": "a" * 39,
+    "long hex": "a" * 41,
+    "uppercase": "A" * 40,
+    "mixed case": "aA" * 20,
+    "ref name": "main",
+    "head": "HEAD",
+    "abbreviation": "abcdef0",
+    "option": "--upload-pack=EXAMPLE",
+    "option-looking hex": "-" + "a" * 39,
+    "empty": "",
+    "space": " ",
+    "trailing newline": "a" * 40 + "\n",
+    "leading newline": "\n" + "a" * 40,
+    "embedded newline": "a" * 20 + "\n" + "a" * 20,
+    "trailing space": "a" * 40 + " ",
+    "two words": "a" * 40 + " " + "b" * 40,
+    "apply prefix": "apply " + "a" * 40,
+    "semicolon": "a" * 40 + ";id",
+    "dollar": "$(id)" + "a" * 35,
+    "backtick": "`id`" + "a" * 36,
+    "nul": "a" * 39 + "\x00",
+    "non-hex letter": "g" * 40,
+    "unicode digit": "\u0661" * 40,
+    "fullwidth": "\uff41" * 40,
+}
+
+
+def run(
+    argv: Sequence[str | Path],
+    cwd: Path | None = None,
+    extra: Mapping[str, str] | None = None,
+) -> str:
+    """Run a fixture command with an isolated git environment and return its output.
+
+    Raises:
+        AssertionError: The command exits with a non-zero status.
+    """
+    environment = {**os.environ, **ISOLATED, **(extra or {})}
+    done = subprocess.run(  # noqa: S603 - test fixtures, argument lists, no shell
+        [str(item) for item in argv],
+        cwd=cwd,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if done.returncode != 0:
+        message = f"{argv[:3]} failed: {done.stderr}"
+        raise AssertionError(message)
+    return done.stdout.strip()
+
+
+@dataclasses.dataclass(frozen=True)
+class SshKey:
+    """A throwaway SSH signing key."""
+
+    private: Path
+
+    @property
+    def public_line(self) -> str:
+        """The public key line, without its comment."""
+        return " ".join(self.private.with_suffix(".pub").read_text(encoding="utf-8").split()[:2])
+
+
+@dataclasses.dataclass(frozen=True)
+class GpgKey:
+    """A throwaway OpenPGP signing key and the keyring that holds it."""
+
+    home: Path
+    fingerprint: str
+    armoured: str
+
+
+def require_gpg() -> str:
+    """Return the path of gpg, or skip the test that needs it.
+
+    Raises:
+        unittest.SkipTest: gpg is not installed on this machine.
+    """
+    if GPG is None:
+        message = "gpg is not installed here; the Molecule scenario covers OpenPGP"
+        raise unittest.SkipTest(message)
+    return GPG
+
+
+def make_ssh_key(directory: Path, name: str) -> SshKey:
+    """Make an unencrypted ed25519 key pair."""
+    private = directory / name
+    run([SSH_KEYGEN, "-q", "-t", "ed25519", "-N", "", "-C", name, "-f", private])
+    return SshKey(private)
+
+
+def make_gpg_key(directory: Path, name: str) -> GpgKey:
+    """Make an OpenPGP signing key in its own keyring."""
+    home = Path(tempfile.mkdtemp(prefix="g"))
+    home.chmod(0o700)
+    base: list[str | Path] = [require_gpg(), "--batch", "--homedir", home]
+    run(
+        [*base, "--pinentry-mode", "loopback", "--passphrase", "", "--quick-gen-key", name]
+        + ["ed25519", "sign", "never"]
+    )
+    listing = run([*base, "--list-keys", "--with-colons"])
+    fingerprint = next(line.split(":")[9] for line in listing.split("\n") if line.startswith("fpr"))
+    armoured = run([*base, "--armor", "--export", fingerprint]) + "\n"
+    return GpgKey(home, fingerprint, armoured)
+
+
+def forget_gpg(key: GpgKey) -> None:
+    """Stop the agent a key's keyring started and remove the keyring."""
+    if GPGCONF is not None:
+        run([GPGCONF, "--homedir", key.home, "--kill", "all"])
+    shutil.rmtree(key.home, ignore_errors=True)
+
+
+class Remote:
+    """A bare repository standing in for the read-only remote, and the means to fill it."""
+
+    def __init__(self, bare: Path, work: Path) -> None:
+        """Remember the bare repository and the work repository that fills it."""
+        self.bare = bare
+        self.work = work
+
+    @classmethod
+    def create(cls, root: Path) -> "Remote":
+        """Make a bare repository and a work repository beside it."""
+        remote = cls(root / "remote.git", root / "work")
+        run([GIT, "init", "-q", "--bare", "-b", "main", remote.bare])
+        run([GIT, "init", "-q", "-b", "main", remote.work])
+        return remote
+
+    def commit(
+        self,
+        files: Mapping[str, str | None],
+        message: str,
+        parent: str | None,
+        signer: SshKey | GpgKey | None,
+    ) -> str:
+        """Make a commit whose tree is the work tree after ``files`` are applied.
+
+        A value of None removes the file; a value starting ``->`` makes a symlink.
+        """
+        for name, content in files.items():
+            path = self.work / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.unlink(missing_ok=True)
+            if content is None:
+                continue
+            if content.startswith("->"):
+                path.symlink_to(content[2:])
+            else:
+                path.write_text(content, encoding="utf-8")
+        run([GIT, "add", "-A"], cwd=self.work)
+        tree = run([GIT, "write-tree"], cwd=self.work)
+        argv: list[str | Path] = [GIT]
+        extra: dict[str, str] = {}
+        if isinstance(signer, SshKey):
+            argv += ["-c", "gpg.format=ssh", "-c", f"user.signingkey={signer.private}"]
+        elif isinstance(signer, GpgKey):
+            argv += ["-c", "gpg.format=openpgp", "-c", f"user.signingkey={signer.fingerprint}"]
+            argv += ["-c", f"gpg.program={require_gpg()}"]
+            extra["GNUPGHOME"] = str(signer.home)
+        argv += ["commit-tree", *(["-S"] if signer else []), *(["-p", parent] if parent else [])]
+        argv += ["-m", message, tree]
+        sha = run(argv, cwd=self.work, extra=extra)
+        run([GIT, "push", "-q", "--force", self.bare, f"{sha}:refs/heads/staging"], cwd=self.work)
+        return sha
+
+    def forge(self, sha: str, old: str, new: str) -> str:
+        """Rewrite a commit's message but keep its signature, which then no longer verifies."""
+        text = run([GIT, "cat-file", "commit", sha], cwd=self.work)
+        edited = text.replace(f"\n\n{old}", f"\n\n{new}") + "\n"
+        process = subprocess.run(  # noqa: S603 - test fixture
+            [str(GIT), "hash-object", "-t", "commit", "-w", "--stdin"],
+            cwd=self.work,
+            env={**os.environ, **ISOLATED},
+            input=edited,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        forged = process.stdout.strip()
+        run(
+            [GIT, "push", "-q", "--force", self.bare, f"{forged}:refs/heads/staging"], cwd=self.work
+        )
+        return forged
+
+    def set_ref(self, ref: str, sha: str) -> None:
+        """Point a branch of the remote at a commit."""
+        run([GIT, "update-ref", f"refs/heads/{ref}", sha], cwd=self.bare)
+
+
+def playbook_text(marker: str) -> str:
+    """Return the text of a placeholder playbook that carries a marker."""
+    return f"- hosts: all\n  tasks: []\n# {marker}\n"
+
+
+def fake_ansible(directory: Path, changed: int = 1, code: int = 0, sleep: float = 0.0) -> Path:
+    """Write a stand-in for ansible-playbook that records how it was called."""
+    script = directory / "ansible-playbook"
+    calls = directory / "calls.txt"
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys, time\n"
+        f"with open({str(calls)!r}, 'a', encoding='utf-8') as handle:\n"
+        "    handle.write(' '.join(sys.argv[1:]) + '\\n')\n"
+        "    handle.write('cwd=' + os.getcwd() + '\\n')\n"
+        f"time.sleep({sleep})\n"
+        "print('PLAY RECAP *****')\n"
+        f"print('localhost : ok=3 changed={changed} unreachable=0 failed=0 skipped=0')\n"
+        f"sys.exit({code})\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
+def snapshot(root: Path) -> dict[str, str]:
+    """Describe every file, directory and link under ``root``, so two states can be compared."""
+    state: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        relative = str(path.relative_to(root))
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            state[relative] = f"link {os.readlink(path)}"
+        elif stat.S_ISDIR(info.st_mode):
+            state[relative] = f"dir {stat.S_IMODE(info.st_mode):o}"
+        else:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            state[relative] = f"file {stat.S_IMODE(info.st_mode):o} {digest}"
+    return state
+
+
+class ArgumentTests(unittest.TestCase):
+    """The command line root sets and the one input the caller sends."""
+
+    def test_the_commit_of_forty_lowercase_hex_digits_is_accepted_from_the_ssh_text(self) -> None:
+        commit = "0123456789abcdef" * 2 + "01234567"
+        arguments = trigger.parse_arguments(["--mode", "apply"])
+        self.assertEqual(
+            commit, trigger.resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": commit})
+        )
+
+    def test_the_commit_is_accepted_as_the_one_positional_word_when_run_by_hand(self) -> None:
+        arguments = trigger.parse_arguments(["--mode", "check", "a" * 40])
+        self.assertEqual("a" * 40, trigger.resolve_commit(arguments, {}))
+
+    def test_every_hostile_commit_is_refused_from_the_ssh_text(self) -> None:
+        arguments = trigger.parse_arguments(["--mode", "apply"])
+        for name, value in HOSTILE_COMMITS.items():
+            with self.subTest(name):
+                with self.assertRaises(trigger.BadRequestError):
+                    trigger.resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": value})
+
+    def test_every_hostile_commit_is_refused_as_a_positional_word(self) -> None:
+        for name, value in HOSTILE_COMMITS.items():
+            with self.subTest(name):
+                if value.startswith("-"):
+                    with self.assertRaises(trigger.BadRequestError):
+                        trigger.parse_arguments(["--mode", "apply", value])
+                else:
+                    arguments = trigger.parse_arguments(["--mode", "apply", value])
+                    with self.assertRaises(trigger.BadRequestError):
+                        trigger.resolve_commit(arguments, {})
+
+    def test_a_commit_given_both_ways_is_refused(self) -> None:
+        arguments = trigger.parse_arguments(["--mode", "apply", "a" * 40])
+        with self.assertRaises(trigger.BadRequestError):
+            trigger.resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": "a" * 40})
+
+    def test_two_positional_words_and_none_are_refused(self) -> None:
+        for words in (["a" * 40, "b" * 40], []):
+            with self.subTest(words=words):
+                arguments = trigger.parse_arguments(["--mode", "apply", *words])
+                with self.assertRaises(trigger.BadRequestError):
+                    trigger.resolve_commit(arguments, {})
+
+    def test_an_empty_ssh_text_is_refused_not_treated_as_absent(self) -> None:
+        arguments = trigger.parse_arguments(["--mode", "apply", "a" * 40])
+        with self.assertRaises(trigger.BadRequestError):
+            trigger.resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": ""})
+
+    def test_a_random_string_is_accepted_only_if_it_is_exactly_forty_lowercase_hex_digits(
+        self,
+    ) -> None:
+        generator = random.Random(20261019)  # noqa: S311 - a fixed seed, not a secret
+        alphabet = string.hexdigits + string.ascii_letters + " \n\t\r-;$`'\"\\\x00\u0661"
+        arguments = trigger.parse_arguments(["--mode", "apply"])
+        for _ in range(3000):
+            length = generator.choice([0, 1, 39, 40, 40, 40, 41, 80])
+            candidate = "".join(generator.choice(alphabet) for _ in range(length))
+            expected = length == 40 and all(
+                character in "0123456789abcdef" for character in candidate
+            )
+            try:
+                accepted = trigger.resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": candidate})
+            except trigger.BadRequestError:
+                self.assertFalse(expected, repr(candidate))
+            else:
+                self.assertTrue(expected, repr(candidate))
+                self.assertEqual(candidate, accepted)
+
+    def test_forty_lowercase_hex_digits_are_always_accepted(self) -> None:
+        generator = random.Random(7)  # noqa: S311 - a fixed seed, not a secret
+        arguments = trigger.parse_arguments(["--mode", "apply"])
+        for _ in range(500):
+            candidate = "".join(generator.choice("0123456789abcdef") for _ in range(40))
+            self.assertEqual(
+                candidate,
+                trigger.resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": candidate}),
+            )
+
+    def test_the_mode_is_required_and_must_be_apply_or_check(self) -> None:
+        bad = [
+            [],
+            ["--mode"],
+            ["--mode", ""],
+            ["--mode", "APPLY"],
+            ["--mode", "apply;"],
+            ["--mode", "plan"],
+        ]
+        for argv in bad:
+            with self.subTest(argv=argv), self.assertRaises(trigger.BadRequestError):
+                trigger.parse_arguments(argv)
+
+    def test_an_option_given_twice_or_unknown_is_refused(self) -> None:
+        bad = [
+            ["--mode", "apply", "--mode", "check"],
+            ["--mode", "apply", "--config", "/a", "--config", "/b"],
+            ["--mode", "apply", "--help"],
+            ["--mode", "apply", "-c"],
+            ["--mode", "apply", "--"],
+            ["--mode", "apply", "--config", "relative"],
+            ["--mode", "apply", "--config"],
+        ]
+        for argv in bad:
+            with self.subTest(argv=argv), self.assertRaises(trigger.BadRequestError):
+                trigger.parse_arguments(argv)
+
+    def test_the_default_configuration_is_the_root_owned_etc_file(self) -> None:
+        arguments = trigger.parse_arguments(["--mode", "check"])
+        self.assertEqual(Path("/etc/pull-trigger/config.json"), arguments.config_path)
+        self.assertIs(trigger.Mode.CHECK, arguments.mode)
+
+
+class PlaybookPathTests(unittest.TestCase):
+    """What the allowlist may hold."""
+
+    def test_plain_paths_under_ansible_playbooks_are_accepted(self) -> None:
+        for path in (
+            "ansible/playbooks/host.yml",
+            "ansible/playbooks/host_1.yaml",
+            "ansible/playbooks/group/host-2.yml",
+        ):
+            with self.subTest(path):
+                self.assertEqual(path, trigger.canonical_playbook(path))
+
+    def test_every_hostile_path_is_rejected(self) -> None:
+        hostile = {
+            "parent": "ansible/playbooks/../../etc/host.yml",
+            "parent inside": "ansible/playbooks/a/../host.yml",
+            "absolute": "/ansible/playbooks/host.yml",
+            "absolute elsewhere": "/etc/host.yml",
+            "outside": "ansible/roles/host.yml",
+            "sibling": "ansible/playbooks2/host.yml",
+            "root only": "ansible/playbooks",
+            "dot": "ansible/playbooks/./host.yml",
+            "doubled slash": "ansible/playbooks//host.yml",
+            "trailing slash": "ansible/playbooks/host.yml/",
+            "no extension": "ansible/playbooks/host",
+            "wrong extension": "ansible/playbooks/host.sh",
+            "newline": "ansible/playbooks/host.yml\n",
+            "newline inside": "ansible/playbooks/ho\nst.yml",
+            "space": "ansible/playbooks/ho st.yml",
+            "hidden": "ansible/playbooks/.host.yml",
+            "backslash": "ansible\\playbooks\\host.yml",
+            "empty": "",
+            "unicode": "ansible/playbooks/h\u00f6st.yml",
+            "nul": "ansible/playbooks/host.yml\x00",
+        }
+        for name, path in hostile.items():
+            with self.subTest(name):
+                self.assertIsNone(trigger.canonical_playbook(path))
+
+
+def valid_config_data(**changes: object) -> dict[str, object]:
+    """Return a valid configuration, with ``changes`` applied."""
+    key = "ssh-ed25519 " + "A" * 68
+    data: dict[str, object] = {
+        "remote_url": "https://example.invalid/EXAMPLE_ORG/EXAMPLE_REPO",
+        "signers": [{"format": "ssh", "key": key}],
+        "playbooks": ["ansible/playbooks/host.yml"],
+        "playbook": "ansible/playbooks/host.yml",
+        "ansible_playbook": "/usr/local/bin/ansible-playbook",
+        "state_dir": "/var/lib/pull-trigger",
+        "log_dir": "/var/log/pull-trigger",
+        "timeout_seconds": 3600,
+        "keep_runs": 50,
+    }
+    data.update(changes)
+    return data
+
+
+class ConfigTests(unittest.TestCase):
+    """The configuration is root's: it is validated strictly and refused when unsafe."""
+
+    def test_a_valid_configuration_is_read(self) -> None:
+        config = trigger.parse_config(json.dumps(valid_config_data()))
+        self.assertEqual("ansible/playbooks/host.yml", config.playbook)
+        self.assertEqual(Path("/var/lib/pull-trigger"), config.state_dir)
+        self.assertEqual("ssh", config.signers[0].key_format)
+
+    def test_every_invalid_configuration_is_refused(self) -> None:
+        pgp_open = (
+            "-----BEGIN PGP PUBLIC KEY BLOCK-----\nAAAA\n-----END PGP PUBLIC KEY BLOCK-----\n"
+        )
+        cases: dict[str, dict[str, object]] = {
+            "ssh url": {"remote_url": "ssh://example.invalid/EXAMPLE"},
+            "http url": {"remote_url": "http://example.invalid/EXAMPLE"},
+            "ext transport": {"remote_url": "ext::sh -c EXAMPLE"},
+            "option url": {"remote_url": "--upload-pack=EXAMPLE"},
+            "file url with parent": {"remote_url": "file:///srv/../etc/EXAMPLE"},
+            "relative file url": {"remote_url": "file://relative/EXAMPLE"},
+            "url with space": {"remote_url": "https://example.invalid/a b"},
+            "no signers": {"signers": []},
+            "signer not a mapping": {"signers": ["ssh-ed25519 AAAA"]},
+            "signer with option": {
+                "signers": [{"format": "ssh", "key": 'command="id" ssh-ed25519 ' + "A" * 68}]
+            },
+            "signer with newline": {
+                "signers": [{"format": "ssh", "key": "ssh-ed25519 " + "A" * 68 + "\nssh-rsa AAAA"}]
+            },
+            "signer unknown type": {"signers": [{"format": "ssh", "key": "ssh-foo " + "A" * 68}]},
+            "signer format": {"signers": [{"format": "x509", "key": "EXAMPLE"}]},
+            "signer extra field": {
+                "signers": [{"format": "ssh", "key": "ssh-ed25519 " + "A" * 68, "x": 1}]
+            },
+            "signer pgp garbage": {"signers": [{"format": "openpgp", "key": "EXAMPLE"}]},
+            "signer pgp trailing text": {
+                "signers": [{"format": "openpgp", "key": pgp_open + "extra"}]
+            },
+            "no playbooks": {"playbooks": []},
+            "allowlist traversal": {"playbooks": ["ansible/playbooks/../../etc/x.yml"]},
+            "allowlist absolute": {"playbooks": ["/etc/x.yml"]},
+            "allowlist not text": {"playbooks": [1]},
+            "playbook not text": {"playbook": 3},
+            "relative state dir": {"state_dir": "state"},
+            "state dir with parent": {"state_dir": "/var/lib/../etc"},
+            "state dir too long for the agent socket": {"state_dir": "/var/lib/" + "x" * 60},
+            "relative program": {"ansible_playbook": "ansible-playbook"},
+            "timeout zero": {"timeout_seconds": 0},
+            "timeout huge": {"timeout_seconds": 10**9},
+            "timeout text": {"timeout_seconds": "3600"},
+            "timeout bool": {"timeout_seconds": True},
+            "keep zero": {"keep_runs": 0},
+        }
+        for name, changes in cases.items():
+            with self.subTest(name), self.assertRaises(trigger.ConfigError):
+                trigger.parse_config(json.dumps(valid_config_data(**changes)))
+
+    def test_a_missing_or_an_unknown_key_is_refused(self) -> None:
+        missing = valid_config_data()
+        del missing["keep_runs"]
+        extra = valid_config_data(unexpected="EXAMPLE")
+        for name, data in {"missing": missing, "unknown": extra}.items():
+            with self.subTest(name), self.assertRaises(trigger.ConfigError):
+                trigger.parse_config(json.dumps(data))
+
+    def test_text_that_is_not_a_json_object_is_refused(self) -> None:
+        for text in ("", "not json", "[]", "null", '"text"', "{"):
+            with self.subTest(text), self.assertRaises(trigger.ConfigError):
+                trigger.parse_config(text)
+
+    def test_the_selected_playbook_is_not_checked_against_the_path_rules_by_the_parser(
+        self,
+    ) -> None:
+        config = trigger.parse_config(json.dumps(valid_config_data(playbook="../../etc/EXAMPLE")))
+        self.assertNotIn(config.playbook, config.playbooks)
+
+
+class ConfigFileTests(unittest.TestCase):
+    """The file must be safe to trust before it is read."""
+
+    def setUp(self) -> None:
+        """Make a private directory for the file."""
+        self.root = Path(tempfile.mkdtemp(prefix="pt-config-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.root.chmod(0o755)
+        self.path = self.root / "config.json"
+
+    def write(self, mode: int) -> None:
+        """Write a valid configuration at the given mode."""
+        self.path.write_text(json.dumps(valid_config_data()), encoding="utf-8")
+        self.path.chmod(mode)
+
+    def test_a_file_owned_by_the_user_and_not_writable_by_others_is_read(self) -> None:
+        self.write(0o644)
+        self.assertEqual("ansible/playbooks/host.yml", trigger.load_config(self.path).playbook)
+
+    def test_a_file_writable_by_group_or_others_is_refused(self) -> None:
+        for mode in (0o664, 0o646, 0o666, 0o622):
+            self.write(mode)
+            with self.subTest(oct(mode)), self.assertRaises(trigger.ConfigError):
+                trigger.load_config(self.path)
+
+    def test_a_directory_writable_by_others_is_refused(self) -> None:
+        self.write(0o644)
+        self.root.chmod(0o777)
+        with self.assertRaises(trigger.ConfigError):
+            trigger.load_config(self.path)
+
+    def test_a_symlink_is_refused_even_to_a_good_file(self) -> None:
+        self.write(0o644)
+        link = self.root / "link.json"
+        link.symlink_to(self.path)
+        with self.assertRaises(trigger.ConfigError):
+            trigger.load_config(link)
+
+    def test_a_missing_file_and_a_directory_are_refused(self) -> None:
+        with self.assertRaises(trigger.ConfigError):
+            trigger.load_config(self.root / "missing.json")
+        with self.assertRaises(trigger.ConfigError):
+            trigger.load_config(self.root)
+
+    def test_a_file_that_is_too_large_is_refused(self) -> None:
+        self.path.write_text(" " * (trigger.MAX_CONFIG_BYTES + 10), encoding="utf-8")
+        self.path.chmod(0o644)
+        with self.assertRaises(trigger.ConfigError):
+            trigger.load_config(self.path)
+
+
+class JudgeSignatureTests(unittest.TestCase):
+    """The decision from what git reports, as a table."""
+
+    ALLOWED = frozenset({"SHA256:ALLOWED", "ABCDEF0123456789ABCDEF0123456789ABCDEF01"})
+
+    def test_a_good_signature_by_an_allowlisted_key_is_accepted(self) -> None:
+        trigger.judge_signature(True, "G", ("SHA256:ALLOWED", ""), self.ALLOWED)
+        trigger.judge_signature(
+            True, "U", ("OTHER_SUBKEY", "ABCDEF0123456789ABCDEF0123456789ABCDEF01"), self.ALLOWED
+        )
+
+    def test_the_table_of_refusals(self) -> None:
+        table: list[tuple[str, bool, str, tuple[str, str], type[trigger.RefusedError]]] = [
+            ("unsigned", False, "N", ("", ""), trigger.UnsignedError),
+            (
+                "unsigned with a stray status",
+                False,
+                "G",
+                ("SHA256:ALLOWED", ""),
+                trigger.UnsignedError,
+            ),
+            ("bad signature", True, "B", ("", ""), trigger.BadSignatureError),
+            ("expired signature", True, "X", ("SHA256:ALLOWED", ""), trigger.BadSignatureError),
+            ("expired key", True, "Y", ("SHA256:ALLOWED", ""), trigger.BadSignatureError),
+            ("revoked key", True, "R", ("SHA256:ALLOWED", ""), trigger.BadSignatureError),
+            (
+                "good ssh signature by a key not listed",
+                True,
+                "U",
+                ("SHA256:OTHER", ""),
+                trigger.SignerNotAllowedError,
+            ),
+            ("good signature, no fingerprint", True, "G", ("", ""), trigger.SignerNotAllowedError),
+            ("cannot be checked", True, "E", ("SHA256:ALLOWED", ""), trigger.SignerNotAllowedError),
+            ("signed, git says none", True, "N", ("", ""), trigger.SignerNotAllowedError),
+            ("unknown letter", True, "Z", ("SHA256:ALLOWED", ""), trigger.SignerNotAllowedError),
+        ]
+        for name, signed, status, fingerprints, expected in table:
+            with self.subTest(name), self.assertRaises(expected):
+                trigger.judge_signature(signed, status, fingerprints, self.ALLOWED)
+
+
+class LockTests(unittest.TestCase):
+    """Single flight: a second trigger is refused, and a dead holder frees the lock."""
+
+    def setUp(self) -> None:
+        """Make a directory for the lock file."""
+        self.root = Path(tempfile.mkdtemp(prefix="pt-lock-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.lock = self.root / "lock"
+
+    def test_a_second_holder_is_refused_while_the_first_holds_the_lock(self) -> None:
+        with trigger.single_flight(self.lock):
+            with self.assertRaises(trigger.BusyError), trigger.single_flight(self.lock):
+                self.fail("the second holder must not get the lock")
+        with trigger.single_flight(self.lock):
+            pass
+
+    def test_a_holder_that_is_killed_does_not_leave_the_lock_held(self) -> None:
+        holder = subprocess.Popen(  # noqa: S603 - a test helper process
+            [
+                sys.executable,
+                "-c",
+                "import fcntl, sys, time\n"
+                f"f = open({str(self.lock)!r}, 'w')\n"
+                "fcntl.flock(f, fcntl.LOCK_EX)\n"
+                "print('held', flush=True)\n"
+                "time.sleep(60)\n",
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.assertIsNotNone(holder.stdout)
+        self.assertEqual("held", (holder.stdout or io.StringIO()).readline().strip())
+        with self.assertRaises(trigger.BusyError), trigger.single_flight(self.lock):
+            self.fail("the lock is held by a live process")
+        holder.kill()
+        holder.wait()
+        with trigger.single_flight(self.lock):
+            pass
+
+
+class ChangedCountTests(unittest.TestCase):
+    """The play recap decides applied against unchanged."""
+
+    def count(self, text: str) -> int | None:
+        """Write run output and read the changed total."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "run.log"
+            path.write_text(text, encoding="utf-8")
+            return trigger.changed_count(path)
+
+    def test_the_changed_figure_is_read_from_the_recap(self) -> None:
+        text = "PLAY RECAP\nlocalhost : ok=5 changed=2 unreachable=0 failed=0 skipped=1\n"
+        self.assertEqual(2, self.count(text))
+
+    def test_several_hosts_are_summed(self) -> None:
+        text = (
+            "a : ok=1 changed=1 unreachable=0 failed=0\nb : ok=1 changed=3 unreachable=0 failed=0\n"
+        )
+        self.assertEqual(4, self.count(text))
+
+    def test_output_without_a_recap_has_no_figure(self) -> None:
+        self.assertIsNone(self.count("changed=9 is not a recap line\n"))
+
+
+@dataclasses.dataclass
+class Scene:
+    """One test's remote, host directories and configuration."""
+
+    root: Path
+    remote: Remote
+    config_path: Path
+    state: Path
+    logs: Path
+    ansible: Path
+    calls: Path
+    calls_before: int = 0
+
+
+class Run:
+    """The outcome of one call of the program."""
+
+    def __init__(self, code: int, summary: str, errors: str, relayed: str) -> None:
+        """Keep the exit status, the summary line, stderr and the relayed playbook output."""
+        self.code = code
+        self.summary = summary
+        self.errors = errors
+        self.relayed = relayed
+
+    def has(self, field: str) -> bool:
+        """Say whether the summary line carries the field, such as ``reason=unsigned``."""
+        return f" {field} " in f"{self.summary} "
+
+
+class EndToEndTests(unittest.TestCase):
+    """The whole program on real repositories and real signatures."""
+
+    keys: dict[str, SshKey]
+    pgp: dict[str, GpgKey]
+    root: Path
+    remote: Remote
+    commits: dict[str, str]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Make the keys and the history every test reads."""
+        cls.root = Path(tempfile.mkdtemp(prefix="pt-fixture-"))
+        keys_dir = cls.root / "keys"
+        keys_dir.mkdir()
+        cls.keys = {
+            "a": make_ssh_key(keys_dir, "signer-a"),
+            "b": make_ssh_key(keys_dir, "signer-b"),
+        }
+        cls.pgp = {}
+        if GPG is not None:
+            cls.pgp = {
+                "g": make_gpg_key(cls.root, "signer-g"),
+                "h": make_gpg_key(cls.root, "signer-h"),
+            }
+        cls.remote = Remote.create(cls.root)
+        a, b = cls.keys["a"], cls.keys["b"]
+        play = "ansible/playbooks/host.yml"
+        commits: dict[str, str] = {}
+        commits["c1"] = cls.remote.commit({play: playbook_text("c1")}, "c1", None, a)
+        commits["c2"] = cls.remote.commit({play: playbook_text("c2")}, "c2", commits["c1"], a)
+        commits["other_key"] = cls.remote.commit(
+            {play: playbook_text("b")}, "by b", commits["c2"], b
+        )
+        commits["unsigned"] = cls.remote.commit(
+            {play: playbook_text("u")}, "unsigned", commits["other_key"], None
+        )
+        signed = cls.remote.commit(
+            {play: playbook_text("t")}, "to be tampered", commits["unsigned"], a
+        )
+        commits["tampered"] = cls.remote.forge(signed, "to be tampered", "tampered after signing")
+        commits["c6"] = cls.remote.commit({play: playbook_text("c6")}, "c6", commits["tampered"], a)
+        parent = commits["c6"]
+        if cls.pgp:
+            commits["pgp_good"] = cls.remote.commit(
+                {play: playbook_text("g")}, "by g", parent, cls.pgp["g"]
+            )
+            commits["pgp_other"] = cls.remote.commit(
+                {play: playbook_text("h")}, "by h", commits["pgp_good"], cls.pgp["h"]
+            )
+            parent = commits["pgp_other"]
+        commits["no_playbook"] = cls.remote.commit({play: None}, "no playbook", parent, a)
+        commits["symlink"] = cls.remote.commit(
+            {play: "->../../../etc/hostname"}, "link", commits["no_playbook"], a
+        )
+        commits["tip"] = cls.remote.commit(
+            {play: playbook_text("tip")}, "tip", commits["symlink"], a
+        )
+        side = cls.remote.commit({play: playbook_text("side")}, "side", commits["c2"], a)
+        commits["side"] = side
+        cls.remote.set_ref("main", commits["tip"])
+        cls.remote.set_ref("side", side)
+        cls.commits = commits
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Remove the fixture and stop any agent it started."""
+        for key in cls.pgp.values():
+            forget_gpg(key)
+        shutil.rmtree(cls.root, ignore_errors=True)
+
+    def make_scene(self, **changes: object) -> Scene:
+        """Make a host: its own copy of the remote, state and log directories, and configuration."""
+        # A short path: gpg's agent socket lives under the state directory and a long path fails.
+        root = Path(tempfile.mkdtemp(prefix="pt", dir="/tmp")).resolve()  # noqa: S108
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        root.chmod(0o700)
+        bare = root / "remote.git"
+        shutil.copytree(self.remote.bare, bare)
+        scene_remote = Remote(bare, self.remote.work)
+        signers: list[dict[str, str]] = [{"format": "ssh", "key": self.keys["a"].public_line}]
+        config_dir = root / "etc"
+        config_dir.mkdir(mode=0o755)
+        helper = root / "bin"
+        helper.mkdir()
+        ansible = fake_ansible(helper)
+        data = valid_config_data(
+            remote_url=f"file://{bare}",
+            signers=signers,
+            ansible_playbook=str(ansible),
+            state_dir=str(root / "state"),
+            log_dir=str(root / "logs"),
+            timeout_seconds=60,
+        )
+        data.update(changes)
+        config_path = config_dir / "config.json"
+        config_path.write_text(json.dumps(data), encoding="utf-8")
+        config_path.chmod(0o644)
+        return Scene(
+            root,
+            scene_remote,
+            config_path,
+            root / "state",
+            root / "logs",
+            ansible,
+            helper / "calls.txt",
+        )
+
+    def request(
+        self,
+        scene: Scene,
+        commit: str,
+        mode: str = "apply",
+        stop: threading.Event | None = None,
+        via_ssh: bool = True,
+    ) -> Run:
+        """Call the program as the forced command would, and collect what it printed."""
+        out, relayed, errors = io.StringIO(), io.BytesIO(), io.StringIO()
+        argv = ["--mode", mode, "--config", str(scene.config_path)]
+        environ: dict[str, str] = {}
+        if via_ssh:
+            environ["SSH_ORIGINAL_COMMAND"] = commit
+        else:
+            argv.append(commit)
+        tools = trigger.Tools(
+            git=GIT,
+            gpg=Path(GPG or "/usr/bin/gpg"),
+            gpgconf=Path(GPGCONF or "/usr/bin/gpgconf"),
+            ssh_keygen=SSH_KEYGEN,
+        )
+        with contextlib.redirect_stderr(errors):
+            code = trigger.main(argv, environ, stop or threading.Event(), tools, out, relayed)
+        return Run(code, out.getvalue().strip(), errors.getvalue(), relayed.getvalue().decode())
+
+    def calls(self, scene: Scene) -> list[str]:
+        """Return the lines the stand-in ansible-playbook recorded."""
+        return scene.calls.read_text(encoding="utf-8").splitlines() if scene.calls.exists() else []
+
+    def prime(self, scene: Scene) -> None:
+        """Apply the oldest commit, so the host has a checkout and a record to protect."""
+        first = self.request(scene, self.commits["c2"])
+        self.assertEqual(10, first.code, first.summary + first.errors)
+        scene.calls_before = len(self.calls(scene))
+
+    def assert_no_new_run(self, scene: Scene) -> None:
+        """Assert that the playbook was not started since the scene was primed."""
+        self.assertEqual(scene.calls_before, len(self.calls(scene)))
+
+    def assert_refused(self, result: Run, reason: str, code: int = 20) -> None:
+        """Assert a refusal with its named reason, and that nothing was run."""
+        self.assertEqual(code, result.code, result.summary + result.errors)
+        self.assertTrue(result.has(f"reason={reason}"), result.summary)
+
+    @contextlib.contextmanager
+    def no_change_to_the_host(self, scene: Scene) -> Iterator[None]:
+        """Assert that the state kept for a refusal to protect is byte for byte the same."""
+        before = self.host_state(scene)
+        yield
+        self.assertEqual(before, self.host_state(scene))
+
+    def host_state(self, scene: Scene) -> dict[str, str]:
+        """Describe the state that a refusal must leave alone: floor, current checkout and work."""
+        state = snapshot(scene.state) if scene.state.exists() else {}
+        return {
+            name: value
+            for name, value in state.items()
+            if not name.startswith(("repo.git", "tmp", "home"))
+        }
+
+    def test_a_good_commit_is_applied_exactly_once_and_recorded(self) -> None:
+        scene = self.make_scene()
+        result = self.request(scene, self.commits["c6"])
+        self.assertEqual(10, result.code, result.summary + result.errors)
+        self.assertTrue(result.has("verdict=applied"))
+        self.assertTrue(result.has(f"commit={self.commits['c6']}"))
+        self.assertTrue(result.has("playbook=ansible/playbooks/host.yml"))
+        self.assertEqual(1, len([line for line in self.calls(scene) if line.startswith("-i")]))
+        self.assertIn("PLAY RECAP", result.relayed)
+        log = (scene.logs / "pull-trigger.log").read_text(encoding="utf-8")
+        self.assertIn(f"commit={self.commits['c6']}", log)
+        self.assertEqual(
+            f"{self.commits['c6']}\n", (scene.state / "last-applied").read_text(encoding="utf-8")
+        )
+
+    def test_the_playbook_runs_against_this_host_only_from_the_exact_checkout(self) -> None:
+        scene = self.make_scene()
+        self.request(scene, self.commits["c6"])
+        arguments, workdir = self.calls(scene)[:2]
+        checkout = (scene.state / "current").resolve()
+        self.assertEqual(
+            f"-i localhost, --connection local {checkout}/ansible/playbooks/host.yml",
+            arguments,
+        )
+        self.assertEqual(f"cwd={checkout}/ansible", workdir)
+        self.assertTrue(checkout.name.startswith(self.commits["c6"]))
+        self.assertIn("# c6", (checkout / "ansible/playbooks/host.yml").read_text(encoding="utf-8"))
+        self.assertFalse((checkout / ".git").exists())
+
+    def test_the_directories_and_files_the_program_keeps_are_private_to_its_user(self) -> None:
+        scene = self.make_scene()
+        self.request(scene, self.commits["c6"])
+        for path in (
+            scene.state,
+            scene.state / "repo.git",
+            scene.state / "work",
+            scene.logs,
+            scene.logs / "runs",
+        ):
+            self.assertEqual(0o700, stat.S_IMODE(path.stat().st_mode), str(path))
+        for path in (
+            scene.logs / "pull-trigger.log",
+            scene.state / "last-applied",
+            scene.state / "lock",
+        ):
+            self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode), str(path))
+        for path in (scene.logs / "runs").iterdir():
+            self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode), str(path))
+
+    def test_a_second_request_for_the_same_commit_runs_cleanly_again(self) -> None:
+        scene = self.make_scene()
+        self.request(scene, self.commits["c6"])
+        scene.ansible.write_text(
+            scene.ansible.read_text(encoding="utf-8").replace("changed=1", "changed=0"),
+            encoding="utf-8",
+        )
+        second = self.request(scene, self.commits["c6"])
+        self.assertEqual(0, second.code, second.summary + second.errors)
+        self.assertTrue(second.has("verdict=unchanged"))
+        self.assertEqual(2, len([line for line in self.calls(scene) if line.startswith("-i")]))
+        self.assertEqual(1, len(list((scene.state / "work").iterdir())))
+
+    def test_a_later_commit_replaces_the_current_checkout_and_removes_the_old_one(self) -> None:
+        scene = self.make_scene()
+        self.request(scene, self.commits["c2"])
+        first = (scene.state / "current").resolve()
+        self.request(scene, self.commits["c6"])
+        second = (scene.state / "current").resolve()
+        self.assertNotEqual(first, second)
+        self.assertFalse(first.exists())
+        self.assertEqual([second], list((scene.state / "work").iterdir()))
+
+    def test_a_check_request_changes_nothing_and_asks_for_check_and_diff(self) -> None:
+        scene = self.make_scene()
+        self.request(scene, self.commits["c2"])
+        with self.no_change_to_the_host(scene):
+            result = self.request(scene, self.commits["c6"], mode="check")
+        self.assertEqual(11, result.code, result.summary + result.errors)
+        self.assertTrue(result.has("verdict=would-change"))
+        self.assertTrue(result.has("mode=check"))
+        self.assertTrue(
+            self.calls(scene)[-2].startswith("-i localhost, --connection local --check --diff ")
+        )
+
+    def test_a_check_request_that_finds_nothing_to_change_exits_zero(self) -> None:
+        scene = self.make_scene()
+        scene.ansible.write_text(
+            scene.ansible.read_text(encoding="utf-8").replace("changed=1", "changed=0"),
+            encoding="utf-8",
+        )
+        result = self.request(scene, self.commits["c6"], mode="check")
+        self.assertEqual(0, result.code)
+        self.assertFalse((scene.state / "last-applied").exists())
+        self.assertFalse((scene.state / "current").exists())
+        self.assertEqual([], list((scene.state / "work").iterdir()))
+
+    def test_a_commit_not_on_main_is_refused(self) -> None:
+        scene = self.make_scene()
+        self.prime(scene)
+        with self.no_change_to_the_host(scene):
+            result = self.request(scene, self.commits["side"])
+        self.assert_refused(result, "not-on-main")
+        self.assert_no_new_run(scene)
+
+    def test_a_commit_that_exists_nowhere_is_refused_as_not_on_main(self) -> None:
+        scene = self.make_scene()
+        self.assert_refused(self.request(scene, "1" * 40), "not-on-main")
+
+    def test_a_commit_that_main_has_moved_away_from_is_refused_though_the_cache_still_holds_it(
+        self,
+    ) -> None:
+        scene = self.make_scene()
+        late = {"ansible/playbooks/host.yml": playbook_text("late")}
+        extra = scene.remote.commit(late, "late", self.commits["tip"], self.keys["a"])
+        scene.remote.set_ref("main", extra)
+        self.assertIn(self.request(scene, extra, mode="check").code, (0, 11))
+        scene.remote.set_ref("main", self.commits["tip"])
+        before = self.host_state(scene)
+        result = self.request(scene, extra)
+        cached = subprocess.run(  # noqa: S603 - a test probe
+            [str(GIT), f"--git-dir={scene.state / 'repo.git'}", "cat-file", "-e", extra],
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(
+            0,
+            cached.returncode,
+            "the commit must still be in the cache for this test to mean anything",
+        )
+        self.assert_refused(result, "not-on-main")
+        self.assertEqual(before, self.host_state(scene))
+
+    def test_an_unsigned_commit_is_refused(self) -> None:
+        scene = self.make_scene()
+        self.prime(scene)
+        with self.no_change_to_the_host(scene):
+            result = self.request(scene, self.commits["unsigned"])
+        self.assert_refused(result, "unsigned")
+        self.assert_no_new_run(scene)
+
+    def test_a_commit_signed_by_a_key_not_on_the_allowlist_is_refused(self) -> None:
+        scene = self.make_scene()
+        self.prime(scene)
+        with self.no_change_to_the_host(scene):
+            result = self.request(scene, self.commits["other_key"])
+        self.assert_refused(result, "signer-not-allowed")
+        self.assert_no_new_run(scene)
+
+    def test_a_commit_whose_signature_no_longer_verifies_is_refused(self) -> None:
+        scene = self.make_scene()
+        self.prime(scene)
+        with self.no_change_to_the_host(scene):
+            result = self.request(scene, self.commits["tampered"])
+        self.assert_refused(result, "bad-signature")
+        self.assert_no_new_run(scene)
+
+    @unittest.skipUnless(GPG, "gpg is not installed here; the Molecule scenario covers OpenPGP")
+    def test_an_openpgp_commit_by_an_allowlisted_key_is_applied_and_one_by_another_key_is_refused(
+        self,
+    ) -> None:
+        both = [
+            {"format": "ssh", "key": self.keys["a"].public_line},
+            {"format": "openpgp", "key": self.pgp["g"].armoured},
+        ]
+        scene = self.make_scene(signers=both)
+        self.assert_refused(self.request(scene, self.commits["pgp_other"]), "signer-not-allowed")
+        result = self.request(scene, self.commits["pgp_good"])
+        self.assertEqual(10, result.code, result.summary + result.errors)
+
+    @unittest.skipUnless(GPG, "gpg is not installed here; the Molecule scenario covers OpenPGP")
+    def test_an_openpgp_signature_made_by_a_key_the_host_holds_but_the_allowlist_lacks_is_refused(
+        self,
+    ) -> None:
+        scene = self.make_scene(signers=[{"format": "ssh", "key": self.keys["a"].public_line}])
+        self.assert_refused(self.request(scene, self.commits["pgp_good"]), "signer-not-allowed")
+
+    def test_a_playbook_outside_the_allowlist_is_refused_before_anything_is_fetched(self) -> None:
+        scene = self.make_scene(playbook="ansible/playbooks/other.yml")
+        result = self.request(scene, self.commits["c6"])
+        self.assert_refused(result, "playbook-not-allowed")
+        self.assertFalse((scene.state / "repo.git" / "HEAD").exists())
+        self.assert_no_new_run(scene)
+
+    def test_a_selected_playbook_that_escapes_the_playbook_directory_is_refused(self) -> None:
+        for chosen in ("../../etc/EXAMPLE", "/etc/EXAMPLE", "ansible/playbooks/../../x.yml", ""):
+            with self.subTest(chosen):
+                scene = self.make_scene(playbook=chosen)
+                self.assert_refused(self.request(scene, self.commits["c6"]), "playbook-not-allowed")
+                self.assert_no_new_run(scene)
+
+    def test_a_playbook_that_is_absent_from_the_commit_is_refused(self) -> None:
+        scene = self.make_scene()
+        self.prime(scene)
+        with self.no_change_to_the_host(scene):
+            result = self.request(scene, self.commits["no_playbook"])
+        self.assert_refused(result, "playbook-not-allowed")
+        self.assert_no_new_run(scene)
+
+    def test_a_playbook_that_is_a_symlink_in_the_commit_is_refused(self) -> None:
+        scene = self.make_scene()
+        self.prime(scene)
+        with self.no_change_to_the_host(scene):
+            result = self.request(scene, self.commits["symlink"])
+        self.assert_refused(result, "playbook-not-allowed")
+        self.assert_no_new_run(scene)
+
+    def test_a_commit_older_than_the_one_last_applied_is_refused(self) -> None:
+        scene = self.make_scene()
+        self.assertEqual(10, self.request(scene, self.commits["c6"]).code)
+        with self.no_change_to_the_host(scene):
+            result = self.request(scene, self.commits["c2"])
+        self.assert_refused(result, "rollback")
+
+    def test_a_check_of_an_older_commit_is_refused_too(self) -> None:
+        scene = self.make_scene()
+        self.assertEqual(10, self.request(scene, self.commits["c6"]).code)
+        self.assert_refused(self.request(scene, self.commits["c2"], mode="check"), "rollback")
+
+    def test_a_damaged_record_of_the_last_applied_commit_stops_the_run(self) -> None:
+        scene = self.make_scene()
+        self.assertEqual(10, self.request(scene, self.commits["c2"]).code)
+        (scene.state / "last-applied").write_text("not a commit\n", encoding="utf-8")
+        result = self.request(scene, self.commits["c6"])
+        self.assertEqual(40, result.code)
+        self.assertTrue(result.has("reason=state-unsafe"))
+
+    def test_every_malformed_request_is_refused_before_the_host_is_touched(self) -> None:
+        for name, value in HOSTILE_COMMITS.items():
+            with self.subTest(name):
+                scene = self.make_scene()
+                result = self.request(scene, value)
+                self.assert_refused(result, "bad-request")
+                self.assertTrue(result.has("commit=-"))
+                self.assert_no_new_run(scene)
+                self.assertFalse((scene.state / "repo.git" / "HEAD").exists())
+                if len(value.strip()) > 6:
+                    self.assertNotIn(value.strip(), result.summary + result.errors)
+
+    def test_two_arguments_and_a_missing_argument_are_refused_by_hand_as_well(self) -> None:
+        scene = self.make_scene()
+        out, errors = io.StringIO(), io.StringIO()
+        for extra in ([self.commits["c6"], self.commits["c2"]], []):
+            with self.subTest(extra), contextlib.redirect_stderr(errors):
+                code = trigger.main(
+                    ["--mode", "apply", "--config", str(scene.config_path), *extra],
+                    {},
+                    threading.Event(),
+                    stdout=out,
+                    caller=io.BytesIO(),
+                )
+                self.assertEqual(20, code)
+
+    def test_a_trigger_that_arrives_while_another_runs_is_refused_and_does_not_run(self) -> None:
+        scene = self.make_scene()
+        scene.state.mkdir(mode=0o700)
+        with trigger.single_flight(scene.state / "lock"):
+            result = self.request(scene, self.commits["c6"])
+        self.assertEqual(21, result.code, result.summary + result.errors)
+        self.assertTrue(result.has("verdict=busy"))
+        self.assert_no_new_run(scene)
+
+    def test_a_failed_playbook_is_reported_as_failed_and_keeps_the_record_of_the_attempt(
+        self,
+    ) -> None:
+        scene = self.make_scene()
+        fake_ansible(scene.ansible.parent, code=2)
+        result = self.request(scene, self.commits["c6"])
+        self.assertEqual(30, result.code)
+        self.assertTrue(result.has("reason=playbook-failed"))
+        self.assertEqual(
+            f"{self.commits['c6']}\n", (scene.state / "last-applied").read_text(encoding="utf-8")
+        )
+
+    def test_a_playbook_that_prints_no_recap_is_reported_as_failed(self) -> None:
+        scene = self.make_scene()
+        scene.ansible.write_text(f"#!{sys.executable}\nprint('no recap here')\n", encoding="utf-8")
+        result = self.request(scene, self.commits["c6"])
+        self.assertEqual(30, result.code)
+        self.assertTrue(result.has("reason=no-recap"))
+
+    def test_a_playbook_that_runs_too_long_is_stopped_and_reported(self) -> None:
+        scene = self.make_scene(timeout_seconds=1)
+        fake_ansible(scene.ansible.parent, sleep=30)
+        result = self.request(scene, self.commits["c6"])
+        self.assertEqual(31, result.code, result.summary + result.errors)
+        self.assertTrue(result.has("verdict=timed-out"))
+        with trigger.single_flight(scene.state / "lock"):
+            pass
+
+    def test_a_stop_request_ends_the_playbook_and_is_recorded_as_interrupted(self) -> None:
+        scene = self.make_scene()
+        fake_ansible(scene.ansible.parent, sleep=30)
+        stop = threading.Event()
+        timer = threading.Timer(1.5, stop.set)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        result = self.request(scene, self.commits["c6"], stop=stop)
+        self.assertEqual(30, result.code, result.summary + result.errors)
+        self.assertTrue(result.has("reason=interrupted"))
+
+    def test_a_missing_program_is_an_error_not_a_refusal(self) -> None:
+        missing = Path("/nonexistent/ansible-playbook")
+        scene = self.make_scene(ansible_playbook=str(missing))
+        self.assertFalse(missing.exists())
+        result = self.request(scene, self.commits["c6"])
+        self.assertEqual(40, result.code)
+        self.assertTrue(result.has("reason=tool-missing"))
+
+    def test_an_unreachable_remote_is_an_error_and_leaves_the_host_alone(self) -> None:
+        scene = self.make_scene()
+        self.prime(scene)
+        shutil.rmtree(scene.root / "remote.git")
+        with self.no_change_to_the_host(scene):
+            result = self.request(scene, self.commits["c6"])
+        self.assertEqual(40, result.code, result.summary + result.errors)
+        self.assertTrue(result.has("reason=git-failed"))
+
+    def test_the_summary_and_the_log_never_carry_anything_the_caller_typed(self) -> None:
+        scene = self.make_scene()
+        hostile = "SECRET_TYPED_BY_CALLER\nverdict=applied exit=0"
+        result = self.request(scene, hostile)
+        log = (scene.logs / "pull-trigger.log").read_text(encoding="utf-8")
+        self.assertNotIn("SECRET_TYPED_BY_CALLER", result.summary + result.errors + log)
+        self.assertEqual(1, len(log.splitlines()))
+        self.assertEqual(1, len(result.summary.splitlines()))
+
+    def test_the_environment_of_the_program_is_not_printed(self) -> None:
+        scene = self.make_scene()
+        with mock_environment({"EXAMPLE_TOKEN": "SECRET_ENVIRONMENT_VALUE"}):
+            result = self.request(scene, self.commits["c6"])
+        log = (scene.logs / "pull-trigger.log").read_text(encoding="utf-8")
+        self.assertNotIn(
+            "SECRET_ENVIRONMENT_VALUE", result.summary + result.errors + result.relayed + log
+        )
+
+    def test_the_environment_passed_to_the_playbook_is_fixed(self) -> None:
+        scene = self.make_scene()
+        env_dump = scene.ansible.parent / "env.txt"
+        scene.ansible.write_text(
+            f"#!{sys.executable}\nimport os\n"
+            f"open({str(env_dump)!r}, 'w').write('\\n'.join(sorted(os.environ)))\n"
+            "print('PLAY RECAP')\nprint('localhost : ok=1 changed=0 unreachable=0 failed=0')\n",
+            encoding="utf-8",
+        )
+        with mock_environment(
+            {"EXAMPLE_TOKEN": "SECRET_ENVIRONMENT_VALUE", "GIT_DIR": "/nonexistent"}
+        ):
+            self.request(scene, self.commits["c6"])
+        names = env_dump.read_text(encoding="utf-8").split("\n")
+        self.assertNotIn("EXAMPLE_TOKEN", names)
+        self.assertNotIn("GIT_DIR", names)
+        self.assertNotIn("SSH_ORIGINAL_COMMAND", names)
+
+    def test_old_run_output_is_pruned_to_the_configured_number(self) -> None:
+        scene = self.make_scene(keep_runs=2)
+        for _ in range(4):
+            self.request(scene, self.commits["c6"], mode="check")
+        self.assertEqual(2, len(list((scene.logs / "runs").iterdir())))
+
+    def test_a_work_directory_left_by_a_dead_run_is_swept_on_the_next_run(self) -> None:
+        scene = self.make_scene()
+        self.request(scene, self.commits["c2"])
+        stale = scene.state / "work" / "left-by-a-dead-run"
+        stale.mkdir()
+        (stale / "file").write_text("x", encoding="utf-8")
+        self.request(scene, self.commits["c6"])
+        self.assertFalse(stale.exists())
+
+    def test_the_state_directory_must_be_private(self) -> None:
+        scene = self.make_scene()
+        scene.state.mkdir(mode=0o755)
+        scene.state.chmod(0o755)
+        result = self.request(scene, self.commits["c6"])
+        self.assertEqual(40, result.code)
+        self.assertTrue(result.has("reason=state-unsafe"))
+        self.assert_no_new_run(scene)
+
+    def test_an_unsafe_configuration_stops_the_program_before_anything_else(self) -> None:
+        scene = self.make_scene()
+        scene.config_path.chmod(0o666)
+        result = self.request(scene, self.commits["c6"])
+        self.assertEqual(40, result.code)
+        self.assertTrue(result.has("reason=config-invalid"))
+        self.assertFalse(scene.state.exists())
+
+    def test_the_fetch_takes_main_only(self) -> None:
+        scene = self.make_scene()
+        self.request(scene, self.commits["c6"], mode="check")
+        refs = run(
+            [GIT, f"--git-dir={scene.state / 'repo.git'}", "for-each-ref", "--format=%(refname)"]
+        )
+        self.assertEqual("refs/pull-trigger/main", refs)
+
+
+@contextlib.contextmanager
+def mock_environment(values: Mapping[str, str]) -> Iterator[None]:
+    """Set environment variables for the duration of a block."""
+    saved = {name: os.environ.get(name) for name in values}
+    os.environ.update(values)
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+class SummaryTests(unittest.TestCase):
+    """The words the caller reads."""
+
+    def test_the_exit_codes_are_the_documented_ones(self) -> None:
+        self.assertEqual(
+            {
+                "unchanged": 0,
+                "applied": 10,
+                "would-change": 11,
+                "refused": 20,
+                "busy": 21,
+                "failed": 30,
+                "timed-out": 31,
+                "error": 40,
+            },
+            {name: int(code) for code, name in trigger.VERDICT_NAMES.items()},
+        )
+
+    def test_every_error_class_carries_a_distinct_named_reason(self) -> None:
+        classes = [
+            trigger.BadRequestError,
+            trigger.BusyError,
+            trigger.NotOnMainError,
+            trigger.RollbackError,
+            trigger.UnsignedError,
+            trigger.BadSignatureError,
+            trigger.SignerNotAllowedError,
+            trigger.PlaybookNotAllowedError,
+            trigger.ConfigError,
+            trigger.StateError,
+            trigger.ToolMissingError,
+            trigger.GitError,
+        ]
+        reasons = [item.reason for item in classes]
+        self.assertEqual(len(reasons), len(set(reasons)))
+        for item in classes:
+            self.assertTrue(
+                all(ch in string.ascii_lowercase + "-" for ch in item.reason), item.reason
+            )
+
+    def test_a_refusal_exits_twenty_and_a_busy_host_twenty_one(self) -> None:
+        self.assertEqual(trigger.Exit.REFUSED, trigger.RefusedError.exit_code)
+        self.assertEqual(trigger.Exit.BUSY, trigger.BusyError.exit_code)
+        self.assertEqual(trigger.Exit.ERROR, trigger.GitError.exit_code)
+
+    def test_the_summary_line_is_one_line_of_words_the_program_made(self) -> None:
+        verdict = trigger.Verdict(trigger.Exit.APPLIED, "ok", 3)
+        line = trigger.summary(verdict, "apply", "a" * 40, "ansible/playbooks/host.yml")
+        self.assertEqual(
+            "pull-trigger verdict=applied exit=10 reason=ok mode=apply "
+            f"commit={'a' * 40} playbook=ansible/playbooks/host.yml changed=3",
+            line,
+        )
+
+    def test_timestamps_are_written_in_utc(self) -> None:
+        self.assertEqual(
+            "2026-10-19T12:00:05Z", trigger.stamp(datetime(2026, 10, 19, 12, 0, 5, tzinfo=UTC))
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

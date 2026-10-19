@@ -1,0 +1,52 @@
+---
+# Test setup only, never part of the role. It installs the programs with the
+# role's own package task file, then builds the throwaway remote, keys and
+# signed history in the container. The apt index refresh is the one step that
+# reaches a package mirror; everything after it is local.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Refresh the apt index, which the image ships empty
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Install the programs the trigger runs, with the role's own task file
+      ansible.builtin.include_role:
+        name: branchleft.pull_trigger
+        tasks_from: packages
+
+    - name: Create the directory the setup programs live in
+      ansible.builtin.file:
+        path: /var/tmp/ptt-setup
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Place the fixture builder and the slow stand-in for ansible-playbook
+      ansible.builtin.copy:
+        src: '{{ item }}'
+        dest: '/var/tmp/ptt-setup/{{ item }}'
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - make_fixtures.py
+        - slow_ansible.py
+
+    - name: Build the throwaway remote, keys and signed history
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - /var/tmp/ptt-setup/make_fixtures.py
+        creates: /var/tmp/ptt/fixtures.json
+
+    - name: Place the slow stand-in where the test configurations name it
+      ansible.builtin.copy:
+        src: /var/tmp/ptt-setup/slow_ansible.py
+        dest: /var/tmp/ptt/slow-ansible
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'

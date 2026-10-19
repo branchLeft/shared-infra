@@ -1,0 +1,63 @@
+---
+argument_specs:
+  main:
+    short_description: Install the trigger a host runs to apply one exact, verified commit of main
+    description: >-
+      Installs the trigger program as a root-owned file and writes its root-owned configuration:
+      the read-only remote, the allowlist of signer keys, the playbook allowlist and the one
+      playbook this host runs. The CI key reaches the program as a forced command.
+    author: AUTHOR_NAME
+    options:
+      pull_trigger_remote_url:
+        type: str
+        required: true
+        description: >-
+          Read-only remote that holds main, as an https URL or a file URL. The host holds no
+          credential that can write to it.
+      pull_trigger_signers:
+        type: list
+        elements: dict
+        required: true
+        description: >-
+          Allowlist of keys whose signature a commit must carry. Public keys only; never a secret.
+          A commit signed by any other key, or not signed, is refused.
+        options:
+          format:
+            type: str
+            required: true
+            choices: [ssh, openpgp]
+            description: Whether the key is an SSH public key line or an armoured OpenPGP public key block.
+          key:
+            type: str
+            required: true
+            description: The public key, as one SSH public key line or the whole armoured block.
+      pull_trigger_playbooks:
+        type: list
+        elements: str
+        required: true
+        description: >-
+          Allowlist of the playbooks this host may ever run, each a plain relative path under
+          ansible/playbooks/ in the repository.
+      pull_trigger_playbook:
+        type: str
+        required: true
+        description: The one playbook this host runs. It must be on the allowlist.
+      pull_trigger_ansible_playbook:
+        type: str
+        description: Absolute path of ansible-playbook on this host, which another role installs.
+        default: /usr/local/bin/ansible-playbook
+      pull_trigger_timeout_seconds:
+        type: int
+        description: Seconds a playbook run may take before the program stops it, from 1 to 86400.
+        default: 3600
+      pull_trigger_keep_runs:
+        type: int
+        description: How many runs' output files to keep in the log directory, from 1 to 1000.
+        default: 50
+  packages:
+    short_description: Install the programs the trigger runs
+    description: >-
+      Installs git, gpg and openssh-client, which the trigger runs to fetch and to verify. A
+      separate entry point so that a test can prepare a host without applying the rest.
+    author: AUTHOR_NAME
+    options: {}

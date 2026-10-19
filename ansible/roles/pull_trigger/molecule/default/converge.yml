@@ -1,0 +1,26 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the fixtures prepare.yml made
+      ansible.builtin.slurp:
+        src: /var/tmp/ptt/fixtures.json
+      register: pull_trigger_converge_fixtures
+
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml. The keys are public keys made for this run.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.pull_trigger
+      vars:
+        converge_values: '{{ pull_trigger_converge_fixtures.content | ansible.builtin.b64decode | ansible.builtin.from_json }}'
+        pull_trigger_remote_url: '{{ converge_values.remote_url }}'
+        pull_trigger_signers:
+          - format: ssh
+            key: '{{ converge_values.ssh_key }}'
+          - format: openpgp
+            key: '{{ converge_values.pgp_key }}'
+        pull_trigger_playbooks:
+          - ansible/playbooks/host.yml
+        pull_trigger_playbook: ansible/playbooks/host.yml
