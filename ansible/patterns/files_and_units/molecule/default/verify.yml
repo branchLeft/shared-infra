@@ -1,0 +1,67 @@
+---
+# The owner, group and description come from the scenario's inventory
+# variables (molecule.yml): the same values the role was converged with.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the configuration file
+      ansible.builtin.stat:
+        path: /etc/files_and_units.json
+      register: files_and_units_verify_config
+
+    - name: Assert the configuration file exists with its owner, group and mode
+      ansible.builtin.assert:
+        that:
+          - files_and_units_verify_config.stat.exists
+          - files_and_units_verify_config.stat.pw_name == files_and_units_config_owner
+          - files_and_units_verify_config.stat.gr_name == files_and_units_config_group
+          - files_and_units_verify_config.stat.mode == '0640'
+        success_msg: The configuration file was delivered with its owner, group and mode.
+
+    - name: Read each unit file
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /etc/systemd/system/files_and_units_svc.service
+        - /etc/systemd/system/files_and_units_tick.service
+        - /etc/systemd/system/files_and_units_tick.timer
+      register: files_and_units_verify_units
+
+    - name: Assert every unit file exists with its owner, group and mode
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == '0644'
+        success_msg: The unit file was delivered with its owner, group and mode.
+      loop: '{{ files_and_units_verify_units.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Ask systemd for the service unit's state
+      ansible.builtin.systemd_service:
+        name: files_and_units_svc.service
+      register: files_and_units_verify_service
+
+    - name: Assert the service is enabled, active and carries the rendered description
+      ansible.builtin.assert:
+        that:
+          - files_and_units_verify_service.status.UnitFileState == 'enabled'
+          - files_and_units_verify_service.status.ActiveState == 'active'
+          - files_and_units_verify_service.status.Description == files_and_units_unit_description
+        success_msg: The service is enabled and running with the rendered unit file loaded.
+
+    - name: Ask systemd for the timer's state
+      ansible.builtin.systemd_service:
+        name: files_and_units_tick.timer
+      register: files_and_units_verify_timer
+
+    - name: Assert the timer is enabled and active with the rendered description
+      ansible.builtin.assert:
+        that:
+          - files_and_units_verify_timer.status.UnitFileState == 'enabled'
+          - files_and_units_verify_timer.status.ActiveState == 'active'
+          - files_and_units_verify_timer.status.Description == files_and_units_unit_description
+        success_msg: The timer is enabled and active with the rendered unit file loaded.

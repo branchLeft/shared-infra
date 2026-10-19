@@ -16,6 +16,15 @@ one entry point per application), and the secrets rules (every credential read
 from the env file and required, no vendor default password for the first
 administrator).
 
+The database administrator's credential is pinned out of the running sign-in
+service. The runtime service starts from the setup phase and holds only its own
+unprivileged login. The administrator's password is read by the `db` service
+alone, and the one phase that needs it (Zitadel's `init`) lives in
+`compose.init.yml`, an overlay the unit never reads. The tests fail if any
+runtime service other than `db` names the credential, if the runtime command
+runs the init phase, or if the overlay stops being init-only or takes a name
+Compose would load by default.
+
 The memory constants are the owner's measurement of the host, not a vendor
 sizing figure. Raising a limit past the margin is a host-size decision, which is
 the owner's.
