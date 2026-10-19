@@ -34,8 +34,14 @@
       window_secret: '{{ verify_window }}'
       probe_role: '{{ verify_probe_role }}'
     verify_sentinel_pattern: "{{ verify_sentinels.values() | join('|') }}"
-    # What the log scan looks for: each sentinel, and the digest control.
-    verify_scan_items: "{{ verify_sentinels | dict2items + [{'key': 'digest_control', 'value': verify_digest_control}] }}"
+    # The environment file's exact text before and after a rotation. Its result
+    # carries a SHA-1 of the whole file, which is not a sentinel's SHA-1, so the
+    # scan also looks for the digests of these two texts.
+    verify_env_text: "{{ 'EXAMPLE_FILE_SECRET=' ~ verify_file ~ ('%c' | format(10)) ~ 'EXAMPLE_ENV_SECRET=' ~ verify_env ~ ('%c' | format(10)) }}"
+    verify_env_text_rotated: "{{ 'EXAMPLE_FILE_SECRET=' ~ verify_file_rotated ~ ('%c' | format(10)) ~ 'EXAMPLE_ENV_SECRET=' ~ verify_env ~ ('%c' | format(10)) }}"
+    # What the log scan looks for: each sentinel, the two environment file texts,
+    # and the digest control.
+    verify_scan_items: "{{ verify_sentinels | dict2items + [{'key': 'env_file', 'value': verify_env_text}, {'key': 'env_file_rotated', 'value': verify_env_text_rotated}, {'key': 'digest_control', 'value': verify_digest_control}] }}"
     verify_role_dir: '{{ playbook_dir }}/../..'
     verify_file_names:
       - EXAMPLE_ENV_SECRET
