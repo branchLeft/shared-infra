@@ -1,0 +1,93 @@
+---
+argument_specs:
+  main:
+    short_description: Install apt packages and deliver pinned, checksummed downloads
+    description: >-
+      Fetches each listed artefact with a sha256 or sha512 checksum, installs named
+      apt packages and local package files, and delivers a repository key and
+      source signed by that key file. None of the variables is a secret.
+    author: AUTHOR_NAME
+    options:
+      packages_and_downloads_apt_packages:
+        type: list
+        elements: str
+        description: Package names installed with state present from the apt index.
+        default: []
+      packages_and_downloads_debs:
+        type: list
+        elements: str
+        description: >-
+          Absolute paths of local package files installed with apt. Each must equal the
+          dest of an entry of packages_and_downloads_downloads, and none may be a URL.
+        default: []
+      packages_and_downloads_downloads:
+        type: list
+        elements: dict
+        description: >-
+          Artefacts fetched with get_url. The role refuses any entry whose checksum is
+          not sha256 or sha512 with its full digest.
+        default: []
+        options:
+          url:
+            type: str
+            required: true
+            description: Where the artefact is fetched from.
+          dest:
+            type: str
+            required: true
+            description: Absolute path the artefact is written to.
+          checksum:
+            type: str
+            required: true
+            description: >-
+              The pinned digest with its algorithm, either sha256:HEX64 (64 lowercase
+              hex digits) or sha512:HEX128 (128). Nothing else is accepted, and a URL
+              is never a checksum.
+          owner:
+            type: str
+            required: false
+            description: >-
+              Owner of the written file. When omitted the task uses
+              packages_and_downloads_download_owner.
+          group:
+            type: str
+            required: false
+            description: >-
+              Group of the written file. When omitted the task uses
+              packages_and_downloads_download_group.
+          mode:
+            type: str
+            required: false
+            description: >-
+              Mode of the written file, as a quoted octal string. When omitted the task
+              uses packages_and_downloads_download_mode.
+      packages_and_downloads_download_owner:
+        type: str
+        description: Owner of a downloaded file whose entry sets no owner.
+        default: root
+      packages_and_downloads_download_group:
+        type: str
+        description: Group of a downloaded file whose entry sets no group.
+        default: root
+      packages_and_downloads_download_mode:
+        type: str
+        description: Mode of a downloaded file whose entry sets no mode, as a quoted octal string.
+        default: '0644'
+      packages_and_downloads_repository_present:
+        type: bool
+        description: Whether the repository key file and source entry are delivered.
+        default: false
+      packages_and_downloads_repository_uri:
+        type: str
+        description: URI of the repository the source entry names. Required when the repository is present.
+        default: ''
+      packages_and_downloads_repository_suite:
+        type: str
+        description: Suite of the repository the source entry names. Required when the repository is present.
+        default: ''
+      packages_and_downloads_repository_key_sha256:
+        type: str
+        description: >-
+          Lowercase sha256 of the key file the role ships under files/. Required when
+          the repository is present; the role refuses a key file with another digest.
+        default: ''

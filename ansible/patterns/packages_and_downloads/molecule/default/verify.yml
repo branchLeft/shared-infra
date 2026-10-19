@@ -1,0 +1,116 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    packages_and_downloads_verify_role_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY', default='') }}"
+  tasks:
+    # Enforcement of the checksum rule, second layer. The first layer is the
+    # role's own assertions, which run on every real run. This layer reads the
+    # role's task and handler files on the controller, so a download task that
+    # drops its pin fails this play even though the download itself would
+    # still succeed. scan-downloads.j2 says exactly what it accepts.
+    - name: Assert Molecule names the role directory
+      ansible.builtin.assert:
+        that:
+          - packages_and_downloads_verify_role_dir | length > 0
+        fail_msg: MOLECULE_PROJECT_DIRECTORY is not set, so the task files cannot be read.
+
+    # The whole role directory is listed and the template keeps the files under
+    # tasks/ and handlers/, so a role without a handlers directory raises no
+    # warning and a file in a nested directory is found at any depth.
+    - name: List every file in the role directory
+      ansible.builtin.find:
+        paths:
+          - '{{ packages_and_downloads_verify_role_dir }}'
+        file_type: any
+        recurse: true
+        hidden: true
+      delegate_to: localhost
+      run_once: true
+      register: packages_and_downloads_verify_files
+
+    - name: Scan every file under tasks and handlers for download tasks
+      ansible.builtin.set_fact:
+        packages_and_downloads_verify_scan: >-
+          {{ lookup('ansible.builtin.template', playbook_dir ~ '/scan-downloads.j2',
+          template_vars={'scan_files': packages_and_downloads_verify_files.files,
+          'role_dir': packages_and_downloads_verify_role_dir, 'prefix': 'packages_and_downloads'}) | from_json }}
+
+    - name: Assert the scan read the role's main tasks file
+      ansible.builtin.assert:
+        that:
+          - packages_and_downloads_verify_scan.files | select('search', '/tasks/main[.]yml$') | list | length == 1
+        fail_msg: The scan did not read tasks/main.yml, so it proves nothing.
+
+    - name: Assert the role has at least one get_url task
+      ansible.builtin.assert:
+        that:
+          - packages_and_downloads_verify_scan.seen > 0
+        fail_msg: No get_url task was found, so the checksum rule has nothing to check.
+
+    - name: Assert no download task in the role lacks a pin
+      ansible.builtin.assert:
+        that:
+          - packages_and_downloads_verify_scan.failures | length == 0
+        fail_msg: "Unpinned download in the role: {{ packages_and_downloads_verify_scan.failures | join('; ') }}"
+
+    - name: Read the downloaded tool
+      ansible.builtin.stat:
+        path: /usr/local/bin/example-tool
+        checksum_algorithm: sha256
+      register: packages_and_downloads_verify_tool
+
+    - name: Assert the tool was written with its pinned checksum, mode and owner
+      ansible.builtin.assert:
+        that:
+          - packages_and_downloads_verify_tool.stat.exists
+          - packages_and_downloads_verify_tool.stat.checksum == 'a3bd5f9c3e07f25cedd25229122fb95c63ebfc7b4358efdf2bae2e1c708bf1f7'
+          - packages_and_downloads_verify_tool.stat.mode == '0755'
+          - packages_and_downloads_verify_tool.stat.pw_name == 'root'
+        success_msg: The tool matches its pinned sha256 and is executable by root.
+
+    - name: Read the downloaded package file
+      ansible.builtin.stat:
+        path: /usr/local/share/example-pinned-tool_1.0.0_all.deb
+      register: packages_and_downloads_verify_deb
+
+    - name: Assert the entry that set no owner, group or mode got the role defaults
+      ansible.builtin.assert:
+        that:
+          - packages_and_downloads_verify_deb.stat.exists
+          - packages_and_downloads_verify_deb.stat.mode == '0644'
+          - packages_and_downloads_verify_deb.stat.pw_name == 'root'
+          - packages_and_downloads_verify_deb.stat.gr_name == 'root'
+        success_msg: The omitted owner, group and mode fell back to the role's variables.
+
+    - name: Gather the installed apt packages
+      ansible.builtin.package_facts:
+        manager: apt
+
+    - name: Assert bash and the local package are installed
+      ansible.builtin.assert:
+        that:
+          - "'bash' in ansible_facts.packages"
+          - "'example-pinned-tool' in ansible_facts.packages"
+        success_msg: The named package and the local package file are installed.
+
+    - name: Read the repository key file
+      ansible.builtin.stat:
+        path: /etc/apt/keyrings/packages-and-downloads.asc
+        checksum_algorithm: sha256
+      register: packages_and_downloads_verify_key
+
+    - name: Read the repository source
+      ansible.builtin.slurp:
+        src: /etc/apt/sources.list.d/packages-and-downloads.sources
+      register: packages_and_downloads_verify_source
+
+    - name: Assert the key file exists and the source is signed by it
+      ansible.builtin.assert:
+        that:
+          - packages_and_downloads_verify_key.stat.exists
+          - packages_and_downloads_verify_key.stat.mode == '0644'
+          - packages_and_downloads_verify_key.stat.checksum == 'b9455ba3da2490c6b3d16dd05287f4bd28e6d7a41715fd8f674a7dc6b60b8d8c'
+          - "'Signed-By: /etc/apt/keyrings/packages-and-downloads.asc' in (packages_and_downloads_verify_source.content | b64decode)"
+        success_msg: The key is a file with its pinned digest and the source names it with Signed-By.
