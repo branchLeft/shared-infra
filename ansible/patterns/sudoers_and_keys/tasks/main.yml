@@ -1,0 +1,122 @@
+---
+# Every input is checked before the first change, so a bad input leaves the
+# host as it was. The assertions use no loop: a failed loop prints its item,
+# which here would be a key.
+- name: Refuse a sudoers fragment name that sudo would skip
+  ansible.builtin.assert:
+    that:
+      - sudoers_and_keys_sudoers_name is match(sudoers_and_keys_name_pattern)
+    quiet: true
+    fail_msg: The fragment name may hold letters, digits, underscore and hyphen only.
+
+# The argument check turns a mapping into text without complaint, and YAML reads
+# an unquoted line that holds a colon and a space as a mapping.
+- name: Refuse a sudoers line that is not text
+  ansible.builtin.assert:
+    that:
+      - sudoers_and_keys_sudoers_lines | select('mapping') | list | length == 0
+    quiet: true
+    fail_msg: Each sudoers line must be a quoted string. A line with a colon and a space needs quotes.
+
+# Printable ASCII only, so a line break of any kind (not only the two the
+# fragment is joined with) cannot start a second line the caller never declared.
+- name: Refuse a sudoers line that is not printable ASCII
+  ansible.builtin.assert:
+    that:
+      - sudoers_and_keys_sudoers_lines | select('search', sudoers_and_keys_not_printable_pattern) | list | length == 0
+    quiet: true
+    fail_msg: Each sudoers line must be one line of printable ASCII (no tab, no control character, nothing outside U+0020 to U+007E).
+
+# The key text is public, but a refusal must not print it: a failed check that
+# named the value would put a half-pasted key in every log. This task works the
+# key text out and keeps only the position of each entry that fails; the
+# assertion after it names those positions and never a value.
+- name: Find the key entries that are not one plausible public key
+  ansible.builtin.set_fact:
+    sudoers_and_keys_bad_key_numbers: >-
+      {{ range(1, (sudoers_and_keys_keys | length) + 1)
+      | zip(sudoers_and_keys_keys | map(attribute='key') | map('regex_search', sudoers_and_keys_key_pattern))
+      | rejectattr('1') | map(attribute='0') | list }}
+  no_log: true
+
+- name: Refuse a key entry that is not one public key on one line
+  ansible.builtin.assert:
+    that:
+      - sudoers_and_keys_bad_key_numbers | length == 0
+    quiet: true
+    fail_msg: >-
+      Key entry number {{ sudoers_and_keys_bad_key_numbers | join(', ') }} is not
+      one public key on one line: a known key type, a base64 body of the length
+      that type has, an optional comment of printable ASCII, and no options in
+      front.
+
+- name: Refuse a forced command that would break its own quoting
+  ansible.builtin.assert:
+    that:
+      - sudoers_and_keys_keys | map(attribute='command', default='') | select('search', sudoers_and_keys_command_forbidden_pattern) | list | length == 0
+    quiet: true
+    fail_msg: A forced command may hold printable ASCII only (U+0020 to U+007E), and no double quote and no backslash.
+
+- name: Refuse a forced command that holds a key type word
+  ansible.builtin.assert:
+    that:
+      - sudoers_and_keys_keys | map(attribute='command', default='') | select('search', sudoers_and_keys_key_type_word_pattern) | list | length == 0
+    quiet: true
+    fail_msg: A forced command may not hold a key type such as ssh-rsa or ssh-ed25519 as a word of its own, because the key module would read it as the key.
+
+- name: Refuse a forced command with no source address
+  ansible.builtin.assert:
+    that:
+      - >-
+        sudoers_and_keys_keys | selectattr('command', 'defined') | selectattr('command')
+        | selectattr('from_addresses', 'defined') | selectattr('from_addresses') | list | length
+        == sudoers_and_keys_keys | selectattr('command', 'defined') | selectattr('command') | list | length
+    quiet: true
+    fail_msg: A key with a forced command must say which addresses it may connect from.
+
+# An address goes into the from option between double quotes, so a space, a
+# quote, a line break or an empty item gives a line the SSH server will not
+# accept: the key stops working, and that is a lock-out for a slot key.
+- name: Refuse a source address that is not an address pattern
+  ansible.builtin.assert:
+    that:
+      - >-
+        sudoers_and_keys_keys | map(attribute='from_addresses', default=[]) | flatten
+        | reject('match', sudoers_and_keys_address_pattern) | list | length == 0
+    quiet: true
+    fail_msg: >-
+      A source address may hold only letters, digits, dots, colons, slashes,
+      hyphens, underscores, asterisks, question marks and exclamation marks, and
+      must not be empty. List one address or range per item.
+
+# The fragment is written to a temporary file, checked by visudo, and only then
+# moved over the old one. A fragment visudo refuses never replaces a good one.
+# -s is strict checking: without it a line that names an alias nobody defined
+# parses as fine, and the grant (or the deny in a deny list) silently does
+# nothing. /etc/sudoers itself is never edited: the fragment directory is what
+# the distribution's sudoers already includes. Check mode skips validate.
+- name: Install the sudoers fragment
+  ansible.builtin.copy:
+    content: "{{ sudoers_and_keys_sudoers_lines | join('\n') }}\n"
+    dest: '/etc/sudoers.d/{{ sudoers_and_keys_sudoers_name }}'
+    owner: root
+    group: root
+    mode: '0440'
+    validate: /usr/sbin/visudo -csf %s
+  no_log: true
+  diff: false
+  when: sudoers_and_keys_sudoers_lines | length > 0
+
+# exclusive: true makes the account's file exactly this list, so a key left out
+# of it is removed. An empty list is skipped, never applied, so a variable that
+# came through empty cannot remove every key. The module writes the new file to
+# a temporary file and then moves it over the old one.
+- name: Make the authorised keys of the account exactly the declared keys
+  ansible.posix.authorized_key:
+    user: '{{ sudoers_and_keys_user }}'
+    key: "{{ lookup('ansible.builtin.template', 'authorized_keys.j2') }}"
+    exclusive: true
+    manage_dir: true
+  no_log: true
+  diff: false
+  when: sudoers_and_keys_keys | length > 0
