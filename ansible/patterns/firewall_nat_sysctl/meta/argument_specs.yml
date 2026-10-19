@@ -3,10 +3,12 @@ argument_specs:
   main:
     short_description: Set IPv4 forwarding, then apply a firewall and NAT ruleset that rolls back if the control port stops answering
     description: >-
-      Persists net.ipv4.ip_forward, renders one nftables ruleset file, and loads
-      it only after the candidate has passed a syntax check. After the load, the
-      control port is connected to. If that check fails, the previous ruleset is
-      restored and the role fails.
+      Persists net.ipv4.ip_forward, renders one nftables ruleset, and loads it
+      when the loaded tables, the active rules file or the boot rules file
+      differ from it, after a syntax check. After the load, the control port is
+      connected to. If that check fails, the previous ruleset is restored and
+      the role fails. When it passes, the rules are also persisted in the boot
+      rules file and the nftables unit that loads that file is enabled.
     author: AUTHOR_NAME
     options:
       firewall_nat_sysctl_control_port:
@@ -24,19 +26,27 @@ argument_specs:
           - 2222
       firewall_nat_sysctl_nat_source:
         type: str
-        description: IPv4 CIDR whose traffic leaving through the uplink is masqueraded.
+        description: >-
+          IPv4 address or CIDR whose traffic leaving through the uplink is
+          masqueraded. Anything else, including a newline, is refused before
+          anything is loaded.
         default: 192.0.2.0/24
       firewall_nat_sysctl_uplink_interface:
         type: str
-        description: Name of the interface the NAT rule masquerades out of. A placeholder must be replaced by the host's real uplink name.
+        description: >-
+          Name of the interface the NAT rule masquerades out of, letters, digits,
+          underscore, dot and hyphen only. A placeholder must be replaced by the
+          host's real uplink name.
         default: UPLINK_INTERFACE
       firewall_nat_sysctl_table:
         type: str
-        description: Name of the nftables tables the role owns. Other tables are not read or changed.
+        description: >-
+          Name of the nftables tables the role owns, a letter or underscore then
+          letters, digits and underscores. Other tables are not read or changed.
         default: pattern_firewall
       firewall_nat_sysctl_rules_dir:
         type: str
-        description: Absolute path of the directory holding the candidate, active and previous rules files.
+        description: Absolute path of the directory holding the active and previous rules files and the recorded listing.
         default: /etc/firewall-nat-sysctl
       firewall_nat_sysctl_sysctl_file:
         type: str

@@ -3,86 +3,122 @@
   hosts: all
   gather_facts: false
   tasks:
-    # The first converge on an instance establishes a previous set, then tries
-    # a bad set on purpose, then applies the good set. The bad set does not
-    # accept the control port, so the role must roll back to the previous set.
-    # Later converges see the active file and skip the probe, so the second
-    # converge changes nothing.
+    # The first converge on an instance runs the attempts below, in this order,
+    # and then applies the good set. Later converges see the active file and skip
+    # them, so the second converge changes nothing. Check mode loads nothing, so
+    # the attempts run only for real; the role's own check-mode skip is the
+    # reason (ANS-10).
     - name: Read whether the active rules file is already on the instance
       ansible.builtin.stat:
         path: /etc/firewall-nat-sysctl-scenario/active.nft
       register: converge_active
 
-    - name: Apply the good set first, so there is a previous set to roll back to
-      ansible.builtin.include_role:
-        name: branchleft.firewall_nat_sysctl
-      when: not converge_active.stat.exists
+    - name: Read the boot rules file and the nftables unit before check mode runs
+      ansible.builtin.stat:
+        path: /etc/nftables.conf
+        checksum_algorithm: sha256
+      register: converge_boot_before
+      when: ansible_check_mode and not converge_active.stat.exists
 
-    - name: Read the loaded ruleset before the bad probe
-      ansible.builtin.command:
-        argv: [nft, list, ruleset]
-      register: converge_listing_before
-      changed_when: false
-      when:
-        - not converge_active.stat.exists
-        - not ansible_check_mode
-
-    # Check mode loads nothing, so the probe is run only for real. The role's
-    # own check-mode skip is the reason (ANS-10).
-    - name: Apply a bad set that drops the control port, expecting a rollback
+    - name: Try inputs the role must refuse, and sets the guard must roll back or fail to restore
       when:
         - not converge_active.stat.exists
         - not ansible_check_mode
       block:
-        - name: Apply the bad set
+        # Inputs that are not plain values. Each must be refused by the input
+        # check before anything is loaded; a newline once loaded a second
+        # masquerade rule that the connection check passed. One has a newline
+        # in the middle, one only at the end (which a pattern ending in $ lets
+        # through), one a second token after the address.
+        - name: Try NAT sources that are not plain addresses
+          ansible.builtin.include_tasks: tasks/probe.yml
+          loop:
+            - name: a newline then a second rule
+              expect: refused
+              ports: [2222]
+              source: "198.51.100.0/24\nip saddr 203.0.113.0/24 oifname \"SCENARIO_OTHER\" masquerade"
+              task: Refuse a NAT source that is not a plain IPv4 address or CIDR
+            - name: a trailing newline
+              expect: refused
+              ports: [2222]
+              source: "198.51.100.0/24\n"
+              task: Refuse a NAT source that is not a plain IPv4 address or CIDR
+            - name: a second token after the address
+              expect: refused
+              ports: [2222]
+              source: 198.51.100.0/24 counter
+              task: Refuse a NAT source that is not a plain IPv4 address or CIDR
+          loop_control:
+            loop_var: probe_case
+            label: '{{ probe_case.name }}'
+
+        # The first-install branch. No ruleset of the role's is on the host, so
+        # the guard has nothing to restore and must remove the tables it loaded.
+        # The set parses and its ports are valid, so every check before the load
+        # accepts it; it does not accept the control port, so the check after
+        # the load refuses it.
+        - name: Try a set that drops the control port on a host with no previous set
+          ansible.builtin.include_tasks: tasks/probe.yml
+          vars:
+            probe_case:
+              name: bad set on first install
+              expect: rolled_back
+              ports: [2223]
+              source: 198.51.100.0/24
+              task: Connect to the control port after the load
+              marker: tcp dport 2223 accept
+
+        - name: Apply the good set, so that there is a previous set to roll back to
           ansible.builtin.include_role:
             name: branchleft.firewall_nat_sysctl
+
+        - name: Try a set that drops the control port on a host with a previous set
+          ansible.builtin.include_tasks: tasks/probe.yml
           vars:
-            firewall_nat_sysctl_allowed_tcp_ports: []
+            probe_case:
+              name: bad set over a previous set
+              expect: rolled_back
+              ports: [2223]
+              source: 198.51.100.0/24
+              task: Connect to the control port after the load
+              marker: tcp dport 2223 accept
 
-        - name: Record that the bad set was accepted
-          ansible.builtin.set_fact:
-            converge_bad_accepted: true
-      rescue:
-        - name: Record that the role failed and the bad set was reverted
-          ansible.builtin.set_fact:
-            converge_bad_rolled_back: true
+        # The rollback itself failing. The previous file is made unloadable, so
+        # the restore fails. What is left is the bad set, loaded: the host fails
+        # closed, and neither the active file nor the boot file was changed.
+        - name: Make the active rules file unloadable, so that a restore from it must fail
+          ansible.builtin.copy:
+            content: "THIS IS NOT A RULES FILE\n"
+            dest: /etc/firewall-nat-sysctl-scenario/active.nft
+            owner: root
+            group: root
+            mode: '0600'
 
-    - name: Read the loaded ruleset after the bad probe
-      ansible.builtin.command:
-        argv: [nft, list, ruleset]
-      register: converge_listing_after
-      changed_when: false
-      when:
-        - not converge_active.stat.exists
-        - not ansible_check_mode
-
-    - name: Assert the bad set was rolled back and the previous ruleset is back byte for byte
-      ansible.builtin.assert:
-        that:
-          - converge_bad_accepted is not defined
-          - converge_bad_rolled_back | default(false)
-          - converge_listing_after.stdout == converge_listing_before.stdout
-        fail_msg: >-
-          The bad set was not rolled back: either it was accepted, the role did
-          not fail, or the loaded ruleset after the probe differs from the one
-          before it.
-        success_msg: The bad set was rolled back and the previous ruleset is loaded again.
-      when:
-        - not converge_active.stat.exists
-        - not ansible_check_mode
+        - name: Try a set that drops the control port when the restore must fail
+          ansible.builtin.include_tasks: tasks/probe.yml
+          vars:
+            probe_case:
+              name: bad set with an unloadable previous set
+              expect: restore_failed
+              ports: [2223]
+              source: 198.51.100.0/24
+              task: Connect to the control port after the load
+              marker: tcp dport 2223 accept
 
     - name: Apply the role with the good set
       ansible.builtin.include_role:
         name: branchleft.firewall_nat_sysctl
 
     # Check mode must write nothing. On a fresh instance the role's run in
-    # check mode is the one this checks: no active rules file and no drop-in.
-    - name: Read whether check mode wrote the active rules file or the drop-in
+    # check mode is the one this checks: no active rules file, no drop-in, no
+    # recorded listing, the boot rules file as it was, and the unit still
+    # disabled.
+    - name: Read whether check mode wrote the active rules file, the listing or the drop-in
       ansible.builtin.stat:
         path: '{{ item }}'
       loop:
         - /etc/firewall-nat-sysctl-scenario/active.nft
+        - /etc/firewall-nat-sysctl-scenario/active.list
         - /etc/sysctl.d/98-firewall-nat-sysctl-scenario.conf
       register: converge_check_written
       when: ansible_check_mode and not converge_active.stat.exists
@@ -96,4 +132,26 @@
       loop: '{{ converge_check_written.results }}'
       loop_control:
         label: '{{ item.item }}'
+      when: ansible_check_mode and not converge_active.stat.exists
+
+    - name: Read the boot rules file and the nftables unit after check mode ran
+      ansible.builtin.stat:
+        path: /etc/nftables.conf
+        checksum_algorithm: sha256
+      register: converge_boot_after
+      when: ansible_check_mode and not converge_active.stat.exists
+
+    - name: Read the nftables unit's state after check mode ran
+      ansible.builtin.systemd_service:
+        name: nftables.service
+      register: converge_unit
+      when: ansible_check_mode and not converge_active.stat.exists
+
+    - name: Assert check mode changed neither the boot rules file nor the unit
+      ansible.builtin.assert:
+        that:
+          - converge_boot_after.stat.checksum == converge_boot_before.stat.checksum
+          - converge_unit.status.UnitFileState == 'disabled'
+        fail_msg: Check mode changed the boot rules file or enabled the nftables unit, so a plan changed the host.
+        success_msg: Check mode left the boot rules file and the nftables unit as they were.
       when: ansible_check_mode and not converge_active.stat.exists

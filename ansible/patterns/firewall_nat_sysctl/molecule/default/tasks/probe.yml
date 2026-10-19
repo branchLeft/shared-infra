@@ -1,0 +1,129 @@
+---
+# One attempt to apply a set that must not stay. The caller gives probe_case:
+#   name     what the attempt is, for the messages
+#   expect   refused | rolled_back | restore_failed
+#   ports    the allowed TCP ports to apply
+#   source   the NAT source to apply
+#   task     the name of the task that must be the one that stops the run
+#   marker   text the loaded tables must hold when the check runs
+#
+# The attempt is judged on facts the run leaves, not on the bare fact that the
+# role failed: any early failure leaves the ruleset unchanged, and a test that
+# read "the role failed and nothing changed" as "the guard rolled back" would
+# stay green with the guard deleted. A rollback is therefore proven by four
+# facts together: the set was accepted by every check made before the load, the
+# kernel held it when the connection check ran, that check is what failed, and
+# the previous ruleset is back afterwards.
+- name: Reset the result facts, so that no value from an earlier attempt can satisfy an assertion
+  ansible.builtin.set_fact:
+    firewall_nat_sysctl_rolled_back: false
+    firewall_nat_sysctl_failed_task: ''
+    firewall_nat_sysctl_rejected_listing: ''
+    probe_accepted: false
+    probe_failed_task: ''
+
+- name: Read the loaded ruleset before the attempt
+  ansible.builtin.command:
+    argv: [nft, list, ruleset]
+  register: probe_before
+  changed_when: false
+
+- name: Read the files the role promotes before the attempt
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop:
+    - '{{ firewall_nat_sysctl_rules_dir }}/active.nft'
+    - /etc/nftables.conf
+  register: probe_files_before
+
+- name: Apply the set
+  block:
+    - name: Run the role with the set
+      ansible.builtin.include_role:
+        name: branchleft.firewall_nat_sysctl
+      vars:
+        firewall_nat_sysctl_allowed_tcp_ports: '{{ probe_case.ports }}'
+        firewall_nat_sysctl_nat_source: '{{ probe_case.source }}'
+
+    - name: Record that the role accepted the set
+      ansible.builtin.set_fact:
+        probe_accepted: true
+  rescue:
+    - name: Record the task that stopped the run
+      ansible.builtin.set_fact:
+        probe_failed_task: '{{ ansible_failed_task.name }}'
+
+- name: Read the loaded ruleset after the attempt
+  ansible.builtin.command:
+    argv: [nft, list, ruleset]
+  register: probe_after
+  changed_when: false
+
+- name: Read the files the role promotes after the attempt
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop:
+    - '{{ firewall_nat_sysctl_rules_dir }}/active.nft'
+    - /etc/nftables.conf
+  register: probe_files_after
+
+# No attempt may promote anything: the active file and the boot file are what
+# they were before.
+- name: Assert the attempt promoted nothing
+  ansible.builtin.assert:
+    that:
+      - not probe_accepted
+      - >-
+        probe_files_after.results | map(attribute='stat') | map(attribute='checksum', default='')
+        | list == probe_files_before.results | map(attribute='stat') | map(attribute='checksum', default='') | list
+    fail_msg: >-
+      The attempt "{{ probe_case.name }}" was accepted, or it changed the active
+      rules file or the boot rules file.
+    success_msg: The attempt "{{ probe_case.name }}" was not accepted and promoted nothing.
+
+- name: Assert the set was refused before the guard, and the ruleset is untouched
+  ansible.builtin.assert:
+    that:
+      - probe_failed_task == probe_case.task
+      - not firewall_nat_sysctl_rolled_back
+      - probe_after.stdout == probe_before.stdout
+    fail_msg: >-
+      The attempt "{{ probe_case.name }}" was not refused by "{{ probe_case.task }}":
+      the run was stopped by "{{ probe_failed_task }}", or the loaded ruleset changed.
+    success_msg: The attempt "{{ probe_case.name }}" was refused by "{{ probe_case.task }}" and nothing was loaded.
+  when: probe_case.expect == 'refused'
+
+- name: Assert the guard itself rolled the set back and the previous ruleset is back byte for byte
+  ansible.builtin.assert:
+    that:
+      - firewall_nat_sysctl_rolled_back | bool
+      - firewall_nat_sysctl_failed_task == probe_case.task
+      - probe_case.marker in firewall_nat_sysctl_rejected_listing
+      - firewall_nat_sysctl_rejected_listing != probe_before.stdout
+      - probe_after.stdout == probe_before.stdout
+    fail_msg: >-
+      The attempt "{{ probe_case.name }}" was not rolled back by the guard. The
+      guard must have recorded that it rolled back, the failing task must be
+      "{{ probe_case.task }}", the tables the check ran against must hold
+      "{{ probe_case.marker }}", and the loaded ruleset after must equal the one
+      before. Rolled back: {{ firewall_nat_sysctl_rolled_back }}. Failing task:
+      "{{ firewall_nat_sysctl_failed_task }}".
+    success_msg: >-
+      The set was accepted, loaded, failed "{{ probe_case.task }}" and was rolled
+      back; the previous ruleset is loaded again.
+  when: probe_case.expect == 'rolled_back'
+
+- name: Assert a failed restore leaves the set loaded and stops on the restore
+  ansible.builtin.assert:
+    that:
+      - not firewall_nat_sysctl_rolled_back
+      - firewall_nat_sysctl_failed_task == probe_case.task
+      - probe_failed_task == 'Restore the previous ruleset'
+      - probe_case.marker in probe_after.stdout
+    fail_msg: >-
+      The attempt "{{ probe_case.name }}" did not end on a failed restore with the
+      set still loaded. Stopped by "{{ probe_failed_task }}".
+    success_msg: The restore failed, the set stays loaded and nothing was promoted.
+  when: probe_case.expect == 'restore_failed'
