@@ -1,8 +1,15 @@
 ---
+# The pinned collections (ANS-4). Each entry names the vendored artifact under
+# vendor/collections/ and the exact version that artifact must carry:
+# ansible-galaxy refuses an entry whose version differs from the artifact's own
+# manifest, and installing reaches no network. The paths resolve from the
+# current directory, so install from this directory. A bump changes the entry,
+# the artifact and vendor/collections/SHA256SUMS in one pull request (see
+# README.md).
 collections:
-  - name: ansible.posix
+  - name: vendor/collections/ansible-posix-2.2.2.tar.gz
     version: 2.2.2
-  - name: community.docker
+  - name: vendor/collections/community-docker-5.4.0.tar.gz
     version: 5.4.0
-  - name: community.library_inventory_filtering_v1
+  - name: vendor/collections/community-library_inventory_filtering_v1-1.1.5.tar.gz
     version: 1.1.5

@@ -11,7 +11,8 @@ name: Ansible
 # passes after a checkout and one diff.
 #
 # The tools install from ansible/requirements.txt at exact versions and the
-# collections from ansible/requirements.yml at exact versions (ANS-4).
+# collections from the vendored artifacts that ansible/requirements.yml names
+# at exact versions, with no network (ANS-4).
 # DOCKER_HOST is deliberately left unset (ANS-15).
 
 on:
@@ -55,7 +56,7 @@ jobs:
             echo "ansible=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          files=$(git diff --name-only "$base" HEAD -- ansible .ansible-lint .yamllint .github/workflows/ansible.yml)
+          files=$(git diff --name-only "$base" HEAD -- ansible ansible.cfg .ansible-lint .yamllint .pre-commit-config.yaml .github/workflows/ansible.yml)
           if [ -n "$files" ]; then
             echo "The Ansible inputs changed:"
             echo "$files"
@@ -75,14 +76,28 @@ jobs:
 
       # The same install, command and flags as the harness runs before Molecule
       # (ansible/harness/run_harness.py), so ansible-lint resolves a pattern's
-      # non-builtin modules. Vendoring the collections is decided elsewhere.
+      # non-builtin modules. It installs the vendored artifacts (ANS-4), from the
+      # ansible directory because the paths in requirements.yml resolve from the
+      # current directory. The proxy points at a closed port, so an entry that
+      # needs the network fails here instead of reaching Galaxy.
       - name: Install the pinned collections
         if: steps.changes.outputs.ansible == 'true'
+        working-directory: ansible
+        env:
+          HTTP_PROXY: http://127.0.0.1:9
+          HTTPS_PROXY: http://127.0.0.1:9
         run: |
           set -euo pipefail
           collections="$RUNNER_TEMP/ansible-collections"
-          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" collection install -r ansible/requirements.yml -p "$collections"
+          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" collection install -r requirements.yml -p "$collections"
           echo "ANSIBLE_COLLECTIONS_PATH=$collections" >> "$GITHUB_ENV"
+
+      # The pins are exact, the vendored artifacts are the pinned ones and match
+      # their recorded hashes, and the pre-commit hook for ansible-lint runs the
+      # pinned version (ANS-4).
+      - name: Check the pins and the vendored collections
+        if: steps.changes.outputs.ansible == 'true'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/checks/check_pins.py'
 
       - name: yamllint every YAML file under ansible/
         if: steps.changes.outputs.ansible == 'true'
@@ -92,24 +107,28 @@ jobs:
         if: steps.changes.outputs.ansible == 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/ansible-lint" --strict ansible'
 
-      - name: Type-check the harness
+      - name: Type-check the harness and the checks
         if: steps.changes.outputs.ansible == 'true'
         working-directory: ansible
-        run: '"$RUNNER_TEMP/ansible-venv/bin/mypy" harness'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/mypy" harness checks'
 
-      - name: Lint the harness
+      - name: Lint the harness and the checks
         if: steps.changes.outputs.ansible == 'true'
         working-directory: ansible
-        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" check harness'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" check harness checks'
 
-      - name: Check the harness formatting
+      - name: Check the harness and checks formatting
         if: steps.changes.outputs.ansible == 'true'
         working-directory: ansible
-        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" format --check harness'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" format --check harness checks'
 
       - name: Test the harness
         if: steps.changes.outputs.ansible == 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/harness -p "test_*.py"'
+
+      - name: Test the checks
+        if: steps.changes.outputs.ansible == 'true'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/checks -p "test_*.py"'
 
       # Roles and patterns are both roles. A directory with no entries expands
       # to nothing (nullglob) rather than to a literal pattern, and a total of
