@@ -1,24 +1,9 @@
 #!/usr/bin/env python3
-"""Decide whether one older run of ci.yml is superseded by this push.
+"""Decide whether an older waiting run of ci.yml is superseded by this push.
 
-Called by the "Cancel older runs that are still waiting for approval" step in
-each plan job of ci.yml, once per older push run still waiting. The step pipes
-that run's `jobs` listing (from `gh api`) on stdin and passes which stacks this
-push planned. "Planned" is the changes job's path filter for the stack, not the
-plan's has_changes output: a stack whose plan ran still counts as planned when
-its apply is then skipped as a no-op.
-
-Prints one line, `cancel: <reason>` or `keep: <reason>`, and exits 0. A listing
-that cannot be read exits 1 and prints nothing, so the step keeps the run.
-
-The rule, in order:
-  1. A run with no apply job is kept.
-  2. A run with any job in progress is kept.
-  3. A run with an apply that is not complete on a stack this push did not
-     plan is kept. A completed apply, whatever its conclusion, does not count.
-  4. A run with no apply waiting for approval is kept.
-  5. Otherwise the run is cancelled: its waiting apply is on a stack this push
-     planned, and the newer run supersedes it.
+Run by the cancel step of each plan job, after Checkout, with the run's jobs
+listing on stdin. Prints `cancel: <reason>` or `keep: <reason>`; exits 1 on an
+unreadable listing. The rules are in decide().
 """
 
 import argparse
@@ -46,7 +31,10 @@ def stack_of(job_name):
 def decide(jobs, planned):
     """Return (verdict, reason) for one older run's jobs.
 
-    `planned` maps a stack name to True when this push planned that stack.
+    `planned` maps a stack to True when this push planned it (the changes
+    job's path filter). Keeps a run with no apply, a job in progress, an
+    incomplete apply on an unplanned stack, or no waiting apply; cancels
+    otherwise. A completed apply, whatever its conclusion, never keeps a run.
     """
     applies = [j for j in jobs if j.get("name", "").startswith(APPLY_PREFIX)]
     if not applies:
