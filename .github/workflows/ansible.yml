@@ -72,6 +72,17 @@ jobs:
         if: steps.changes.outputs.ansible == 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv -r ansible/requirements.txt'
 
+      # The same install, command and flags as the harness runs before Molecule
+      # (ansible/harness/run_harness.py), so ansible-lint resolves a pattern's
+      # non-builtin modules. Vendoring the collections is decided elsewhere.
+      - name: Install the pinned collections
+        if: steps.changes.outputs.ansible == 'true'
+        run: |
+          set -euo pipefail
+          collections="$RUNNER_TEMP/ansible-collections"
+          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" collection install -r ansible/requirements.yml -p "$collections"
+          echo "ANSIBLE_COLLECTIONS_PATH=$collections" >> "$GITHUB_ENV"
+
       - name: yamllint every YAML file under ansible/
         if: steps.changes.outputs.ansible == 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/yamllint" --strict -c .yamllint ansible'
@@ -99,9 +110,23 @@ jobs:
         if: steps.changes.outputs.ansible == 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/harness -p "test_*.py"'
 
-      - name: Run the harness over every role
+      # Roles and patterns are both roles. A directory with no entries expands
+      # to nothing (nullglob) rather than to a literal pattern, and a total of
+      # zero fails the step, so the job cannot pass having tested nothing.
+      - name: Run the harness over every role and pattern
         if: steps.changes.outputs.ansible == 'true'
-        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py ansible/roles/*'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          roles=(ansible/roles/*/ ansible/patterns/*/)
+          if [ "${#roles[@]}" -eq 0 ]; then
+            echo "No role or pattern was found under ansible/roles or ansible/patterns, so nothing would be tested."
+            exit 1
+          fi
+          roles=("${roles[@]%/}")
+          echo "The harness runs over ${#roles[@]} role(s):"
+          printf '  %s\n' "${roles[@]}"
+          "$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py "${roles[@]}"
 
       - name: Create a role from the skeleton
         if: steps.changes.outputs.ansible == 'true'
