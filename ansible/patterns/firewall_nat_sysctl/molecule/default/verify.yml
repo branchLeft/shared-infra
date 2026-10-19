@@ -27,8 +27,8 @@
     - name: Assert the drop-in persists IPv4 forwarding with the value 1
       ansible.builtin.assert:
         that:
-          - "'net.ipv4.ip_forward = 1' in (firewall_nat_sysctl_verify_dropin.content | b64decode).splitlines()"
-        fail_msg: The sysctl drop-in does not persist net.ipv4.ip_forward = 1.
+          - "'net.ipv4.ip_forward=1' in (firewall_nat_sysctl_verify_dropin.content | b64decode).splitlines()"
+        fail_msg: The sysctl drop-in does not carry the line net.ipv4.ip_forward=1.
         success_msg: The sysctl drop-in persists IPv4 forwarding.
 
     - name: Read the active rules file's mode
