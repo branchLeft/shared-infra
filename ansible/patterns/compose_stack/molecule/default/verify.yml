@@ -1,0 +1,412 @@
+---
+# The owner, group, image and secret come from the scenario's inventory
+# variables (molecule.yml): the values the role was converged with.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_dir: /opt/compose_stack_example
+    verify_state: /var/lib/compose_stack_standin
+    # The one shape of a real up call: the module adds the first flags, the
+    # role's task sets the others. A flag added or taken away changes it. The
+    # compose file is always named, so an override file next to it is never
+    # read. With services named, they follow the double dash.
+    verify_up_line: >-
+      --host unix:///var/run/docker.sock compose --ansi never --progress json
+      --project-directory /opt/compose_stack_example --project-name compose_stack_example
+      --file compose.yaml
+      up --detach --no-color --quiet-pull --force-recreate --no-build --wait --wait-timeout 120 --
+    verify_up_scoped: '{{ verify_up_line | ansible.builtin.trim }} app'
+    # Every call the stand-in may ever receive for real. Anything else, such as
+    # down, rm, volume, a different up or another engine, is unexpected.
+    verify_allowed:
+      - '^--host \S+ version --format \{\{ json \. \}\}$'
+      - '^--host \S+ compose version --format json$'
+      - '^--host \S+ compose --ansi never --progress json --project-directory \S+ --project-name \S+ --file compose.yaml ps --format json --all --no-trunc$'
+      - '^--host \S+ compose --ansi never --progress json --project-directory \S+ --project-name \S+ --file compose.yaml images --format json$'
+      - '^compose --project-directory \S+ --file \S+ config --quiet$'
+  tasks:
+    - name: Read the configuration file, the secret file, the compose file and the directory
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_dir }}/app.conf'
+        - '{{ verify_dir }}/app.secret.env'
+        - '{{ verify_dir }}/compose.yaml'
+        - '{{ verify_dir }}'
+      register: verify_files
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert each has its owner, group and mode
+      ansible.builtin.assert:
+        that:
+          - verify_files.results[0].stat.pw_name == compose_stack_owner
+          - verify_files.results[0].stat.gr_name == compose_stack_group
+          - verify_files.results[0].stat.mode == '0640'
+          - verify_files.results[1].stat.pw_name == compose_stack_owner
+          - verify_files.results[1].stat.gr_name == compose_stack_group
+          - verify_files.results[1].stat.mode == '0600'
+          - verify_files.results[2].stat.pw_name == 'root'
+          - verify_files.results[2].stat.gr_name == 'root'
+          - verify_files.results[2].stat.mode == '0644'
+          - verify_files.results[3].stat.pw_name == 'root'
+          - verify_files.results[3].stat.gr_name == compose_stack_group
+          - verify_files.results[3].stat.mode == '0750'
+        quiet: true
+        fail_msg: A delivered file or the project directory has the wrong owner, group or mode.
+
+    # The stamp is derived from the secrets, so it is kept as closed as the
+    # secret files and must hold nothing but a digest. Read before the refusal
+    # cases below run, which leave the stamp as the last good run wrote it.
+    - name: Read the stamp file
+      ansible.builtin.stat:
+        path: '{{ verify_dir }}/.compose_stack_stamp'
+      register: verify_stamp_stat
+
+    - name: Assert the stamp is a regular file owned by root, group root, mode 0600
+      ansible.builtin.assert:
+        that:
+          - verify_stamp_stat.stat.exists
+          - verify_stamp_stat.stat.isreg
+          - verify_stamp_stat.stat.pw_name == 'root'
+          - verify_stamp_stat.stat.gr_name == 'root'
+          - verify_stamp_stat.stat.mode == '0600'
+        quiet: true
+        fail_msg: The stamp file is missing, or is not a regular file owned by root, group root, mode 0600.
+
+    # The content is read by a command whose output is censored: if the stamp
+    # ever held a secret, the failing task must not print it.
+    - name: Read the stamp's content
+      ansible.builtin.command:
+        argv: [cat, '{{ verify_dir }}/.compose_stack_stamp']
+      register: verify_stamp_content
+      changed_when: false
+      no_log: true
+
+    - name: Assert the stamp holds one lower-case hex SHA-256 digest and nothing else
+      ansible.builtin.assert:
+        that:
+          - verify_stamp_content.stdout is ansible.builtin.match('^[0-9a-f]{64}\Z')
+        quiet: true
+        fail_msg: The stamp does not hold exactly one 64-character lower-case hex digest, so it holds something other than a hash.
+
+    - name: Assert the stamp holds neither the secret's value nor the secret files' names
+      ansible.builtin.assert:
+        that:
+          - scenario_secret not in verify_stamp_content.stdout
+          - verify_stamp_content.stdout is not ansible.builtin.search(verify_stamp_names)
+        quiet: true
+        fail_msg: The stamp holds a secret value or the name of a secret file in the clear.
+      vars:
+        verify_stamp_secret_names: >-
+          {{ compose_stack_secret_files | ansible.builtin.map(attribute='name')
+          | ansible.builtin.map('ansible.builtin.regex_escape') | ansible.builtin.list }}
+        verify_stamp_names: "{{ (['APP_SECRET'] + verify_stamp_secret_names) | ansible.builtin.join('|') }}"
+
+    - name: Read the calls the stand-in has logged
+      ansible.builtin.command:
+        argv: [cat, '{{ verify_state }}/argv.log']
+      register: verify_argv
+      changed_when: false
+
+    - name: Assert the stack was brought up, always with the same arguments
+      ansible.builtin.assert:
+        that:
+          - verify_ups | ansible.builtin.length >= 4
+          - verify_ups | ansible.builtin.unique | ansible.builtin.sort | ansible.builtin.list == verify_up_expected
+        quiet: true
+        fail_msg: >-
+          Every real up call must carry exactly the expected arguments (the compose file named,
+          --force-recreate, --no-build, --wait, a timeout and nothing that removes data), once
+          for the whole project and once scoped to one service. Seen: {{ verify_ups | ansible.builtin.unique | ansible.builtin.list }}
+      vars:
+        verify_ups: "{{ verify_argv.stdout_lines | ansible.builtin.select('ansible.builtin.search', ' up --detach') | ansible.builtin.list }}"
+        verify_up_expected: '{{ [verify_up_line | ansible.builtin.trim, verify_up_scoped] | ansible.builtin.sort }}'
+
+    - name: Assert no call removed data or was unexpected
+      ansible.builtin.assert:
+        that:
+          - verify_removing | ansible.builtin.length == 0
+          - verify_unexpected | ansible.builtin.length == 0
+        quiet: true
+        fail_msg: >-
+          A call could remove volumes or was not expected. Removing: {{ verify_removing }}.
+          Unexpected: {{ verify_unexpected }}
+      vars:
+        verify_removing: >-
+          {{ verify_argv.stdout_lines | ansible.builtin.select('ansible.builtin.search',
+          '(--volumes|--remove-orphans|--renew-anon-volumes|--rmi| down | rm | volume | prune| -V )')
+          | ansible.builtin.list }}
+        verify_up_patterns:
+          - '^{{ verify_up_line | ansible.builtin.trim | ansible.builtin.regex_escape }}$'
+          - '^{{ verify_up_scoped | ansible.builtin.regex_escape }}$'
+        verify_unexpected: >-
+          {{ verify_argv.stdout_lines
+          | ansible.builtin.reject('ansible.builtin.match', '(' ~ (verify_allowed + verify_up_patterns)
+          | ansible.builtin.join('|') ~ ')') | ansible.builtin.list }}
+
+    - name: Assert the compose file was validated as a temporary copy, before it was installed
+      ansible.builtin.assert:
+        that:
+          - verify_validations | ansible.builtin.length >= 1
+          - >-
+            verify_validations | ansible.builtin.select('ansible.builtin.search', '--file ' ~ verify_dir ~ '/compose.yaml ')
+            | ansible.builtin.list | ansible.builtin.length == 0
+        quiet: true
+        fail_msg: >-
+          The compose file must be checked with `compose config --quiet` on the temporary copy
+          Ansible makes, never on the installed file. Seen: {{ verify_validations }}
+      vars:
+        verify_validations: "{{ verify_argv.stdout_lines | ansible.builtin.select('ansible.builtin.search', ' config --quiet') | ansible.builtin.list }}"
+
+    - name: Assert the secret never reached a call's arguments
+      ansible.builtin.assert:
+        that:
+          - scenario_secret not in verify_argv.stdout
+        quiet: true
+        fail_msg: The throwaway secret was passed to the docker command.
+
+    - name: Refuse each image reference that is not pinned by digest
+      ansible.builtin.include_tasks: tasks/refuse_image.yml
+      vars:
+        refuse_title: '{{ item.title }}'
+        refuse_image: '{{ item.image }}'
+        # Made-up lower-case hex digests, 64 characters, built from one character.
+        verify_digest: '{{ "2" * 64 }}'
+      loop:
+        - title: A tag alone
+          image: 'example.invalid/example-app:1.2.3'
+        - title: The latest tag
+          image: 'example.invalid/example-app:latest'
+        - title: No tag and no digest
+          image: 'example.invalid/example-app'
+        - title: An empty reference
+          image: ''
+        - title: A reference taken from the environment
+          image: '${EXAMPLE_IMAGE}'
+        - title: A digest that is too short
+          image: 'example.invalid/example-app@sha256:abc123'
+        - title: A digest one character too long
+          image: 'example.invalid/example-app@sha256:{{ verify_digest }}2'
+        - title: Upper-case hex in the digest
+          image: 'example.invalid/example-app@sha256:{{ "A" * 64 }}'
+        - title: Another algorithm
+          image: 'example.invalid/example-app@sha512:{{ verify_digest * 2 }}'
+        - title: A valid digest followed by a space
+          image: 'example.invalid/example-app@sha256:{{ verify_digest }} '
+        - title: A tag and a digest after a space
+          image: 'example.invalid/example-app:1.2.3 @sha256:{{ verify_digest }}'
+        - title: Two digests
+          image: 'example.invalid/example-app@sha256:{{ verify_digest }}@sha256:{{ verify_digest }}'
+      loop_control:
+        label: '{{ item.title }}'
+
+    - name: Fail the role on each state of the stack that is not healthy
+      ansible.builtin.include_tasks: tasks/refuse_unhealthy.yml
+      vars:
+        refuse_title: '{{ item.title }}'
+        refuse_reported: '{{ item.reported }}'
+        refuse_naming: '{{ item.naming }}'
+      loop:
+        - title: A container that is unhealthy
+          reported: '{"Name":"stand-in-app-1","Service":"app","State":"running","Health":"unhealthy","Labels":"","Networks":"default","Publishers":null}'
+          naming: "Unhealthy or still starting: ['app']"
+        - title: A container that is still starting
+          reported: '{"Name":"stand-in-app-1","Service":"app","State":"running","Health":"starting","Labels":"","Networks":"default","Publishers":null}'
+          naming: "Unhealthy or still starting: ['app']"
+        - title: A container that has exited
+          reported: '{"Name":"stand-in-app-1","Service":"app","State":"exited","Health":"","Labels":"","Networks":"default","Publishers":null}'
+          naming: "Not running: ['app']"
+        - title: No container reported at all
+          reported: ''
+          naming: "Services with no container: ['app']"
+      loop_control:
+        label: '{{ item.title }}'
+
+    # The module reads the Compose version itself, from `compose version`, and
+    # refuses one below its minimum (2.18.0) before it does anything else.
+    - name: Fail the role on a Compose version below the module's minimum
+      ansible.builtin.include_tasks: tasks/refuse_old_compose.yml
+
+    - name: Refuse a compose override file in the project directory
+      ansible.builtin.include_tasks: tasks/refuse_override.yml
+      vars:
+        override_name: '{{ item }}'
+      loop:
+        - compose.override.yaml
+        - compose.override.yml
+        - docker-compose.override.yml
+
+    - name: Apply the role once more on the healthy state to show it passes again
+      ansible.builtin.include_role:
+        name: branchleft.compose_stack
+
+    - name: Count the real up calls before a plan
+      ansible.builtin.command:
+        argv: [grep, --count, --fixed-strings, ' up --detach', '{{ verify_state }}/argv.log']
+      register: verify_plan_before
+      changed_when: false
+      failed_when: verify_plan_before.rc > 1
+
+    # The health check also dry-runs `up`, but without --force-recreate, so a
+    # dry run that recreates is the role's own plan.
+    - name: Count the dry runs that recreate before a plan
+      ansible.builtin.command:
+        argv:
+          [
+            grep,
+            --count,
+            --fixed-strings,
+            --regexp=--force-recreate,
+            '{{ verify_state }}/dryrun.log',
+          ]
+      register: verify_recreate_before
+      changed_when: false
+      failed_when: verify_recreate_before.rc > 1
+
+    - name: Plan an edited image with check mode on
+      ansible.builtin.include_role:
+        name: branchleft.compose_stack
+        apply:
+          check_mode: true
+      vars:
+        compose_stack_app_image: 'example.invalid/example-app@sha256:{{ "3" * 64 }}'
+
+    - name: Count the real up calls after the plan
+      ansible.builtin.command:
+        argv: [grep, --count, --fixed-strings, ' up --detach', '{{ verify_state }}/argv.log']
+      register: verify_plan_after
+      changed_when: false
+      failed_when: verify_plan_after.rc > 1
+
+    - name: Count the dry runs that recreate after the plan
+      ansible.builtin.command:
+        argv:
+          [
+            grep,
+            --count,
+            --fixed-strings,
+            --regexp=--force-recreate,
+            '{{ verify_state }}/dryrun.log',
+          ]
+      register: verify_recreate_after
+      changed_when: false
+      failed_when: verify_recreate_after.rc > 1
+
+    - name: Read the calls the stand-in has logged as dry runs
+      ansible.builtin.command:
+        argv: [cat, '{{ verify_state }}/dryrun.log']
+      register: verify_dry
+      changed_when: false
+
+    - name: Assert the plan dry-ran the stack and brought nothing up
+      ansible.builtin.assert:
+        that:
+          - verify_plan_after.stdout == verify_plan_before.stdout
+          - (verify_recreate_after.stdout | ansible.builtin.int) - (verify_recreate_before.stdout | ansible.builtin.int) == 1
+          - >-
+            verify_dry.stdout_lines | ansible.builtin.select('ansible.builtin.search', ' up --detach')
+            | ansible.builtin.select('ansible.builtin.search', '--dry-run') | ansible.builtin.list | ansible.builtin.length >= 1
+        quiet: true
+        fail_msg: >-
+          A plan with a changed file must run one `up --dry-run` that recreates and no real `up`.
+          Real up calls before: {{ verify_plan_before.stdout }}, after: {{ verify_plan_after.stdout }}.
+          Dry runs that recreate before: {{ verify_recreate_before.stdout }}, after: {{ verify_recreate_after.stdout }}.
+          Dry runs logged: {{ verify_dry.stdout_lines }}
+
+    - name: Assert every dry run names the compose file
+      ansible.builtin.assert:
+        that:
+          - verify_dry.stdout_lines | ansible.builtin.length >= 1
+          - >-
+            verify_dry.stdout_lines | ansible.builtin.reject('ansible.builtin.search', ' --file compose.yaml ')
+            | ansible.builtin.list | ansible.builtin.length == 0
+        quiet: true
+        fail_msg: >-
+          A dry run was made without naming the compose file, so Compose would merge an override
+          file. Dry runs logged: {{ verify_dry.stdout_lines }}
+
+    - name: Make the stand-in refuse the compose file
+      ansible.builtin.file:
+        path: '{{ verify_state }}/config_fails'
+        state: touch
+        mode: '0644'
+
+    - name: Edit the image and apply the role while the validator refuses
+      block:
+        - name: Apply the role
+          ansible.builtin.include_role:
+            name: branchleft.compose_stack
+          vars:
+            compose_stack_app_image: example.invalid/example-app@sha256:3333333333333333333333333333333333333333333333333333333333333333
+
+        - name: Fail because the role installed a compose file the validator refused
+          ansible.builtin.fail:
+            msg: The role accepted a compose file that the validator refused.
+      rescue:
+        - name: Assert the validator refused the file
+          ansible.builtin.assert:
+            that:
+              - "'failed to validate' in ansible_failed_result.msg"
+            quiet: true
+            fail_msg: >-
+              The compose file was not refused by its validator. The role stopped with: {{ ansible_failed_result.msg }}
+      always:
+        - name: Let the stand-in accept compose files again
+          ansible.builtin.file:
+            path: '{{ verify_state }}/config_fails'
+            state: absent
+
+    - name: Read the compose file that stayed installed
+      ansible.builtin.command:
+        argv:
+          [grep, --count, --fixed-strings, '{{ scenario_image }}', '{{ verify_dir }}/compose.yaml']
+      register: verify_kept
+      changed_when: false
+
+    - name: Assert the refused edit did not replace the installed compose file
+      ansible.builtin.assert:
+        that:
+          - verify_kept.stdout | ansible.builtin.int == 1
+        quiet: true
+        fail_msg: The compose file on the instance is not the one before the refused edit.
+
+- name: Verify the run's log on the machine that runs the test
+  hosts: localhost
+  gather_facts: false
+  vars:
+    verify_log_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+    verify_secret: '{{ hostvars[groups["all"][0]].scenario_secret }}'
+  tasks:
+    # The control first: a value the converge printed on purpose. A scan that
+    # cannot find it would find nothing for the secret either. Without
+    # read_whole_file, find matches the pattern at the start of each line only,
+    # so it would find neither; the control is what showed that.
+    - name: Look for the control value in the log of the whole run
+      ansible.builtin.find:
+        paths: '{{ verify_log_dir }}'
+        patterns: ansible.log
+        contains: LOG-SCAN-CONTROL-VALUE
+        read_whole_file: true
+      register: verify_control
+
+    - name: Look for the secret in the log of the whole run
+      ansible.builtin.find:
+        paths: '{{ verify_log_dir }}'
+        patterns: ansible.log
+        contains: '{{ verify_secret }}'
+        read_whole_file: true
+      register: verify_leak
+      no_log: true
+
+    - name: Assert the scan works and the secret is not in the log
+      ansible.builtin.assert:
+        that:
+          - verify_control.matched == 1
+          - verify_leak.matched == 0
+        quiet: true
+        fail_msg: >-
+          Either the log scan cannot see a printed value (control found in
+          {{ verify_control.matched }} file(s), expected 1) or the secret reached the log
+          ({{ verify_leak.matched }} file(s), expected 0).

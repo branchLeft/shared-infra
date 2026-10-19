@@ -1,0 +1,40 @@
+---
+# Makes the stand-in report one state for the stack, applies the role and
+# asserts it failed with the health check's message. The healthy state is put
+# back whatever happens, so the cases do not depend on each other.
+- name: Fail the role on one reported state
+  block:
+    - name: Report the state
+      ansible.builtin.copy:
+        content: '{{ refuse_reported }}'
+        dest: /var/lib/compose_stack_standin/ps.json
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.compose_stack
+
+    - name: Fail because the role passed a stack that is not healthy
+      ansible.builtin.fail:
+        msg: The role accepted a stack that is not healthy.
+  rescue:
+    - name: Assert the health check refused the stack and named the service
+      ansible.builtin.assert:
+        that:
+          - "'The compose stack is not healthy' in ansible_failed_result.msg"
+          - refuse_naming in ansible_failed_result.msg
+        quiet: true
+        fail_msg: >-
+          {{ refuse_title }}: the health check did not refuse the stack as expected.
+          The role stopped with: {{ ansible_failed_result.msg }}
+  always:
+    - name: Report the healthy state again
+      ansible.builtin.copy:
+        content: |
+          {"Name":"stand-in-app-1","Service":"app","State":"running","Health":"healthy","Labels":"","Networks":"default","Publishers":null}
+        dest: /var/lib/compose_stack_standin/ps.json
+        owner: root
+        group: root
+        mode: '0644'
