@@ -1,0 +1,25 @@
+---
+# Applies the role with one image reference that is not pinned by digest and
+# asserts the role refused it with the digest check's own message. If the role
+# accepts the reference, the block's last task fails with a message that is not
+# the digest check's, so the rescue's assertion goes red.
+- name: Refuse one image reference
+  block:
+    - name: Apply the role with the image
+      ansible.builtin.include_role:
+        name: branchleft.compose_stack
+      vars:
+        compose_stack_app_image: '{{ refuse_image }}'
+
+    - name: Fail because the role accepted the image
+      ansible.builtin.fail:
+        msg: The role accepted an image that is not pinned by digest.
+  rescue:
+    - name: Assert the digest check refused the image
+      ansible.builtin.assert:
+        that:
+          - "'ending in @sha256:' in ansible_failed_result.msg"
+        quiet: true
+        fail_msg: >-
+          {{ refuse_title }}: the role did not refuse the image with the digest check.
+          It stopped with: {{ ansible_failed_result.msg }}
