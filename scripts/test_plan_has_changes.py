@@ -87,7 +87,7 @@ def plan(output_diff=None, root=_ROOT, root_steps=("same",), others=None, goal=N
     root_goal = goal if goal is not None else clean_goal(type="pulumi:pulumi:Stack")
     if goal is None and output_diff is not None:
         root_goal["outputDiff"] = output_diff
-    plans = {root: {"goal": root_goal, "steps": list(root_steps), "state": {"k": MARKER}}}
+    plans = {root: {"goal": root_goal, "steps": list(root_steps), "state": {"k": "v"}}}
     for urn, steps in (others or {}).items():
         plans[urn] = {"goal": clean_goal(), "steps": list(steps)}
     return {"manifest": {"version": "v0"}, "config": {"k": MARKER}, "resourcePlans": plans}
@@ -527,6 +527,8 @@ class SameStepEvidenceTests(VerdictCase):
     def test_an_equal_old_and_new_state_on_every_key_is_no_change(self):
         # Every key a state can carry, equal on both sides, id and outputs included.
         both = {key: f"value-of-{key}" for key in STATE_KEYS}
+        both |= {"custom": False, "type": "hcloud:index/server:Server", "outputs": {"o": 1}}
+        both |= {key: False for key in noop.FLAG_STATE_KEYS}
         step = same_step(_SERVER, oldState=dict(both), newState=dict(both))
         self.assertFalse(self.verdict(preview_of(same_step(_ROOT), step), plan()).has_changes)
 
@@ -552,7 +554,7 @@ class SameStepEvidenceTests(VerdictCase):
                     states = self.states()
                     states["oldState"].pop(key, None)
                     states["newState"].pop(key, None)
-                    states[f"{side}State"][key] = "X"
+                    states[f"{side}State"][key] = {"x": 1} if key == "outputs" else "X"
                     self.assertFalse(self.verdict(self.differing(**states), plan()).has_changes)
             with self.subTest(key=key, shape="two values"):
                 doc = self.differing(**self.states({key: "A"}, {key: "B"}))
@@ -681,6 +683,158 @@ class SameStepEvidenceTests(VerdictCase):
         step = same_step(_ROOT, provider="urn:p", detailedDiff=None, diffReasons=None, replaceReasons=None)
         self.assertEqual(set(step) - noop.STEP_KEYS, set())
         self.assertFalse(self.verdict(preview_of(step), plan()).has_changes)
+
+    def test_a_truthy_pending_flag_on_either_side_is_a_change(self):
+        # A same step that still owes work; the four names are written out, not read back.
+        for key in ("taint", "pendingReplacement", "delete", "initErrors"):
+            for value in (True, 1, "x", [1], {"a": 1}):
+                for sides in (("old",), ("new",), ("old", "new")):
+                    with self.subTest(key=key, value=value, sides=sides):
+                        states = self.states()
+                        for side in sides:
+                            states[f"{side}State"][key] = value
+                        self.assertAsks(self.verdict(self.differing(**states), plan()), "steps-changed")
+
+    def test_a_falsy_pending_flag_on_both_sides_is_no_change(self):
+        for key in ("taint", "pendingReplacement", "delete", "initErrors"):
+            for value in (False, None, 0, [], {}):
+                with self.subTest(key=key, value=value):
+                    doc = self.differing(**self.states({key: value}, {key: value}))
+                    self.assertFalse(self.verdict(doc, plan()).has_changes)
+
+    def test_the_flag_keys_are_the_four_the_engine_acts_on(self):
+        self.assertEqual(set(noop.FLAG_STATE_KEYS), {"taint", "pendingReplacement", "delete", "initErrors"})
+
+    def test_a_flag_on_a_listed_non_root_resource_is_a_change(self):
+        step = same_step(_SERVER)
+        step["newState"]["taint"] = True
+        self.assertAsks(self.verdict(self.beside_root(step), plan()), "steps-changed")
+
+    def test_values_of_a_different_type_are_a_change_though_python_calls_them_equal(self):
+        for old, new in (
+            (False, 0),
+            (0, False),
+            (True, 1),
+            (1, True),
+            ({"a": False}, {"a": 0}),
+            ([True], [1]),
+            ({"a": [{"b": True}]}, {"a": [{"b": 1}]}),
+            ("1", 1),
+        ):
+            with self.subTest(old=old, new=new):
+                doc = self.differing(**self.states({"protect": old}, {"protect": new}))
+                self.assertAsks(self.verdict(doc, plan()), "steps-changed")
+
+    def test_numbers_that_are_equal_are_no_change_whatever_their_spelling(self):
+        for old, new in ((1, 1.0), ({"a": 2}, {"a": 2.0}), ([0], [0.0])):
+            with self.subTest(old=old, new=new):
+                doc = self.differing(**self.states({"inputs": old}, {"inputs": new}))
+                self.assertFalse(self.verdict(doc, plan()).has_changes)
+
+    def test_a_custom_flag_that_is_not_a_bool_is_a_change(self):
+        for value in (0, 1, "true", "", None, [], {}):
+            for sides in (("old",), ("new",), ("old", "new")):
+                with self.subTest(value=value, sides=sides):
+                    states = self.states()
+                    for side in sides:
+                        states[f"{side}State"]["custom"] = value
+                    self.assertAsks(self.verdict(self.differing(**states), plan()), "steps-changed")
+
+    def test_the_provider_exemption_needs_the_whole_type_token(self):
+        for token, expected in (
+            ("pulumi:providers:hcloud", True),
+            ("pulumi:providers:aws", True),
+            ("pulumi:providers:", False),
+            ("pulumi:providers", False),
+            ("pulumi:providers:hcloud:extra", False),
+            ("pulumi:providersx:hcloud", False),
+            ("xpulumi:providers:hcloud", False),
+            ("other:providers:hcloud", False),
+            ("hcloud:index/server:Server", False),
+            ("", False),
+            (None, False),
+            (5, False),
+            (["pulumi:providers:hcloud"], False),
+        ):
+            with self.subTest(token=token):
+                self.assertIs(noop._is_provider_type(token), expected)
+
+    def test_a_custom_resource_that_only_looks_like_a_provider_needs_a_provider(self):
+        for leaf in ("other:providers:hcloud", "pulumi:providersx:hcloud", "xpulumi:providers:hcloud"):
+            with self.subTest(leaf=leaf):
+                step = self.custom_pair(f"{_STACK}{leaf}::default", None, None)
+                for side in ("oldState", "newState"):
+                    step[side]["type"] = leaf
+                self.assertAsks(self.verdict(self.beside_root(step), plan()), "steps-changed")
+
+    def test_a_state_type_that_is_not_the_urns_type_is_a_change(self):
+        for side in ("oldState", "newState"):
+            for value in ("pulumi:providers:hcloud", "other:index/thing:Thing", "", 5, None):
+                with self.subTest(side=side, value=value):
+                    step = same_step(_SERVER)
+                    step[side]["type"] = value
+                    self.assertAsks(self.verdict(self.beside_root(step), plan()), "steps-changed")
+
+    def test_the_same_foreign_type_on_both_sides_is_still_a_change(self):
+        # Equal on both sides, so only the comparison with the URN's own type can see it.
+        for value in ("other:index/thing:Thing", "pulumi:providers:hcloud", ""):
+            with self.subTest(value=value):
+                step = same_step(_SERVER)
+                for side in ("oldState", "newState"):
+                    step[side]["type"] = value
+                self.assertAsks(self.verdict(self.beside_root(step), plan()), "steps-changed")
+
+    def test_a_key_on_one_side_of_a_nested_object_is_a_change_either_way(self):
+        for old, new in (
+            ({"a": 1}, {"a": 1, "b": 2}),
+            ({"a": 1, "b": 2}, {"a": 1}),
+            ({"a": {"x": 1}}, {"a": {"x": 1, "y": None}}),
+            ({"a": {"x": 1, "y": None}}, {"a": {"x": 1}}),
+            ({"a": [{"x": 1}]}, {"a": [{"x": 1, "y": 0}]}),
+            ({"a": None}, {}),
+            ({}, {"a": None}),
+        ):
+            with self.subTest(old=old, new=new):
+                doc = self.differing(**self.states({"inputs": old}, {"inputs": new}))
+                self.assertAsks(self.verdict(doc, plan()), "steps-changed")
+
+    def test_lists_of_different_length_are_a_change_either_way(self):
+        for old, new in (
+            ([1], [1, 2]),
+            ([1, 2], [1]),
+            ([], [0]),
+            ({"a": [1]}, {"a": [1, 1]}),
+            ({"a": [[1], [2]]}, {"a": [[1], [2], []]}),
+        ):
+            with self.subTest(old=old, new=new):
+                doc = self.differing(**self.states({"dependencies": old}, {"dependencies": new}))
+                self.assertAsks(self.verdict(doc, plan()), "steps-changed")
+
+    def test_a_provider_type_in_the_state_does_not_exempt_a_resource_with_another_urn(self):
+        step = self.custom_pair(_SERVER, None, None)
+        step["newState"]["type"] = "pulumi:providers:hcloud"
+        self.assertAsks(self.verdict(self.beside_root(step), plan()), "steps-changed")
+
+    def test_a_state_with_no_type_is_not_a_change_by_itself(self):
+        step = same_step(_SERVER)
+        for side in ("oldState", "newState"):
+            step[side].pop("type", None)
+        self.assertFalse(self.verdict(self.beside_root(step), plan()).has_changes)
+
+    def test_the_same_urn_listed_twice_is_not_understood(self):
+        for urns in ((_ROOT, _SERVER, _SERVER), (_ROOT, _ROOT), (_SERVER, _ROOT, _SERVER)):
+            with self.subTest(urns=urns):
+                doc = preview_of(*(same_step(u) for u in urns), summary={"same": len(urns)})
+                self.assertAsks(self.verdict(doc, plan()), "preview-shape")
+
+    def test_a_duplicate_beside_a_changing_step_still_says_the_steps_changed(self):
+        doc = preview(("same", _ROOT), ("create", _SERVER), ("create", _SERVER), summary={"same": 1, "create": 2})
+        self.assertAsks(self.verdict(doc, plan()), "steps-changed")
+
+    def test_two_different_urns_are_not_a_duplicate(self):
+        other = f"{_STACK}hcloud:index/server:Server::mx2"
+        doc = preview_of(same_step(_ROOT), same_step(_SERVER), same_step(other), summary={"same": 3})
+        self.assertFalse(self.verdict(doc, plan()).has_changes)
 
 
 class KnownKeyTests(VerdictCase):
@@ -871,6 +1025,86 @@ class NestedKeyTests(VerdictCase):
                     self.assertAsks(self.verdict(no_op_preview(), doc), "plan-shape")
 
 
+class DetailTests(VerdictCase):
+    """A plan-shape verdict names what it did not recognise: names only, never values."""
+
+    def refused(self, mutate):
+        doc = observed_plan()
+        mutate(doc["resourcePlans"])
+        verdict = self.verdict(no_op_preview(), doc)
+        self.assertAsks(verdict, "plan-shape")
+        return verdict.detail
+
+    def test_unknown_goal_keys_are_named_sorted_across_every_entry(self):
+        def mutate(plans):
+            plans[_ROOT]["goal"]["aliases"] = [MARKER]
+            plans[_SERVER]["goal"]["ignoreChanges"] = [MARKER]
+            plans[_SERVER]["goal"]["aliases"] = [MARKER]
+
+        self.assertEqual(self.refused(mutate), "unrecognised goal key(s): aliases, ignoreChanges")
+
+    def test_unknown_entry_keys_are_named(self):
+        detail = self.refused(lambda plans: plans[_SERVER].update({"replaceOn": MARKER}))
+        self.assertEqual(detail, "unrecognised plan entry key(s): replaceOn")
+
+    def test_protect_true_names_the_resource_types_and_no_resource_name(self):
+        def mutate(plans):
+            plans[_SERVER]["goal"]["protect"] = True
+
+        detail = self.refused(mutate)
+        self.assertEqual(detail, "protect is true on resource type(s): hcloud:index/server:Server")
+        self.assertNotIn("mx1", detail)
+
+    def test_two_findings_are_joined_and_both_reported(self):
+        def mutate(plans):
+            plans[_ROOT]["goal"]["protect"] = True
+            plans[_SERVER]["goal"]["ignoreChanges"] = []
+
+        detail = self.refused(mutate)
+        self.assertIn("protect is true on resource type(s): pulumi:pulumi:Stack", detail)
+        self.assertIn("unrecognised goal key(s): ignoreChanges", detail)
+        self.assertEqual(detail.count("; "), 1)
+
+    def test_a_value_is_never_in_the_detail(self):
+        def mutate(plans):
+            plans[_SERVER]["goal"]["extra"] = {"k": MARKER, "s": SECRET}
+            plans[_SERVER]["state"] = {"k": MARKER}
+
+        detail = self.refused(mutate)
+        self.assertEqual(detail, "unrecognised goal key(s): extra")
+        for text in (MARKER, "CIPHERTEXT_PLACEHOLDER", SECRET["ciphertext"]):
+            self.assertNotIn(text, detail)
+
+    def test_an_odd_key_name_is_not_echoed(self):
+        # A key is part of the plan file, which can carry anything: only plain names are printed.
+        odd = ("has space", "line\nbreak", "::error::x", "a" * 81, "", "secret=" + MARKER, "<script>")
+        for name in odd:
+            with self.subTest(name=name):
+                detail = self.refused(lambda plans, n=name: plans[_SERVER]["goal"].update({n: 1}))
+                self.assertEqual(detail, "unrecognised goal key(s): <odd name>")
+
+    def test_a_long_list_of_names_is_cut_and_counted(self):
+        names = [f"key{i:03d}" for i in range(noop.MAX_NAMES + 5)]
+        detail = self.refused(lambda plans: plans[_SERVER]["goal"].update({n: 1 for n in names}))
+        self.assertTrue(detail.endswith("and 5 more"), detail)
+        self.assertEqual(detail.count("key0"), noop.MAX_NAMES)
+
+    def test_an_unreadable_or_clean_plan_has_no_detail(self):
+        self.assertEqual(self.verdict(no_op_preview(), observed_plan()).detail, "")
+        self.assertEqual(self.verdict(no_op_preview(), "{not json").detail, "")
+
+    def test_a_goal_that_is_wrong_in_another_way_is_still_a_plan_shape_with_no_names(self):
+        doc = observed_plan()
+        doc["resourcePlans"][_SERVER]["goal"]["customTimeouts"] = {"create": "5m"}
+        verdict = self.verdict(no_op_preview(), doc)
+        self.assertAsks(verdict, "plan-shape")
+        self.assertEqual(verdict.detail, "")
+
+    def test_reason_line_is_empty_without_a_detail(self):
+        self.assertEqual(noop.reason_line(noop.Verdict(True, 0, "plan-shape")), "")
+        self.assertEqual(noop.reason_line(noop.Verdict(True, 0, "plan-shape", "x: y")), "plan-shape: x: y\n")
+
+
 _COMP = f"{_STACK}my:mod:Comp::net"
 _NESTED = f"{_STACK}my:mod:Comp$hcloud:index/network:Network::n"
 
@@ -1011,14 +1245,90 @@ class PlanGoalTests(VerdictCase):
                 preview_doc["steps"][1]["oldState"][field] = value
                 self.assertAsks(self.verdict(preview_doc, observed_plan()), "plan-shape")
 
-    def test_a_plan_state_is_not_compared_with_the_previews_old_outputs(self):
-        # Decided, not missed: the outputDiff is the engine's own statement of what
-        # differs, and secrets cannot be compared byte for byte (the plan holds
-        # ciphertext with a fresh nonce each time, the preview holds "[secret]").
+    def root_outputs(self, old, state):
+        """A clean no-op whose root has these old outputs in the preview and this plan state."""
+        preview_doc = no_op_preview()
+        preview_doc["steps"][0]["oldState"]["outputs"] = old
+        doc = observed_plan()
+        doc["resourcePlans"][_ROOT]["state"] = state
+        return self.verdict(preview_doc, doc)
+
+    def test_a_plain_root_output_that_differs_from_the_plan_state_is_a_change(self):
+        for old, state in (
+            ({"o": "v"}, {"o": "w"}),
+            ({"o": {"a": [1, 2]}}, {"o": {"a": [1, 3]}}),
+            ({"o": False}, {"o": 0}),
+            ({"o": 1}, {"o": True}),
+            ({"o": "1"}, {"o": 1}),
+            ({"o": None}, {"o": "x"}),
+        ):
+            with self.subTest(old=old, state=state):
+                verdict = self.root_outputs(old, state)
+                self.assertAsks(verdict, "output-changed")
+                self.assertEqual(verdict.count, 1)
+
+    def test_equal_root_outputs_are_no_change(self):
+        for old, state in (({"o": "v"}, {"o": "v"}), ({"o": 1}, {"o": 1.0}), ({}, {}), ({"o": {"a": [1]}}, {"o": {"a": [1]}})):
+            with self.subTest(old=old, state=state):
+                self.assertFalse(self.root_outputs(old, state).has_changes)
+
+    def test_a_secret_root_output_is_not_compared(self):
+        # The plan holds ciphertext with a fresh nonce each time, the preview "[secret]":
+        # two different ciphertexts, or a secret inside a plain object, are no evidence.
+        other = {**SECRET, "ciphertext": "v1:OTHER"}
+        for old, state in (
+            ({"s": "[secret]"}, {"s": SECRET}),
+            ({"s": "[secret]", "o": "v"}, {"s": other, "o": "v"}),
+            ({"o": {"s": "[secret]", "p": 1}}, {"o": {"s": SECRET, "p": 1}}),
+            ({"s": other}, {"s": SECRET}),
+        ):
+            with self.subTest(old=old):
+                self.assertFalse(self.root_outputs(old, state).has_changes)
+
+    def test_a_secret_on_one_side_only_is_a_change(self):
+        # Secret-ness itself changed: the plan's secret faces a plain value, or the
+        # preview's placeholder faces a plain value in the plan.
+        for old, state in (
+            ({"s": "plain"}, {"s": SECRET}),
+            ({"s": "[secret]"}, {"s": "plain"}),
+            ({"s": 1}, {"s": SECRET}),
+            ({"s": {"a": 1}}, {"s": SECRET}),
+            ({"s": "[secret]"}, {"s": {"a": 1}}),
+        ):
+            with self.subTest(old=old, state=state):
+                self.assertAsks(self.root_outputs(old, state), "output-changed")
+
+    def test_root_old_outputs_that_are_not_an_object_are_not_understood(self):
+        for value in (None, "X", [], ["a"], 1, True):
+            with self.subTest(value=value):
+                preview_doc = no_op_preview()
+                preview_doc["steps"][0]["oldState"]["outputs"] = value
+                self.assertAsks(self.verdict(preview_doc, observed_plan()), "preview-shape")
+
+    def test_a_plain_difference_beside_a_secret_is_still_a_change(self):
+        verdict = self.root_outputs({"s": "[secret]", "o": "v"}, {"s": SECRET, "o": "w"})
+        self.assertAsks(verdict, "output-changed")
+        self.assertEqual(verdict.count, 1)
+
+    def test_a_key_on_one_side_of_the_root_outputs_is_the_output_diffs_to_report(self):
+        # Pinned: the plan's outputDiff lists adds and deletes, so only shared keys are compared.
+        self.assertFalse(self.root_outputs({"o": "v"}, {"o": "v", "extra": "x"}).has_changes)
+        self.assertFalse(self.root_outputs({"o": "v", "gone": "x"}, {"o": "v"}).has_changes)
+
+    def test_a_plan_with_no_root_state_is_no_change(self):
         preview_doc = no_op_preview()
         preview_doc["steps"][0]["oldState"]["outputs"] = {"o": "v"}
         doc = observed_plan()
-        doc["resourcePlans"][_ROOT]["state"] = {"o": "w"}
+        del doc["resourcePlans"][_ROOT]["state"]
+        self.assertFalse(self.verdict(preview_doc, doc).has_changes)
+
+    def test_a_non_root_plan_state_is_not_compared_with_the_preview(self):
+        # Decided: a listed child's state carries its provider's `id` among the plain
+        # outputs, and only the root's outputs are described by the output diff.
+        preview_doc = self.listed_server()
+        preview_doc["steps"][1]["oldState"]["outputs"] = {"hex": "abc"}
+        doc = observed_plan()
+        doc["resourcePlans"][_SERVER]["state"] = {"hex": "zzz"}
         self.assertFalse(self.verdict(preview_doc, doc).has_changes)
 
     def test_plan_fields_of_the_wrong_type_are_a_change(self):
@@ -1371,6 +1681,35 @@ class MainTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn(expect_in_stdout, stdout)
         return out_path
+
+    def test_a_dangling_symlink_is_refused_and_its_target_is_not_created(self):
+        # Opening a dangling link for append would create the file it points at.
+        target = self.files.dir / "target"
+        link = self.files.dir / "link"
+        link.symlink_to(target)
+        good = str(self.files.dir / "good")
+        self.refused(str(link), good, "::error::--github-output is a symlink to a missing target")
+        self.refused(good, str(link), "::error::--github-summary is a symlink to a missing target")
+        self.assertFalse(target.exists())
+        self.assertFalse((self.files.dir / "good").exists())
+
+    def test_a_plan_shape_detail_reaches_the_summary_and_stdout_and_no_value_does(self):
+        doc = plan()
+        doc["resourcePlans"][_ROOT]["goal"]["ignoreChanges"] = [MARKER]
+        code, stdout, out, summary = self.run_main(no_op_preview(), doc)
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "has_changes=true\n")
+        lines = summary.splitlines()
+        self.assertEqual(lines[0], "Plan not understood, treated as changes: approval required")
+        self.assertEqual(lines[1], "plan-shape: unrecognised goal key(s): ignoreChanges")
+        self.assertIn("plan-shape: unrecognised goal key(s): ignoreChanges", stdout.splitlines())
+        for text in (stdout, out, summary):
+            self.assertNotIn(MARKER, text)
+
+    def test_a_clean_no_op_has_no_reason_line(self):
+        _, stdout, _, summary = self.run_main(no_op_preview(), plan())
+        self.assertEqual(summary, noop.HEADLINE_NO_CHANGES + "\n\n")
+        self.assertEqual(len(stdout.splitlines()), 1)
 
     def test_a_whitespace_only_path_is_refused_and_writes_nothing(self):
         # Run in the temp directory, so a path that is wrongly accepted creates

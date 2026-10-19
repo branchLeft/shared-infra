@@ -8,6 +8,7 @@ import argparse
 import json
 import math
 import os
+import re
 import stat
 import sys
 from typing import NamedTuple
@@ -33,7 +34,14 @@ STEP_DIFF_KEYS = ("detailedDiff", "diffReasons", "replaceReasons")
 # read before it copies the old ones); sourcePosition and stackTrace, never.
 OLD_SIDE_STATE_KEYS = frozenset({"id", "outputs"})
 DIAGNOSTIC_STATE_KEYS = frozenset({"sourcePosition", "stackTrace"})
-PROVIDER_TYPE_PREFIX = "pulumi:providers:"
+# The engine never emits `same` for these, so any truthy one on either side is a change.
+FLAG_STATE_KEYS = ("taint", "pendingReplacement", "delete", "initErrors")
+# How a secret shows up: in a plan, an object holding the signature key; in the preview, the placeholder.
+SECRET_SIG_KEY = "4dabf18193072939515e22adb298388d"
+SECRET_PLACEHOLDER = "[secret]"
+# A key or type name is reported in the summary only if it is plain; at most this many are named.
+NAME_PATTERN = re.compile(r"[A-Za-z0-9_.:/$-]{1,80}\Z")
+MAX_NAMES = 20
 # What the output diff and the input diff may carry, with each JSON type.
 DIFF_KEYS = {"adds": dict, "updates": dict, "deletes": list}
 
@@ -46,6 +54,7 @@ class Verdict(NamedTuple):
     has_changes: bool
     count: int
     reason: str
+    detail: str = ""
 
 
 class Urn(NamedTuple):
@@ -60,22 +69,33 @@ class Preview(NamedTuple):
 
     root: Urn
     new_states: dict[str, dict[str, object]]
+    root_outputs: dict[str, object]
 
 
 NO_CHANGES = Verdict(False, 0, "no-changes")
 
 
 class Unclear(Exception):
-    """An input is not a shape this script understands. `reason` is its code."""
+    """An input is not a shape this script understands. `reason` is its code and
+    `detail` names what was not understood (key and type names, never values)."""
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, detail: str = "") -> None:
         super().__init__(reason)
         self.reason = reason
+        self.detail = detail
 
 
 def _require(condition: bool, reason: str) -> None:
     if not condition:
         raise Unclear(reason)
+
+
+def _names(values: set[str]) -> str:
+    """Plain, sorted, de-duplicated names for the summary; anything odd is not echoed."""
+    unique = sorted({v if NAME_PATTERN.match(v) and "::" not in v else "<odd name>" for v in values})
+    shown = unique[:MAX_NAMES]
+    more = len(unique) - len(shown)
+    return ", ".join(shown) + (f" and {more} more" if more else "")
 
 
 def _as_dict(value: object, reason: str) -> dict[str, object]:
@@ -161,8 +181,10 @@ def _has_one_root(urns: list[Urn]) -> bool:
     return len(stacks) == 1 and _is_root(stacks[0])
 
 
-def _check_keys(doc: dict[str, object], known: frozenset[str], reason: str) -> None:
-    _require(set(doc) <= known, reason)
+def _check_keys(doc: dict[str, object], known: frozenset[str], reason: str, level: str) -> None:
+    unknown = set(doc) - known
+    if unknown:
+        raise Unclear(reason, f"unrecognised {level} key(s): {_names(unknown)}")
 
 
 def _is_count(value: object) -> bool:
@@ -178,30 +200,75 @@ def _evidence(value: object) -> bool:
     raise Unclear("preview-shape")
 
 
+def _is_secret(value: object) -> bool:
+    return isinstance(value, dict) and SECRET_SIG_KEY in value
+
+
+def _same_value(first: object, second: object, secrets: bool = False) -> bool:
+    """JSON equality by type and value: a boolean is never a number, a null never an absent
+    key. Numbers compare by value. With `secrets`, a plan secret facing a secret or the preview's placeholder is skipped;
+    a secret against a plain value, or a placeholder against one, differs."""
+    pending = [(first, second)]
+    while pending:
+        a, b = pending.pop()
+        if secrets and _is_secret(a) and (b == SECRET_PLACEHOLDER or _is_secret(b)):
+            continue
+        if isinstance(a, bool) or isinstance(b, bool):
+            if not (isinstance(a, bool) and isinstance(b, bool) and a == b):
+                return False
+        elif isinstance(a, dict) and isinstance(b, dict):
+            if a.keys() != b.keys():
+                return False
+            pending.extend((a[key], b[key]) for key in a)
+        elif isinstance(a, list) and isinstance(b, list):
+            if len(a) != len(b):
+                return False
+            pending.extend(zip(a, b))
+        elif isinstance(a, (dict, list)) or isinstance(b, (dict, list)) or a != b:
+            return False
+    return True
+
+
 def _states_differ(old: dict[str, object], new: dict[str, object]) -> bool:
     """Whether a `same` step's old and new state disagree on any key."""
     for key in (old.keys() | new.keys()) - DIAGNOSTIC_STATE_KEYS:
         if key in OLD_SIDE_STATE_KEYS and not (key in old and key in new):
             continue
-        if old.get(key) != new.get(key):
+        if not _same_value(old.get(key), new.get(key)):
             return True
     return False
 
 
-def _lacks_provider(urn: Urn, new: dict[str, object]) -> bool:
+def _is_provider_type(token: object) -> bool:
+    """The engine's IsProviderType: exactly `pulumi:providers:<package>` (reference.go 40-46)."""
+    parts = token.split(":") if isinstance(token, str) else []
+    return len(parts) == 3 and parts[:2] == ["pulumi", "providers"] and bool(parts[2])
+
+
+def _lacks_provider(new: dict[str, object]) -> bool:
     """A custom resource that is not itself a provider must carry one (NewSameStep)."""
-    is_provider = _leaf_type(urn).startswith(PROVIDER_TYPE_PREFIX)
-    return new.get("custom") is True and not is_provider and not new.get("provider")
+    return new.get("custom") is True and not _is_provider_type(new.get("type")) and not new.get("provider")
+
+
+def _state_is_unfit(urn: Urn, state: dict[str, object]) -> bool:
+    """A state the engine would not write for a `same` step: `custom` not a boolean, a
+    state flag set, or a `type` that is not the URN's own."""
+    return (
+        not isinstance(state.get("custom"), bool)
+        or any(state.get(key) for key in FLAG_STATE_KEYS)
+        or ("type" in state and state["type"] != _leaf_type(urn))
+    )
 
 
 def _same_step_differs(urn: Urn, step: dict[str, object]) -> bool:
     """Whether a `same` step carries its own evidence of a difference."""
-    _check_keys(step, STEP_KEYS, "preview-shape")
+    _check_keys(step, STEP_KEYS, "preview-shape", "preview step")
     evidence = [_evidence(step.get(key)) for key in STEP_DIFF_KEYS]
     old, new = step.get("oldState"), step.get("newState")
     if not (isinstance(old, dict) and isinstance(new, dict)):
         raise Unclear("preview-shape")
-    return any(evidence) or _lacks_provider(urn, new) or _states_differ(old, new)
+    unfit = _state_is_unfit(urn, old) or _state_is_unfit(urn, new)
+    return any(evidence) or unfit or _lacks_provider(new) or _states_differ(old, new)
 
 
 def _preview_steps(doc: dict[str, object]) -> list[tuple[str, Urn, dict[str, object]]]:
@@ -234,11 +301,13 @@ def _preview_verdict(path: str) -> tuple[Verdict | None, Preview | None]:
     """(a `true` verdict, None) if the preview JSON shows anything but a clean no-op,
     else (None, what the plan is checked against)."""
     doc = _as_dict(_load(path, "preview-unreadable"), "preview-shape")
-    _check_keys(doc, PREVIEW_KEYS, "preview-shape")
+    _check_keys(doc, PREVIEW_KEYS, "preview-shape", "preview")
     steps = _preview_steps(doc)
     changed = sum(1 for op, _, _ in steps if op != SAME)
     if changed:
         return Verdict(True, changed, "steps-changed"), None
+    # After the op check: a replace lists one URN in several steps, and that is a change.
+    _require(len({urn for _, urn, _ in steps}) == len(steps), "preview-shape")
     differing = sum(1 for _, urn, step in steps if _same_step_differs(urn, step))
     if differing:
         return Verdict(True, differing, "steps-changed"), None
@@ -252,13 +321,17 @@ def _preview_verdict(path: str) -> tuple[Verdict | None, Preview | None]:
     corrupt = doc.get("maybeCorrupt")
     _require(corrupt is None or corrupt is False, "preview-shape")
     states = {str(entry["urn"]): entry["newState"] for _, _, entry in steps}
-    return _summary_verdict(doc, len(steps)), Preview(_stacks(urns)[0], states)
+    root = _stacks(urns)[0]
+    root_old = next(entry["oldState"] for _, urn, entry in steps if urn == root)
+    outputs = root_old.get("outputs", {})  # type: ignore[union-attr]
+    _require(isinstance(outputs, dict), "preview-shape")
+    return _summary_verdict(doc, len(steps)), Preview(root, states, outputs)
 
 
 def _diff_size(diff: object) -> int:
     """How many keys an adds/updates/deletes diff holds; null or odd types are Unclear."""
     entries = _as_dict(diff, "plan-shape")
-    _check_keys(entries, frozenset(DIFF_KEYS), "plan-shape")
+    _check_keys(entries, frozenset(DIFF_KEYS), "plan-shape", "diff")
     total = 0
     for key, kind in DIFF_KEYS.items():
         if key in entries:
@@ -297,7 +370,7 @@ def _goal_fields_are_clean(urn: Urn, goal: dict[str, object], plan_urns: dict[st
         goal.get("type", _leaf_type(urn)) == _leaf_type(urn)
         and goal.get("name", urn.name) == urn.name
         and isinstance(goal.get("custom", False), bool)
-        and goal.get("protect", False) is False
+        and isinstance(goal.get("protect", False), bool)
         and goal.get("customTimeouts", {}) == {}
         and _provider_is_clean(goal)
         and _property_dependencies_are_clean(goal)
@@ -327,20 +400,40 @@ def _goal_agrees_with_preview(goal: dict[str, object], state: dict[str, object])
     )
 
 
-def _entry_changes(urn: Urn, entry: dict[str, object], plan_urns: dict[str, object], preview: Preview) -> tuple[int, int]:
+def _note(findings: dict[str, set[str]], label: str, names: set[str]) -> None:
+    """Record names for the plan-shape detail; every entry is read before it is raised."""
+    if names:
+        findings.setdefault(label, set()).update(names)
+
+
+def _entry_changes(
+    urn: Urn, entry: dict[str, object], plan_urns: dict[str, object], preview: Preview, findings: dict[str, set[str]]
+) -> tuple[int, int]:
     """(output changes, other changes) for one planned resource."""
-    _check_keys(entry, ENTRY_KEYS, "plan-shape")
+    _note(findings, "unrecognised plan entry key(s)", set(entry) - ENTRY_KEYS)
     other = _planned_steps(entry)
     _require("seed" not in entry or isinstance(entry["seed"], str), "plan-shape")
     _require("state" not in entry or isinstance(entry["state"], dict), "plan-shape")
     goal = _as_dict(entry.get("goal"), "plan-shape")
-    _check_keys(goal, GOAL_KEYS, "plan-shape")
+    _note(findings, "unrecognised goal key(s)", set(goal) - GOAL_KEYS)
     _require("outputDiff" in goal and "inputDiff" in goal, "plan-shape")
     _require(_goal_fields_are_clean(urn, goal, plan_urns), "plan-shape")
+    if goal.get("protect"):
+        _note(findings, "protect is true on resource type(s)", {_leaf_type(urn)})
     listed = preview.new_states.get(_urn_text(urn))
     _require(listed is None or _goal_agrees_with_preview(goal, listed), "plan-shape")
     other += _diff_size(goal["inputDiff"])
     return _diff_size(goal["outputDiff"]), other
+
+
+def _root_output_changes(state: object, old_outputs: dict[str, object]) -> int:
+    """Plain keys of the root's plan state that differ from the preview's old outputs.
+
+    A secret is skipped (ciphertext in the plan, a placeholder in the preview); a key
+    on one side only is the output diff's to report."""
+    new_outputs = state if isinstance(state, dict) else {}
+    shared = new_outputs.keys() & old_outputs.keys()
+    return sum(1 for key in shared if not _same_value(new_outputs[key], old_outputs[key], secrets=True))
 
 
 def _plan_verdict(path: str, preview: Preview) -> Verdict:
@@ -348,7 +441,7 @@ def _plan_verdict(path: str, preview: Preview) -> Verdict:
 
     `preview` is the clean preview: the plan must be for the same stack."""
     doc = _as_dict(_load(path, "plan-unreadable"), "plan-shape")
-    _check_keys(doc, PLAN_KEYS, "plan-shape")
+    _check_keys(doc, PLAN_KEYS, "plan-shape", "plan")
     for key in ("manifest", "config"):
         _require(key not in doc or isinstance(doc[key], dict), "plan-shape")
     plans = _as_dict(doc.get("resourcePlans"), "plan-shape")
@@ -357,8 +450,12 @@ def _plan_verdict(path: str, preview: Preview) -> Verdict:
     urns = [urn for urn, _ in entries]
     _require(_has_one_root(urns), "plan-shape")
     _require(_stacks(urns)[0] == preview.root, "stack-mismatch")
-    results = [_entry_changes(urn, entry, plans, preview) for urn, entry in entries]
-    outputs = sum(out for out, _ in results)
+    findings: dict[str, set[str]] = {}
+    results = [_entry_changes(urn, entry, plans, preview, findings) for urn, entry in entries]
+    if findings:
+        raise Unclear("plan-shape", "; ".join(f"{label}: {_names(names)}" for label, names in findings.items()))
+    root_entry = plans[_urn_text(preview.root)]
+    outputs = sum(out for out, _ in results) + _root_output_changes(root_entry.get("state"), preview.root_outputs)  # type: ignore[attr-defined]
     other = sum(rest for _, rest in results)
     if outputs:
         return Verdict(True, outputs, "output-changed")
@@ -387,7 +484,7 @@ def evaluate(preview_path: str, plan_path: str) -> Verdict:
         _require(clean_preview is not None, "internal-error")
         return _plan_verdict(plan_path, clean_preview)  # type: ignore[arg-type]
     except Unclear as unclear:
-        return Verdict(True, 0, unclear.reason)
+        return Verdict(True, 0, unclear.reason, unclear.detail)
     except Exception:  # noqa: BLE001 -- every failure must reach the gate
         return Verdict(True, 0, "internal-error")
 
@@ -402,10 +499,17 @@ def headline(verdict: Verdict) -> str:
     return HEADLINE_NOT_UNDERSTOOD
 
 
+def reason_line(verdict: Verdict) -> str:
+    """The summary's second line: the reason code and what was not understood, or empty."""
+    return f"{verdict.reason}: {verdict.detail}\n" if verdict.detail else ""
+
+
 def _path_problem(flag: str, path: str) -> str | None:
     """Why an output path cannot carry the verdict: blank, or an existing non-regular file."""
     if not path.strip():
         return f"{flag} names no file, so the plan verdict cannot be published"
+    if os.path.islink(path) and not os.path.exists(path):
+        return f"{flag} is a symlink to a missing target, so the plan verdict cannot be published"
     if os.path.exists(path) and not stat.S_ISREG(os.stat(path).st_mode):
         return f"{flag} is not a regular file, so the plan verdict cannot be published"
     return None
@@ -439,12 +543,14 @@ def main(argv: list[str]) -> int:
         with open(args.github_output, "a", encoding="utf-8") as handle:
             handle.write(f"has_changes={text}\n")
         with open(args.github_summary, "a", encoding="utf-8") as handle:
-            handle.write(f"{headline(verdict)}\n\n")
+            handle.write(f"{headline(verdict)}\n{reason_line(verdict)}\n")
     except OSError as error:
         print(f"::error::cannot write the plan verdict: {type(error).__name__}")
         return 1
 
     print(f"has_changes={text} reason={verdict.reason} count={verdict.count}")
+    if verdict.detail:
+        print(reason_line(verdict).strip())
     return 0
 
 
