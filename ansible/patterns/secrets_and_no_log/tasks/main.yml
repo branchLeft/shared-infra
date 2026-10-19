@@ -89,11 +89,17 @@
       has a value that is not printable ASCII (U+0020 to U+007E), so it cannot be
       one line of the environment file. Give it as a host file instead.
 
-# stat reads the metadata of each source file and never its content, and each
-# loop item is a path, so this task and the one after it hold no value.
+# stat reads the metadata of each source file. The digest is off: stat's default
+# SHA-1 would be the fingerprint of a secret, and the failing assertion below
+# prints each registered item at default verbosity. Each loop item is a path, so
+# this task and the one after it hold no value. The always section empties the
+# register as well.
 - name: Look at each source file given as a host file
   ansible.builtin.stat:
     path: '{{ item }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
   loop: "{{ secrets_and_no_log_secrets | map(attribute='source_file', default='') | select | list }}"
   register: secrets_and_no_log_sources
 
@@ -218,6 +224,7 @@
         secrets_and_no_log_written: {}
         secrets_and_no_log_copied: {}
         secrets_and_no_log_env: {}
+        secrets_and_no_log_sources: {}
       no_log: true
 
 - name: Run the reload handler now, so the playbook can read what it set

@@ -18,6 +18,9 @@
     # The one sentinel that is meant to reach the log: Ansible's own validation
     # prints it (see the probes below). It is the scan's control, not a leak.
     verify_probe_echoed: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/probe_echoed') }}"
+    # The control of the digest scan: its raw text is never printed, only its
+    # SHA-1, which the verify play prints on purpose (see the scan below).
+    verify_digest_control: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/digest_control') }}"
     # Every sentinel the log must not hold, as one pattern. Sentinels are letters
     # and digits, so they need no escaping.
     verify_sentinels:
@@ -31,6 +34,8 @@
       window_secret: '{{ verify_window }}'
       probe_role: '{{ verify_probe_role }}'
     verify_sentinel_pattern: "{{ verify_sentinels.values() | join('|') }}"
+    # What the log scan looks for: each sentinel, and the digest control.
+    verify_scan_items: "{{ verify_sentinels | dict2items + [{'key': 'digest_control', 'value': verify_digest_control}] }}"
     verify_role_dir: '{{ playbook_dir }}/../..'
     verify_file_names:
       - EXAMPLE_ENV_SECRET
@@ -149,6 +154,15 @@
           - name: "EXAMPLE_NAME{{ '%c' | format(10) }}"
             value: '{{ verify_probe_role }}'
 
+    # A dot or a slash in a name would make the file name a path or a hidden name.
+    - name: Refuse a secret name that has a dot and a slash
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a secret name that is not an ALL_CAPS name
+        refused_secrets:
+          - name: EXAMPLE.DOT/SLASH
+            value: '{{ verify_probe_role }}'
+
     - name: Refuse a secret name that is used twice
       ansible.builtin.include_tasks: tasks/refused.yml
       vars:
@@ -256,6 +270,15 @@
         refused_secrets:
           - name: EXAMPLE_OWNED
             source_file: '{{ scenario_source_dir }}/OWNED_SOURCE'
+
+    # Mode 0640 is refused by its group bits alone: no other bit is set.
+    - name: Refuse a source file that the group can read
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source file that is missing, not a plain file, not owned by root or open to group or other
+        refused_secrets:
+          - name: EXAMPLE_GROUP
+            source_file: '{{ scenario_source_dir }}/GROUP_SOURCE'
 
     - name: Refuse a source file that is a link
       ansible.builtin.include_tasks: tasks/refused.yml
@@ -368,6 +391,7 @@
       ansible.builtin.stat:
         path: '{{ verify_path_host }}'
       register: verify_after_plan
+      no_log: true
 
     - name: Assert the plan did not rewrite the delivered file
       ansible.builtin.assert:
@@ -628,6 +652,12 @@
     # run with diff, the rotations, the refusals and the failures. The controls
     # show the scan reads the output: the canary of the converge, two task names,
     # and the one sentinel Ansible's own validation printed.
+    # The one digest the log is meant to hold: the SHA-1 of the digest control.
+    # Its raw text is printed nowhere, so the scan finds it only by its digest.
+    - name: Print the SHA-1 of the digest control, the scan's control for digests
+      ansible.builtin.debug:
+        msg: 'SCENARIO_DIGEST_CONTROL {{ verify_digest_control | hash("sha1") }}'
+
     - name: Read the log of this scenario's Ansible runs
       ansible.builtin.set_fact:
         verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
@@ -644,10 +674,35 @@
         quiet: true
       no_log: true
 
+    - name: Start the list of the sentinels the log holds
+      ansible.builtin.set_fact:
+        verify_found: []
+      no_log: true
+
+    # A sentinel counts as held when its text, its SHA-1 or its MD5 is in the log.
+    # A fingerprint of a secret is a leak too: a digest of a human-chosen password
+    # can be checked offline. The digest control is found only by its SHA-1.
+    - name: Look in the log for each sentinel, its SHA-1 and its MD5, and for the digest control
+      ansible.builtin.set_fact:
+        verify_found: '{{ verify_found + [item.key] }}'
+      loop: '{{ verify_scan_items }}'
+      when: >-
+        item.value in verify_log
+        or (item.value | hash('sha1')) in verify_log
+        or (item.value | hash('md5')) in verify_log
+      no_log: true
+
     - name: Work out which sentinels the log holds
       ansible.builtin.set_fact:
-        verify_leaked: "{{ verify_sentinels | dict2items | selectattr('value', 'in', verify_log) | map(attribute='key') | list }}"
+        verify_leaked: "{{ verify_found | reject('equalto', 'digest_control') | list }}"
       no_log: true
+
+    - name: Assert the scan finds the digest control in the log
+      ansible.builtin.assert:
+        that:
+          - "'digest_control' in verify_found"
+        fail_msg: The scan did not find the SHA-1 of the digest control in the log, so an empty scan of digests would prove nothing.
+        quiet: true
 
     - name: Assert no sentinel reached the log
       ansible.builtin.assert:

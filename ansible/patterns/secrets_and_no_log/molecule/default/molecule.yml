@@ -66,6 +66,7 @@ provisioner:
           - window_secret
           - probe_role
           - probe_echoed
+          - digest_control
         # The account and group the files belong to. They are not root, so the
         # test shows that the role's owner and group parameters produce the
         # result: on a root-owned default the same assertion would pass without

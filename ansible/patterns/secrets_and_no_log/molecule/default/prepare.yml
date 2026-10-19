@@ -69,6 +69,15 @@
         group: root
         mode: '0644'
 
+    # Group-readable but not world-readable: only a check of the group bits refuses it.
+    - name: Put a source file that the group can read on the host
+      ansible.builtin.copy:
+        content: EXAMPLE_PLACEHOLDER
+        dest: '{{ scenario_source_dir }}/GROUP_SOURCE'
+        owner: root
+        group: root
+        mode: '0640'
+
     - name: Put a source file that the account owns on the host
       ansible.builtin.copy:
         content: EXAMPLE_PLACEHOLDER
