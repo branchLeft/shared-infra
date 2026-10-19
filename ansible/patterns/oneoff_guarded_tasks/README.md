@@ -65,7 +65,8 @@ another and a `--tags` list can name it by accident. The confirmation alone is n
 enough, because a confirmation is only read when a tag asks for the step. Both are
 needed, and the scenario proves each separately.
 
-A confirmation is first checked against the step id pattern in `vars/main.yml`,
+The confirmation check and the state directory carry the `always` tag, so a named
+step tag does not skip them. A confirmation is first checked against the step id pattern in `vars/main.yml`,
 which ends with `\Z`, so a confirmation with a line break in it is refused before
 any step reads it.
 
@@ -167,16 +168,20 @@ marker write:
   requested step in check mode reports the effect and the marker it would change,
   and writes neither. The `copy` of the marker is skipped by check mode, so it
   reports that it would change the file.
-- **A task that cannot run in check mode counts as changed.** The check-mode
-  steps of the harness count a change as a failure only on a configured host, so a
-  task that is skipped in check mode because it cannot run must not report `ok` or
-  `skipped` in its place. This pattern avoids the case: its effects are modules that
-  support check mode.
+- **A task that cannot run in check mode must report a change.** The harness's
+  check-configured step fails on any change, and a check-mode run that skips a task
+  reports nothing for it. A task that cannot run in check mode is therefore written to
+  report `changed`, the rule the no-change check relies on. The placeholder effects use
+  modules that support check mode, except the command in `EXAMPLE_STEP_TWO`, which the
+  limits below name.
 
 ### (d) What the test proves, and the named limits
 
-See the tables and the list under "What the test shows". A check the default
-Molecule sequence cannot see is listed under "Named limits" as reviewed, not tested.
+The scenario's verify asserts each claim in the order below, and each assertion
+names the claim it tests. The default Molecule sequence runs all of them, so each
+claim fails by default. The limits are listed under "Named limits". Every control
+the scenario claims was proven red by one edit and one harness run each, and green
+again after the restore.
 
 ### (e) How a service role copies it
 
@@ -200,8 +205,9 @@ Molecule sequence cannot see is listed under "Named limits" as reviewed, not tes
 Choose a guarded task when the step is an effect the role can make on a host with
 no judgement left to a person, and whose result a marker can record. Choose an
 owner step when the step needs a decision, a value only a person holds, a
-credential, or a step outside any host the role can reach. Do not put a credential
-or a host address in this file.
+credential, or a step outside any host the role can reach: the role cannot record
+those, so no marker is written for them. Do not put a credential or a host address
+in this file.
 
 An owner step is written in the role's README as a numbered step. The example below
 is an owner step, not a guarded task. It is not run by the role.
@@ -224,8 +230,8 @@ is an owner step, not a guarded task. It is not run by the role.
 
 Write each owner step with its step number, a name, who runs it, the exact command
 with every value filled in as a placeholder in capitals, what is then true and how to
-tell it has been done. A step that no check can tell apart from a repeat is written as
-a guarded task, not as an owner step.
+tell it has been done. An owner step writes no marker, so a repeat is the owner's
+check to make, not the role's.
 
 ## How to run its test
 
@@ -309,9 +315,10 @@ a terminal, once that workflow exists. Until then no step runs on any host.
   repeated step visible to the idempotence assertion, and it means this pattern does
   not show a real effect's idempotence. A real step's effect must be idempotent itself
   or be gated by its marker, as here.
-- **A command effect is skipped in check mode.** `ansible.builtin.command` does not run
-  in check mode unless told to, so a check run reports the marker and not the command.
-  This is the reason the example command is not a model for a real one in check mode.
+- **The command effect of `EXAMPLE_STEP_TWO` is not checked in check mode.**
+  `ansible.builtin.command` is skipped in check mode, so the scenario makes no claim
+  about the check-mode result of that step. A real command effect that must show its
+  change in check mode needs a module, or a check of its own.
 
 ## What it does not prove
 
@@ -319,9 +326,9 @@ a terminal, once that workflow exists. Until then no step runs on any host.
 - That a step is run on the right host, or only once across hosts. The marker is
   host-local.
 - That the approved delivery path runs it. That path is separate work.
-- That `never` keeps a step from a run that names every tag with `--tags` plus a
-  copied list; the scenario names the step by its tag alone and by its tag with a
-  confirmation, not every spelling of a command line.
+- That every spelling of a command line is refused. The scenario tests the tag alone,
+  the confirmation with a line break, and the tag with its confirmation; it does not test
+  `--tags all` or other tag lists.
 - That a changed role still refuses a tag without its confirmation. The scenario
   checks the two shipped steps; a new step needs its own check, which the README's
   "How a service role copies it" asks for.

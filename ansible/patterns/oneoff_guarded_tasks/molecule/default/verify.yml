@@ -82,7 +82,7 @@
       ansible.builtin.assert:
         that:
           - oneoff_guarded_tasks_line_break.rc != 0
-          - "'is not a step id' in (oneoff_guarded_tasks_line_break.stdout ~ oneoff_guarded_tasks_line_break.stderr)"
+          - "'REFUSED: oneoff_guarded_tasks_confirm is not a step id' in (oneoff_guarded_tasks_line_break.stdout ~ oneoff_guarded_tasks_line_break.stderr)"
         quiet: true
         fail_msg: A confirmation with a line break was not refused by the step id check.
 
