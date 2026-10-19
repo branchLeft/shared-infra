@@ -44,9 +44,33 @@ REQUIREMENT = re.compile(
 )
 HASH = re.compile(r"--hash=sha256:[0-9a-f]{64}", re.ASCII)
 
+# The chosen packages live in requirements.in, one exact pin per line, and the
+# lock is compiled from it with `uv pip compile`. ansible-core is not chosen:
+# the `ansible` package fixes its release, so it is in the lock and not here.
+INPUT_FILE = "requirements.in"
+INPUT_TOOLS = REQUIRED_TOOLS - {"ansible-core"}
+INPUT_LINE = re.compile(
+    rf"(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[A-Za-z0-9._,-]+\])?==(?P<version>{VERSION})",
+    re.ASCII,
+)
+# A lock entry starts in column 0; its hashes and `# via` comments are indented.
+ENTRY_START = re.compile(r"(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[A-Za-z0-9._,-]+\])?==")
+# What the header uv writes must say. Dependabot reads --universal and the Python
+# version from it when it recompiles the lock, and keeps the header as it is.
+HEADER_FACTS = (
+    ("uv pip compile", r"uv pip compile"),
+    (INPUT_FILE, r"uv pip compile " + re.escape(INPUT_FILE)),
+    ("--universal", r"--universal"),
+    ("--generate-hashes", r"--generate-hashes"),
+    ("--python-version", r"--python-version \d+\.\d+"),
+)
+
 LINT_REPOSITORY = "https://github.com/ansible/ansible-lint"
 # Where Dependabot must watch the lock: it is the only thing that raises a bump
-# of the package that carries the collections.
+# of the package that carries the collections. The `uv` ecosystem is the one that
+# recompiles a `uv pip compile` lock from requirements.in; `pip` would run
+# pip-compile, which cannot write a universal lock.
+UPDATE_ECOSYSTEM = "uv"
 UPDATE_DIRECTORY = "/ansible"
 # Anything that makes a copy of a collection live in git hides it from the lock.
 COPY_SUFFIXES = (".tar.gz", ".tgz", ".tar")
@@ -98,6 +122,99 @@ def locked_packages(requirements: Path) -> tuple[dict[str, str], list[str]]:
     return pins, findings
 
 
+def normalise(name: str) -> str:
+    """Return a package name in the form pip compares it."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def read_input(path: Path) -> tuple[dict[str, str], list[str]]:
+    """Return the chosen packages of requirements.in, each an exact pin without hashes."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        return {}, [f"{path.name} cannot be read: {type(error).__name__}"]
+    chosen: dict[str, str] = {}
+    findings: list[str] = []
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = INPUT_LINE.fullmatch(line)
+        if match is None:
+            findings.append(f"{path.name} line {number} is not an exact name==version: {line!r}")
+            continue
+        name = normalise(match["name"])
+        if name in chosen:
+            findings.append(f"{path.name} line {number} names {name} a second time")
+        chosen[name] = match["version"]
+    findings.extend(
+        f"{path.name} does not name {name}" for name in sorted(INPUT_TOOLS - chosen.keys())
+    )
+    return chosen, findings
+
+
+def header_text(text: str) -> str:
+    """Return the comment lines at the top of a file, joined."""
+    lines: list[str] = []
+    for line in text.splitlines():
+        if not line.startswith("#"):
+            break
+        lines.append(line)
+    return " ".join(lines)
+
+
+def check_header(text: str) -> list[str]:
+    """Check the lock's own header records the command that makes it reproducible."""
+    header = header_text(text)
+    return [
+        f"requirements.txt header does not record {what}"
+        for what, pattern in HEADER_FACTS
+        if re.search(pattern, header, re.ASCII) is None
+    ]
+
+
+def lock_entries(text: str) -> list[tuple[str, str]]:
+    """Return each lock entry's name and the comment lines that follow it."""
+    entries: list[tuple[str, list[str]]] = []
+    for line in text.splitlines():
+        match = ENTRY_START.match(line)
+        if match is not None:
+            entries.append((normalise(match["name"]), []))
+        elif entries and line.strip().startswith("#"):
+            entries[-1][1].append(line.strip())
+    return [(name, " ".join(comments)) for name, comments in entries]
+
+
+def check_provenance(ansible_dir: Path, pins: dict[str, str]) -> list[str]:
+    """Check requirements.in, the lock's header and its `# via` comments explain every line."""
+    chosen, findings = read_input(ansible_dir / INPUT_FILE)
+    try:
+        text = (ansible_dir / "requirements.txt").read_text(encoding="utf-8")
+    except OSError:
+        return findings
+    findings.extend(check_header(text))
+    direct: set[str] = set()
+    for name, via in lock_entries(text):
+        if "# via" not in via:
+            findings.append(f"requirements.txt pins {name} with no '# via' comment")
+        if f"-r {INPUT_FILE}" in via:
+            direct.add(name)
+    findings.extend(
+        f"requirements.txt marks {name} as chosen but {INPUT_FILE} does not name it"
+        for name in sorted(direct - chosen.keys())
+    )
+    findings.extend(
+        f"{INPUT_FILE} names {name} but requirements.txt does not mark it '-r {INPUT_FILE}'"
+        for name in sorted(chosen.keys() - direct)
+    )
+    findings.extend(
+        f"{INPUT_FILE} pins {name} {version}, requirements.txt has {pins[name]}"
+        for name, version in sorted(chosen.items())
+        if name in pins and pins[name] != version
+    )
+    return findings
+
+
 def load_yaml(path: Path) -> tuple[object, str | None]:
     """Return the parsed YAML in ``path``, or a finding saying why it could not be read."""
     try:
@@ -138,12 +255,12 @@ def check_dependabot(config: Path) -> list[str]:
     for entry in entries:
         if (
             isinstance(entry, dict)
-            and entry.get("package-ecosystem") == "pip"
+            and entry.get("package-ecosystem") == UPDATE_ECOSYSTEM
             and entry.get("directory") == UPDATE_DIRECTORY
             and isinstance(entry.get("schedule"), dict)
         ):
             return []
-    return [f"{config.name} has no scheduled pip update for {UPDATE_DIRECTORY}"]
+    return [f"{config.name} has no scheduled {UPDATE_ECOSYSTEM} update for {UPDATE_DIRECTORY}"]
 
 
 def lint_hook_revs(config: Path) -> tuple[list[str], list[str]]:
@@ -205,6 +322,7 @@ def run_checks(root: Path) -> tuple[list[str], list[str]]:
     """Run every check under ``root``; return the findings and the notes."""
     ansible_dir = root / "ansible"
     pins, findings = locked_packages(ansible_dir / "requirements.txt")
+    findings.extend(check_provenance(ansible_dir, pins))
     findings.extend(check_no_galaxy_collections(ansible_dir / "requirements.yml"))
     findings.extend(check_no_copies(ansible_dir))
     findings.extend(check_dependabot(root / ".github" / "dependabot.yml"))
