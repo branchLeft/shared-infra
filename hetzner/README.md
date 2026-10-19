@@ -501,7 +501,10 @@ container has a `mem_limit`, and `provision/test_control_plane_stack.py` holds
 their sum under the host's measured available memory with a margin.
 PostgreSQL's `pg_hba.conf` is mounted beside the Compose file and selected at
 start: each login reaches only its own database, with `scram-sha-256` and a
-final `reject`, pinned by the same test file. The
+final `reject`, pinned by the same test file. The sign-in service runs as its own
+unprivileged database login and holds no administrator credential: it starts
+from Zitadel's setup phase, and the init phase that needs the administrator is
+a one-off run of `compose.init.yml`, which the unit does not read. The
 delivery procedure is in the private `branchLeft/ghost-platform-docs`
 repository.
 

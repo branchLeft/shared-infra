@@ -15,6 +15,7 @@ service yet.
 | ------------------ | ---------------------------------------------------------------------- |
 | `role_skeleton/`   | The skeleton `ansible-galaxy role init --role-skeleton` copies.        |
 | `roles/`           | One directory per role. `example_config` is the worked example.        |
+| `patterns/`        | One directory per pattern, each a role the harness runs like `roles/`. |
 | `harness/`         | The test harness, its unit tests and nothing else.                     |
 | `requirements.txt` | The pinned Python tools (ANS-4). Code owners review a change.          |
 | `requirements.yml` | The pinned collections (ANS-4). Code owners review a change.           |
