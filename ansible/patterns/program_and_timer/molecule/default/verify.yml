@@ -131,6 +131,32 @@
         program_and_timer_verify_reloads: >-
           {{ program_and_timer_verify_events | selectattr('MESSAGE', 'equalto', 'Reloading...') | list | length }}
 
+    # "Nothing else": systemd logged no message about any other unit after the mark.
+    # The timer's calendar in this scenario is a time that never comes, so the
+    # timer cannot have started the oneshot service; a job for the service, or for
+    # any unit, was started by something the role (or the test) did. The units the
+    # base image's own daily timers run are named below, because one of them may
+    # legitimately fire in the window.
+    - name: Assert systemd logged nothing about any other unit
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_other_units | length == 0
+        fail_msg: >-
+          systemd logged messages about units other than the timer after the mark:
+          {{ program_and_timer_verify_other_units | unique | join(', ') }}.
+        success_msg: systemd logged no message about any unit but the timer after the mark.
+      vars:
+        program_and_timer_verify_image_units:
+          - apt-daily.service
+          - apt-daily-upgrade.service
+          - dpkg-db-backup.service
+          - man-db.service
+          - systemd-tmpfiles-clean.service
+        program_and_timer_verify_other_units: >-
+          {{ program_and_timer_verify_events | selectattr('UNIT', 'defined')
+          | map(attribute='UNIT') | reject('equalto', 'program_and_timer_tick.timer')
+          | reject('in', program_and_timer_verify_image_units) | list }}
+
     - name: Read each unit file
       ansible.builtin.stat:
         path: '{{ item }}'
@@ -213,3 +239,48 @@
           - program_and_timer_verify_restarted.status.UnitFileState == 'enabled'
         fail_msg: The role left a stopped timer stopped.
         success_msg: The role started the stopped timer without a program or unit change.
+
+    # The root default: no service user declared. The scenario's own variables
+    # declare one, so this phase overrides them with empty values and a second
+    # directory, applies the role, and reads the result. The last phase applies
+    # the scenario's own variables again so the instance ends as it was converged.
+    - name: Apply the role with no service user, into a second directory
+      ansible.builtin.include_role:
+        name: branchleft.program_and_timer
+      vars:
+        program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.sh'
+        program_and_timer_program_dir: /usr/local/lib/program_and_timer_root
+        program_and_timer_service_user: ''
+        program_and_timer_service_group: ''
+
+    - name: Read the root-owned program and directory
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /usr/local/lib/program_and_timer_root
+        - /usr/local/lib/program_and_timer_root/program.sh
+      register: program_and_timer_verify_root
+
+    - name: Ask systemd for the oneshot service of the root default
+      ansible.builtin.systemd_service:
+        name: program_and_timer_tick.service
+      register: program_and_timer_verify_root_service
+
+    - name: Assert the root default owns the files and the unit runs as root
+      ansible.builtin.assert:
+        that:
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - program_and_timer_verify_root_service.status.User | default('') == ''
+          - program_and_timer_verify_root_service.status.ExecStart is search('/usr/local/lib/program_and_timer_root/program.sh')
+        fail_msg: With no service user, the program, its directory or the unit is not root's.
+        success_msg: With no service user the program and its directory are root's and the unit has no User=.
+      loop: '{{ program_and_timer_verify_root.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Apply the role with the scenario's own variables again
+      ansible.builtin.include_role:
+        name: branchleft.program_and_timer
+      vars:
+        program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.sh'

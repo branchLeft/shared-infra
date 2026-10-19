@@ -39,6 +39,35 @@
         dir: /etc/systemd/system
         planted: /etc/systemd/system
         expect: 'rule: dedicated directory'
+      - case: an existing system directory with files of its own
+        dir: /etc/apt
+        planted: /etc/apt
+        expect: 'rule: foreign content'
+      - case: a path that is a file
+        dir: /opt/file_probe
+        planted: /opt/file_probe
+        expect: 'rule: foreign content'
+      - case: an empty directory that belongs to another user
+        dir: /opt/foreign_owner_probe
+        planted: /opt/foreign_owner_probe
+        expect: 'rule: foreign owner'
+      - case: a link to a root-only directory
+        dir: /opt/lnk_probe
+        planted: /etc/ssl
+        expect: 'rule: real path'
+      - case: a directory under a link to a root-only directory
+        dir: /opt/lnk_probe/sub
+        planted: /etc/ssl
+        expect: 'rule: real path'
+      - case: directory with a trailing line break
+        dir: "/opt/nl/x\n"
+        expect: 'rule: directory shape'
+      - case: program name with a trailing line break
+        file: "program.sh\n"
+        expect: 'rule: program name'
+      - case: service user with a trailing line break
+        user: "example_user\n"
+        expect: 'rule: service identity'
       - case: program name with a separator
         file: sub/program.sh
         expect: 'rule: program name'
@@ -62,6 +91,36 @@
       ansible.builtin.stat:
         path: /usr/local/lib/program_and_timer/program.sh
       register: converge_before
+
+    # What some refused inputs point at, planted on the instance: an empty
+    # directory owned by another user, a regular file, and a link to a root-only
+    # directory. They stay for the rest of the run; nothing reads them but the
+    # refused cases below, and the role must leave all of them as they are.
+    - name: Plant the objects the refused cases point at
+      ansible.builtin.file:
+        path: '{{ item.path }}'
+        state: '{{ item.state }}'
+        src: '{{ item.src | default(omit) }}'
+        owner: '{{ item.owner | default(omit) }}'
+        group: '{{ item.group | default(omit) }}'
+        mode: '{{ item.mode | default(omit) }}'
+      loop:
+        - path: /opt/foreign_owner_probe
+          state: directory
+          owner: nobody
+          group: nogroup
+          mode: '0755'
+        - path: /opt/file_probe
+          state: touch
+          mode: '0644'
+        - path: /opt/lnk_probe
+          state: link
+          src: /etc/ssl
+      loop_control:
+        label: '{{ item.path }}'
+      when:
+        - not ansible_check_mode
+        - not converge_before.stat.exists
 
     # Refusals come first, on a host where nothing is installed: a refused input
     # must leave no trace. Check mode writes nothing and a refusal is a fact of

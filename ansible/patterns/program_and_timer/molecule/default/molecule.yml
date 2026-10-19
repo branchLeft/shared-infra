@@ -60,5 +60,9 @@ provisioner:
         program_and_timer_service_user: example_user
         program_and_timer_service_group: example_group
         program_and_timer_unit_description: SCENARIO_UNIT_DESCRIPTION
+        # A time that never comes during a test run, so the timer never starts the
+        # oneshot service: any job systemd logs for the service in a test window
+        # was started by something else, which the verify play counts as a defect.
+        program_and_timer_tick_calendar: '2099-12-31 23:59:59'
 verifier:
   name: ansible

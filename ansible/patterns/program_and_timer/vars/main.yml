@@ -5,6 +5,11 @@
 # The installed program. Both parts are checked at the start of the role.
 program_and_timer_program_path: '{{ program_and_timer_program_dir }}/{{ program_and_timer_program_name }}'
 
+# The patterns end in \Z, not $, so a trailing line break does not pass.
+program_and_timer_dir_pattern: '^/[A-Za-z0-9_.@+-]+(/[A-Za-z0-9_.@+-]+)*\Z'
+program_and_timer_name_pattern: '^[A-Za-z0-9_][A-Za-z0-9_.@+-]*\Z'
+program_and_timer_identity_pattern: '^([a-z_][a-z0-9_-]*)?\Z'
+
 # Directories the role never takes over. It changes the owner, group and mode of
 # the program directory, so the directory must be one nothing else uses. A path
 # with fewer than two components is refused as well, which covers every

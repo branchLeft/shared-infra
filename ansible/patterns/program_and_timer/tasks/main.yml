@@ -26,7 +26,7 @@
 - name: Refuse a program directory that is not an absolute, normalised path
   ansible.builtin.assert:
     that:
-      - program_and_timer_program_dir is match('^/[A-Za-z0-9_.@+-]+(/[A-Za-z0-9_.@+-]+)*$')
+      - program_and_timer_program_dir is match(program_and_timer_dir_pattern)
       - program_and_timer_program_dir is not search('(^|/)[.][.]?(/|$)')
     fail_msg: >-
       program_and_timer refused its input (rule: directory shape): the program directory
@@ -48,7 +48,7 @@
 - name: Refuse a program name that is not one file name
   ansible.builtin.assert:
     that:
-      - program_and_timer_program_name is match('^[A-Za-z0-9_][A-Za-z0-9_.@+-]*$')
+      - program_and_timer_program_name is match(program_and_timer_name_pattern)
     fail_msg: >-
       program_and_timer refused its input (rule: program name): the program name must be
       one file name with no path separator.
@@ -58,16 +58,89 @@
   ansible.builtin.assert:
     that:
       - (program_and_timer_service_user | length == 0) == (program_and_timer_service_group | length == 0)
-      - program_and_timer_service_user is match('^([a-z_][a-z0-9_-]*)?$')
-      - program_and_timer_service_group is match('^([a-z_][a-z0-9_-]*)?$')
+      - program_and_timer_service_user is match(program_and_timer_identity_pattern)
+      - program_and_timer_service_group is match(program_and_timer_identity_pattern)
     fail_msg: >-
       program_and_timer refused its input (rule: service identity): the service user and
       the service group are declared together, each a plain name, or both left empty.
     quiet: true
 
-# The directory is the role's own: it is made for this program and nothing else
-# lives in it, so taking over its owner, group and mode changes nothing another
-# service uses. Any missing parent directory is created with the same owner.
+# The directory must be the role's own before the role takes it over. "Dedicated"
+# is checked on the host, not assumed from the name: the path must be real (no
+# link in it), and a directory that already exists must hold nothing but the
+# program and must belong to root or to the declared user. These reads change
+# nothing, so they run in check mode too (ANS-10).
+- name: Read the real path of the program directory
+  ansible.builtin.command:
+    argv:
+      - realpath
+      - -m
+      - --
+      - '{{ program_and_timer_program_dir }}'
+  register: program_and_timer_realpath
+  changed_when: false
+  check_mode: false
+
+- name: Refuse a program directory with a link in its path
+  ansible.builtin.assert:
+    that:
+      - program_and_timer_realpath.stdout == program_and_timer_program_dir
+    fail_msg: >-
+      program_and_timer refused its input (rule: real path): the program directory
+      must be its own real path, with no symbolic link in it, so that taking it over
+      cannot reach another directory.
+    quiet: true
+
+- name: Read the program directory without following a link
+  ansible.builtin.stat:
+    path: '{{ program_and_timer_program_dir }}'
+    follow: false
+  register: program_and_timer_dir_state
+
+- name: List what an existing program directory holds
+  ansible.builtin.find:
+    paths: '{{ program_and_timer_program_dir }}'
+    hidden: true
+    file_type: any
+    patterns: '*'
+    follow: false
+  register: program_and_timer_dir_content
+  when: program_and_timer_dir_state.stat.exists and program_and_timer_dir_state.stat.isdir
+
+- name: Refuse an existing path that is not a directory holding only the program
+  ansible.builtin.assert:
+    that:
+      - not program_and_timer_dir_state.stat.exists or program_and_timer_dir_state.stat.isdir
+      - >-
+        program_and_timer_dir_content.files | default([]) | map(attribute='path')
+        | map('basename') | difference([program_and_timer_program_name]) | length == 0
+    fail_msg: >-
+      program_and_timer refused its input (rule: foreign content): the program directory
+      already exists and is not a directory that holds only the program, so it is not
+      dedicated to it.
+    quiet: true
+
+- name: Refuse an existing directory that belongs to someone else
+  ansible.builtin.assert:
+    that:
+      - >-
+        not program_and_timer_dir_state.stat.exists or
+        (program_and_timer_dir_state.stat.pw_name | default('')) in
+        ['root', program_and_timer_service_user | default('root', true)]
+      - >-
+        not program_and_timer_dir_state.stat.exists or
+        (program_and_timer_dir_state.stat.gr_name | default('')) in
+        ['root', program_and_timer_service_group | default('root', true)]
+    fail_msg: >-
+      program_and_timer refused its input (rule: foreign owner): the program directory
+      already exists and belongs to neither root nor the declared service user and
+      group, so it is not the role's to take over.
+    quiet: true
+
+# Past the checks the directory is absent, or empty or holding only the program,
+# and owned by root or by the declared user: it is the role's own, and taking over
+# its owner, group and mode changes nothing another service uses. Any missing
+# parent directory is created with the same owner.
 - name: Create the directory the program is installed into
   ansible.builtin.file:
     path: '{{ program_and_timer_program_dir }}'
