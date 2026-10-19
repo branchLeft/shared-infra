@@ -71,7 +71,7 @@
 
 # No attempt may promote anything: the active file and the boot file are what
 # they were before.
-- name: Assert the attempt promoted nothing
+- name: Assert the set was not accepted and nothing was promoted
   ansible.builtin.assert:
     that:
       - not probe_accepted
