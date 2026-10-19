@@ -36,24 +36,43 @@ and the apply jobs read is produced exactly as before.
 
 The allowlists in the script (`PREVIEW_KEYS`, `PLAN_KEYS`, `STEP_KEYS`,
 `ENTRY_KEYS`, `GOAL_KEYS`) hold the keys seen in a real plan and preview from a
-local run against a throwaway stack, plus the preview step's own fields from
-the CLI source. Any other key at those levels is a shape change and gives
-`true`.
+local run of Pulumi CLI v3.255.0 against a throwaway stack (create cases only),
+plus three keys read from the CLI source and never seen in a run. Any other key
+at those levels is a shape change and gives `true`. The tests pin each list to
+exactly the observed keys plus the code-only ones named below.
 
-- The preview carries `steps`, `duration` and `changeSummary`, and optionally
-  `config`. `diagnostics` and `maybeCorrupt` are absent in a clean run.
-- A plan entry carries `goal`, `steps`, `state` and `seed`. A goal carries
-  `type`, `name`, `custom`, `inputDiff`, `outputDiff`, `protect`,
-  `customTimeouts`, and for a child `parent`, `provider` and
-  `propertyDependencies`. Every entry seen had an `outputDiff`.
+- Observed in the preview: `steps`, `duration`, `changeSummary` and `config`.
+  Read from the code, not observed: `diagnostics` and `maybeCorrupt` (a clean
+  run is expected to omit them or leave them empty).
+- Observed on a preview step: `op`, `urn`, `provider`, `newState` and
+  `detailedDiff`. Read from the code, not observed: `oldState`, `diffReasons`
+  and `replaceReasons`.
+- Observed in the plan: `manifest`, `config` and `resourcePlans`. An entry
+  carries `goal`, `steps`, `state` and `seed`. A goal carries `type`, `name`,
+  `custom`, `inputDiff`, `outputDiff`, `protect`, `customTimeouts`, and for a
+  child `parent`, `provider` and `propertyDependencies`. Every entry seen had
+  both diffs.
 - Keys the CLI can write that none of those runs showed, such as
   `dependencies`, `ignoreChanges` or `aliases` on a goal, are not allowlisted.
   A stack whose resources use them gets `true` until the allowlist is widened
   from a real clean plan.
 - No `same` step was observed. By the CLI source a `same` step has both states:
   the old one holds the `id` and `outputs`, and the new one is read before it
-  copies them. So a state may hold `outputs`, `id` or `provider` on one side
-  only, and those are compared only when both sides hold them.
+  copies them. Every other state key is compared, as the next section says.
+
+A real clean plan, from the local run, shows these goal values: `protect`
+`false`, `customTimeouts` `{}`, `custom` a boolean, `name` and `type` those of
+the resource, and for a child a `parent` that is the root stack and a `provider`
+string. A goal that holds anything else for those fields is a change.
+
+Four plan fields are read for their type only, and their content is ignored on
+purpose: `manifest`, `config`, `seed` and `state`. They carry no statement of
+what changes. `state` is not compared with the preview's old outputs because
+the plan's own `outputDiff` is the engine's statement of what differs, and a
+secret cannot be compared byte for byte: in the local run the same secret's
+ciphertext differed between `outputDiff` and `state` (a fresh nonce each time),
+while the preview shows `[secret]`. A test pins this. Likewise the preview's
+`config` and `duration` are checked for type only.
 
 ## What makes a plan `false`
 
@@ -73,20 +92,53 @@ All of these hold:
   stack or project is refused.
 - Every preview step is `same`. A `same` step has both states as objects, and
   its `detailedDiff`, `diffReasons` and `replaceReasons` are absent, null or
-  empty; any other type is refused. Its states agree: `inputs` and `parent`
-  must match exactly, a key missing on one side counting as a difference, and
-  `outputs`, `id` and `provider` must match when both sides hold them. Whether
-  Pulumi ever emits a `same` step that fails this is not verified; the rules
-  can only push towards `true`.
+  empty; any other type is refused. Its states agree on every key they hold,
+  a key on one side only counting as a difference (`protect`, `dependencies`,
+  `aliases`, `customTimeouts`, `propertyDependencies`, `parent`, `provider`,
+  `inputs` and the rest alike). The engine persists the new state of a `same`
+  step as it is, and `protect` drives its deletion guard, so none is skipped.
+  There are two exceptions, each named in the script and pinned by a test.
+  `id` and `outputs` are compared only when both sides hold them: the step
+  copies them from the old state when it applies (`step.go` `SameStep.Apply`,
+  lines 177 to 179), so the new state in the preview does not hold them yet.
+  `sourcePosition` and `stackTrace` are not compared: the engine sets them from
+  the program run being previewed (`step_generator.go` lines 812 and 813), so an
+  edit that only moves a line changes them on every resource, and nothing reads
+  them to decide a delete or an update. A custom resource other than a provider
+  must carry a provider in its new state (`NewSameStep`, `step.go` lines 107 to
+  128); one that does not is a change. Whether Pulumi ever emits a `same` step
+  that fails these rules is not verified; they can only push towards `true`.
+  Two costs follow: a resource carrying `importID` or `snippetID` in its old
+  state is expected to read `true` always, because the new state is built from
+  the program and does not carry them.
 - The change summary counts nothing but `same`: a zero count for another
   operation is allowed. The summary's `same` is at least the `same` steps listed.
 - `diagnostics` is absent, null or an empty list, and `maybeCorrupt` is absent,
-  null or `false`; any other value is refused.
+  null or `false`; any other value is refused. The preview's `config` is
+  absent or an object and its `duration` absent or a non-negative integer, as
+  in the local run; the plan's `manifest` and `config` are absent or objects.
+- Source line numbers in this file are those of Pulumi v3.255.0, the version of
+  the local run.
 - Every plan entry, the root's included, has a non-empty list of string steps,
-  all `same`, and a goal with an `outputDiff`. A goal `type`, if present, is the
-  resource's own type. Its input and output diffs are empty objects of the
-  expected collection types: `adds` and `updates` are objects and `deletes` is
-  a list. A null collection is not an empty one.
+  all `same`, and a goal with both an `inputDiff` and an `outputDiff`. Both
+  diffs must be present on every entry: an absent one is not an empty one. They
+  are empty objects of the expected collection types: `adds` and `updates` are
+  objects and `deletes` is a list. A null collection is not an empty one.
+- Every goal field holds a clean value or is absent. `type` and `name` are the
+  resource's own. `protect` is `false`, so a plan with a protected resource
+  always reads `true`: the plan holds only the desired value, and a resource the
+  preview hides cannot be checked for a change to it. `customTimeouts` is empty.
+  `custom` is a boolean. `parent`, when present, is another entry of the same
+  plan, in the same stack and project, whose type builds this resource's type
+  (a child of the root has a plain type, a child of a component has the
+  component's type, then `$`, then its own); an entry with a `$` in its type and
+  no parent is refused. `provider` is a
+  non-empty string and `propertyDependencies` maps names to lists of strings,
+  their contents unchecked. A change to those two on a resource the preview
+  hides cannot be seen. Where the preview lists the resource, its goal and its
+  new state agree on `custom`, `parent` and `provider`, and its new state does
+  not have `protect` set. The preview always lists the root, whose new state
+  has no parent, so a root goal with a parent is refused by this agreement.
 - A non-root entry with a non-empty output diff is a change too, because
   registering outputs on a component sets its entry's output diff.
 
@@ -102,8 +154,9 @@ either file. The codes are `no-changes`, `steps-changed`, `summary-changed`,
 
 Both `--github-output` and `--github-summary` are required. A blank path, an
 existing target that is not a regular file (a device such as `/dev/null`, a
-symlink to one, a directory), and one file named for both flags are refused
-with exit 1 and nothing written. An unwritable path also exits 1. A skipped
+symlink to one, a directory), and one file named for both flags, whether by one
+path, a symlink or a hard link, are refused with exit 1 and nothing written.
+Two paths are the same file when they have the same device and inode. An unwritable path also exits 1. A skipped
 write would turn an unpublished verdict into no approval.
 
 ## Limits
@@ -120,6 +173,9 @@ write would turn an unpublished verdict into no approval.
 
 ## Tests
 
-`test_plan_has_changes.py` holds a fixture and a test for each rule above.
+`test_plan_has_changes.py` holds a fixture and a test for each rule above. The
+script keeps `from __future__ import annotations`, as every other Python suite
+in this repo does, so it imports on Python 3.9 (the workstation's
+`/usr/bin/python3`); a test pins that import.
 `test_ci_apply_environments.py` checks that each apply job's `if:` is exactly
 the push, main and `has_changes != 'false'` operands joined by `&&`.

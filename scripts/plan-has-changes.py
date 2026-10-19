@@ -2,6 +2,8 @@
 """Decide whether a Pulumi plan changes anything: only a clean plan is `false`.
 The rules and their reasons are in plan-has-changes.md beside this file."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import math
@@ -26,11 +28,12 @@ GOAL_KEYS = frozenset(
 
 # A `same` step that carries any of these, non-empty, is not a no-op.
 STEP_DIFF_KEYS = ("detailedDiff", "diffReasons", "replaceReasons")
-# State keys that must match exactly; a missing one reads as null, so a value
-# on one side only differs. Outputs, id and provider are compared only when
-# both sides hold them: a real new state is read before it copies the old ones.
-STRICT_STATE_KEYS = ("inputs", "parent")
-LENIENT_STATE_KEYS = ("outputs", "id", "provider")
+# Every state key is compared exactly, a missing one reading as null, except:
+# id and outputs, compared only when both sides hold them (a real new state is
+# read before it copies the old ones); sourcePosition and stackTrace, never.
+OLD_SIDE_STATE_KEYS = frozenset({"id", "outputs"})
+DIAGNOSTIC_STATE_KEYS = frozenset({"sourcePosition", "stackTrace"})
+PROVIDER_TYPE_PREFIX = "pulumi:providers:"
 # What the output diff and the input diff may carry, with each JSON type.
 DIFF_KEYS = {"adds": dict, "updates": dict, "deletes": list}
 
@@ -50,6 +53,13 @@ class Urn(NamedTuple):
     project: str
     type: str
     name: str
+
+
+class Preview(NamedTuple):
+    """What a clean preview gives the plan check: its root stack and each listed new state."""
+
+    root: Urn
+    new_states: dict[str, dict[str, object]]
 
 
 NO_CHANGES = Verdict(False, 0, "no-changes")
@@ -127,6 +137,10 @@ def _parse_urn(urn: object, reason: str) -> Urn:
     return Urn(parts[0][len("urn:pulumi:") :], parts[1], parts[2], parts[3])
 
 
+def _urn_text(urn: Urn) -> str:
+    return f"urn:pulumi:{urn.stack}::{urn.project}::{urn.type}::{urn.name}"
+
+
 def _is_root(urn: Urn) -> bool:
     """The stack's own root: the exact root type, named `<project>-<stack>`."""
     return urn.type == ROOT_STACK_TYPE and urn.name == f"{urn.project}-{urn.stack}"
@@ -165,21 +179,29 @@ def _evidence(value: object) -> bool:
 
 
 def _states_differ(old: dict[str, object], new: dict[str, object]) -> bool:
-    """Whether a `same` step's old and new state disagree."""
-    for key in STRICT_STATE_KEYS:
+    """Whether a `same` step's old and new state disagree on any key."""
+    for key in (old.keys() | new.keys()) - DIAGNOSTIC_STATE_KEYS:
+        if key in OLD_SIDE_STATE_KEYS and not (key in old and key in new):
+            continue
         if old.get(key) != new.get(key):
             return True
-    return any(key in old and key in new and old[key] != new[key] for key in LENIENT_STATE_KEYS)
+    return False
 
 
-def _same_step_differs(step: dict[str, object]) -> bool:
+def _lacks_provider(urn: Urn, new: dict[str, object]) -> bool:
+    """A custom resource that is not itself a provider must carry one (NewSameStep)."""
+    is_provider = _leaf_type(urn).startswith(PROVIDER_TYPE_PREFIX)
+    return new.get("custom") is True and not is_provider and not new.get("provider")
+
+
+def _same_step_differs(urn: Urn, step: dict[str, object]) -> bool:
     """Whether a `same` step carries its own evidence of a difference."""
     _check_keys(step, STEP_KEYS, "preview-shape")
     evidence = [_evidence(step.get(key)) for key in STEP_DIFF_KEYS]
     old, new = step.get("oldState"), step.get("newState")
     if not (isinstance(old, dict) and isinstance(new, dict)):
         raise Unclear("preview-shape")
-    return any(evidence) or _states_differ(old, new)
+    return any(evidence) or _lacks_provider(urn, new) or _states_differ(old, new)
 
 
 def _preview_steps(doc: dict[str, object]) -> list[tuple[str, Urn, dict[str, object]]]:
@@ -208,26 +230,29 @@ def _summary_verdict(doc: dict[str, object], same_steps: int) -> Verdict | None:
     return None
 
 
-def _preview_verdict(path: str) -> tuple[Verdict | None, Urn | None]:
+def _preview_verdict(path: str) -> tuple[Verdict | None, Preview | None]:
     """(a `true` verdict, None) if the preview JSON shows anything but a clean no-op,
-    else (None, the root stack's URN)."""
+    else (None, what the plan is checked against)."""
     doc = _as_dict(_load(path, "preview-unreadable"), "preview-shape")
     _check_keys(doc, PREVIEW_KEYS, "preview-shape")
     steps = _preview_steps(doc)
     changed = sum(1 for op, _, _ in steps if op != SAME)
     if changed:
         return Verdict(True, changed, "steps-changed"), None
-    differing = sum(1 for _, _, step in steps if _same_step_differs(step))
+    differing = sum(1 for _, urn, step in steps if _same_step_differs(urn, step))
     if differing:
         return Verdict(True, differing, "steps-changed"), None
     urns = [urn for _, urn, _ in steps]
     if not _has_one_root(urns):
         return Verdict(True, 0, "no-root-stack"), None
+    _require("config" not in doc or isinstance(doc["config"], dict), "preview-shape")
+    _require("duration" not in doc or _is_count(doc["duration"]), "preview-shape")
     diagnostics = doc.get("diagnostics")
     _require(diagnostics is None or (isinstance(diagnostics, list) and not diagnostics), "preview-diagnostics")
     corrupt = doc.get("maybeCorrupt")
     _require(corrupt is None or corrupt is False, "preview-shape")
-    return _summary_verdict(doc, len(steps)), _stacks(urns)[0]
+    states = {str(entry["urn"]): entry["newState"] for _, _, entry in steps}
+    return _summary_verdict(doc, len(steps)), Preview(_stacks(urns)[0], states)
 
 
 def _diff_size(diff: object) -> int:
@@ -251,33 +276,88 @@ def _planned_steps(entry: dict[str, object]) -> int:
     return sum(1 for op in steps if op != SAME)  # type: ignore[union-attr]
 
 
-def _entry_changes(urn: Urn, entry: dict[str, object]) -> tuple[int, int]:
+def _parent_is_clean(urn: Urn, goal: dict[str, object], plan_urns: dict[str, object]) -> bool:
+    """A goal's parent is another entry of the plan whose type chain builds this URN's type.
+
+    No parent is clean only for a type with no parent in its chain (no `$`)."""
+    if "parent" not in goal:
+        return "$" not in urn.type
+    parent = goal["parent"]
+    if not isinstance(parent, str) or parent not in plan_urns:
+        return False
+    owner = _parse_urn(parent, "plan-shape")
+    leaf = _leaf_type(urn)
+    expected = leaf if _is_root(owner) else f"{owner.type}${leaf}"
+    return (owner.stack, owner.project, expected) == (urn.stack, urn.project, urn.type)
+
+
+def _goal_fields_are_clean(urn: Urn, goal: dict[str, object], plan_urns: dict[str, object]) -> bool:
+    """Every goal field other than the diffs holds the value a clean plan carries, or is absent."""
+    return (
+        goal.get("type", _leaf_type(urn)) == _leaf_type(urn)
+        and goal.get("name", urn.name) == urn.name
+        and isinstance(goal.get("custom", False), bool)
+        and goal.get("protect", False) is False
+        and goal.get("customTimeouts", {}) == {}
+        and _provider_is_clean(goal)
+        and _property_dependencies_are_clean(goal)
+        and _parent_is_clean(urn, goal, plan_urns)
+    )
+
+
+def _provider_is_clean(goal: dict[str, object]) -> bool:
+    return "provider" not in goal or (isinstance(goal["provider"], str) and bool(goal["provider"]))
+
+
+def _property_dependencies_are_clean(goal: dict[str, object]) -> bool:
+    """A map from property name to a list of URN strings, as the real plan writes it."""
+    deps = goal.get("propertyDependencies", {})
+    if not isinstance(deps, dict):
+        return False
+    return all(isinstance(v, list) and all(isinstance(u, str) for u in v) for v in deps.values())
+
+
+def _goal_agrees_with_preview(goal: dict[str, object], state: dict[str, object]) -> bool:
+    """Where the preview lists the resource, the goal says what its new state says."""
+    return (
+        bool(goal.get("custom", False)) == bool(state.get("custom", False))
+        and goal.get("parent") == state.get("parent")
+        and goal.get("provider") == state.get("provider")
+        and not state.get("protect")
+    )
+
+
+def _entry_changes(urn: Urn, entry: dict[str, object], plan_urns: dict[str, object], preview: Preview) -> tuple[int, int]:
     """(output changes, other changes) for one planned resource."""
     _check_keys(entry, ENTRY_KEYS, "plan-shape")
     other = _planned_steps(entry)
+    _require("seed" not in entry or isinstance(entry["seed"], str), "plan-shape")
+    _require("state" not in entry or isinstance(entry["state"], dict), "plan-shape")
     goal = _as_dict(entry.get("goal"), "plan-shape")
     _check_keys(goal, GOAL_KEYS, "plan-shape")
-    _require("outputDiff" in goal, "plan-shape")
-    if "type" in goal:
-        _require(goal["type"] == _leaf_type(urn), "plan-shape")
-    if "inputDiff" in goal:
-        other += _diff_size(goal["inputDiff"])
+    _require("outputDiff" in goal and "inputDiff" in goal, "plan-shape")
+    _require(_goal_fields_are_clean(urn, goal, plan_urns), "plan-shape")
+    listed = preview.new_states.get(_urn_text(urn))
+    _require(listed is None or _goal_agrees_with_preview(goal, listed), "plan-shape")
+    other += _diff_size(goal["inputDiff"])
     return _diff_size(goal["outputDiff"]), other
 
 
-def _plan_verdict(path: str, root: Urn | None) -> Verdict:
+def _plan_verdict(path: str, preview: Preview) -> Verdict:
     """The verdict from the update plan, every entry checked, the root stack's included.
 
-    `root` is the preview's root stack: the plan must be for the same stack."""
+    `preview` is the clean preview: the plan must be for the same stack."""
     doc = _as_dict(_load(path, "plan-unreadable"), "plan-shape")
     _check_keys(doc, PLAN_KEYS, "plan-shape")
+    for key in ("manifest", "config"):
+        _require(key not in doc or isinstance(doc[key], dict), "plan-shape")
     plans = _as_dict(doc.get("resourcePlans"), "plan-shape")
     _require(bool(plans), "plan-shape")
     entries = [(_parse_urn(key, "plan-shape"), _as_dict(value, "plan-shape")) for key, value in plans.items()]
     urns = [urn for urn, _ in entries]
     _require(_has_one_root(urns), "plan-shape")
-    _require(_stacks(urns)[0] == root, "stack-mismatch")
-    results = [_entry_changes(urn, entry) for urn, entry in entries]
+    _require(_stacks(urns)[0] == preview.root, "stack-mismatch")
+    results = [_entry_changes(urn, entry, plans, preview) for urn, entry in entries]
     outputs = sum(out for out, _ in results)
     other = sum(rest for _, rest in results)
     if outputs:
@@ -301,10 +381,11 @@ def evaluate(preview_path: str, plan_path: str) -> Verdict:
     try:
         if _same_file(preview_path, plan_path):
             return Verdict(True, 0, "same-file")
-        verdict, root = _preview_verdict(preview_path)
+        verdict, clean_preview = _preview_verdict(preview_path)
         if verdict is not None:
             return verdict
-        return _plan_verdict(plan_path, root)
+        _require(clean_preview is not None, "internal-error")
+        return _plan_verdict(plan_path, clean_preview)  # type: ignore[arg-type]
     except Unclear as unclear:
         return Verdict(True, 0, unclear.reason)
     except Exception:  # noqa: BLE001 -- every failure must reach the gate
@@ -333,7 +414,8 @@ def _path_problem(flag: str, path: str) -> str | None:
 def _output_problem(output: str, summary: str) -> str | None:
     """Why the two output paths cannot be written, or None."""
     problem = _path_problem("--github-output", output) or _path_problem("--github-summary", summary)
-    if problem is None and os.path.realpath(output) == os.path.realpath(summary):
+    same_name = os.path.realpath(output) == os.path.realpath(summary)
+    if problem is None and (same_name or _same_file(output, summary)):
         return "--github-output and --github-summary name the same file, so the verdict would be mangled"
     return problem
 

@@ -789,7 +789,10 @@ class NoOpStepBehaviourTests(unittest.TestCase):
     def plan(self, diff=None):
         return {
             "resourcePlans": {
-                self.ROOT_URN: {"goal": {"outputDiff": diff or {}}, "steps": ["same"]}
+                self.ROOT_URN: {
+                    "goal": {"inputDiff": {}, "outputDiff": diff or {}},
+                    "steps": ["same"],
+                }
             }
         }
 
