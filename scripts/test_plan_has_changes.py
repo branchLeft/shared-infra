@@ -6,6 +6,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import pathlib
 import tempfile
 import unittest
@@ -39,10 +40,22 @@ SECRET = {
 MARKER = "VALUE_MARKER_MUST_NOT_BE_PRINTED"
 
 
+def step_of(op, urn):
+    """A preview step. A `same` step carries both states, as a real one does: the
+    old state holds the id and outputs, the new state is read before it copies
+    them (from the engine source; no real `same` step has been observed)."""
+    step = {"op": op, "urn": urn}
+    if op == "same":
+        base = {"urn": urn, "custom": False}
+        step["oldState"] = {**base, "id": "ID", "outputs": {"k": "v"}}
+        step["newState"] = dict(base)
+    return step
+
+
 def preview(*steps, summary=None, **extra):
     """A preview JSON document: (op, urn) steps and a change summary."""
     doc = {
-        "steps": [{"op": op, "urn": urn} for op, urn in steps],
+        "steps": [step_of(op, urn) for op, urn in steps],
         "duration": 1,
         "changeSummary": summary if summary is not None else {"same": 3},
     }
@@ -383,15 +396,17 @@ class FailClosedTests(VerdictCase):
             noop._preview_verdict = original
         self.assertAsks(verdict, "internal-error")
 
-    def test_a_deeply_nested_file_is_a_change_not_a_crash(self):
-        # Balanced and past the parser's own recursion limit (about a million
-        # levels on a recent Python), so the parser itself raises RecursionError.
+    def test_a_file_too_deep_to_parse_is_a_change_not_a_crash(self):
+        # Proves a document too deep to parse is `preview-unreadable`, never an
+        # exception or `internal-error`. On Python 3.14 this size makes the parser
+        # raise RecursionError (the loader's except clause); elsewhere the depth
+        # rule may give the same code. The depth rule has its own test.
         verdict = self.verdict("[" * 1000000 + "]" * 1000000, plan())
         self.assertAsks(verdict, "preview-unreadable")
 
 
 def same_step(urn, **extra):
-    return {"op": "same", "urn": urn, **extra}
+    return {**step_of("same", urn), **extra}
 
 
 def preview_of(*steps, summary=None):
@@ -432,8 +447,14 @@ class NonRootEntryTests(VerdictCase):
         self.assertAsks(self.verdict(no_op_preview(), plan_with(_SERVER, entry)), "output-changed")
 
     def test_an_entry_with_a_non_empty_input_diff(self):
-        entry = {"goal": {"inputDiff": {"updates": {"k": "v"}}}, "steps": ["same"]}
+        goal = {"inputDiff": {"updates": {"k": "v"}}, "outputDiff": {}}
+        entry = {"goal": goal, "steps": ["same"]}
         self.assertAsks(self.verdict(no_op_preview(), plan_with(_SERVER, entry)), "steps-changed")
+
+    def test_an_entry_with_no_output_diff_key(self):
+        # The root's missing key is tested apart; every entry of a real plan has it.
+        entry = {"goal": {"type": "hcloud:index/server:Server"}, "steps": ["same"]}
+        self.assertAsks(self.verdict(no_op_preview(), plan_with(_SERVER, entry)), "plan-shape")
 
     def test_a_clean_entry_with_the_resource_type_is_no_change(self):
         goal = {"type": "hcloud:index/server:Server", "outputDiff": {}, "inputDiff": {}}
@@ -452,7 +473,8 @@ class NullAndMissingTests(VerdictCase):
                 )
 
     def test_a_null_input_diff_collection(self):
-        entry = {"goal": {"inputDiff": {"adds": None}}, "steps": ["same"]}
+        goal = {"inputDiff": {"adds": None}, "outputDiff": {}}
+        entry = {"goal": goal, "steps": ["same"]}
         self.assertAsks(self.verdict(no_op_preview(), plan_with(_SERVER, entry)), "plan-shape")
 
     def test_root_steps_missing(self):
@@ -476,16 +498,58 @@ class SameStepEvidenceTests(VerdictCase):
     def differing(self, **extra):
         return preview_of(same_step(_ROOT, **extra))
 
+    def states(self, old=None, new=None):
+        """Old and new state around the real shape, with each given key set to its value."""
+        return {
+            "oldState": {**step_of("same", _ROOT)["oldState"], **(old or {})},
+            "newState": {**step_of("same", _ROOT)["newState"], **(new or {})},
+        }
+
+    def test_the_real_shaped_same_step_is_no_change(self):
+        # Old state holds the id and outputs; the new state has neither yet.
+        self.assertFalse(self.verdict(self.differing(), plan()).has_changes)
+
     def test_old_and_new_inputs_that_differ_on_the_root(self):
-        doc = self.differing(oldState={"inputs": {"a": 1}}, newState={"inputs": {"a": 2}})
+        doc = self.differing(**self.states({"inputs": {"a": 1}}, {"inputs": {"a": 2}}))
         self.assertAsks(self.verdict(doc, plan()), "steps-changed")
 
+    def test_inputs_on_one_side_only(self):
+        for old, new in (({"inputs": {"a": 1}}, {}), ({}, {"inputs": {"a": 1}}), ({"inputs": {}}, {})):
+            with self.subTest(old=old, new=new):
+                doc = self.differing(**self.states(old, new))
+                self.assertAsks(self.verdict(doc, plan()), "steps-changed")
+
     def test_old_and_new_outputs_that_differ_on_another_resource(self):
-        doc = preview_of(
-            same_step(_ROOT),
-            same_step(_SERVER, oldState={"outputs": {"a": 1}}, newState={"outputs": {"a": 2}}),
-        )
+        other = same_step(_SERVER)
+        other["oldState"]["outputs"] = {"a": 1}
+        other["newState"]["outputs"] = {"a": 2}
+        doc = preview_of(same_step(_ROOT), other)
         self.assertAsks(self.verdict(doc, plan()), "steps-changed")
+
+    def test_an_id_or_parent_that_differs(self):
+        for key in ("id", "parent", "provider"):
+            with self.subTest(key=key):
+                doc = self.differing(**self.states({key: "A"}, {key: "B"}))
+                self.assertAsks(self.verdict(doc, plan()), "steps-changed")
+
+    def test_a_parent_on_one_side_only(self):
+        doc = self.differing(**self.states({"parent": "P"}, {}))
+        self.assertAsks(self.verdict(doc, plan()), "steps-changed")
+
+    def test_outputs_or_id_on_the_old_side_only_is_the_real_shape(self):
+        # Disagreed with in review: a real new state is read before it copies
+        # these, so one side holding them is no evidence of a change.
+        doc = self.differing(**self.states({"outputs": {"k": "v"}, "id": "X"}, {}))
+        self.assertFalse(self.verdict(doc, plan()).has_changes)
+
+    def test_a_state_that_is_missing_null_or_not_an_object(self):
+        for extra in ({"oldState": None}, {"newState": None}, {"oldState": []}, {"newState": "s"}):
+            with self.subTest(extra=extra):
+                self.assertAsks(self.verdict(self.differing(**extra), plan()), "preview-shape")
+
+    def test_a_same_step_with_no_states(self):
+        step = {"op": "same", "urn": _ROOT}
+        self.assertAsks(self.verdict(preview_of(step), plan()), "preview-shape")
 
     def test_diffs_listed_on_a_same_step(self):
         for key in noop.STEP_DIFF_KEYS:
@@ -493,18 +557,27 @@ class SameStepEvidenceTests(VerdictCase):
                 doc = self.differing(**{key: ["a"] if key != "detailedDiff" else {"a": {}}})
                 self.assertAsks(self.verdict(doc, plan()), "steps-changed")
 
-    def test_equal_old_and_new_state_is_no_change(self):
-        state = {"inputs": {"a": 1}, "outputs": {"b": 2}}
-        doc = self.differing(oldState=state, newState=dict(state))
+    def test_a_diff_field_of_another_type_is_not_evidence_of_nothing(self):
+        for key in noop.STEP_DIFF_KEYS:
+            for value in (0, "", False, 1, "x", True):
+                with self.subTest(key=key, value=value):
+                    doc = self.differing(**{key: value})
+                    self.assertAsks(self.verdict(doc, plan()), "preview-shape")
+
+    def test_an_unknown_key_on_a_same_step(self):
+        for key in ("diffs", "extra", "inputs"):
+            self.assertNotIn(key, noop.STEP_KEYS)
+            with self.subTest(key=key):
+                self.assertAsks(self.verdict(self.differing(**{key: 0}), plan()), "preview-shape")
+
+    def test_empty_and_null_diff_fields_on_a_same_step_are_no_change(self):
+        doc = self.differing(detailedDiff=None, diffReasons=[], replaceReasons={})
         self.assertFalse(self.verdict(doc, plan()).has_changes)
 
-    def test_one_side_missing_leaves_the_op_rule_alone(self):
-        doc = self.differing(oldState={"inputs": {"a": 1}})
-        self.assertFalse(self.verdict(doc, plan()).has_changes)
-
-    def test_empty_diff_lists_on_a_same_step_are_no_change(self):
-        doc = self.differing(diffs=[], detailedDiff={}, diffReasons=[], replaceReasons=[])
-        self.assertFalse(self.verdict(doc, plan()).has_changes)
+    def test_every_known_step_key_is_accepted(self):
+        step = same_step(_ROOT, provider="urn:p", detailedDiff=None, diffReasons=None, replaceReasons=None)
+        self.assertEqual(set(step) - noop.STEP_KEYS, set())
+        self.assertFalse(self.verdict(preview_of(step), plan()).has_changes)
 
 
 class KnownKeyTests(VerdictCase):
@@ -583,7 +656,137 @@ class RootIdentityTests(VerdictCase):
         self.assertAsks(self.verdict(no_op_preview(), doc), "plan-shape")
 
 
+def observed_plan():
+    """A clean plan with every key the real plan files carried, at every level."""
+    root_goal = {
+        "type": "pulumi:pulumi:Stack",
+        "name": "branchleft-mail-production",
+        "custom": False,
+        "inputDiff": {},
+        "outputDiff": {},
+        "protect": False,
+        "customTimeouts": {},
+    }
+    child_goal = {
+        "type": "hcloud:index/server:Server",
+        "name": "mx1",
+        "custom": True,
+        "inputDiff": {},
+        "outputDiff": {},
+        "parent": _ROOT,
+        "protect": False,
+        "provider": f"{_STACK}pulumi:providers:hcloud::default::ID",
+        "propertyDependencies": {"name": []},
+        "customTimeouts": {},
+    }
+    manifest = {"time": "T", "magic": "M", "version": "v"}
+    return {
+        "manifest": manifest,
+        "config": {"branchleft-mail:k": "v"},
+        "resourcePlans": {
+            _ROOT: {"goal": root_goal, "steps": ["same"], "state": {}, "seed": "S"},
+            _SERVER: {"goal": child_goal, "steps": ["same"], "state": {}, "seed": "S"},
+        },
+    }
+
+
+class NestedKeyTests(VerdictCase):
+    """An unknown key below the top level reaches the gate too."""
+
+    def test_a_plan_with_every_observed_key_is_no_change(self):
+        self.assertFalse(self.verdict(no_op_preview(), observed_plan()).has_changes)
+
+    def test_the_observed_keys_are_the_allowlists(self):
+        doc = observed_plan()
+        entry_keys = {key for entry in doc["resourcePlans"].values() for key in entry}
+        goal_keys = {key for entry in doc["resourcePlans"].values() for key in entry["goal"]}
+        self.assertEqual(entry_keys, set(noop.ENTRY_KEYS))
+        self.assertEqual(goal_keys, set(noop.GOAL_KEYS))
+
+    def test_an_unknown_key_on_the_root_entry(self):
+        for key in ("outputs", "changes"):
+            self.assertNotIn(key, noop.ENTRY_KEYS)
+            with self.subTest(key=key):
+                doc = observed_plan()
+                doc["resourcePlans"][_ROOT][key] = {}
+                self.assertAsks(self.verdict(no_op_preview(), doc), "plan-shape")
+
+    def test_an_unknown_key_on_a_non_root_entry(self):
+        doc = observed_plan()
+        doc["resourcePlans"][_SERVER]["replaceOn"] = ["x"]
+        self.assertAsks(self.verdict(no_op_preview(), doc), "plan-shape")
+
+    def test_an_unknown_goal_key(self):
+        for key in ("properties", "dependencies", "replaceOn", "ignoreChanges", "aliases", "id"):
+            self.assertNotIn(key, noop.GOAL_KEYS)
+            for urn in (_ROOT, _SERVER):
+                with self.subTest(key=key, urn=urn):
+                    doc = observed_plan()
+                    doc["resourcePlans"][urn]["goal"][key] = []
+                    self.assertAsks(self.verdict(no_op_preview(), doc), "plan-shape")
+
+
+class PreviewFieldTests(VerdictCase):
+    """The preview's own top-level fields: diagnostics and maybeCorrupt."""
+
+    def test_diagnostics_that_are_not_empty(self):
+        entry = {"severity": "error", "message": "boom"}
+        for value in ([entry], "boom", {"k": 1}, 0, 1, False, ""):
+            with self.subTest(value=value):
+                doc = no_op_preview() | {"diagnostics": value}
+                self.assertAsks(self.verdict(doc, plan()), "preview-diagnostics")
+
+    def test_absent_null_and_empty_diagnostics_are_no_change(self):
+        for extra in ({}, {"diagnostics": None}, {"diagnostics": []}):
+            with self.subTest(extra=extra):
+                self.assertFalse(self.verdict(no_op_preview() | extra, plan()).has_changes)
+
+    def test_maybe_corrupt_other_than_absent_null_or_false(self):
+        for value in (True, 0, 1, "false", "", {}, []):
+            with self.subTest(value=value):
+                doc = no_op_preview() | {"maybeCorrupt": value}
+                self.assertAsks(self.verdict(doc, plan()), "preview-shape")
+
+    def test_maybe_corrupt_false_or_null_is_accepted_as_a_known_key(self):
+        # Fails if the key leaves PREVIEW_KEYS: the unknown-key rule would then
+        # reject a value this test requires to be accepted.
+        self.assertIn("maybeCorrupt", noop.PREVIEW_KEYS)
+        for value in (False, None):
+            with self.subTest(value=value):
+                doc = no_op_preview() | {"maybeCorrupt": value}
+                self.assertFalse(self.verdict(doc, plan()).has_changes)
+
+
+class StackMatchTests(VerdictCase):
+    """The preview and the plan must be for the same stack."""
+
+    def test_a_plan_for_another_stack(self):
+        other = _ROOT.replace("production", "dev")
+        self.assertAsks(self.verdict(no_op_preview(), plan(root=other)), "stack-mismatch")
+
+    def test_a_plan_for_another_project(self):
+        other = _ROOT.replace("branchleft-mail", "branchleft-hetzner")
+        self.assertAsks(self.verdict(no_op_preview(), plan(root=other)), "stack-mismatch")
+
+    def test_a_nested_stack_typed_step_beside_the_real_root(self):
+        urn = f"{_STACK}my:mod:Comp$pulumi:pulumi:Stack::branchleft-mail-production"
+        doc = preview(("same", _ROOT), ("same", urn), summary={"same": 2})
+        self.assertAsks(self.verdict(doc, plan()), "no-root-stack")
+
+
 class JsonHazardTests(VerdictCase):
+    def test_a_number_that_overflows_to_infinity(self):
+        for literal in ("1e999", "-1e999"):
+            with self.subTest(literal=literal):
+                text = json.dumps(no_op_preview()).replace('"duration": 1', f'"duration": {literal}')
+                self.assertAsks(self.verdict(text, plan()), "preview-unreadable")
+                text = json.dumps(plan()).replace('"v0"', literal)
+                self.assertAsks(self.verdict(no_op_preview(), text), "plan-unreadable")
+
+    def test_a_finite_exponent_is_fine(self):
+        text = json.dumps(no_op_preview()).replace('"duration": 1', '"duration": 1.5e3')
+        self.assertFalse(self.verdict(text, plan()).has_changes)
+
     def test_a_duplicate_key_in_the_preview(self):
         text = '{"steps": [], "steps": [], "changeSummary": {"same": 1}}'
         self.assertAsks(self.verdict(text, plan()), "preview-unreadable")
@@ -632,6 +835,13 @@ class JsonHazardTests(VerdictCase):
     def test_fewer_same_in_the_summary_than_same_steps_listed(self):
         doc = preview_of(same_step(_ROOT), same_step(_SERVER), summary={"same": 1})
         self.assertAsks(self.verdict(doc, plan()), "preview-shape")
+
+    def test_an_equal_same_count_is_no_change(self):
+        # The boundary of the `at least` rule: one root step, a summary of one.
+        doc = preview_of(same_step(_ROOT), summary={"same": 1})
+        verdict = self.verdict(doc, plan())
+        self.assertFalse(verdict.has_changes)
+        self.assertEqual(verdict, noop.NO_CHANGES)
 
     def test_more_same_in_the_summary_than_steps_listed_is_the_real_no_op(self):
         # The preview hides same steps other than the root, so the summary
@@ -796,6 +1006,70 @@ class MainTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as raised:
                 self.run_with_flags(["--github-summary", str(self.files.dir / "summary")])
         self.assertEqual(raised.exception.code, 2)
+
+    def refused(self, output, summary, expect_in_stdout):
+        out_path = pathlib.Path(output)
+        code, stdout = self.run_with_flags(["--github-output", output, "--github-summary", summary])
+        self.assertEqual(code, 1)
+        self.assertIn(expect_in_stdout, stdout)
+        return out_path
+
+    def test_a_whitespace_only_path_is_refused_and_writes_nothing(self):
+        # Run in the temp directory, so a path that is wrongly accepted creates
+        # its file there and not in the checkout.
+        previous = os.getcwd()
+        os.chdir(self.files.dir)
+        self.addCleanup(os.chdir, previous)
+        good = str(self.files.dir / "good")
+        for blank in ("   ", "\t", " \n"):
+            with self.subTest(blank=blank):
+                self.refused(blank, good, "::error::--github-output names no file")
+                self.refused(good, blank, "::error::--github-summary names no file")
+                self.assertFalse((self.files.dir / "good").exists())
+                self.assertFalse(pathlib.Path(blank).exists())
+
+    @unittest.skipUnless(os.path.exists(os.devnull), "needs a null device")
+    def test_a_device_file_is_refused(self):
+        good = str(self.files.dir / "good")
+        self.refused(os.devnull, good, "::error::--github-output is not a regular file")
+        self.refused(good, os.devnull, "::error::--github-summary is not a regular file")
+        self.assertFalse((self.files.dir / "good").exists())
+
+    @unittest.skipUnless(os.path.exists(os.devnull), "needs a null device")
+    def test_a_symlink_to_a_device_file_is_refused(self):
+        link = self.files.dir / "link"
+        link.symlink_to(os.devnull)
+        good = str(self.files.dir / "good")
+        self.refused(str(link), good, "::error::--github-output is not a regular file")
+        self.refused(good, str(link), "::error::--github-summary is not a regular file")
+
+    def test_a_directory_is_refused(self):
+        good = str(self.files.dir / "good")
+        self.refused(str(self.files.dir), good, "::error::--github-output is not a regular file")
+
+    def test_the_same_path_for_output_and_summary_is_refused(self):
+        same = self.files.dir / "both"
+        self.refused(str(same), str(same), "::error::--github-output and --github-summary name the same file")
+        self.assertFalse(same.exists())
+
+    def test_the_same_file_by_a_symlink_is_refused(self):
+        real = self.files.dir / "real"
+        real.write_text("", encoding="utf-8")
+        link = self.files.dir / "link"
+        link.symlink_to(real)
+        self.refused(str(real), str(link), "name the same file")
+        self.assertEqual(real.read_text(encoding="utf-8"), "")
+
+    def test_a_symlink_to_a_regular_file_is_written_through(self):
+        real = self.files.dir / "real"
+        real.write_text("", encoding="utf-8")
+        link = self.files.dir / "link"
+        link.symlink_to(real)
+        code, _ = self.run_with_flags(
+            ["--github-output", str(link), "--github-summary", str(self.files.dir / "summary")]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(real.read_text(encoding="utf-8"), "has_changes=false\n")
 
     def test_a_usage_error_exits_two(self):
         with contextlib.redirect_stderr(io.StringIO()):

@@ -779,10 +779,12 @@ class NoOpStepBehaviourTests(unittest.TestCase):
         return result, read(out), read(summary)
 
     def preview(self, op="same"):
-        return {
-            "steps": [{"op": op, "urn": self.ROOT_URN}],
-            "changeSummary": {op: 3},
-        }
+        step = {"op": op, "urn": self.ROOT_URN}
+        if op == "same":
+            # A same step carries both states; the old one holds the id and outputs.
+            step["oldState"] = {"urn": self.ROOT_URN, "id": "ID", "outputs": {"k": "v"}}
+            step["newState"] = {"urn": self.ROOT_URN}
+        return {"steps": [step], "changeSummary": {op: 3}}
 
     def plan(self, diff=None):
         return {

@@ -4,7 +4,9 @@ The rules and their reasons are in plan-has-changes.md beside this file."""
 
 import argparse
 import json
+import math
 import os
+import stat
 import sys
 from typing import NamedTuple
 
@@ -12,12 +14,23 @@ ROOT_STACK_TYPE = "pulumi:pulumi:Stack"
 SAME = "same"
 MAX_DEPTH = 500
 
-# The only top-level keys each input file has been seen to carry.
+# The keys each level of the two files may carry: those seen in a real plan and
+# preview, plus the preview step's own fields. Any other key is a shape change.
 PREVIEW_KEYS = frozenset({"config", "steps", "duration", "changeSummary", "diagnostics", "maybeCorrupt"})
 PLAN_KEYS = frozenset({"manifest", "config", "resourcePlans"})
+STEP_KEYS = frozenset({"op", "urn", "provider", "oldState", "newState", "detailedDiff", "diffReasons", "replaceReasons"})
+ENTRY_KEYS = frozenset({"goal", "steps", "state", "seed"})
+GOAL_KEYS = frozenset(
+    {"type", "name", "custom", "inputDiff", "outputDiff", "parent", "protect", "provider", "propertyDependencies", "customTimeouts"}
+)
 
 # A `same` step that carries any of these, non-empty, is not a no-op.
-STEP_DIFF_KEYS = ("diffs", "detailedDiff", "diffReasons", "replaceReasons")
+STEP_DIFF_KEYS = ("detailedDiff", "diffReasons", "replaceReasons")
+# State keys that must match exactly; a missing one reads as null, so a value
+# on one side only differs. Outputs, id and provider are compared only when
+# both sides hold them: a real new state is read before it copies the old ones.
+STRICT_STATE_KEYS = ("inputs", "parent")
+LENIENT_STATE_KEYS = ("outputs", "id", "provider")
 # What the output diff and the input diff may carry, with each JSON type.
 DIFF_KEYS = {"adds": dict, "updates": dict, "deletes": list}
 
@@ -71,6 +84,14 @@ def _no_constant(name: str) -> object:
     raise ValueError(name)
 
 
+def _finite(text: str) -> float:
+    """A JSON number that overflows to infinity is refused, like `NaN` and `Infinity`."""
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError(text)
+    return value
+
+
 def _too_deep(doc: object) -> bool:
     """Whether the document nests deeper than MAX_DEPTH, measured without recursion."""
     stack = [(doc, 1)]
@@ -88,7 +109,9 @@ def _load(path: str, reason: str) -> object:
     """Parse a JSON file, or raise Unclear for every way it can fail."""
     try:
         with open(path, encoding="utf-8") as handle:
-            doc = json.load(handle, object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
+            doc = json.load(
+                handle, object_pairs_hook=_no_duplicates, parse_constant=_no_constant, parse_float=_finite
+            )
     except (OSError, ValueError, RecursionError) as error:
         raise Unclear(reason) from error
     _require(not _too_deep(doc), reason)
@@ -109,14 +132,19 @@ def _is_root(urn: Urn) -> bool:
     return urn.type == ROOT_STACK_TYPE and urn.name == f"{urn.project}-{urn.stack}"
 
 
-def _has_one_root(urns: list[Urn]) -> bool:
-    """Exactly one stack-typed resource, and it is the root: a second one is anomalous."""
-    stacks = [urn for urn in urns if urn.type == ROOT_STACK_TYPE]
-    return len(stacks) == 1 and _is_root(stacks[0])
-
-
 def _leaf_type(urn: Urn) -> str:
     return urn.type.rsplit("$", 1)[-1]
+
+
+def _stacks(urns: list[Urn]) -> list[Urn]:
+    """Every resource whose own type is the stack type, nested under a parent type or not."""
+    return [urn for urn in urns if _leaf_type(urn) == ROOT_STACK_TYPE]
+
+
+def _has_one_root(urns: list[Urn]) -> bool:
+    """Exactly one stack-typed resource, and it is the root: a second one is anomalous."""
+    stacks = _stacks(urns)
+    return len(stacks) == 1 and _is_root(stacks[0])
 
 
 def _check_keys(doc: dict[str, object], known: frozenset[str], reason: str) -> None:
@@ -127,14 +155,31 @@ def _is_count(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+def _evidence(value: object) -> bool:
+    """Absent, null and empty hold no evidence; non-empty does; any other type is Unclear."""
+    if value is None:
+        return False
+    if isinstance(value, (list, dict)):
+        return bool(value)
+    raise Unclear("preview-shape")
+
+
+def _states_differ(old: dict[str, object], new: dict[str, object]) -> bool:
+    """Whether a `same` step's old and new state disagree."""
+    for key in STRICT_STATE_KEYS:
+        if old.get(key) != new.get(key):
+            return True
+    return any(key in old and key in new and old[key] != new[key] for key in LENIENT_STATE_KEYS)
+
+
 def _same_step_differs(step: dict[str, object]) -> bool:
     """Whether a `same` step carries its own evidence of a difference."""
-    if any(step.get(key) for key in STEP_DIFF_KEYS):
-        return True
+    _check_keys(step, STEP_KEYS, "preview-shape")
+    evidence = [_evidence(step.get(key)) for key in STEP_DIFF_KEYS]
     old, new = step.get("oldState"), step.get("newState")
-    if isinstance(old, dict) and isinstance(new, dict):
-        return any(key in old and key in new and old[key] != new[key] for key in ("inputs", "outputs"))
-    return False
+    if not (isinstance(old, dict) and isinstance(new, dict)):
+        raise Unclear("preview-shape")
+    return any(evidence) or _states_differ(old, new)
 
 
 def _preview_steps(doc: dict[str, object]) -> list[tuple[str, Urn, dict[str, object]]]:
@@ -163,22 +208,26 @@ def _summary_verdict(doc: dict[str, object], same_steps: int) -> Verdict | None:
     return None
 
 
-def _preview_verdict(path: str) -> Verdict | None:
-    """A `true` verdict if the preview JSON shows anything but a clean no-op."""
+def _preview_verdict(path: str) -> tuple[Verdict | None, Urn | None]:
+    """(a `true` verdict, None) if the preview JSON shows anything but a clean no-op,
+    else (None, the root stack's URN)."""
     doc = _as_dict(_load(path, "preview-unreadable"), "preview-shape")
     _check_keys(doc, PREVIEW_KEYS, "preview-shape")
     steps = _preview_steps(doc)
     changed = sum(1 for op, _, _ in steps if op != SAME)
     if changed:
-        return Verdict(True, changed, "steps-changed")
+        return Verdict(True, changed, "steps-changed"), None
     differing = sum(1 for _, _, step in steps if _same_step_differs(step))
     if differing:
-        return Verdict(True, differing, "steps-changed")
-    if not _has_one_root([urn for _, urn, _ in steps]):
-        return Verdict(True, 0, "no-root-stack")
-    verdict = _summary_verdict(doc, len(steps))
-    _require(not doc.get("maybeCorrupt"), "preview-shape")
-    return verdict
+        return Verdict(True, differing, "steps-changed"), None
+    urns = [urn for _, urn, _ in steps]
+    if not _has_one_root(urns):
+        return Verdict(True, 0, "no-root-stack"), None
+    diagnostics = doc.get("diagnostics")
+    _require(diagnostics is None or (isinstance(diagnostics, list) and not diagnostics), "preview-diagnostics")
+    corrupt = doc.get("maybeCorrupt")
+    _require(corrupt is None or corrupt is False, "preview-shape")
+    return _summary_verdict(doc, len(steps)), _stacks(urns)[0]
 
 
 def _diff_size(diff: object) -> int:
@@ -204,26 +253,30 @@ def _planned_steps(entry: dict[str, object]) -> int:
 
 def _entry_changes(urn: Urn, entry: dict[str, object]) -> tuple[int, int]:
     """(output changes, other changes) for one planned resource."""
+    _check_keys(entry, ENTRY_KEYS, "plan-shape")
     other = _planned_steps(entry)
     goal = _as_dict(entry.get("goal"), "plan-shape")
+    _check_keys(goal, GOAL_KEYS, "plan-shape")
+    _require("outputDiff" in goal, "plan-shape")
     if "type" in goal:
         _require(goal["type"] == _leaf_type(urn), "plan-shape")
     if "inputDiff" in goal:
         other += _diff_size(goal["inputDiff"])
-    if "outputDiff" in goal:
-        return _diff_size(goal["outputDiff"]), other
-    _require(not _is_root(urn), "plan-shape")
-    return 0, other
+    return _diff_size(goal["outputDiff"]), other
 
 
-def _plan_verdict(path: str) -> Verdict:
-    """The verdict from the update plan, every entry checked, the root stack's included."""
+def _plan_verdict(path: str, root: Urn | None) -> Verdict:
+    """The verdict from the update plan, every entry checked, the root stack's included.
+
+    `root` is the preview's root stack: the plan must be for the same stack."""
     doc = _as_dict(_load(path, "plan-unreadable"), "plan-shape")
     _check_keys(doc, PLAN_KEYS, "plan-shape")
     plans = _as_dict(doc.get("resourcePlans"), "plan-shape")
     _require(bool(plans), "plan-shape")
     entries = [(_parse_urn(key, "plan-shape"), _as_dict(value, "plan-shape")) for key, value in plans.items()]
-    _require(_has_one_root([urn for urn, _ in entries]), "plan-shape")
+    urns = [urn for urn, _ in entries]
+    _require(_has_one_root(urns), "plan-shape")
+    _require(_stacks(urns)[0] == root, "stack-mismatch")
     results = [_entry_changes(urn, entry) for urn, entry in entries]
     outputs = sum(out for out, _ in results)
     other = sum(rest for _, rest in results)
@@ -248,10 +301,10 @@ def evaluate(preview_path: str, plan_path: str) -> Verdict:
     try:
         if _same_file(preview_path, plan_path):
             return Verdict(True, 0, "same-file")
-        verdict = _preview_verdict(preview_path)
+        verdict, root = _preview_verdict(preview_path)
         if verdict is not None:
             return verdict
-        return _plan_verdict(plan_path)
+        return _plan_verdict(plan_path, root)
     except Unclear as unclear:
         return Verdict(True, 0, unclear.reason)
     except Exception:  # noqa: BLE001 -- every failure must reach the gate
@@ -268,6 +321,23 @@ def headline(verdict: Verdict) -> str:
     return HEADLINE_NOT_UNDERSTOOD
 
 
+def _path_problem(flag: str, path: str) -> str | None:
+    """Why an output path cannot carry the verdict: blank, or an existing non-regular file."""
+    if not path.strip():
+        return f"{flag} names no file, so the plan verdict cannot be published"
+    if os.path.exists(path) and not stat.S_ISREG(os.stat(path).st_mode):
+        return f"{flag} is not a regular file, so the plan verdict cannot be published"
+    return None
+
+
+def _output_problem(output: str, summary: str) -> str | None:
+    """Why the two output paths cannot be written, or None."""
+    problem = _path_problem("--github-output", output) or _path_problem("--github-summary", summary)
+    if problem is None and os.path.realpath(output) == os.path.realpath(summary):
+        return "--github-output and --github-summary name the same file, so the verdict would be mangled"
+    return problem
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="plan-has-changes.py", description=__doc__.split("\n")[0])
     parser.add_argument("preview_json")
@@ -276,10 +346,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--github-summary", required=True, help="append the headline to this file")
     args = parser.parse_args(argv[1:])
 
-    for flag, value in (("--github-output", args.github_output), ("--github-summary", args.github_summary)):
-        if not value:
-            print(f"::error::{flag} names no file, so the plan verdict cannot be published")
-            return 1
+    problem = _output_problem(args.github_output, args.github_summary)
+    if problem:
+        print(f"::error::{problem}")
+        return 1
 
     verdict = evaluate(args.preview_json, args.plan_file)
     text = "true" if verdict.has_changes else "false"

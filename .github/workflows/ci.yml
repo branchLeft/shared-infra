@@ -1069,9 +1069,10 @@ jobs:
       # The update plan is saved by a second preview, apart from the one above,
       # so the preview.json the delete guard reads and the owner reviews is
       # produced exactly as before. Best effort: a failure leaves no plan file,
-      # which the `noop` step reads as "changes". Its text output is discarded:
-      # the plan file can hold resource inputs and secrets-provider ciphertext,
-      # and is never uploaded, printed or summarised.
+      # which the `noop` step reads as "changes". Only its stdout goes to
+      # /dev/null; stderr is not redirected, and the step above logs the same
+      # stderr. The plan file can hold resource inputs and secrets-provider
+      # ciphertext, and is never uploaded, printed or summarised.
       - name: Save the update plan for the no-change check
         continue-on-error: true
         run: pulumi preview --stack production --save-plan preview-plan.json > /dev/null
