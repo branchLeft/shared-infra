@@ -1,0 +1,35 @@
+{#- Rendered once by ansible-galaxy role init --role-skeleton. lb and rb are the runtime braces: this file is a Jinja template twice over. -#}
+{%- set lb = '{{' -%}
+{%- set rb = '}}' -%}
+---
+- name: Install the notice file
+  ansible.builtin.copy:
+    src: notice.txt
+    dest: '{{ lb }} {{ role_name }}_notice_path {{ rb }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: {{ role_name }}_state == 'present'
+
+- name: Render the configuration file
+  ansible.builtin.template:
+    src: config.conf.j2
+    dest: '{{ lb }} {{ role_name }}_config_path {{ rb }}'
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    config_greeting: '{{ lb }} {{ role_name }}_greeting {{ rb }}'
+  when: {{ role_name }}_state == 'present'
+
+- name: Remove the notice file
+  ansible.builtin.file:
+    path: '{{ lb }} {{ role_name }}_notice_path {{ rb }}'
+    state: absent
+  when: {{ role_name }}_state == 'absent'
+
+- name: Remove the configuration file
+  ansible.builtin.file:
+    path: '{{ lb }} {{ role_name }}_config_path {{ rb }}'
+    state: absent
+  when: {{ role_name }}_state == 'absent'

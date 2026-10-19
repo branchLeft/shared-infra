@@ -1,0 +1,115 @@
+name: Ansible
+
+# Runs the role test harness (ansible/harness) on a runner that holds no
+# credentials and reaches no host: the roles are applied to containers on the
+# runner's own Docker daemon, and nothing else.
+#
+# It is a gate on pull requests and on push to `main` (CI-3). The workflow has
+# no `paths:` filter, so the job reports on every pull request and can be a
+# required check (CI-14); the first step decides whether the Ansible inputs
+# changed, and the rest run only when they did. Where nothing changed the job
+# passes after a checkout and one diff.
+#
+# The tools install from ansible/requirements.txt at exact versions and the
+# collections from ansible/requirements.yml at exact versions (ANS-4).
+# DOCKER_HOST is deliberately left unset (ANS-15).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  roles:
+    name: Lint and test the Ansible roles
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Full history, so the base commit of the diff below exists on the runner.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # A base commit the runner cannot resolve (a new branch, a forced push)
+      # counts as changed, so the gate runs rather than being skipped.
+      - name: Decide whether the Ansible inputs changed
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PULL_REQUEST_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          base="$PUSH_BEFORE"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$PULL_REQUEST_BASE"
+          fi
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "The base commit is unknown, so every check runs."
+            echo "ansible=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only "$base" HEAD -- ansible .ansible-lint .yamllint .github/workflows/ansible.yml)
+          if [ -n "$files" ]; then
+            echo "The Ansible inputs changed:"
+            echo "$files"
+            echo "ansible=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No Ansible input changed, so there is nothing to run."
+            echo "ansible=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create the tool environment
+        if: steps.changes.outputs.ansible == 'true'
+        run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
+
+      - name: Install the pinned tools
+        if: steps.changes.outputs.ansible == 'true'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv -r ansible/requirements.txt'
+
+      - name: yamllint every YAML file under ansible/
+        if: steps.changes.outputs.ansible == 'true'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/yamllint" --strict -c .yamllint ansible'
+
+      - name: ansible-lint at the production profile
+        if: steps.changes.outputs.ansible == 'true'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/ansible-lint" --strict ansible'
+
+      - name: Type-check the harness
+        if: steps.changes.outputs.ansible == 'true'
+        working-directory: ansible
+        run: '"$RUNNER_TEMP/ansible-venv/bin/mypy" harness'
+
+      - name: Lint the harness
+        if: steps.changes.outputs.ansible == 'true'
+        working-directory: ansible
+        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" check harness'
+
+      - name: Check the harness formatting
+        if: steps.changes.outputs.ansible == 'true'
+        working-directory: ansible
+        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" format --check harness'
+
+      - name: Test the harness
+        if: steps.changes.outputs.ansible == 'true'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/harness -p "test_*.py"'
+
+      - name: Run the harness over every role
+        if: steps.changes.outputs.ansible == 'true'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py ansible/roles/*'
+
+      - name: Create a role from the skeleton
+        if: steps.changes.outputs.ansible == 'true'
+        run: >-
+          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" role init
+          --role-skeleton ansible/role_skeleton
+          --init-path "$RUNNER_TEMP/skeleton-probe" skeleton_probe
+
+      - name: Run the harness over the new role with no edits
+        if: steps.changes.outputs.ansible == 'true'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py "$RUNNER_TEMP/skeleton-probe/skeleton_probe"'

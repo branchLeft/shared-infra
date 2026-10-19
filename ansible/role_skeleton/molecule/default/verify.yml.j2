@@ -1,0 +1,28 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the configuration file
+      ansible.builtin.slurp:
+        src: /etc/{{ role_name }}.conf
+      register: {{ role_name }}_verify_config
+
+    - name: Assert the configuration file carries the default greeting
+      ansible.builtin.assert:
+        that:
+          - "'greeting = EXAMPLE_GREETING' in ({{ role_name }}_verify_config.content | ansible.builtin.b64decode)"
+        success_msg: The configuration file was rendered from the template.
+
+    - name: Read the notice file
+      ansible.builtin.stat:
+        path: /etc/{{ role_name }}.notice
+      register: {{ role_name }}_verify_notice
+
+    - name: Assert the notice file exists with the expected mode and owner
+      ansible.builtin.assert:
+        that:
+          - {{ role_name }}_verify_notice.stat.exists
+          - {{ role_name }}_verify_notice.stat.mode == '0644'
+          - {{ role_name }}_verify_notice.stat.pw_name == 'root'
+        success_msg: The notice file was copied with its mode and owner.

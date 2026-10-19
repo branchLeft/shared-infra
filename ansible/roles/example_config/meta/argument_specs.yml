@@ -1,0 +1,24 @@
+---
+argument_specs:
+  main:
+    short_description: Manage the EXAMPLE_FILES of example_config
+    description: Writes one configuration file from a template and one fixed notice file, or removes both.
+    author: AUTHOR_NAME
+    options:
+      example_config_state:
+        type: str
+        description: Whether the files are present or absent.
+        choices: [present, absent]
+        default: present
+      example_config_config_path:
+        type: str
+        description: Absolute path of the configuration file.
+        default: /etc/example_config.conf
+      example_config_notice_path:
+        type: str
+        description: Absolute path of the notice file.
+        default: /etc/example_config.notice
+      example_config_greeting:
+        type: str
+        description: Value written into the configuration file.
+        default: EXAMPLE_GREETING

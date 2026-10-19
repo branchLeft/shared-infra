@@ -1,0 +1,20 @@
+[project]
+name = "branchleft-ansible-harness"
+version = "0.0.0"
+requires-python = ">=3.12"
+
+[tool.mypy]
+strict = true
+disallow_any_explicit = true
+python_version = "3.12"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# DOC501 is a preview rule: explicit-preview-rules keeps preview from enabling any
+# other preview rule under a selected prefix (the shared policy, SYNC-1).
+preview = true
+explicit-preview-rules = true
+select = ["E", "F", "I", "B", "UP", "ANN", "S", "TRY", "BLE", "N", "DOC501"]
