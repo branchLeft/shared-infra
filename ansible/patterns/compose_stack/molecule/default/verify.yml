@@ -56,6 +56,52 @@
         quiet: true
         fail_msg: A delivered file or the project directory has the wrong owner, group or mode.
 
+    # The stamp is derived from the secrets, so it is kept as closed as the
+    # secret files and must hold nothing but a digest. Read before the refusal
+    # cases below run, which leave the stamp as the last good run wrote it.
+    - name: Read the stamp file
+      ansible.builtin.stat:
+        path: '{{ verify_dir }}/.compose_stack_stamp'
+      register: verify_stamp_stat
+
+    - name: Assert the stamp is a regular file owned by root, group root, mode 0600
+      ansible.builtin.assert:
+        that:
+          - verify_stamp_stat.stat.exists
+          - verify_stamp_stat.stat.isreg
+          - verify_stamp_stat.stat.pw_name == 'root'
+          - verify_stamp_stat.stat.gr_name == 'root'
+          - verify_stamp_stat.stat.mode == '0600'
+        quiet: true
+        fail_msg: The stamp file is missing, or is not a regular file owned by root, group root, mode 0600.
+
+    # The content is read by a command whose output is censored: if the stamp
+    # ever held a secret, the failing task must not print it.
+    - name: Read the stamp's content
+      ansible.builtin.command:
+        argv: [cat, '{{ verify_dir }}/.compose_stack_stamp']
+      register: verify_stamp_content
+      changed_when: false
+      no_log: true
+
+    - name: Assert the stamp holds one lower-case hex SHA-256 digest and nothing else
+      ansible.builtin.assert:
+        that:
+          - verify_stamp_content.stdout is ansible.builtin.match('^[0-9a-f]{64}\Z')
+        quiet: true
+        fail_msg: The stamp does not hold exactly one 64-character lower-case hex digest, so it holds something other than a hash.
+
+    - name: Assert the stamp holds neither the secret's value nor the secret files' names
+      ansible.builtin.assert:
+        that:
+          - scenario_secret not in verify_stamp_content.stdout
+          - verify_stamp_content.stdout is not ansible.builtin.search(verify_stamp_names)
+        quiet: true
+        fail_msg: The stamp holds a secret value or the name of a secret file in the clear.
+      vars:
+        verify_stamp_secret_names: "{{ compose_stack_secret_files | ansible.builtin.map(attribute='name') | ansible.builtin.map('ansible.builtin.regex_escape') | ansible.builtin.list }}"
+        verify_stamp_names: "{{ (['APP_SECRET'] + verify_stamp_secret_names) | ansible.builtin.join('|') }}"
+
     - name: Read the calls the stand-in has logged
       ansible.builtin.command:
         argv: [cat, '{{ verify_state }}/argv.log']

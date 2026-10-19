@@ -28,8 +28,9 @@ whose stack needs any of those has another role for it (ANS-12).
 ## Interface
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the variables, and
-[`defaults/main.yml`](defaults/main.yml) holds their defaults. Two have no default and
-must be supplied: the image, which must carry a digest, and the list of secret files.
+[`defaults/main.yml`](defaults/main.yml) holds their defaults. A variable with no
+default must be supplied: the image, which must carry a digest, and the list of secret
+files. The argument specification is the authority for which variables are required.
 The only secret is `compose_stack_secret_files[].content`. It is supplied at run time,
 has no default (ANS-16) and is marked `no_log` in the specification. The compose file
 refers to the secret files by name, so a service role that renames one renames it in
@@ -308,14 +309,14 @@ python3 -m venv .venv
 The harness lints the role and runs the scenario in `molecule/default/` on one
 container, and exits non-zero if any step fails. It removes its container when it
 finishes. There is no systemd in this scenario, so it takes none of the cgroup settings
-`files_and_units` needs (the reasons for the three platform keys are in `molecule.yml`).
+`files_and_units` needs (the reason for each platform key is in `molecule.yml`).
 
 What each part of the scenario does:
 
 - `prepare.yml` creates the placeholder service user and group, and installs the
   `docker` stand-in with its state directory: `argv.log` (the real calls), `dryrun.log`
-  (calls made with `--dry-run`) and `ps.json` (what `compose ps` prints). Three
-  switches in the directory change the stand-in: `config_fails`, `up_fails` and
+  (calls made with `--dry-run`) and `ps.json` (what `compose ps` prints). The switches
+  in the directory that change the stand-in are `config_fails`, `up_fails` and
   `compose_version`.
 - `check-fresh`: the converge in check mode on an instance with nothing installed. It
   completes; the `up`, the container read and the stamp are skipped for the reason in (c).
@@ -334,13 +335,16 @@ What each part of the scenario does:
   above, calls `up` zero times. This is the ANS-11 proof.
 - `verify`:
   - owner, group and mode of the files and the directory;
-  - every real `up` call is exactly one of two argument lists (the whole project, and
-    scoped to one service), and every call the stand-in ever received is one of a
+  - every real `up` call is exactly one of the argument lists in `verify.yml` (the whole
+    project, and scoped to one service), and every call the stand-in ever received is one of a
     short list: nothing else, in particular no `down`, `rm`, volume command or
     `--volumes`, `--remove-orphans` or `--renew-anon-volumes`;
   - `config --quiet` was run on a temporary copy and never on the installed file, and a
     refusing validator stops the role and leaves the installed file as it was;
   - the secret is not in any call;
+  - the stamp file is a regular file owned by `root:root` with mode `0600`, holds one
+    lower-case hex SHA-256 digest and nothing else, and holds neither the throwaway
+    secret nor the secret files' names;
   - each image reference in the list in `verify.yml` that is not pinned by digest stops
     the role at the digest check;
   - each state that `compose ps` can report in the list (unhealthy, still starting,
@@ -361,26 +365,27 @@ What each part of the scenario does:
 
 What breaks which step. Each row was done by an edit, one harness run, and a restore, as
 an assertion failure and not a crash. The harness run is the retrieval: run it with the
-row's edit made to see the message. The first five rows are the controls of the retry
-rule and of the second-run rule, the next four are the health states, and the rest are
-the other controls.
+row's edit made to see the message. The rows run in groups: the controls of the retry
+rule and of the second-run rule, then the health states, then the other controls.
 
-| Edit to the role                                                     | Step that fails                                                                            |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| The stamp comparison removed from the decision to bring the stack up | `converge`, "Retried after a failed up: expected 1 real up call(s), the stand-in logged 0" |
-| The stamp recorded before the health check instead of after          | `converge`, "Retried after a failed health check: expected 1 real up call(s) ... logged 0" |
-| The "a delivery changed a file" terms removed from the decision      | `converge`, "File changed by hand and put back: expected 1 real up call(s) ... logged 0"   |
-| The stack brought up on every run                                    | `converge`, "Settled after the retries: expected 0 real up call(s), the stand-in logged 1" |
-| A `command` task that always reports changed                         | `idempotence`, naming the task                                                             |
-| The not-running term removed from the health assertion               | `verify`, "A container that has exited: the health check did not refuse the stack"         |
-| The unhealthy term removed                                           | `converge`, "Health check fails: the role did not stop for the expected reason"            |
-| The no-container term removed                                        | `verify`, "No container reported at all: the health check did not refuse the stack"        |
-| `failed_when: false` on the health assertion                         | `converge`, "Health check fails: the role did not stop for the expected reason"            |
-| `check_mode: true` removed from the container read                   | `converge`, "First application: expected 1 real up call(s), the stand-in logged 2"         |
-| The override assertion disabled                                      | `verify`, "compose.override.yaml: the role did not refuse the directory"                   |
-| `files:` removed from the `up` call                                  | `verify`, "Every real up call must carry exactly the expected arguments"                   |
-| `files:` removed from the container read                             | `verify`, "A call could remove volumes or was not expected" (a `ps` without `--file`)      |
-| `services:` removed from the `up` call                               | `verify`, "Every real up call must carry exactly the expected arguments" (no scoped line)  |
+| Edit to the role                                                      | Step that fails                                                                            |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| The stamp comparison removed from the decision to bring the stack up  | `converge`, "Retried after a failed up: expected 1 real up call(s), the stand-in logged 0" |
+| The stamp recorded before the health check instead of after           | `converge`, "Retried after a failed health check: expected 1 real up call(s) ... logged 0" |
+| The "a delivery changed a file" terms removed from the decision       | `converge`, "File changed by hand and put back: expected 1 real up call(s) ... logged 0"   |
+| The stack brought up on every run                                     | `converge`, "Settled after the retries: expected 0 real up call(s), the stand-in logged 1" |
+| A `command` task that always reports changed                          | `idempotence`, naming the task                                                             |
+| The not-running term removed from the health assertion                | `verify`, "A container that has exited: the health check did not refuse the stack"         |
+| The unhealthy term removed                                            | `converge`, "Health check fails: the role did not stop for the expected reason"            |
+| The no-container term removed                                         | `verify`, "No container reported at all: the health check did not refuse the stack"        |
+| `failed_when: false` on the health assertion                          | `converge`, "Health check fails: the role did not stop for the expected reason"            |
+| `check_mode: true` removed from the container read                    | `converge`, "First application: expected 1 real up call(s), the stand-in logged 2"         |
+| The override assertion disabled                                       | `verify`, "compose.override.yaml: the role did not refuse the directory"                   |
+| `files:` removed from the `up` call                                   | `verify`, "Every real up call must carry exactly the expected arguments"                   |
+| `files:` removed from the container read                              | `verify`, "A call could remove volumes or was not expected" (a `ps` without `--file`)      |
+| `services:` removed from the `up` call                                | `verify`, "Every real up call must carry exactly the expected arguments" (no scoped line)  |
+| The stamp written from the unhashed content (the secret in the clear) | `verify`, "The stamp does not hold exactly one 64-character lower-case hex digest"         |
+| The stamp written with mode `0644`                                    | `verify`, "The stamp file is missing, or is not a regular file owned by root"              |
 
 Not repeated against this version of the role (they were each broken on the version
 before it, and their tests are unchanged in kind): the digest assertion removed or
@@ -408,14 +413,32 @@ the limits). `state: absent` with `remove_volumes` is not an input (see the limi
   service must list only its stateless services in `compose_stack_services`, so a
   change to the app's files does not recreate the database; a stack that lists nothing
   recreates the whole project.
+- **The stand-in's failing `up` is not Compose's failing `up`.** The stand-in prints a
+  plain line to standard error. Real Compose prints a JSON error event, which the
+  module reads for the message it reports. With a plain line the module skips it with a
+  warning and reports the return code and the raw standard error instead. The role
+  stops either way and the test reads the standard error text, so the control (a
+  failed `up` is retried) is real; what the module reports for a real pull error is not
+  shown. **UNVERIFIED** against a real engine.
+- **UNVERIFIED, not run against real Compose:** whether `up --dry-run` works against an
+  engine when images are not yet pulled; whether a scoped `up --force-recreate` with
+  service names also recreates the named services' dependencies (the role's text says
+  only the named services are recreated, which is read from documentation and not
+  shown, so a service that another depends on may be recreated too); and whether
+  named volumes survive a recreate. The first gated run is the proof (ANS-17).
 - **The scope of `compose_stack_services` is a name check by Compose, not by the role.**
   A name that is not a service in the compose file is refused by Compose when it runs
   `up`, which the stand-in does not do. Tested: that the input reaches the module.
 - **A stack that was healthy and later fails is reported, not restarted.** The health
   check fails every run until it is healthy again, but the stamp and the files are
   unchanged, so the role does not call `up`. Restarting such a stack is the restart
-  policy's job or an operator's. The reverse is also true: a stack that has never been
-  recorded healthy is recreated on every run until it passes.
+  policy's job or an operator's. The same holds for a healthy stack whose containers
+  are later removed by hand: the stamp matches and no file changed, so every run
+  reports it (the health check fails) and none repairs it, until an operator acts or a
+  file changes. That is the price of calling `up` only on a content change; calling it
+  on every health failure would recreate an unhealthy stack on each run. The reverse
+  is also true: a stack that has never been recorded healthy is recreated on every run
+  until it passes.
 - **The stamp covers content, not metadata.** A change of `compose_stack_owner`,
   `compose_stack_group` or a mode alone is delivered, which reports a change and calls
   `up`, but is not in the digest. A stamp file that is deleted or edited makes the next
@@ -467,9 +490,10 @@ the limits). `state: absent` with `remove_volumes` is not an input (see the limi
   and fails a minute later is a later run's failure.
 - **The check-mode skip on a fresh host** is stated in (c); the harness does not catch
   a silent skip, and this section is the review of it.
-- CI does not run this scenario today: the Ansible workflow
-  (`.github/workflows/ansible.yml`) runs the harness over `ansible/roles` only. Until it
-  lists `ansible/patterns`, a change here is proven by the local run above.
+- CI runs this scenario: the step "Run the harness over every role and pattern" in the
+  Ansible workflow (`.github/workflows/ansible.yml`) expands `ansible/roles/*/` and
+  `ansible/patterns/*/`, on a runner image the workflow pins. It runs the same harness
+  as the local run above, on the runner's own Docker daemon.
 - The image is a third-party systemd-capable Debian 13 base used here for its Python
   and Ansible-ready layout. It is trusted by digest, as the `files_and_units` README
   records; this scenario uses the same pin and none of its systemd settings.
