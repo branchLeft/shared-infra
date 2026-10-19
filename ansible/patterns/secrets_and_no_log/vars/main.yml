@@ -1,0 +1,19 @@
+---
+# Fixed by the pattern, not by the inventory: a caller cannot loosen them.
+secrets_and_no_log_directory_mode: '0700'
+secrets_and_no_log_file_mode: '0600'
+
+# A secret's name is also its file name and its environment variable name:
+# upper-case letters, digits and underscore, starting with a letter. The
+# patterns end in \Z, not $, because $ also matches before a trailing line break.
+secrets_and_no_log_name_pattern: '^[A-Z][A-Z0-9_]*\Z'
+
+# An absolute path of letters, digits, dot, underscore, hyphen and slash.
+secrets_and_no_log_path_pattern: '^/[A-Za-z0-9._/-]+\Z'
+
+# The name of the environment file, a file inside the secrets directory.
+secrets_and_no_log_env_name_pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*\Z'
+
+# A value that goes on a line of the environment file: printable ASCII only
+# (U+0020 to U+007E), so no line break of any kind can start a second line.
+secrets_and_no_log_env_value_pattern: '^[ -~]+\Z'

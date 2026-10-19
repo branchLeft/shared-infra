@@ -1,0 +1,696 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    # The sentinels, read from the files prepare.yml made. A task that prints one
+    # of these variables prints a sentinel, so every task below that handles one
+    # has no_log.
+    verify_file: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/file_secret') }}"
+    verify_env: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/env_secret') }}"
+    verify_host: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/host_secret') }}"
+    verify_file_rotated: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/file_secret_rotated') }}"
+    verify_host_rotated: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/host_secret_rotated') }}"
+    verify_earlier: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/earlier_secret') }}"
+    verify_blocked: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/blocked_secret') }}"
+    verify_window: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/window_secret') }}"
+    verify_probe_role: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/probe_role') }}"
+    # The one sentinel that is meant to reach the log: Ansible's own validation
+    # prints it (see the probes below). It is the scan's control, not a leak.
+    verify_probe_echoed: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/probe_echoed') }}"
+    # Every sentinel the log must not hold, as one pattern. Sentinels are letters
+    # and digits, so they need no escaping.
+    verify_sentinels:
+      file_secret: '{{ verify_file }}'
+      env_secret: '{{ verify_env }}'
+      host_secret: '{{ verify_host }}'
+      file_secret_rotated: '{{ verify_file_rotated }}'
+      host_secret_rotated: '{{ verify_host_rotated }}'
+      earlier_secret: '{{ verify_earlier }}'
+      blocked_secret: '{{ verify_blocked }}'
+      window_secret: '{{ verify_window }}'
+      probe_role: '{{ verify_probe_role }}'
+    verify_sentinel_pattern: "{{ verify_sentinels.values() | join('|') }}"
+    verify_role_dir: '{{ playbook_dir }}/../..'
+    verify_file_names:
+      - EXAMPLE_ENV_SECRET
+      - EXAMPLE_FILE_SECRET
+      - EXAMPLE_HOST_SECRET
+      - '{{ scenario_env_name }}'
+    verify_path_file: '{{ scenario_directory }}/EXAMPLE_FILE_SECRET'
+    verify_path_env: '{{ scenario_directory }}/{{ scenario_env_name }}'
+    verify_path_host: '{{ scenario_directory }}/EXAMPLE_HOST_SECRET'
+    # The secrets as the converge applied them, and with one value rotated.
+    verify_secrets_file_rotated:
+      - name: EXAMPLE_FILE_SECRET
+        value: '{{ verify_file_rotated }}'
+      - name: EXAMPLE_ENV_SECRET
+        value: '{{ verify_env }}'
+      - name: EXAMPLE_HOST_SECRET
+        source_file: '{{ scenario_host_source }}'
+    # Code points that must not be in a value that goes on a line of the
+    # environment file: tab, line feed, vertical tab, form feed, carriage return,
+    # the three file, group and record separators, next line, line separator,
+    # paragraph separator, delete, and one letter outside ASCII.
+    verify_separators: [9, 10, 11, 12, 13, 28, 29, 30, 127, 133, 233, 8232, 8233]
+  tasks:
+    # ----- The state the converge left -----
+    - name: Assert the host is configured
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+      vars:
+        state_file_value: '{{ verify_file }}'
+        state_env_value: '{{ verify_env }}'
+        state_host_value: '{{ verify_host }}'
+
+    # The earlier release left its value in a world-readable file at the place
+    # the role writes. It must be gone from the host, in every file.
+    - name: Assert the value the earlier release left is gone from the host
+      ansible.builtin.include_tasks: tasks/assert_gone.yml
+      vars:
+        gone_value: '{{ verify_earlier }}'
+        gone_label: earlier_secret
+
+    # The search is only worth anything if it can find a value. The current value
+    # of the file secret is on the host, in the delivered file and in the
+    # environment file: grep must report it, and report both files.
+    - name: Search the host for a value that is there
+      ansible.builtin.command:
+        argv:
+          - grep
+          - --recursive
+          - --files-with-matches
+          - --text
+          - --fixed-strings
+          - --exclude-dir=.ansible
+          - --regexp
+          - '{{ verify_file }}'
+          - '{{ scenario_directory }}'
+      register: verify_control
+      changed_when: false
+      check_mode: false
+      no_log: true
+
+    - name: Assert the search found the delivered files that hold the value
+      ansible.builtin.assert:
+        that:
+          - verify_control.stdout_lines | sort == [verify_path_file, verify_path_env] | sort
+        fail_msg: 'The control search found {{ verify_control.stdout_lines | sort }}.'
+        quiet: true
+
+    # ----- The role holds no secret of its own -----
+    # ANS-16: a secret is never a default. The files are read from the role's
+    # own directory, not from the copy Molecule links.
+    - name: Read the role's defaults and argument spec
+      ansible.builtin.set_fact:
+        verify_defaults_text: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/defaults/main.yml') }}"
+        verify_defaults: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/defaults/main.yml') | from_yaml }}"
+        verify_spec_text: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/meta/argument_specs.yml') }}"
+        verify_spec: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/meta/argument_specs.yml') | from_yaml }}"
+      no_log: true
+
+    - name: Assert the defaults hold no secret and the list of secrets is empty
+      ansible.builtin.assert:
+        that:
+          - >-
+            verify_defaults.keys() | sort == ['secrets_and_no_log_directory', 'secrets_and_no_log_env_name',
+            'secrets_and_no_log_group', 'secrets_and_no_log_owner', 'secrets_and_no_log_secrets']
+          - verify_defaults['secrets_and_no_log_secrets'] == []
+          - verify_defaults_text | regex_search(verify_sentinel_pattern) is none
+        fail_msg: The role's defaults/main.yml holds a variable the role does not declare, a non-empty list of secrets, or a sentinel.
+        quiet: true
+
+    - name: Assert the argument spec gives no secret a default
+      ansible.builtin.assert:
+        that:
+          - verify_spec_options['secrets_and_no_log_secrets']['default'] == []
+          - verify_spec_options['secrets_and_no_log_secrets']['options']['value']['default'] == ''
+          - verify_spec_options['secrets_and_no_log_secrets']['options']['source_file']['default'] == ''
+          - verify_spec_text | regex_search(verify_sentinel_pattern) is none
+        fail_msg: The role's meta/argument_specs.yml gives a secret a default or holds a sentinel.
+        quiet: true
+      vars:
+        verify_spec_options: "{{ verify_spec['argument_specs']['main']['options'] }}"
+
+    # ----- Inputs the role must refuse, before it changes anything -----
+    - name: Refuse a secret name in lower case
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a secret name that is not an ALL_CAPS name
+        refused_message_part: 'entry number 1 '
+        refused_secrets:
+          - name: example_lower
+            value: '{{ verify_probe_role }}'
+
+    - name: Refuse a secret name that ends in a line break
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a secret name that is not an ALL_CAPS name
+        refused_secrets:
+          - name: "EXAMPLE_NAME{{ '%c' | format(10) }}"
+            value: '{{ verify_probe_role }}'
+
+    - name: Refuse a secret name that is used twice
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a secret name that is used twice
+        refused_message_part: 'entry number 2 '
+        refused_secrets:
+          - name: EXAMPLE_TWICE
+            value: '{{ verify_probe_role }}'
+          - name: EXAMPLE_TWICE
+            value: '{{ verify_probe_role }}'
+
+    - name: Refuse a secret that gives both a value and a source file
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a secret that is not given as exactly one of value and source_file
+        refused_secrets:
+          - name: EXAMPLE_BOTH
+            value: '{{ verify_probe_role }}'
+            source_file: '{{ scenario_host_source }}'
+
+    - name: Refuse a secret that gives neither a value nor a source file
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a secret that is not given as exactly one of value and source_file
+        refused_secrets:
+          - name: EXAMPLE_NEITHER
+
+    # An unquoted value that holds a colon and a space is a mapping, and a number
+    # is a number. The argument check turns both into text without complaint.
+    - name: Refuse a secret value that YAML read as a mapping
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a secret value that is not text
+        refused_secrets:
+          - name: EXAMPLE_MAPPING
+            value:
+              EXAMPLE_KEY: '{{ verify_probe_role }}'
+
+    - name: Refuse a secret value that YAML read as a number
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a secret value that is not text
+        refused_secrets:
+          - name: EXAMPLE_NUMBER
+            value: 123456
+
+    - name: Refuse a source file given as a relative path
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source file path that is not an absolute path of plain characters
+        refused_secrets:
+          - name: EXAMPLE_RELATIVE
+            source_file: example-sources/EXAMPLE_HOST_SECRET
+
+    - name: Refuse a source file path that ends in a line break
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source file path that is not an absolute path of plain characters
+        refused_secrets:
+          - name: EXAMPLE_NEWLINE_PATH
+            source_file: "{{ scenario_host_source }}{{ '%c' | format(10) }}"
+
+    # The environment file is one line per secret. Each code point below would
+    # start a second line, or is not printable ASCII.
+    - name: Refuse a value that cannot go on one line of the environment file
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a value that cannot go on one line of the environment file
+        refused_secrets:
+          - name: EXAMPLE_SEPARATOR
+            value: "{{ verify_probe_role }}{{ '%c' | format(verify_separator) }}EXAMPLE_INJECTED=1"
+      loop: '{{ verify_separators }}'
+      loop_control:
+        loop_var: verify_separator
+        label: code point {{ verify_separator }}
+
+    - name: Refuse a value that ends in a line break
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a value that cannot go on one line of the environment file
+        refused_secrets:
+          - name: EXAMPLE_TRAILING
+            value: "{{ verify_probe_role }}{{ '%c' | format(10) }}"
+
+    - name: Refuse a source file that does not exist
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source file that is missing, not a plain file, not owned by root or open to group or other
+        refused_secrets:
+          - name: EXAMPLE_MISSING
+            source_file: '{{ scenario_source_dir }}/NO_SUCH_SOURCE'
+
+    - name: Refuse a source file that others can read
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source file that is missing, not a plain file, not owned by root or open to group or other
+        refused_secrets:
+          - name: EXAMPLE_WIDE
+            source_file: '{{ scenario_source_dir }}/WIDE_SOURCE'
+
+    - name: Refuse a source file that an account other than root owns
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source file that is missing, not a plain file, not owned by root or open to group or other
+        refused_secrets:
+          - name: EXAMPLE_OWNED
+            source_file: '{{ scenario_source_dir }}/OWNED_SOURCE'
+
+    - name: Refuse a source file that is a link
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source file that is missing, not a plain file, not owned by root or open to group or other
+        refused_secrets:
+          - name: EXAMPLE_LINK
+            source_file: '{{ scenario_source_dir }}/LINK_SOURCE'
+
+    - name: Refuse a relative secrets directory
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a directory or an environment file name that is not a plain name
+        refused_directory: etc/example-service/secrets
+
+    - name: Refuse an environment file name that climbs out of the directory
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a directory or an environment file name that is not a plain name
+        refused_env_name: ../service.env
+
+    - name: Refuse an environment file name that ends in a line break
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a directory or an environment file name that is not a plain name
+        refused_env_name: "service.env{{ '%c' | format(10) }}"
+
+    # Nothing above changed anything: the host is as the converge left it.
+    - name: Assert the refusals left the host as it was
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+      vars:
+        state_file_value: '{{ verify_file }}'
+        state_env_value: '{{ verify_env }}'
+        state_host_value: '{{ verify_host }}'
+
+    # ----- Rotation as a re-run -----
+    # The same values again: nothing changes, no file is rewritten, and the
+    # handler does not run.
+    - name: Apply the same values again
+      ansible.builtin.include_tasks: tasks/step.yml
+      vars:
+        step_secrets: '{{ scenario_secrets }}'
+        step_expected_changed: []
+        step_notified: false
+        step_changed_names: []
+        step_file_value: '{{ verify_file }}'
+        step_env_value: '{{ verify_env }}'
+        step_host_value: '{{ verify_host }}'
+
+    # One value is rotated: its file and the environment file are replaced, the
+    # other two files are not, and the value it replaced is nowhere on the host.
+    - name: Rotate the file secret
+      ansible.builtin.include_tasks: tasks/step.yml
+      vars:
+        step_secrets: '{{ verify_secrets_file_rotated }}'
+        step_expected_changed: ['{{ verify_path_file }}', '{{ verify_path_env }}']
+        step_notified: true
+        step_changed_names: [EXAMPLE_FILE_SECRET, '{{ scenario_env_name }}']
+        step_file_value: '{{ verify_file_rotated }}'
+        step_env_value: '{{ verify_env }}'
+        step_host_value: '{{ verify_host }}'
+
+    - name: Assert the value the rotation replaced is gone from the host
+      ansible.builtin.include_tasks: tasks/assert_gone.yml
+      vars:
+        gone_value: '{{ verify_file }}'
+        gone_label: file_secret
+
+    - name: Apply the rotated value again
+      ansible.builtin.include_tasks: tasks/step.yml
+      vars:
+        step_secrets: '{{ verify_secrets_file_rotated }}'
+        step_expected_changed: []
+        step_notified: false
+        step_changed_names: []
+        step_file_value: '{{ verify_file_rotated }}'
+        step_env_value: '{{ verify_env }}'
+        step_host_value: '{{ verify_host }}'
+
+    # The host-file secret is rotated at its source. The plan (check mode with
+    # --diff on, as the approval gate shows it) must report the change and must
+    # not make it; the live run then makes it.
+    - name: Rotate the source file of the host-file secret
+      ansible.builtin.copy:
+        content: '{{ verify_host_rotated }}'
+        dest: '{{ scenario_host_source }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    # The keywords are on a block, which the tasks of the included file inherit.
+    - name: Plan the rotation of the host-file secret in check mode with diff on
+      check_mode: true
+      diff: true
+      block:
+        - name: Apply the role in check mode
+          ansible.builtin.include_tasks: tasks/apply.yml
+          vars:
+            apply_secrets: '{{ verify_secrets_file_rotated }}'
+
+    - name: Assert the plan reported the file and changed nothing
+      ansible.builtin.assert:
+        that:
+          - secrets_and_no_log_changed == [verify_path_host]
+        quiet: true
+
+    - name: Read the host-file secret after the plan
+      ansible.builtin.stat:
+        path: '{{ verify_path_host }}'
+      register: verify_after_plan
+
+    - name: Assert the plan did not rewrite the delivered file
+      ansible.builtin.assert:
+        that:
+          - verify_after_plan.stat.checksum == (verify_host | hash('sha1'))
+        quiet: true
+
+    - name: Rotate the host-file secret
+      ansible.builtin.include_tasks: tasks/step.yml
+      vars:
+        step_secrets: '{{ verify_secrets_file_rotated }}'
+        step_expected_changed: ['{{ verify_path_host }}']
+        step_notified: true
+        step_changed_names: [EXAMPLE_HOST_SECRET]
+        step_file_value: '{{ verify_file_rotated }}'
+        step_env_value: '{{ verify_env }}'
+        step_host_value: '{{ verify_host_rotated }}'
+
+    - name: Assert the value the second rotation replaced is gone from the host
+      ansible.builtin.include_tasks: tasks/assert_gone.yml
+      vars:
+        gone_value: '{{ verify_host }}'
+        gone_label: host_secret
+
+    # Put the host back as the converge left it, by rotating both values back.
+    # The harness checks the configured host for drift after this play, and the
+    # rotated values must not outlive the play.
+    - name: Put the source file of the host-file secret back
+      ansible.builtin.copy:
+        content: '{{ verify_host }}'
+        dest: '{{ scenario_host_source }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    - name: Rotate both values back
+      ansible.builtin.include_tasks: tasks/step.yml
+      vars:
+        step_secrets: '{{ scenario_secrets }}'
+        step_expected_changed:
+          ['{{ verify_path_file }}', '{{ verify_path_env }}', '{{ verify_path_host }}']
+        step_notified: true
+        step_changed_names: [EXAMPLE_FILE_SECRET, '{{ scenario_env_name }}', EXAMPLE_HOST_SECRET]
+        step_file_value: '{{ verify_file }}'
+        step_env_value: '{{ verify_env }}'
+        step_host_value: '{{ verify_host }}'
+
+    - name: Assert the rotated file secret is gone from the host
+      ansible.builtin.include_tasks: tasks/assert_gone.yml
+      vars:
+        gone_value: '{{ verify_file_rotated }}'
+        gone_label: file_secret_rotated
+
+    - name: Assert the rotated host-file secret is gone from the host
+      ansible.builtin.include_tasks: tasks/assert_gone.yml
+      vars:
+        gone_value: '{{ verify_host_rotated }}'
+        gone_label: host_secret_rotated
+
+    # ----- A task that handles a value fails -----
+    # The destination of one secret is a directory, so the write fails with the
+    # value in the loop item and in the module's arguments. The failure must not
+    # print it, and the role must not leave the item in a registered result.
+    - name: Make a directory where a secret file would go
+      ansible.builtin.file:
+        path: '{{ scenario_directory }}/EXAMPLE_BLOCKED'
+        state: directory
+        mode: '0700'
+
+    - name: Fail to write a secret
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Write the secrets given as values
+        refused_secrets:
+          - name: EXAMPLE_BLOCKED
+            value: '{{ verify_blocked }}'
+
+    - name: Assert no registered result of the failed run holds a sentinel
+      ansible.builtin.assert:
+        that:
+          - >-
+            [secrets_and_no_log_written | default({}), secrets_and_no_log_copied | default({}), secrets_and_no_log_env | default({})]
+            | to_json | regex_search(verify_sentinel_pattern) is none
+        quiet: true
+      no_log: true
+
+    - name: Remove the directory made for the failure
+      ansible.builtin.file:
+        path: '{{ scenario_directory }}/EXAMPLE_BLOCKED'
+        state: absent
+
+    # Ansible puts a file at its final name and sets the owner and mode after.
+    # Here the owner cannot be set, so the file stays at the mode it was given
+    # first, which is not 0600. The directory is what keeps it out of reach.
+    - name: Leave a file at the mode Ansible gives before it sets the owner
+      block:
+        - name: Write a file whose owner cannot be set
+          ansible.builtin.copy:
+            content: '{{ verify_window }}'
+            dest: '{{ scenario_directory }}/EXAMPLE_WINDOW'
+            owner: no_such_example_owner
+            mode: '0600'
+          no_log: true
+          diff: false
+      rescue:
+        - name: Note that the write failed, as it should
+          ansible.builtin.set_fact:
+            verify_window_failed: true
+
+    - name: Read the file the failed write left
+      ansible.builtin.stat:
+        path: '{{ scenario_directory }}/EXAMPLE_WINDOW'
+      register: verify_window_stat
+
+    - name: Try to read that file as an account that is not the owner
+      ansible.builtin.command:
+        argv:
+          - runuser
+          - --user
+          - nobody
+          - --
+          - test
+          - -r
+          - '{{ scenario_directory }}/EXAMPLE_WINDOW'
+      register: verify_window_read
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Assert the file was left wider than 0600 and that no other account could read it
+      ansible.builtin.assert:
+        that:
+          - verify_window_failed | default(false)
+          - verify_window_stat.stat.exists
+          - verify_window_stat.stat.mode == '0644'
+          - verify_window_read.rc != 0
+        fail_msg: >-
+          Expected the failed write to leave the file at mode 0644 and the closed
+          directory to keep another account from reading it. The mode was
+          {{ verify_window_stat.stat.mode | default('absent') }} and the read
+          ended with {{ verify_window_read.rc }}.
+        quiet: true
+
+    - name: Remove the file the failed write left
+      ansible.builtin.file:
+        path: '{{ scenario_directory }}/EXAMPLE_WINDOW'
+        state: absent
+
+    # ----- What a failed argument validation prints -----
+    # The role's spec is checked by Ansible before the role starts, by a task no
+    # keyword reaches. These cases give the sentinel to the role as input that
+    # fails the spec, in the shapes a slip produces.
+    - name: Fail the role's argument check with the sentinel as the whole list
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: "Validating arguments against arg spec 'main' - Deliver secrets as root-only files, and optionally one environment file"
+        refused_secrets: '{{ verify_probe_role }}'
+
+    - name: Fail the role's argument check with the sentinel as a list item
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: "Validating arguments against arg spec 'main' - Deliver secrets as root-only files, and optionally one environment file"
+        refused_secrets:
+          - '{{ verify_probe_role }}'
+
+    - name: Fail the role's argument check with the sentinel as the value of a misspelt key
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: "Validating arguments against arg spec 'main' - Deliver secrets as root-only files, and optionally one environment file"
+        refused_secrets:
+          - name: EXAMPLE_TYPO
+            valu: '{{ verify_probe_role }}'
+
+    - name: Fail the role's argument check with the sentinel as a name that is a mapping
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: "Validating arguments against arg spec 'main' - Deliver secrets as root-only files, and optionally one environment file"
+        refused_secrets:
+          - EXAMPLE_NAME: '{{ verify_probe_role }}'
+
+    # The same validation, run on a spec that has options whose types can fail.
+    # The role has none (its secret-bearing options are text, which accepts
+    # anything), so these show what Ansible does, as a fact about the pinned
+    # ansible-core: the failure message prints the value that failed, and a
+    # no_log key in the spec does not stop it.
+    - name: Give the sentinel to an option restricted to a few choices
+      ansible.builtin.include_tasks: tasks/probe_validation.yml
+      vars:
+        probe_sentinel: '{{ verify_probe_echoed }}'
+        probe_spec:
+          probe_choice:
+            type: str
+            choices: [alpha, beta]
+        probe_provided:
+          probe_choice: '{{ verify_probe_echoed }}'
+
+    - name: Assert the failure message printed the value that failed its choices
+      ansible.builtin.assert:
+        that:
+          - not probe_accepted
+          - probe_echoed_in_message
+        fail_msg: A failed argument validation no longer prints the value of the option that failed its choices. Update the README.
+        quiet: true
+
+    - name: Give the sentinel to an option declared no_log in the spec
+      ansible.builtin.include_tasks: tasks/probe_validation.yml
+      vars:
+        probe_sentinel: '{{ verify_probe_echoed }}'
+        probe_spec:
+          probe_hidden_choice:
+            type: str
+            no_log: true
+            choices: [alpha, beta]
+        probe_provided:
+          probe_hidden_choice: '{{ verify_probe_echoed }}'
+
+    - name: Assert the no_log key in the spec did not stop the failure message printing it
+      ansible.builtin.assert:
+        that:
+          - not probe_accepted
+          - probe_echoed_in_message
+        fail_msg: A no_log key in an argument spec now keeps the value out of a failed validation. Update the README.
+        quiet: true
+
+    - name: Give the sentinel to an option that must be a number
+      ansible.builtin.include_tasks: tasks/probe_validation.yml
+      vars:
+        probe_sentinel: '{{ verify_probe_echoed }}'
+        probe_spec:
+          probe_count:
+            type: int
+        probe_provided:
+          probe_count: '{{ verify_probe_echoed }}'
+
+    - name: Assert the failure message printed the value that is not a number
+      ansible.builtin.assert:
+        that:
+          - not probe_accepted
+          - probe_echoed_in_message
+        fail_msg: A failed argument validation no longer prints a value that cannot be converted. Update the README.
+        quiet: true
+
+    # ----- The host is as the converge left it -----
+    - name: Assert the host ends as the converge left it
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+      vars:
+        state_file_value: '{{ verify_file }}'
+        state_env_value: '{{ verify_env }}'
+        state_host_value: '{{ verify_host }}'
+
+    # ----- ANS-16: no sentinel in any log -----
+    # The scenario sets verbosity 3 and a log path (molecule.yml), so a task that
+    # handles a value without no_log prints it into this log, in its result, its
+    # loop item, its diff or the message of a failure. The scan runs last, so it
+    # covers every run above: the converge, the second converge, the check-mode
+    # run with diff, the rotations, the refusals and the failures. The controls
+    # show the scan reads the output: the canary of the converge, two task names,
+    # and the one sentinel Ansible's own validation printed.
+    - name: Read the log of this scenario's Ansible runs
+      ansible.builtin.set_fact:
+        verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+      no_log: true
+
+    - name: Assert the log holds the output the scan is meant to read
+      ansible.builtin.assert:
+        that:
+          - "'SCENARIO_LOG_CANARY' in verify_log"
+          - "' : Write the secrets given as values' in verify_log"
+          - "' : Write the environment file' in verify_log"
+          - verify_probe_echoed in verify_log
+        fail_msg: The log lacks the canary, a role task name or the sentinel the validation printed, so an empty scan would prove nothing.
+        quiet: true
+      no_log: true
+
+    - name: Work out which sentinels the log holds
+      ansible.builtin.set_fact:
+        verify_leaked: "{{ verify_sentinels | dict2items | selectattr('value', 'in', verify_log) | map(attribute='key') | list }}"
+      no_log: true
+
+    - name: Assert no sentinel reached the log
+      ansible.builtin.assert:
+        that:
+          - verify_leaked == []
+        fail_msg: 'The log holds the sentinels: {{ verify_leaked }}.'
+        quiet: true
+
+    # The directory is created before any file is written (see the role). The
+    # log lists the tasks in the order they ran.
+    - name: Assert the directory task ran before the write tasks
+      ansible.builtin.assert:
+        that:
+          - "verify_log.find(' : Create the secrets directory') >= 0"
+          - "verify_log.find(' : Write the secrets given as values') >= 0"
+          - "verify_log.find(' : Create the secrets directory') < verify_log.find(' : Write the secrets given as values')"
+        quiet: true
+      no_log: true
+
+# The other files this run leaves on the controller: Molecule's own copy of the
+# configuration, the inventory it built, its state, and the log. The sentinel
+# files themselves are the one place the values are meant to be.
+- name: Scan the files the run leaves on the controller
+  hosts: localhost
+  gather_facts: false
+  vars:
+    scan_files: "{{ scenario_sentinel_labels | reject('equalto', 'probe_echoed') | map('regex_replace', '^', scenario_sentinel_dir ~ '/') | list }}"
+    scan_pattern: "{{ lookup('ansible.builtin.file', *scan_files, wantlist=True) | join('|') }}"
+  tasks:
+    - name: Search the scenario's directory for every sentinel but the one the validation printed
+      ansible.builtin.find:
+        paths: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+        recurse: true
+        hidden: true
+        file_type: file
+        excludes: '{{ scenario_sentinel_labels }}'
+        contains: '{{ scan_pattern }}'
+      register: scan_found
+      no_log: true
+
+    - name: Assert no other file the run left holds the sentinel
+      ansible.builtin.assert:
+        that:
+          - scan_found.files | length == 0
+        fail_msg: 'The sentinel is in: {{ scan_found.files | map(attribute="path") | list }}'
+        quiet: true

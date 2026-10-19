@@ -1,0 +1,26 @@
+---
+# Runs Ansible's own argument validation (the action that checks a role's
+# meta/argument_specs.yml before the role starts) on probe_spec and
+# probe_provided, and records whether the failure message it prints holds the
+# sentinel. Requires probe_spec, probe_provided and probe_sentinel. Sets
+# probe_accepted and probe_echoed_in_message.
+#
+# The validation task has no no_log, on purpose: the validation a role gets is an
+# implicit task that no keyword can reach, so the probe shows what it prints.
+- name: Validate the probe arguments
+  block:
+    - name: Validate the arguments against the spec
+      ansible.builtin.validate_argument_spec:
+        argument_spec: '{{ probe_spec }}'
+        provided_arguments: '{{ probe_provided }}'
+
+    - name: Record that the arguments were accepted
+      ansible.builtin.set_fact:
+        probe_accepted: true
+        probe_echoed_in_message: false
+  rescue:
+    - name: Record whether the failure message holds the sentinel
+      ansible.builtin.set_fact:
+        probe_accepted: false
+        probe_echoed_in_message: "{{ (probe_sentinel | default('')) in (ansible_failed_result.msg | default('')) }}"
+      no_log: true

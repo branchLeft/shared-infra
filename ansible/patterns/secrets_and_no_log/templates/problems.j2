@@ -1,0 +1,32 @@
+{#-
+  Reads the secret entries and returns, as JSON, only the position of each
+  entry that breaks a rule. It never returns a name, a value or a path, so the
+  task that renders it can keep its result out of the log and the assertion
+  after it can still say which entry is wrong.
+-#}
+{%- set found = {'name': [], 'duplicate': [], 'source': [], 'text': [], 'path': [], 'env': []} -%}
+{%- set seen = [] -%}
+{%- for entry in secrets_and_no_log_secrets -%}
+  {%- set name = entry['name'] | default('') | string -%}
+  {%- set value = entry['value'] | default('') -%}
+  {%- set source = entry['source_file'] | default('') -%}
+  {%- if name is not match(secrets_and_no_log_name_pattern) -%}
+    {%- set _ = found['name'].append(loop.index) -%}
+  {%- endif -%}
+  {%- if name in seen -%}
+    {%- set _ = found['duplicate'].append(loop.index) -%}
+  {%- endif -%}
+  {%- set _ = seen.append(name) -%}
+  {%- if (value != '') == (source != '') -%}
+    {%- set _ = found['source'].append(loop.index) -%}
+  {%- endif -%}
+  {%- if value is not string -%}
+    {%- set _ = found['text'].append(loop.index) -%}
+  {%- elif secrets_and_no_log_env_name != '' and value != '' and value is not match(secrets_and_no_log_env_value_pattern) -%}
+    {%- set _ = found['env'].append(loop.index) -%}
+  {%- endif -%}
+  {%- if source != '' and (source | string) is not match(secrets_and_no_log_path_pattern) -%}
+    {%- set _ = found['path'].append(loop.index) -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ found | to_json }}

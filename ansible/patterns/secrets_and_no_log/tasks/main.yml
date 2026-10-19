@@ -1,0 +1,221 @@
+---
+# Every task below that handles a value sets no_log: true, and diff: false where
+# a diff would show the text (ANS-16). A task that handles a value is the one
+# place a value can reach a log; the tasks that handle none (the directory, the
+# source file check) say so in a comment.
+
+# The facts this role leaves for the playbook. They hold paths and a flag, never
+# a value. Reset on every run, so a second include in one play starts clean.
+- name: Start with no changed file recorded
+  ansible.builtin.set_fact:
+    secrets_and_no_log_changed: []
+    secrets_and_no_log_notified: false
+
+- name: Refuse a directory or an environment file name that is not a plain name
+  ansible.builtin.assert:
+    that:
+      - secrets_and_no_log_directory is match(secrets_and_no_log_path_pattern)
+      - secrets_and_no_log_env_name == '' or secrets_and_no_log_env_name is match(secrets_and_no_log_env_name_pattern)
+    quiet: true
+    fail_msg: >-
+      The directory must be an absolute path of letters, digits, dot,
+      underscore, hyphen and slash. The environment file name, when set, must be
+      a plain file name of letters, digits, dot, underscore and hyphen.
+
+# The entries are secrets, so a failed check must not print one. This task reads
+# them and keeps only the position of each entry that breaks a rule; the
+# assertions after it name those positions and never a value, a name or a path.
+- name: Find the secret entries that break a rule
+  ansible.builtin.set_fact:
+    secrets_and_no_log_problems: "{{ lookup('ansible.builtin.template', 'problems.j2') | from_json }}"
+  no_log: true
+
+- name: Refuse a secret name that is not an ALL_CAPS name
+  ansible.builtin.assert:
+    that:
+      - secrets_and_no_log_problems['name'] | length == 0
+    quiet: true
+    fail_msg: >-
+      Secret entry number {{ secrets_and_no_log_problems['name'] | join(', ') }}
+      has a name that is not an ALL_CAPS name (upper-case letters, digits and
+      underscore, starting with a letter).
+
+- name: Refuse a secret name that is used twice
+  ansible.builtin.assert:
+    that:
+      - secrets_and_no_log_problems['duplicate'] | length == 0
+    quiet: true
+    fail_msg: >-
+      Secret entry number {{ secrets_and_no_log_problems['duplicate'] | join(', ') }}
+      repeats the name of an earlier entry. A name is a file name, so each is used once.
+
+- name: Refuse a secret that is not given as exactly one of value and source_file
+  ansible.builtin.assert:
+    that:
+      - secrets_and_no_log_problems['source'] | length == 0
+    quiet: true
+    fail_msg: >-
+      Secret entry number {{ secrets_and_no_log_problems['source'] | join(', ') }}
+      must give exactly one of value and source_file.
+
+# The argument check turns a mapping or a number into text without complaint, and
+# YAML reads an unquoted value that holds a colon and a space as a mapping.
+- name: Refuse a secret value that is not text
+  ansible.builtin.assert:
+    that:
+      - secrets_and_no_log_problems['text'] | length == 0
+    quiet: true
+    fail_msg: >-
+      Secret entry number {{ secrets_and_no_log_problems['text'] | join(', ') }}
+      has a value that is not text. Quote it.
+
+- name: Refuse a source file path that is not an absolute path of plain characters
+  ansible.builtin.assert:
+    that:
+      - secrets_and_no_log_problems['path'] | length == 0
+    quiet: true
+    fail_msg: >-
+      Secret entry number {{ secrets_and_no_log_problems['path'] | join(', ') }}
+      has a source_file that is not an absolute path of letters, digits, dot,
+      underscore, hyphen and slash.
+
+- name: Refuse a value that cannot go on one line of the environment file
+  ansible.builtin.assert:
+    that:
+      - secrets_and_no_log_problems['env'] | length == 0
+    quiet: true
+    fail_msg: >-
+      Secret entry number {{ secrets_and_no_log_problems['env'] | join(', ') }}
+      has a value that is not printable ASCII (U+0020 to U+007E), so it cannot be
+      one line of the environment file. Give it as a host file instead.
+
+# stat reads the metadata of each source file and never its content, and each
+# loop item is a path, so this task and the one after it hold no value.
+- name: Look at each source file given as a host file
+  ansible.builtin.stat:
+    path: '{{ item }}'
+  loop: "{{ secrets_and_no_log_secrets | map(attribute='source_file', default='') | select | list }}"
+  register: secrets_and_no_log_sources
+
+# The copy keeps the mode of its source until the role sets the final mode, so a
+# source that others can read would make the delivered file readable for a moment.
+# The directory is closed as well, but the source is checked first.
+- name: Refuse a source file that is missing, not a plain file, not owned by root or open to group or other
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg | default(false)
+      - item.stat.uid == 0
+      - item.stat.mode | int(base=8) % 64 == 0
+    quiet: true
+    fail_msg: >-
+      The source file {{ item.item }} must be an existing plain file owned by root
+      with no group or other permission.
+  loop: '{{ secrets_and_no_log_sources.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+# The directory is created, closed to everyone but the owner, before any file is
+# written. Ansible puts a file at its final name and sets the owner and mode in a
+# second step, so for a moment the file can have a wider mode (see the README).
+# The closed directory is what keeps it out of reach in that moment. This task
+# handles no secret.
+- name: Create the secrets directory, closed to everyone but its owner
+  ansible.builtin.file:
+    path: '{{ secrets_and_no_log_directory }}'
+    state: directory
+    owner: '{{ secrets_and_no_log_owner }}'
+    group: '{{ secrets_and_no_log_group }}'
+    mode: '{{ secrets_and_no_log_directory_mode }}'
+
+# Check mode creates nothing, so on a fresh host the directory is not there and
+# the writes below would fail for want of it. stat runs in check mode as in a
+# real run, so the writes run whenever the directory is really on disk.
+- name: Look at the secrets directory
+  ansible.builtin.stat:
+    path: '{{ secrets_and_no_log_directory }}'
+  register: secrets_and_no_log_directory_stat
+
+# The tasks that write a value register their result, and the registered result
+# of a loop keeps its items, which hold the values. no_log hides a task's output
+# from the screen; it does not empty the registered variable. So the task that
+# reads a register has no_log too, and the always section empties the registers,
+# after a failure as well.
+- name: Write the secrets
+  block:
+    - name: Write the secrets given as values
+      ansible.builtin.copy:
+        content: '{{ item.value }}'
+        dest: '{{ secrets_and_no_log_directory }}/{{ item.name }}'
+        owner: '{{ secrets_and_no_log_owner }}'
+        group: '{{ secrets_and_no_log_group }}'
+        mode: '{{ secrets_and_no_log_file_mode }}'
+        backup: false
+      loop: "{{ secrets_and_no_log_secrets | selectattr('value', 'defined') | rejectattr('value', 'equalto', '') | list }}"
+      no_log: true
+      diff: false
+      register: secrets_and_no_log_written
+      notify: Tell the playbook that the consumers of the secrets need a reload
+      when: secrets_and_no_log_directory_stat.stat.exists
+
+    # remote_src: the file is copied on the host, so its content is never read
+    # into Ansible and no value passes through a variable. The loop items hold a
+    # path. no_log stays, so the rule has no exception to remember.
+    - name: Copy the secrets given as host files
+      ansible.builtin.copy:
+        src: '{{ item.source_file }}'
+        remote_src: true
+        dest: '{{ secrets_and_no_log_directory }}/{{ item.name }}'
+        owner: '{{ secrets_and_no_log_owner }}'
+        group: '{{ secrets_and_no_log_group }}'
+        mode: '{{ secrets_and_no_log_file_mode }}'
+        backup: false
+      loop: "{{ secrets_and_no_log_secrets | selectattr('source_file', 'defined') | rejectattr('source_file', 'equalto', '') | list }}"
+      no_log: true
+      diff: false
+      register: secrets_and_no_log_copied
+      notify: Tell the playbook that the consumers of the secrets need a reload
+      when: secrets_and_no_log_directory_stat.stat.exists
+
+    # One NAME=value line for every secret given as a value, for a program that
+    # can only read its secrets from the environment. The file is exactly those
+    # lines.
+    - name: Write the environment file
+      ansible.builtin.template:
+        src: environment.j2
+        dest: '{{ secrets_and_no_log_directory }}/{{ secrets_and_no_log_env_name }}'
+        owner: '{{ secrets_and_no_log_owner }}'
+        group: '{{ secrets_and_no_log_group }}'
+        mode: '{{ secrets_and_no_log_file_mode }}'
+        backup: false
+      no_log: true
+      diff: false
+      register: secrets_and_no_log_env
+      notify: Tell the playbook that the consumers of the secrets need a reload
+      when:
+        - secrets_and_no_log_env_name != ''
+        - secrets_and_no_log_directory_stat.stat.exists
+
+    # Reads the registered results, whose items hold the values. The environment
+    # file's result is one more entry in the list; a skipped task's result says
+    # it did not change.
+    - name: Record the paths of the secret files that changed
+      ansible.builtin.set_fact:
+        secrets_and_no_log_changed: '{{ secrets_and_no_log_changed + [item.dest] }}'
+      loop: >-
+        {{ ((secrets_and_no_log_written.results | default([])) + (secrets_and_no_log_copied.results | default([]))
+        + [secrets_and_no_log_env | default({})]) | selectattr('changed', 'defined') | selectattr('changed') | list }}
+      no_log: true
+  always:
+    # A registered variable stays in the host's variables for the rest of the
+    # play. Empty the ones whose items held a value, so a later task that shows
+    # its variables shows no secret.
+    - name: Forget the registered results that held values
+      ansible.builtin.set_fact:
+        secrets_and_no_log_written: {}
+        secrets_and_no_log_copied: {}
+        secrets_and_no_log_env: {}
+      no_log: true
+
+- name: Run the reload handler now, so the playbook can read what it set
+  ansible.builtin.meta: flush_handlers

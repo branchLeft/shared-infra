@@ -1,0 +1,112 @@
+---
+# What the role expects to find on a host before it runs, and what the verify
+# play compares against. Every task that handles a sentinel has no_log and
+# diff: false: the scan in verify.yml reads the log of this play too.
+- name: Make the throwaway sentinels on the controller
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Make the directory for this run's sentinels
+      ansible.builtin.file:
+        path: '{{ scenario_sentinel_dir }}'
+        state: directory
+        mode: '0700'
+
+    # The /dev/null path makes the lookup keep nothing, and the seed makes the
+    # value repeat, so the same label gives the same value in every play. The
+    # value is a random-looking string made for this scenario, never a real one.
+    - name: Make one sentinel for each label the scenario uses
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.password', '/dev/null seed=' ~ item ~ ' chars=ascii_letters,digits length=40') }}"
+        dest: '{{ scenario_sentinel_dir }}/{{ item }}'
+        mode: '0600'
+      loop: '{{ scenario_sentinel_labels }}'
+      no_log: true
+      diff: false
+
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create the group the files belong to
+      ansible.builtin.group:
+        name: '{{ scenario_group }}'
+
+    - name: Create the account the files belong to
+      ansible.builtin.user:
+        name: '{{ scenario_owner }}'
+        group: '{{ scenario_group }}'
+        shell: /usr/sbin/nologin
+        create_home: false
+
+    - name: Create the directory for the source files
+      ansible.builtin.file:
+        path: '{{ scenario_source_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    # The root-only file a delivery step would have put on the host. The role
+    # copies it on the host and never reads it.
+    - name: Put the host-file secret on the host
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/host_secret') }}"
+        dest: '{{ scenario_host_source }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    # Source files the role must refuse. Their content is a placeholder: they
+    # are refused before any copy.
+    - name: Put a source file that others can read on the host
+      ansible.builtin.copy:
+        content: EXAMPLE_PLACEHOLDER
+        dest: '{{ scenario_source_dir }}/WIDE_SOURCE'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Put a source file that the account owns on the host
+      ansible.builtin.copy:
+        content: EXAMPLE_PLACEHOLDER
+        dest: '{{ scenario_source_dir }}/OWNED_SOURCE'
+        owner: '{{ scenario_owner }}'
+        group: '{{ scenario_group }}'
+        mode: '0600'
+
+    - name: Put a link to the good source file on the host
+      ansible.builtin.file:
+        src: '{{ scenario_host_source }}'
+        dest: '{{ scenario_source_dir }}/LINK_SOURCE'
+        state: link
+
+    # An earlier release of the host: the directory is open to everyone and the
+    # file is world-readable and holds the earlier value. The role must close the
+    # directory, replace the file, set its owner and mode, and leave no copy of
+    # the earlier value anywhere. A file that exists keeps its owner and mode
+    # unless the module is told otherwise, so only a file that is not owned by
+    # the account, and wider than the final mode, can show that the role sets
+    # them itself.
+    - name: Create the directory an earlier release left, open to everyone
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/example-service
+        - '{{ scenario_directory }}'
+
+    - name: Leave an earlier secret file that anyone can read
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/earlier_secret') }}"
+        dest: '{{ scenario_directory }}/EXAMPLE_FILE_SECRET'
+        owner: root
+        group: root
+        mode: '0644'
+      no_log: true
+      diff: false

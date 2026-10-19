@@ -1,0 +1,12 @@
+---
+# Sets read_inodes_result to the inode of each secret file, by file name. A file
+# the role replaces by rename has a new inode; a file it leaves alone keeps its.
+- name: Read each secret file
+  ansible.builtin.stat:
+    path: '{{ scenario_directory }}/{{ item }}'
+  loop: '{{ verify_file_names }}'
+  register: read_inodes_stat
+
+- name: Keep the inode of each file by name
+  ansible.builtin.set_fact:
+    read_inodes_result: "{{ dict(verify_file_names | zip(read_inodes_stat.results | map(attribute='stat.inode'))) }}"

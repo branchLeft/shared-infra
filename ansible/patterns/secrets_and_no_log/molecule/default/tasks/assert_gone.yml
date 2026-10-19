@@ -1,0 +1,43 @@
+---
+# Requires gone_value: a value the host must no longer hold anywhere, and
+# gone_label: what to call it in a failure message. The search reads the content
+# of every file under the directories a secret could have been copied to, backups
+# and temporary files included, and keeps only the paths that hold the value.
+#
+# grep is used because the find module cannot do this one job: Ansible keeps the
+# arguments of a running module in a file under the connection user's
+# .ansible directory, and a search for the value finds that file. grep is told to
+# leave that directory out. The module that finds files by content (find) is the
+# idiomatic choice everywhere else (ANS-9).
+- name: Search the host for a value that should be gone
+  ansible.builtin.command:
+    argv:
+      - grep
+      - --recursive
+      - --files-with-matches
+      - --text
+      - --no-messages
+      - --fixed-strings
+      - --exclude-dir=.ansible
+      - --regexp
+      - '{{ gone_value }}'
+      - /etc
+      - /home
+      - /opt
+      - /root
+      - /srv
+      - /tmp
+      - /usr/local
+      - /var
+  register: gone_found
+  changed_when: false
+  failed_when: gone_found.rc not in [0, 1]
+  check_mode: false
+  no_log: true
+
+- name: Assert no file on the host holds the value
+  ansible.builtin.assert:
+    that:
+      - gone_found.rc == 1
+    fail_msg: 'The value {{ gone_label }} is still held by: {{ gone_found.stdout_lines }}'
+    quiet: true
