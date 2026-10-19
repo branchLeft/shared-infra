@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  standalone: true
+  author: AUTHOR_NAME
+  # Molecule derives a fully qualified role name from the namespace, or from
+  # the author when there is none, and refuses an upper-case author.
+  namespace: branchleft
+  description: Runs a one-off step on a host only when its tag and its confirmation are both given, and records that it ran.
+  license: LICENSE_ID
+  min_ansible_version: '2.21.5'

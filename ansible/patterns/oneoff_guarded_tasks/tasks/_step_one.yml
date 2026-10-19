@@ -1,0 +1,36 @@
+---
+# Guarded step EXAMPLE_STEP_ONE. Its tags come from the importing file. The
+# effect is a placeholder file, touched on each run, so a repeated run that
+# reaches it reports a change and the idempotence check catches it.
+
+- name: Refuse EXAMPLE_STEP_ONE when its tag is named without its confirmation
+  ansible.builtin.assert:
+    that:
+      - oneoff_guarded_tasks_confirm == 'EXAMPLE_STEP_ONE'
+    quiet: true
+    fail_msg: 'REFUSED: EXAMPLE_STEP_ONE was requested by its tag without oneoff_guarded_tasks_confirm set to EXAMPLE_STEP_ONE, so it did not run.'
+
+- name: Read the marker of EXAMPLE_STEP_ONE
+  ansible.builtin.stat:
+    path: '{{ oneoff_guarded_tasks_state_dir }}/EXAMPLE_STEP_ONE'
+  register: oneoff_guarded_tasks_step_one_marker
+
+- name: Run the placeholder effect of EXAMPLE_STEP_ONE
+  ansible.builtin.file:
+    path: /var/tmp/EXAMPLE_STEP_ONE.effect
+    state: touch
+    owner: root
+    group: root
+    mode: '0640'
+  when: not oneoff_guarded_tasks_step_one_marker.stat.exists
+
+# The marker comes after the effect, so a failed effect stops the play before
+# it is written. It holds the step id and nothing else.
+- name: Write the marker of EXAMPLE_STEP_ONE after its effect succeeded
+  ansible.builtin.copy:
+    content: "EXAMPLE_STEP_ONE\n"
+    dest: '{{ oneoff_guarded_tasks_state_dir }}/EXAMPLE_STEP_ONE'
+    owner: root
+    group: root
+    mode: '0644'
+  when: not oneoff_guarded_tasks_step_one_marker.stat.exists

@@ -1,0 +1,290 @@
+---
+# The outcome, asserted in the order the claims are made. Each request is an
+# ansible-playbook run of request.yml on the controller, against the same
+# container, so each run is the one a maintainer would make. Every check that
+# follows a run looks at the container, not at the run's own output, and every
+# assertion names the claim it tests.
+
+# 1. A plain apply skipped both guarded steps and wrote no marker.
+- name: Check the plain apply left both guarded steps alone
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the effects and markers of both steps
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      register: oneoff_guarded_tasks_before
+      loop:
+        - /var/tmp/EXAMPLE_STEP_ONE.effect
+        - '{{ scenario_state_dir }}/EXAMPLE_STEP_ONE'
+        - '{{ scenario_state_dir }}/EXAMPLE_STEP_TWO'
+
+    - name: Assert no effect and no marker exists after a plain apply
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_before.results | map(attribute='stat') | selectattr('exists') | list | length == 0
+        quiet: true
+        fail_msg: A plain apply ran a guarded step or wrote a marker (the tag guard or the never tag is not doing its job).
+
+    - name: Read the state directory
+      ansible.builtin.stat:
+        path: '{{ scenario_state_dir }}'
+      register: oneoff_guarded_tasks_dir
+
+    - name: Assert the state directory is root-owned and mode 0755
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_dir.stat.pw_name == 'root'
+          - oneoff_guarded_tasks_dir.stat.gr_name == 'root'
+          - oneoff_guarded_tasks_dir.stat.mode == '0755'
+        quiet: true
+        fail_msg: The state directory was not made root-owned and mode 0755 by the role, though it was owned by the account.
+
+# 2. The tag alone, and a confirmation with a line break, are refused by name.
+- name: Request EXAMPLE_STEP_ONE by its tag alone, and with a confirmation holding a line break
+  hosts: localhost
+  gather_facts: false
+  vars:
+    oneoff_guarded_tasks_request:
+      - ansible-playbook
+      - -i
+      - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+      - '{{ playbook_dir }}/request.yml'
+    # The YAML double-quoted "\n" is a real line break; to_json writes it as the
+    # two characters the extra-vars parser reads back as one.
+    oneoff_guarded_tasks_line_break_extra:
+      oneoff_guarded_tasks_confirm: "EXAMPLE_STEP_ONE\n"
+  tasks:
+    - name: Request the step with its tag and no confirmation
+      ansible.builtin.command:
+        argv: "{{ oneoff_guarded_tasks_request + ['--tags', 'oneoff_guarded_tasks_step_one'] }}"
+      register: oneoff_guarded_tasks_tag_alone
+      failed_when: false
+      changed_when: false
+
+    - name: Request the step with a confirmation that holds a line break
+      ansible.builtin.command:
+        argv: "{{ oneoff_guarded_tasks_request + ['--tags', 'oneoff_guarded_tasks_step_one',
+          '-e', oneoff_guarded_tasks_line_break_extra | to_json] }}"
+      register: oneoff_guarded_tasks_line_break
+      failed_when: false
+      changed_when: false
+
+    - name: Assert the tag alone is refused by the named message
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_tag_alone.rc != 0
+          - "'REFUSED: EXAMPLE_STEP_ONE was requested by its tag' in (oneoff_guarded_tasks_tag_alone.stdout ~ oneoff_guarded_tasks_tag_alone.stderr)"
+        quiet: true
+        fail_msg: The tag alone did not refuse EXAMPLE_STEP_ONE with its named message; a copied tag can run the step.
+
+    - name: Assert a confirmation with a line break is refused by the step id message
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_line_break.rc != 0
+          - "'is not a step id' in (oneoff_guarded_tasks_line_break.stdout ~ oneoff_guarded_tasks_line_break.stderr)"
+        quiet: true
+        fail_msg: A confirmation with a line break was not refused by the step id check.
+
+# 3. The refusals ran nothing.
+- name: Check the refusals left no effect and no marker
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the effect and marker of EXAMPLE_STEP_ONE
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      register: oneoff_guarded_tasks_after_refusal
+      loop:
+        - /var/tmp/EXAMPLE_STEP_ONE.effect
+        - '{{ scenario_state_dir }}/EXAMPLE_STEP_ONE'
+
+    - name: Assert the refused requests changed nothing
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_after_refusal.results | map(attribute='stat') | selectattr('exists') | list | length == 0
+        quiet: true
+        fail_msg: A refused request ran EXAMPLE_STEP_ONE or wrote its marker.
+
+# 4. A check-mode run reports the change it would make, and writes nothing.
+- name: Request EXAMPLE_STEP_ONE in check mode
+  hosts: localhost
+  gather_facts: false
+  vars:
+    oneoff_guarded_tasks_request:
+      - ansible-playbook
+      - -i
+      - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+      - '{{ playbook_dir }}/request.yml'
+  tasks:
+    - name: Request the step in check mode with its tag and confirmation
+      ansible.builtin.command:
+        argv:
+          "{{ oneoff_guarded_tasks_request + ['--check', '--tags', 'oneoff_guarded_tasks_step_one',
+          '-e', 'oneoff_guarded_tasks_confirm=EXAMPLE_STEP_ONE'] }}"
+      register: oneoff_guarded_tasks_check_run
+      failed_when: false
+      changed_when: false
+
+    - name: Assert the check run succeeded and reported a change
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_check_run.rc == 0
+          - oneoff_guarded_tasks_check_run.stdout is search('changed=[1-9]')
+        quiet: true
+        fail_msg: The check-mode request did not succeed or did not report the change it would make.
+
+- name: Check the check-mode run wrote nothing
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the effect and marker of EXAMPLE_STEP_ONE
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      register: oneoff_guarded_tasks_after_check
+      loop:
+        - /var/tmp/EXAMPLE_STEP_ONE.effect
+        - '{{ scenario_state_dir }}/EXAMPLE_STEP_ONE'
+
+    - name: Assert the check run left no effect and no marker
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_after_check.results | map(attribute='stat') | selectattr('exists') | list | length == 0
+        quiet: true
+        fail_msg: A check-mode run wrote a marker or ran the effect.
+
+# 5. The requested run does the step, writes the marker, and the effect has the
+# mode the step sets.
+- name: Request EXAMPLE_STEP_ONE for real
+  hosts: localhost
+  gather_facts: false
+  vars:
+    oneoff_guarded_tasks_request:
+      - ansible-playbook
+      - -i
+      - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+      - '{{ playbook_dir }}/request.yml'
+  tasks:
+    - name: Request the step with its tag and confirmation
+      ansible.builtin.command:
+        argv: "{{ oneoff_guarded_tasks_request + ['--tags', 'oneoff_guarded_tasks_step_one', '-e', 'oneoff_guarded_tasks_confirm=EXAMPLE_STEP_ONE'] }}"
+      register: oneoff_guarded_tasks_run_one
+      failed_when: false
+      changed_when: false
+
+    - name: Assert the requested run succeeded
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_run_one.rc == 0
+        quiet: true
+        fail_msg: The requested run of EXAMPLE_STEP_ONE, with its tag and confirmation, did not succeed.
+
+- name: Check the requested run did the step and recorded it
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the effect, the marker and the state directory
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      register: oneoff_guarded_tasks_after_run
+      loop:
+        - /var/tmp/EXAMPLE_STEP_ONE.effect
+        - '{{ scenario_state_dir }}/EXAMPLE_STEP_ONE'
+
+    - name: Read the marker, which must hold the step id only
+      ansible.builtin.command:
+        argv:
+          - cat
+          - '{{ scenario_state_dir }}/EXAMPLE_STEP_ONE'
+      register: oneoff_guarded_tasks_marker_text
+      changed_when: false
+
+    - name: Assert the effect has its mode, the marker its owner, mode and text
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_after_run.results[0].stat.exists
+          - oneoff_guarded_tasks_after_run.results[0].stat.mode == '0640'
+          - oneoff_guarded_tasks_after_run.results[1].stat.exists
+          - oneoff_guarded_tasks_after_run.results[1].stat.pw_name == 'root'
+          - oneoff_guarded_tasks_after_run.results[1].stat.mode == '0644'
+          - oneoff_guarded_tasks_marker_text.stdout == 'EXAMPLE_STEP_ONE'
+        quiet: true
+        fail_msg: After the requested run the effect, the marker or its owner, mode or text is not as the step sets it.
+
+# 6. Asking again with the marker present changes nothing (idempotence of a
+# requested step).
+- name: Request EXAMPLE_STEP_ONE a second time
+  hosts: localhost
+  gather_facts: false
+  vars:
+    oneoff_guarded_tasks_request:
+      - ansible-playbook
+      - -i
+      - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+      - '{{ playbook_dir }}/request.yml'
+  tasks:
+    - name: Request the step again with its tag and confirmation
+      ansible.builtin.command:
+        argv: "{{ oneoff_guarded_tasks_request + ['--tags', 'oneoff_guarded_tasks_step_one', '-e', 'oneoff_guarded_tasks_confirm=EXAMPLE_STEP_ONE'] }}"
+      register: oneoff_guarded_tasks_run_again
+      failed_when: false
+      changed_when: false
+
+    - name: Assert the second request succeeded and reported no change
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_run_again.rc == 0
+          - oneoff_guarded_tasks_run_again.stdout is search('changed=0 ')
+          - oneoff_guarded_tasks_run_again.stdout is not search('changed=[1-9]')
+        quiet: true
+        fail_msg: A second request of EXAMPLE_STEP_ONE with its marker present reported a change, or failed.
+
+# 7. A step whose effect fails writes no marker, and the next request tries again.
+- name: Request EXAMPLE_STEP_TWO, whose effect fails, twice
+  hosts: localhost
+  gather_facts: false
+  vars:
+    oneoff_guarded_tasks_request:
+      - ansible-playbook
+      - -i
+      - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+      - '{{ playbook_dir }}/request.yml'
+  tasks:
+    - name: Request the failing step the first time
+      ansible.builtin.command:
+        argv: "{{ oneoff_guarded_tasks_request + ['--tags', 'oneoff_guarded_tasks_step_two', '-e', 'oneoff_guarded_tasks_confirm=EXAMPLE_STEP_TWO'] }}"
+      register: oneoff_guarded_tasks_fail_first
+      failed_when: false
+      changed_when: false
+
+    - name: Request the failing step the second time
+      ansible.builtin.command:
+        argv: "{{ oneoff_guarded_tasks_request + ['--tags', 'oneoff_guarded_tasks_step_two', '-e', 'oneoff_guarded_tasks_confirm=EXAMPLE_STEP_TWO'] }}"
+      register: oneoff_guarded_tasks_fail_second
+      failed_when: false
+      changed_when: false
+
+    - name: Assert both requests failed, and the second one ran the failing effect again
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_fail_first.rc != 0
+          - oneoff_guarded_tasks_fail_second.rc != 0
+          - "'Run the failing placeholder command of EXAMPLE_STEP_TWO' in oneoff_guarded_tasks_fail_second.stdout"
+        quiet: true
+        fail_msg: The failing step did not fail both times, or the second request did not try its effect again.
+
+- name: Check the failing step wrote no marker
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the marker of EXAMPLE_STEP_TWO
+      ansible.builtin.stat:
+        path: '{{ scenario_state_dir }}/EXAMPLE_STEP_TWO'
+      register: oneoff_guarded_tasks_marker_two
+
+    - name: Assert the failing step left no marker
+      ansible.builtin.assert:
+        that:
+          - not oneoff_guarded_tasks_marker_two.stat.exists
+        quiet: true
+        fail_msg: A step whose effect failed wrote its marker, so the next request would skip it.

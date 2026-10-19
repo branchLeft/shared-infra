@@ -1,0 +1,24 @@
+---
+argument_specs:
+  main:
+    short_description: Run a one-off step only when it is named and confirmed, and record that it ran
+    description: >-
+      Creates the state directory that holds one marker per one-off step that
+      ran. A guarded step is skipped by a plain apply. It runs only when its tag
+      is named on the command line and oneoff_guarded_tasks_confirm names the
+      same step id; it writes its marker only after its effect succeeded, and
+      never in check mode. An empty confirmation leaves every step untouched.
+    author: AUTHOR_NAME
+    options:
+      oneoff_guarded_tasks_state_dir:
+        type: str
+        description: >-
+          Directory holding one marker file per step that ran, named by the step
+          id. Created root-owned, mode 0755. Host-local: a rebuilt host has none.
+        default: /var/lib/oneoff_guarded_tasks
+      oneoff_guarded_tasks_confirm:
+        type: str
+        description: >-
+          The step id this run confirms. Empty on a plain apply. A guarded step
+          runs only when its tag is named and this is exactly its step id.
+        default: ''
