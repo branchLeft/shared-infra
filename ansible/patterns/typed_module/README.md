@@ -301,11 +301,13 @@ Each is proven by sabotage; the commands and results are in the pull request.
   (ANS-2); this pattern has none, so how mypy and Ansible's packaging find it
   is not shown here. The first role that needs one records it.
 - **A symbolic link makes the module visible to the verify play.**
-  `molecule/default/library` points at `../../library`: Ansible, and the
-  ansible-lint syntax check, look for a `library/` next to a playbook, and
-  `verify.yml` calls the module by its bare name. The converge play finds the
-  module through the role. Without the link ansible-lint reports an unknown
-  module.
+  `molecule/default/library/typed_module_record.py` links to the module:
+  Ansible, and the ansible-lint syntax check, look for a `library/` next to a
+  playbook, and `verify.yml` calls the module by its bare name. The converge
+  play finds the module through the role. Without the link ansible-lint
+  reports an unknown module. The link is to the file, not to the directory:
+  a test in `hetzner/provision` reads every tracked file as text and fails on
+  a link to a directory.
 - **ANS-8 and the bare name.** At the production profile, ansible-lint raised
   no finding for the bare name `typed_module_record`, called from the role and
   from the verify play. The module carries the role's name as its prefix, as
