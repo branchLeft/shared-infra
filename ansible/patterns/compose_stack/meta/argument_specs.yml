@@ -1,0 +1,67 @@
+---
+argument_specs:
+  main:
+    short_description: Deliver a compose file and its files, bring the stack up when they change, check it is healthy
+    description: >-
+      Renders a compose file, a configuration file and secret files into a project
+      directory, refuses a compose file whose images are not pinned by digest or a
+      project directory that holds a compose override file, brings the stack up only
+      when the content differs from the content last recorded as healthy or a
+      delivered file changed, and fails if a service is not running and healthy
+      afterwards. It never removes volumes.
+    author: AUTHOR_NAME
+    options:
+      compose_stack_project_dir:
+        type: str
+        description: Absolute path of the project directory that holds the compose file and the files it uses.
+        default: /opt/compose_stack_example
+      compose_stack_project_name:
+        type: str
+        description: Compose project name.
+        default: compose_stack_example
+      compose_stack_owner:
+        type: str
+        description: Owner of the configuration and secret files. The user must exist before the role runs.
+        default: root
+      compose_stack_group:
+        type: str
+        description: Group of the project directory and of the configuration and secret files. The group must exist before the role runs.
+        default: root
+      compose_stack_app_image:
+        type: str
+        required: true
+        description: >-
+          Image of the app service, pinned by digest as NAME@sha256:64 hex digits,
+          or NAME:TAG@sha256:64 hex digits. A reference without a digest is refused.
+      compose_stack_app_greeting:
+        type: str
+        description: Value written into the configuration file. Not a secret.
+        default: EXAMPLE_GREETING
+      compose_stack_wait_timeout:
+        type: int
+        description: Seconds the stack may take to become healthy after it is brought up.
+        default: 120
+      compose_stack_services:
+        type: list
+        elements: str
+        description: >-
+          Names of the services to recreate when a file changes. Empty means every
+          service in the project. A stack with a stateful service next to the app
+          lists the stateless services only, so a change to the app's files does not
+          restart the database. The health check always reads the whole project.
+        default: []
+      compose_stack_secret_files:
+        type: list
+        elements: dict
+        required: true
+        description: Secret files to write into the project directory with mode 0600. The content is a secret, supplied at run time.
+        options:
+          name:
+            type: str
+            required: true
+            description: File name inside the project directory. The compose file refers to it.
+          content:
+            type: str
+            required: true
+            no_log: true
+            description: The file's content. A secret.

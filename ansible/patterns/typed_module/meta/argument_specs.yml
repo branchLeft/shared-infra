@@ -1,0 +1,33 @@
+---
+argument_specs:
+  main:
+    short_description: Manage the EXAMPLE_RECORD file of typed_module
+    description: Writes one record file with the typed module in library/, or removes it.
+    author: AUTHOR_NAME
+    options:
+      typed_module_state:
+        type: str
+        description: Whether the record file is present or absent.
+        choices: [present, absent]
+        default: present
+      typed_module_path:
+        type: str
+        description: Absolute path of the record file. Its directory must already exist.
+        default: /etc/typed_module.record
+      typed_module_name:
+        type: str
+        description: Name written into the record, one word that starts with a letter.
+        default: EXAMPLE_NAME
+      typed_module_count:
+        type: int
+        description: Number written into the record, from 1 to 100.
+        default: 1
+      typed_module_mode:
+        type: str
+        description: Permissions of the record file, as four octal digits in a string.
+        default: '0600'
+      typed_module_token:
+        type: str
+        required: false
+        no_log: true
+        description: Secret that keys the signature in the record. Supplied at run time, never defaulted, never written to the file.
