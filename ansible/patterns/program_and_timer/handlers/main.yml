@@ -1,0 +1,15 @@
+---
+# Handlers run in the order written here. The reload comes first, so a restart
+# that follows it sees the new unit file.
+- name: Reload systemd manager
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# Check mode would ask systemd to restart a timer that no file defines yet, so
+# the restart is skipped in check mode only. The skip is stated here (ANS-10); a
+# real run never skips it.
+- name: Restart the program timer
+  ansible.builtin.systemd_service:
+    name: program_and_timer_tick.timer
+    state: restarted
+  when: not ansible_check_mode

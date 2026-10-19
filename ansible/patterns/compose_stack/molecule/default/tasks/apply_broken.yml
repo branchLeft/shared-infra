@@ -1,0 +1,86 @@
+---
+# One application of the role that must fail after it has delivered its files,
+# and that must have tried `up` once before it failed. The caller sets
+# broken_title, broken_greeting (a new value, so the files change), broken_mode
+# (up: the stand-in's real `up` fails; health: `up` works and a container
+# reports unhealthy) and broken_expect (text the failure must contain). The next
+# application with the same values is where the retry is counted. Both switches
+# are put back whatever happens.
+- name: Count the real up calls before this application
+  ansible.builtin.command:
+    argv: [grep, --count, --fixed-strings, ' up --detach', /var/lib/compose_stack_standin/argv.log]
+  register: apply_broken_before
+  changed_when: false
+  failed_when: apply_broken_before.rc > 1
+  check_mode: false
+
+- name: Apply the role while the stack cannot come up
+  block:
+    - name: Make the stand-in's up fail
+      ansible.builtin.file:
+        path: /var/lib/compose_stack_standin/up_fails
+        state: touch
+        mode: '0644'
+      when: broken_mode == 'up'
+
+    - name: Report an unhealthy container
+      ansible.builtin.copy:
+        content: |
+          {"Name":"stand-in-app-1","Service":"app","State":"running","Health":"unhealthy","Labels":"","Networks":"default","Publishers":null}
+        dest: /var/lib/compose_stack_standin/ps.json
+        owner: root
+        group: root
+        mode: '0644'
+      when: broken_mode == 'health'
+
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.compose_stack
+      vars:
+        compose_stack_app_greeting: '{{ broken_greeting }}'
+
+    - name: Fail because the role passed a stack that could not come up
+      ansible.builtin.fail:
+        msg: The role accepted a stack that could not come up.
+  rescue:
+    - name: Assert the role stopped for the reason the stand-in was given
+      ansible.builtin.assert:
+        that:
+          - broken_expect in broken_failure
+        quiet: true
+        fail_msg: >-
+          {{ broken_title }}: the role did not stop for the expected reason ({{ broken_expect }}).
+          It stopped with: {{ broken_failure }}
+      vars:
+        broken_failure: "{{ ansible_failed_result.msg }} {{ ansible_failed_result.stderr | ansible.builtin.default('') }}"
+  always:
+    - name: Let the stand-in's up work again
+      ansible.builtin.file:
+        path: /var/lib/compose_stack_standin/up_fails
+        state: absent
+
+    - name: Report the healthy state again
+      ansible.builtin.copy:
+        content: |
+          {"Name":"stand-in-app-1","Service":"app","State":"running","Health":"healthy","Labels":"","Networks":"default","Publishers":null}
+        dest: /var/lib/compose_stack_standin/ps.json
+        owner: root
+        group: root
+        mode: '0644'
+
+- name: Count the real up calls after this application
+  ansible.builtin.command:
+    argv: [grep, --count, --fixed-strings, ' up --detach', /var/lib/compose_stack_standin/argv.log]
+  register: apply_broken_after
+  changed_when: false
+  failed_when: apply_broken_after.rc > 1
+  check_mode: false
+
+- name: Assert the role did try to bring the stack up once before it failed
+  ansible.builtin.assert:
+    that:
+      - (apply_broken_after.stdout | ansible.builtin.int) - (apply_broken_before.stdout | ansible.builtin.int) == 1
+    fail_msg: >-
+      {{ broken_title }}: expected the failed run to call up once, the stand-in
+      logged {{ (apply_broken_after.stdout | ansible.builtin.int) - (apply_broken_before.stdout | ansible.builtin.int) }}.
+    quiet: true

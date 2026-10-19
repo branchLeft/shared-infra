@@ -1,0 +1,14 @@
+---
+# The module validates its own arguments and names each refusal. no_log hides
+# the whole task result and diff: false keeps the record out of --diff output
+# (ANS-16). The module's own no_log on the token is what the test proves.
+- name: Manage the record file
+  typed_module_record:
+    path: '{{ typed_module_path }}'
+    name: '{{ typed_module_name }}'
+    count: '{{ typed_module_count }}'
+    state: '{{ typed_module_state }}'
+    mode: '{{ typed_module_mode }}'
+    token: '{{ typed_module_token | default(omit) }}'
+  no_log: true
+  diff: false
