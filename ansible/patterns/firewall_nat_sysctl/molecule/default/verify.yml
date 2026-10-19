@@ -1,0 +1,82 @@
+---
+# The values come from the scenario's inventory variables (molecule.yml), the
+# same values the role was converged with.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the sysctl drop-in's owner, group and mode
+      ansible.builtin.stat:
+        path: '{{ firewall_nat_sysctl_sysctl_file }}'
+      register: firewall_nat_sysctl_verify_dropin_stat
+
+    - name: Assert the drop-in exists with root ownership and mode 0644
+      ansible.builtin.assert:
+        that:
+          - firewall_nat_sysctl_verify_dropin_stat.stat.exists
+          - firewall_nat_sysctl_verify_dropin_stat.stat.pw_name == 'root'
+          - firewall_nat_sysctl_verify_dropin_stat.stat.gr_name == 'root'
+          - firewall_nat_sysctl_verify_dropin_stat.stat.mode == '0644'
+        success_msg: The sysctl drop-in is on the host with root ownership and mode 0644.
+
+    - name: Read the persisted sysctl drop-in
+      ansible.builtin.slurp:
+        src: '{{ firewall_nat_sysctl_sysctl_file }}'
+      register: firewall_nat_sysctl_verify_dropin
+
+    - name: Assert the drop-in persists IPv4 forwarding with the value 1
+      ansible.builtin.assert:
+        that:
+          - "'net.ipv4.ip_forward = 1' in (firewall_nat_sysctl_verify_dropin.content | b64decode).splitlines()"
+        fail_msg: The sysctl drop-in does not persist net.ipv4.ip_forward = 1.
+        success_msg: The sysctl drop-in persists IPv4 forwarding.
+
+    - name: Read the active rules file's mode
+      ansible.builtin.stat:
+        path: '{{ firewall_nat_sysctl_rules_dir }}/active.nft'
+      register: firewall_nat_sysctl_verify_active
+
+    - name: Assert the active rules file exists with its mode
+      ansible.builtin.assert:
+        that:
+          - firewall_nat_sysctl_verify_active.stat.exists
+          - firewall_nat_sysctl_verify_active.stat.mode == '0600'
+        success_msg: The active rules file is on the host with mode 0600.
+
+    - name: Read the loaded filter table
+      ansible.builtin.command:
+        argv: [nft, list, table, inet, '{{ firewall_nat_sysctl_table }}']
+      register: firewall_nat_sysctl_verify_filter
+      changed_when: false
+
+    - name: Assert the loaded filter table accepts the control port and established traffic
+      ansible.builtin.assert:
+        that:
+          - "'tcp dport ' ~ firewall_nat_sysctl_control_port ~ ' accept' in firewall_nat_sysctl_verify_filter.stdout"
+          - "'ct state established,related accept' in firewall_nat_sysctl_verify_filter.stdout"
+          - "'policy drop' in firewall_nat_sysctl_verify_filter.stdout"
+        fail_msg: The loaded filter table does not carry the rules the rendered file names.
+        success_msg: The loaded filter table carries the control port rule and the drop policy.
+
+    - name: Read the loaded NAT table
+      ansible.builtin.command:
+        argv: [nft, list, table, ip, '{{ firewall_nat_sysctl_table }}_nat']
+      register: firewall_nat_sysctl_verify_nat
+      changed_when: false
+
+    - name: Assert the loaded NAT table masquerades the source out of the uplink
+      ansible.builtin.assert:
+        that:
+          - >-
+            'ip saddr ' ~ firewall_nat_sysctl_nat_source ~ ' oifname "' ~
+            firewall_nat_sysctl_uplink_interface ~ '" masquerade' in
+            firewall_nat_sysctl_verify_nat.stdout
+        fail_msg: The loaded NAT table does not masquerade the configured source out of the configured uplink.
+        success_msg: The loaded NAT table masquerades the configured source out of the configured uplink.
+
+    - name: Connect to the control port the role must keep reachable
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: '{{ firewall_nat_sysctl_control_port }}'
+        state: started
+        timeout: 5

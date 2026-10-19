@@ -1,0 +1,22 @@
+# Rendered by the role. Edit the role, never the file on the host.
+# Each table is added, deleted and defined again, so loading this file replaces
+# the whole of the table it names and never adds rules to an earlier copy.
+add table inet {{ firewall_nat_sysctl_table }}
+delete table inet {{ firewall_nat_sysctl_table }}
+table inet {{ firewall_nat_sysctl_table }} {
+    chain input {
+        type filter hook input priority 0; policy drop;
+        ct state established,related accept
+{% for port in firewall_nat_sysctl_allowed_tcp_ports %}
+        tcp dport {{ port }} accept
+{% endfor %}
+    }
+}
+add table ip {{ firewall_nat_sysctl_table }}_nat
+delete table ip {{ firewall_nat_sysctl_table }}_nat
+table ip {{ firewall_nat_sysctl_table }}_nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        ip saddr {{ firewall_nat_sysctl_nat_source }} oifname "{{ firewall_nat_sysctl_uplink_interface }}" masquerade
+    }
+}

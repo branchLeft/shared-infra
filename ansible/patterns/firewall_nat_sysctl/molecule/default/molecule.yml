@@ -1,0 +1,61 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party systemd test base on Debian 13, the release every production
+    # host runs, trusted by digest (see the role README). The digest is the
+    # pin; the tag is informational and moves weekly. The image runs systemd as
+    # PID 1, so the platform is one the author justifies here, per ANS-15.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # Destroy removes the container's anonymous volumes. This scenario's cgroup
+    # bind mount means none is created; the key guards against one if the mount
+    # is ever dropped.
+    keep_volumes: false
+    # The host cgroup namespace and the cgroup mount, the tmpfs and the command
+    # below are the same set the files_and_units pattern uses for systemd on
+    # this image. The reasons are in that role's README (the limit names the
+    # runner evidence).
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+    command: /lib/systemd/systemd
+    # NET_ADMIN is the one added capability, the netlink right the nft loader
+    # needs. Measured on 2026-10-19 with a throwaway container on Docker
+    # Desktop with NET_ADMIN added: nft checks, loads and lists a table (rc 0).
+    # Adding it does not make /proc/sys writable: the sysctl write is still
+    # denied, which is why the scenario writes the drop-in file only.
+    capabilities:
+      - NET_ADMIN
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  inventory:
+    # The values the role runs with, read by the prepare, converge and verify
+    # plays as well. Non-default values, so the verify play shows the variables
+    # reached the rendered rules, the sysctl drop-in and the rules directory.
+    group_vars:
+      all:
+        firewall_nat_sysctl_rules_dir: /etc/firewall-nat-sysctl-scenario
+        firewall_nat_sysctl_sysctl_file: /etc/sysctl.d/98-firewall-nat-sysctl-scenario.conf
+        firewall_nat_sysctl_table: scenario_firewall
+        firewall_nat_sysctl_control_port: 2222
+        firewall_nat_sysctl_allowed_tcp_ports:
+          - 2222
+        firewall_nat_sysctl_nat_source: 198.51.100.0/24
+        firewall_nat_sysctl_uplink_interface: SCENARIO_UPLINK
+verifier:
+  name: ansible

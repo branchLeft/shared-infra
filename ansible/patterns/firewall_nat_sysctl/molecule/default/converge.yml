@@ -1,0 +1,77 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # The first converge on an instance establishes a previous set, then tries
+    # a bad set on purpose, then applies the good set. The bad set does not
+    # accept the control port, so the role must roll back to the previous set.
+    # Later converges see the active file and skip the probe, so the second
+    # converge changes nothing.
+    - name: Read whether the active rules file is already on the instance
+      ansible.builtin.stat:
+        path: /etc/firewall-nat-sysctl-scenario/active.nft
+      register: converge_active
+
+    - name: Apply the good set first, so there is a previous set to roll back to
+      ansible.builtin.include_role:
+        name: branchleft.firewall_nat_sysctl
+      when: not converge_active.stat.exists
+
+    - name: Read the loaded ruleset before the bad probe
+      ansible.builtin.command:
+        argv: [nft, list, ruleset]
+      register: converge_listing_before
+      changed_when: false
+      when:
+        - not converge_active.stat.exists
+        - not ansible_check_mode
+
+    # Check mode loads nothing, so the probe is run only for real. The role's
+    # own check-mode skip is the reason (ANS-10).
+    - name: Apply a bad set that drops the control port, expecting a rollback
+      when:
+        - not converge_active.stat.exists
+        - not ansible_check_mode
+      block:
+        - name: Apply the bad set
+          ansible.builtin.include_role:
+            name: branchleft.firewall_nat_sysctl
+          vars:
+            firewall_nat_sysctl_allowed_tcp_ports: []
+
+        - name: Record that the bad set was accepted
+          ansible.builtin.set_fact:
+            converge_bad_accepted: true
+      rescue:
+        - name: Record that the role failed and the bad set was reverted
+          ansible.builtin.set_fact:
+            converge_bad_rolled_back: true
+
+    - name: Read the loaded ruleset after the bad probe
+      ansible.builtin.command:
+        argv: [nft, list, ruleset]
+      register: converge_listing_after
+      changed_when: false
+      when:
+        - not converge_active.stat.exists
+        - not ansible_check_mode
+
+    - name: Assert the bad set was rolled back and the previous ruleset is back byte for byte
+      ansible.builtin.assert:
+        that:
+          - converge_bad_accepted is not defined
+          - converge_bad_rolled_back | default(false)
+          - converge_listing_after.stdout == converge_listing_before.stdout
+        fail_msg: >-
+          The bad set was not rolled back: either it was accepted, the role did
+          not fail, or the loaded ruleset after the probe differs from the one
+          before it.
+        success_msg: The bad set was rolled back and the previous ruleset is loaded again.
+      when:
+        - not converge_active.stat.exists
+        - not ansible_check_mode
+
+    - name: Apply the role with the good set
+      ansible.builtin.include_role:
+        name: branchleft.firewall_nat_sysctl

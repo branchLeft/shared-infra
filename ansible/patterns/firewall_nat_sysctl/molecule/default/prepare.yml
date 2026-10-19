@@ -1,0 +1,37 @@
+---
+# What the role expects on a host before it runs: nftables, and a listener on
+# the control port that the connectivity check connects to. The listener is a
+# placeholder service; a real host's control port is whatever the operator
+# already runs (its SSH daemon, say).
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install nftables, the loader the role calls
+      ansible.builtin.apt:
+        name: nftables
+        state: present
+        update_cache: true
+
+    - name: Install the placeholder control-port listener unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/firewall-nat-sysctl-listener.service
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Placeholder control-port listener for the test
+
+          [Service]
+          ExecStart=/usr/bin/python3 -m http.server 2222 --bind 127.0.0.1
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Start the placeholder control-port listener
+      ansible.builtin.systemd_service:
+        name: firewall-nat-sysctl-listener.service
+        daemon_reload: true
+        enabled: true
+        state: started

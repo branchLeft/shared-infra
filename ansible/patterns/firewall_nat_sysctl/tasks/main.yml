@@ -1,0 +1,132 @@
+---
+# Forwarding is persisted in a drop-in file only. sysctl_set is false and
+# reload is false, so the module never writes /proc/sys: the container runtime
+# mounts that read-only, so the runtime write is reviewed, not tested here. The
+# first live consumer's gated run is where the runtime effect is observed.
+- name: Persist IPv4 forwarding in the sysctl drop-in
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    state: present
+    sysctl_set: false
+    sysctl_file: '{{ firewall_nat_sysctl_sysctl_file }}'
+    reload: false
+
+- name: Create the rules directory
+  ansible.builtin.file:
+    path: '{{ firewall_nat_sysctl_rules_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+# The candidate is the rendered file. It is syntax-checked on the target by
+# nft's check-only mode before anything is loaded, so an invalid file is never
+# loaded and never becomes the active file.
+- name: Render the candidate rules file
+  ansible.builtin.template:
+    src: rules.nft.j2
+    dest: '{{ firewall_nat_sysctl_rules_dir }}/candidate.nft'
+    owner: root
+    group: root
+    mode: '0600'
+    validate: nft -c -f %s
+
+- name: Read the active rules file, if one is on the host
+  ansible.builtin.stat:
+    path: '{{ firewall_nat_sysctl_rules_dir }}/active.nft'
+    checksum_algorithm: sha256
+    get_checksum: true
+  register: firewall_nat_sysctl_active
+
+- name: Read the candidate rules file
+  ansible.builtin.stat:
+    path: '{{ firewall_nat_sysctl_rules_dir }}/candidate.nft'
+    checksum_algorithm: sha256
+    get_checksum: true
+  register: firewall_nat_sysctl_candidate
+
+# The guard. The new set is loaded only when it differs from the active file,
+# so a second run loads nothing. Check mode skips the guard because it loads
+# nothing and promotes nothing; that skip is the reason on this line (ANS-10),
+# and the check-fresh step therefore proves only that the rendered file passes
+# validation.
+- name: Load the candidate ruleset behind a revert guard
+  when:
+    - not ansible_check_mode
+    - (firewall_nat_sysctl_candidate.stat.checksum | default('')) != (firewall_nat_sysctl_active.stat.checksum | default(''))
+  block:
+    - name: Keep the active rules file as the previous set
+      ansible.builtin.copy:
+        src: '{{ firewall_nat_sysctl_rules_dir }}/active.nft'
+        dest: '{{ firewall_nat_sysctl_rules_dir }}/previous.nft'
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+      when: firewall_nat_sysctl_active.stat.exists
+
+    - name: Remove any earlier previous set when there is no active set
+      ansible.builtin.file:
+        path: '{{ firewall_nat_sysctl_rules_dir }}/previous.nft'
+        state: absent
+      when: not firewall_nat_sysctl_active.stat.exists
+
+    - name: Load the candidate ruleset
+      ansible.builtin.command:
+        argv:
+          - nft
+          - -f
+          - '{{ firewall_nat_sysctl_rules_dir }}/candidate.nft'
+      changed_when: true
+
+    # The loopback connection enters the input chain, so a set that does not
+    # accept the control port refuses it here. Connecting, not listing the
+    # ruleset, is what proves the port still answers.
+    - name: Connect to the control port after the load
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: '{{ firewall_nat_sysctl_control_port }}'
+        state: started
+        timeout: 5
+
+    - name: Promote the candidate to the active rules file
+      ansible.builtin.copy:
+        src: '{{ firewall_nat_sysctl_rules_dir }}/candidate.nft'
+        dest: '{{ firewall_nat_sysctl_rules_dir }}/active.nft'
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+  rescue:
+    - name: Read whether a previous set was kept
+      ansible.builtin.stat:
+        path: '{{ firewall_nat_sysctl_rules_dir }}/previous.nft'
+      register: firewall_nat_sysctl_previous
+
+    - name: Restore the previous ruleset
+      ansible.builtin.command:
+        argv:
+          - nft
+          - -f
+          - '{{ firewall_nat_sysctl_rules_dir }}/previous.nft'
+      when: firewall_nat_sysctl_previous.stat.exists
+      changed_when: true
+
+    # With no previous set, the only state to return to is no table at all.
+    - name: Remove the tables when there was no previous set
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop:
+        - [nft, delete, table, inet, '{{ firewall_nat_sysctl_table }}']
+        - [nft, delete, table, ip, '{{ firewall_nat_sysctl_table }}_nat']
+      when: not firewall_nat_sysctl_previous.stat.exists
+      changed_when: true
+      failed_when: false
+
+    - name: Fail after the rollback
+      ansible.builtin.fail:
+        msg: >-
+          The candidate ruleset did not pass the connection check on the control
+          port, so the previous ruleset was restored and the candidate was not
+          promoted.
