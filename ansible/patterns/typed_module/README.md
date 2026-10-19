@@ -276,7 +276,15 @@ Each is proven by sabotage; the commands and results are in the pull request.
   `ansible-test sanity --test validate-modules`, which needs a collection
   layout. Reviewed, not tested.
 - **`no_log` is proven on the registered result, not on every log.** The scan
-  reads what the default callback prints for a task. It does not read the
+  reads what the default callback prints for a task. The scenario sets
+  `ANSIBLE_INJECT_INVOCATION`, because ansible-core 2.21 otherwise leaves the
+  module's arguments out of the result, and a missing `no_log` would then show
+  nothing to scan; a play run without that setting hides the arguments anyway.
+  The throwaway token is also absent from the whole harness output: save it to
+  a file and `grep -c THROWAWAY_TOKEN_VALUE` the file, which must count zero.
+  That scan is by hand. Removing `no_log: true` from the role's own task is
+  reviewed, not tested: the default callback prints no arguments for a task
+  that succeeds, so nothing in a green run shows the difference. It does not read the
   controller's log file, a higher verbosity, or the target's journal, where
   `AnsibleModule` logs its arguments with `no_log` values masked. A failure
   inside the role's own task is hidden by the task's `no_log: true`, so the

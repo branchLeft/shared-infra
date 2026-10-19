@@ -38,6 +38,12 @@ platforms:
       branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
 provisioner:
   name: ansible
+  env:
+    # ansible-core leaves the module arguments out of a task's result unless
+    # this is set. With it set, the result carries them, so the verify play
+    # can see whether the module masked the token: a token the module does not
+    # mark no_log appears there in clear.
+    ANSIBLE_INJECT_INVOCATION: 'true'
   inventory:
     # The values the role runs with, read by the converge and verify plays as
     # well. The mode and the count differ from the defaults, so the test shows
