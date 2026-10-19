@@ -1,0 +1,286 @@
+---
+# The service user, group and description come from the scenario's inventory
+# variables (molecule.yml) and the scenario's files: the same values the role
+# was converged with.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the installed program with its checksum
+      ansible.builtin.stat:
+        path: /usr/local/lib/program_and_timer/program.sh
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: program_and_timer_verify_program
+
+    # The source's checksum is read on the controller, where the source file lives,
+    # with the same algorithm as the installed file.
+    - name: Read the source program's checksum on the controller
+      ansible.builtin.stat:
+        path: '{{ playbook_dir }}/files/example_program_v2.sh'
+        checksum_algorithm: sha256
+        get_checksum: true
+      delegate_to: localhost
+      register: program_and_timer_verify_source
+
+    - name: Assert the installed program is the source file byte for byte
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_program.stat.exists
+          - program_and_timer_verify_program.stat.checksum == program_and_timer_verify_source.stat.checksum
+        fail_msg: >-
+          The installed program differs from the source file: installed
+          {{ program_and_timer_verify_program.stat.checksum | default('missing') }},
+          source {{ program_and_timer_verify_source.stat.checksum }}.
+        success_msg: The installed program is the source file byte for byte.
+
+    - name: Assert the installed program has its owner, group and mode
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_program.stat.pw_name == program_and_timer_service_user
+          - program_and_timer_verify_program.stat.gr_name == program_and_timer_service_group
+          - program_and_timer_verify_program.stat.mode == '0755'
+        fail_msg: >-
+          The installed program owner, group or mode differs:
+          {{ program_and_timer_verify_program.stat.pw_name | default('?') }}:{{ program_and_timer_verify_program.stat.gr_name | default('?') }}
+          {{ program_and_timer_verify_program.stat.mode | default('?') }}.
+        success_msg: The installed program has its owner, group and mode.
+
+    - name: Read the program directory
+      ansible.builtin.stat:
+        path: /usr/local/lib/program_and_timer
+      register: program_and_timer_verify_dir
+
+    - name: Assert the program directory has its owner, group and mode
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_dir.stat.pw_name == program_and_timer_service_user
+          - program_and_timer_verify_dir.stat.gr_name == program_and_timer_service_group
+          - program_and_timer_verify_dir.stat.mode == '0755'
+        fail_msg: The program directory owner, group or mode differs from the declared ones.
+        success_msg: The program directory has its owner, group and mode.
+
+    # What systemd did to the timer and to the manager since the converge marked
+    # the journal, read from systemd's own log of its own jobs and reloads. The
+    # role writes none of it. The marker line is the converge's.
+    - name: Find the mark the converge wrote in the journal
+      ansible.builtin.command: journalctl --identifier=program_and_timer_test --output=json --lines=1 --no-pager
+      register: program_and_timer_verify_mark
+      changed_when: false
+
+    - name: Assert the converge left its mark in the journal
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_mark.stdout | length > 0
+        fail_msg: The journal holds no mark from the converge, so nothing can be counted from it.
+        quiet: true
+
+    - name: Read what systemd logged about itself after the mark
+      ansible.builtin.command: >-
+        journalctl --after-cursor={{ (program_and_timer_verify_mark.stdout | from_json)['__CURSOR'] }}
+        --output=json --no-pager _PID=1
+      register: program_and_timer_verify_log
+      changed_when: false
+
+    - name: Count the timer's stops and starts and the manager's reloads after the mark
+      ansible.builtin.set_fact:
+        program_and_timer_verify_events: '{{ program_and_timer_verify_log.stdout_lines | map("from_json") | list }}'
+
+    # A control case for the zero-reload assertion below: the first install of
+    # the units reloaded the manager before the mark, so the message that
+    # assertion matches must appear in this boot's log. If a newer systemd
+    # worded it differently, this fails instead of the zero passing for nothing.
+    - name: Read everything systemd logged about itself since boot
+      ansible.builtin.command: journalctl --output=json --no-pager _PID=1
+      register: program_and_timer_verify_boot_log
+      changed_when: false
+
+    - name: Assert the reload message the test matches on is one this systemd logs
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_boot_reloads | int >= 1
+        fail_msg: The journal holds no manager reload message since boot, so a count of zero would prove nothing.
+        quiet: true
+      vars:
+        program_and_timer_verify_boot_events: '{{ program_and_timer_verify_boot_log.stdout_lines | map("from_json") | list }}'
+        program_and_timer_verify_boot_reloads: >-
+          {{ program_and_timer_verify_boot_events | selectattr('MESSAGE', 'equalto', 'Reloading...') | list | length }}
+
+    - name: Assert the edit restarted the timer exactly once and reloaded nothing
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_stops == 1
+          - program_and_timer_verify_starts == 1
+          - program_and_timer_verify_reloads == 0
+        fail_msg: >-
+          A program change must restart the timer exactly once and reload no unit. systemd
+          logged {{ program_and_timer_verify_stops }} stops and
+          {{ program_and_timer_verify_starts }} starts of the timer and
+          {{ program_and_timer_verify_reloads }} manager reloads after the mark.
+        success_msg: systemd logged one stop and one start of the timer and no reload for the program change.
+      vars:
+        program_and_timer_verify_timer_events: >-
+          {{ program_and_timer_verify_events | selectattr('UNIT', 'defined')
+          | selectattr('UNIT', 'equalto', 'program_and_timer_tick.timer') | list }}
+        program_and_timer_verify_stops: >-
+          {{ program_and_timer_verify_timer_events
+          | selectattr('MESSAGE_ID', 'equalto', '9d1aaa27d60140bd96365438aad20286') | list | length }}
+        program_and_timer_verify_starts: >-
+          {{ program_and_timer_verify_timer_events
+          | selectattr('MESSAGE_ID', 'equalto', '39f53479d3a045ac8e11786248231fbf') | list | length }}
+        program_and_timer_verify_reloads: >-
+          {{ program_and_timer_verify_events | selectattr('MESSAGE', 'equalto', 'Reloading...') | list | length }}
+
+    # "Nothing else": systemd logged no message about any other unit after the mark.
+    # The timer's calendar in this scenario is a time that never comes, so the
+    # timer cannot have started the oneshot service; a job for the service, or for
+    # any unit, was started by something the role (or the test) did. The units the
+    # base image's own daily timers run are named below, because one of them may
+    # legitimately fire in the window.
+    - name: Assert systemd logged nothing about any other unit
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_other_units | length == 0
+        fail_msg: >-
+          systemd logged messages about units other than the timer after the mark:
+          {{ program_and_timer_verify_other_units | unique | join(', ') }}.
+        success_msg: systemd logged no message about any unit but the timer after the mark.
+      vars:
+        program_and_timer_verify_image_units:
+          - apt-daily.service
+          - apt-daily-upgrade.service
+          - dpkg-db-backup.service
+          - man-db.service
+          - systemd-tmpfiles-clean.service
+        program_and_timer_verify_other_units: >-
+          {{ program_and_timer_verify_events | selectattr('UNIT', 'defined')
+          | map(attribute='UNIT') | reject('equalto', 'program_and_timer_tick.timer')
+          | reject('in', program_and_timer_verify_image_units) | list }}
+
+    - name: Read each unit file
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /etc/systemd/system/program_and_timer_tick.service
+        - /etc/systemd/system/program_and_timer_tick.timer
+      register: program_and_timer_verify_units
+
+    - name: Assert every unit file exists with its owner, group and mode
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == '0644'
+        success_msg: The unit file was delivered with its owner, group and mode.
+      loop: '{{ program_and_timer_verify_units.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Ask systemd for the timer's state
+      ansible.builtin.systemd_service:
+        name: program_and_timer_tick.timer
+      register: program_and_timer_verify_timer
+
+    - name: Assert the timer is enabled and active with the rendered description
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_timer.status.UnitFileState == 'enabled'
+          - program_and_timer_verify_timer.status.ActiveState == 'active'
+          - program_and_timer_verify_timer.status.Description == program_and_timer_unit_description
+          - program_and_timer_verify_timer.status.NeedDaemonReload == 'no'
+          - program_and_timer_verify_timer.status.InvocationID == program_and_timer_verify_last_start.INVOCATION_ID
+        success_msg: The timer is enabled and active with the rendered unit file loaded, and it is the invocation systemd logged last.
+      vars:
+        program_and_timer_verify_last_start: >-
+          {{ program_and_timer_verify_events | selectattr('UNIT', 'defined')
+          | selectattr('UNIT', 'equalto', 'program_and_timer_tick.timer')
+          | selectattr('MESSAGE_ID', 'equalto', '39f53479d3a045ac8e11786248231fbf') | list | last }}
+
+    - name: Ask systemd for the oneshot service's state
+      ansible.builtin.systemd_service:
+        name: program_and_timer_tick.service
+      register: program_and_timer_verify_service
+
+    # The unit runs the program as the user that owns it. A program owned by the
+    # service user and run by root is a way for that user to run commands as root.
+    - name: Assert systemd runs the program as the service user
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_service.status.User | default('') == program_and_timer_service_user
+          - program_and_timer_verify_service.status.Group | default('') == program_and_timer_service_group
+          - program_and_timer_verify_service.status.ExecStart is search('/usr/local/lib/program_and_timer/program.sh')
+        fail_msg: The unit does not run the program as the user and group that own it.
+        success_msg: systemd runs the program as the service user and group.
+
+    # A timer stopped by hand, with no program or unit change, must be started by
+    # the role. The restart handler does not run when nothing changed, so only the
+    # start in the enable task can bring the timer back.
+    - name: Stop the timer, as an operator might
+      ansible.builtin.systemd_service:
+        name: program_and_timer_tick.timer
+        state: stopped
+
+    - name: Apply the role again with nothing changed
+      ansible.builtin.include_role:
+        name: branchleft.program_and_timer
+      vars:
+        program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.sh'
+
+    - name: Ask systemd for the timer's state after the role ran
+      ansible.builtin.systemd_service:
+        name: program_and_timer_tick.timer
+      register: program_and_timer_verify_restarted
+
+    - name: Assert the role started the timer that was stopped
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_restarted.status.ActiveState == 'active'
+          - program_and_timer_verify_restarted.status.UnitFileState == 'enabled'
+        fail_msg: The role left a stopped timer stopped.
+        success_msg: The role started the stopped timer without a program or unit change.
+
+    # The root default: no service user declared. The scenario's own variables
+    # declare one, so this phase overrides them with empty values and a second
+    # directory, applies the role, and reads the result. The last phase applies
+    # the scenario's own variables again so the instance ends as it was converged.
+    - name: Apply the role with no service user, into a second directory
+      ansible.builtin.include_role:
+        name: branchleft.program_and_timer
+      vars:
+        program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.sh'
+        program_and_timer_program_dir: /usr/local/lib/program_and_timer_root
+        program_and_timer_service_user: ''
+        program_and_timer_service_group: ''
+
+    - name: Read the root-owned program and directory
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /usr/local/lib/program_and_timer_root
+        - /usr/local/lib/program_and_timer_root/program.sh
+      register: program_and_timer_verify_root
+
+    - name: Ask systemd for the oneshot service of the root default
+      ansible.builtin.systemd_service:
+        name: program_and_timer_tick.service
+      register: program_and_timer_verify_root_service
+
+    - name: Assert the root default owns the files and the unit runs as root
+      ansible.builtin.assert:
+        that:
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - program_and_timer_verify_root_service.status.User | default('') == ''
+          - program_and_timer_verify_root_service.status.ExecStart is search('/usr/local/lib/program_and_timer_root/program.sh')
+        fail_msg: With no service user, the program, its directory or the unit is not root's.
+        success_msg: With no service user the program and its directory are root's and the unit has no User=.
+      loop: '{{ program_and_timer_verify_root.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Apply the role with the scenario's own variables again
+      ansible.builtin.include_role:
+        name: branchleft.program_and_timer
+      vars:
+        program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.sh'

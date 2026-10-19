@@ -1,0 +1,200 @@
+---
+# The inputs are refused before any task changes anything, and no message names a
+# value: the options are not secrets, but the rule is that a refusal never echoes
+# what it refused. The argument spec has already run; it coerces a wrong type
+# rather than rejecting it, so the first assertion rejects it.
+- name: Refuse an option that is not a string
+  ansible.builtin.assert:
+    that:
+      - program_and_timer_program_src is string
+      - program_and_timer_program_dir is string
+      - program_and_timer_program_name is string
+      - program_and_timer_service_user is string
+      - program_and_timer_service_group is string
+      - program_and_timer_unit_description is string
+      - program_and_timer_tick_calendar is string
+    fail_msg: 'program_and_timer refused its input (rule: types): every option must be a string.'
+    quiet: true
+
+- name: Refuse an empty program source
+  ansible.builtin.assert:
+    that:
+      - program_and_timer_program_src | length > 0
+    fail_msg: 'program_and_timer refused its input (rule: source): the program source must not be empty.'
+    quiet: true
+
+- name: Refuse a program directory that is not an absolute, normalised path
+  ansible.builtin.assert:
+    that:
+      - program_and_timer_program_dir is match(program_and_timer_dir_pattern)
+      - program_and_timer_program_dir is not search('(^|/)[.][.]?(/|$)')
+    fail_msg: >-
+      program_and_timer refused its input (rule: directory shape): the program directory
+      must be an absolute path of plain characters, with no . or .. component and no
+      trailing slash.
+    quiet: true
+
+- name: Refuse a program directory that is a system or top-level directory
+  ansible.builtin.assert:
+    that:
+      - program_and_timer_program_dir.count('/') >= 2
+      - program_and_timer_program_dir not in program_and_timer_shared_dirs
+    fail_msg: >-
+      program_and_timer refused its input (rule: dedicated directory): the program
+      directory is changed to the service user's ownership, so it must be a directory
+      made for this program, at least two components deep and not a system directory.
+    quiet: true
+
+- name: Refuse a program name that is not one file name
+  ansible.builtin.assert:
+    that:
+      - program_and_timer_program_name is match(program_and_timer_name_pattern)
+    fail_msg: >-
+      program_and_timer refused its input (rule: program name): the program name must be
+      one file name with no path separator.
+    quiet: true
+
+- name: Refuse a service user without a service group, or the reverse
+  ansible.builtin.assert:
+    that:
+      - (program_and_timer_service_user | length == 0) == (program_and_timer_service_group | length == 0)
+      - program_and_timer_service_user is match(program_and_timer_identity_pattern)
+      - program_and_timer_service_group is match(program_and_timer_identity_pattern)
+    fail_msg: >-
+      program_and_timer refused its input (rule: service identity): the service user and
+      the service group are declared together, each a plain name, or both left empty.
+    quiet: true
+
+# The directory must be the role's own before the role takes it over. "Dedicated"
+# is checked on the host, not assumed from the name: the path must be real (no
+# link in it), and a directory that already exists must hold nothing but the
+# program and must belong to root or to the declared user. These reads change
+# nothing, so they run in check mode too (ANS-10).
+- name: Read the real path of the program directory
+  ansible.builtin.command:
+    argv:
+      - realpath
+      - -m
+      - --
+      - '{{ program_and_timer_program_dir }}'
+  register: program_and_timer_realpath
+  changed_when: false
+  check_mode: false
+
+- name: Refuse a program directory with a link in its path
+  ansible.builtin.assert:
+    that:
+      - program_and_timer_realpath.stdout == program_and_timer_program_dir
+    fail_msg: >-
+      program_and_timer refused its input (rule: real path): the program directory
+      must be its own real path, with no symbolic link in it, so that taking it over
+      cannot reach another directory.
+    quiet: true
+
+- name: Read the program directory without following a link
+  ansible.builtin.stat:
+    path: '{{ program_and_timer_program_dir }}'
+    follow: false
+  register: program_and_timer_dir_state
+
+- name: List what an existing program directory holds
+  ansible.builtin.find:
+    paths: '{{ program_and_timer_program_dir }}'
+    hidden: true
+    file_type: any
+    patterns: '*'
+    follow: false
+  register: program_and_timer_dir_content
+  when: program_and_timer_dir_state.stat.exists and program_and_timer_dir_state.stat.isdir
+
+- name: Refuse an existing path that is not a directory holding only the program
+  ansible.builtin.assert:
+    that:
+      - not program_and_timer_dir_state.stat.exists or program_and_timer_dir_state.stat.isdir
+      - >-
+        program_and_timer_dir_content.files | default([]) | map(attribute='path')
+        | map('basename') | difference([program_and_timer_program_name]) | length == 0
+    fail_msg: >-
+      program_and_timer refused its input (rule: foreign content): the program directory
+      already exists and is not a directory that holds only the program, so it is not
+      dedicated to it.
+    quiet: true
+
+- name: Refuse an existing directory that belongs to someone else
+  ansible.builtin.assert:
+    that:
+      - >-
+        not program_and_timer_dir_state.stat.exists or
+        (program_and_timer_dir_state.stat.pw_name | default('')) in
+        ['root', program_and_timer_service_user | default('root', true)]
+      - >-
+        not program_and_timer_dir_state.stat.exists or
+        (program_and_timer_dir_state.stat.gr_name | default('')) in
+        ['root', program_and_timer_service_group | default('root', true)]
+    fail_msg: >-
+      program_and_timer refused its input (rule: foreign owner): the program directory
+      already exists and belongs to neither root nor the declared service user and
+      group, so it is not the role's to take over.
+    quiet: true
+
+# Past the checks the directory is absent, or empty or holding only the program,
+# and owned by root or by the declared user: it is the role's own, and taking over
+# its owner, group and mode changes nothing another service uses. Any missing
+# parent directory is created with the same owner.
+- name: Create the directory the program is installed into
+  ansible.builtin.file:
+    path: '{{ program_and_timer_program_dir }}'
+    state: directory
+    owner: '{{ program_and_timer_service_user | default("root", true) }}'
+    group: '{{ program_and_timer_service_group | default("root", true) }}'
+    mode: '0755'
+
+# The source is copied to a temporary file, the validator runs on that copy, and
+# only a copy that passes replaces the installed program. A program that fails
+# its check is never installed, the task fails, and the previous program stays.
+- name: Install the program after its own check passes
+  ansible.builtin.copy:
+    src: '{{ program_and_timer_program_src }}'
+    dest: '{{ program_and_timer_program_path }}'
+    owner: '{{ program_and_timer_service_user | default("root", true) }}'
+    group: '{{ program_and_timer_service_group | default("root", true) }}'
+    mode: '0755'
+    validate: /bin/sh %s --check
+  notify: Restart the program timer
+
+- name: Render the timer's oneshot service unit
+  ansible.builtin.template:
+    src: tick.service.j2
+    dest: /etc/systemd/system/program_and_timer_tick.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
+- name: Render the timer unit
+  ansible.builtin.template:
+    src: tick.timer.j2
+    dest: /etc/systemd/system/program_and_timer_tick.timer
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
+# Queued handlers run here, before the timer is enabled, so the enable below
+# starts the timer with the unit file as it now is on disk.
+- name: Load queued unit changes and restart the timer before it is enabled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no unit file, so on a fresh host there is nothing for
+# systemd to enable. The stat runs in check mode as it does in a real run.
+- name: Read back the timer unit file
+  ansible.builtin.stat:
+    path: /etc/systemd/system/program_and_timer_tick.timer
+  register: program_and_timer_timer_unit
+
+- name: Enable and start the timer
+  ansible.builtin.systemd_service:
+    name: program_and_timer_tick.timer
+    enabled: true
+    state: started
+  when: program_and_timer_timer_unit.stat.exists
