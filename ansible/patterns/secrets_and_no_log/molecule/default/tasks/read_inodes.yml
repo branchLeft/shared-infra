@@ -4,6 +4,8 @@
 - name: Read each secret file
   ansible.builtin.stat:
     path: '{{ scenario_directory }}/{{ item }}'
+    # Only the inode is read. The default digest of a secret file is not printed.
+    get_checksum: false
   loop: '{{ verify_file_names }}'
   register: read_inodes_stat
 

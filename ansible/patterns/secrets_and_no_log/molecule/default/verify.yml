@@ -506,6 +506,7 @@
     - name: Read the file the failed write left
       ansible.builtin.stat:
         path: '{{ scenario_directory }}/EXAMPLE_WINDOW'
+        get_checksum: false
       register: verify_window_stat
 
     - name: Try to read that file as an account that is not the owner

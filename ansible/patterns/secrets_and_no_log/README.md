@@ -83,6 +83,15 @@ the interface, so an inventory cannot loosen them.
 | `secrets_and_no_log_env_name`  | empty                          | The name of one environment file inside the directory; empty writes none  |
 | `secrets_and_no_log_secrets`   | `[]`                           | The list of secrets: `name`, and exactly one of `value` and `source_file` |
 
+`secrets_and_no_log_secrets` is the secret variable (ANS-14): each entry's `value`
+is a secret and must never be written in a file, a default or a log. Its
+`source_file` is a path, not a secret, but the file it names holds one. A secret
+is given as a `source_file` (a root-only file on the host) where the source can
+be one, and as a `value` only where a consumer needs it in the play. The
+environment file (`secrets_and_no_log_env_name`) is the second choice (CRED-10):
+use it only for a program that can read its secrets from the environment and not
+from a file. One file per secret is the first choice.
+
 The role leaves two facts for the play after it: `secrets_and_no_log_changed`,
 the paths of the files it replaced, and `secrets_and_no_log_notified`, true when
 any file was replaced. Neither holds a value.
@@ -182,9 +191,15 @@ after it names that number and the rule, never a name, a path or a value.
 - `content` and `remote_src` are the two forms. `content` carries the text through
   a variable, so every task that handles it has `no_log`. `remote_src: true` with
   `src` copies on the host, so the loop items hold a path. The task keeps
-  `no_log: true` anyway, so the rule has no exception to remember.
+  `no_log: true` anyway, so the rule has no exception to remember. The copy's
+  result still holds the SHA-1 and MD5 of the delivered file, which is a digest of
+  the secret; `no_log` is what keeps that result out of the log (see "What the test
+  shows about logs").
 - The source file is checked first, and must be a plain file (not a link), owned
-  by root, with no group or other permission. A copy keeps the mode of its source
+  by root, with no group or other permission. Its `stat` asks for no digest
+  (`get_checksum: false`): the default SHA-1 of a secret would be printed by the
+  assertion that refuses a bad source, and the register is emptied in the always
+  section like the write registers. A copy keeps the mode of its source
   until the role sets the final mode, so a source that others could read would
   make the delivered file readable for a moment, in the one case the directory
   does not cover.
@@ -488,6 +503,27 @@ unedited fresh role were green too.
   host prints only that the output is hidden. The role's own checks come first and
   print the rule and the entry number; for the rest, reproduce on a lab host with a
   throwaway value. Do not turn `no_log` off on a real host.
+- **A value given as plain text is read as a template when it holds a template
+  marker.** Ansible evaluates `{{ ... }}` and `{# ... #}` in a play's own text, so a
+  value of `a{{ 1 + 1 }}b` is delivered as `a2b`, and a value with a broken marker
+  fails in the argument check, which prints the line of the file that holds it. A
+  value from a `file` lookup, an encrypted vault variable or one marked `!unsafe`
+  is delivered literally. The role does not refuse a marker in a value, so a secret
+  that holds one must come as a `source_file` or from a lookup. Not tested for every
+  shape.
+- **An environment file named like a secret overwrites that secret's file, and
+  is not idempotent.** `secrets_and_no_log_env_name` equal to a secret's name is not
+  refused. The environment file replaces the secret's file, and the role reports a
+  change on every run. Give the environment file a name no secret uses.
+- **An empty source file is delivered as an empty secret.** A `value` of the empty
+  string is refused, but a `source_file` that is empty is copied, and the consumer
+  gets an empty secret with no error. The role does not check the content of a
+  source file.
+- **The parent directories of a source file are not checked.** Only the final
+  component (a plain file, not a link, owned by root, mode with no group or other
+  bit) is checked. A link in a parent directory that another account can write to
+  could redirect the path to another root-only file, and the check and the copy are
+  not atomic. The owner's source paths must sit in directories only root writes.
 - **A retired secret is not removed.** The role writes the files it is given and
   removes none. A secret that is no longer declared stays on the host until a
   deliberate removal change.
