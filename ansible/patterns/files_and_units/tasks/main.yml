@@ -1,0 +1,67 @@
+---
+- name: Install the configuration file
+  ansible.builtin.copy:
+    src: example.json
+    dest: '{{ files_and_units_config_path }}'
+    owner: '{{ files_and_units_config_owner }}'
+    group: '{{ files_and_units_config_group }}'
+    mode: '0640'
+    validate: python3 -m json.tool %s
+
+- name: Render the service unit
+  ansible.builtin.template:
+    src: service.unit.j2
+    dest: /etc/systemd/system/files_and_units_svc.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
+- name: Render the timer's service unit
+  ansible.builtin.template:
+    src: tick.service.j2
+    dest: /etc/systemd/system/files_and_units_tick.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
+- name: Render the timer unit
+  ansible.builtin.template:
+    src: tick.timer.j2
+    dest: /etc/systemd/system/files_and_units_tick.timer
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
+- name: Load queued unit changes before any unit is started
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no unit file, so on a fresh host systemd cannot know the
+# unit and the enable and start below would fail. The stat module runs in check
+# mode as it does in a real run, so the enable and start run whenever the unit
+# file is really on disk.
+- name: Read back the service unit file
+  ansible.builtin.stat:
+    path: /etc/systemd/system/files_and_units_svc.service
+  register: files_and_units_svc_unit
+
+- name: Read back the timer unit file
+  ansible.builtin.stat:
+    path: /etc/systemd/system/files_and_units_tick.timer
+  register: files_and_units_timer_unit
+
+- name: Enable and start the service
+  ansible.builtin.systemd_service:
+    name: files_and_units_svc.service
+    enabled: true
+    state: started
+  when: files_and_units_svc_unit.stat.exists
+
+- name: Enable and start the timer
+  ansible.builtin.systemd_service:
+    name: files_and_units_tick.timer
+    enabled: true
+    state: started
+  when: files_and_units_timer_unit.stat.exists

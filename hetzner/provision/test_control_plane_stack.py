@@ -15,11 +15,29 @@ if sys.version_info < (3, 10):
         f"{sys.version.split()[0]}. On macOS, `/usr/bin/python3` is the system 3.9."
     )
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import stack_keys_check  # noqa: E402  (needs the path above when run by file)
+
 HETZNER = pathlib.Path(__file__).resolve().parent.parent
 REPOSITORY = HETZNER.parent
 COMPOSE = HETZNER / "control-plane" / "stack" / "compose.yml"
 SITES = REPOSITORY / "sites.ts"
 PG_HBA = HETZNER / "control-plane" / "stack" / "pg_hba.conf"
+INIT_OVERLAY = HETZNER / "control-plane" / "stack" / "compose.init.yml"
+UNIT = HETZNER / "provision" / "branchleft-compose@.service"
+FIXTURE = HETZNER / "provision" / "fixtures" / "stack-keys-quoted-env-file.yml"
+
+# Every reference to the database administrator's credential: the Zitadel
+# variables that carry it and the env-file variable it is read from.
+ADMIN_REFERENCE = re.compile(r"POSTGRES_ADMIN|DB_ADMIN")
+ADMIN_PASSWORD_VARIABLE = "CONTROL_PLANE_DB_ADMIN_PASSWORD"
+
+# The names `docker compose` reads from a directory when no -f is given.
+COMPOSE_DEFAULT_FILES = frozenset(
+    f"{base}{suffix}"
+    for base in ("compose", "docker-compose")
+    for suffix in (".yaml", ".yml", ".override.yaml", ".override.yml")
+)
 
 OPS1_PRIVATE_IP = "10.20.1.50"
 
@@ -299,6 +317,88 @@ class ControlPlaneStackTests(unittest.TestCase):
 
     def test_the_hba_file_carries_no_secret(self):
         self.assertNotRegex(PG_HBA.read_text(encoding="utf-8"), r"(?i)password\s*[:=]")
+
+    def test_the_runtime_sign_in_service_holds_no_administrator_credential(self):
+        block = service_blocks(compose_text())["zitadel"]
+        self.assertTrue(block, "the parser found no lines for the sign-in service")
+        for line in block:
+            with self.subTest(line=line.strip()):
+                self.assertNotRegex(line, ADMIN_REFERENCE)
+                self.assertNotRegex(line, r"USERNAME:\s*postgres\s*\Z")
+        joined = "\n".join(block)
+        self.assertIn("ZITADEL_DATABASE_POSTGRES_USER_USERNAME: zitadel", joined)
+        self.assertIn("ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: ${CONTROL_PLANE_ZITADEL_DB_PASSWORD:?", joined)
+
+    def test_the_administrator_password_is_given_to_the_database_service_alone(self):
+        text = compose_text()
+        blocks = service_blocks(text)
+        for name, block in blocks.items():
+            holders = [line for line in block if ADMIN_PASSWORD_VARIABLE in line]
+            with self.subTest(service=name):
+                self.assertEqual(len(holders), 1 if name == "db" else 0, holders)
+        self.assertEqual(
+            sum(ADMIN_PASSWORD_VARIABLE in line for line in code_lines(text)),
+            1,
+            "the administrator's password variable is read somewhere other than the db service",
+        )
+
+    def test_the_stack_files_hold_no_file_pulling_key_and_no_unlisted_service_key(self):
+        """Checked on parsed YAML: a quoted, flow, anchored or merged key is the same key to Compose."""
+        for path in (COMPOSE, INIT_OVERLAY):
+            with self.subTest(file=path.name):
+                problems = stack_keys_check.check_file(path)
+                self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_structural_check_still_rejects_a_quoted_env_file(self):
+        """The control case: if the check stopped matching, the test above would pass silently."""
+        problems = stack_keys_check.check_file(FIXTURE)
+        self.assertTrue(
+            any("'env_file' pulls another file in" in problem for problem in problems),
+            f"the quoted-key fixture was not rejected: {problems}",
+        )
+
+    def test_the_runtime_command_runs_the_setup_phase_and_never_the_init_phase(self):
+        block = service_blocks(compose_text())["zitadel"]
+        commands = [line for line in block if line.startswith("    command:")]
+        self.assertEqual(len(commands), 1, commands)
+        self.assertRegex(commands[0], r"\A    command: start-from-setup\s")
+        self.assertNotRegex(commands[0], r"start-from-init|command:\s*init\b")
+
+    def test_the_init_overlay_is_init_only_and_the_only_file_with_the_administrator_credential(self):
+        text = INIT_OVERLAY.read_text(encoding="utf-8")
+        blocks = service_blocks(text)
+        self.assertEqual(set(blocks), {"zitadel"})
+        block = blocks["zitadel"]
+        self.assertEqual([line for line in block if line.startswith("    command:")], ["    command: init"])
+        self.assertIn("      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: postgres", block)
+        self.assertTrue(
+            any(
+                line.startswith("      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${CONTROL_PLANE_DB_ADMIN_PASSWORD:?")
+                for line in block
+            ),
+            "the overlay must read the administrator password from the env file, required",
+        )
+        self.assertIn("    restart: 'no'", block)
+        for line in block:
+            with self.subTest(line=line.strip()):
+                self.assertNotRegex(line, r"\A    (ports|profiles|depends_on|image|secrets):")
+        self.assertNotRegex(text, r"(?m)^[^#\n]*\bstart(-from-\w+)?\b")
+
+    def test_nothing_in_the_stack_directory_is_read_by_default_except_compose_yml(self):
+        self.assertNotIn(INIT_OVERLAY.name, COMPOSE_DEFAULT_FILES)
+        present = {path.name for path in COMPOSE.parent.iterdir()}
+        self.assertEqual(present & COMPOSE_DEFAULT_FILES, {COMPOSE.name}, present)
+
+    def test_the_unit_never_reads_the_init_overlay(self):
+        unit = UNIT.read_text(encoding="utf-8")
+        executed = [
+            line for line in unit.splitlines() if line.startswith(("ExecStart", "ExecStartPre", "Environment"))
+        ]
+        self.assertTrue(executed)
+        for line in executed:
+            with self.subTest(line=line):
+                self.assertNotRegex(line, r"compose\.init|COMPOSE_FILE|\s-f\s|--file")
+        self.assertNotIn("COMPOSE_FILE", compose_text())
 
 
 if __name__ == "__main__":
