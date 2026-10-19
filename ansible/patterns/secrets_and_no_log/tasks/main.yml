@@ -198,10 +198,13 @@
 
     # Reads the registered results, whose items hold the values. The environment
     # file's result is one more entry in the list; a skipped task's result says
-    # it did not change.
+    # it did not change. The path is built from the name, not read from the result:
+    # in check mode the result for a file that does not exist yet has no dest.
     - name: Record the paths of the secret files that changed
       ansible.builtin.set_fact:
-        secrets_and_no_log_changed: '{{ secrets_and_no_log_changed + [item.dest] }}'
+        secrets_and_no_log_changed: >-
+          {{ secrets_and_no_log_changed + [secrets_and_no_log_directory ~ '/' ~
+          (item['item']['name'] if 'item' in item else secrets_and_no_log_env_name)] }}
       loop: >-
         {{ ((secrets_and_no_log_written.results | default([])) + (secrets_and_no_log_copied.results | default([]))
         + [secrets_and_no_log_env | default({})]) | selectattr('changed', 'defined') | selectattr('changed') | list }}

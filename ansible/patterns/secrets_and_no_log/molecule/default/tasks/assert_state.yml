@@ -2,13 +2,25 @@
 # Requires state_file_value, state_env_value and state_host_value: the values
 # the three secrets must hold on the host. Nothing here prints a value: the
 # files are compared by checksum, and a comparison that fails names the file.
+# The environment file is exactly one line for each secret given as a value. A
+# backslash-n in a folded YAML scalar is not a line break, so the line break is
+# built from its code point.
+- name: Work out the text the environment file must hold
+  ansible.builtin.set_fact:
+    state_env_text: >-
+      {{ 'EXAMPLE_FILE_SECRET=' ~ state_file_value ~ ('%c' | format(10))
+      ~ 'EXAMPLE_ENV_SECRET=' ~ state_env_value ~ ('%c' | format(10)) }}
+  no_log: true
+
+# A key of a mapping written in YAML is not templated, so the environment file's
+# name goes in through a Jinja mapping.
 - name: Work out the checksum each file must have
   ansible.builtin.set_fact:
-    state_checksums:
-      EXAMPLE_FILE_SECRET: "{{ state_file_value | hash('sha1') }}"
-      EXAMPLE_ENV_SECRET: "{{ state_env_value | hash('sha1') }}"
-      EXAMPLE_HOST_SECRET: "{{ state_host_value | hash('sha1') }}"
-      '{{ scenario_env_name }}': "{{ ('EXAMPLE_FILE_SECRET=' ~ state_file_value ~ '\nEXAMPLE_ENV_SECRET=' ~ state_env_value ~ '\n') | hash('sha1') }}"
+    state_checksums: >-
+      {{ {'EXAMPLE_FILE_SECRET': state_file_value | hash('sha1'),
+      'EXAMPLE_ENV_SECRET': state_env_value | hash('sha1'),
+      'EXAMPLE_HOST_SECRET': state_host_value | hash('sha1'),
+      scenario_env_name: state_env_text | hash('sha1')} }}
   no_log: true
 
 - name: Read the secrets directory
