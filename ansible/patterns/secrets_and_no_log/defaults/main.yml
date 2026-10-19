@@ -1,0 +1,8 @@
+---
+# No secret is ever a default (ANS-16). The list is empty, so a run that was
+# given nothing delivers nothing. A test fails if this file holds a value.
+secrets_and_no_log_directory: /etc/example-service/secrets
+secrets_and_no_log_owner: root
+secrets_and_no_log_group: root
+secrets_and_no_log_env_name: ''
+secrets_and_no_log_secrets: []
