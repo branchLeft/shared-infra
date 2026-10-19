@@ -1,7 +1,7 @@
 ---
-# The owner, group, description and the checksum source come from the scenario's
-# inventory variables (molecule.yml) and the scenario's files: the same values
-# the role was converged with.
+# The service user, group and description come from the scenario's inventory
+# variables (molecule.yml) and the scenario's files: the same values the role
+# was converged with.
 - name: Verify
   hosts: all
   gather_facts: false
@@ -37,8 +37,8 @@
     - name: Assert the installed program has its owner, group and mode
       ansible.builtin.assert:
         that:
-          - program_and_timer_verify_program.stat.pw_name == program_and_timer_program_owner
-          - program_and_timer_verify_program.stat.gr_name == program_and_timer_program_group
+          - program_and_timer_verify_program.stat.pw_name == program_and_timer_service_user
+          - program_and_timer_verify_program.stat.gr_name == program_and_timer_service_group
           - program_and_timer_verify_program.stat.mode == '0755'
         fail_msg: >-
           The installed program owner, group or mode differs:
@@ -46,24 +46,70 @@
           {{ program_and_timer_verify_program.stat.mode | default('?') }}.
         success_msg: The installed program has its owner, group and mode.
 
-    - name: Count the restart and daemon-reload records the edit left
-      ansible.builtin.find:
-        paths: /var/lib/program_and_timer/events
-        patterns:
-          - restart-*
-          - reload-*
-      register: program_and_timer_verify_records
+    - name: Read the program directory
+      ansible.builtin.stat:
+        path: /usr/local/lib/program_and_timer
+      register: program_and_timer_verify_dir
 
-    - name: Assert the edit caused exactly one restart and no daemon reload
+    - name: Assert the program directory has its owner, group and mode
       ansible.builtin.assert:
         that:
-          - program_and_timer_verify_records.files | selectattr('path', 'search', '/restart-') | list | length == 1
-          - program_and_timer_verify_records.files | selectattr('path', 'search', '/reload-') | list | length == 0
+          - program_and_timer_verify_dir.stat.pw_name == program_and_timer_service_user
+          - program_and_timer_verify_dir.stat.gr_name == program_and_timer_service_group
+          - program_and_timer_verify_dir.stat.mode == '0755'
+        fail_msg: The program directory owner, group or mode differs from the declared ones.
+        success_msg: The program directory has its owner, group and mode.
+
+    # What systemd did to the timer and to the manager since the converge marked
+    # the journal, read from systemd's own log of its own jobs and reloads. The
+    # role writes none of it. The marker line is the converge's.
+    - name: Find the mark the converge wrote in the journal
+      ansible.builtin.command: journalctl --identifier=program_and_timer_test --output=json --lines=1 --no-pager
+      register: program_and_timer_verify_mark
+      changed_when: false
+
+    - name: Assert the converge left its mark in the journal
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_mark.stdout | length > 0
+        fail_msg: The journal holds no mark from the converge, so nothing can be counted from it.
+        quiet: true
+
+    - name: Read what systemd logged about itself after the mark
+      ansible.builtin.command: >-
+        journalctl --after-cursor={{ (program_and_timer_verify_mark.stdout | from_json)['__CURSOR'] }}
+        --output=json --no-pager _PID=1
+      register: program_and_timer_verify_log
+      changed_when: false
+
+    - name: Count the timer's stops and starts and the manager's reloads after the mark
+      ansible.builtin.set_fact:
+        program_and_timer_verify_events: '{{ program_and_timer_verify_log.stdout_lines | map("from_json") | list }}'
+
+    - name: Assert the edit restarted the timer exactly once and reloaded nothing
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_stops == 1
+          - program_and_timer_verify_starts == 1
+          - program_and_timer_verify_reloads == 0
         fail_msg: >-
-          A program change must restart the timer exactly once and reload no unit. Found
-          restarts {{ program_and_timer_verify_records.files | selectattr('path', 'search', '/restart-') | list | length }},
-          reloads {{ program_and_timer_verify_records.files | selectattr('path', 'search', '/reload-') | list | length }}.
-        success_msg: The program change restarted the timer once and reloaded no unit.
+          A program change must restart the timer exactly once and reload no unit. systemd
+          logged {{ program_and_timer_verify_stops }} stops and
+          {{ program_and_timer_verify_starts }} starts of the timer and
+          {{ program_and_timer_verify_reloads }} manager reloads after the mark.
+        success_msg: systemd logged one stop and one start of the timer and no reload for the program change.
+      vars:
+        program_and_timer_verify_timer_events: >-
+          {{ program_and_timer_verify_events | selectattr('UNIT', 'defined')
+          | selectattr('UNIT', 'equalto', 'program_and_timer_tick.timer') | list }}
+        program_and_timer_verify_stops: >-
+          {{ program_and_timer_verify_timer_events
+          | selectattr('MESSAGE_ID', 'equalto', '9d1aaa27d60140bd96365438aad20286') | list | length }}
+        program_and_timer_verify_starts: >-
+          {{ program_and_timer_verify_timer_events
+          | selectattr('MESSAGE_ID', 'equalto', '39f53479d3a045ac8e11786248231fbf') | list | length }}
+        program_and_timer_verify_reloads: >-
+          {{ program_and_timer_verify_events | selectattr('MESSAGE', 'equalto', 'Reloading...') | list | length }}
 
     - name: Read each unit file
       ansible.builtin.stat:
@@ -96,4 +142,54 @@
           - program_and_timer_verify_timer.status.UnitFileState == 'enabled'
           - program_and_timer_verify_timer.status.ActiveState == 'active'
           - program_and_timer_verify_timer.status.Description == program_and_timer_unit_description
-        success_msg: The timer is enabled and active with the rendered unit file loaded.
+          - program_and_timer_verify_timer.status.NeedDaemonReload == 'no'
+          - program_and_timer_verify_timer.status.InvocationID == program_and_timer_verify_last_start.INVOCATION_ID
+        success_msg: The timer is enabled and active with the rendered unit file loaded, and it is the invocation systemd logged last.
+      vars:
+        program_and_timer_verify_last_start: >-
+          {{ program_and_timer_verify_events | selectattr('UNIT', 'defined')
+          | selectattr('UNIT', 'equalto', 'program_and_timer_tick.timer')
+          | selectattr('MESSAGE_ID', 'equalto', '39f53479d3a045ac8e11786248231fbf') | list | last }}
+
+    - name: Ask systemd for the oneshot service's state
+      ansible.builtin.systemd_service:
+        name: program_and_timer_tick.service
+      register: program_and_timer_verify_service
+
+    # The unit runs the program as the user that owns it. A program owned by the
+    # service user and run by root is a way for that user to run commands as root.
+    - name: Assert systemd runs the program as the service user
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_service.status.User == program_and_timer_service_user
+          - program_and_timer_verify_service.status.Group == program_and_timer_service_group
+          - program_and_timer_verify_service.status.ExecStart is search('/usr/local/lib/program_and_timer/program.sh')
+        fail_msg: The unit does not run the program as the user and group that own it.
+        success_msg: systemd runs the program as the service user and group.
+
+    # A timer stopped by hand, with no program or unit change, must be started by
+    # the role. The restart handler does not run when nothing changed, so only the
+    # start in the enable task can bring the timer back.
+    - name: Stop the timer, as an operator might
+      ansible.builtin.systemd_service:
+        name: program_and_timer_tick.timer
+        state: stopped
+
+    - name: Apply the role again with nothing changed
+      ansible.builtin.include_role:
+        name: branchleft.program_and_timer
+      vars:
+        program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.sh'
+
+    - name: Ask systemd for the timer's state after the role ran
+      ansible.builtin.systemd_service:
+        name: program_and_timer_tick.timer
+      register: program_and_timer_verify_restarted
+
+    - name: Assert the role started the timer that was stopped
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_restarted.status.ActiveState == 'active'
+          - program_and_timer_verify_restarted.status.UnitFileState == 'enabled'
+        fail_msg: The role left a stopped timer stopped.
+        success_msg: The role started the stopped timer without a program or unit change.

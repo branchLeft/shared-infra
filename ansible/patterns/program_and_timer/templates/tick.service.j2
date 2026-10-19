@@ -3,4 +3,8 @@ Description={{ program_and_timer_unit_description }}
 
 [Service]
 Type=oneshot
+{% if program_and_timer_service_user | length > 0 %}
+User={{ program_and_timer_service_user }}
+Group={{ program_and_timer_service_group }}
+{% endif %}
 ExecStart={{ program_and_timer_program_path }}

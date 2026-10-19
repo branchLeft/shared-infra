@@ -8,13 +8,13 @@
   tasks:
     - name: Create the placeholder service group
       ansible.builtin.group:
-        name: '{{ program_and_timer_program_group }}'
+        name: '{{ program_and_timer_service_group }}'
         system: true
 
     - name: Create the placeholder service user
       ansible.builtin.user:
-        name: '{{ program_and_timer_program_owner }}'
-        group: '{{ program_and_timer_program_group }}'
+        name: '{{ program_and_timer_service_user }}'
+        group: '{{ program_and_timer_service_group }}'
         system: true
         create_home: false
         shell: /usr/sbin/nologin

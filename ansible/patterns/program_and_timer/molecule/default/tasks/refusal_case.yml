@@ -1,0 +1,51 @@
+---
+# One refused input: the role is applied with it, the refusal is caught, and the
+# directory the input could damage is read before and after. Included once per
+# case by converge.yml, with the case in `refused_input`.
+- name: Forget the earlier case's refusal
+  ansible.builtin.set_fact:
+    refusal_message: ''
+
+- name: Read the directory this case could damage
+  ansible.builtin.stat:
+    path: '{{ refused_input.planted | default("/usr/local/lib") }}'
+  register: refusal_before
+
+- name: Apply the role with the input that must be refused
+  block:
+    - name: Apply the role with the refused input
+      ansible.builtin.include_role:
+        name: branchleft.program_and_timer
+      vars:
+        program_and_timer_program_src: '{{ refused_input.src | default("example_program.sh") }}'
+        program_and_timer_program_dir: '{{ refused_input.dir | default("/usr/local/lib/program_and_timer") }}'
+        program_and_timer_program_name: '{{ refused_input.file | default("program.sh") }}'
+        program_and_timer_service_user: '{{ refused_input.user | default(hostvars[inventory_hostname].program_and_timer_service_user) }}'
+        program_and_timer_service_group: '{{ refused_input.group | default(hostvars[inventory_hostname].program_and_timer_service_group) }}'
+  rescue:
+    - name: Keep the refusal's message
+      ansible.builtin.set_fact:
+        refusal_message: '{{ ansible_failed_result.msg | default("") }}'
+
+- name: Read the directory this case could damage, after the role
+  ansible.builtin.stat:
+    path: '{{ refused_input.planted | default("/usr/local/lib") }}'
+  register: refusal_after
+
+# The directory is checked before the refusal is, so a role that accepts the
+# input and takes the directory over is reported as that.
+- name: Assert the directory kept its owner, group and mode
+  ansible.builtin.assert:
+    that:
+      - refusal_after.stat.pw_name == refusal_before.stat.pw_name
+      - refusal_after.stat.gr_name == refusal_before.stat.gr_name
+      - refusal_after.stat.mode == refusal_before.stat.mode
+    fail_msg: 'The role changed the owner, group or mode of a directory it must not touch (case {{ refused_input.case }}).'
+    quiet: true
+
+- name: Assert the role refused the input, naming the rule
+  ansible.builtin.assert:
+    that:
+      - refusal_message is search(refused_input.expect)
+    fail_msg: 'The role did not refuse the input with the rule {{ refused_input.expect }} (case {{ refused_input.case }}).'
+    quiet: true

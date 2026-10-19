@@ -6,29 +6,41 @@ argument_specs:
       Delivers one program file that the role never edits, runs the program's own
       install-time check before the file replaces the installed one, delivers the
       timer and its oneshot service, enables and starts the timer, and restarts the
-      timer once when the program file changes.
+      timer once when the program file changes. The program is owned by root and the
+      unit runs it as root, unless a service user is declared: then the program, its
+      directory and the unit belong to that user.
     author: AUTHOR_NAME
     options:
       program_and_timer_program_src:
         type: str
-        description: Source of the program. A name under the role's files directory, or an absolute path on the controller.
+        description: Source of the program, not empty. A name under the role's files directory, or an absolute path on the controller.
         default: example_program.sh
-      program_and_timer_program_path:
+      program_and_timer_program_dir:
         type: str
-        description: Absolute path where the program is installed. Its directory is created by the role.
-        default: /usr/local/lib/program_and_timer/program.sh
-      program_and_timer_program_owner:
+        description: >-
+          The directory the role creates for the program and takes over (owner, group,
+          mode 0755). It must be used for nothing else. An absolute path of plain
+          characters with no .. and no trailing slash, at least two components deep, and
+          not a system directory (the list is in vars/main.yml).
+        default: /usr/local/lib/program_and_timer
+      program_and_timer_program_name:
         type: str
-        description: Owner of the program and its directory. The user must exist before the role runs. None of the variables is a secret.
-        default: root
-      program_and_timer_program_group:
+        description: File name of the program inside its directory. One name, no path separator.
+        default: program.sh
+      program_and_timer_service_user:
         type: str
-        description: Group of the program and its directory. The group must exist before the role runs.
-        default: root
-      program_and_timer_event_dir:
+        description: >-
+          The user the program and its directory belong to, and the user the unit runs
+          the program as. Empty means root. It must exist before the role runs. None of
+          the variables is a secret.
+        default: ''
+      program_and_timer_service_group:
         type: str
-        description: Directory where the handlers record one empty file per restart and per daemon reload, so a play can count them.
-        default: /var/lib/program_and_timer/events
+        description: >-
+          The group of the program and its directory, and the group the unit runs the
+          program as. Declared together with the user, or both empty. It must exist
+          before the role runs.
+        default: ''
       program_and_timer_unit_description:
         type: str
         description: Description written into both unit files. A change to it edits both unit files and triggers one daemon reload.

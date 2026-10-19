@@ -1,8 +1,8 @@
 ---
-program_and_timer_program_path: /usr/local/lib/program_and_timer/program.sh
 program_and_timer_program_src: example_program.sh
-program_and_timer_program_owner: root
-program_and_timer_program_group: root
-program_and_timer_event_dir: /var/lib/program_and_timer/events
+program_and_timer_program_dir: /usr/local/lib/program_and_timer
+program_and_timer_program_name: program.sh
+program_and_timer_service_user: ''
+program_and_timer_service_group: ''
 program_and_timer_unit_description: EXAMPLE_UNIT_DESCRIPTION
 program_and_timer_tick_calendar: hourly

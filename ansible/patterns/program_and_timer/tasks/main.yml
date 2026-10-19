@@ -1,18 +1,79 @@
 ---
+# The inputs are refused before any task changes anything, and no message names a
+# value: the options are not secrets, but the rule is that a refusal never echoes
+# what it refused. The argument spec has already run; it coerces a wrong type
+# rather than rejecting it, so the first assertion rejects it.
+- name: Refuse an option that is not a string
+  ansible.builtin.assert:
+    that:
+      - program_and_timer_program_src is string
+      - program_and_timer_program_dir is string
+      - program_and_timer_program_name is string
+      - program_and_timer_service_user is string
+      - program_and_timer_service_group is string
+      - program_and_timer_unit_description is string
+      - program_and_timer_tick_calendar is string
+    fail_msg: 'program_and_timer refused its input (rule: types): every option must be a string.'
+    quiet: true
+
+- name: Refuse an empty program source
+  ansible.builtin.assert:
+    that:
+      - program_and_timer_program_src | length > 0
+    fail_msg: 'program_and_timer refused its input (rule: source): the program source must not be empty.'
+    quiet: true
+
+- name: Refuse a program directory that is not an absolute, normalised path
+  ansible.builtin.assert:
+    that:
+      - program_and_timer_program_dir is match('^/[A-Za-z0-9_.@+-]+(/[A-Za-z0-9_.@+-]+)*$')
+      - program_and_timer_program_dir is not search('(^|/)[.][.]?(/|$)')
+    fail_msg: >-
+      program_and_timer refused its input (rule: directory shape): the program directory
+      must be an absolute path of plain characters, with no . or .. component and no
+      trailing slash.
+    quiet: true
+
+- name: Refuse a program directory that is a system or top-level directory
+  ansible.builtin.assert:
+    that:
+      - program_and_timer_program_dir.count('/') >= 2
+      - program_and_timer_program_dir not in program_and_timer_shared_dirs
+    fail_msg: >-
+      program_and_timer refused its input (rule: dedicated directory): the program
+      directory is changed to the service user's ownership, so it must be a directory
+      made for this program, at least two components deep and not a system directory.
+    quiet: true
+
+- name: Refuse a program name that is not one file name
+  ansible.builtin.assert:
+    that:
+      - program_and_timer_program_name is match('^[A-Za-z0-9_][A-Za-z0-9_.@+-]*$')
+    fail_msg: >-
+      program_and_timer refused its input (rule: program name): the program name must be
+      one file name with no path separator.
+    quiet: true
+
+- name: Refuse a service user without a service group, or the reverse
+  ansible.builtin.assert:
+    that:
+      - (program_and_timer_service_user | length == 0) == (program_and_timer_service_group | length == 0)
+      - program_and_timer_service_user is match('^([a-z_][a-z0-9_-]*)?$')
+      - program_and_timer_service_group is match('^([a-z_][a-z0-9_-]*)?$')
+    fail_msg: >-
+      program_and_timer refused its input (rule: service identity): the service user and
+      the service group are declared together, each a plain name, or both left empty.
+    quiet: true
+
+# The directory is the role's own: it is made for this program and nothing else
+# lives in it, so taking over its owner, group and mode changes nothing another
+# service uses. Any missing parent directory is created with the same owner.
 - name: Create the directory the program is installed into
   ansible.builtin.file:
-    path: '{{ program_and_timer_program_path | dirname }}'
+    path: '{{ program_and_timer_program_dir }}'
     state: directory
-    owner: '{{ program_and_timer_program_owner }}'
-    group: '{{ program_and_timer_program_group }}'
-    mode: '0755'
-
-- name: Create the directory the handlers record into
-  ansible.builtin.file:
-    path: '{{ program_and_timer_event_dir }}'
-    state: directory
-    owner: root
-    group: root
+    owner: '{{ program_and_timer_service_user | default("root", true) }}'
+    group: '{{ program_and_timer_service_group | default("root", true) }}'
     mode: '0755'
 
 # The source is copied to a temporary file, the validator runs on that copy, and
@@ -22,11 +83,11 @@
   ansible.builtin.copy:
     src: '{{ program_and_timer_program_src }}'
     dest: '{{ program_and_timer_program_path }}'
-    owner: '{{ program_and_timer_program_owner }}'
-    group: '{{ program_and_timer_program_group }}'
+    owner: '{{ program_and_timer_service_user | default("root", true) }}'
+    group: '{{ program_and_timer_service_group | default("root", true) }}'
     mode: '0755'
     validate: /bin/sh %s --check
-  notify: program changed
+  notify: Restart the program timer
 
 - name: Render the timer's oneshot service unit
   ansible.builtin.template:
@@ -35,7 +96,7 @@
     owner: root
     group: root
     mode: '0644'
-  notify: unit files changed
+  notify: Reload systemd manager
 
 - name: Render the timer unit
   ansible.builtin.template:
@@ -44,7 +105,7 @@
     owner: root
     group: root
     mode: '0644'
-  notify: unit files changed
+  notify: Reload systemd manager
 
 # Queued handlers run here, before the timer is enabled, so the enable below
 # starts the timer with the unit file as it now is on disk.

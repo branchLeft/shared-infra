@@ -2,15 +2,103 @@
 - name: Converge
   hosts: all
   gather_facts: false
+  vars:
+    # Every input the role must refuse, with the rule its message names. A case
+    # changes only the fields it lists; `planted` is the directory whose owner,
+    # group and mode must be the same after the refusal.
+    converge_refused_inputs:
+      - case: relative directory
+        dir: relative/dir
+        expect: 'rule: directory shape'
+      - case: directory with a .. component
+        dir: /opt/probe/../etc
+        expect: 'rule: directory shape'
+      - case: directory with a trailing slash
+        dir: /opt/probe/
+        expect: 'rule: directory shape'
+      - case: the root directory
+        dir: /
+        expect: 'rule: directory shape'
+      - case: a top-level directory
+        dir: /opt
+        planted: /opt
+        expect: 'rule: dedicated directory'
+      - case: a shared system directory
+        dir: /usr/local/bin
+        planted: /usr/local/bin
+        expect: 'rule: dedicated directory'
+      - case: a shared library directory
+        dir: /usr/local/lib
+        planted: /usr/local/lib
+        expect: 'rule: dedicated directory'
+      - case: a shared state directory
+        dir: /var/lib
+        planted: /var/lib
+        expect: 'rule: dedicated directory'
+      - case: the unit directory
+        dir: /etc/systemd/system
+        planted: /etc/systemd/system
+        expect: 'rule: dedicated directory'
+      - case: program name with a separator
+        file: sub/program.sh
+        expect: 'rule: program name'
+      - case: program name with a .. component
+        file: ../program.sh
+        expect: 'rule: program name'
+      - case: empty program source
+        src: ''
+        expect: 'rule: source'
+      - case: service user given as a list
+        user: [example_user]
+        expect: 'rule: types'
+      - case: service user without a group
+        group: ''
+        expect: 'rule: service identity'
   tasks:
-    # An instance with no program stands for a host that has no program yet: the
-    # role is applied once with the placeholder program, then the edit below
-    # changes the program and its counters are read on their own. Once the
-    # program exists this is skipped, so a second converge changes nothing.
+    # An instance with no program stands for a host that has no program yet. The
+    # steps that need that starting point run once, in the first converge, and
+    # are skipped once the program exists, so a second converge changes nothing.
     - name: Read whether the program is already on the instance
       ansible.builtin.stat:
         path: /usr/local/lib/program_and_timer/program.sh
       register: converge_before
+
+    # Refusals come first, on a host where nothing is installed: a refused input
+    # must leave no trace. Check mode writes nothing and a refusal is a fact of
+    # the real run, so these are skipped in check mode (ANS-10).
+    - name: Apply the role with each input it must refuse
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/refusal_case.yml'
+      loop: '{{ converge_refused_inputs }}'
+      loop_control:
+        loop_var: refused_input
+        label: '{{ refused_input.case }}'
+      when:
+        - not ansible_check_mode
+        - not converge_before.stat.exists
+
+    - name: Look for anything the refused inputs left behind
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /usr/local/lib/program_and_timer
+        - /etc/systemd/system/program_and_timer_tick.timer
+        - /etc/systemd/system/program_and_timer_tick.service
+        - /opt/probe
+      register: converge_leftovers
+      when:
+        - not ansible_check_mode
+        - not converge_before.stat.exists
+
+    - name: Assert the refused inputs changed nothing
+      ansible.builtin.assert:
+        that:
+          - converge_leftovers.results | map(attribute='stat.exists') | select | list | length == 0
+        fail_msg: A refused input left a directory or a unit file behind.
+        success_msg: Every refused input was stopped before anything was written.
+        quiet: true
+      when:
+        - not ansible_check_mode
+        - not converge_before.stat.exists
 
     - name: Apply the role with the placeholder program on an instance with none
       ansible.builtin.include_role:
@@ -19,43 +107,44 @@
         name: branchleft.program_and_timer
       when: not converge_before.stat.exists
 
-    - name: Read the installed program's checksum after the first apply
-      ansible.builtin.stat:
-        path: /usr/local/lib/program_and_timer/program.sh
-        checksum_algorithm: sha256
-        get_checksum: true
-      register: converge_program
+    # The mark that the verify play counts from. systemd's journal is the clock:
+    # the verify play counts what systemd did to the timer after this line.
+    - name: Mark the journal before the program is changed
+      ansible.builtin.command: systemd-cat --identifier=program_and_timer_test echo EDIT_START
+      changed_when: false
+      when:
+        - not ansible_check_mode
+        - not converge_before.stat.exists
 
-    # The edit: when the installed program is not the second version, the event
-    # records are cleared and the role is applied with the second version. The
-    # verify play then counts the records this edit made: one restart and no
-    # daemon reload. A second converge finds the second version and skips this.
-    - name: Edit the program to its second version
-      when: not converge_before.stat.exists
+    # A program whose own check fails must be refused, and what is installed must
+    # stay exactly as it was. The state is read before and after, from the file
+    # system and from systemd, so a role that overwrote the program and then
+    # failed, or touched the timer, is caught by what it left, not by its message.
+    - name: Read what is installed before the failing program is offered
+      when:
+        - not ansible_check_mode
+        - not converge_before.stat.exists
       block:
-        - name: Find the event records left by the earlier apply
+        - name: Read the installed program
+          ansible.builtin.stat:
+            path: /usr/local/lib/program_and_timer/program.sh
+            checksum_algorithm: sha256
+            get_checksum: true
+          register: converge_program_before
+
+        - name: List the program directory, hidden files included
           ansible.builtin.find:
-            paths: /var/lib/program_and_timer/events
-            patterns:
-              - restart-*
-              - reload-*
-          register: converge_records
+            paths: /usr/local/lib/program_and_timer
+            hidden: true
+            file_type: any
+            patterns: '*'
+          register: converge_files_before
 
-        - name: Clear the event records before the edit
-          ansible.builtin.file:
-            path: '{{ item.path }}'
-            state: absent
-          loop: '{{ converge_records.files }}'
-          loop_control:
-            label: '{{ item.path | basename }}'
+        - name: Ask systemd for the timer
+          ansible.builtin.systemd_service:
+            name: program_and_timer_tick.timer
+          register: converge_timer_before
 
-    # A program whose own check fails must be refused, and the installed program
-    # must stay. The role is applied with the failing program inside a block, so
-    # the refusal is caught here and asserted. The refusal belongs to the run that
-    # makes the edit: a role that stops at a refused copy never reaches its later
-    # tasks, so on every later converge the test would hide the whole role from
-    # idempotence. Check mode writes nothing, so it has no refusal to see; the
-    # copy would report a change there, so it is skipped in check mode (ANS-10).
     - name: Apply the role with a program whose own check fails
       when:
         - not ansible_check_mode
@@ -71,21 +160,62 @@
           ansible.builtin.set_fact:
             program_and_timer_refused: '{{ "failed to validate" in (ansible_failed_result.msg | default("")) }}'
 
-    - name: Assert the failing program was refused by the install-time check
-      ansible.builtin.assert:
-        that:
-          - program_and_timer_refused | default(false)
-        fail_msg: >-
-          The program whose check fails was installed, or refused for another reason:
-          the install-time check did not stop it.
-        success_msg: The program whose check fails was refused before it replaced the installed one.
+    - name: Check what is installed after the failing program was offered
       when:
         - not ansible_check_mode
         - not converge_before.stat.exists
+      block:
+        - name: Read the installed program again
+          ansible.builtin.stat:
+            path: /usr/local/lib/program_and_timer/program.sh
+            checksum_algorithm: sha256
+            get_checksum: true
+          register: converge_program_after
 
-    # The role is applied with the second version on every converge. The edit above
-    # only makes the change and clears the records it counts; this apply is the
-    # real converge, so a second converge runs the whole role and must change nothing.
+        - name: List the program directory again
+          ansible.builtin.find:
+            paths: /usr/local/lib/program_and_timer
+            hidden: true
+            file_type: any
+            patterns: '*'
+          register: converge_files_after
+
+        - name: Ask systemd for the timer again
+          ansible.builtin.systemd_service:
+            name: program_and_timer_tick.timer
+          register: converge_timer_after
+
+        - name: Assert the refusal left the old program, its mode, the timer and the directory as they were
+          ansible.builtin.assert:
+            that:
+              - converge_program_after.stat.checksum == converge_program_before.stat.checksum
+              - converge_program_after.stat.mode == converge_program_before.stat.mode
+              - converge_program_after.stat.pw_name == converge_program_before.stat.pw_name
+              - converge_program_after.stat.gr_name == converge_program_before.stat.gr_name
+              - converge_files_after.files | map(attribute='path') | sort | list == converge_files_before.files | map(attribute='path') | sort | list
+              - converge_files_after.files | length == 1
+              - converge_timer_after.status.ActiveState == converge_timer_before.status.ActiveState
+              - converge_timer_after.status.InvocationID == converge_timer_before.status.InvocationID
+              - converge_timer_after.status.ActiveEnterTimestampMonotonic == converge_timer_before.status.ActiveEnterTimestampMonotonic
+            fail_msg: >-
+              A program whose check fails changed what was installed: its bytes, mode or
+              owner, the files next to it, or the timer.
+            success_msg: The refusal left the old program, its mode and owner, the directory and the timer unchanged.
+            quiet: true
+
+        - name: Assert the failing program was refused by the install-time check
+          ansible.builtin.assert:
+            that:
+              - program_and_timer_refused | default(false)
+            fail_msg: >-
+              The program whose check fails was installed, or refused for another reason:
+              the install-time check did not stop it.
+            success_msg: The program whose check fails was refused before it replaced the installed one.
+            quiet: true
+
+    # The role is applied with the second version on every converge. The first
+    # converge makes the change that the verify play counts; a later converge runs
+    # the whole role and must change nothing.
     - name: Apply the role with the second version of the program
       ansible.builtin.include_role:
         name: branchleft.program_and_timer

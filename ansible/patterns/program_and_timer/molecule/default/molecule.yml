@@ -52,13 +52,13 @@ provisioner:
   name: ansible
   inventory:
     # The values the role runs with, read by the prepare, converge and verify
-    # plays as well. The program's owner and group are not root, so the test
-    # shows that the role's owner and group parameters produce the result: on a
-    # root-owned default the same assertion would pass without them.
+    # plays as well. The service user and group are not root, so the test shows
+    # that the role's parameters produce the owner, the group and the unit's
+    # User=: on the root default the same assertions would pass without them.
     group_vars:
       all:
-        program_and_timer_program_owner: example_user
-        program_and_timer_program_group: example_group
+        program_and_timer_service_user: example_user
+        program_and_timer_service_group: example_group
         program_and_timer_unit_description: SCENARIO_UNIT_DESCRIPTION
 verifier:
   name: ansible
