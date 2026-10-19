@@ -73,9 +73,10 @@ only. The plan entry's `state` is the resource's outputs property map
 (`plan.go` lines 226 to 232), and it is compared for the root stack only: each
 plain key that both it and the preview's old root outputs hold must be equal
 (type-tagged, as below), and a difference is `output-changed`. A secret is
-skipped, because the plan holds ciphertext with a fresh nonce each time and the
-preview holds `[secret]`; a key on one side only is the output diff's to
-report. A child's plan `state` is not compared (its `id` sits among the plain
+skipped when the plan holds one and the preview holds `[secret]` or a secret
+too (the plan holds ciphertext with a fresh nonce each time); a secret against
+a plain value, or `[secret]` against one, is a difference. A key on one side
+only is the output diff's to report. A child's plan `state` is not compared (its `id` sits among the plain
 outputs, and a preview that hides the child has nothing to compare it with).
 
 ## What makes a plan `false`

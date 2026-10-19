@@ -775,6 +775,41 @@ class SameStepEvidenceTests(VerdictCase):
                     step[side]["type"] = value
                     self.assertAsks(self.verdict(self.beside_root(step), plan()), "steps-changed")
 
+    def test_the_same_foreign_type_on_both_sides_is_still_a_change(self):
+        # Equal on both sides, so only the comparison with the URN's own type can see it.
+        for value in ("other:index/thing:Thing", "pulumi:providers:hcloud", ""):
+            with self.subTest(value=value):
+                step = same_step(_SERVER)
+                for side in ("oldState", "newState"):
+                    step[side]["type"] = value
+                self.assertAsks(self.verdict(self.beside_root(step), plan()), "steps-changed")
+
+    def test_a_key_on_one_side_of_a_nested_object_is_a_change_either_way(self):
+        for old, new in (
+            ({"a": 1}, {"a": 1, "b": 2}),
+            ({"a": 1, "b": 2}, {"a": 1}),
+            ({"a": {"x": 1}}, {"a": {"x": 1, "y": None}}),
+            ({"a": {"x": 1, "y": None}}, {"a": {"x": 1}}),
+            ({"a": [{"x": 1}]}, {"a": [{"x": 1, "y": 0}]}),
+            ({"a": None}, {}),
+            ({}, {"a": None}),
+        ):
+            with self.subTest(old=old, new=new):
+                doc = self.differing(**self.states({"inputs": old}, {"inputs": new}))
+                self.assertAsks(self.verdict(doc, plan()), "steps-changed")
+
+    def test_lists_of_different_length_are_a_change_either_way(self):
+        for old, new in (
+            ([1], [1, 2]),
+            ([1, 2], [1]),
+            ([], [0]),
+            ({"a": [1]}, {"a": [1, 1]}),
+            ({"a": [[1], [2]]}, {"a": [[1], [2], []]}),
+        ):
+            with self.subTest(old=old, new=new):
+                doc = self.differing(**self.states({"dependencies": old}, {"dependencies": new}))
+                self.assertAsks(self.verdict(doc, plan()), "steps-changed")
+
     def test_a_provider_type_in_the_state_does_not_exempt_a_resource_with_another_urn(self):
         step = self.custom_pair(_SERVER, None, None)
         step["newState"]["type"] = "pulumi:providers:hcloud"
@@ -1245,9 +1280,30 @@ class PlanGoalTests(VerdictCase):
             ({"s": "[secret]"}, {"s": SECRET}),
             ({"s": "[secret]", "o": "v"}, {"s": other, "o": "v"}),
             ({"o": {"s": "[secret]", "p": 1}}, {"o": {"s": SECRET, "p": 1}}),
+            ({"s": other}, {"s": SECRET}),
         ):
             with self.subTest(old=old):
                 self.assertFalse(self.root_outputs(old, state).has_changes)
+
+    def test_a_secret_on_one_side_only_is_a_change(self):
+        # Secret-ness itself changed: the plan's secret faces a plain value, or the
+        # preview's placeholder faces a plain value in the plan.
+        for old, state in (
+            ({"s": "plain"}, {"s": SECRET}),
+            ({"s": "[secret]"}, {"s": "plain"}),
+            ({"s": 1}, {"s": SECRET}),
+            ({"s": {"a": 1}}, {"s": SECRET}),
+            ({"s": "[secret]"}, {"s": {"a": 1}}),
+        ):
+            with self.subTest(old=old, state=state):
+                self.assertAsks(self.root_outputs(old, state), "output-changed")
+
+    def test_root_old_outputs_that_are_not_an_object_are_not_understood(self):
+        for value in (None, "X", [], ["a"], 1, True):
+            with self.subTest(value=value):
+                preview_doc = no_op_preview()
+                preview_doc["steps"][0]["oldState"]["outputs"] = value
+                self.assertAsks(self.verdict(preview_doc, observed_plan()), "preview-shape")
 
     def test_a_plain_difference_beside_a_secret_is_still_a_change(self):
         verdict = self.root_outputs({"s": "[secret]", "o": "v"}, {"s": SECRET, "o": "w"})

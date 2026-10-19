@@ -206,11 +206,12 @@ def _is_secret(value: object) -> bool:
 
 def _same_value(first: object, second: object, secrets: bool = False) -> bool:
     """JSON equality by type and value: a boolean is never a number, a null never an absent
-    key. Numbers compare by value. With `secrets`, a pair holding a secret is skipped."""
+    key. Numbers compare by value. With `secrets`, a plan secret facing a secret or the preview's placeholder is skipped;
+    a secret against a plain value, or a placeholder against one, differs."""
     pending = [(first, second)]
     while pending:
         a, b = pending.pop()
-        if secrets and (_is_secret(a) or b == SECRET_PLACEHOLDER):
+        if secrets and _is_secret(a) and (b == SECRET_PLACEHOLDER or _is_secret(b)):
             continue
         if isinstance(a, bool) or isinstance(b, bool):
             if not (isinstance(a, bool) and isinstance(b, bool) and a == b):
