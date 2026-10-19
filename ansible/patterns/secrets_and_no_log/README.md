@@ -227,7 +227,71 @@ after it names that number and the rule, never a name, a path or a value.
 
 ## What the test shows about logs
 
-RESULTS_PENDING
+Each scenario value is a sentinel: a 40-character string made for the run by the
+seeded password lookup on the controller (`prepare.yml`), so the same label gives
+the same text and the run's output can be searched for it afterwards. A sentinel is
+not in `molecule.yml`, which names only the file it is read from. The scenario sets
+`ANSIBLE_LOG_PATH` to a file on the controller and `ANSIBLE_VERBOSITY` to `3`, which
+makes Ansible print each task's result together with the arguments it was given,
+and the loop items. The verify play reads that log last, so it covers the check-mode
+run against the fresh host (which runs with `--diff`), the converge, the second
+converge, the plan with `--diff` for a rotation, every rotation, the twenty refused
+inputs (thirty cases, counting each code point), a write that fails (a directory is in the way of one secret's file), and the
+argument checks. It fails if any sentinel except one is in the log. The exception
+is the sentinel that Ansible's own argument validation printed (see "What a failed
+argument check prints"), which the scan uses as a positive control.
+
+A scan that finds nothing proves nothing unless it can find something. The scan's
+controls, all required before it counts: the converge also runs a harmless command
+with a known canary argument and no `no_log`, and the scan requires the canary, two
+of the role's task names and the one sentinel Ansible printed to be in the log.
+
+The scan also covers the other files the run leaves: the second play of
+`verify.yml` searches the whole scenario directory on the controller (the
+inventory Molecule built, its state, the log) for every sentinel but the one the
+validation printed. Last, the harness output was captured to a file and searched by
+a separate throwaway playbook that regenerates the sentinels from the same seeds
+and counts them; the counts were zero for every sentinel but the validation's, and
+nine for that one. That outside scan is a check made at this state, not a step of
+the harness.
+
+What was observed on ansible-core 2.21.5, by editing the role and running the
+harness (the table at the end has every edit):
+
+- With `no_log: true` removed from the copy that writes the values (a loop task),
+  the values are in the log: the loop items and the module arguments print them.
+  The verify play fails at "Assert no sentinel reached the log" and names the
+  labels it found.
+- With `no_log: true` removed from the task that reads the registered results
+  (the one that records which files changed), the values are in the log: the loop
+  over the registered results prints each item, and the items of a registered loop
+  hold the values. The verify play fails at the same assertion.
+- With only `diff: false` removed from the copy, nothing leaks and the harness is
+  green: `no_log: true` also hides the diff on this version. With only `no_log`
+  removed from the environment file's template, nothing leaks either: its result
+  holds no content and `diff: false` keeps its diff out. With both removed from the
+  template, the content of the environment file is in the log, from the `--diff` of
+  the check-mode run, and the verify play fails. So the two keywords overlap, each
+  covers the other alone, and `diff: false` alone is **reviewed, not tested**. It
+  stays because ANS-16 asks for it, and because a later version may behave
+  differently.
+- With `no_log: true` removed from the host-file copy, nothing leaks and the
+  harness is green: its loop items hold a path and its module arguments hold a
+  path. It is **reviewed, not tested**; it stays so the rule has no exception.
+- The `no_log: true` on the task that works out which entries break a rule is
+  **reviewed, not tested**: its result holds only numbers.
+
+A consequence of `no_log: true` that a maintainer will meet: when one of these
+tasks fails on a host, the output says only that it is hidden. The role's failure
+modes that a maintainer can act on are checked before the tasks that hold a value
+(source file, name, path, line), and they print the entry number and the rule. For
+the rest, reproduce on a lab host with a throwaway value.
+
+The failing write (a directory is in the way of one secret's file) is the case
+that matters most: the module's own error would repeat its arguments. The task
+prints that its output is hidden, the scenario asserts that the failure message
+holds no sentinel, and that no registered result holds one afterwards, because the
+always section emptied them.
 
 ## Rotation as a re-run
 
@@ -324,3 +388,207 @@ generated on the host or becomes an entry the owner creates is the source decisi
 this pattern leaves to the owner. The last two rows are credentials of the people
 and pipelines that provision, not of a running service, and may not belong on a
 host at all; that is the owner's call too.
+
+## How to run its test
+
+From the repository root, with Docker running locally and Python 3.12 or later.
+`ansible/README.md` describes the harness and the tools in full. The controller
+needs nothing else: the sentinels are made by Ansible's own password lookup.
+
+```text
+python3 -m venv .venv
+.venv/bin/pip install -r ansible/requirements.txt
+.venv/bin/python ansible/harness/run_harness.py ansible/patterns/secrets_and_no_log
+```
+
+Run it through the harness. A bare `molecule` run reuses its scratch directory, and
+the log file there then holds the output of earlier runs, which can fail the log
+scan for a reason the current role does not have.
+
+What each part of the scenario does:
+
+- `prepare.yml` makes the throwaway sentinels on the controller (one file per
+  label, in a directory under Molecule's scratch directory, never in the
+  repository), creates the placeholder account and group, puts a root-only source
+  file on the host, three bad source files (open to others, owned by another
+  account, a link), and an earlier release's state: the directory open to everyone
+  and a world-readable file holding an old value at the place the role writes.
+- `check-fresh`: the converge in check mode with `--diff` against that host.
+- `converge`: applies the role with three secrets (two values, one host file) and
+  an environment file, then runs the canary command.
+- `idempotence`: a second converge reports no change (ANS-11).
+- `verify`: the host is checked (`tasks/assert_state.yml`), the earlier value is
+  gone, the defaults and the argument spec are checked for secrets, the refused
+  inputs run, the rotations run, the failing write runs, the argument checks run,
+  the host is checked again, and the log and the scenario directory are scanned.
+- `check-configured` and `molecule-check`: the configured host shows no drift.
+
+`tasks/assert_state.yml` checks: the directory's mode, owner and group; that the
+directory holds the declared files and nothing else, hidden files and backups
+included; each file's mode `0600`, owner, group, link count and checksum (no value
+is printed, the checksums are compared); the source file untouched.
+
+The refused cases build their awkward characters from code points (`'%c' | format(N)`),
+because a character typed into the YAML file is folded or refused by the linter.
+Each case runs the role inside a `block` and requires that the role stopped at the
+named task, with the entry number in the message where the rule gives one, and that
+the message holds no sentinel.
+
+What breaks which step. Each row is an edit, one harness run, and a `git restore`;
+the harness is green again after the restores, and a last full run and a run on an
+unedited fresh role were green too.
+
+| Edit                                                                                                  | Step that fails, and the assertion                                                                                                           |
+| ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `no_log: true` removed from the copy that writes the values (a loop task)                             | `verify`: "Assert no sentinel reached the log" (four sentinels found)                                                                        |
+| `no_log: true` removed from the task that records the changed paths (it reads the registered results) | `verify`: the same assertion (three sentinels found)                                                                                         |
+| `diff: false` removed from the value copy, `no_log` kept                                              | green: `no_log` hides the diff too. Reviewed, not tested                                                                                     |
+| `no_log: true` removed from the environment file's template, `diff: false` kept                       | green: the result holds no content. Reviewed, not tested                                                                                     |
+| `no_log: true` and `diff: false` both removed from the environment file's template                    | `verify`: "Assert no sentinel reached the log" (the `--diff` output; two sentinels found)                                                    |
+| `no_log: true` removed from the host-file copy                                                        | green: it handles a path only. Reviewed, not tested                                                                                          |
+| A variable added to `defaults/main.yml`                                                               | `verify`: "Assert the defaults hold no secret and the list of secrets is empty"                                                              |
+| File mode `0644`                                                                                      | `verify`: "Assert each file is private to its owner and holds exactly its value" (all four files)                                            |
+| `owner: root` on the value copy                                                                       | `verify`: the same assertion, for the files the copy wrote                                                                                   |
+| `backup: true` on the value copy                                                                      | `verify`: "Assert the directory holds the declared files and nothing else" (a backup is listed)                                              |
+| A task that keeps a copy of the old file outside the directory, made once                             | `verify`: "Assert no file on the host holds the value" (the earlier value is in the kept copy)                                               |
+| The same task, copying again on every run                                                             | `idempotence`                                                                                                                                |
+| A `command` task with `changed_when: true` added                                                      | `idempotence`: the task is named                                                                                                             |
+| The directory task moved after the write tasks                                                        | `verify`: "Assert the directory task ran before the write tasks"                                                                             |
+| The check that a source file has no group or other permission made always true                        | `verify`: "Expected the role to stop at Refuse a source file that is missing, not a plain file, not owned by root or open to group or other" |
+
+### Named limits
+
+- **The source of a secret is the owner's decision.** The role takes a value at run
+  time or the path of a root-only file already on the host. It does not fetch, store
+  or generate a secret, and it does not know where the value came from. How the
+  value of an approved store entry reaches a host that pulls its commit from `main`
+  is not decided here (PRIN-6); until it is, a service role built from this pattern
+  has no source and must not invent one.
+- **The file is not `0600` at every instant.** Ansible moves the new file into place
+  and sets the owner and mode afterwards, so a new file has the mode the umask
+  allows (`0644`) until the second step. The control is the directory, created
+  `0700` before any write: another account cannot enter it. The scenario proves
+  this by making the second step fail and showing the file stays `0644` and an
+  unrelated account cannot read it. What it does not prove: that root and the owner
+  cannot read the file in that moment (they can, and are not the threat), and that
+  no process which already held the directory open from before the role closed it
+  can read the file. The pattern is for a directory the role owns.
+- **The value passes through temporary files.** For `content`, Ansible writes the
+  value to a temporary file on the controller, sends it to the connection user's
+  `.ansible/tmp` on the host, and writes the target from there; it removes both when
+  the module ends. The scenario searches the host for the old value after each
+  rotation, but skips the `.ansible` directory, and it searches the controller's
+  scenario directory but not the controller's system temporary directory. A crash
+  of the run can leave a temporary file; it is `0600` and owned by the connection
+  user.
+- **A failed argument check can print the value of an option that has a type or a
+  choice.** See "What a failed argument check prints". The role has none, and the
+  `no_log` key of an argument spec does not stop it.
+- **`no_log` hides the reason for a failure on a real host.** A failing write on a
+  host prints only that the output is hidden. The role's own checks come first and
+  print the rule and the entry number; for the rest, reproduce on a lab host with a
+  throwaway value. Do not turn `no_log` off on a real host.
+- **A retired secret is not removed.** The role writes the files it is given and
+  removes none. A secret that is no longer declared stays on the host until a
+  deliberate removal change.
+- **Mode `0600` only.** A service that runs as another account than the owner of
+  the file cannot read it. The owner is the account that reads (or root), and the
+  role does not offer group read. A service role that needs `0640` changes
+  `vars/main.yml` deliberately and re-proves the table below.
+- **The environment file is written verbatim.** One `NAME=value` line for each
+  secret given as a value, printable ASCII only. How a consumer parses it differs:
+  a systemd `EnvironmentFile` reads quotes and a trailing backslash differently from
+  a Docker `env_file`, which keeps quotes, and neither is the shell. A value with a
+  quote, a `$`, a backslash or a leading or trailing space is accepted and written
+  as it is; the service role decides whether its consumer reads it back. Not tested
+  against any consumer.
+- **Check mode on a fresh host shows less.** Check mode creates nothing, so on a host
+  where the directory does not exist the plan lists the directory and skips the file
+  writes. The plan job (`--check --diff`, ANS-17) cannot show the per-file changes
+  of a first run. Once the directory exists, the plan lists each changed file.
+- **The handler is a placeholder.** It sets a flag. A service role replaces it with
+  the reload of its service, and the test of that reload belongs to the service role.
+- **The scenario scans the log and the scenario directory, not the harness console.**
+  The harness prints Ansible's console output (verbosity 3) to its own standard
+  output. That output was captured and searched once, outside the harness, for each
+  sentinel, and held none but the validation's. It is not a step of the harness, so
+  a change that prints a value to the console but not to the log would not fail it.
+- **Only the Debian 13 image on Docker Desktop (arm64) was run**; an amd64 runner was
+  not.
+- CI runs this scenario: the Ansible workflow on `main` installs the pinned
+  collections and runs the harness over every role and every pattern under
+  `ansible/patterns/`, so this pattern's lint, interface and container steps run on
+  each change.
+
+## How it is delivered
+
+Delivery to a host is ANS-17: only the gated workflow, run against `main` after the
+approval of its protected environment. A plan job shows each host's diff in check
+mode first; after the approval the host pulls that exact commit of `main` and applies
+it, and a second run must report zero changes. Nothing is applied from a laptop. This
+pattern is not applied to any host: it exists to be copied, and the trigger and the
+reusable workflow are separate work.
+
+The plan job's diff is the reason `diff: false` is in the recipe: a job summary is
+read by everyone who can see the run. How the value reaches the play on a host that
+pulls its commit is the source decision above.
+
+## How a service role copies it
+
+1. Make the new role from the skeleton, as `ansible/README.md` says, under
+   `ansible/roles/`.
+2. Copy `tasks/main.yml`, `handlers/main.yml`, `vars/main.yml`, the two templates
+   and the whole of `molecule/default/` over the new role's files. Keep `namespace`
+   in `meta/main.yml`: Molecule links the role under it.
+3. Rename. The variable prefix `secrets_and_no_log_` becomes the new role's name in
+   `defaults/main.yml`, `meta/argument_specs.yml`, `vars/main.yml`, the tasks, the
+   templates and the `include_role` calls in `converge.yml`, `verify.yml` and
+   `tasks/apply.yml` and `tasks/refused.yml` (`branchleft.secrets_and_no_log`). The
+   task names appear in `verify.yml` as the `refused_task` values: change both
+   together.
+4. Replace the placeholders: the directory, the owner and group, the secret names
+   (use the names in the list above) and the ALL_CAPS values in `meta/`.
+5. Take the secrets from the service's own variables, supplied at run time. Do not
+   put a value in `defaults/main.yml`, in `argument_specs.yml` or in a file in the
+   repository; the test fails if you do.
+6. Replace the handler with the service's reload.
+7. Run the harness on the new role. Then break each control in the table above on the
+   copy and see the same step fail: a control is yours only after you have broken it.
+8. Keep the image pin and its reason below.
+
+## The test base image (a third-party image, trusted by digest)
+
+The scenario needs Python, `grep`, `runuser` and the account tools. It does not need
+systemd, so it sets none of the settings that run systemd: no cgroup mount, no
+cgroup namespace mode, no tmpfs. It sets `command: sleep infinity`, so systemd is
+never the first process. The image's own command starts systemd, which needs those
+settings; the container can exit at once on a host with cgroup v2 without them. No
+`privileged`, no capabilities.
+
+- Image: `geerlingguy/docker-debian13-ansible`, referenced in
+  `molecule/default/molecule.yml` as `name:latest@sha256:<digest>` (CON-3). The
+  production hosts run Debian 13. The digest is the pin and the tag beside it is
+  informational.
+- Source: the public repository `geerlingguy/docker-debian13-ansible` on GitHub (MIT
+  licence), built `FROM debian:trixie` with `sudo`, `systemd`, `python3-pip`,
+  `python3-apt` and a few network tools, then `ansible` and `cryptography` from PyPI
+  without version pins. The image's own Ansible is not used: Molecule runs the
+  controller's pinned Ansible against the container.
+- The image declares `/sys/fs/cgroup` as a volume, so every container started from it
+  gets an anonymous volume. Molecule's destroy keeps a container's volumes by
+  default, so the platform sets `keep_volumes: false`. Without it each run leaves a
+  volume that has no label to find it by. Any scenario on this image must set it.
+
+Named limit: the image is trusted by its digest and by review. It is not built by
+this repository, and its unpinned PyPI installs were resolved once, at its build and
+are frozen by the digest.
+
+## How to change it safely
+
+Change the tasks, the templates, the argument spec, the defaults and the converge,
+verify and refusal plays together, run the harness, and break the control you
+touched (the table above) to see it fail. A change to the digest is its own change,
+reviewed on its own. Removing a `no_log`, the `backup: false`, the closed directory,
+the source file check or any assertion removes a control the table shows. Never
+add a value to a file in this directory, and never run the role against a real
+secret to test it.
