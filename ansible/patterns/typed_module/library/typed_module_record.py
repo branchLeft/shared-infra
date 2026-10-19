@@ -1,11 +1,8 @@
 #!/usr/bin/python
 """Manage one RECORD_FILE: the typed Ansible module the pattern copies.
 
-The module is deliberately trivial. Its shape is the template: one dataclass
-holds the parameters, the argument_spec is generated from that dataclass, the
-decision is a pure function, and the only code that touches the host is
-``apply``. ``ansible.builtin.copy`` with ``content:`` would do this module's
-job, so a real role does not ship it (ANS-9); see the pattern README.
+Deliberately trivial: ``ansible.builtin.copy`` does its job, so a real role
+does not ship it (ANS-9). The shape is the template; see the pattern README.
 """
 
 import dataclasses
@@ -275,10 +272,7 @@ def _scalar(field: str, annotation: object) -> str:
 
 
 def build_argument_spec(model: "type[DataclassInstance]") -> dict[str, dict[str, object]]:
-    """Generate the module's argument_spec from the dataclass that holds its parameters.
-
-    A field without a default is required. ``X | None`` must default to None. A
-    field with ``metadata={"no_log": True}`` is a secret.
+    """Generate the argument_spec from the dataclass that holds the parameters.
 
     Raises:
         SpecError: when a field has a type or a default the argument_spec cannot state.

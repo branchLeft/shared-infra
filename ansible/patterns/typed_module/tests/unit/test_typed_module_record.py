@@ -1,7 +1,6 @@
-"""Unit tests for the typed_module_record module: its logic, its argument_spec and check mode.
+"""Unit tests for typed_module_record: its logic, its argument_spec and check mode.
 
-Run from the repository root with the library directory on the import path
-(see the pattern README for the exact command).
+The pattern README gives the command, with the library directory on PYTHONPATH.
 """
 
 import dataclasses
