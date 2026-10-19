@@ -161,8 +161,8 @@
     - name: Assert systemd runs the program as the service user
       ansible.builtin.assert:
         that:
-          - program_and_timer_verify_service.status.User == program_and_timer_service_user
-          - program_and_timer_verify_service.status.Group == program_and_timer_service_group
+          - program_and_timer_verify_service.status.User | default('') == program_and_timer_service_user
+          - program_and_timer_verify_service.status.Group | default('') == program_and_timer_service_group
           - program_and_timer_verify_service.status.ExecStart is search('/usr/local/lib/program_and_timer/program.sh')
         fail_msg: The unit does not run the program as the user and group that own it.
         success_msg: systemd runs the program as the service user and group.
