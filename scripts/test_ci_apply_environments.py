@@ -139,7 +139,7 @@ class StubGh:
     def put(self, name: str, value) -> None:
         (self.dir / name).write_text(json.dumps(value), encoding="utf-8")
 
-    def run(self, script: str, **env: str) -> subprocess.CompletedProcess:
+    def run(self, script: str, cwd: str | None = None, **env: str) -> subprocess.CompletedProcess:
         full = {
             "PATH": f"{self.dir}{os.pathsep}{os.environ['PATH']}",
             "STUB_DIR": str(self.dir),
@@ -152,6 +152,7 @@ class StubGh:
         return subprocess.run(
             ["bash", "-e", "-c", script],
             env=full,
+            cwd=cwd,
             capture_output=True,
             text=True,
             check=False,
@@ -401,7 +402,9 @@ class CancelBehaviourTests(unittest.TestCase):
             self.stub.put(f"jobs-{run_id}.json", {"jobs": jobs})
         result = self.stub.run(
             self.script,
+            cwd=str(ROOT),
             GITHUB_RUN_NUMBER=str(self.CURRENT),
+            GITHUB_STEP_SUMMARY=str(self.stub.dir / "summary.md"),
             PLANS_MAIL=plans[0],
             PLANS_NETWORK=plans[1],
             PLANS_ESTATE=plans[2],
@@ -456,12 +459,23 @@ class CancelBehaviourTests(unittest.TestCase):
         )
         self.assertEqual(posts, [])
 
-    def test_keeps_a_run_with_an_apply_that_already_finished(self):
+    def test_clears_a_waiting_apply_whose_sibling_apply_already_finished(self):
+        # Run 38425376153's shape: a finished sibling no longer protects a
+        # waiting apply on a stack this push planned.
         posts = self.run_with(
             [self.run_row(101)],
             {101: [self.job(self.MAIL, "completed", "success"), self.job(self.NETWORK, "waiting")]},
         )
-        self.assertEqual(posts, [])
+        self.assertEqual(posts, ["POST repos/ORG/REPO/actions/runs/101/cancel"])
+
+    def test_the_summary_names_a_kept_run_and_why(self):
+        self.run_with(
+            [self.run_row(101)],
+            {101: [self.job(self.MAIL, "in_progress"), self.job(self.NETWORK, "waiting")]},
+        )
+        summary = (self.stub.dir / "summary.md").read_text(encoding="utf-8")
+        self.assertIn("Kept run 101", summary)
+        self.assertIn("in progress", summary)
 
     def test_keeps_a_run_with_any_job_in_progress(self):
         posts = self.run_with(
@@ -536,7 +550,9 @@ class CancelBehaviourTests(unittest.TestCase):
     def test_a_listing_failure_cancels_nothing(self):
         result = self.stub.run(
             self.script,
+            cwd=str(ROOT),
             GITHUB_RUN_NUMBER=str(self.CURRENT),
+            GITHUB_STEP_SUMMARY=str(self.stub.dir / "summary.md"),
             PLANS_MAIL="true",
             PLANS_NETWORK="true",
             PLANS_ESTATE="true",

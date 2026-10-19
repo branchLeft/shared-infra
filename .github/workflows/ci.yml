@@ -994,25 +994,18 @@ jobs:
             jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
               '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
           for run in ${older}; do
-            verdict=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
-              jq -r --arg m "${PLANS_MAIL}" --arg n "${PLANS_NETWORK}" --arg e "${PLANS_ESTATE}" '
-                def planned:
-                  if startswith("Apply (mail,") then $m == "true"
-                  elif startswith("Apply (hetzner network,") then $n == "true"
-                  elif startswith("Apply (hetzner estate,") then $e == "true"
-                  else false end;
-                [.jobs[] | select(.name | startswith("Apply ("))] as $applies
-                | if ($applies | length) == 0 then "keep"
-                  elif ([.jobs[] | select(.status == "in_progress")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "completed" and .conclusion != "skipped")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status != "completed" and ((.name | planned) | not))] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "waiting")] | length) == 0 then "keep"
-                  else "cancel" end')
+            decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              python3 scripts/cancel-superseded-waiting.py \
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+              decision="keep: the jobs of run ${run} could not be read"
+            verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
               gh api --method POST "${api}/runs/${run}/cancel" --silent
-              echo "cancelled superseded run ${run}"
+              echo "cancelled superseded run ${run}: ${decision#*: }"
+              echo "- Cancelled run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "kept run ${run}"
+              echo "kept run ${run}: ${decision#*: }"
+              echo "- Kept run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
 
@@ -1306,25 +1299,18 @@ jobs:
             jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
               '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
           for run in ${older}; do
-            verdict=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
-              jq -r --arg m "${PLANS_MAIL}" --arg n "${PLANS_NETWORK}" --arg e "${PLANS_ESTATE}" '
-                def planned:
-                  if startswith("Apply (mail,") then $m == "true"
-                  elif startswith("Apply (hetzner network,") then $n == "true"
-                  elif startswith("Apply (hetzner estate,") then $e == "true"
-                  else false end;
-                [.jobs[] | select(.name | startswith("Apply ("))] as $applies
-                | if ($applies | length) == 0 then "keep"
-                  elif ([.jobs[] | select(.status == "in_progress")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "completed" and .conclusion != "skipped")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status != "completed" and ((.name | planned) | not))] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "waiting")] | length) == 0 then "keep"
-                  else "cancel" end')
+            decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              python3 scripts/cancel-superseded-waiting.py \
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+              decision="keep: the jobs of run ${run} could not be read"
+            verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
               gh api --method POST "${api}/runs/${run}/cancel" --silent
-              echo "cancelled superseded run ${run}"
+              echo "cancelled superseded run ${run}: ${decision#*: }"
+              echo "- Cancelled run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "kept run ${run}"
+              echo "kept run ${run}: ${decision#*: }"
+              echo "- Kept run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
 
@@ -1618,25 +1604,18 @@ jobs:
             jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
               '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
           for run in ${older}; do
-            verdict=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
-              jq -r --arg m "${PLANS_MAIL}" --arg n "${PLANS_NETWORK}" --arg e "${PLANS_ESTATE}" '
-                def planned:
-                  if startswith("Apply (mail,") then $m == "true"
-                  elif startswith("Apply (hetzner network,") then $n == "true"
-                  elif startswith("Apply (hetzner estate,") then $e == "true"
-                  else false end;
-                [.jobs[] | select(.name | startswith("Apply ("))] as $applies
-                | if ($applies | length) == 0 then "keep"
-                  elif ([.jobs[] | select(.status == "in_progress")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "completed" and .conclusion != "skipped")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status != "completed" and ((.name | planned) | not))] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "waiting")] | length) == 0 then "keep"
-                  else "cancel" end')
+            decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              python3 scripts/cancel-superseded-waiting.py \
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+              decision="keep: the jobs of run ${run} could not be read"
+            verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
               gh api --method POST "${api}/runs/${run}/cancel" --silent
-              echo "cancelled superseded run ${run}"
+              echo "cancelled superseded run ${run}: ${decision#*: }"
+              echo "- Cancelled run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "kept run ${run}"
+              echo "kept run ${run}: ${decision#*: }"
+              echo "- Kept run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
 
