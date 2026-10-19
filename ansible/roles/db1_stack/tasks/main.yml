@@ -320,6 +320,7 @@
   # The content is empty, but when the file already exists the module reports
   # the checksum of the file as it is, and that is a digest of the password.
   no_log: true
+  register: db1_stack_exporter_created
   when:
     - db1_stack_branchleft_directory_stat.stat.exists
     - not (db1_stack_exporter_path_now.stat.isdir | default(false))
