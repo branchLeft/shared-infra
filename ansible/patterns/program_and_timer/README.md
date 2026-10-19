@@ -21,14 +21,59 @@ exist before it runs. It does not supply the unit files of `files_and_units`: it
 timer and oneshot service are its own copies of that recipe, with the program as
 their `ExecStart`.
 
+It refuses, before any task changes anything, an input it cannot use safely: see
+"The rules the role enforces on its inputs".
+
 ## Interface
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the variables, and
 [`defaults/main.yml`](defaults/main.yml) holds their defaults. None of them is a
 secret. This role takes no credentials, so the `no_log` and `diff: false` rules do
-not apply to it (see the named limits). The owner and group of the program are
-variables so a service role can give the program to its service user; the units stay
-`root:root`.
+not apply to it (see the named limits).
+
+| Variable                             | Meaning                                                                       |
+| ------------------------------------ | ----------------------------------------------------------------------------- |
+| `program_and_timer_program_src`      | The program's source: a name under `files/`, or an absolute path (not empty). |
+| `program_and_timer_program_dir`      | The dedicated directory the role creates and takes over for the program.      |
+| `program_and_timer_program_name`     | The program's file name inside that directory.                                |
+| `program_and_timer_service_user`     | The user that owns the program and runs it. Empty means root.                 |
+| `program_and_timer_service_group`    | The group of the program and of the run. Declared with the user, or empty.    |
+| `program_and_timer_unit_description` | The description written into both units.                                      |
+| `program_and_timer_tick_calendar`    | The timer's `OnCalendar` value.                                               |
+
+`vars/main.yml` holds two internal values (the installed path and the list of
+directories the role refuses). Role variables outrank a caller's, so a caller
+cannot change them; they are not part of the interface.
+
+## The rules the role enforces on its inputs
+
+The role runs these assertions first. Each message names the rule and never
+echoes the value it refused.
+
+- **types**: every option is a string. The argument spec coerces a wrong type
+  (a list passes a `str` check and the role still receives the list), so the role
+  rejects it itself.
+- **source**: the program source is not empty.
+- **directory shape**: the program directory is an absolute path of plain
+  characters, with no `.` or `..` component, no empty component and no trailing
+  slash.
+- **dedicated directory**: the program directory is at least two components deep
+  and is not one of the system directories in `vars/main.yml` (at least `/bin`,
+  `/sbin`, `/usr`, `/usr/bin`, `/usr/sbin`, `/usr/local`, `/usr/local/bin`,
+  `/usr/local/sbin`, `/etc`, `/lib`, `/var`, `/var/lib`, `/opt`). The role changes
+  the owner, group and mode of the program directory, so it must be a directory
+  made for this one program. A missing parent of it is created with the same
+  owner; a parent that exists is not touched.
+- **program name**: the program name is one file name, with no path separator.
+- **service identity**: the service user and the service group are declared
+  together, each a plain name, or both left empty.
+
+The owner rule behind the last one: the program is owned by root and the unit
+runs as root, unless a service user is declared. When one is, the program, its
+directory and the unit's `User=` and `Group=` are all that user and group. A
+program a service user can write must never run as root, because that is a way for
+that user to run commands as root; declaring the user in one place keeps the file
+owner and the unit's user the same by construction.
 
 ## Requirements
 
@@ -41,19 +86,19 @@ variables so a service role can give the program to its service user; the units 
 
 ## What it changes on a host
 
-- The directory `/usr/local/lib/program_and_timer`, owner and group from
-  `program_and_timer_program_owner` and `program_and_timer_program_group`, mode `0755`.
-- The program at `program_and_timer_program_path`, the same owner and group, mode
-  `0755`, byte for byte the source file.
-- The event directory `/var/lib/program_and_timer/events`, `root:root`, mode `0755`.
-  The handlers write one empty file there per restart and per daemon reload.
+- The directory `program_and_timer_program_dir` (default
+  `/usr/local/lib/program_and_timer`), owner and group from the service user and
+  group (root without them), mode `0755`.
+- The program inside it, the same owner and group, mode `0755`, byte for byte the
+  source file.
 - `/etc/systemd/system/program_and_timer_tick.service`, mode `0644`, a oneshot that
-  runs the program.
+  runs the program, as the service user when one is declared.
 - `/etc/systemd/system/program_and_timer_tick.timer`, mode `0644`, which starts the
   oneshot. Enabled and started.
 - One `daemon-reload` of the systemd manager, only when a unit file changed.
 - One restart of the timer, only when the program file changed.
-- No port, no user, no firewall rule.
+- Nothing else: no state directory, no record files, no port, no user, no firewall
+  rule.
 
 ## The recipe
 
@@ -79,8 +124,8 @@ changed. The reader must simulate it to learn the end state.
   ansible.builtin.copy:
     src: '{{ program_and_timer_program_src }}'
     dest: '{{ program_and_timer_program_path }}'
-    owner: '{{ program_and_timer_program_owner }}'
-    group: '{{ program_and_timer_program_group }}'
+    owner: '{{ program_and_timer_service_user | default("root", true) }}'
+    group: '{{ program_and_timer_service_group | default("root", true) }}'
     mode: '0755'
     validate: /bin/sh %s --check
   notify: Restart the program timer
@@ -96,18 +141,16 @@ changed. The reader must simulate it to learn the end state.
   when: program_and_timer_timer_unit.stat.exists
 ```
 
-The program task notifies the topic `program changed`. Two handlers listen to that
-topic: `Restart the program timer`, a `systemd_service` task with `state: restarted`,
-and `Record the program timer restart`, which writes the counter file the test reads.
-Ansible runs a handler once per play however many tasks notified its topic, and only
-when one of them changed. A handler's name cannot be notified twice in one play, so
-the topic is what lets one action and its record run together.
+The program task notifies the handler `Restart the program timer`, a
+`systemd_service` task with `state: restarted`. The unit tasks notify
+`Reload systemd manager`. Ansible runs a handler once per play however many tasks
+notified it, and only when one of them changed.
 
 ### (c) Why each parameter is set
 
 - `owner`, `group`, `mode` are explicit. A copy without them takes the process's umask
-  and the invoking user, so the end state depends on who ran it. The program's owner
-  is a variable so the test can tell the parameter from the default (see the limits).
+  and the invoking user, so the end state depends on who ran it. The owner comes from
+  the service user so the test can tell the parameter from the default (see the limits).
 - `validate: /bin/sh %s --check` runs the program's own check on the temporary copy,
   before the file replaces the installed one. A program whose check fails is never
   installed: the task fails with the validator's message, and the previous program
@@ -124,14 +167,17 @@ the topic is what lets one action and its record run together.
 - The handler order in `handlers/main.yml`: the daemon reload first, then the restart.
   Handlers run in the order written, so a restart that follows a reload sees the new
   unit.
-- The restart handler and its record are skipped in check mode only. Check mode writes
-  no unit file, so a restart of a timer that no file defines would fail on a fresh
-  host. This skip is stated here (ANS-10). Its record is skipped for the same reason.
+- `state: started` on the enable task. The restart handler runs only when the program
+  changed, so on a host where the timer was stopped by hand and nothing changed, only
+  this start brings it back.
+- The restart handler is skipped in check mode only. Check mode writes no unit file,
+  so a restart of a timer that no file defines would fail on a fresh host. This skip
+  is stated here (ANS-10).
 - `systemd_service` (not `command` with `systemctl`) reports the unit's real state, so
   the module knows when a change has happened (ANS-9).
-- The records are one empty file per restart and per reload, named by a microsecond
-  timestamp, so a play counts them with `find` and no state is kept in the role. They
-  are an audit trail of what the role did, and they are the counters the test reads.
+- The program directory is the role's own, and the role refuses any other (see the
+  rules above). The unit has no `User=` for root, and has the service user when one is
+  declared, so the file's owner and the process's user never differ.
 
 ## How to run its test
 
@@ -154,52 +200,98 @@ What each part of the scenario does:
   names are inventory variables in `molecule.yml`, so the role, the converge and the
   verify read one value.
 - `check-fresh`: the converge in check mode against an instance on which nothing is
-  installed. It completes. The restart and its record are skipped, and the enable is
-  skipped, for the reasons in (c).
-- `converge`: on an instance with no program it first applies the role with the
-  placeholder program. In that same run it clears the event records, applies a program
-  whose check fails inside a block and asserts the validator refused it, and then
-  applies the role with the second version. The counters therefore read only what the
-  edit did. Every later converge applies the role with the second version and changes
-  nothing; the edit and refusal steps are skipped there, so a refused program is never
-  re-run against a host that already has the second version.
+  installed. It completes. The restart and the enable are skipped, for the reasons in
+  (c).
+- `converge`: on an instance with no program it first applies the role with each
+  refused input in `converge.yml` (a relative path, a `..` component, a trailing slash,
+  `/`, a top-level directory, three shared system directories and the unit directory, a
+  program name with a separator, an empty source, a list for the user, a user without a
+  group) and asserts that each is refused with its rule's message, that the shared
+  directory it named kept its owner, group and mode, and that nothing was left behind.
+  It then applies the role with the placeholder program and writes a mark to the
+  journal. Next it reads the installed program, the files next to it and the timer
+  from systemd, applies a program whose check fails inside a block, and asserts that
+  the refusal left the old program's bytes, mode and owner, the directory's only file
+  and the timer's state, invocation and start time unchanged, and that the validator
+  gave the refusal. Last it applies the second version of the program. Every later
+  converge applies the role with the second version and changes nothing; the steps
+  above are skipped there.
 - `idempotence`: a second converge reports zero changed tasks. It runs the whole role
-  with the second version, so the restart, the reload and every unit task are inside the
-  proof (the two gated edit and refusal tasks are skipped and reported as such).
+  with the second version, so the restart, the reload and every unit task are inside
+  the proof.
 - `verify`: the program is the source file's bytes (sha256), with its owner, group and
-  mode. The records show exactly one restart and no daemon reload from the edit. The
-  unit files have their owner, group and mode. The timer is `enabled` and `active`
-  with the rendered description.
+  mode, in a directory with its owner, group and mode. systemd's own log, read from the
+  journal mark onward, shows exactly one stop and one start of the timer and no manager
+  reload (see "What the test counts"). The unit files have their owner, group and mode.
+  The timer is `enabled` and `active`, needs no daemon reload, has the rendered
+  description and is the invocation systemd logged last. systemd reports that the
+  oneshot runs as the service user. Finally the timer is stopped by hand and the role is
+  applied again with nothing changed: the timer must be active afterwards.
 - `check-configured` and `molecule-check`: the configured instance shows no drift.
 
-What breaks which step. Each row was one edit, one harness run on the pattern role,
-and a restore with `git restore`, run on 19 October 2026 on Docker Desktop with the
-engine named in the PR. Each red step is an assertion, not a crash.
+### What the test counts
 
-| Edit to the role or the scenario                                                                | Step that fails                                                             |
-| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| A task that changes on every run (a copy of `now()`) notifies the restart                       | `idempotence`, naming the marker task; the restart runs on each converge    |
-| `notify: program changed` removed from the program copy                                         | `verify`, "Found restarts 0, reloads 0"                                     |
-| A second record handler on the `program changed` topic                                          | `verify`, "Found restarts 2, reloads 0"                                     |
-| `validate: /bin/sh %s --check` removed                                                          | `converge`, the refusal assertion: "the install-time check did not stop it" |
-| The program delivered as other bytes (content with a replaced word, the same on every converge) | `verify`, "The installed program differs from the source file"              |
-| `enabled: true` changed to `false` for the timer                                                | `verify`, the timer's `UnitFileState == 'enabled'` assertion                |
-| `mode: '0755'` changed to `'0644'` on the program                                               | `verify`, "owner, group or mode differs ... 0644"                           |
+The restart and reload counts come from systemd, not from the role. The converge
+writes one line to the journal (`systemd-cat`), after the first install and before
+the program is changed. The verify play reads what systemd's own process (`_PID=1`)
+logged after that line:
 
-Not run as a row: a `no_log` control. The placeholder program takes no credentials, so
-there is no secret to prove (see the named limits).
+- a restart of the timer is the pair of job messages for `program_and_timer_tick.timer`
+  with `MESSAGE_ID` `9d1aaa27d60140bd96365438aad20286` (unit stopped) and
+  `39f53479d3a045ac8e11786248231fbf` (unit started); one restart is one of each;
+- a daemon reload is the manager's `Reloading...` line.
+
+The identifiers and the line were read from the journal of the test image's systemd
+257 (JSON output, fields `MESSAGE_ID`, `UNIT`, `JOB_TYPE`, `MESSAGE`); they are not
+taken from the role. A control case checks that the reload line this systemd writes
+is the one the test matches, by finding it in the journal of the first install, so a
+systemd that worded it differently fails the control instead of a count of zero
+passing for nothing. The mark is written by the test only; the role writes nothing
+for the test to read.
+
+### What breaks which step
+
+Each row was one edit, one harness run on the pattern role, and a restore with
+`git restore`. Each red step is an assertion, not a crash; the always-changed row is
+Molecule's own idempotence check, which names the task.
+
+| Edit to the role or the scenario                                                      | Step that fails                                                                          |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| The restart handler's `state: restarted` changed to `started`                         | `verify`, "systemd logged 0 stops and 0 starts of the timer"                             |
+| A second restart handler on the same notification                                     | `verify`, "systemd logged 2 stops and 2 starts"                                          |
+| A second handler that reloads the manager on the same notification                    | `verify`, "1 manager reloads"                                                            |
+| `state: started` removed from the enable task                                         | `verify`, "The role left a stopped timer stopped"                                        |
+| A task that changes on every run (a copy of `now()`) notifies the restart             | `idempotence`, naming the marker task and the restart                                    |
+| `notify` removed from the program copy                                                | `verify`, "systemd logged 0 stops and 0 starts of the timer"                             |
+| The program copied and checked afterwards (the old program overwritten first)         | `converge`, "A program whose check fails changed what was installed"                     |
+| `validate: /bin/sh %s --check` removed                                                | `converge`, the same assertion: the bad program replaced the old one                     |
+| The program delivered as other bytes (content from a lookup, a trailing newline lost) | `verify`, "The installed program differs from the source file"                           |
+| `enabled: true` changed to `false` for the timer                                      | `verify`, the timer's enabled assertion                                                  |
+| `mode: '0755'` changed to `'0644'` on the program                                     | `verify`, "owner, group or mode differs ... 0644"                                        |
+| The directory task without `owner` and `group`                                        | `verify`, "The program directory owner, group or mode differs"                           |
+| `User=` and `Group=` removed from the service unit                                    | `verify`, "The unit does not run the program as the user and group that own it"          |
+| The types rule made always true                                                       | `converge`, "did not refuse the input with the rule rule: types"                         |
+| The source rule made always true                                                      | `converge`, the same with "rule: source"                                                 |
+| The directory shape rule made always true                                             | `converge`, the same with "rule: directory shape" (the relative path)                    |
+| Only the `..` component test of the shape rule removed                                | `converge`, the same with "rule: directory shape" (the `..` path)                        |
+| Both conditions of the dedicated-directory rule made always true                      | `converge`, "The role changed the owner, group or mode of a directory it must not touch" |
+| Only the list of system directories removed from that rule                            | `converge`, the same for `/usr/local/bin`                                                |
+| The program name rule made always true                                                | `converge`, the same with "rule: program name"                                           |
+| The service identity rule made always true                                            | `converge`, the same with "rule: service identity"                                       |
 
 ### Named limits
 
-- **The program's `owner` and `group` are tested with non-root values.** The test
-  runs the program as the placeholder user, so the owner assertion can tell the
-  parameter from the default. In production the program's owner should be `root`:
-  a program run by root that a service user can write is a way for that user to run
-  commands as root. The variable exists for a service that needs its own user, and the
-  role does not decide that for the caller.
 - **Reviewed, not tested.** The `owner: root` and `group: root` on the two unit files.
   The test runs as root, so omitting them gives the same result, and a unit must not be
   owned by anyone else, so there is no value that would tell the two apart.
+- **The service user is a placeholder in the test.** The scenario declares a non-root
+  service user so the owner, group and `User=` assertions can tell the parameters from
+  the defaults. The test does not run the program as that user; it asks systemd what the
+  unit is configured to run as.
+- **A directory outside the refused list can still be shared.** The role refuses `/`,
+  every directory fewer than two components deep and the listed system directories. It
+  cannot know that `/srv/EXAMPLE` is used by another service. The rule for a consumer is
+  that the program directory is used for this program and nothing else.
 - **The check runs at apply, not in check mode.** A check-mode run does not run
   `validate`, so a plan shows the program as a change. The refusal shows at apply.
 - **The program's own check is what the role runs.** The role does not check the
@@ -207,30 +299,33 @@ there is no secret to prove (see the named limits).
   timer runs it is not caught here.
 - **The restart is for the timer.** The oneshot service the timer starts is not
   restarted by a program change, because it is not running between runs.
-- **No credentials.** The placeholder program takes no credentials file, so the rule
-  that a secret is delivered with `no_log: true` and `diff: false`, and a log scan that
-  proves it, is not exercised here. A service role whose program takes a credentials
-  file must add that delivery and its own proof.
-- **The event records are a side effect of the role.** They are written on every
-  restart and reload to the event directory, and they grow with each change. A
-  maintainer who prunes that directory loses the record, not the program.
+- **No credentials, so the `no_log` control is not exercised.** The placeholder program
+  takes no credentials file, so the rule that a secret is delivered with `no_log: true`
+  and `diff: false`, and a log scan that proves it, has nothing to prove here. This is a
+  limit of this pattern. A service role whose program takes a credentials file adds the
+  delivery task with `no_log: true` and `diff: false` on it, and adds its own proof that
+  the secret is absent from the run's output.
 - **The validator is `/bin/sh --check`, which is the program's own check.** It runs the
   temporary copy as a shell script. A program in another language needs its own
   validator, and the role does not pick one.
+- **The count depends on the journal.** The test reads systemd's log through
+  `journalctl`, so the base image must run `systemd-journald` (the pinned image does).
+  The message identifiers and the reload line are systemd 257's; the control case above
+  catches a change in the reload line, and the exactly-one assertions on stops and
+  starts fail if the job messages change.
 - The test proves the files' content and the systemd state on one container. It does
   not prove that the placeholder program does useful work, or that the timer fires at
   its calendar time.
 - The owner, group and mode are checked on the files this role writes. A file another
   role writes is not covered.
-- `check-fresh` skips the restart, its record and the enable (see (c)), and the harness
-  does not catch a silent skip. This section is the review of it.
-- **CI does not run this scenario today.** The Ansible workflow runs the harness over
-  `ansible/roles` only. Until it lists `ansible/patterns`, a change here is proven by
-  the local run above.
+- `check-fresh` skips the restart and the enable (see (c)), and the harness does not
+  catch a silent skip. This section is the review of it.
+- **CI.** The Ansible workflow on `main` (`.github/workflows/ansible.yml`) runs the
+  harness over every role under `ansible/roles` and every pattern under
+  `ansible/patterns`, and pins its runner image. A change here is run by it.
 - The platform settings in `molecule.yml` are the sibling pattern's, with the same
-  reasons. They were run here on Docker Desktop only. They are not measured on a
-  GitHub runner for this pattern.
-- The runner image `ubuntu-latest` moves to Ubuntu 26.04 in a rollout from 19 October 2026. This pattern has not been run on Ubuntu 26.04, so that move is unproven for it.
+  reasons. This README does not claim a measurement of them beyond what the harness and
+  that workflow run.
 - The base image is Debian 13 with Python 3.13 and an `EXTERNALLY-MANAGED` marker that
   its Dockerfile tries to remove at a 3.11 path, so the marker stays and its unpinned
   `ansible` and `cryptography` installs rely on `--break-system-packages`. This is a
@@ -249,36 +344,36 @@ reusable workflow are separate work.
 
 1. Make the new role from the skeleton, as `ansible/README.md` says, under
    `ansible/roles/`.
-2. Copy `tasks/main.yml`, `handlers/main.yml`, `templates/` and the whole of
-   `molecule/default/` over the new role's files, and the program file into the new
-   role's `files/` directory. Keep `namespace` in `meta/main.yml`: Molecule links the
-   role under it.
+2. Copy `tasks/main.yml`, `handlers/main.yml`, `vars/main.yml`, `templates/` and the
+   whole of `molecule/default/` over the new role's files, and the program file into
+   the new role's `files/` directory. Keep `namespace` in `meta/main.yml`: Molecule
+   links the role under it.
 3. Rename. The variable prefix `program_and_timer_` becomes the new role's name in
-   `defaults/main.yml`, `meta/argument_specs.yml`, the tasks, the handlers, the
-   templates and the group variables in `molecule.yml`. The unit names
+   `defaults/main.yml`, `meta/argument_specs.yml`, `vars/main.yml`, the tasks, the
+   handlers, the templates and the group variables in `molecule.yml`. The unit names
    `program_and_timer_tick.service` and `program_and_timer_tick.timer` become the
-   service's. The role name in `converge.yml` (`branchleft.program_and_timer`) becomes
-   `branchleft.` and the new name. The same paths appear in `verify.yml` and
-   `converge.yml`.
-4. Replace the placeholders: the program's content (it must support `--check`), its
-   `ExecStart` path, the calendar, and the ALL_CAPS values in `meta/`.
+   service's. The role name in `converge.yml` and `verify.yml`
+   (`branchleft.program_and_timer`) becomes `branchleft.` and the new name. The same
+   paths appear in `verify.yml`, `converge.yml` and `tasks/refusal_case.yml`.
+4. Replace the placeholders: the program's content (it must support `--check`), the
+   calendar, and the ALL_CAPS values in `meta/`. Choose the program directory: one made
+   for this program, deep enough and not a system directory, or the role refuses it.
 5. Keep the install-time check. A program in a language other than `/bin/sh` needs its
    own validator in `validate:`, and the scenario's second and bad programs must be
    written in that language.
-6. Set the program's user and group in the scenario's group variables to placeholders
-   for the real service's, and keep them non-root unless the program must be root-owned
-   and the README says so.
-7. Run the harness on the new role. Then break each control in the table below on the
+6. Set the service user and group in the scenario's group variables to placeholders for
+   the real service's, and keep them non-root unless the program must be root-owned. Do
+   not set the file owner without the unit's `User=`: the role declares both together.
+7. Run the harness on the new role. Then break each control in the table above on the
    copy and see the same step fail: a control is yours only after you have broken it.
 8. Do not give the scenario more privilege than this one, and reuse the image pin
    below rather than choosing another base.
 
 ## The systemd test base image (a third-party image, trusted by digest)
 
-This scenario uses the same third-party systemd base as `files_and_units`, chosen by
-the orchestrator's ruling and recorded there as the decision the owner reviews. Its
-image, source, Dockerfile, trixie differences and the table of settings that let
-systemd run are in
+This scenario uses the same third-party systemd base as `files_and_units`. Its image,
+source, Dockerfile, trixie differences and the table of settings that let systemd run
+are in
 [`ansible/patterns/files_and_units/README.md`](../files_and_units/README.md) under
 "The systemd test base image". The reference is
 `geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372`
@@ -288,8 +383,8 @@ scenario with each key's reason kept beside it.
 ## How to change it safely
 
 Change the tasks, the handlers, the templates and the converge and verify plays
-together, run the harness, and break the control you touched (the table below) to see
+together, run the harness, and break the control you touched (the table above) to see
 it fail. A change to the digest is its own change, reviewed on its own. An edit to a
 default value is a change of behaviour on every host that uses the role, not a rename.
-Removing the `notify`, the flush, the validator, the mode or the enable removes a
-control the table shows.
+Removing the `notify`, the flush, the validator, the mode, the enable, the `User=`
+line or a rule of the input checks removes a control the table shows.

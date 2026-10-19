@@ -86,6 +86,26 @@
       ansible.builtin.set_fact:
         program_and_timer_verify_events: '{{ program_and_timer_verify_log.stdout_lines | map("from_json") | list }}'
 
+    # A control case for the zero-reload assertion below: the first install of
+    # the units reloaded the manager before the mark, so the message that
+    # assertion matches must appear in this boot's log. If a newer systemd
+    # worded it differently, this fails instead of the zero passing for nothing.
+    - name: Read everything systemd logged about itself since boot
+      ansible.builtin.command: journalctl --output=json --no-pager _PID=1
+      register: program_and_timer_verify_boot_log
+      changed_when: false
+
+    - name: Assert the reload message the test matches on is one this systemd logs
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_boot_reloads | int >= 1
+        fail_msg: The journal holds no manager reload message since boot, so a count of zero would prove nothing.
+        quiet: true
+      vars:
+        program_and_timer_verify_boot_events: '{{ program_and_timer_verify_boot_log.stdout_lines | map("from_json") | list }}'
+        program_and_timer_verify_boot_reloads: >-
+          {{ program_and_timer_verify_boot_events | selectattr('MESSAGE', 'equalto', 'Reloading...') | list | length }}
+
     - name: Assert the edit restarted the timer exactly once and reloaded nothing
       ansible.builtin.assert:
         that:
