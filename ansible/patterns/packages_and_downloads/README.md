@@ -252,7 +252,8 @@ The rule is: a download without a pin fails.
    - an `include_tasks` or `import_tasks` whose target is not a literal file name
      of a file under `tasks/` or `handlers/` that this same scan read (a file
      at the role root, a missing file, a template, `..` or a leading `/` is
-     refused);
+     refused, unless a file of the same name also exists under `tasks/` or
+     `handlers/`; see the named limit on the include check);
    - a scan that read no `tasks/main.yml`, or saw no `get_url` task at all, so
      the check cannot pass by finding nothing.
 
@@ -346,6 +347,16 @@ one and needs no cgroup mount, no `cgroupns_mode` and no tmpfs.
   never reports a package file whose package was removed. Closing it needs a
   task that reads the installed packages and compares them with the expected
   list; this pattern does not do that.
+- **The include check matches by name, not by the path Ansible resolves.** The
+  scan accepts an `include_tasks` or `import_tasks` target by the file name it
+  read under `tasks/` or `handlers/`. A role-root file of the same name is
+  refused only when no such file exists. So a role with a clean
+  `handlers/extra.yml`, an unpinned `extra.yml` at the role root, and
+  `include_tasks: extra.yml` in `tasks/main.yml` passes the scan, and Ansible
+  may run the role-root file. This needs two same-named files placed on
+  purpose. The safe rule for a service role that copies this pattern is to put
+  every included file under `tasks/` only, and to review any YAML file at the
+  role root by hand.
 - **A `uri` task without `dest` is not refused.** Followed by a `copy` with
   `content:` it fetches with no pin, and the scan passes it.
 - **A rewrite of the downloads variable after the first assertions is not
@@ -369,11 +380,12 @@ one and needs no cgroup mount, no `cgroupns_mode` and no tmpfs.
   claim. A file under `tasks/` that is not valid YAML stops the scan with an
   error rather than an assertion. The pin proves the bytes did not change, not
   that the vendor published them.
-- **CI runs lint here, not the harness.** CI's lint and yamllint steps cover
-  `ansible/` as a whole, so they run over this pattern. The harness (Molecule)
-  runs there only over `ansible/roles/*`, so the container test and the scan do
-  not run in CI for this pattern until the workflow is changed. The run-time
-  assertions run wherever the role runs.
+- **CI runs the harness over this pattern too.** CI's lint and yamllint steps
+  cover `ansible/` as a whole. The workflow step named "Run the harness over
+  every role and pattern" runs `ansible/harness/run_harness.py` over
+  `ansible/roles/*/` and `ansible/patterns/*/`, so the container test and the
+  download scan run in CI for this pattern. The run-time assertions run wherever
+  the role runs.
 - **The harness lints this pattern from the repository root, which lints a
   tracked directory fully.** For a role directory that git does not track, such
   as a fresh skeleton role made in a temporary directory, ansible-lint reports
