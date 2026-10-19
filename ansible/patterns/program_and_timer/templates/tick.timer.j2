@@ -1,0 +1,9 @@
+[Unit]
+Description={{ program_and_timer_unit_description }}
+
+[Timer]
+OnCalendar={{ program_and_timer_tick_calendar }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
