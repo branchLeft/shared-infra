@@ -347,12 +347,13 @@ class CancelStepStructureTests(unittest.TestCase):
     def setUp(self):
         self.text = workflow_text()
 
-    def test_each_plan_job_opens_with_the_cancel_step(self):
+    def test_each_plan_job_runs_the_cancel_step_right_after_checkout(self):
         bodies = []
         for job in PLAN_JOBS:
             with self.subTest(job=job):
                 block = job_block(self.text, job)
-                self.assertEqual(step_blocks(block)[0][0], CANCEL_NAME)
+                names = [n for n, _ in step_blocks(block)]
+                self.assertEqual(names[names.index("Checkout") + 1], CANCEL_NAME)
                 bodies.append(step(block, CANCEL_NAME))
         self.assertEqual(len(set(bodies)), 1, "the three copies must not drift")
 
@@ -388,6 +389,39 @@ class CancelStepStructureTests(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("jq"), "jq is needed to run the cancel step")
+class CancelStepOrderTests(unittest.TestCase):
+    """The cancel step runs scripts/cancel-superseded-waiting.py from the
+    checkout, so in every job that calls it the checkout step must come first.
+    Parsed as YAML, so the order is the workflow's real step order."""
+
+    def setUp(self):
+        import yaml
+
+        self.workflow = yaml.safe_load(workflow_text())
+
+    def test_the_script_step_comes_after_checkout_in_every_job_that_calls_it(self):
+        callers = []
+        for job_name, job in self.workflow["jobs"].items():
+            steps = job.get("steps") or []
+            for index, found in enumerate(steps):
+                if "cancel-superseded-waiting.py" not in str(found.get("run", "")):
+                    continue
+                callers.append(job_name)
+                checkouts = [
+                    i for i, s in enumerate(steps)
+                    if str(s.get("uses", "")).startswith("actions/checkout@")
+                ]
+                with self.subTest(job=job_name):
+                    self.assertTrue(checkouts, "no checkout step before the script call")
+                    self.assertLess(
+                        min(checkouts),
+                        index,
+                        "the script call (step %d) runs before Checkout, so the file is "
+                        "missing on the runner" % index,
+                    )
+        self.assertEqual(sorted(callers), sorted(PLAN_JOBS))
+
+
 class CancelBehaviourTests(unittest.TestCase):
     CURRENT = 50
 
@@ -546,6 +580,39 @@ class CancelBehaviourTests(unittest.TestCase):
             [self.run_row(101)], {101: jobs}, plans=("false", "true", "true")
         )
         self.assertEqual(cancelled, ["POST repos/ORG/REPO/actions/runs/101/cancel"])
+
+    def run_outside_repo(self, script):
+        """Run the step from an empty directory with no scripts/ in it."""
+        elsewhere = pathlib.Path(tempfile.mkdtemp(prefix="cancel-elsewhere-"))
+        self.addCleanup(shutil.rmtree, elsewhere, True)
+        self.stub.put("runs.json", {"workflow_runs": [self.run_row(101)]})
+        self.stub.put("jobs-101.json", {"jobs": [self.job(self.ESTATE, "waiting")]})
+        result = self.stub.run(
+            script,
+            cwd=str(elsewhere),
+            GITHUB_RUN_NUMBER=str(self.CURRENT),
+            GITHUB_STEP_SUMMARY=str(self.stub.dir / "summary.md"),
+            PLANS_MAIL="true",
+            PLANS_NETWORK="true",
+            PLANS_ESTATE="true",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return [c for c in self.stub.calls() if c.startswith("POST ")]
+
+    def test_a_missing_script_keeps_every_run_and_says_so(self):
+        # The failure shape of an ordering mistake: the relative script path
+        # does not resolve, so the run is kept and the summary names why.
+        posts = self.run_outside_repo(self.script)
+        self.assertEqual(posts, [])
+        summary = (self.stub.dir / "summary.md").read_text(encoding="utf-8")
+        self.assertIn("Kept run 101", summary)
+        self.assertIn("could not be read", summary)
+
+    def test_the_script_decides_the_same_when_run_by_its_absolute_path(self):
+        absolute = str(ROOT / "scripts" / "cancel-superseded-waiting.py")
+        script = self.script.replace("scripts/cancel-superseded-waiting.py", absolute)
+        posts = self.run_outside_repo(script)
+        self.assertEqual(posts, ["POST repos/ORG/REPO/actions/runs/101/cancel"])
 
     def test_a_listing_failure_cancels_nothing(self):
         result = self.stub.run(
