@@ -1,0 +1,73 @@
+---
+# What the role expects to find on a host before it runs: the account whose
+# keys it manages. Prepare also puts in place what the verify play compares
+# against: a key the role must remove, and a copy of the main sudoers file the
+# role must never change.
+- name: Make the throwaway keys on the controller
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Make the directory for this run's throwaway keys
+      ansible.builtin.file:
+        path: '{{ scenario_key_dir }}'
+        state: directory
+        mode: '0700'
+
+    # No module in the pinned collections makes an SSH key pair, so the command
+    # is used (ANS-9). The creates argument makes it report truthfully.
+    - name: Make one throwaway key pair for each key the scenario uses
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -q
+          - -t
+          - ed25519
+          - -N
+          - ''
+          - -C
+          - 'PLACEHOLDER_{{ item }}'
+          - -f
+          - '{{ scenario_key_dir }}/{{ item }}'
+        creates: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - forced
+        - interactive
+        - stale
+
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create the placeholder account
+      ansible.builtin.user:
+        name: '{{ scenario_user }}'
+        shell: /bin/bash
+        create_home: true
+
+    # A key an earlier release of the host had. The role must remove it.
+    - name: Give the account a key the role must remove
+      ansible.posix.authorized_key:
+        user: '{{ scenario_user }}'
+        key: "{{ lookup('ansible.builtin.file', scenario_key_dir ~ '/stale.pub') }}"
+        manage_dir: true
+      no_log: true
+      diff: false
+
+    # The fragment of an earlier release, owned by the account and with other
+    # content. The copy keeps the owner and mode of a file that exists unless it
+    # is told otherwise, so only a file that is not owned by root can show that
+    # the role sets the owner, the group and the mode itself.
+    - name: Leave an earlier fragment owned by the account
+      ansible.builtin.copy:
+        content: "# EARLIER_FRAGMENT\n"
+        dest: '/etc/sudoers.d/{{ scenario_sudoers_name }}'
+        owner: '{{ scenario_user }}'
+        group: '{{ scenario_user }}'
+        mode: '0640'
+
+    - name: Keep a copy of the main sudoers file as the image ships it
+      ansible.builtin.copy:
+        src: /etc/sudoers
+        dest: /var/tmp/sudoers.before
+        remote_src: true
+        mode: preserve

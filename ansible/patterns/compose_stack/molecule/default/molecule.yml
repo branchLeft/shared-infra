@@ -1,0 +1,61 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party Debian 13 test base, the release every production host runs,
+    # trusted by digest (see the role README). The digest is the pin; the tag
+    # is informational and moves weekly. This scenario needs no init system, so
+    # it takes none of the systemd settings the files_and_units scenario needs.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # The image declares /sys/fs/cgroup as a volume, so each start creates an
+    # anonymous volume. Destroy removes it with the container; true would leak
+    # one volume per run.
+    keep_volumes: false
+    # The image's own command starts systemd as PID 1, which needs a read-write
+    # cgroup mount and tmpfs mounts this scenario does not give it. Nothing here
+    # uses systemd, so the container just stays up for Ansible to connect to.
+    command: sleep infinity
+    # The run's label, so the harness can check that a destroy removed only
+    # this run's container.
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every step of one run appends to this file, so the verify play can look
+    # through all of the run's output for a secret. It lives in the scenario's
+    # ephemeral directory, which destroy removes.
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+  inventory:
+    group_vars:
+      all:
+        # The values the role runs with, read by the prepare, converge and
+        # verify plays as well. The owner and group are not root, so the test
+        # shows that the role's owner and group parameters produce the result.
+        compose_stack_owner: example_user
+        compose_stack_group: example_group
+        # Images use the .invalid top-level domain, which never resolves, and
+        # fixed made-up digests: no image is ever pulled. The earlier values
+        # the converge starts from are in converge.yml.
+        scenario_image: example.invalid/example-app@sha256:2222222222222222222222222222222222222222222222222222222222222222
+        scenario_greeting: SCENARIO_GREETING
+        # A throwaway made for this run from the harness's run id: it is never
+        # committed, and the verify play looks for it in the run's log.
+        scenario_secret: "THROWAWAY-{{ lookup('ansible.builtin.env', 'ROLE_TEST_RUN_ID') }}"
+        compose_stack_app_image: '{{ scenario_image }}'
+        compose_stack_app_greeting: '{{ scenario_greeting }}'
+        compose_stack_secret_files:
+          - name: app.secret.env
+            content: 'APP_SECRET={{ scenario_secret }}'
+verifier:
+  name: ansible

@@ -1,0 +1,11 @@
+---
+packages_and_downloads_apt_packages: []
+packages_and_downloads_debs: []
+packages_and_downloads_downloads: []
+packages_and_downloads_download_owner: root
+packages_and_downloads_download_group: root
+packages_and_downloads_download_mode: '0644'
+packages_and_downloads_repository_present: false
+packages_and_downloads_repository_uri: ''
+packages_and_downloads_repository_suite: ''
+packages_and_downloads_repository_key_sha256: ''

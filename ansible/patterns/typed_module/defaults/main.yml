@@ -1,0 +1,6 @@
+---
+typed_module_state: present
+typed_module_path: /etc/typed_module.record
+typed_module_name: EXAMPLE_NAME
+typed_module_count: 1
+typed_module_mode: '0600'

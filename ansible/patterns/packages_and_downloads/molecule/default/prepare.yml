@@ -1,0 +1,85 @@
+---
+# Test setup only, never part of the role. It makes the artefacts local, builds
+# the placeholder package inside the instance (so no binary is committed), and
+# marks the apt index fresh, so the test needs no network.
+- name: Prepare the local artefacts and the apt index stamp
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create the local artefact directory
+      ansible.builtin.file:
+        path: /srv/packages-and-downloads
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Place the pinned tool fixture next to the test
+      ansible.builtin.copy:
+        src: example-tool-v1
+        dest: /srv/packages-and-downloads/example-tool-v1
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create the package build directories
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /var/tmp/package-build
+        - /var/tmp/package-build/example-pinned-tool
+        - /var/tmp/package-build/example-pinned-tool/DEBIAN
+        - /var/tmp/package-build/example-pinned-tool/usr
+        - /var/tmp/package-build/example-pinned-tool/usr/share
+        - /var/tmp/package-build/example-pinned-tool/usr/share/example-pinned-tool
+
+    - name: Write the placeholder package control file
+      ansible.builtin.copy:
+        content: |
+          Package: example-pinned-tool
+          Version: 1.0.0
+          Architecture: all
+          Maintainer: AUTHOR_NAME <ADDRESS@example.invalid>
+          Description: PLACEHOLDER_DESCRIPTION
+        dest: /var/tmp/package-build/example-pinned-tool/DEBIAN/control
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Write the placeholder package payload
+      ansible.builtin.copy:
+        content: |
+          PLACEHOLDER_PACKAGE_PAYLOAD
+        dest: /var/tmp/package-build/example-pinned-tool/usr/share/example-pinned-tool/PLACEHOLDER
+        owner: root
+        group: root
+        mode: '0644'
+
+    # An uncompressed archive with a fixed timestamp and root ownership, so the
+    # same inputs build the same bytes and converge.yml can pin the digest.
+    - name: Build the placeholder package file
+      ansible.builtin.command:
+        argv:
+          - dpkg-deb
+          - -Znone
+          - --root-owner-group
+          - --build
+          - /var/tmp/package-build/example-pinned-tool
+          - /srv/packages-and-downloads/example-pinned-tool_1.0.0_all.deb
+        creates: /srv/packages-and-downloads/example-pinned-tool_1.0.0_all.deb
+      environment:
+        SOURCE_DATE_EPOCH: '1700000000'
+
+    # apt skips its index refresh while this stamp is younger than
+    # cache_valid_time, so no apt-get update runs and nothing is fetched.
+    - name: Mark the apt index as fresh so no refresh runs
+      ansible.builtin.file:
+        path: /var/lib/apt/periodic/update-success-stamp
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'
