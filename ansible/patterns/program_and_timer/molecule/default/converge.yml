@@ -1,0 +1,94 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # An instance with no program stands for a host that has no program yet: the
+    # role is applied once with the placeholder program, then the edit below
+    # changes the program and its counters are read on their own. Once the
+    # program exists this is skipped, so a second converge changes nothing.
+    - name: Read whether the program is already on the instance
+      ansible.builtin.stat:
+        path: /usr/local/lib/program_and_timer/program.sh
+      register: converge_before
+
+    - name: Apply the role with the placeholder program on an instance with none
+      ansible.builtin.include_role:
+        # Molecule links the role under its namespace and name, the namespace
+        # from galaxy_info in meta/main.yml.
+        name: branchleft.program_and_timer
+      when: not converge_before.stat.exists
+
+    - name: Read the installed program's checksum after the first apply
+      ansible.builtin.stat:
+        path: /usr/local/lib/program_and_timer/program.sh
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: converge_program
+
+    # The edit: when the installed program is not the second version, the event
+    # records are cleared and the role is applied with the second version. The
+    # verify play then counts the records this edit made: one restart and no
+    # daemon reload. A second converge finds the second version and skips this.
+    # The second version's checksum is read on the controller, where the file lives,
+    # with the same algorithm as the installed file.
+    - name: Read the second version's checksum on the controller
+      ansible.builtin.stat:
+        path: '{{ playbook_dir }}/files/example_program_v2.sh'
+        checksum_algorithm: sha256
+        get_checksum: true
+      delegate_to: localhost
+      register: converge_source
+
+    - name: Edit the program to its second version
+      when: converge_program.stat.checksum | default('') != converge_source.stat.checksum
+      block:
+        - name: Find the event records left by the earlier apply
+          ansible.builtin.find:
+            paths: /var/lib/program_and_timer/events
+            patterns:
+              - restart-*
+              - reload-*
+          register: converge_records
+
+        - name: Clear the event records before the edit
+          ansible.builtin.file:
+            path: '{{ item.path }}'
+            state: absent
+          loop: '{{ converge_records.files }}'
+          loop_control:
+            label: '{{ item.path | basename }}'
+
+        - name: Apply the role with the second version of the program
+          ansible.builtin.include_role:
+            name: branchleft.program_and_timer
+          vars:
+            program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.sh'
+
+    # A program whose own check fails must be refused, and the installed program
+    # must stay. The role is applied with the failing program inside a block, so
+    # the refusal is caught here and asserted. Check mode writes nothing, so it
+    # has no refusal to see; the copy would report a change there, so it is
+    # skipped in check mode only (ANS-10).
+    - name: Apply the role with a program whose own check fails
+      when: not ansible_check_mode
+      block:
+        - name: Apply the role with the failing program
+          ansible.builtin.include_role:
+            name: branchleft.program_and_timer
+          vars:
+            program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_bad.sh'
+      rescue:
+        - name: Record that the failing program was refused by the validator
+          ansible.builtin.set_fact:
+            program_and_timer_refused: '{{ "failed to validate" in (ansible_failed_result.msg | default("")) }}'
+
+    - name: Assert the failing program was refused by the install-time check
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_refused | default(false)
+        fail_msg: >-
+          The program whose check fails was installed, or refused for another reason:
+          the install-time check did not stop it.
+        success_msg: The program whose check fails was refused before it replaced the installed one.
+      when: not ansible_check_mode

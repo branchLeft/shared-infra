@@ -1,0 +1,99 @@
+---
+# The owner, group, description and the checksum source come from the scenario's
+# inventory variables (molecule.yml) and the scenario's files: the same values
+# the role was converged with.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the installed program with its checksum
+      ansible.builtin.stat:
+        path: /usr/local/lib/program_and_timer/program.sh
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: program_and_timer_verify_program
+
+    # The source's checksum is read on the controller, where the source file lives,
+    # with the same algorithm as the installed file.
+    - name: Read the source program's checksum on the controller
+      ansible.builtin.stat:
+        path: '{{ playbook_dir }}/files/example_program_v2.sh'
+        checksum_algorithm: sha256
+        get_checksum: true
+      delegate_to: localhost
+      register: program_and_timer_verify_source
+
+    - name: Assert the installed program is the source file byte for byte
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_program.stat.exists
+          - program_and_timer_verify_program.stat.checksum == program_and_timer_verify_source.stat.checksum
+        fail_msg: >-
+          The installed program differs from the source file: installed
+          {{ program_and_timer_verify_program.stat.checksum | default('missing') }},
+          source {{ program_and_timer_verify_source.stat.checksum }}.
+        success_msg: The installed program is the source file byte for byte.
+
+    - name: Assert the installed program has its owner, group and mode
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_program.stat.pw_name == program_and_timer_program_owner
+          - program_and_timer_verify_program.stat.gr_name == program_and_timer_program_group
+          - program_and_timer_verify_program.stat.mode == '0755'
+        fail_msg: >-
+          The installed program owner, group or mode differs:
+          {{ program_and_timer_verify_program.stat.pw_name | default('?') }}:{{ program_and_timer_verify_program.stat.gr_name | default('?') }}
+          {{ program_and_timer_verify_program.stat.mode | default('?') }}.
+        success_msg: The installed program has its owner, group and mode.
+
+    - name: Count the restart and daemon-reload records the edit left
+      ansible.builtin.find:
+        paths: /var/lib/program_and_timer/events
+        patterns:
+          - restart-*
+          - reload-*
+      register: program_and_timer_verify_records
+
+    - name: Assert the edit caused exactly one restart and no daemon reload
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_records.files | selectattr('path', 'search', '/restart-') | list | length == 1
+          - program_and_timer_verify_records.files | selectattr('path', 'search', '/reload-') | list | length == 0
+        fail_msg: >-
+          A program change must restart the timer exactly once and reload no unit. Found
+          restarts {{ program_and_timer_verify_records.files | selectattr('path', 'search', '/restart-') | list | length }},
+          reloads {{ program_and_timer_verify_records.files | selectattr('path', 'search', '/reload-') | list | length }}.
+        success_msg: The program change restarted the timer once and reloaded no unit.
+
+    - name: Read each unit file
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /etc/systemd/system/program_and_timer_tick.service
+        - /etc/systemd/system/program_and_timer_tick.timer
+      register: program_and_timer_verify_units
+
+    - name: Assert every unit file exists with its owner, group and mode
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == '0644'
+        success_msg: The unit file was delivered with its owner, group and mode.
+      loop: '{{ program_and_timer_verify_units.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Ask systemd for the timer's state
+      ansible.builtin.systemd_service:
+        name: program_and_timer_tick.timer
+      register: program_and_timer_verify_timer
+
+    - name: Assert the timer is enabled and active with the rendered description
+      ansible.builtin.assert:
+        that:
+          - program_and_timer_verify_timer.status.UnitFileState == 'enabled'
+          - program_and_timer_verify_timer.status.ActiveState == 'active'
+          - program_and_timer_verify_timer.status.Description == program_and_timer_unit_description
+        success_msg: The timer is enabled and active with the rendered unit file loaded.

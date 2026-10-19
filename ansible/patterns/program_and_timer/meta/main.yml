@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  standalone: true
+  author: AUTHOR_NAME
+  # Molecule derives a fully qualified role name from the namespace, or from
+  # the author when there is none, and refuses an upper-case author.
+  namespace: branchleft
+  description: Installs an existing program after its own check, then enables and starts its timer, restarting the timer once per program change.
+  license: LICENSE_ID
+  min_ansible_version: '2.21.5'

@@ -1,0 +1,39 @@
+---
+argument_specs:
+  main:
+    short_description: Install an existing program after its check, then enable its timer
+    description: >-
+      Delivers one program file that the role never edits, runs the program's own
+      install-time check before the file replaces the installed one, delivers the
+      timer and its oneshot service, enables and starts the timer, and restarts the
+      timer once when the program file changes.
+    author: AUTHOR_NAME
+    options:
+      program_and_timer_program_src:
+        type: str
+        description: Source of the program. A name under the role's files directory, or an absolute path on the controller.
+        default: example_program.sh
+      program_and_timer_program_path:
+        type: str
+        description: Absolute path where the program is installed. Its directory is created by the role.
+        default: /usr/local/lib/program_and_timer/program.sh
+      program_and_timer_program_owner:
+        type: str
+        description: Owner of the program and its directory. The user must exist before the role runs. None of the variables is a secret.
+        default: root
+      program_and_timer_program_group:
+        type: str
+        description: Group of the program and its directory. The group must exist before the role runs.
+        default: root
+      program_and_timer_event_dir:
+        type: str
+        description: Directory where the handlers record one empty file per restart and per daemon reload, so a play can count them.
+        default: /var/lib/program_and_timer/events
+      program_and_timer_unit_description:
+        type: str
+        description: Description written into both unit files. A change to it edits both unit files and triggers one daemon reload.
+        default: EXAMPLE_UNIT_DESCRIPTION
+      program_and_timer_tick_calendar:
+        type: str
+        description: OnCalendar value of the timer.
+        default: hourly

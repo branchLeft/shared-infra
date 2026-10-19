@@ -1,0 +1,66 @@
+---
+- name: Create the directory the program is installed into
+  ansible.builtin.file:
+    path: '{{ program_and_timer_program_path | dirname }}'
+    state: directory
+    owner: '{{ program_and_timer_program_owner }}'
+    group: '{{ program_and_timer_program_group }}'
+    mode: '0755'
+
+- name: Create the directory the handlers record into
+  ansible.builtin.file:
+    path: '{{ program_and_timer_event_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# The source is copied to a temporary file, the validator runs on that copy, and
+# only a copy that passes replaces the installed program. A program that fails
+# its check is never installed, the task fails, and the previous program stays.
+- name: Install the program after its own check passes
+  ansible.builtin.copy:
+    src: '{{ program_and_timer_program_src }}'
+    dest: '{{ program_and_timer_program_path }}'
+    owner: '{{ program_and_timer_program_owner }}'
+    group: '{{ program_and_timer_program_group }}'
+    mode: '0755'
+    validate: /bin/sh %s --check
+  notify: program changed
+
+- name: Render the timer's oneshot service unit
+  ansible.builtin.template:
+    src: tick.service.j2
+    dest: /etc/systemd/system/program_and_timer_tick.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: unit files changed
+
+- name: Render the timer unit
+  ansible.builtin.template:
+    src: tick.timer.j2
+    dest: /etc/systemd/system/program_and_timer_tick.timer
+    owner: root
+    group: root
+    mode: '0644'
+  notify: unit files changed
+
+# Queued handlers run here, before the timer is enabled, so the enable below
+# starts the timer with the unit file as it now is on disk.
+- name: Load queued unit changes and restart the timer before it is enabled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no unit file, so on a fresh host there is nothing for
+# systemd to enable. The stat runs in check mode as it does in a real run.
+- name: Read back the timer unit file
+  ansible.builtin.stat:
+    path: /etc/systemd/system/program_and_timer_tick.timer
+  register: program_and_timer_timer_unit
+
+- name: Enable and start the timer
+  ansible.builtin.systemd_service:
+    name: program_and_timer_tick.timer
+    enabled: true
+    state: started
+  when: program_and_timer_timer_unit.stat.exists
