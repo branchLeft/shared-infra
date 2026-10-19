@@ -1,8 +1,7 @@
 #!/usr/bin/python3
 """A stand-in for ansible-playbook that holds the trigger's lock for a while.
 
-Test setup only, never part of the role. It records each call, says when it has
-started, waits, then prints a play recap that reports one change.
+Test setup only. It records the call, waits, then reports one change.
 """
 
 import sys

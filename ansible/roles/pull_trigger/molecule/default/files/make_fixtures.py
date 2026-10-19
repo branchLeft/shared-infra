@@ -1,9 +1,7 @@
 #!/usr/bin/python3
 """Make the throwaway remote, keys and signed history the Molecule verify play reads.
 
-Test setup only, never part of the role. It runs in the test container, after
-the role's own package task has installed git, gpg and ssh-keygen. Every key is
-made for the run and holds nothing real. The result is ``fixtures.json``.
+Test setup only. Every key is made for the run. The result is ``fixtures.json``.
 """
 
 import json

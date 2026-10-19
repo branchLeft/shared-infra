@@ -1,9 +1,6 @@
 """Unit tests for pull_trigger: the validator, the refusals, the state it keeps and the exit codes.
 
-The end-to-end cases use real git and real signatures (SSH always, OpenPGP when
-gpg is installed) on repositories made for the run, and a stand-in for
-ansible-playbook. Nothing reaches the network or a host. The role README gives
-the command, with the files directory on PYTHONPATH.
+The end-to-end cases use real git and real signatures on throwaway repositories.
 """
 
 import contextlib

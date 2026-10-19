@@ -1,27 +1,12 @@
 #!/usr/bin/python3
 """Apply one exact, verified commit of main to this host.
 
-The role installs this file as one root-owned program. It is the only thing the
-CI key can run (a forced command), and it takes one input from the caller: a
-commit id of 40 lowercase hex digits. Everything else comes from a root-owned
-configuration file, so the caller never names a repository, a playbook, a path
-or an option.
+The role installs this file as one root-owned program, the only thing the CI key
+can run. The caller supplies one commit id of 40 lowercase hex digits; every
+other value comes from a root-owned configuration file.
 
-In order, and stopping at the first refusal:
-
-1. Validate the request. The caller's text is a 40-digit hex commit and nothing
-   else. No shell is used anywhere: every command is an argument list.
-2. Take the single-flight lock. A second trigger is refused, never queued.
-3. Fetch ``main`` (only) from the read-only remote into a root-owned cache and
-   refuse a commit that is not an ancestor of the fetched tip.
-4. Refuse a commit older than the last one applied here (no rollback).
-5. Verify the commit's signature against the allowlist of signer keys.
-6. Check out exactly that commit into a fresh directory, never in place.
-7. Run the one playbook the configuration names, and only if it is on the
-   playbook allowlist, with ``ansible-playbook`` against this host alone.
-8. Record the result in a root-owned log and print one summary line.
-
-The exit status says which of these happened: see ``Exit``.
+The steps, their order and the exit codes are in the role README. ``Exit`` names
+the exit statuses.
 """
 
 import contextlib
@@ -357,14 +342,7 @@ def parse_arguments(argv: Sequence[str]) -> Arguments:
     """Read the options that root put on the command line.
 
     Only ``--mode apply|check`` (required, once) and ``--config PATH`` (once) are
-    options. The caller reaches the program through ``SSH_ORIGINAL_COMMAND`` and
-    cannot add to this line. Any other option is refused.
-
-    Args:
-        argv: The command line without the program name.
-
-    Returns:
-        The mode, the configuration path and any positional words.
+    options. The caller cannot add to this line. Any other option is refused.
 
     Raises:
         BadRequestError: An option is unknown, repeated, or missing its value, or no mode is given.
@@ -418,18 +396,9 @@ def _config_path_from(value: str | None) -> Path:
 def resolve_commit(arguments: Arguments, environ: Mapping[str, str]) -> str:
     """Return the one commit the caller asked for, or refuse.
 
-    Through a forced command the caller's text arrives in ``SSH_ORIGINAL_COMMAND``
-    and must be the commit alone. Run by hand, the commit is the one positional
-    word. Giving both, or neither, is refused, and so is anything that is not
-    exactly 40 lowercase hex digits (a ref name, an abbreviation, an option,
-    whitespace, a newline, an empty value).
-
-    Args:
-        arguments: The parsed command line.
-        environ: The environment, read only for ``SSH_ORIGINAL_COMMAND``.
-
-    Returns:
-        The commit id.
+    The commit comes from ``SSH_ORIGINAL_COMMAND``, or, run by hand, from the one
+    positional word; both, or neither, is refused. Anything but 40 lowercase hex
+    digits is refused.
 
     Raises:
         BadRequestError: The input is not exactly one 40-digit lowercase hex commit.
@@ -454,9 +423,6 @@ def canonical_playbook(path: str) -> str | None:
     The path is relative, already normalised (no ``.``, no ``..``, no doubled or
     trailing slash), inside ``ansible/playbooks/``, made of plain name parts, and
     ends in ``.yml`` or ``.yaml``.
-
-    Args:
-        path: The path as written in the configuration.
 
     Returns:
         The same path when acceptable, otherwise None.
@@ -542,12 +508,6 @@ def parse_config(text: str) -> Config:
     host runs is not checked here: whether it is on the allowlist is a refusal
     of the request, not a fault in the file.
 
-    Args:
-        text: The JSON the role wrote.
-
-    Returns:
-        The configuration.
-
     Raises:
         ConfigError: The text is not valid JSON, has unknown or missing keys, or a bad value.
     """
@@ -614,12 +574,6 @@ def load_config(path: Path) -> Config:
     by the user running the program, and neither it nor its directory may be
     writable by group or others.
 
-    Args:
-        path: The configuration file.
-
-    Returns:
-        The configuration.
-
     Raises:
         ConfigError: The file is missing, unsafe or invalid.
     """
@@ -685,12 +639,6 @@ def single_flight(lock_path: Path) -> Iterator[None]:
     host and no stale-lock cleanup is needed. The descriptor is not inherited
     by the playbook.
 
-    Args:
-        lock_path: The lock file, in the private state directory.
-
-    Yields:
-        Nothing; the lock is held until the block ends.
-
     Raises:
         BusyError: Another trigger holds the lock.
     """
@@ -712,11 +660,6 @@ def run_command(
 ) -> subprocess.CompletedProcess[str]:
     """Run one program, as an argument list with no shell, and capture its output.
 
-    Args:
-        argv: The program and its arguments.
-        environment: The whole environment the program gets.
-        timeout: Seconds before the program is killed.
-
     Returns:
         The completed process; the caller reads its return code.
 
@@ -724,7 +667,7 @@ def run_command(
         GitError: The program cannot be started or runs too long.
     """
     try:
-        # S603: the arguments are built from constants and from values validated
+        # The arguments are built from constants and from values validated
         # earlier (a 40-digit hex commit, paths this program made). No shell is used.
         return subprocess.run(  # noqa: S603
             list(argv),
@@ -849,9 +792,6 @@ class Cache:
         The cache may still hold an object from an earlier fetch (for example a
         commit that main has since moved away from), so presence is not enough.
 
-        Args:
-            commit: A validated 40-digit commit id.
-
         Raises:
             NotOnMainError: The commit is unknown here or is not an ancestor of the tip.
             GitError: git fails for another reason.
@@ -892,15 +832,8 @@ def judge_signature(
 ) -> None:
     """Decide from what git reported whether the signature is acceptable.
 
-    git's own status is not enough: for an SSH signature it reports ``U`` (good,
-    unknown validity) for a valid signature by a key that is not on the list, so
-    the signing key's fingerprint must be on the allowlist as well.
-
-    Args:
-        signed: Whether the commit carries a signature header.
-        status: git's ``%G?`` letter.
-        fingerprints: The signing key's fingerprints git reported (empty ones ignored).
-        allowed: The allowlisted fingerprints.
+    git reports ``U`` (good, unknown validity) for a valid SSH signature by a key
+    that is not on the list, so the key's fingerprint must be on the allowlist too.
 
     Raises:
         UnsignedError: The commit has no signature.
@@ -930,10 +863,6 @@ class Verifier:
 
         Only the allowlisted keys are in the keyring, so no key the host happens
         to hold can make a signature acceptable.
-
-        Args:
-            commit: A validated 40-digit commit id.
-            scratch_root: A private directory to make the temporary keyring in.
 
         Raises:
             GitError: the keyring cannot be built or git cannot run.
@@ -1096,13 +1025,6 @@ class Workspace:
         directory holds the commit's files and no ``.git`` of its own. On any
         failure the half-made directory is removed.
 
-        Args:
-            git: The git runner for the cache.
-            commit: A validated, verified commit id.
-
-        Returns:
-            The new directory.
-
         Raises:
             GitError: git cannot check the commit out.
         """
@@ -1233,13 +1155,6 @@ class PlaybookRunner:
         The playbook's output is written to ``log_path`` (mode 0600) and relayed to
         the caller as it appears. A caller that disconnects does not stop the run.
 
-        Args:
-            checkout: The fresh checkout.
-            playbook: The allowlisted playbook, relative to the checkout.
-            mode: Apply, or check (``--check --diff``).
-            log_path: Where the output is kept.
-            timeout: Seconds before the run is terminated.
-
         Returns:
             How the run ended.
         """
@@ -1259,7 +1174,7 @@ class PlaybookRunner:
         }
         descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         try:
-            # S603: the program and the playbook path come from the root-owned
+            # The program and the playbook path come from the root-owned
             # configuration and this program's own checkout. No shell is used.
             process = subprocess.Popen(  # noqa: S603
                 argv,
@@ -1368,10 +1283,6 @@ class Trigger:
         Every failure ends as a verdict with a named reason: an expected one
         (a refusal, a git failure) and an unexpected one (a bug, a full disk)
         alike. Nothing the caller typed is copied into the log or the summary.
-
-        Args:
-            mode: Apply or check.
-            request: The validated commit, or the refusal raised for the request.
 
         Returns:
             The verdict.
@@ -1505,14 +1416,6 @@ def main(
     caller: BinaryIO | None = None,
 ) -> int:
     """Run one request and return the exit status.
-
-    Args:
-        argv: The command line without the program name.
-        environ: The environment, read only for ``SSH_ORIGINAL_COMMAND``.
-        stop: Set by a signal handler to ask the playbook to stop.
-        tools: Paths of the programs run; defaults to the Debian locations.
-        stdout: Where the summary line goes; defaults to ``sys.stdout``.
-        caller: Where the playbook's output is relayed; defaults to stderr.
 
     Returns:
         An ``Exit`` value.
