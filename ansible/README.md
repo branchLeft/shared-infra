@@ -184,13 +184,13 @@ and the commands are given so that a maintainer can run them again.
 
 ### What is pinned, and where
 
-| What                                         | Where                           | Exact form                                |
-| -------------------------------------------- | ------------------------------- | ----------------------------------------- |
-| The Python tools, `ansible-core` among them  | `requirements.txt`              | `name==version`, one per line             |
-| The collections                              | `requirements.yml`              | a vendored archive path and its `version` |
-| The hash of each collection archive          | `vendor/collections/SHA256SUMS` | `sha256sum` format                        |
-| The `ansible-lint` pre-commit hook, if any   | `../.pre-commit-config.yaml`    | `rev: v` and the `requirements.txt` pin   |
-| Where Ansible looks for installed collection | `../ansible.cfg`                | `collections_path = .ansible/collections` |
+| What                                          | Where                           | Exact form                                |
+| --------------------------------------------- | ------------------------------- | ----------------------------------------- |
+| The Python tools, `ansible-core` among them   | `requirements.txt`              | `name==version`, one per line             |
+| The collections                               | `requirements.yml`              | a vendored archive path and its `version` |
+| The hash of each collection archive           | `vendor/collections/SHA256SUMS` | `sha256sum` format                        |
+| The `ansible-lint` pre-commit hook, if any    | `../.pre-commit-config.yaml`    | `rev: v` and the `requirements.txt` pin   |
+| Where Ansible looks for installed collections | `../ansible.cfg`                | `collections_path = .ansible/collections` |
 
 ### Where the vendored copy lives
 
@@ -240,9 +240,10 @@ nothing is installed, passes once the collections are installed into
 `.ansible/collections`, and fails again with `ansible.cfg` removed.
 
 The harness and CI set `ANSIBLE_COLLECTIONS_PATH` to a directory of their own,
-which takes precedence over the file, so they do not depend on it. A scenario
-run with `molecule` directly from a role directory does not see the repository
-root's `ansible.cfg`; run roles through the harness.
+which takes precedence over the file, so they do not depend on it. Ansible
+reads `ansible.cfg` from the current directory only, so a run started from a
+role directory does not see the repository root's file: run roles through the
+harness.
 
 ### How a check proves the copy matches its pin
 
