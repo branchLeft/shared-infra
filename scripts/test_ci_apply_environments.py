@@ -82,6 +82,12 @@ def job_block(text: str, job: str) -> str:
     raise AssertionError(f"job {job!r} not found in ci.yml")
 
 
+def job_names(text: str) -> list[str]:
+    """Every top-level job key, in file order."""
+    jobs = text.split("\njobs:\n", 1)[1]
+    return [m.group(1) for m in re.finditer(r"^  ([A-Za-z0-9_-]+):[ \t]*$", jobs, re.M)]
+
+
 def step_blocks(job: str) -> list[tuple[str, str]]:
     """(name, text) for each step of a job, including its leading comments."""
     steps = job.split("\n    steps:\n", 1)[1]
@@ -388,40 +394,42 @@ class CancelStepStructureTests(unittest.TestCase):
         self.assertNotRegex(header, r"(?m)^concurrency:")
 
 
-@unittest.skipUnless(shutil.which("jq"), "jq is needed to run the cancel step")
 class CancelStepOrderTests(unittest.TestCase):
     """The cancel step runs scripts/cancel-superseded-waiting.py from the
     checkout, so in every job that calls it the checkout step must come first.
-    Parsed as YAML, so the order is the workflow's real step order."""
-
-    def setUp(self):
-        import yaml
-
-        self.workflow = yaml.safe_load(workflow_text())
+    Line-structure parse of each job's steps list, standard library only."""
 
     def test_the_script_step_comes_after_checkout_in_every_job_that_calls_it(self):
+        text = workflow_text()
         callers = []
-        for job_name, job in self.workflow["jobs"].items():
-            steps = job.get("steps") or []
-            for index, found in enumerate(steps):
-                if "cancel-superseded-waiting.py" not in str(found.get("run", "")):
-                    continue
-                callers.append(job_name)
-                checkouts = [
-                    i for i, s in enumerate(steps)
-                    if str(s.get("uses", "")).startswith("actions/checkout@")
-                ]
-                with self.subTest(job=job_name):
-                    self.assertTrue(checkouts, "no checkout step before the script call")
-                    self.assertLess(
-                        min(checkouts),
-                        index,
-                        "the script call (step %d) runs before Checkout, so the file is "
-                        "missing on the runner" % index,
-                    )
+        for job in job_names(text):
+            block = job_block(text, job)
+            if "\n    steps:\n" not in block:
+                continue
+            steps = step_blocks(block)
+            calls = [
+                i for i, (_, body) in enumerate(steps)
+                if "cancel-superseded-waiting.py" in body
+            ]
+            if not calls:
+                continue
+            callers.append(job)
+            checkouts = [
+                i for i, (_, body) in enumerate(steps)
+                if "uses: actions/checkout@" in body
+            ]
+            with self.subTest(job=job):
+                self.assertTrue(checkouts, "no checkout step in the job")
+                self.assertLess(
+                    min(checkouts),
+                    calls[0],
+                    "the script call (step %d) runs before Checkout, so the file is "
+                    "missing on the runner" % calls[0],
+                )
         self.assertEqual(sorted(callers), sorted(PLAN_JOBS))
 
 
+@unittest.skipUnless(shutil.which("jq"), "jq is needed to run the cancel step")
 class CancelBehaviourTests(unittest.TestCase):
     CURRENT = 50
 
