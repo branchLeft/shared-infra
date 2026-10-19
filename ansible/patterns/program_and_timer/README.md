@@ -11,8 +11,9 @@ program with placeholder names. Copy the shape, not the names.
 
 It delivers one program file unchanged, checks it, and delivers a oneshot service
 and a timer that run it. It makes systemd load the units, then enables and starts
-the timer. It restarts the timer once when the program file changes, and nothing
-else.
+the timer. It restarts the timer once when the program file changes, and does nothing
+else to systemd: the test shows that no other unit is touched and that the manager is
+not reloaded for a program change (see "What the test counts").
 
 It does not write the program, edit its text, or template it. It does not install a
 package or a binary the program needs, create a user or a group, open a port, touch
@@ -41,9 +42,9 @@ not apply to it (see the named limits).
 | `program_and_timer_unit_description` | The description written into both units.                                      |
 | `program_and_timer_tick_calendar`    | The timer's `OnCalendar` value.                                               |
 
-`vars/main.yml` holds two internal values (the installed path and the list of
-directories the role refuses). Role variables outrank a caller's, so a caller
-cannot change them; they are not part of the interface.
+`vars/main.yml` holds internal values (the installed path, the input patterns and
+the list of directories the role refuses). Role variables outrank a caller's, so a
+caller cannot change them; they are not part of the interface.
 
 ## The rules the role enforces on its inputs
 
@@ -56,17 +57,35 @@ echoes the value it refused.
 - **source**: the program source is not empty.
 - **directory shape**: the program directory is an absolute path of plain
   characters, with no `.` or `..` component, no empty component and no trailing
-  slash.
+  slash. The patterns end in `\Z`, not `$`, which would also pass one trailing
+  line break.
 - **dedicated directory**: the program directory is at least two components deep
   and is not one of the system directories in `vars/main.yml` (at least `/bin`,
   `/sbin`, `/usr`, `/usr/bin`, `/usr/sbin`, `/usr/local`, `/usr/local/bin`,
-  `/usr/local/sbin`, `/etc`, `/lib`, `/var`, `/var/lib`, `/opt`). The role changes
-  the owner, group and mode of the program directory, so it must be a directory
-  made for this one program. A missing parent of it is created with the same
-  owner; a parent that exists is not touched.
+  `/usr/local/sbin`, `/etc`, `/lib`, `/var`, `/var/lib`, `/opt`). This list is a
+  first screen only; the three host checks below do the real work.
+- **real path**: `realpath -m` of the program directory equals the program
+  directory, so no component of the path is a symbolic link and taking the
+  directory over cannot reach another one.
+- **foreign content**: if the path exists it is a directory (not a file, not a
+  link) holding nothing but the program file. A directory with any other file,
+  hidden files and sub-directories included, is not dedicated to this program.
+  The message never lists what it found.
+- **foreign owner**: if the directory exists, its owner is root or the declared
+  service user, and its group is root or the declared group. A directory owned by
+  anyone else is not the role's to take over.
 - **program name**: the program name is one file name, with no path separator.
 - **service identity**: the service user and the service group are declared
   together, each a plain name, or both left empty.
+
+The role therefore changes the owner, group and mode of a directory only when it
+creates it in that run (a missing parent of it is created with the same owner; a
+parent that exists is not touched), or when it found it empty or holding only the
+program, with no link in its path, owned by root or by the declared user and
+group. What the checks cannot know: a directory that is empty, or holds only a
+file of the same name, and belongs to another service. That directory looks
+exactly like a new one, so the rule for a consumer is that the program directory
+is used for this program and nothing else.
 
 The owner rule behind the last one: the program is owned by root and the unit
 runs as root, unless a service user is declared. When one is, the program, its
@@ -202,12 +221,17 @@ What each part of the scenario does:
 - `check-fresh`: the converge in check mode against an instance on which nothing is
   installed. It completes. The restart and the enable are skipped, for the reasons in
   (c).
-- `converge`: on an instance with no program it first applies the role with each
-  refused input in `converge.yml` (a relative path, a `..` component, a trailing slash,
-  `/`, a top-level directory, three shared system directories and the unit directory, a
+- `converge`: on an instance with no program it first plants what some refused
+  inputs point at (an empty directory owned by another user, a regular file, a link to
+  a root-only directory), then applies the role with each refused input in
+  `converge.yml` (a relative path, a `..` component, a trailing slash or any other
+  trailing line break, `/`, a top-level directory, shared system directories and the
+  unit directory, the system directory `/etc/apt` with files of its own, a path that is
+  a file, the foreign-owned directory, the link and a directory under the link, a
   program name with a separator, an empty source, a list for the user, a user without a
-  group) and asserts that each is refused with its rule's message, that the shared
-  directory it named kept its owner, group and mode, and that nothing was left behind.
+  group) and asserts that each is refused with its rule's message, that the directory
+  it named or pointed at kept its owner, group and mode, and that nothing was left
+  behind.
   It then applies the role with the placeholder program and writes a mark to the
   journal. Next it reads the installed program, the files next to it and the timer
   from systemd, applies a program whose check fails inside a block, and asserts that
@@ -222,11 +246,15 @@ What each part of the scenario does:
 - `verify`: the program is the source file's bytes (sha256), with its owner, group and
   mode, in a directory with its owner, group and mode. systemd's own log, read from the
   journal mark onward, shows exactly one stop and one start of the timer and no manager
-  reload (see "What the test counts"). The unit files have their owner, group and mode.
-  The timer is `enabled` and `active`, needs no daemon reload, has the rendered
-  description and is the invocation systemd logged last. systemd reports that the
-  oneshot runs as the service user. Finally the timer is stopped by hand and the role is
-  applied again with nothing changed: the timer must be active afterwards.
+  reload, and no message about any other unit (see "What the test counts"). The unit
+  files have their owner, group and mode. The timer is `enabled` and `active`, needs no
+  daemon reload, has the rendered description and is the invocation systemd logged
+  last. systemd reports that the oneshot runs as the service user. Then the timer is
+  stopped by hand and the role is applied again with nothing changed: the timer must be
+  active afterwards. Last, the root default: the role is applied with no service user
+  into a second directory, and the program, the directory and the unit must be root's
+  with no `User=`; then it is applied with the scenario's variables again, so the
+  instance ends as it was converged.
 - `check-configured` and `molecule-check`: the configured instance shows no drift.
 
 ### What the test counts
@@ -239,7 +267,15 @@ logged after that line:
 - a restart of the timer is the pair of job messages for `program_and_timer_tick.timer`
   with `MESSAGE_ID` `9d1aaa27d60140bd96365438aad20286` (unit stopped) and
   `39f53479d3a045ac8e11786248231fbf` (unit started); one restart is one of each;
-- a daemon reload is the manager's `Reloading...` line.
+- a daemon reload is the manager's `Reloading...` line;
+- "nothing else" is every other message with a `UNIT` field in that window: there must
+  be none for any unit but the timer. The scenario's calendar is a time that never
+  comes (`2099-12-31 23:59:59`), so the timer cannot start the oneshot service during a
+  test run; a start of the service in the window is therefore not a timer-fired run but
+  something the role (or the test) did, and it fails. Five units of the base image's own
+  daily timers (named in `verify.yml`) are excluded, because one of them may legitimately
+  run in the window. A message about a unit the base image does not run daily is a
+  defect.
 
 The identifiers and the line were read from the journal of the test image's systemd
 257 (JSON output, fields `MESSAGE_ID`, `UNIT`, `JOB_TYPE`, `MESSAGE`); they are not
@@ -255,29 +291,38 @@ Each row was one edit, one harness run on the pattern role, and a restore with
 `git restore`. Each red step is an assertion, not a crash; the always-changed row is
 Molecule's own idempotence check, which names the task.
 
-| Edit to the role or the scenario                                                      | Step that fails                                                                          |
-| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| The restart handler's `state: restarted` changed to `started`                         | `verify`, "systemd logged 0 stops and 0 starts of the timer"                             |
-| A second restart handler on the same notification                                     | `verify`, "systemd logged 2 stops and 2 starts"                                          |
-| A second handler that reloads the manager on the same notification                    | `verify`, "1 manager reloads"                                                            |
-| `state: started` removed from the enable task                                         | `verify`, "The role left a stopped timer stopped"                                        |
-| A task that changes on every run (a copy of `now()`) notifies the restart             | `idempotence`, naming the marker task and the restart                                    |
-| `notify` removed from the program copy                                                | `verify`, "systemd logged 0 stops and 0 starts of the timer"                             |
-| The program copied and checked afterwards (the old program overwritten first)         | `converge`, "A program whose check fails changed what was installed"                     |
-| `validate: /bin/sh %s --check` removed                                                | `converge`, the same assertion: the bad program replaced the old one                     |
-| The program delivered as other bytes (content from a lookup, a trailing newline lost) | `verify`, "The installed program differs from the source file"                           |
-| `enabled: true` changed to `false` for the timer                                      | `verify`, the timer's enabled assertion                                                  |
-| `mode: '0755'` changed to `'0644'` on the program                                     | `verify`, "owner, group or mode differs ... 0644"                                        |
-| The directory task without `owner` and `group`                                        | `verify`, "The program directory owner, group or mode differs"                           |
-| `User=` and `Group=` removed from the service unit                                    | `verify`, "The unit does not run the program as the user and group that own it"          |
-| The types rule made always true                                                       | `converge`, "did not refuse the input with the rule rule: types"                         |
-| The source rule made always true                                                      | `converge`, the same with "rule: source"                                                 |
-| The directory shape rule made always true                                             | `converge`, the same with "rule: directory shape" (the relative path)                    |
-| Only the `..` component test of the shape rule removed                                | `converge`, the same with "rule: directory shape" (the `..` path)                        |
-| Both conditions of the dedicated-directory rule made always true                      | `converge`, "The role changed the owner, group or mode of a directory it must not touch" |
-| Only the list of system directories removed from that rule                            | `converge`, the same for `/usr/local/bin`                                                |
-| The program name rule made always true                                                | `converge`, the same with "rule: program name"                                           |
-| The service identity rule made always true                                            | `converge`, the same with "rule: service identity"                                       |
+| Edit to the role or the scenario                                                      | Step that fails                                                                                                                   |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| The restart handler's `state: restarted` changed to `started`                         | `verify`, "systemd logged 0 stops and 0 starts of the timer"                                                                      |
+| A second restart handler on the same notification                                     | `verify`, "systemd logged 2 stops and 2 starts"                                                                                   |
+| A second handler that reloads the manager on the same notification                    | `verify`, "1 manager reloads"                                                                                                     |
+| `state: started` removed from the enable task                                         | `verify`, "The role left a stopped timer stopped"                                                                                 |
+| A task that changes on every run (a copy of `now()`) notifies the restart             | `idempotence`, naming the marker task and the restart                                                                             |
+| `notify` removed from the program copy                                                | `verify`, "systemd logged 0 stops and 0 starts of the timer"                                                                      |
+| The program copied and checked afterwards (the old program overwritten first)         | `converge`, "A program whose check fails changed what was installed"                                                              |
+| `validate: /bin/sh %s --check` removed                                                | `converge`, the same assertion: the bad program replaced the old one                                                              |
+| The program delivered as other bytes (content from a lookup, a trailing newline lost) | `verify`, "The installed program differs from the source file"                                                                    |
+| `enabled: true` changed to `false` for the timer                                      | `verify`, the timer's enabled assertion                                                                                           |
+| `mode: '0755'` changed to `'0644'` on the program                                     | `verify`, "owner, group or mode differs ... 0644"                                                                                 |
+| The directory task without `owner` and `group`                                        | `verify`, "The program directory owner, group or mode differs"                                                                    |
+| `User=` and `Group=` removed from the service unit                                    | `verify`, "The unit does not run the program as the user and group that own it"                                                   |
+| The types rule made always true                                                       | `converge`, "did not refuse the input with the rule rule: types"                                                                  |
+| The source rule made always true                                                      | `converge`, the same with "rule: source"                                                                                          |
+| The directory shape rule made always true                                             | `converge`, the same with "rule: directory shape" (the relative path)                                                             |
+| Only the `..` component test of the shape rule removed                                | `converge`, the same with "rule: directory shape" (the `..` path)                                                                 |
+| Both conditions of the dedicated-directory rule made always true                      | `converge`, "The role changed the owner, group or mode of a directory it must not touch"                                          |
+| Only the list of system directories removed from that rule                            | `converge`, the same for `/usr/local/bin`                                                                                         |
+| The program name rule made always true                                                | `converge`, the same with "rule: program name"                                                                                    |
+| The service identity rule made always true                                            | `converge`, the same with "rule: service identity"                                                                                |
+| `\Z` replaced by `$` in the directory pattern                                         | `converge`, the same with "rule: directory shape" (the trailing line break)                                                       |
+| `\Z` replaced by `$` in the name pattern                                              | `converge`, the same with "rule: program name" (the trailing line break)                                                          |
+| `\Z` replaced by `$` in the user and group pattern                                    | `converge`, the same with "rule: service identity" (the trailing line break)                                                      |
+| The real-path rule made always true                                                   | `converge`, the same with "rule: real path" (the link case: the foreign-content rule also refuses a link, so the message differs) |
+| The foreign-content rule's "only the program" condition made always true              | `converge`, "The role changed the owner, group or mode of a directory it must not touch" (`/etc/apt`)                             |
+| The foreign-content rule's "is a directory" condition made always true                | `converge`, the same with "rule: foreign content" (the path that is a file)                                                       |
+| The foreign-owner rule made always true                                               | `converge`, the owner-changed assertion for the directory owned by another user                                                   |
+| An extra handler that restarts the oneshot service on a program change                | `verify`, "systemd logged messages about units other than the timer ... program_and_timer_tick.service"                           |
+| The directory task's root default owner changed to another user                       | `verify`, "With no service user, the program, its directory or the unit is not root's"                                            |
 
 ### Named limits
 
@@ -288,10 +333,21 @@ Molecule's own idempotence check, which names the task.
   service user so the owner, group and `User=` assertions can tell the parameters from
   the defaults. The test does not run the program as that user; it asks systemd what the
   unit is configured to run as.
-- **A directory outside the refused list can still be shared.** The role refuses `/`,
-  every directory fewer than two components deep and the listed system directories. It
-  cannot know that `/srv/EXAMPLE` is used by another service. The rule for a consumer is
-  that the program directory is used for this program and nothing else.
+- **An empty directory of another service looks like a new one.** The role refuses a
+  path with a link in it, an existing path that is not a directory holding only the
+  program, and a directory owned by anyone but root or the declared user; it checks
+  these on the host, so `/etc/apt` is refused although it is in no list. It cannot
+  know that an empty directory, or one holding only a file of the same name as the
+  program, belongs to another service. The rule for a consumer is that the program
+  directory is used for this program and nothing else.
+- **A second `molecule verify` on the same instance is not supported.** The verify
+  play counts what systemd logged after the converge's mark, and its own last phases
+  stop and start the timer and reload the manager, so a second run without a fresh
+  converge counts those and fails (measured: three stops and three starts, two
+  reloads). The harness runs `verify` once, after a converge.
+- **The root default is applied by the verify play.** It runs in the same instance as
+  the service-user scenario and is followed by a reapply of the scenario's variables;
+  it uses a second directory, so the first directory is left in place.
 - **The check runs at apply, not in check mode.** A check-mode run does not run
   `validate`, so a plan shows the program as a change. The refusal shows at apply.
 - **The program's own check is what the role runs.** The role does not check the
