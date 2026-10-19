@@ -37,7 +37,8 @@ and the apply jobs read is produced exactly as before.
 The allowlists in the script (`PREVIEW_KEYS`, `PLAN_KEYS`, `STEP_KEYS`,
 `ENTRY_KEYS`, `GOAL_KEYS`) hold the keys seen in a real plan and preview from a
 local run of Pulumi CLI v3.255.0 against a throwaway stack (create cases only),
-plus three keys read from the CLI source and never seen in a run. Any other key
+plus five keys read from the CLI source and never seen in a run (`diagnostics`,
+`maybeCorrupt`, `oldState`, `diffReasons` and `replaceReasons`, named below). Any other key
 at those levels is a shape change and gives `true`. The tests pin each list to
 exactly the observed keys plus the code-only ones named below.
 
@@ -65,14 +66,17 @@ A real clean plan, from the local run, shows these goal values: `protect`
 the resource, and for a child a `parent` that is the root stack and a `provider`
 string. A goal that holds anything else for those fields is a change.
 
-Four plan fields are read for their type only, and their content is ignored on
-purpose: `manifest`, `config`, `seed` and `state`. They carry no statement of
-what changes. `state` is not compared with the preview's old outputs because
-the plan's own `outputDiff` is the engine's statement of what differs, and a
-secret cannot be compared byte for byte: in the local run the same secret's
-ciphertext differed between `outputDiff` and `state` (a fresh nonce each time),
-while the preview shows `[secret]`. A test pins this. Likewise the preview's
-`config` and `duration` are checked for type only.
+Three plan fields are read for their type only, and their content is ignored on
+purpose: `manifest`, `config` and `seed`. They carry no statement of what
+changes. Likewise the preview's `config` and `duration` are checked for type
+only. The plan entry's `state` is the resource's outputs property map
+(`plan.go` lines 226 to 232), and it is compared for the root stack only: each
+plain key that both it and the preview's old root outputs hold must be equal
+(type-tagged, as below), and a difference is `output-changed`. A secret is
+skipped, because the plan holds ciphertext with a fresh nonce each time and the
+preview holds `[secret]`; a key on one side only is the output diff's to
+report. A child's plan `state` is not compared (its `id` sits among the plain
+outputs, and a preview that hides the child has nothing to compare it with).
 
 ## What makes a plan `false`
 
@@ -106,7 +110,16 @@ All of these hold:
   edit that only moves a line changes them on every resource, and nothing reads
   them to decide a delete or an update. A custom resource other than a provider
   must carry a provider in its new state (`NewSameStep`, `step.go` lines 107 to
-  128); one that does not is a change. Whether Pulumi ever emits a `same` step
+  128); one that does not is a change. The exemption for a provider tests the
+  state's whole `type` token, exactly `pulumi:providers:<package>`
+  (`reference.go` lines 40 to 46), and a state `type` that is not the type in
+  the resource's own URN is a change. Values compare type-tagged: a bool is
+  never a number, so `false` against `0` differs, in nested objects and lists
+  too; two numbers compare by value. `custom` must be a bool on both sides. A
+  truthy `taint`, `pendingReplacement`, `delete` or `initErrors` on either side
+  is a change, whatever the other side holds. The same URN listed twice is
+  `preview-shape` (after the operation check, so a duplicated create still says
+  the steps changed). Whether Pulumi ever emits a `same` step
   that fails these rules is not verified; they can only push towards `true`.
   Two costs follow: a resource carrying `importID` or `snippetID` in its old
   state is expected to read `true` always, because the new state is built from
@@ -150,14 +163,25 @@ either file. The codes are `no-changes`, `steps-changed`, `summary-changed`,
 `preview-unreadable`, `preview-shape`, `preview-diagnostics`, `plan-unreadable`,
 `plan-shape` and `internal-error`.
 
+When a plan is refused because of keys it does not know or a protected
+resource, the summary's second line, and one stdout line, add the names after
+the code, for example `plan-shape: unrecognised goal key(s): aliases,
+ignoreChanges`. Only key names and, for `protect`, resource type tokens are
+printed, never a value, a resource name or a secret: a name that is not plain
+(letters, digits and `_.:/$-`, up to 80 long, no `::`) prints as `<odd name>`,
+and more than twenty are cut with a count. That line is how the allowlists get
+widened from a real plan: the first run on a stack names exactly what to add.
+
 ## Output paths
 
 Both `--github-output` and `--github-summary` are required. A blank path, an
 existing target that is not a regular file (a device such as `/dev/null`, a
-symlink to one, a directory), and one file named for both flags, whether by one
-path, a symlink or a hard link, are refused with exit 1 and nothing written.
-Two paths are the same file when they have the same device and inode. An unwritable path also exits 1. A skipped
-write would turn an unpublished verdict into no approval.
+symlink to one, a directory), a symlink to a missing target (opening it to
+append would create the target, a file nothing reads), and one file named for
+both flags, whether by one path, a symlink or a hard link, are refused with
+exit 1 and nothing written. Two paths are the same file when they have the same
+device and inode. An unwritable path also exits 1. A skipped write would turn an
+unpublished verdict into no approval.
 
 ## Limits
 
@@ -170,6 +194,16 @@ write would turn an unpublished verdict into no approval.
   made outside Pulumi (drift) shows up only if a refresh is part of the preview.
 - The Pulumi CLI is not pinned. A version that changes the shape makes the
   script fall back to `true`.
+- Named gaps, left open. Unprotecting a resource the preview hides is not
+  seen: the plan's entry `state` is the outputs map, so it carries no old
+  `protect` to compare with the goal's, and a flip of `protect` is a `same`
+  step that the preview lists only for the root. Nothing is lost by it, since
+  the unprotect is a state write that applies only with a later change and
+  protection stays in state until then. A hidden child's plan `state` is not
+  compared with anything. A nested `null` against an absent key reads `true`
+  (the safe side). A resource whose goal uses a key not on the allowlist, and
+  any protected resource, reads `true` until the allowlist is widened from a
+  real plan; the summary names them.
 
 ## Tests
 
