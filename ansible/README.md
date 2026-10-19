@@ -17,7 +17,8 @@ service yet; the inventory trees are empty by design.
 | `roles/`           | One directory per role. `example_config` is the worked example.        |
 | `patterns/`        | One directory per pattern, each a role the harness runs like `roles/`. |
 | `harness/`         | The test harness, its unit tests and nothing else.                     |
-| `requirements.txt` | The hash-locked toolchain, collections included (ANS-4).               |
+| `requirements.in`  | The seven tools chosen on purpose, exact pins (ANS-4).                 |
+| `requirements.txt` | The hash-locked toolchain compiled from it, collections included.      |
 | `requirements.yml` | Empty by design: no collection is fetched outside the lock (ANS-4).    |
 | `checks/`          | The pin check and its unit tests (ANS-4).                              |
 | `inventories/`     | The inventory and group-variable trees. Empty by design.               |
@@ -177,16 +178,37 @@ maintainer can run them again.
 
 | What                                           | Where                        | Exact form                                    |
 | ---------------------------------------------- | ---------------------------- | --------------------------------------------- |
+| The seven tools chosen on purpose              | `requirements.in`            | `name==version`, one per line, no hashes      |
 | Every Python package, `ansible-core` among     | `requirements.txt`           | `name==version` and one or more sha256 hashes |
 | The collections the roles use                  | `requirements.txt`           | inside the pinned `ansible` package           |
 | That no collection is fetched outside the lock | `requirements.yml`           | the single line `collections: []`             |
-| What raises a bump                             | `../.github/dependabot.yml`  | a `pip` entry for `/ansible`                  |
+| What raises a bump                             | `../.github/dependabot.yml`  | a `uv` entry for `/ansible`                   |
 | The `ansible-lint` pre-commit hook, if any     | `../.pre-commit-config.yaml` | `rev: v` and the `requirements.txt` pin       |
 
-`requirements.txt` is generated, not written by hand: every package the tools
-need is listed, so `pip install --require-hashes` refuses an install that
-leaves one out. The packages chosen on purpose are the ones whose `# via`
-comment names `-r requirements.in`; the rest are what they pull in.
+### Why `requirements.txt` is long, and that a tool writes it
+
+`requirements.txt` is tool output, never edited by hand. `uv pip compile`
+reads `requirements.in` and writes every package the seven tools need (51 of
+them) with the sha256 of every published file of that version: one per platform
+wheel, plus the source archive. That is why it runs to more than a thousand
+lines (nine packages that ship a wheel per platform, such as `charset-normalizer`,
+`markupsafe` and `cryptography`, carry about 930 of the hash lines), and it is
+the integrity property: `pip install
+--require-hashes` refuses a file whose hash is not listed, and a package that is
+not listed at all. The header at the top records the command, and this
+regenerates the file from the input:
+
+```text
+cd ansible && uv pip compile requirements.in --universal --python-version 3.12 --generate-hashes --output-file requirements.txt
+```
+
+`--universal` makes one lock for every platform and `--python-version` fixes the
+floor, so a laptop and the CI runner resolve the same set. The header is kept
+because it is the only record of those options. The `# via` comment under each
+package says why it is there: `-r requirements.in` for the chosen seven, another
+package's name for the rest. `ansible-core` is not chosen: the `ansible` package
+fixes which release it needs, so it follows `ansible` and is pinned in the lock
+only.
 
 ### Why the collections come with the `ansible` package
 
@@ -248,18 +270,29 @@ for its own.
 
 ### How updates and advisories surface, with no one watching
 
-`../.github/dependabot.yml` has a weekly `pip` entry for `/ansible`. A new
-`ansible` release (which carries every collection update), or a new release of
-any other locked package, opens a pull request that changes the pin and its
-hashes, and the Ansible workflow tests it. The entry groups minor and patch
-updates so that `ansible` and `ansible-core`, which must move together, arrive
-in one pull request; a major version is a separate pull request (DEP-3). A
+`../.github/dependabot.yml` has a weekly `uv` entry for `/ansible`. The `uv`
+ecosystem is the one that recompiles a lock made by `uv pip compile`: it finds
+`requirements.in` beside `requirements.txt`, bumps the chosen pin in the input,
+and reruns `uv pip compile` with `--generate-hashes`, `--universal` and the
+Python version it reads from the lock's header, then writes the whole file back
+under the original header. A new `ansible` release (which carries every
+collection update), or a new release of any other locked package, therefore
+opens a pull request that re-resolves the entire lock, and the Ansible workflow
+tests it. The `pip` ecosystem would not do this: it runs `pip-compile`, which
+has no universal mode, and it reads its options from a `pip-compile` header
+that `uv` does not write. This was run, not only read, with the Dependabot CLI
+against a copy of the lock one `ansible` release behind: the pull request it
+produced changed the input pin and rewrote the lock to the file committed here,
+byte for byte. The same run on a copy with the header removed compiled for the
+runner's platform only: it dropped `pywin32` and the platform markers on three
+packages and wrote no header, which is why the check refuses a lock without one. The entry groups minor and patch updates into one pull request;
+a major version is a separate pull request (DEP-3). A
 security advisory on a locked package is a Dependabot alert, a repository
 setting that is not a file in git. The advisory database lists `ansible`
 advisories that name a bundled collection, so a collection fix is covered by the
 alert for the package that carries it.
 
-`checks/check_pins.py` fails if the `pip` entry for `/ansible` goes missing, so
+`checks/check_pins.py` fails if the `uv` entry for `/ansible` goes missing, so
 the route cannot be switched off by an edit that looks unrelated.
 
 ### Where an SBOM reads the versions
@@ -285,11 +318,20 @@ It fails when:
   `--hash=sha256:` of 64 hex digits (a range, `~=`, a wildcard, a bare name, an
   include, an editable install, a URL, an index option, or a pin with no hash),
   or a named tool is missing, or a package is pinned twice;
+- `requirements.in` is missing, has a line that is not an exact
+  `name==version`, does not name one of the seven chosen tools, or disagrees
+  with the lock on a version;
+- the lock's header does not record `uv pip compile requirements.in`,
+  `--universal`, `--generate-hashes` and a `--python-version` (so a lock made
+  with `--no-header` is refused), or a package in the lock has no `# via`
+  comment, or the lock marks a package `-r requirements.in` that the input does
+  not name, or the input names one the lock does not mark: every line of the
+  lock is explained by the input or by another package;
 - `requirements.yml` is anything but `collections: []`, so no collection or role
   is fetched outside the lock;
 - an archive (`.tar.gz`, `.tgz`, `.tar`) or an `ansible_collections` tree sits
   anywhere under `ansible/`, a copy that the lock and an SBOM cannot see;
-- `../.github/dependabot.yml` has no scheduled `pip` entry for `/ansible`;
+- `../.github/dependabot.yml` has no scheduled `uv` entry for `/ansible`;
 - a Molecule scenario under `roles/`, `patterns/` or `role_skeleton/` does not
   set `dependency: enabled: false`;
 - the `ansible-lint` hook in `.pre-commit-config.yaml`, when there is one, is
@@ -326,18 +368,12 @@ Normally a person does nothing to learn of a bump: Dependabot opens it.
    check compares it as soon as one does.
 4. Merge when the checks are green.
 
-Dependabot changes the pin and the hashes of the package it bumps. When the new
-version needs a different version of another package, the install fails; then
-the lock is regenerated, with the packages marked `-r requirements.in` in a
-scratch file of that name, edited to the wanted versions:
-
-```text
-uv pip compile requirements.in --universal --python-version 3.12 --generate-hashes --no-header --output-file requirements.txt
-```
-
-and the result replaces `ansible/requirements.txt`. Run it in the scratch
-directory so the `# via` comments keep their shape. Then run the install above,
-the check and the harness.
+To bump by hand, edit the pin in `requirements.in` and regenerate the lock with
+the command under "Why `requirements.txt` is long", run from `ansible/`, then
+run the install above, the check and the harness. Never edit `requirements.txt`
+directly, and never regenerate it without the header or without `--universal`
+and `--generate-hashes`: the check refuses it, and Dependabot reads those
+options from the header.
 
 ### What this does not prove
 
@@ -347,9 +383,11 @@ the check and the harness.
   accepted. A bump is reviewed, not trusted.
 - A collection's own code is part of a 50 MB package and is not read in a diff.
   The package is trusted at the level PyPI and its hashes give.
-- The Dependabot route has not run against this repository yet; the first pull
-  request can only follow the merge. The advisory alert is a repository setting
-  the check cannot see.
+- The Dependabot route was run with its CLI against a copy of the lock, not
+  against this repository: the first real pull request can only follow the
+  merge, and a person should read it once to confirm it changes `requirements.in`
+  and `requirements.txt` and nothing else. The advisory alert is a repository
+  setting the check cannot see.
 - The check runs in CI and by hand, not in pre-commit.
 - ANS-5 says lint runs in pre-commit as well as CI. This repository has no
   ansible-lint hook yet, so no rev is compared; the check says so on every run.
