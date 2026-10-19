@@ -82,6 +82,12 @@ def job_block(text: str, job: str) -> str:
     raise AssertionError(f"job {job!r} not found in ci.yml")
 
 
+def job_names(text: str) -> list[str]:
+    """Every top-level job key, in file order."""
+    jobs = text.split("\njobs:\n", 1)[1]
+    return [m.group(1) for m in re.finditer(r"^  ([A-Za-z0-9_-]+):[ \t]*$", jobs, re.M)]
+
+
 def step_blocks(job: str) -> list[tuple[str, str]]:
     """(name, text) for each step of a job, including its leading comments."""
     steps = job.split("\n    steps:\n", 1)[1]
@@ -139,7 +145,7 @@ class StubGh:
     def put(self, name: str, value) -> None:
         (self.dir / name).write_text(json.dumps(value), encoding="utf-8")
 
-    def run(self, script: str, **env: str) -> subprocess.CompletedProcess:
+    def run(self, script: str, cwd: str | None = None, **env: str) -> subprocess.CompletedProcess:
         full = {
             "PATH": f"{self.dir}{os.pathsep}{os.environ['PATH']}",
             "STUB_DIR": str(self.dir),
@@ -152,6 +158,7 @@ class StubGh:
         return subprocess.run(
             ["bash", "-e", "-c", script],
             env=full,
+            cwd=cwd,
             capture_output=True,
             text=True,
             check=False,
@@ -346,12 +353,13 @@ class CancelStepStructureTests(unittest.TestCase):
     def setUp(self):
         self.text = workflow_text()
 
-    def test_each_plan_job_opens_with_the_cancel_step(self):
+    def test_each_plan_job_runs_the_cancel_step_right_after_checkout(self):
         bodies = []
         for job in PLAN_JOBS:
             with self.subTest(job=job):
                 block = job_block(self.text, job)
-                self.assertEqual(step_blocks(block)[0][0], CANCEL_NAME)
+                names = [n for n, _ in step_blocks(block)]
+                self.assertEqual(names[names.index("Checkout") + 1], CANCEL_NAME)
                 bodies.append(step(block, CANCEL_NAME))
         self.assertEqual(len(set(bodies)), 1, "the three copies must not drift")
 
@@ -386,6 +394,41 @@ class CancelStepStructureTests(unittest.TestCase):
         self.assertNotRegex(header, r"(?m)^concurrency:")
 
 
+class CancelStepOrderTests(unittest.TestCase):
+    """The cancel step runs scripts/cancel-superseded-waiting.py from the
+    checkout, so in every job that calls it the checkout step must come first.
+    Line-structure parse of each job's steps list, standard library only."""
+
+    def test_the_script_step_comes_after_checkout_in_every_job_that_calls_it(self):
+        text = workflow_text()
+        callers = []
+        for job in job_names(text):
+            block = job_block(text, job)
+            if "\n    steps:\n" not in block:
+                continue
+            steps = step_blocks(block)
+            calls = [
+                i for i, (_, body) in enumerate(steps)
+                if "cancel-superseded-waiting.py" in body
+            ]
+            if not calls:
+                continue
+            callers.append(job)
+            checkouts = [
+                i for i, (_, body) in enumerate(steps)
+                if "uses: actions/checkout@" in body
+            ]
+            with self.subTest(job=job):
+                self.assertTrue(checkouts, "no checkout step in the job")
+                self.assertLess(
+                    min(checkouts),
+                    calls[0],
+                    "the script call (step %d) runs before Checkout, so the file is "
+                    "missing on the runner" % calls[0],
+                )
+        self.assertEqual(sorted(callers), sorted(PLAN_JOBS))
+
+
 @unittest.skipUnless(shutil.which("jq"), "jq is needed to run the cancel step")
 class CancelBehaviourTests(unittest.TestCase):
     CURRENT = 50
@@ -401,7 +444,9 @@ class CancelBehaviourTests(unittest.TestCase):
             self.stub.put(f"jobs-{run_id}.json", {"jobs": jobs})
         result = self.stub.run(
             self.script,
+            cwd=str(ROOT),
             GITHUB_RUN_NUMBER=str(self.CURRENT),
+            GITHUB_STEP_SUMMARY=str(self.stub.dir / "summary.md"),
             PLANS_MAIL=plans[0],
             PLANS_NETWORK=plans[1],
             PLANS_ESTATE=plans[2],
@@ -456,12 +501,23 @@ class CancelBehaviourTests(unittest.TestCase):
         )
         self.assertEqual(posts, [])
 
-    def test_keeps_a_run_with_an_apply_that_already_finished(self):
+    def test_clears_a_waiting_apply_whose_sibling_apply_already_finished(self):
+        # Run 38425376153's shape: a finished sibling no longer protects a
+        # waiting apply on a stack this push planned.
         posts = self.run_with(
             [self.run_row(101)],
             {101: [self.job(self.MAIL, "completed", "success"), self.job(self.NETWORK, "waiting")]},
         )
-        self.assertEqual(posts, [])
+        self.assertEqual(posts, ["POST repos/ORG/REPO/actions/runs/101/cancel"])
+
+    def test_the_summary_names_a_kept_run_and_why(self):
+        self.run_with(
+            [self.run_row(101)],
+            {101: [self.job(self.MAIL, "in_progress"), self.job(self.NETWORK, "waiting")]},
+        )
+        summary = (self.stub.dir / "summary.md").read_text(encoding="utf-8")
+        self.assertIn("Kept run 101", summary)
+        self.assertIn("in progress", summary)
 
     def test_keeps_a_run_with_any_job_in_progress(self):
         posts = self.run_with(
@@ -533,10 +589,45 @@ class CancelBehaviourTests(unittest.TestCase):
         )
         self.assertEqual(cancelled, ["POST repos/ORG/REPO/actions/runs/101/cancel"])
 
+    def run_outside_repo(self, script):
+        """Run the step from an empty directory with no scripts/ in it."""
+        elsewhere = pathlib.Path(tempfile.mkdtemp(prefix="cancel-elsewhere-"))
+        self.addCleanup(shutil.rmtree, elsewhere, True)
+        self.stub.put("runs.json", {"workflow_runs": [self.run_row(101)]})
+        self.stub.put("jobs-101.json", {"jobs": [self.job(self.ESTATE, "waiting")]})
+        result = self.stub.run(
+            script,
+            cwd=str(elsewhere),
+            GITHUB_RUN_NUMBER=str(self.CURRENT),
+            GITHUB_STEP_SUMMARY=str(self.stub.dir / "summary.md"),
+            PLANS_MAIL="true",
+            PLANS_NETWORK="true",
+            PLANS_ESTATE="true",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return [c for c in self.stub.calls() if c.startswith("POST ")]
+
+    def test_a_missing_script_keeps_every_run_and_says_so(self):
+        # The failure shape of an ordering mistake: the relative script path
+        # does not resolve, so the run is kept and the summary names why.
+        posts = self.run_outside_repo(self.script)
+        self.assertEqual(posts, [])
+        summary = (self.stub.dir / "summary.md").read_text(encoding="utf-8")
+        self.assertIn("Kept run 101", summary)
+        self.assertIn("could not be read", summary)
+
+    def test_the_script_decides_the_same_when_run_by_its_absolute_path(self):
+        absolute = str(ROOT / "scripts" / "cancel-superseded-waiting.py")
+        script = self.script.replace("scripts/cancel-superseded-waiting.py", absolute)
+        posts = self.run_outside_repo(script)
+        self.assertEqual(posts, ["POST repos/ORG/REPO/actions/runs/101/cancel"])
+
     def test_a_listing_failure_cancels_nothing(self):
         result = self.stub.run(
             self.script,
+            cwd=str(ROOT),
             GITHUB_RUN_NUMBER=str(self.CURRENT),
+            GITHUB_STEP_SUMMARY=str(self.stub.dir / "summary.md"),
             PLANS_MAIL="true",
             PLANS_NETWORK="true",
             PLANS_ESTATE="true",
