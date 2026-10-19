@@ -344,7 +344,8 @@ What each part of the scenario does:
   - the secret is not in any call;
   - the stamp file is a regular file owned by `root:root` with mode `0600`, holds one
     lower-case hex SHA-256 digest and nothing else, and holds neither the throwaway
-    secret nor the secret files' names;
+    secret nor the secret files' names (the last check is defence in depth: it cannot
+    fail while the digest-shape check passes);
   - each image reference in the list in `verify.yml` that is not pinned by digest stops
     the role at the digest check;
   - each state that `compose ps` can report in the list (unhealthy, still starting,
@@ -414,12 +415,18 @@ the limits). `state: absent` with `remove_volumes` is not an input (see the limi
   change to the app's files does not recreate the database; a stack that lists nothing
   recreates the whole project.
 - **The stand-in's failing `up` is not Compose's failing `up`.** The stand-in prints a
-  plain line to standard error. Real Compose prints a JSON error event, which the
-  module reads for the message it reports. With a plain line the module skips it with a
-  warning and reports the return code and the raw standard error instead. The role
-  stops either way and the test reads the standard error text, so the control (a
-  failed `up` is retried) is real; what the module reports for a real pull error is not
-  shown. **UNVERIFIED** against a real engine.
+  plain line to standard error. Real Compose prints JSON error events, which the module
+  turns into the message it reports. The stand-in reports a Compose version of 2.29.0 or
+  later, so the module reads standard error with its JSON parser
+  (`parse_json_events` in the pinned `_compose_v2.py`, chosen by `use_json_events`): that
+  parser skips a line that is not JSON with a warning ("Cannot parse event from non-JSON
+  line", visible in the harness log), and the module fails with "Return code 1 is
+  non-zero" and the line in `stderr`. Only a reported version below 2.29.0 would make the
+  module read the same line with its plain-text parser, which turns a lone line into a
+  "General error" message; that path is not run here. The test reads the module's message
+  and standard error together, so the control (a failed `up` is retried) is real; what the
+  module reports for a real pull error is not shown. **UNVERIFIED** against a real
+  engine.
 - **UNVERIFIED, not run against real Compose:** whether `up --dry-run` works against an
   engine when images are not yet pulled; whether a scoped `up --force-recreate` with
   service names also recreates the named services' dependencies (the role's text says
