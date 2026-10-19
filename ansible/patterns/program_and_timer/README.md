@@ -157,21 +157,37 @@ What each part of the scenario does:
   installed. It completes. The restart and its record are skipped, and the enable is
   skipped, for the reasons in (c).
 - `converge`: on an instance with no program it first applies the role with the
-  placeholder program. It then replaces the program with the second version, having
-  cleared the event records first, so the counters read only what that one edit did.
-  Last, it applies the role with a program whose check fails, inside a block, and
-  asserts the validator refused it.
-- `idempotence`: a second converge reports zero changed tasks. The program is already
-  the second version, so the edit is skipped, and the refused program is refused
-  again without a change.
+  placeholder program. In that same run it clears the event records, applies a program
+  whose check fails inside a block and asserts the validator refused it, and then
+  applies the role with the second version. The counters therefore read only what the
+  edit did. Every later converge applies the role with the second version and changes
+  nothing; the edit and refusal steps are skipped there, so a refused program is never
+  re-run against a host that already has the second version.
+- `idempotence`: a second converge reports zero changed tasks. It runs the whole role
+  with the second version, so the restart, the reload and every unit task are inside the
+  proof (the two gated edit and refusal tasks are skipped and reported as such).
 - `verify`: the program is the source file's bytes (sha256), with its owner, group and
   mode. The records show exactly one restart and no daemon reload from the edit. The
   unit files have their owner, group and mode. The timer is `enabled` and `active`
   with the rendered description.
 - `check-configured` and `molecule-check`: the configured instance shows no drift.
 
-What breaks which step. Each row was done by an edit, one harness run, and a restore;
-the results are in the table after the limits.
+What breaks which step. Each row was one edit, one harness run on the pattern role,
+and a restore with `git restore`, run on 19 October 2026 on Docker Desktop with the
+engine named in the PR. Each red step is an assertion, not a crash.
+
+| Edit to the role or the scenario                                                                | Step that fails                                                             |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| A task that changes on every run (a copy of `now()`) notifies the restart                       | `idempotence`, naming the marker task; the restart runs on each converge    |
+| `notify: program changed` removed from the program copy                                         | `verify`, "Found restarts 0, reloads 0"                                     |
+| A second record handler on the `program changed` topic                                          | `verify`, "Found restarts 2, reloads 0"                                     |
+| `validate: /bin/sh %s --check` removed                                                          | `converge`, the refusal assertion: "the install-time check did not stop it" |
+| The program delivered as other bytes (content with a replaced word, the same on every converge) | `verify`, "The installed program differs from the source file"              |
+| `enabled: true` changed to `false` for the timer                                                | `verify`, the timer's `UnitFileState == 'enabled'` assertion                |
+| `mode: '0755'` changed to `'0644'` on the program                                               | `verify`, "owner, group or mode differs ... 0644"                           |
+
+Not run as a row: a `no_log` control. The placeholder program takes no credentials, so
+there is no secret to prove (see the named limits).
 
 ### Named limits
 
