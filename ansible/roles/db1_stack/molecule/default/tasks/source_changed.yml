@@ -1,0 +1,30 @@
+---
+# A person edits the repository source by hand. The role puts it back, and
+# because the file changed it refreshes the index, which fails here because the
+# container has no network: stopping at the refresh task is how the test sees
+# that it ran.
+- name: Change the suite in the repository source
+  ansible.builtin.copy:
+    content: "{{ verify_apt_texts['/etc/apt/sources.list.d/mysql-community.sources'] | replace('bookworm', 'trixie') }}"
+    dest: /etc/apt/sources.list.d/mysql-community.sources
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Apply the role while the repository source differs
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refresh the apt index after the repository files changed
+
+- name: Assert the role put the repository source back before the refresh
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'
+
+- name: Apply the role again
+  ansible.builtin.include_tasks: apply.yml
+
+- name: Assert the host is as declared
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'

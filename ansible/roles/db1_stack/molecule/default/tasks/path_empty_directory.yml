@@ -1,0 +1,43 @@
+---
+# Docker leaves an empty directory at a bind-mount source it cannot find. The
+# role must remove it and write the file, and must not fail a plan run while the
+# directory is still there, because check mode removes nothing.
+- name: Remove the exporter file
+  ansible.builtin.file:
+    path: '{{ scenario_cnf_path }}'
+    state: absent
+
+- name: Create an empty directory in its place
+  ansible.builtin.file:
+    path: '{{ scenario_cnf_path }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Plan the role in check mode while the directory is in the way
+  check_mode: true
+  diff: true
+  block:
+    - name: Apply the role in check mode
+      ansible.builtin.include_tasks: apply.yml
+
+- name: Look at the path after the plan
+  ansible.builtin.stat:
+    path: '{{ scenario_cnf_path }}'
+    follow: false
+  register: db1_stack_path_after_plan
+
+- name: Assert the plan removed nothing
+  ansible.builtin.assert:
+    that:
+      - db1_stack_path_after_plan.stat.isdir
+    quiet: true
+
+- name: Apply the role
+  ansible.builtin.include_tasks: apply.yml
+
+- name: Assert the empty directory was replaced by the exporter file
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'

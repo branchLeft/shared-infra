@@ -1,0 +1,670 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    # The sentinels, read from the files prepare.yml made. A task that prints one
+    # of these variables prints a sentinel, so every task below that handles one
+    # has no_log.
+    verify_password: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/password') }}"
+    verify_earlier: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/earlier_password') }}"
+    verify_probe: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/probe_role') }}"
+    verify_digest_control: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/digest_control') }}"
+    # The rotated password is exactly the shortest length the role accepts and
+    # holds all four punctuation characters it allows, so one rotation shows that
+    # both the boundary and the set are accepted.
+    verify_password_full_rotated: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/password_rotated') }}"
+    verify_password_rotated: "{{ verify_password_full_rotated[:12] ~ '.a_b~c-d' }}"
+    # Every text the log must not hold, as one pattern. Sentinels are letters and
+    # digits, so they need no escaping. The probe is the prefix of every refused
+    # password, so a refusal that echoed its input would hold it.
+    verify_sentinels:
+      password: '{{ verify_password }}'
+      password_full_rotated: '{{ verify_password_full_rotated }}'
+      password_rotated: '{{ verify_password_rotated }}'
+      earlier_password: '{{ verify_earlier }}'
+      probe: '{{ verify_probe }}'
+    verify_sentinel_pattern: "{{ verify_sentinels.values() | join('|') }}"
+    # The exporter file's exact text for the two passwords it holds. The result of
+    # the task that writes it carries a SHA-1 and an MD5 of the whole file, which
+    # are not a sentinel's, so the scan also looks for the digests of these texts.
+    verify_cnf_text: >-
+      {{ '[client]' ~ ('%c' | format(10)) ~ 'user = exporter' ~ ('%c' | format(10)) ~ 'password = ' ~ verify_password
+      ~ ('%c' | format(10)) ~ 'socket = /var/run/mysqld/mysqld.sock' ~ ('%c' | format(10)) }}
+    verify_cnf_text_rotated: >-
+      {{ '[client]' ~ ('%c' | format(10)) ~ 'user = exporter' ~ ('%c' | format(10)) ~ 'password = ' ~ verify_password_rotated
+      ~ ('%c' | format(10)) ~ 'socket = /var/run/mysqld/mysqld.sock' ~ ('%c' | format(10)) }}
+    # What the log scan looks for: each sentinel, the two file texts, and the
+    # digest control.
+    verify_scan_items: >-
+      {{ verify_sentinels | dict2items + [{'key': 'cnf_file', 'value': verify_cnf_text},
+      {'key': 'cnf_file_rotated', 'value': verify_cnf_text_rotated},
+      {'key': 'digest_control', 'value': verify_digest_control}] }}
+    verify_role_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY', default='') }}"
+    # The downloads and package files the scenario applies the role with.
+    verify_downloads:
+      - url: file://{{ scenario_package_dir }}/{{ scenario_libaio_name }}
+        dest: '{{ scenario_libaio_path }}'
+        checksum: 'sha256:{{ db1_stack_verify_libaio_stat.stat.checksum | default("MISSING") }}'
+    verify_debs:
+      - '{{ scenario_libaio_path }}'
+    # The pins the role carries in vars/main.yml, as the test expects them. A
+    # bump of a pin changes the file and these together.
+    verify_key_sha256: 5c35d3f5f79ef8755693f7458f4eeaad23974bcbf3a56a906e76eaa68a915d05
+    verify_checked_packages:
+      - mysql-community-client
+      - mysql-community-server-core
+    verify_legacy_files:
+      - /etc/apt/sources.list.d/mysql-community.list
+      - /usr/share/keyrings/mysql.gpg
+    verify_spec_short_description: Install the database host prerequisites and render the exporter credentials file
+    verify_apt_texts:
+      /etc/apt/sources.list.d/mysql-community.sources: |
+        # Managed by Ansible. Changes made here by hand are overwritten.
+        Types: deb
+        URIs: http://repo.mysql.com/apt/debian
+        Suites: bookworm
+        Components: mysql-8.0
+        Signed-By: /etc/apt/keyrings/mysql-community.asc
+      /etc/apt/preferences.d/mysql-community-8.0: |
+        # Managed by Ansible. Changes made here by hand are overwritten.
+        # Holds the MySQL client toolchain to the 8.0 line, so unattended upgrades cannot
+        # pick a newer candidate from the repository's component.
+        Package: mysql-community-client mysql-community-client-core mysql-community-client-plugins mysql-community-server-core mysql-common
+        Pin: version 8.0.*
+        Pin-Priority: 1001
+    # Code points that must not be in the password: dollar, double quote, number
+    # sign, semicolon, backslash, line feed, carriage return, space, tab, vertical
+    # tab, form feed, braces, single quote, backtick, equals, ampersand, percent,
+    # brackets, comma, slash, colon, question mark, at, caret, exclamation, one
+    # letter outside ASCII, and the line separator.
+    verify_unsafe_codes:
+      [
+        36,
+        34,
+        35,
+        59,
+        92,
+        10,
+        13,
+        32,
+        9,
+        11,
+        12,
+        123,
+        125,
+        39,
+        96,
+        61,
+        38,
+        37,
+        40,
+        41,
+        44,
+        47,
+        58,
+        63,
+        64,
+        91,
+        93,
+        94,
+        33,
+        233,
+        8232,
+      ]
+  tasks:
+    - name: Read the placeholder package file the download names
+      ansible.builtin.stat:
+        path: '{{ scenario_package_dir }}/{{ scenario_libaio_name }}'
+        checksum_algorithm: sha256
+      register: db1_stack_verify_libaio_stat
+
+    # ----- The state the converge left -----
+    - name: Assert the host is configured
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+      vars:
+        state_password: '{{ verify_password }}'
+
+    # ----- The role holds no secret of its own -----
+    # ANS-16: a secret is never a default. The files are read from the role's own
+    # directory, not from the copy Molecule links.
+    - name: Read the role's defaults, argument spec and fixed values
+      ansible.builtin.set_fact:
+        db1_stack_verify_defaults_text: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/defaults/main.yml') }}"
+        db1_stack_verify_defaults: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/defaults/main.yml') | from_yaml }}"
+        db1_stack_verify_spec_text: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/meta/argument_specs.yml') }}"
+        db1_stack_verify_spec: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/meta/argument_specs.yml') | from_yaml }}"
+        db1_stack_verify_vars_text: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/vars/main.yml') }}"
+        db1_stack_verify_vars: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/vars/main.yml') | from_yaml }}"
+      no_log: true
+
+    - name: Assert the defaults hold no secret and declare only the inputs
+      ansible.builtin.assert:
+        that:
+          - db1_stack_verify_defaults.keys() | sort == ['db1_stack_apt_packages', 'db1_stack_debs', 'db1_stack_downloads']
+          - db1_stack_verify_defaults_text | regex_search(verify_sentinel_pattern) is none
+          - "'password' not in (db1_stack_verify_defaults.keys() | join(' '))"
+        fail_msg: The role's defaults/main.yml holds a variable the role does not declare, a password, or a sentinel.
+        quiet: true
+
+    - name: Assert the argument spec marks the password as a secret and gives it no default
+      ansible.builtin.assert:
+        that:
+          - verify_spec_options['db1_stack_exporter_password']['required']
+          - verify_spec_options['db1_stack_exporter_password']['no_log']
+          - "'default' not in verify_spec_options['db1_stack_exporter_password']"
+          - db1_stack_verify_spec_text | regex_search(verify_sentinel_pattern) is none
+        fail_msg: The password option is not required and no_log, or has a default, or the spec holds a sentinel.
+        quiet: true
+      vars:
+        verify_spec_options: "{{ db1_stack_verify_spec['argument_specs']['main']['options'] }}"
+
+    - name: Assert the spec describes every input the defaults declare
+      ansible.builtin.assert:
+        that:
+          - verify_spec_options.keys() | sort == (db1_stack_verify_defaults.keys() | list + ['db1_stack_exporter_password']) | sort
+          - verify_spec_options[item]['default'] == db1_stack_verify_defaults[item]
+        quiet: true
+      loop: '{{ db1_stack_verify_defaults.keys() | sort }}'
+      vars:
+        verify_spec_options: "{{ db1_stack_verify_spec['argument_specs']['main']['options'] }}"
+
+    # The pins the role carries are the ones the test expects, and the pinned
+    # download is the real package file, not the placeholder the scenario swaps in.
+    - name: Assert the pins in the role are the ones the test expects
+      ansible.builtin.assert:
+        that:
+          - db1_stack_verify_vars.db1_stack_mysql_key_sha256 == verify_key_sha256
+          - db1_stack_verify_vars.db1_stack_mysql_version_line == '8.0'
+          - db1_stack_verify_vars.db1_stack_mysql_repository_uri == 'http://repo.mysql.com/apt/debian'
+          - db1_stack_verify_vars.db1_stack_mysql_repository_suite == 'bookworm'
+          - db1_stack_verify_vars.db1_stack_mysql_repository_component == 'mysql-8.0'
+          - db1_stack_verify_vars.db1_stack_mysql_checked_packages == verify_checked_packages
+          - db1_stack_verify_vars.db1_stack_legacy_files == verify_legacy_files
+          - db1_stack_verify_vars.db1_stack_exporter_uid == 65534
+          - db1_stack_verify_vars.db1_stack_exporter_gid == 65534
+          - db1_stack_verify_vars.db1_stack_exporter_cnf_mode == '0400'
+          - db1_stack_verify_defaults.db1_stack_downloads | length == 1
+          - db1_stack_verify_defaults.db1_stack_downloads[0].url == 'https://deb.debian.org/debian/pool/main/liba/libaio/libaio1_0.3.113-4_amd64.deb'
+          - db1_stack_verify_defaults.db1_stack_downloads[0].dest == '/var/cache/db1-stack/libaio1_0.3.113-4_amd64.deb'
+          - db1_stack_verify_defaults.db1_stack_downloads[0].checksum == 'sha256:d1476e4beab3d85f8a7d31de94c27472711ed3ef399ce70708e24b259426125b'
+          - db1_stack_verify_defaults.db1_stack_debs == ['/var/cache/db1-stack/libaio1_0.3.113-4_amd64.deb']
+          - db1_stack_verify_defaults.db1_stack_apt_packages == ['age', 'mysql-community-client', 'mysql-community-server-core']
+        fail_msg: A pin in the role differs from the one the test expects. Change both in one change.
+        quiet: true
+
+    # ----- Every download must be pinned: the scan of the role's source -----
+    # The scan is the one in the packages_and_downloads pattern, read from there
+    # and not copied. It lists the role's task and handler files on the controller
+    # and fails for any get_url without a checksum, a uri that writes a file, an
+    # apt install of a URL, and the other spellings its header lists.
+    - name: Assert Molecule names the role directory
+      ansible.builtin.assert:
+        that:
+          - verify_role_dir | length > 0
+        fail_msg: MOLECULE_PROJECT_DIRECTORY is not set, so the task files cannot be read.
+        quiet: true
+
+    - name: List every file in the role directory
+      ansible.builtin.find:
+        paths:
+          - '{{ verify_role_dir }}'
+        file_type: any
+        recurse: true
+        hidden: true
+      delegate_to: localhost
+      run_once: true
+      register: db1_stack_verify_role_files
+
+    - name: Scan every file under tasks and handlers for download tasks
+      ansible.builtin.set_fact:
+        db1_stack_verify_scan: >-
+          {{ lookup('ansible.builtin.template', playbook_dir ~ '/../../../../patterns/packages_and_downloads/molecule/default/scan-downloads.j2',
+          template_vars={'scan_files': db1_stack_verify_role_files.files, 'role_dir': verify_role_dir, 'prefix': 'db1_stack'}) | from_json }}
+
+    - name: Assert the scan read the role's main tasks file and saw a download
+      ansible.builtin.assert:
+        that:
+          - db1_stack_verify_scan.files | select('search', '/tasks/main[.]yml$') | list | length == 1
+          - db1_stack_verify_scan.seen > 0
+        fail_msg: The scan did not read tasks/main.yml or saw no get_url task, so it proves nothing.
+        quiet: true
+
+    - name: Assert no download task in the role lacks a pin
+      ansible.builtin.assert:
+        that:
+          - db1_stack_verify_scan.failures | length == 0
+        fail_msg: "Unpinned download in the role: {{ db1_stack_verify_scan.failures | join('; ') }}"
+        quiet: true
+
+    # ----- Inputs the role must refuse, before it changes anything -----
+    # The unsafe-character refusal is the control that matters most: a password
+    # with one of these characters is accepted by the exporter, which then
+    # authenticates as another string than the one the database holds. Each case
+    # is the probe sentinel with the character in the middle, so a refusal that
+    # echoed its input would hold the probe, and the log scan at the end would
+    # fail.
+    - name: Refuse a password with a character outside the allowed set
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an exporter password with a character outside the allowed set
+        refused_password: "{{ verify_probe ~ '%c' | format(verify_code) ~ 'tail' }}"
+      loop: '{{ verify_unsafe_codes }}'
+      loop_control:
+        loop_var: verify_code
+        label: code point {{ verify_code }}
+
+    # A final line break is the case a pattern ending in a dollar sign accepts.
+    - name: Refuse a password that ends in a line break
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an exporter password with a character outside the allowed set
+        refused_password: "{{ verify_probe ~ '%c' | format(10) }}"
+
+    - name: Refuse a password with a character in front of the rest
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an exporter password with a character outside the allowed set
+        refused_password: "{{ '%c' | format(36) ~ verify_probe }}"
+
+    - name: Refuse a password one character short of the minimum
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an exporter password shorter than the minimum length
+        refused_password: '{{ verify_probe[:19] }}'
+
+    - name: Refuse a short password
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an exporter password shorter than the minimum length
+        refused_password: Abc123
+
+    - name: Refuse an empty password
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an empty exporter password
+        refused_password: ''
+
+    # YAML reads an unquoted run of digits as a number.
+    - name: Refuse a password that YAML read as a number
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an exporter password that is not text
+        refused_password: 12345678901234567890
+
+    - name: Refuse a missing password
+      ansible.builtin.include_tasks: tasks/refused_without_password.yml
+
+    # A value of the wrong shape, with the sentinel inside it. Ansible's own
+    # argument check runs first, in a task no keyword reaches, so the role cannot
+    # hide what it prints. It converts a mapping or a list to text for a text
+    # option and hands the role the original, so these reach the role's own
+    # check, which refuses them without printing them. The log scan at the end
+    # requires that the sentinel is printed nowhere.
+    - name: Refuse a password that is a mapping
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an exporter password that is not text
+        refused_password:
+          EXAMPLE_KEY: '{{ verify_probe }}'
+
+    - name: Refuse a password that is a list
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an exporter password that is not text
+        refused_password:
+          - '{{ verify_probe }}'
+
+    # The download and package-file rules.
+    - name: Refuse a download pinned by an md5 digest
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a download entry that is not pinned by a sha256 or sha512 digest
+        refused_downloads:
+          - url: '{{ verify_downloads[0].url }}'
+            dest: '{{ scenario_libaio_path }}'
+            checksum: md5:d41d8cd98f00b204e9800998ecf8427e
+
+    - name: Refuse a download with an empty digest
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a download entry that is not pinned by a sha256 or sha512 digest
+        refused_downloads:
+          - url: '{{ verify_downloads[0].url }}'
+            dest: '{{ scenario_libaio_path }}'
+            checksum: ''
+
+    - name: Refuse a download whose digest is a URL
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a download entry that is not pinned by a sha256 or sha512 digest
+        refused_downloads:
+          - url: '{{ verify_downloads[0].url }}'
+            dest: '{{ scenario_libaio_path }}'
+            checksum: https://example.invalid/PLACEHOLDER.sha256
+
+    - name: Refuse a download whose digest ends in a line break
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a download entry that is not pinned by a sha256 or sha512 digest
+        refused_downloads:
+          - url: '{{ verify_downloads[0].url }}'
+            dest: '{{ scenario_libaio_path }}'
+            checksum: "{{ verify_downloads[0].checksum ~ '%c' | format(10) }}"
+
+    # A well-formed digest that is not the file's: the download module refuses
+    # the file. This is a module failure, not an assertion, and it is the
+    # designed result.
+    - name: Refuse a download whose digest is not the file's
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Download each pinned artefact and check its digest
+        refused_downloads:
+          - url: '{{ verify_downloads[0].url }}'
+            dest: '/var/cache/db1-stack/OTHER.deb'
+            checksum: 'sha256:{{ "0" * 64 }}'
+        refused_debs: []
+
+    - name: Refuse a package file that is a URL
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a package file that is not the destination of a pinned download
+        refused_debs:
+          - https://example.invalid/PLACEHOLDER.deb
+
+    - name: Refuse a package file that no pinned download wrote
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a package file that is not the destination of a pinned download
+        refused_debs:
+          - /srv/db1-stack/age_1.0.0-1_all.deb
+
+    # The key file is compared with the digest pinned in the role.
+    - name: Refuse a key file whose digest is not the pinned one
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a repository key whose digest is not the pinned one
+        refused_key_sha256: '{{ "0" * 64 }}'
+
+    - name: Refuse a pin that is not a digest
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a repository key whose digest is not the pinned one
+        refused_key_sha256: NOT_A_DIGEST
+
+    # The installed version is checked, not assumed: the placeholder age package
+    # is on a 1.0 line, which stands in for a client on another line.
+    - name: Refuse a toolchain package that is not on the pinned line
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a MySQL toolchain that is not on the pinned line
+        refused_checked_packages:
+          - age
+
+    - name: Refuse a toolchain package that is not installed
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a MySQL toolchain that is not on the pinned line
+        refused_checked_packages:
+          - no-such-package
+
+    # Nothing above changed anything: the host is as the converge left it.
+    - name: Assert the refusals left the host as it was
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+      vars:
+        state_password: '{{ verify_password }}'
+
+    # ----- A path that Docker or an earlier release left in the way -----
+    # Docker creates a directory at a bind-mount source it cannot find. The
+    # role removes an empty one, refuses one that holds anything, and replaces a
+    # link without following it.
+    - name: Put an empty directory where the exporter file goes
+      ansible.builtin.include_tasks: tasks/path_empty_directory.yml
+
+    - name: Put a directory that holds a file where the exporter file goes
+      ansible.builtin.include_tasks: tasks/path_full_directory.yml
+
+    - name: Put a link to another file where the exporter file goes
+      ansible.builtin.include_tasks: tasks/path_link.yml
+
+    # ----- An earlier release left a wide file behind -----
+    # The file is world-readable, owned by root and holds an earlier password.
+    # The role must close it, give it to the exporter's account, replace the
+    # content, and leave no copy of the earlier password anywhere.
+    - name: Leave an exporter file that anyone can read, with an earlier password
+      ansible.builtin.copy:
+        content: "{{ '[client]' ~ ('%c' | format(10)) ~ 'password = ' ~ verify_earlier ~ ('%c' | format(10)) }}"
+        dest: '{{ scenario_cnf_path }}'
+        owner: root
+        group: root
+        mode: '0644'
+      no_log: true
+      diff: false
+
+    - name: Apply the role over the wide file
+      ansible.builtin.include_tasks: tasks/apply.yml
+
+    - name: Assert the wide file was closed and replaced
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+      vars:
+        state_password: '{{ verify_password }}'
+
+    - name: Assert the earlier password is gone from the host
+      ansible.builtin.include_tasks: tasks/assert_gone.yml
+      vars:
+        gone_value: '{{ verify_earlier }}'
+
+    # ----- Rotation as a re-run -----
+    - name: Read the exporter file before the rotation
+      ansible.builtin.stat:
+        path: '{{ scenario_cnf_path }}'
+        get_checksum: false
+      register: db1_stack_verify_before
+
+    - name: Apply the same password again
+      ansible.builtin.include_tasks: tasks/apply.yml
+
+    - name: Read the exporter file after the same password
+      ansible.builtin.stat:
+        path: '{{ scenario_cnf_path }}'
+        get_checksum: false
+      register: db1_stack_verify_same
+
+    # The same inode: nothing was rewritten.
+    - name: Assert the same password rewrote nothing
+      ansible.builtin.assert:
+        that:
+          - db1_stack_verify_same.stat.inode == db1_stack_verify_before.stat.inode
+        quiet: true
+
+    - name: Plan the rotation in check mode with diff on
+      check_mode: true
+      diff: true
+      block:
+        - name: Apply the rotated password in check mode
+          ansible.builtin.include_tasks: tasks/apply.yml
+          vars:
+            apply_password: '{{ verify_password_rotated }}'
+
+    - name: Assert the plan changed nothing
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+      vars:
+        state_password: '{{ verify_password }}'
+
+    - name: Rotate the password
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        apply_password: '{{ verify_password_rotated }}'
+
+    - name: Assert the rotated password is in the file
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+      vars:
+        state_password: '{{ verify_password_rotated }}'
+
+    - name: Assert the replaced password is gone from the host
+      ansible.builtin.include_tasks: tasks/assert_gone.yml
+      vars:
+        gone_value: '{{ verify_password }}'
+
+    - name: Read the exporter file after the rotation
+      ansible.builtin.stat:
+        path: '{{ scenario_cnf_path }}'
+        get_checksum: false
+      register: db1_stack_verify_rotated
+
+    - name: Assert the rotation replaced the file
+      ansible.builtin.assert:
+        that:
+          - db1_stack_verify_rotated.stat.inode != db1_stack_verify_before.stat.inode
+        quiet: true
+
+    - name: Apply the rotated password again
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        apply_password: '{{ verify_password_rotated }}'
+
+    - name: Read the exporter file after the rotated password again
+      ansible.builtin.stat:
+        path: '{{ scenario_cnf_path }}'
+        get_checksum: false
+      register: db1_stack_verify_rotated_again
+
+    - name: Assert the rotated password again rewrote nothing
+      ansible.builtin.assert:
+        that:
+          - db1_stack_verify_rotated_again.stat.inode == db1_stack_verify_rotated.stat.inode
+        quiet: true
+
+    # Put the host back as the converge left it. The harness checks the
+    # configured host for drift after this play, and the rotated password must not
+    # outlive it.
+    - name: Rotate back to the first password
+      ansible.builtin.include_tasks: tasks/apply.yml
+
+    - name: Assert the first password is back
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+      vars:
+        state_password: '{{ verify_password }}'
+
+    - name: Assert the rotated password is gone from the host
+      ansible.builtin.include_tasks: tasks/assert_gone.yml
+      vars:
+        gone_value: '{{ verify_password_rotated }}'
+
+    # ----- A change to a repository file refreshes the index -----
+    # The container has no network, so the refresh fails, which is how the test
+    # sees that it ran. Nothing else in the role reaches the network.
+    - name: Leave the repository files the hand-run installer made
+      ansible.builtin.include_tasks: tasks/legacy_files.yml
+
+    - name: Change the repository source by hand
+      ansible.builtin.include_tasks: tasks/source_changed.yml
+
+    # ----- The host is as the converge left it -----
+    - name: Assert the host ends as the converge left it
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+      vars:
+        state_password: '{{ verify_password }}'
+
+    # ----- ANS-16: no sentinel in any log -----
+    # The scenario sets verbosity 3 and a log path (molecule.yml), so a task that
+    # handles the password without no_log prints it into this log, in its result,
+    # its arguments, its diff or the message of a failure. The scan runs last, so
+    # it covers every run above: the converge, the second converge, the
+    # check-mode runs with diff, the rotations, the refusals and the failures. The
+    # controls show the scan reads the output: the canary of the converge, two
+    # task names of the role, and the digest control.
+    - name: Print the SHA-1 of the digest control, the scan's control for digests
+      ansible.builtin.debug:
+        msg: 'SCENARIO_DIGEST_CONTROL {{ verify_digest_control | hash("sha1") }}'
+
+    - name: Read the log of this scenario's Ansible runs
+      ansible.builtin.set_fact:
+        db1_stack_verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+      no_log: true
+
+    - name: Assert the log holds the output the scan is meant to read
+      ansible.builtin.assert:
+        that:
+          - "'SCENARIO_LOG_CANARY' in db1_stack_verify_log"
+          - "' : Write the exporter credentials file' in db1_stack_verify_log"
+          - "' : Create the exporter file empty and closed' in db1_stack_verify_log"
+        fail_msg: The log lacks the canary or a role task name, so an empty scan would prove nothing.
+        quiet: true
+      no_log: true
+
+    - name: Start the list of the sentinels the log holds
+      ansible.builtin.set_fact:
+        db1_stack_verify_found: []
+      no_log: true
+
+    # A sentinel counts as held when its text, its SHA-1 or its MD5 is in the log.
+    # A fingerprint of a secret is a leak too: a digest of a human-chosen password
+    # can be checked offline. The digest control is found only by its SHA-1.
+    - name: Look in the log for each sentinel, its SHA-1 and its MD5, and for the digest control
+      ansible.builtin.set_fact:
+        db1_stack_verify_found: '{{ db1_stack_verify_found + [item.key] }}'
+      loop: '{{ verify_scan_items }}'
+      when: >-
+        item.value in db1_stack_verify_log
+        or (item.value | hash('sha1')) in db1_stack_verify_log
+        or (item.value | hash('md5')) in db1_stack_verify_log
+      no_log: true
+
+    - name: Work out which sentinels the log holds
+      ansible.builtin.set_fact:
+        db1_stack_verify_leaked: "{{ db1_stack_verify_found | reject('equalto', 'digest_control') | list }}"
+      no_log: true
+
+    - name: Assert the scan finds the digest control in the log
+      ansible.builtin.assert:
+        that:
+          - "'digest_control' in db1_stack_verify_found"
+        fail_msg: The scan did not find the SHA-1 of the digest control in the log, so an empty scan of digests would prove nothing.
+        quiet: true
+
+    - name: Assert no sentinel reached the log
+      ansible.builtin.assert:
+        that:
+          - db1_stack_verify_leaked == []
+        fail_msg: 'The log holds the sentinels: {{ db1_stack_verify_leaked }}.'
+        quiet: true
+
+    # The file is created closed before the password is written (see the role).
+    # The log lists the tasks in the order they ran.
+    - name: Assert the closed file is created before the password is written
+      ansible.builtin.assert:
+        that:
+          - "db1_stack_verify_log.find(' : Create the exporter file empty and closed') >= 0"
+          - "db1_stack_verify_log.find(' : Write the exporter credentials file') >= 0"
+          - "db1_stack_verify_log.find(' : Create the exporter file empty and closed') < db1_stack_verify_log.find(' : Write the exporter credentials file')"
+        quiet: true
+      no_log: true
+
+# The other files this run leaves on the controller: Molecule's own copy of the
+# configuration, the inventory it built, its state, and the log. The sentinel
+# files themselves are the one place the values are meant to be.
+- name: Scan the files the run leaves on the controller
+  hosts: localhost
+  gather_facts: false
+  vars:
+    scan_files: "{{ scenario_sentinel_labels | map('regex_replace', '^', scenario_sentinel_dir ~ '/') | list }}"
+    scan_pattern: "{{ lookup('ansible.builtin.file', *scan_files, wantlist=True) | join('|') }}"
+  tasks:
+    - name: Search the scenario's directory for every sentinel but the sentinel files
+      ansible.builtin.find:
+        paths: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+        recurse: true
+        hidden: true
+        file_type: file
+        excludes: '{{ scenario_sentinel_labels }}'
+        contains: '{{ scan_pattern }}'
+      register: db1_stack_scan_found
+      no_log: true
+
+    - name: Assert no other file the run left holds a sentinel
+      ansible.builtin.assert:
+        that:
+          - db1_stack_scan_found.files | length == 0
+        fail_msg: 'A sentinel is in: {{ db1_stack_scan_found.files | map(attribute="path") | list }}'
+        quiet: true

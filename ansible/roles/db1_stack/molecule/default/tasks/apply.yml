@@ -1,0 +1,11 @@
+---
+# Applies the role with the scenario's good inputs. The password is apply_password
+# when a step gives one, and the scenario's password otherwise. The include
+# carries no no_log, for the reason given in converge.yml.
+- name: Apply the role
+  ansible.builtin.include_role:
+    name: branchleft.db1_stack
+  vars:
+    db1_stack_exporter_password: '{{ apply_password | default(verify_password) }}'
+    db1_stack_downloads: '{{ verify_downloads }}'
+    db1_stack_debs: '{{ verify_debs }}'
