@@ -1,0 +1,35 @@
+---
+# Makes the stand-in report a Compose version below the module's minimum,
+# applies the role and asserts it stopped with the module's own refusal. The
+# reported version is put back whatever happens.
+- name: Fail the role on an old Compose
+  block:
+    - name: Report an old Compose version
+      ansible.builtin.copy:
+        content: v2.17.9
+        dest: /var/lib/compose_stack_standin/compose_version
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.compose_stack
+
+    - name: Fail because the role accepted an old Compose
+      ansible.builtin.fail:
+        msg: The role accepted a Compose version below the module's minimum.
+  rescue:
+    - name: Assert the module refused the version
+      ansible.builtin.assert:
+        that:
+          - "'need version 2.18.0 or later' in ansible_failed_result.msg"
+        quiet: true
+        fail_msg: >-
+          An old Compose was not refused with the module's version message.
+          The role stopped with: {{ ansible_failed_result.msg }}
+  always:
+    - name: Report the current Compose version again
+      ansible.builtin.file:
+        path: /var/lib/compose_stack_standin/compose_version
+        state: absent

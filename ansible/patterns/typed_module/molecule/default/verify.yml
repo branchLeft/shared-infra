@@ -1,0 +1,344 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    # A file only this play touches, in a directory that exists on the image.
+    typed_module_verify_probe: /var/tmp/typed_module_probe.record
+  tasks:
+    # 0. The module runs under the interpreter the pattern's requires-python
+    # names (PY-3): the oldest Python any target host provides.
+    - name: Read the Python version the module runs under
+      ansible.builtin.setup:
+        gather_subset: [min]
+
+    - name: Assert the target Python is the pattern's floor or newer
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.python.version.major == 3
+          - ansible_facts.python.version.minor >= 13
+        fail_msg: The pattern's requires-python is 3.13, the Python of the Debian 13 image.
+
+    # 1. The role's own apply, with the scenario's values.
+    - name: Read the record the role wrote
+      ansible.builtin.stat:
+        path: /etc/typed_module.record
+      register: typed_module_verify_record
+
+    - name: Assert the record is a regular file with the scenario's mode
+      ansible.builtin.assert:
+        that:
+          - typed_module_verify_record.stat.exists
+          - typed_module_verify_record.stat.isreg
+          - typed_module_verify_record.stat.mode == '0640'
+        success_msg: The record exists as a regular file with the mode the role was given.
+
+    - name: Count the lines of the record that match each pattern
+      ansible.builtin.find:
+        paths: /etc
+        patterns: typed_module.record
+        contains: '{{ item.pattern }}'
+      loop:
+        - { pattern: '^name=SCENARIO_NAME$', expected: 1 }
+        - { pattern: '^count=7$', expected: 1 }
+        - { pattern: '^signature=[0-9a-f]{64}$', expected: 1 }
+        - { pattern: 'THROWAWAY', expected: 0 }
+      loop_control:
+        label: '{{ item.pattern }}'
+      register: typed_module_verify_lines
+
+    - name: Assert the record holds the scenario's values, a signature and no token
+      ansible.builtin.assert:
+        that:
+          - item.matched == item.item.expected
+        fail_msg: 'The record has {{ item.matched }} line(s) matching {{ item.item.pattern }}, expected {{ item.item.expected }}.'
+      loop: '{{ typed_module_verify_lines.results }}'
+      loop_control:
+        label: '{{ item.item.pattern }}'
+
+    # 2. Check mode changes nothing, an apply changes once, a second apply
+    # changes nothing. The module is called directly on a probe file, so each
+    # claim is read from its own result and from the file.
+    - name: Remove any probe file left by an earlier run
+      ansible.builtin.file:
+        path: '{{ typed_module_verify_probe }}'
+        state: absent
+
+    - name: Run the module in check mode against a file that does not exist
+      typed_module_record:
+        path: '{{ typed_module_verify_probe }}'
+        name: PROBE_NAME
+      check_mode: true
+      register: typed_module_verify_check_fresh
+
+    - name: Read the probe after the check-mode run
+      ansible.builtin.stat:
+        path: '{{ typed_module_verify_probe }}'
+      register: typed_module_verify_after_check
+
+    - name: Assert check mode reported a write and wrote nothing
+      ansible.builtin.assert:
+        that:
+          - typed_module_verify_check_fresh.changed
+          - typed_module_verify_check_fresh.action == 'write'
+          - not typed_module_verify_after_check.stat.exists
+        fail_msg: Check mode must report the change it would make and must not create the file.
+
+    - name: Apply the module to the probe
+      typed_module_record:
+        path: '{{ typed_module_verify_probe }}'
+        name: PROBE_NAME
+      register: typed_module_verify_apply
+
+    - name: Apply the module to the probe a second time
+      typed_module_record:
+        path: '{{ typed_module_verify_probe }}'
+        name: PROBE_NAME
+      register: typed_module_verify_apply_again
+
+    - name: Run the module in check mode against the applied probe
+      typed_module_record:
+        path: '{{ typed_module_verify_probe }}'
+        name: PROBE_NAME
+      check_mode: true
+      register: typed_module_verify_check_applied
+
+    - name: Assert the apply changed once and nothing changes after it
+      ansible.builtin.assert:
+        that:
+          - typed_module_verify_apply.changed
+          - not typed_module_verify_apply_again.changed
+          - not typed_module_verify_check_applied.changed
+        fail_msg: An apply must change a new file once, and neither a second apply nor a check-mode run may report a change after it.
+
+    # 3. Drift is reported by check mode without being repaired, and repaired
+    # by an apply that then changes nothing.
+    - name: Overwrite the probe with other content
+      ansible.builtin.copy:
+        content: "drifted\n"
+        dest: '{{ typed_module_verify_probe }}'
+        mode: '0666'
+
+    - name: Run the module in check mode against the drifted probe
+      typed_module_record:
+        path: '{{ typed_module_verify_probe }}'
+        name: PROBE_NAME
+      check_mode: true
+      register: typed_module_verify_check_drift
+
+    - name: Find the drifted line after the check-mode run
+      ansible.builtin.find:
+        paths: /var/tmp
+        patterns: typed_module_probe.record
+        contains: '^drifted$'
+      register: typed_module_verify_drift_kept
+
+    - name: Assert check mode reported the drift and left the file alone
+      ansible.builtin.assert:
+        that:
+          - typed_module_verify_check_drift.changed
+          - typed_module_verify_check_drift.action == 'write'
+          - typed_module_verify_drift_kept.matched == 1
+        fail_msg: Check mode must report drift and must not repair it.
+
+    - name: Apply the module to the drifted probe
+      typed_module_record:
+        path: '{{ typed_module_verify_probe }}'
+        name: PROBE_NAME
+      register: typed_module_verify_repair
+
+    - name: Apply the module to the repaired probe
+      typed_module_record:
+        path: '{{ typed_module_verify_probe }}'
+        name: PROBE_NAME
+      register: typed_module_verify_repair_again
+
+    - name: Assert the apply repaired the drift once
+      ansible.builtin.assert:
+        that:
+          - typed_module_verify_repair.changed
+          - not typed_module_verify_repair_again.changed
+        fail_msg: An apply must repair drifted content once and then change nothing.
+
+    - name: Widen the mode of the probe
+      ansible.builtin.file:
+        path: '{{ typed_module_verify_probe }}'
+        mode: '0666'
+
+    - name: Run the module in check mode against the widened probe
+      typed_module_record:
+        path: '{{ typed_module_verify_probe }}'
+        name: PROBE_NAME
+      check_mode: true
+      register: typed_module_verify_check_mode_drift
+
+    - name: Read the mode after the check-mode run
+      ansible.builtin.stat:
+        path: '{{ typed_module_verify_probe }}'
+      register: typed_module_verify_widened
+
+    - name: Assert check mode reported the mode drift and did not repair it
+      ansible.builtin.assert:
+        that:
+          - typed_module_verify_check_mode_drift.changed
+          - typed_module_verify_check_mode_drift.action == 'chmod'
+          - typed_module_verify_widened.stat.mode == '0666'
+        fail_msg: Check mode must report a mode drift and must not repair it.
+
+    - name: Apply the module to the widened probe
+      typed_module_record:
+        path: '{{ typed_module_verify_probe }}'
+        name: PROBE_NAME
+      register: typed_module_verify_chmod
+
+    - name: Read the mode after the apply
+      ansible.builtin.stat:
+        path: '{{ typed_module_verify_probe }}'
+      register: typed_module_verify_narrowed
+
+    - name: Assert the apply narrowed the mode
+      ansible.builtin.assert:
+        that:
+          - typed_module_verify_chmod.changed
+          - typed_module_verify_narrowed.stat.mode == '0600'
+        fail_msg: An apply must restore the mode the module was given.
+
+    # 4. A removal is reported by check mode and carried out by an apply.
+    - name: Run the module in check mode with the state absent
+      typed_module_record:
+        path: '{{ typed_module_verify_probe }}'
+        name: PROBE_NAME
+        state: absent
+      check_mode: true
+      register: typed_module_verify_check_remove
+
+    - name: Read the probe after the check-mode removal
+      ansible.builtin.stat:
+        path: '{{ typed_module_verify_probe }}'
+      register: typed_module_verify_kept
+
+    - name: Assert check mode reported the removal and kept the file
+      ansible.builtin.assert:
+        that:
+          - typed_module_verify_check_remove.changed
+          - typed_module_verify_check_remove.action == 'remove'
+          - typed_module_verify_kept.stat.exists
+        fail_msg: Check mode must report a removal and must not delete the file.
+
+    - name: Remove the probe with the module
+      typed_module_record:
+        path: '{{ typed_module_verify_probe }}'
+        name: PROBE_NAME
+        state: absent
+      register: typed_module_verify_remove
+
+    - name: Remove the probe with the module a second time
+      typed_module_record:
+        path: '{{ typed_module_verify_probe }}'
+        name: PROBE_NAME
+        state: absent
+      register: typed_module_verify_remove_again
+
+    - name: Assert the removal changed once
+      ansible.builtin.assert:
+        that:
+          - typed_module_verify_remove.changed
+          - not typed_module_verify_remove_again.changed
+        fail_msg: A removal must change an existing file once and then change nothing.
+
+    # 5. The token never reaches a result (ANS-16). This task sets no no_log of
+    # its own, so what is registered here is what the default callback would
+    # print: the module's own no_log on the token is what is under test.
+    - name: Apply the module with the throwaway token and no task-level no_log
+      typed_module_record:
+        path: '{{ typed_module_verify_probe }}'
+        name: PROBE_NAME
+        token: '{{ typed_module_token }}'
+      register: typed_module_verify_secret
+
+    - name: Find the token in the probe file
+      ansible.builtin.find:
+        paths: /var/tmp
+        patterns: typed_module_probe.record
+        contains: '{{ typed_module_token }}'
+      register: typed_module_verify_token_in_file
+
+    - name: Assert the token is in no result, the diff or the file
+      ansible.builtin.assert:
+        that:
+          - typed_module_verify_secret.changed
+          - typed_module_token not in (typed_module_verify_secret | to_json)
+          - "'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER' in (typed_module_verify_secret | to_json)"
+          - "'signature=' in typed_module_verify_secret.diff.after"
+          - typed_module_verify_token_in_file.matched == 0
+        fail_msg: The throwaway token reached a result, the diff or the file, or the module did not mask it.
+
+    - name: Remove the probe again
+      typed_module_record:
+        path: '{{ typed_module_verify_probe }}'
+        name: PROBE_NAME
+        state: absent
+
+    # 6. Bad input is refused with a named message, not a traceback.
+    - name: Run the module with each bad argument
+      typed_module_record:
+      args: '{{ item.args }}'
+      check_mode: '{{ item.check_mode | default(false) }}'
+      failed_when: false
+      loop:
+        - msg: 'count must be between 1 and 100, got 0'
+          args: { path: '{{ typed_module_verify_probe }}', name: PROBE_NAME, count: 0 }
+        - msg: 'count must be between 1 and 100, got 101'
+          args: { path: '{{ typed_module_verify_probe }}', name: PROBE_NAME, count: 101 }
+        - msg: 'name must start with a letter and hold only letters'
+          args: { path: '{{ typed_module_verify_probe }}', name: 'BAD NAME' }
+        - msg: 'mode must be four octal digits such as 0600, got .0999.'
+          args: { path: '{{ typed_module_verify_probe }}', name: PROBE_NAME, mode: '0999' }
+        - msg: 'token must not be empty when it is given'
+          args: { path: '{{ typed_module_verify_probe }}', name: PROBE_NAME, token: '' }
+        - msg: 'value of state must be one of: present, absent, got: bogus'
+          args: { path: '{{ typed_module_verify_probe }}', name: PROBE_NAME, state: bogus }
+        - msg: 'missing required arguments: name'
+          args: { path: '{{ typed_module_verify_probe }}' }
+        - msg: 'directory /var/tmp/typed_module_missing does not exist'
+          args: { path: /var/tmp/typed_module_missing/record, name: PROBE_NAME }
+        - msg: 'directory /var/tmp/typed_module_missing does not exist'
+          args: { path: /var/tmp/typed_module_missing/record, name: PROBE_NAME }
+          check_mode: true
+      loop_control:
+        label: '{{ item.msg }}'
+      register: typed_module_verify_bad
+
+    - name: Assert each bad argument gave its named message and no traceback
+      ansible.builtin.assert:
+        that:
+          - item.failed is defined
+          - item.msg is search(item.item.msg)
+          - item.exception is not defined
+          - "'Traceback' not in (item.module_stderr | default(''))"
+        fail_msg: 'Expected the message {{ item.item.msg }}, got {{ item.msg | default("none") }}.'
+      loop: '{{ typed_module_verify_bad.results }}'
+      loop_control:
+        label: '{{ item.item.msg }}'
+
+    # 7. The role's own interface refuses a value outside its choices before
+    # any task runs.
+    - name: Apply the role with a state outside its choices
+      block:
+        - name: Apply the role with the state bogus
+          ansible.builtin.include_role:
+            name: branchleft.typed_module
+          vars:
+            typed_module_state: bogus
+      rescue:
+        - name: Keep the message the role's interface gave
+          ansible.builtin.set_fact:
+            typed_module_verify_role_refusal: '{{ ansible_failed_result.msg }}'
+
+    - name: Assert the role named the variable and the allowed values
+      ansible.builtin.assert:
+        that:
+          - typed_module_verify_role_refusal is defined
+          - "'typed_module_state' in typed_module_verify_role_refusal"
+          - "'present' in typed_module_verify_role_refusal"
+        fail_msg: The role must refuse a state outside its choices and name the variable.
