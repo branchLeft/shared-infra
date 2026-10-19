@@ -323,8 +323,8 @@ The named limits follow. Each is stated so that a green run is not read as more.
 - **The rollback is only as good as the previous file.** If it cannot be loaded, the bad
   set stays loaded (tested, above), and the host fails closed.
 - **The test runs on the Docker runtime's kernel.** The runtime's kernel decides whether
-  nftables loads and whether masquerade works. The same scenario passes on the CI runner;
-  neither is a production host's kernel.
+  nftables loads and whether masquerade works. CI runs the same scenario on a runner's
+  kernel; neither is a production host's kernel.
 - **The uplink is a placeholder.** The masquerade rule names `UPLINK_INTERFACE` by
   default. Nothing checks that a real host passes its own uplink name.
 - **The timeout is short.** The connection check waits five seconds. A host whose control
