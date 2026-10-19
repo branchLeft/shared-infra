@@ -90,6 +90,7 @@ jobs:
               found+=("$dir")
             fi
           done
+          found=()
           if [ "${#found[@]}" -eq 0 ]; then
             echo "No role or pattern with a molecule/ directory was found, so nothing would be tested."
             exit 1
