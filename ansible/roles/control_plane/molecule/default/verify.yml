@@ -18,22 +18,24 @@
       - compose.init.yml
       - pg_hba.conf
   tasks:
+    # rstrip=False: the lookup strips trailing whitespace by default, and slurp on
+    # the instance keeps the final newline, so the byte comparison needs it kept.
     - name: Read each stack file and each isolation file from the repository
       ansible.builtin.set_fact:
         control_plane_verify_sources: >-
-          {{ control_plane_verify_sources | default({}) | combine({item.key: lookup('ansible.builtin.file', item.value)}) }}
+          {{ control_plane_verify_sources | default({})
+          | combine({item.key: lookup('ansible.builtin.file', item.value, rstrip=False)}) }}
       loop:
-        - { key: 'compose.yml', value: '{{ verify_stack_source }}/compose.yml' }
-        - { key: 'compose.init.yml', value: '{{ verify_stack_source }}/compose.init.yml' }
-        - { key: 'pg_hba.conf', value: '{{ verify_stack_source }}/pg_hba.conf' }
-        - {
-            key: 'branchleft_docker_user_policy.sh',
-            value: '{{ verify_provision_source }}/branchleft_docker_user_policy.sh',
-          }
-        - {
-            key: 'branchleft-docker-user-policy.service',
-            value: '{{ verify_provision_source }}/branchleft-docker-user-policy.service',
-          }
+        - key: compose.yml
+          value: '{{ verify_stack_source }}/compose.yml'
+        - key: compose.init.yml
+          value: '{{ verify_stack_source }}/compose.init.yml'
+        - key: pg_hba.conf
+          value: '{{ verify_stack_source }}/pg_hba.conf'
+        - key: branchleft_docker_user_policy.sh
+          value: '{{ verify_provision_source }}/branchleft_docker_user_policy.sh'
+        - key: branchleft-docker-user-policy.service
+          value: '{{ verify_provision_source }}/branchleft-docker-user-policy.service'
       loop_control:
         label: '{{ item.key }}'
       no_log: true
@@ -102,27 +104,119 @@
         fail_msg: The environment file or the master key does not have the mode and owner the runbook sets.
 
     # The secret values are written on the instance, and must not appear in the
-    # run's log, which the controller keeps. The log is read on the controller.
-    - name: Read the environment file's content on the instance
+    # run's log, which the controller keeps. The log is read at the end, after the
+    # role has been applied again below.
+    - name: Read the secrets on the instance after the first apply
       ansible.builtin.slurp:
-        src: '{{ verify_env_file }}'
-      register: control_plane_verify_env
+        src: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_first
+      loop_control:
+        label: '{{ item }}'
       no_log: true
 
-    - name: Read the run's log on the controller
-      ansible.builtin.slurp:
-        src: '{{ lookup("ansible.builtin.env", "ANSIBLE_LOG_PATH") }}'
-      register: control_plane_verify_log
-      delegate_to: localhost
-      no_log: true
-
-    - name: Assert the secret is on the instance and absent from the run's log
+    - name: Assert the secrets hold exactly the values of the first apply
       ansible.builtin.assert:
         that:
-          - "'THROWAWAY-' in (control_plane_verify_env.content | ansible.builtin.b64decode)"
-          - "'THROWAWAY-' not in (control_plane_verify_log.content | ansible.builtin.b64decode)"
+          - (control_plane_verify_first.results[0].content | ansible.builtin.b64decode) == control_plane_env_content
+          - (control_plane_verify_first.results[1].content | ansible.builtin.b64decode) == control_plane_masterkey
         quiet: true
-        fail_msg: The secret is missing from the instance, or it appears in the run's log.
+        fail_msg: The environment file or the master key does not hold the value the first apply was given.
+      no_log: true
+
+    # The write-once rule. The role is applied again with DIFFERENT values for both
+    # secrets, and both files must still hold the first values.
+    - name: Apply the role again with different secret values
+      ansible.builtin.include_role:
+        name: branchleft.control_plane
+      vars:
+        control_plane_env_content: 'CONTROL_PLANE_DB_ADMIN_PASSWORD=SECOND-{{ scenario_secret }}'
+        control_plane_masterkey: 'MASTERKEY-SECOND-{{ scenario_secret }}'
+
+    - name: Read the secrets on the instance after the second apply
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_second
+      loop_control:
+        label: '{{ item }}'
+      no_log: true
+
+    - name: Assert the second apply, with different values, changed neither secret
+      ansible.builtin.assert:
+        that:
+          - (control_plane_verify_second.results[0].content | ansible.builtin.b64decode) == control_plane_env_content
+          - (control_plane_verify_second.results[1].content | ansible.builtin.b64decode) == control_plane_masterkey
+          - "'SECOND' not in (control_plane_verify_second.results[0].content | ansible.builtin.b64decode)"
+          - "'SECOND' not in (control_plane_verify_second.results[1].content | ansible.builtin.b64decode)"
+        quiet: true
+        fail_msg: A second apply with different values replaced the environment file or the master key.
+      no_log: true
+
+    # A run that stopped between creating a file empty and writing its content
+    # leaves an empty file. The next apply must fill it, and only then.
+    - name: Empty both secret files, as a run that stopped between the two steps leaves them
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ item.path }}'
+        owner: '{{ item.owner }}'
+        group: '{{ item.owner }}'
+        mode: '{{ item.mode }}'
+        force: true
+      loop:
+        - path: '{{ verify_env_file }}'
+          owner: root
+          mode: '0600'
+        - path: '{{ verify_masterkey_file }}'
+          owner: '1000'
+          mode: '0400'
+      loop_control:
+        label: '{{ item.path }}'
+
+    - name: Apply the role again over the empty files, with different secret values
+      ansible.builtin.include_role:
+        name: branchleft.control_plane
+      vars:
+        control_plane_env_content: 'CONTROL_PLANE_DB_ADMIN_PASSWORD=SECOND-{{ scenario_secret }}'
+        control_plane_masterkey: 'MASTERKEY-SECOND-{{ scenario_secret }}'
+
+    - name: Read the secrets on the instance after the empty files were filled
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_filled
+      loop_control:
+        label: '{{ item }}'
+      no_log: true
+
+    - name: Read the mode and owner of both files after they were filled
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_filled_stats
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert the empty files were filled with the new values at the same owner and mode
+      ansible.builtin.assert:
+        that:
+          - (control_plane_verify_filled.results[0].content | ansible.builtin.b64decode) == ('CONTROL_PLANE_DB_ADMIN_PASSWORD=SECOND-' ~ scenario_secret)
+          - (control_plane_verify_filled.results[1].content | ansible.builtin.b64decode) == ('MASTERKEY-SECOND-' ~ scenario_secret)
+          - control_plane_verify_filled_stats.results[0].stat.mode == '0600'
+          - control_plane_verify_filled_stats.results[0].stat.pw_name == 'root'
+          - control_plane_verify_filled_stats.results[1].stat.mode == '0400'
+          - control_plane_verify_filled_stats.results[1].stat.uid == 1000
+          - control_plane_verify_filled_stats.results[1].stat.gid == 1000
+        quiet: true
+        fail_msg: An empty secret file was not filled, or it was filled at the wrong owner or mode.
       no_log: true
 
     - name: Read the isolation reconciler and its unit on the instance
@@ -138,10 +232,13 @@
     - name: Assert the isolation reconciler and its unit are byte-equal to their sources
       ansible.builtin.assert:
         that:
-          - (control_plane_verify_isolation.results[0].content | ansible.builtin.b64decode) == control_plane_verify_sources['branchleft_docker_user_policy.sh']
-          - (control_plane_verify_isolation.results[1].content | ansible.builtin.b64decode) == control_plane_verify_sources['branchleft-docker-user-policy.service']
+          - verify_reconciler_content == control_plane_verify_sources['branchleft_docker_user_policy.sh']
+          - verify_unit_content == control_plane_verify_sources['branchleft-docker-user-policy.service']
         quiet: true
         fail_msg: The isolation reconciler or its unit differs from its source.
+      vars:
+        verify_reconciler_content: '{{ control_plane_verify_isolation.results[0].content | ansible.builtin.b64decode }}'
+        verify_unit_content: '{{ control_plane_verify_isolation.results[1].content | ansible.builtin.b64decode }}'
       no_log: true
 
     - name: Read the reconciler's mode
@@ -156,3 +253,20 @@
           - control_plane_verify_reconciler_stat.stat.pw_name == 'root'
         quiet: true
         fail_msg: The reconciler is not root-owned with mode 0755; systemd runs it as root at every boot.
+
+    # Last, so the log holds every apply above, the two with different values too.
+    # Both marker prefixes contain THROWAWAY-.
+    - name: Read the run's log on the controller
+      ansible.builtin.slurp:
+        src: '{{ lookup("ansible.builtin.env", "ANSIBLE_LOG_PATH") }}'
+      register: control_plane_verify_log
+      delegate_to: localhost
+      no_log: true
+
+    - name: Assert the secrets are absent from the run's log
+      ansible.builtin.assert:
+        that:
+          - "'THROWAWAY-' not in (control_plane_verify_log.content | ansible.builtin.b64decode)"
+        quiet: true
+        fail_msg: A secret appears in the run's log.
+      no_log: true

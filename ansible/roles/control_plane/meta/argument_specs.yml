@@ -4,7 +4,7 @@ argument_specs:
     short_description: Deliver the control-plane stack, bring it up and install the app-host isolation policy
     description: >-
       Creates the control plane's host configuration directories, writes its
-      environment file and master key once when they are absent, copies the
+      environment file and master key once when they are absent or empty, copies the
       committed Compose files into the project directory, starts the database and
       then the sign-in service (running the one-off init phase once, on a fresh
       database), enables the stack's unit and runs the deploy wrapper with the
@@ -26,16 +26,16 @@ argument_specs:
         no_log: true
         description: >-
           Content of /etc/branchleft/control-plane.env, a secret supplied at run
-          time. Written only when the file is absent; an existing file is never
-          replaced, so a changed value here is not applied.
+          time. Written only while the file is absent or empty; a file that holds a
+          value is never replaced, so a changed value here is not applied.
       control_plane_masterkey:
         type: str
         required: true
         no_log: true
         description: >-
           Content of the sign-in service's master key file, a secret supplied at
-          run time, written without a trailing newline. Written only when the file
-          is absent. A different key orphans the sign-in service's encrypted data.
+          run time, written without a trailing newline. Written only while the file
+          is absent or empty. A different key orphans the sign-in service's encrypted data.
       control_plane_bring_up:
         type: bool
         default: true
@@ -43,4 +43,6 @@ argument_specs:
       control_plane_start_units:
         type: bool
         default: true
-        description: Whether to enable and start the stack's unit, run the deploy wrapper and apply the isolation policy. False writes the files and leaves systemd alone.
+        description: >-
+          Whether to enable and start the stack's unit, run the deploy wrapper and
+          apply the isolation policy. False writes the files and leaves systemd alone.

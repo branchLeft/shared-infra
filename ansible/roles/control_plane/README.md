@@ -19,9 +19,11 @@ It does these, in order:
    and the sign-in service's state directory. Their owners and modes are in
    `vars/main.yml`.
 2. Writes `/etc/branchleft/control-plane.env` and the sign-in service's master
-   key, each only when the file is absent. The content comes from the inputs
-   `control_plane_env_content` and `control_plane_masterkey`, both secrets
-   supplied at run time. A file that exists is never replaced.
+   key, each only while the file is absent or empty. The content comes from the
+   inputs `control_plane_env_content` and `control_plane_masterkey`, both secrets
+   supplied at run time. A file that holds a value is never replaced. How the
+   file is written without a window of wider access is under "Writing a secret
+   without an exposure window" below.
 3. Copies `compose.yml`, `compose.init.yml` and `pg_hba.conf` from
    `hetzner/control-plane/stack/` into `/opt/branchleft/control-plane`, as
    `root:root` mode `0644` in a `0755` directory.
@@ -96,8 +98,37 @@ and `control_plane_masterkey`. The two secrets carry `no_log: true`. Two switche
   `/etc/systemd/system/branchleft-docker-user-policy.service` (`0644`). The
   policy is applied when either changed, and at every boot after.
 
+### Writing a secret without an exposure window
+
+Ansible's `copy` moves a new file into place at the mode `0666` minus the umask
+(`0644`), and only then applies the role's mode. The environment file sits in
+`/etc/branchleft`, which is `0755`, so a file created with its content would be
+readable by anyone for that moment. The runbook closed this with `umask 077`.
+
+The chosen approach is create-empty-then-fill. For each of the two secrets:
+
+1. `copy` with empty content and `force: false` creates the file empty, at its
+   final owner and mode (`root` `0600`; `1000:1000` `0400`). If the file exists
+   it is left alone. A brief wider mode on an empty file exposes nothing.
+2. The content is then written into the existing file. Ansible's `atomic_move`
+   keeps an existing destination's mode and owner, so the new content is never
+   at a wider mode than the file it replaces.
+3. The content write has the condition "the file is absent or zero bytes long".
+   That condition is the write-once rule: a file that holds a value is never
+   written again. A run that stopped between steps 1 and 2 leaves an empty file,
+   which the next run fills.
+
+The directory `/etc/branchleft` stays `0755`: other roles' units and the deploy
+tooling read files in it, so its mode is not this role's to narrow. A person who
+puts a file in it by hand can still choose a wider mode; the role corrects the
+mode of the two files it owns at every run.
+
 ### Differences from the runbook
 
+- The first run on the existing ops1 host repeats the init phase once. No stamp
+  file exists there, so the role runs `compose.init.yml` once. The runbook calls
+  that phase idempotent, so this is safe. It writes the stamp, and later runs
+  skip it.
 - The init phase runs only when the stamp is absent. The runbook skipped it on
   an initialised host by hand; the stamp does the same check.
 - The isolation reconciler is restarted only when it or its unit changed. The
@@ -124,8 +155,13 @@ converge is the idempotence step. `verify.yml` checks:
 - the owner and mode of every directory and file the role writes;
 - that each stack file and each isolation file is byte-equal to its source in
   the repository, read by the controller and not through the role's links;
-- that the environment file and the master key hold a throwaway secret, and
-  that the same secret does not appear in the run's log.
+- that the environment file and the master key hold exactly the first apply's
+  throwaway values;
+- the write-once rule: the role is applied again with different values and both
+  files must still hold the first values;
+- the interrupted run: both files are emptied by hand, the role is applied
+  again, and both must be filled with the new values at the same owner and mode;
+- that no throwaway value, from any apply, appears in the run's log.
 
 The container does not run Docker, so the bring-up tasks, the stack's health and
 the isolation policy's effect on the firewall are not proven by this scenario.
@@ -134,9 +170,10 @@ the isolation policy's effect on the firewall are not proven by this scenario.
 
 - **The Docker bring-up is not exercised.** No container of the stack is started
   in the test. The first live run through the gated pull is the proof.
-- **The write-once rule is reviewed, not run.** The copy with `force: false` is
-  the control; the scenario writes once with fixed inputs and cannot show a
-  second, different value being refused.
+- **The absence of the exposure window is by construction, not observed.** The
+  scenario proves the final owner, mode and content and the write-once rule. It
+  cannot see the mode a file has for the moment a write takes, so it does not
+  prove that no wider mode occurred.
 - **The DOCKER-USER policy is not applied in the test.** The reconciler refuses
   on a host that is not an app host, and the test container has no DOCKER-USER
   chain.

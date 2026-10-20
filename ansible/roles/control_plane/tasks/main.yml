@@ -15,29 +15,70 @@
   loop_control:
     label: '{{ item.path }}'
 
-# Written once. copy with force false leaves an existing file exactly as it is,
-# so a second run never replaces a secret, and a master key is never overwritten.
-- name: Write the environment file once, if it is absent
+# Each secret is written once, in two steps, so that no file holding a value is
+# ever readable by anyone but its owner. Ansible puts a new file in place at the
+# mode 0666 minus the umask and sets the role's mode only afterwards, so a file
+# created with its content is briefly 0644 in /etc/branchleft (0755). So the file
+# is created EMPTY first, at its final owner and mode: a wider mode for a moment
+# shows nothing. The content then goes into the existing file, and Ansible keeps
+# an existing destination's mode and owner when it moves new content over it.
+- name: Create the environment file empty, if it is absent
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ control_plane_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+    force: false
+
+- name: Look at the environment file
+  ansible.builtin.stat:
+    path: '{{ control_plane_env_file }}'
+    get_checksum: false
+  register: control_plane_env_stat
+
+# The condition is the write-once rule: the content is written only while the file
+# is empty, so a file that holds a value is never changed. A run that stopped
+# between the two steps left an empty file, and the next run fills it.
+- name: Write the environment file's content while the file is empty
   ansible.builtin.copy:
     content: '{{ control_plane_env_content }}'
     dest: '{{ control_plane_env_file }}'
     owner: root
     group: root
     mode: '0600'
-    force: false
+    force: true
   no_log: true
   diff: false
+  when: not control_plane_env_stat.stat.exists or control_plane_env_stat.stat.size == 0
 
-- name: Write the master key once, if it is absent
+# The master key is written the same way, and never overwritten once it holds a value.
+- name: Create the master key empty, if it is absent
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ control_plane_masterkey_file }}'
+    owner: '1000'
+    group: '1000'
+    mode: '0400'
+    force: false
+
+- name: Look at the master key
+  ansible.builtin.stat:
+    path: '{{ control_plane_masterkey_file }}'
+    get_checksum: false
+  register: control_plane_masterkey_stat
+
+- name: Write the master key's content while the file is empty
   ansible.builtin.copy:
     content: '{{ control_plane_masterkey }}'
     dest: '{{ control_plane_masterkey_file }}'
     owner: '1000'
     group: '1000'
     mode: '0400'
-    force: false
+    force: true
   no_log: true
   diff: false
+  when: not control_plane_masterkey_stat.stat.exists or control_plane_masterkey_stat.stat.size == 0
 
 - name: Create the project directory of the control-plane stack
   ansible.builtin.file:
@@ -75,8 +116,11 @@
     IMAGE: '{{ control_plane_app_image }}'
   # Compose itself reports the containers it started or left alone, and --wait
   # fails the task when the database is not healthy. The task reports no change
-  # so that a second apply of the same commit reports zero changes.
+  # so that a second apply of the same commit reports zero changes. no_log: Compose
+  # quotes a line of the environment file when it cannot parse it, and a line can
+  # hold a value.
   changed_when: false
+  no_log: true
   when: control_plane_bring_up | ansible.builtin.bool
 
 - name: Read whether the sign-in service's init phase has run
@@ -105,6 +149,7 @@
   environment:
     IMAGE: '{{ control_plane_app_image }}'
   changed_when: true
+  no_log: true
   when:
     - control_plane_bring_up | ansible.builtin.bool
     - not control_plane_init_stat.stat.exists
@@ -137,6 +182,7 @@
   # As for the database: --wait fails the task when the service is not healthy,
   # and the task reports no change so a second apply reports zero changes.
   changed_when: false
+  no_log: true
   when: control_plane_bring_up | ansible.builtin.bool
 
 - name: Enable the stack's unit
