@@ -6,8 +6,8 @@ page of the standards repository (clauses ANS-1 to ANS-17).
 
 This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
-the skeleton. It holds no host, no playbook and no role for a real
-service yet; the inventory trees are empty by design.
+the skeleton. Its one real host is `edge1` (`playbooks/edge1.yml`, which applies
+`roles/ansible_runtime` and `roles/pull_trigger`); the other trees hold only what edge1 needs.
 
 ## Layout
 
@@ -21,7 +21,8 @@ service yet; the inventory trees are empty by design.
 | `requirements.txt` | The hash-locked toolchain compiled from it, collections included.      |
 | `requirements.yml` | Empty by design: no collection is fetched outside the lock (ANS-4).    |
 | `checks/`          | The pin check and its unit tests (ANS-4).                              |
-| `inventories/`     | The inventory and group-variable trees. Empty by design.               |
+| `inventories/`     | The inventory and group-variable trees. `production` holds edge1.      |
+| `playbooks/`       | One playbook per host: selects hosts and lists roles (ANS-13).         |
 | `pyproject.toml`   | The Python floor for the harness: version, mypy strict, ruff (ANS-2).  |
 | `../.ansible-lint` | The lint floor, production profile (ANS-5). Not editable by a role PR. |
 | `../.yamllint`     | The YAML floor (ANS-6). Not editable by a role PR.                     |
@@ -457,13 +458,13 @@ oversight. Each is a decision the standard assigns to later work.
 - **The standard's own checks.** Of the checks the standard's check plans
   describe, the scenario limits and the pins are scripted. No `shell` tasks and
   no loosened lint file are still review.
-- **Inventories.** The trees under `inventories/` are empty by design, and their
+- **Inventories.** The trees under `inventories/` hold one host, and their
   layout is a proposal.
 - **A required check.** The Ansible job runs on every pull request, so it can be
   required (CI-14), but making it required is a repository ruleset change and
   belongs to the owner. Until it is done a red Ansible job does not block a
   merge on its own.
-- **Delivery.** Nothing applies a role to a host. ANS-17 describes the only
+- **Delivery.** Only edge1 has a playbook, and its first apply is the one-time root bootstrap and then the gated pull. ANS-17 describes the only
   approved path; the trigger and the reusable workflow it needs are separate
   work.
 - **Reuse by other repositories.** The harness is code another repository may

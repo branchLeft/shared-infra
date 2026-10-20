@@ -1,0 +1,32 @@
+---
+# Test scaffolding, not role tasks. It puts the test-only copy of the programs
+# where a file:// URL can reach it, and stands in for the tools the role's
+# prerequisite step would install, so the scenario needs no network and no apt.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+  tasks:
+    - name: Copy the test-only release files into the container
+      ansible.builtin.copy:
+        src: source/
+        dest: '{{ backup_worker_test_source_dir }}/'
+        owner: root
+        group: root
+        mode: '0644'
+        directory_mode: '0755'
+
+    - name: Install stand-ins for age, mysql and the mysqldump 8.0 client
+      ansible.builtin.copy:
+        content: |
+          #!/bin/sh
+          echo "{{ item }}  Ver 8.0.99 TEST PLACEHOLDER"
+        dest: /usr/local/bin/{{ item }}
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - age
+        - mysql
+        - mysqldump

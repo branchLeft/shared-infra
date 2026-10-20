@@ -1,0 +1,139 @@
+---
+# The binary is left alone once the installed binary already reports the pinned
+# version. Read without a change, so check mode reads it too.
+- name: Read whether a node_exporter binary is installed
+  ansible.builtin.stat:
+    path: '{{ exporters_and_collectors_bin_path }}'
+  register: exporters_and_collectors_bin_stat
+
+- name: Read the version of the installed node_exporter
+  ansible.builtin.command:
+    argv:
+      - '{{ exporters_and_collectors_bin_path }}'
+      - --version
+  register: exporters_and_collectors_bin_version
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: exporters_and_collectors_bin_stat.stat.exists
+
+- name: Decide whether the pinned binary is already installed
+  ansible.builtin.set_fact:
+    exporters_and_collectors_bin_current: >-
+      {{ exporters_and_collectors_bin_stat.stat.exists
+         and ('node_exporter, version ' ~ exporters_and_collectors_node_exporter_version)
+         in (exporters_and_collectors_bin_version.stdout | default('')) }}
+
+# The download is made into a directory of its own and removed when the role is done,
+# whether or not the install succeeded. get_url checks the digest before anything is
+# extracted, so a corrupted or substituted download fails the play.
+# Check mode downloads nothing and extracts nothing, so the install is skipped there with
+# this stated reason (ANS-10): the archive the copy would read is written by the download,
+# which check mode does not perform. A check-mode run still reports the unit and env file.
+- name: Make a directory for the download
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: exporters_and_collectors_
+  register: exporters_and_collectors_tmp
+  when: not exporters_and_collectors_bin_current and not ansible_check_mode
+
+- name: Fetch the pinned node_exporter release and check its digest
+  when: not exporters_and_collectors_bin_current and not ansible_check_mode
+  block:
+    - name: Download the release tarball
+      ansible.builtin.get_url:
+        url: '{{ exporters_and_collectors_node_exporter_download_url }}'
+        dest: '{{ exporters_and_collectors_tmp.path }}/node_exporter.tar.gz'
+        checksum: '{{ exporters_and_collectors_node_exporter_sha256 }}'
+        mode: '0600'
+
+    - name: Extract the release tarball into the download directory
+      ansible.builtin.unarchive:
+        src: '{{ exporters_and_collectors_tmp.path }}/node_exporter.tar.gz'
+        dest: '{{ exporters_and_collectors_tmp.path }}'
+        remote_src: true
+
+    - name: Install the binary from the release, owned by root, mode 0755
+      ansible.builtin.copy:
+        src: '{{ exporters_and_collectors_tmp.path }}/node_exporter-{{ exporters_and_collectors_node_exporter_version }}.linux-amd64/node_exporter'
+        dest: '{{ exporters_and_collectors_bin_path }}'
+        owner: root
+        group: root
+        mode: '0755'
+        remote_src: true
+      notify: Restart node_exporter
+  always:
+    - name: Remove the download directory
+      ansible.builtin.file:
+        path: '{{ exporters_and_collectors_tmp.path }}'
+        state: absent
+      when: exporters_and_collectors_tmp is defined and exporters_and_collectors_tmp.path is defined
+
+# The system user has no home and no login shell, and is created only when absent.
+- name: Create the unprivileged user the exporter runs as
+  ansible.builtin.user:
+    name: '{{ exporters_and_collectors_user }}'
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+
+# The textfile directory is the one the backup worker writes its gauges to, on this host.
+# Its mode matches the one that worker creates it with.
+- name: Create the textfile directory the exporter reads
+  ansible.builtin.file:
+    path: '{{ exporters_and_collectors_textfile_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# Regenerated from this run's address every time, so a host that changes its private
+# address does not keep serving on a stale one. The write is compared by content, so an
+# unchanged value does not restart the service.
+- name: Create the directory of the exporter's environment file
+  ansible.builtin.file:
+    path: '{{ exporters_and_collectors_env_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Write the environment file with this host's private address
+  ansible.builtin.copy:
+    content: "NODE_EXPORTER_LISTEN_ADDRESS={{ exporters_and_collectors_private_address }}\n"
+    dest: '{{ exporters_and_collectors_env_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart node_exporter
+
+# The unit is the same file on every host; only the environment file varies.
+- name: Install the node_exporter unit
+  ansible.builtin.copy:
+    src: node-exporter.service
+    dest: '{{ exporters_and_collectors_unit_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd manager
+    - Restart node_exporter
+
+# Queued handlers run here, so the enable and start below see the unit and the binary
+# as they now are on disk.
+- name: Load queued changes and restart the exporter before it is enabled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no unit file on a fresh host, so there is nothing for systemd to
+# enable yet. The stat runs in check mode as it does in a real run.
+- name: Read back the node_exporter unit file
+  ansible.builtin.stat:
+    path: '{{ exporters_and_collectors_unit_path }}'
+  register: exporters_and_collectors_unit_stat
+
+- name: Enable and start the node_exporter service
+  ansible.builtin.systemd_service:
+    name: node_exporter.service
+    enabled: true
+    state: started
+  when: exporters_and_collectors_unit_stat.stat.exists
