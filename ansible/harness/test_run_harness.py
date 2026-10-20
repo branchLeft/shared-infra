@@ -127,6 +127,20 @@ class RunHarnessTests(RoleCase):
         self.assertIsNotNone(run_harness.pinned_version(run_harness.REQUIREMENTS, "ansible-core"))
         self.assertIsNone(run_harness.pinned_version(run_harness.REQUIREMENTS, "not-a-package"))
 
+    def test_pinned_version_reads_a_hash_locked_line(self) -> None:
+        base = Path(tempfile.mkdtemp(prefix="harness-lock-"))
+        self.addCleanup(shutil.rmtree, base, True)
+        lock = base / "requirements.txt"
+        lock.write_text(
+            "ansible-core==2.21.5 \\\n    --hash=sha256:" + "b" * 64 + "\n"
+            "ansible-core-extra==9.9.9 --hash=sha256:" + "c" * 64 + "\n"
+            "ruff==0.17.0\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(run_harness.pinned_version(lock, "ansible-core"), "2.21.5")
+        self.assertEqual(run_harness.pinned_version(lock, "ruff"), "0.17.0")
+        self.assertIsNone(run_harness.pinned_version(lock, "ansible"))
+
     def test_every_step_runs_in_order_and_destroy_is_last(self) -> None:
         run, _ = fake_runner()
         outcomes = run_harness.run_role(self.make_role(), TOOLS, run, ENV)

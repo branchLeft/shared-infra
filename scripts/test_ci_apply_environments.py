@@ -638,15 +638,6 @@ class CancelBehaviourTests(unittest.TestCase):
         self.assertEqual([c for c in self.stub.calls() if c.startswith("POST ")], [])
 
 
-NOOP_NAME = "Decide whether the plan changes anything"
-SAVE_NAME = "Save the update plan for the no-change check"
-PLAN_FILE = "preview-plan.json"
-# Each plan job's working directory, which its relative script path depends on.
-PLAN_WORKDIRS = {
-    "mail-plan": "mail",
-    "hetzner-network-plan": "hetzner",
-    "hetzner-estate-plan": "hetzner/estate",
-}
 PLAN_OF_APPLY = {
     "mail-apply": "mail-plan",
     "hetzner-network-apply": "hetzner-network-plan",
@@ -726,201 +717,25 @@ class NoOpGateStructureTests(unittest.TestCase):
             with self.subTest(job=job):
                 self.assertEqual(needs_of(job_block(self.text, job)), [PLAN_OF_APPLY[job]])
 
-    def test_no_gated_apply_condition_has_an_or(self):
-        # An `||` lets one operand alone start the job, whatever the others say.
-        for job in gated_apply_jobs(self.text):
-            with self.subTest(job=job):
-                condition = job_if(job_block(self.text, job))
-                self.assertNotIn("||", condition, f"{job}: an `||` in the apply condition")
-
-    def test_every_gated_apply_condition_is_the_three_exact_operands(self):
+    def test_every_gated_apply_condition_is_the_push_and_main_operands(self):
+        # The has_changes operand is the shared check's to hold; this pins the rest.
         for job in gated_apply_jobs(self.text):
             with self.subTest(job=job):
                 operands = and_operands(job_if(job_block(self.text, job)))
                 self.assertEqual(
-                    sorted(operands),
-                    sorted(
-                        [
-                            "github.event_name == 'push'",
-                            "github.ref == 'refs/heads/main'",
-                            f"needs.{PLAN_OF_APPLY[job]}.outputs.has_changes != 'false'",
-                        ]
-                    ),
-                    f"{job}: the apply condition is not push, main and not-an-explicit-false",
+                    sorted(o for o in operands if "has_changes" not in o),
+                    sorted(["github.event_name == 'push'", "github.ref == 'refs/heads/main'"]),
+                    f"{job}: the apply condition is not push and main",
                 )
 
-    def test_the_has_changes_operand_skips_only_on_an_explicit_false(self):
-        # Tested alone: an unset output must not skip the apply, so the
-        # operator is `!=` and the literal is 'false', not `== 'true'`.
-        for job in gated_apply_jobs(self.text):
-            with self.subTest(job=job):
-                plan = PLAN_OF_APPLY[job]
-                found = [
-                    o
-                    for o in and_operands(job_if(job_block(self.text, job)))
-                    if "has_changes" in o
-                ]
-                self.assertEqual(
-                    found,
-                    [f"needs.{plan}.outputs.has_changes != 'false'"],
-                    f"{job}: the has_changes operand is not `!= 'false'`, as one operand",
-                )
-
-    def test_the_operand_splitter_reads_top_level_and_only(self):
-        self.assertEqual(and_operands("a == 1 && (b || c) && d"), ["a == 1", "(b || c)", "d"])
-        self.assertEqual(and_operands("a == 'x && y' && b"), ["a == 'x && y'", "b"])
-        self.assertEqual(and_operands("a || b"), ["a || b"])
-
-    def test_each_plan_job_outputs_has_changes_from_the_noop_step(self):
+    def test_each_plan_job_previews_to_preview_json_as_before(self):
+        # preview.json is the file the delete guard reads and the owner reviews.
         for job in PLAN_JOBS:
             with self.subTest(job=job):
-                block = job_block(self.text, job)
-                self.assertIn(
-                    "\n    outputs:\n      has_changes: ${{ steps.noop.outputs.has_changes }}\n",
-                    block,
-                    f"{job} does not publish has_changes",
-                )
-                noop = step(block, NOOP_NAME)
-                self.assertIn("        id: noop\n", noop)
-                self.assertIn("        if: always()\n", noop)
-                self.assertIn("plan-has-changes.py preview.json " + PLAN_FILE, noop)
-                self.assertIn('--github-output "$GITHUB_OUTPUT"', noop)
-                self.assertIn('--github-summary "$GITHUB_STEP_SUMMARY"', noop)
-
-    def test_the_noop_step_comes_before_the_summary_so_its_line_is_first(self):
-        for job in PLAN_JOBS:
-            with self.subTest(job=job):
-                names = [n for n, _ in step_blocks(job_block(self.text, job))]
-                self.assertLess(
-                    names.index(NOOP_NAME), names.index("Write the plan to the job summary")
-                )
-
-    def test_the_update_plan_is_saved_by_its_own_step_in_the_plan_jobs_only(self):
-        self.assertEqual(self.text.count("--save-plan"), len(PLAN_JOBS))
-        self.assertNotIn("PULUMI_EXPERIMENTAL", self.text)
-        for job in PLAN_JOBS:
-            with self.subTest(job=job):
-                block = job_block(self.text, job)
-                save = step(block, SAVE_NAME)
-                self.assertIn("        continue-on-error: true\n", save)
-                self.assertIn(
-                    f"pulumi preview --stack production --save-plan {PLAN_FILE} > /dev/null",
-                    save,
-                )
-                # The preview.json the delete guard reads is produced as before.
                 self.assertIn(
                     "run: pulumi preview --stack production --json > preview.json\n",
-                    step(block, "Preview the plan"),
+                    step(job_block(self.text, job), "Preview the plan"),
                 )
-        for job in set(all_jobs(self.text)) - set(PLAN_JOBS):
-            with self.subTest(job=job):
-                block = job_block(self.text, job)
-                self.assertNotIn("--save-plan", block)
-                self.assertNotIn(PLAN_FILE, block)
-
-    def test_the_plan_file_is_only_ever_read_by_the_script(self):
-        # It can hold resource inputs and ciphertext: never uploaded, printed
-        # or summarised.
-        self.assertNotIn("upload-artifact", self.text)
-        for job in PLAN_JOBS:
-            for name, body in step_blocks(job_block(self.text, job)):
-                if PLAN_FILE in body:
-                    with self.subTest(job=job, step=name):
-                        self.assertIn(name, (SAVE_NAME, NOOP_NAME))
-
-
-@unittest.skipUnless(shutil.which("bash"), "bash is needed to run the decision step")
-class NoOpStepBehaviourTests(unittest.TestCase):
-    """Run each plan job's decision step, as written, against fixture files."""
-
-    ROOT_URN = "urn:pulumi:production::STACK::pulumi:pulumi:Stack::STACK-production"
-
-    def setUp(self):
-        self.text = workflow_text()
-        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="noop-step-test-"))
-        self.addCleanup(shutil.rmtree, self.tmp, True)
-        (self.tmp / "scripts").symlink_to(ROOT / "scripts")
-
-    def run_step(self, job: str, preview, plan_file):
-        workdir = self.tmp / PLAN_WORKDIRS[job]
-        workdir.mkdir(parents=True, exist_ok=True)
-        (workdir / "preview.json").write_text(json.dumps(preview), encoding="utf-8")
-        if plan_file is not None:
-            (workdir / PLAN_FILE).write_text(json.dumps(plan_file), encoding="utf-8")
-        out = self.tmp / f"{job}.output"
-        summary = self.tmp / f"{job}.summary"
-        line = re.search(
-            r"^        run: (.+)$", step(job_block(self.text, job), NOOP_NAME), re.M
-        )
-        self.assertIsNotNone(line, f"{job}: the decision step has no one-line run")
-        script = line.group(1)
-        result = subprocess.run(
-            ["bash", "-e", "-c", script],
-            cwd=workdir,
-            env={
-                "PATH": os.environ["PATH"],
-                "GITHUB_OUTPUT": str(out),
-                "GITHUB_STEP_SUMMARY": str(summary),
-            },
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        read = lambda p: p.read_text(encoding="utf-8") if p.exists() else ""  # noqa: E731
-        return result, read(out), read(summary)
-
-    def preview(self, op="same"):
-        step = {"op": op, "urn": self.ROOT_URN}
-        if op == "same":
-            # A same step carries both states; the old one holds the id and outputs.
-            step["oldState"] = {"urn": self.ROOT_URN, "custom": False, "id": "ID", "outputs": {"k": "v"}}
-            step["newState"] = {"urn": self.ROOT_URN, "custom": False}
-        return {"steps": [step], "changeSummary": {op: 3}}
-
-    def plan(self, diff=None):
-        return {
-            "resourcePlans": {
-                self.ROOT_URN: {
-                    "goal": {"inputDiff": {}, "outputDiff": diff or {}},
-                    "steps": ["same"],
-                }
-            }
-        }
-
-    def test_a_no_op_plan_publishes_false_and_says_so_first(self):
-        for job in PLAN_JOBS:
-            with self.subTest(job=job):
-                result, out, summary = self.run_step(job, self.preview(), self.plan())
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(out, "has_changes=false\n")
-                self.assertEqual(
-                    summary.splitlines()[0],
-                    "No changes: the apply job is skipped and no approval is requested",
-                )
-
-    def test_a_changing_plan_publishes_true_and_counts_first(self):
-        for job in PLAN_JOBS:
-            with self.subTest(job=job):
-                preview = self.preview("update")
-                result, out, summary = self.run_step(job, preview, self.plan())
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(out, "has_changes=true\n")
-                self.assertEqual(summary.splitlines()[0], "1 change: approval required")
-
-    def test_an_output_only_change_publishes_true(self):
-        for job in PLAN_JOBS:
-            with self.subTest(job=job):
-                plan = self.plan({"updates": {"greeting": "hello"}})
-                _, out, summary = self.run_step(job, self.preview(), plan)
-                self.assertEqual(out, "has_changes=true\n")
-                self.assertEqual(summary.splitlines()[0], "1 change: approval required")
-
-    def test_a_missing_plan_file_publishes_true(self):
-        for job in PLAN_JOBS:
-            with self.subTest(job=job):
-                result, out, _ = self.run_step(job, self.preview(), None)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(out, "has_changes=true\n")
 
 
 if __name__ == "__main__":

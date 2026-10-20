@@ -1,0 +1,20 @@
+---
+argument_specs:
+  main:
+    short_description: Deliver the monitoring Compose stack's files and its systemd drop-in
+    description: >-
+      Copies the monitoring stack's committed files (the Compose file, the
+      Prometheus, Blackbox and Grafana configuration, and the Alertmanager and
+      ntfy templates) into the stack's project directory, installs the stack's
+      systemd drop-in and reloads systemd when it changed. It renders no
+      template, writes no secret, starts nothing and removes nothing.
+    author: branchLeft
+    options:
+      monitoring_stack_project_dir:
+        type: str
+        description: >-
+          Absolute path of the stack's project directory. It must equal the
+          WorkingDirectory the shared Compose unit template derives from the
+          instance name, which is /opt/branchleft/monitoring for the instance
+          named monitoring. None of the role's variables is a secret.
+        default: /opt/branchleft/monitoring

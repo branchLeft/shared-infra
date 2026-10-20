@@ -147,6 +147,7 @@ SCANNED_SUFFIXES = frozenset(
         ".conf",
         ".enforcing",
         ".gotmpl",
+        ".in",
         ".j2",
         ".json",
         ".local",
@@ -216,10 +217,13 @@ def walked_files() -> list[pathlib.Path]:
         text=True,
         check=True,
     ).stdout.splitlines()
+    # A tracked symlink to a directory (the monitoring_stack role's `files/stack`)
+    # has no text to read here; its target is walked at its own path under hetzner/.
     return [
         path
         for path in (REPOSITORY / relative for relative in tracked)
-        if not any(part in UNSCANNED_DIRECTORIES for part in path.relative_to(REPOSITORY).parts)
+        if not path.is_dir()
+        and not any(part in UNSCANNED_DIRECTORIES for part in path.relative_to(REPOSITORY).parts)
     ]
 
 

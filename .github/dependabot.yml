@@ -84,6 +84,28 @@ updates:
     labels:
       - 'dependencies'
 
+  # The Ansible toolchain lock (ANS-4): ansible/requirements.txt is `uv pip
+  # compile` output of ansible/requirements.in, with every package's hashes. The
+  # `uv` ecosystem reruns that command from the header the file keeps, so a bump
+  # re-resolves the whole lock; `pip` would run pip-compile, which cannot write a
+  # universal lock. The `ansible` package carries the collections the roles use,
+  # so a new release is how a collection update reaches this repository.
+  # ansible/checks/check_pins.py fails if this entry goes.
+  - package-ecosystem: 'uv'
+    directory: '/ansible'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 5
+    groups:
+      ansible-toolchain:
+        applies-to: version-updates
+        update-types:
+          - 'minor'
+          - 'patch'
+    labels:
+      - 'dependencies'
+
   # GitHub Actions workflows
   - package-ecosystem: 'github-actions'
     directory: '/'

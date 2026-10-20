@@ -77,8 +77,11 @@ def run_command(
 
 
 def pinned_version(requirements: Path, package: str) -> str | None:
-    """Return the exact version ``package`` is pinned to, or None."""
-    pattern = re.compile(rf"^{re.escape(package)}==(\S+)\s*$", re.MULTILINE)
+    """Return the exact version ``package`` is pinned to, or None.
+
+    A line may carry hashes after the version, as a hash-locked file does.
+    """
+    pattern = re.compile(rf"^{re.escape(package)}==([^\s;\\]+)(?:[\s;\\]|$)", re.MULTILINE)
     match = pattern.search(requirements.read_text(encoding="utf-8"))
     return match.group(1) if match else None
 
