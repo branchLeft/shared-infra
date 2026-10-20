@@ -1,0 +1,3 @@
+---
+oneoff_guarded_tasks_state_dir: /var/lib/oneoff_guarded_tasks
+oneoff_guarded_tasks_confirm: ''

@@ -1,0 +1,43 @@
+---
+# A plain apply runs the lines below and skips both guarded steps. Each step is
+# imported with the never tag, which Ansible runs only when that exact tag is
+# named on the command line. A step also needs its step id in
+# oneoff_guarded_tasks_confirm (see the README, "The guard").
+
+# Refuse a confirmation that is not a step id, before any step can read it.
+# always: a request names a step tag with --tags, and an untagged task would be
+# skipped under that filter. These lines run on every request and every apply.
+- name: Refuse a confirmation that is not a step id
+  ansible.builtin.assert:
+    that:
+      - oneoff_guarded_tasks_confirm is string
+      - oneoff_guarded_tasks_confirm is match(oneoff_guarded_tasks_step_id_pattern)
+    quiet: true
+    fail_msg: 'REFUSED: oneoff_guarded_tasks_confirm is not a step id (one text value of capitals, digits and underscore, no line break).'
+  when: oneoff_guarded_tasks_confirm is not none and (oneoff_guarded_tasks_confirm | string | length) > 0
+  tags:
+    - always
+
+# The directory the markers live in. Root owns it, so a step's marker cannot be
+# removed or written by the account the host runs its services as.
+- name: Create the state directory of the one-off markers
+  ansible.builtin.file:
+    path: '{{ oneoff_guarded_tasks_state_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  tags:
+    - always
+
+- name: Guarded step EXAMPLE_STEP_ONE
+  ansible.builtin.import_tasks: _step_one.yml
+  tags:
+    - never
+    - oneoff_guarded_tasks_step_one
+
+- name: Guarded step EXAMPLE_STEP_TWO
+  ansible.builtin.import_tasks: _step_two.yml
+  tags:
+    - never
+    - oneoff_guarded_tasks_step_two

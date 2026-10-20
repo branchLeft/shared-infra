@@ -17,8 +17,9 @@ name: Ansible
 # is the one check the ruleset requires; it needs every other job and fails
 # unless each of them succeeded.
 #
-# The tools install from ansible/requirements.txt at exact versions and the
-# collections from ansible/requirements.yml at exact versions (ANS-4).
+# The tools and the `ansible` package, which carries the collections, install
+# from ansible/requirements.txt at exact versions, each file checked against its
+# recorded hash (ANS-4).
 # DOCKER_HOST is deliberately left unset (ANS-15).
 
 on:
@@ -119,17 +120,23 @@ jobs:
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
 
       - name: Install the pinned tools
-        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv -r ansible/requirements.txt'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes -r ansible/requirements.txt'
 
-      # The same install, command and flags as the harness runs before Molecule
-      # (ansible/harness/run_harness.py), so ansible-lint resolves a pattern's
-      # non-builtin modules. Vendoring the collections is decided elsewhere.
-      - name: Install the pinned collections
+      # --require-hashes makes pip refuse any package without a recorded hash, so
+      # the lock must name every package. The collections the roles use come with
+      # the `ansible` package and are found by ansible-lint and Ansible with no
+      # setting (ANS-4); this lists the versions in the job log.
+      - name: Check the installed set and list the collections
         run: |
           set -euo pipefail
-          collections="$RUNNER_TEMP/ansible-collections"
-          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" collection install -r ansible/requirements.yml -p "$collections"
-          echo "ANSIBLE_COLLECTIONS_PATH=$collections" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/ansible-venv/bin/pip" check
+          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" collection list
+
+      # Every requirements line is an exact, hashed pin, nothing is fetched or
+      # copied in outside the lock, Dependabot watches the lock, and the
+      # pre-commit hook for ansible-lint runs the pinned version (ANS-4).
+      - name: Check the pins and the update route
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/checks/check_pins.py'
 
       - name: yamllint every YAML file under ansible/
         run: '"$RUNNER_TEMP/ansible-venv/bin/yamllint" --strict -c .yamllint ansible'
@@ -137,20 +144,23 @@ jobs:
       - name: ansible-lint at the production profile
         run: '"$RUNNER_TEMP/ansible-venv/bin/ansible-lint" --strict ansible'
 
-      - name: Type-check the harness
+      - name: Type-check the harness and the checks
         working-directory: ansible
-        run: '"$RUNNER_TEMP/ansible-venv/bin/mypy" harness'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/mypy" harness checks'
 
-      - name: Lint the harness
+      - name: Lint the harness and the checks
         working-directory: ansible
-        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" check harness'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" check harness checks'
 
-      - name: Check the harness formatting
+      - name: Check the harness and checks formatting
         working-directory: ansible
-        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" format --check harness'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" format --check harness checks'
 
       - name: Test the harness
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/harness -p "test_*.py"'
+
+      - name: Test the checks
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/checks -p "test_*.py"'
 
   shard:
     name: 'Harness: ${{ matrix.name }}'
@@ -172,17 +182,17 @@ jobs:
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
 
       - name: Install the pinned tools
-        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv -r ansible/requirements.txt'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes -r ansible/requirements.txt'
 
-      # The same install, command and flags as the harness runs before Molecule
-      # (ansible/harness/run_harness.py), so ansible-lint resolves a pattern's
-      # non-builtin modules. Vendoring the collections is decided elsewhere.
-      - name: Install the pinned collections
+      # --require-hashes makes pip refuse any package without a recorded hash, so
+      # the lock must name every package. The collections the roles use come with
+      # the `ansible` package and are found by ansible-lint and Ansible with no
+      # setting (ANS-4); this lists the versions in the job log.
+      - name: Check the installed set and list the collections
         run: |
           set -euo pipefail
-          collections="$RUNNER_TEMP/ansible-collections"
-          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" collection install -r ansible/requirements.yml -p "$collections"
-          echo "ANSIBLE_COLLECTIONS_PATH=$collections" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/ansible-venv/bin/pip" check
+          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" collection list
 
       - name: Run the harness over this role or pattern
         if: matrix.kind == 'role'

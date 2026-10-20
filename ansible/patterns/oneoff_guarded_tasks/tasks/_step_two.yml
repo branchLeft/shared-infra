@@ -1,0 +1,34 @@
+---
+# Guarded step EXAMPLE_STEP_TWO. Its effect is a placeholder command that always
+# fails, so the scenario can show that a step which fails writes no marker and
+# is tried again on the next request.
+
+- name: Refuse EXAMPLE_STEP_TWO when its tag is named without its confirmation
+  ansible.builtin.assert:
+    that:
+      - oneoff_guarded_tasks_confirm == 'EXAMPLE_STEP_TWO'
+    quiet: true
+    fail_msg: 'REFUSED: EXAMPLE_STEP_TWO was requested by its tag without oneoff_guarded_tasks_confirm set to EXAMPLE_STEP_TWO, so it did not run.'
+
+- name: Read the marker of EXAMPLE_STEP_TWO
+  ansible.builtin.stat:
+    path: '{{ oneoff_guarded_tasks_state_dir }}/EXAMPLE_STEP_TWO'
+  register: oneoff_guarded_tasks_step_two_marker
+
+# The command is given as an argument list with no shell. It always fails, so
+# the placeholder stands for an effect that did not complete.
+- name: Run the failing placeholder command of EXAMPLE_STEP_TWO
+  ansible.builtin.command:
+    argv:
+      - /bin/false
+  changed_when: true
+  when: not oneoff_guarded_tasks_step_two_marker.stat.exists
+
+- name: Write the marker of EXAMPLE_STEP_TWO after its effect succeeded
+  ansible.builtin.copy:
+    content: "EXAMPLE_STEP_TWO\n"
+    dest: '{{ oneoff_guarded_tasks_state_dir }}/EXAMPLE_STEP_TWO'
+    owner: root
+    group: root
+    mode: '0644'
+  when: not oneoff_guarded_tasks_step_two_marker.stat.exists

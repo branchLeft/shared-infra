@@ -769,6 +769,17 @@ jobs:
           python3 scripts/assert-no-committed-pulumi-secrets.py --self-test
           python3 scripts/assert-no-committed-pulumi-secrets.py --scan-tree .
 
+      # The no-op gate's contract is checked by the shared action, which reads
+      # only this workflow file, so this repo keeps no test of its own for it.
+      - name: Check the no-op gate contract
+        uses: branchLeft/github-workflows/.github/actions/check-apply-gate@2cfa57c06773bc70172022be12a85ce4ae5bcb6b # v1.0.10
+        with:
+          workflow: .github/workflows/ci.yml
+          pairs: mail-plan:mail-apply hetzner-network-plan:hetzner-network-apply hetzner-estate-plan:hetzner-estate-apply
+          verdict-step: noop
+          summary-step: Write the plan to the job summary
+          plan-file: preview-plan.json
+
   pulumi-inventory-audit:
     name: Audit (Pulumi secrets + state backends)
     runs-on: ubuntu-latest
@@ -822,8 +833,8 @@ jobs:
   # is asked for it and the run graph shows the apply skipped; the plan job's
   # summary says so on its first line. An unset output does not skip, and a
   # plan job that was skipped or failed still skips its apply (the implicit
-  # success() of an `if:` with no status function). `scripts/plan-has-changes.py`
-  # computes it and fails closed: only a plan that parsed and is wholly `same`
+  # success() of an `if:` with no status function). The shared plan-has-changes
+  # action computes it and fails closed: only a plan that parsed and is wholly `same`
   # is `false`. It reads preview.json and a saved update plan (a second
   # preview, in its own step), because preview.json cannot show an
   # outputs-only change. The environments, their reviewers and the
@@ -1083,12 +1094,17 @@ jobs:
           fi
 
       # Fails closed: `has_changes` is `false` only for a plan that parsed and
-      # changes nothing, outputs included; plan-has-changes.md says what else
-      # counts. It also puts the verdict on the first line of the job summary.
+      # changes nothing, outputs included; the shared plan-has-changes action
+      # says what else counts. It also puts the verdict on the first line of
+      # the job summary.
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        run: python3 ../scripts/plan-has-changes.py preview.json preview-plan.json --github-output "$GITHUB_OUTPUT" --github-summary "$GITHUB_STEP_SUMMARY"
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@2cfa57c06773bc70172022be12a85ce4ae5bcb6b # v1.0.10
+        with:
+          preview-json: preview.json
+          plan-file: preview-plan.json
+          working-directory: mail
 
       - name: Write the plan to the job summary
         if: always()
@@ -1376,7 +1392,11 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        run: python3 ../scripts/plan-has-changes.py preview.json preview-plan.json --github-output "$GITHUB_OUTPUT" --github-summary "$GITHUB_STEP_SUMMARY"
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@2cfa57c06773bc70172022be12a85ce4ae5bcb6b # v1.0.10
+        with:
+          preview-json: preview.json
+          plan-file: preview-plan.json
+          working-directory: hetzner
 
       - name: Write the plan to the job summary
         if: always()
@@ -1685,7 +1705,11 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        run: python3 ../../scripts/plan-has-changes.py preview.json preview-plan.json --github-output "$GITHUB_OUTPUT" --github-summary "$GITHUB_STEP_SUMMARY"
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@2cfa57c06773bc70172022be12a85ce4ae5bcb6b # v1.0.10
+        with:
+          preview-json: preview.json
+          plan-file: preview-plan.json
+          working-directory: hetzner/estate
 
       - name: Write the plan to the job summary
         if: always()
