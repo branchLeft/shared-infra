@@ -1,0 +1,206 @@
+---
+# Internal to the role: installs one reconciler and its boot unit, then runs it,
+# and puts the previous files back if the run fails. The caller sets
+# egress_nat_item (vars/main.yml). It is the install-and-restart of
+# 05-configure-host-egress.sh and nat-gateway.sh, written once.
+
+# What was on the host before this run, so a failed run can tell a first
+# install (remove what it wrote) from an update (put the old files back).
+- name: Read whether the reconciler is already installed
+  ansible.builtin.stat:
+    path: '{{ egress_nat_item.reconciler_dest }}'
+  register: egress_nat_reconciler_before
+
+- name: Read whether the unit is already installed
+  ansible.builtin.stat:
+    path: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.unit_name }}'
+  register: egress_nat_unit_before
+
+- name: Install, enable and run the reconciler, reverting on failure
+  block:
+    # Mode 0755 with root ownership is load-bearing: systemd runs this file as
+    # root at every boot, so a group- or world-writable copy is a root shell for
+    # whoever can write it. backup keeps the file it replaces next to it, and
+    # only when the content differs, so a second run writes nothing.
+    - name: Install the reconciler of the unit {{ egress_nat_item.unit_name }}
+      ansible.builtin.copy:
+        src: '{{ egress_nat_item.reconciler_src }}'
+        dest: '{{ egress_nat_item.reconciler_dest }}'
+        owner: root
+        group: root
+        mode: '0755'
+        backup: true
+      register: egress_nat_reconciler_copy
+
+    # The reconciler is on disk before the unit that names it.
+    - name: Install the unit {{ egress_nat_item.unit_name }}
+      ansible.builtin.copy:
+        src: '{{ egress_nat_item.unit_src }}'
+        dest: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.unit_name }}'
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      register: egress_nat_unit_copy
+      notify: Reload systemd manager
+
+    - name: Load the unit before it is enabled
+      ansible.builtin.meta: flush_handlers
+
+    # Check mode writes no unit file, so on a fresh host systemd cannot know the
+    # unit and the tasks below would fail. stat runs in check mode as in a real
+    # run, so they run whenever the unit file is really on disk, and the skip on
+    # a fresh host is the stated reason (ANS-10).
+    - name: Read back the unit file of {{ egress_nat_item.unit_name }}
+      ansible.builtin.stat:
+        path: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.unit_name }}'
+      register: egress_nat_unit_now
+
+    - name: Enable the unit {{ egress_nat_item.unit_name }}
+      ansible.builtin.systemd_service:
+        name: '{{ egress_nat_item.unit_name }}'
+        enabled: true
+      when: egress_nat_unit_now.stat.exists
+
+    # restart, not start. The unit is a RemainAfterExit oneshot, so once it has
+    # succeeded systemd counts it as active and a start does nothing, which
+    # would leave a freshly installed reconciler unrun until the next reboot.
+    # Done only when a file changed, so that a second run changes nothing.
+    - name: 'Restart the unit so the installed reconciler runs: {{ egress_nat_item.unit_name }}'
+      ansible.builtin.systemd_service:
+        name: '{{ egress_nat_item.unit_name }}'
+        state: restarted
+      when: egress_nat_unit_now.stat.exists and (egress_nat_reconciler_copy.changed or egress_nat_unit_copy.changed)
+
+    # A unit that failed on an earlier run is not active and nothing above
+    # touched it, so this starts it, which runs the reconciler again. On an
+    # active unit it does nothing.
+    - name: 'Start the unit if it is not active: {{ egress_nat_item.unit_name }}'
+      ansible.builtin.systemd_service:
+        name: '{{ egress_nat_item.unit_name }}'
+        state: started
+      when: egress_nat_unit_now.stat.exists
+
+    - name: Read the state of the unit {{ egress_nat_item.unit_name }}
+      ansible.builtin.systemd_service:
+        name: '{{ egress_nat_item.unit_name }}'
+      register: egress_nat_unit_state
+      when: egress_nat_unit_now.stat.exists and not ansible_check_mode
+
+    # What the shell script's closing systemctl status did: a unit that is not
+    # active after the run is a failure, not a silent success. Skipped in check
+    # mode, where nothing was started (ANS-10).
+    - name: 'Assert the unit is active after the run: {{ egress_nat_item.unit_name }}'
+      ansible.builtin.assert:
+        that:
+          - egress_nat_unit_state.status.ActiveState == 'active'
+        quiet: true
+        fail_msg: The unit {{ egress_nat_item.unit_name }} is not active after the reconciler ran.
+      when: egress_nat_unit_now.stat.exists and not ansible_check_mode
+
+    # The run succeeded, so the files kept for a revert are not needed.
+    - name: Remove the kept copy of the previous reconciler
+      ansible.builtin.file:
+        path: '{{ egress_nat_reconciler_copy.backup_file }}'
+        state: absent
+      when: egress_nat_reconciler_copy.backup_file is defined
+
+    - name: Remove the kept copy of the previous unit
+      ansible.builtin.file:
+        path: '{{ egress_nat_unit_copy.backup_file }}'
+        state: absent
+      when: egress_nat_unit_copy.backup_file is defined
+
+  rescue:
+    - name: Record which task failed
+      ansible.builtin.set_fact:
+        egress_nat_failed_task: '{{ ansible_failed_task.name }}'
+        egress_nat_failed_unit: '{{ egress_nat_item.unit_name }}'
+
+    - name: Read the unit file the failed run left
+      ansible.builtin.stat:
+        path: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.unit_name }}'
+      register: egress_nat_unit_after
+
+    # First install: there is no previous version to go back to, so what this
+    # run installed is taken out. A unit left enabled would fail again at every
+    # boot with a reconciler that has just been shown to fail.
+    - name: Stop and disable a unit this run installed for the first time
+      ansible.builtin.systemd_service:
+        name: '{{ egress_nat_item.unit_name }}'
+        state: stopped
+        enabled: false
+      when: not egress_nat_unit_before.stat.exists and egress_nat_unit_after.stat.exists
+
+    - name: Remove a unit this run installed for the first time
+      ansible.builtin.file:
+        path: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.unit_name }}'
+        state: absent
+      when: not egress_nat_unit_before.stat.exists
+
+    - name: Remove a reconciler this run installed for the first time
+      ansible.builtin.file:
+        path: '{{ egress_nat_item.reconciler_dest }}'
+        state: absent
+      when: not egress_nat_reconciler_before.stat.exists
+
+    # An update: the files kept before the copy go back, then the kept copies are
+    # removed. A file that did not change has no kept copy and is already right.
+    - name: Put the previous reconciler back
+      ansible.builtin.copy:
+        src: '{{ egress_nat_reconciler_copy.backup_file }}'
+        dest: '{{ egress_nat_item.reconciler_dest }}'
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+      when: egress_nat_reconciler_copy.backup_file | default('') | length > 0
+
+    - name: Put the previous unit back
+      ansible.builtin.copy:
+        src: '{{ egress_nat_unit_copy.backup_file }}'
+        dest: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.unit_name }}'
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      when: egress_nat_unit_copy.backup_file | default('') | length > 0
+
+    - name: Remove the kept copy of the previous reconciler after the revert
+      ansible.builtin.file:
+        path: '{{ egress_nat_reconciler_copy.backup_file }}'
+        state: absent
+      when: egress_nat_reconciler_copy.backup_file | default('') | length > 0
+
+    - name: Remove the kept copy of the previous unit after the revert
+      ansible.builtin.file:
+        path: '{{ egress_nat_unit_copy.backup_file }}'
+        state: absent
+      when: egress_nat_unit_copy.backup_file | default('') | length > 0
+
+    - name: Make systemd read the unit files as they are now
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    # Running the previous reconciler again is the revert that matters: it puts
+    # back the route or the rules the failed version may have changed. If it
+    # fails too, the failure is reported below and the host is left as it is.
+    - name: Run the previous reconciler again
+      ansible.builtin.systemd_service:
+        name: '{{ egress_nat_item.unit_name }}'
+        state: restarted
+      register: egress_nat_revert_run
+      failed_when: false
+      when: egress_nat_unit_before.stat.exists and egress_nat_reconciler_before.stat.exists
+
+    - name: Record that the previous files were put back
+      ansible.builtin.set_fact:
+        egress_nat_reverted: true
+
+    - name: Fail after putting the previous files back
+      ansible.builtin.fail:
+        msg: >-
+          {{ egress_nat_item.unit_name }} failed at the task "{{ egress_nat_failed_task }}".
+          {{ 'The previous reconciler and unit were put back and the previous reconciler was run again'
+          if egress_nat_unit_before.stat.exists else 'The files this run installed were removed' }}.
+          Read the unit's journal for the reconciler's own message.

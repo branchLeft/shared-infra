@@ -1,0 +1,198 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # The first converge on an instance runs the attempts below, in this order,
+    # and then applies the role for real. Once the NAT reconciler is installed
+    # they are skipped, so the second converge changes nothing. Check mode
+    # starts no unit, so the attempts run only for real; the skip is the stated
+    # reason (ANS-10).
+    - name: Read whether the NAT reconciler is already on the instance
+      ansible.builtin.stat:
+        path: /usr/local/sbin/branchleft-nat
+      register: egress_nat_converge_nat
+
+    - name: Try the role where it must install only the host egress half, then where it must revert
+      when:
+        - not egress_nat_converge_nat.stat.exists
+        - not ansible_check_mode
+      block:
+        # The gateway switch. With it off the host egress reconciler is installed
+        # and nothing of the NAT gateway is: on any other host the NAT
+        # reconciler either fails its own guard or builds a path nothing routes to.
+        - name: Apply the role with the gateway switch off
+          ansible.builtin.include_tasks: tasks/attempt.yml
+          vars:
+            attempt_gateway: false
+
+        - name: Read the files each half installs
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - /usr/local/sbin/branchleft-host-egress
+            - /etc/systemd/system/branchleft-host-egress.service
+            - /usr/local/sbin/branchleft-nat
+            - /etc/systemd/system/branchleft-nat.service
+          register: egress_nat_converge_switch_off
+
+        - name: Assert the host egress half is installed and the NAT half is not
+          ansible.builtin.assert:
+            that:
+              - not egress_nat_attempt_failed
+              - egress_nat_converge_switch_off.results[0].stat.exists
+              - egress_nat_converge_switch_off.results[1].stat.exists
+              - not egress_nat_converge_switch_off.results[2].stat.exists
+              - not egress_nat_converge_switch_off.results[3].stat.exists
+            quiet: true
+            fail_msg: With the gateway switch off the role must install the host egress half and nothing of the NAT gateway.
+
+        # First install, failing. The uplink holds no public address, so the NAT
+        # reconciler refuses to run and the restart fails. There is nothing to
+        # put back, so what the run installed must be taken out again.
+        - name: Take the public address off the uplink
+          ansible.builtin.include_tasks: tasks/uplink_public.yml
+          vars:
+            uplink_public: false
+
+        - name: Apply the role where the NAT reconciler must fail on a first install
+          ansible.builtin.include_tasks: tasks/attempt.yml
+
+        - name: Read the NAT files after the failed first install
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - /usr/local/sbin/branchleft-nat
+            - /etc/systemd/system/branchleft-nat.service
+          register: egress_nat_converge_first_failed
+
+        - name: Assert the failed first install was reverted by the guard
+          ansible.builtin.assert:
+            that:
+              - egress_nat_attempt_failed
+              - "egress_nat_failed_task == 'Restart the unit so the installed reconciler runs: branchleft-nat.service'"
+              - egress_nat_failed_unit == 'branchleft-nat.service'
+              - egress_nat_reverted
+              - not egress_nat_converge_first_failed.results[0].stat.exists
+              - not egress_nat_converge_first_failed.results[1].stat.exists
+            quiet: true
+            fail_msg: >-
+              A first install whose restart failed must end with the role failed at that restart, the guard run,
+              and neither the reconciler nor the unit left on the host.
+              Failed task: {{ egress_nat_failed_task }}.
+
+        # A good install, so that there is a previous release to go back to.
+        - name: Put the public address back on the uplink
+          ansible.builtin.include_tasks: tasks/uplink_public.yml
+          vars:
+            uplink_public: true
+
+        - name: Apply the role where it must succeed
+          ansible.builtin.include_tasks: tasks/attempt.yml
+
+        - name: Assert the good install did not fail
+          ansible.builtin.assert:
+            that:
+              - not egress_nat_attempt_failed
+            quiet: true
+            fail_msg: The role failed on a host where the NAT reconciler can run.
+
+        # Update, failing. The installed reconciler and unit are replaced by an
+        # earlier release (a different reconciler that leaves a marker, and a
+        # unit with another description), the uplink loses its public address,
+        # and the role is applied. The role installs the current files, the
+        # restart fails, and the guard must put the earlier release back and
+        # run it again.
+        - name: Install an earlier release of the NAT reconciler
+          ansible.builtin.copy:
+            src: old_reconciler.sh
+            dest: /usr/local/sbin/branchleft-nat
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Install an earlier release of the NAT unit
+          ansible.builtin.copy:
+            src: old_nat.service
+            dest: /etc/systemd/system/branchleft-nat.service
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Make systemd read the earlier release of the unit
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+
+        - name: Forget that the earlier reconciler has run
+          ansible.builtin.file:
+            path: /run/egress-nat-old-reconciler-ran
+            state: absent
+
+        - name: Take the public address off the uplink again
+          ansible.builtin.include_tasks: tasks/uplink_public.yml
+          vars:
+            uplink_public: false
+
+        - name: Apply the role where the restart must fail over an earlier release
+          ansible.builtin.include_tasks: tasks/attempt.yml
+
+        - name: Read the NAT files, the marker and the unit after the failed update
+          ansible.builtin.stat:
+            path: '{{ item }}'
+            checksum_algorithm: sha256
+          loop:
+            - /usr/local/sbin/branchleft-nat
+            - /etc/systemd/system/branchleft-nat.service
+            - /run/egress-nat-old-reconciler-ran
+          register: egress_nat_converge_update_failed
+
+        - name: Read the earlier release's files in the scenario
+          ansible.builtin.stat:
+            path: '{{ item }}'
+            checksum_algorithm: sha256
+          loop:
+            - '{{ playbook_dir }}/files/old_reconciler.sh'
+            - '{{ playbook_dir }}/files/old_nat.service'
+          register: egress_nat_converge_update_sources
+          delegate_to: localhost
+
+        - name: Find any kept copy the guard left behind
+          ansible.builtin.find:
+            paths:
+              - /usr/local/sbin
+              - /etc/systemd/system
+            patterns: ['branchleft-*~']
+          register: egress_nat_converge_update_leftovers
+
+        - name: Ask systemd for the unit after the failed update
+          ansible.builtin.systemd_service:
+            name: branchleft-nat.service
+          register: egress_nat_converge_update_unit
+
+        - name: Assert the failed update was reverted by the guard
+          ansible.builtin.assert:
+            that:
+              - egress_nat_attempt_failed
+              - "egress_nat_failed_task == 'Restart the unit so the installed reconciler runs: branchleft-nat.service'"
+              - egress_nat_reverted
+              - egress_nat_converge_update_failed.results[0].stat.checksum == egress_nat_converge_update_sources.results[0].stat.checksum
+              - egress_nat_converge_update_failed.results[1].stat.checksum == egress_nat_converge_update_sources.results[1].stat.checksum
+              - egress_nat_converge_update_failed.results[2].stat.exists
+              - egress_nat_converge_update_leftovers.matched == 0
+              - egress_nat_converge_update_unit.status.ActiveState == 'active'
+              - egress_nat_converge_update_unit.status.Description == 'OLD_RELEASE_OF_THE_NAT_UNIT'
+            quiet: true
+            fail_msg: >-
+              A failed update must put the earlier reconciler and unit back (byte for byte), run the earlier
+              reconciler again, and leave no kept copy. Failed task: {{ egress_nat_failed_task }}.
+
+        - name: Put the public address back on the uplink for the real apply
+          ansible.builtin.include_tasks: tasks/uplink_public.yml
+          vars:
+            uplink_public: true
+
+    - name: Apply the role
+      ansible.builtin.include_role:
+        # Molecule links the role under its namespace and name, the namespace
+        # from galaxy_info in meta/main.yml.
+        name: branchleft.egress_nat
