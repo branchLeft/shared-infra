@@ -1,0 +1,3 @@
+---
+# The role has no inputs: every value it writes is a constant of the baseline
+# (see vars/main.yml), the same on every container host.

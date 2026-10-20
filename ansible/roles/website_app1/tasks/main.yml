@@ -1,0 +1,157 @@
+---
+# Every check below runs before anything is written to the host. A value is
+# checked in a task with no_log, and the assertion names the rule, never a value.
+- name: Refuse a path that is not a plain absolute path
+  ansible.builtin.assert:
+    that:
+      - website_app1_project_dir is match(website_app1_path_pattern)
+      - website_app1_env_file is match(website_app1_path_pattern)
+      - website_app1_env_dir is match(website_app1_path_pattern)
+    quiet: true
+    fail_msg: >-
+      The project directory, the environment file and its directory must each be an
+      absolute path of letters, digits, dot, underscore, hyphen and slash.
+
+- name: Refuse an image that is not the website image pinned by digest
+  ansible.builtin.assert:
+    that:
+      - website_app1_image == '' or website_app1_image is match(website_app1_image_pattern)
+    quiet: true
+    fail_msg: >-
+      The image must be pinned by digest: ghcr.io/branchleft/website@sha256: and
+      64 lower-case hex characters, or empty for no deploy. A tag alone can move.
+
+- name: Refuse an SMTP value that is empty or not printable ASCII
+  ansible.builtin.assert:
+    that:
+      - website_app1_smtp_host is match(website_app1_value_pattern)
+      - website_app1_smtp_port is match(website_app1_value_pattern)
+      - website_app1_smtp_user is match(website_app1_value_pattern)
+      - website_app1_smtp_password is match(website_app1_value_pattern)
+    quiet: true
+    fail_msg: >-
+      Each SMTP value must be non-empty printable ASCII with no line break, so it fits
+      one line of the environment file. The values are not printed.
+  no_log: true
+
+# The directory the environment file goes in, created before the file. This is
+# the install -d of the runbook's step 1, with the same owner and mode.
+- name: Create the directory of the environment file
+  ansible.builtin.file:
+    path: '{{ website_app1_env_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# The four values the stack's unit loads (CONTACT_SMTP_*). Written in one step with
+# mode 0600 and no backup, so no old value is left on the host. Every task that
+# handles a value has no_log and diff off.
+- name: Write the environment file the stack's unit loads
+  ansible.builtin.template:
+    src: website.env.j2
+    dest: '{{ website_app1_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+    backup: false
+  no_log: true
+  diff: false
+  register: website_app1_env_delivery
+
+- name: Create the project directory of the stack
+  ansible.builtin.file:
+    path: '{{ website_app1_project_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# The compose file is copied whole, from files/, byte for byte the file the
+# website repository held (its deploy/compose.yml). It names no image of its
+# own: the unit's environment supplies IMAGE, which branchleft-deploy writes.
+- name: Deliver the compose file of the stack
+  ansible.builtin.copy:
+    src: compose.yml
+    dest: '{{ website_app1_project_dir }}/compose.yml'
+    owner: root
+    group: root
+    mode: '0644'
+  register: website_app1_compose_delivery
+
+# The stamp is a digest of the compose file and the image. It is a function of
+# the inputs, so it is worked out in check mode too, and it is never printed.
+- name: Work out the stamp of the content this run delivers
+  ansible.builtin.set_fact:
+    website_app1_stamp: >-
+      {{ {'compose': lookup('ansible.builtin.file', 'compose.yml') | ansible.builtin.hash('sha256'),
+      'image': website_app1_image} | ansible.builtin.to_json(sort_keys=True) | ansible.builtin.hash('sha256') }}
+
+- name: Read the checksum of the recorded stamp
+  ansible.builtin.stat:
+    path: '{{ website_app1_project_dir }}/{{ website_app1_stamp_name }}'
+    checksum_algorithm: sha256
+  register: website_app1_recorded_stamp
+
+# A deploy restarts the stack, so it runs only when there is an image to deploy
+# and the content differs from the content last deployed and found healthy. A
+# compose file change with no image waits for the next deploy: this role never
+# restarts a running stack by itself.
+- name: Work out whether the image must be deployed
+  ansible.builtin.set_fact:
+    website_app1_deploy_needed: >-
+      {{ website_app1_image | ansible.builtin.length > 0
+      and not (website_app1_recorded_stamp.stat.exists
+      and website_app1_recorded_stamp.stat.checksum == (website_app1_stamp | ansible.builtin.hash('sha256'))) }}
+
+# Enabled, not started: starting is the deploy's job. The unit file is the one the
+# host provisioning installed.
+- name: Enable the stack's unit
+  ansible.builtin.systemd_service:
+    name: '{{ website_app1_unit }}'
+    enabled: true
+
+# The host's deploy program is the only thing that may pin the digest. It is run
+# with sudo and argv, not through a shell, so the digest is one argument and the
+# program refuses anything that is not a digest of the website image itself.
+- name: Pin the image to the stack and restart it with the host's deploy program
+  ansible.builtin.command:
+    argv:
+      - sudo
+      - -n
+      - '{{ website_app1_deploy_program }}'
+      - website
+      - '{{ website_app1_image }}'
+  when: website_app1_deploy_needed | ansible.builtin.bool
+  changed_when: true
+
+# Run from the host itself, because the app port is bound to the private address
+# only. Each path is retried while the stack starts.
+- name: Smoke test the deployed app over the private address
+  ansible.builtin.uri:
+    url: 'http://{{ website_app1_private_address }}:8080{{ item }}'
+    method: GET
+    status_code: 200
+    timeout: 10
+    return_content: false
+  loop: '{{ website_app1_smoke_paths }}'
+  register: website_app1_smoke
+  until: website_app1_smoke.status is defined and website_app1_smoke.status == 200
+  retries: 10
+  delay: 6
+  when: website_app1_deploy_needed | ansible.builtin.bool
+  changed_when: false
+
+# Last, and only after a deploy that passed its smoke test: a run that fails
+# anywhere above leaves the old stamp, so the next run deploys again.
+- name: Record the content as deployed and serving
+  ansible.builtin.copy:
+    content: '{{ website_app1_stamp }}'
+    dest: '{{ website_app1_project_dir }}/{{ website_app1_stamp_name }}'
+    owner: root
+    group: root
+    mode: '0600'
+    backup: false
+  diff: false
+  no_log: true
+  when: website_app1_deploy_needed | ansible.builtin.bool

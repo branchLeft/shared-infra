@@ -1,0 +1,33 @@
+---
+# edge1: the first host under the gated pull. Two roles, in order: the Ansible
+# toolchain the host runs this playbook with, then the trigger that runs it.
+#
+# The host's trigger runs this file on a signed checkout with the inventory
+# `localhost,`, which loads no group variables, and a playbook must target `all`
+# or `localhost` for that (pull_trigger README, limit f). So the values the roles
+# read are loaded here from the production group variables, and the one-time
+# bootstrap, which does use the inventory, loads the same file twice with the
+# same content. Run against more than one host this playbook would apply edge1's
+# values to every one, so the first play refuses any host but edge1 (or the
+# localhost the trigger names).
+- name: Bring edge1 under the pull
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - '{{ playbook_dir }}/../inventories/production/group_vars/edge/pull_trigger.yml'
+  pre_tasks:
+    - name: Refuse any host but edge1
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in ['edge1', 'localhost']
+        fail_msg: This playbook is edge1's. Limit the run to edge1.
+        quiet: true
+  # The roles live in ansible/roles/ (ANS-13), one level above this directory, and a
+  # playbook finds roles only beside itself unless a path is given. A path works
+  # from any directory, which the host trigger (started in ansible/) and the lint
+  # (started at the repository root) do not share. One suppression per line.
+  roles:
+    - role: ../roles/ansible_runtime # noqa: role-name[path]
+      vars:
+        ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
+    - role: ../roles/pull_trigger # noqa: role-name[path]

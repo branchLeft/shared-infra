@@ -14,5 +14,4 @@ overrides `all`.
 - Only values that are safe to publish are committed. A secret is supplied at
   run time (`ANS-16`).
 
-The directory holds this file alone until the first role is applied to a real
-host.
+The `edge/` directory holds the values for the edge hosts: `pull_trigger.yml`.

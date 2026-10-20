@@ -1,0 +1,38 @@
+---
+# Documentation values only: addresses from 192.0.2.0/24, hosts under
+# example.invalid, and made-up credentials. Nothing here is a real value, and
+# none is real-looking enough to pass as one. These are the role's own inputs,
+# set as play variables by converge.yml and verify.yml.
+backup_worker_db_host: 192.0.2.10
+backup_worker_db_user: backup_example
+backup_worker_db_password: EXAMPLEONLYdbpassword0000000000000000000
+backup_worker_db_ca_pem: |
+  -----BEGIN CERTIFICATE-----
+  TEST_PLACEHOLDER_NOT_A_CERTIFICATE
+  -----END CERTIFICATE-----
+backup_worker_bucket: example-bucket
+backup_worker_s3_endpoint: s3.example.invalid
+backup_worker_s3_region: example-region
+backup_worker_s3_access_key_id: EXAMPLEONLYkeyid
+backup_worker_s3_secret_access_key: EXAMPLEONLYsecretkey0000000000
+backup_worker_tenants:
+  - slug: tenant-one
+    recipient: age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq
+  - slug: tenant-two
+    recipient: age1pppppppppppppppppppppppppppppppppppppppppppppppppppppppppp
+
+# The test-only copy of the programs, written by prepare.yml, and the sha256 of
+# each placeholder file in it. The real pins are the role's defaults; the
+# scenario points the download URL at the copy and the pins at its checksums.
+backup_worker_test_source_dir: /opt/test-source
+backup_worker_source_base_url: file:///opt/test-source
+backup_worker_test_files:
+  - path: control/provision/branchleft-backup-worker.service
+    sha256: de15dcffda04885080797a0ed0f1f634dbbf633d6422f09e546826f7f41960de
+  - path: control/provision/branchleft-backup-worker.timer
+    sha256: 2ea2eee5d1d2e6361745c819575fd73f5463dac3ce1fde20126c042f951dd8cd
+  - path: control/provision/install_backup_worker.py
+    sha256: 26def775d998652375a3b5b3320970a1e01df5a4b658d0b5e0f4ba680b68b355
+  - path: db/provision/install_host_prereqs.py
+    sha256: 44c264c8aff843a328be9ee6792e789527d73390fd860c3eedd19f6afbf7590b
+backup_worker_release_files: '{{ backup_worker_test_files }}'

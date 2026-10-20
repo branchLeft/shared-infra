@@ -1,0 +1,6 @@
+# Managed by Ansible. Changes made here by hand are overwritten.
+# Holds the MySQL client toolchain to the {{ db1_stack_mysql_version_line }} line, so unattended upgrades cannot
+# pick a newer candidate from the repository's component.
+Package: {{ db1_stack_mysql_pinned_packages | join(' ') }}
+Pin: version {{ db1_stack_mysql_version_line }}.*
+Pin-Priority: 1001

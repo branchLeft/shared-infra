@@ -1,0 +1,54 @@
+---
+# Test scaffolding, not role tasks: the shared Compose unit template the
+# drop-in belongs to. The real template is part of the host baseline, which is
+# another role, so the test installs a placeholder with the same name and no
+# real content: a oneshot that runs /bin/true. Systemd needs the template to
+# exist to load an instance and apply a drop-in to it. The role's restart
+# handler does start the instance, so the test also installs its own drop-in
+# that replaces the instance's ExecStart with /bin/true (see below). The
+# production drop-in runs Docker Compose, and this container has no Docker.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install a placeholder for the shared Compose unit template
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=PLACEHOLDER Compose stack %i
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/true
+        dest: /etc/systemd/system/branchleft-compose@.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create the instance drop-in directory the role installs into
+      ansible.builtin.file:
+        path: /etc/systemd/system/branchleft-compose@nextcloud1.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    # systemd applies drop-ins in filename order. The role installs override.conf,
+    # which replaces ExecStart with docker compose. This file sorts after it, so
+    # its own reset and /bin/true are the last ExecStart and win. The leading
+    # empty ExecStart= is required: without it, systemd would append /bin/true
+    # to the production command instead of replacing it.
+    - name: Install a test drop-in that starts the placeholder instead of Docker Compose
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          ExecStart=
+          ExecStart=/bin/true
+        dest: /etc/systemd/system/branchleft-compose@nextcloud1.service.d/zz-molecule-start.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Make systemd read the placeholder and the test drop-in
+      ansible.builtin.systemd_service:
+        daemon_reload: true
