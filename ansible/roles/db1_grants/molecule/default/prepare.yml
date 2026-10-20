@@ -43,6 +43,9 @@
         group: root
         mode: '0600'
 
+    # Prepare is the start of a fresh host: the record starts empty and the stamp of
+    # the ops1 password is absent, also when the instance was kept from an earlier
+    # run and prepared again by hand.
     - name: Start an empty record of the client's calls
       ansible.builtin.copy:
         content: ''
@@ -50,4 +53,8 @@
         owner: root
         group: root
         mode: '0600'
-        force: false
+
+    - name: Remove the stamp of the ops1 password
+      ansible.builtin.file:
+        path: /etc/branchleft/db1-backup-ops1.pw.sha256
+        state: absent
