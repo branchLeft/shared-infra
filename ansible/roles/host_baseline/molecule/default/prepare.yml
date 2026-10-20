@@ -1,0 +1,162 @@
+---
+# Test scaffolding, not role tasks. The test image has none of what the role
+# installs and the test has no network, so this play puts stand-ins in place
+# of the packages, the services and sshd, all of them named PLACEHOLDER:
+#
+#   - a package of each name the role installs, built here with dpkg-deb and
+#     installed from the local file, so that the role finds every package
+#     installed, as it does on a host that has been set up, and makes no apt call
+#   - a unit for ssh, unattended-upgrades, fail2ban and docker, so that the role
+#     can enable and start them; ssh and fail2ban count their reloads in a file
+#   - sshd, a script that models what the role depends on (files/sshd_standin.sh),
+#     with a Debian-style sshd_config that includes sshd_config.d, and a
+#     50-cloud-init.conf that allows passwords, as cloud-init writes it
+#
+# The path through apt that installs a missing package is therefore not run by
+# this test. The README names that limit.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  vars:
+    prepare_packages:
+      - unattended-upgrades
+      - apt-listchanges
+      - fail2ban
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-compose-plugin
+    prepare_units:
+      - ssh
+      - unattended-upgrades
+      - fail2ban
+      - docker
+  tasks:
+    - name: Create a package directory for each placeholder package
+      ansible.builtin.file:
+        path: '/usr/local/share/host_baseline_test/{{ item }}/DEBIAN'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop: '{{ prepare_packages }}'
+
+    - name: Describe each placeholder package
+      ansible.builtin.copy:
+        content: |
+          Package: {{ item }}
+          Version: 0.0.0+placeholder
+          Architecture: all
+          Maintainer: PLACEHOLDER <placeholder@example.invalid>
+          Description: PLACEHOLDER package for the host_baseline test
+        dest: '/usr/local/share/host_baseline_test/{{ item }}/DEBIAN/control'
+        owner: root
+        group: root
+        mode: '0644'
+      loop: '{{ prepare_packages }}'
+
+    - name: Build each placeholder package
+      ansible.builtin.command:
+        argv:
+          - dpkg-deb
+          - --build
+          - '/usr/local/share/host_baseline_test/{{ item }}'
+          - '/usr/local/share/host_baseline_test/{{ item }}.deb'
+        creates: '/usr/local/share/host_baseline_test/{{ item }}.deb'
+      loop: '{{ prepare_packages }}'
+
+    - name: Install each placeholder package from its local file
+      ansible.builtin.apt:
+        deb: '/usr/local/share/host_baseline_test/{{ item }}.deb'
+        state: present
+      loop: '{{ prepare_packages }}'
+
+    - name: Create the directory that holds the reload counters
+      ansible.builtin.file:
+        path: /var/lib/host_baseline_test
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Start each reload counter at zero
+      ansible.builtin.copy:
+        content: ''
+        dest: '/var/lib/host_baseline_test/{{ item }}-reloads'
+        owner: root
+        group: root
+        mode: '0644'
+      loop: [ssh, fail2ban]
+
+    - name: Install a placeholder unit for each service the role manages
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=PLACEHOLDER {{ item }}
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/true
+          ExecReload=/bin/sh -c "echo reloaded >> /var/lib/host_baseline_test/{{ item }}-reloads"
+          [Install]
+          WantedBy=multi-user.target
+        dest: '/usr/lib/systemd/system/{{ item }}.service'
+        owner: root
+        group: root
+        mode: '0644'
+      loop: '{{ prepare_units }}'
+
+    - name: Make systemd read the placeholder units
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    # The role reloads sshd and expects it to be running, as it is on a host.
+    - name: Start the placeholder sshd service
+      ansible.builtin.systemd_service:
+        name: ssh
+        state: started
+
+    - name: Install the sshd stand-in
+      ansible.builtin.copy:
+        src: sshd_standin.sh
+        dest: /usr/sbin/sshd
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create the directory the drop-ins go in
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Write a Debian-style sshd_config
+      ansible.builtin.copy:
+        content: |
+          Include /etc/ssh/sshd_config.d/*.conf
+          PermitRootLogin prohibit-password
+        dest: /etc/ssh/sshd_config
+        owner: root
+        group: root
+        mode: '0644'
+
+    # The file cloud-init writes when ssh_pwauth is set. It sorts after the
+    # role's 01- drop-in, so the drop-in must win; a drop-in named 99- would not.
+    - name: Write the drop-in that cloud-init writes
+      ansible.builtin.copy:
+        content: |
+          PasswordAuthentication yes
+        dest: /etc/ssh/sshd_config.d/50-cloud-init.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create the fail2ban configuration directory
+      ansible.builtin.file:
+        path: /etc/fail2ban
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
