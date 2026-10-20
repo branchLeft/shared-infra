@@ -31,13 +31,9 @@ GPG = shutil.which("gpg")
 GPGCONF = shutil.which("gpgconf")
 PROGRAM = Path(trigger.__file__)
 
-ISOLATED = {
-    "GIT_CONFIG_GLOBAL": "/dev/null",
-    "GIT_CONFIG_NOSYSTEM": "1",
-    "GIT_AUTHOR_NAME": "TEST_AUTHOR",
-    "GIT_AUTHOR_EMAIL": "author@example.invalid",
-    "GIT_COMMITTER_NAME": "TEST_AUTHOR",
-    "GIT_COMMITTER_EMAIL": "author@example.invalid",
+# Fixed dates make the fixture commits reproducible. Nothing here redirects git's home or
+# configuration: the test process's own git reads the real environment.
+FIXTURE_DATES = {
     "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z",
     "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z",
 }
@@ -75,17 +71,19 @@ def run(
     argv: Sequence[str | Path],
     cwd: Path | None = None,
     extra: Mapping[str, str] | None = None,
+    stdin: str | None = None,
 ) -> str:
-    """Run a fixture command with an isolated git environment and return its output.
+    """Run a fixture command in the real environment and return its output.
 
     Raises:
         AssertionError: The command exits with a non-zero status.
     """
-    environment = {**os.environ, **ISOLATED, **(extra or {})}
+    environment = {**os.environ, **FIXTURE_DATES, **(extra or {})}
     done = subprocess.run(  # noqa: S603 - test fixtures, argument lists, no shell
         [str(item) for item in argv],
         cwd=cwd,
         env=environment,
+        input=stdin,
         capture_output=True,
         text=True,
         check=False,
@@ -115,6 +113,25 @@ class GpgKey:
     home: Path
     fingerprint: str
     armoured: str
+
+
+def git_command(signer: SshKey | GpgKey | None = None) -> list[str | Path]:
+    """Return the start of every fixture ``git`` command: the program and its ``-c`` settings.
+
+    The one place the fixtures' git settings are made. They are passed with ``-c`` and the
+    real environment is kept, so the owner's own git configuration is never redirected.
+    A signer turns signing on with its throwaway key; no setting here turns signing off.
+    """
+    argv: list[str | Path] = [GIT, "-c", "user.name=TEST_AUTHOR"]
+    argv += ["-c", "user.email=author@example.invalid"]
+    if isinstance(signer, SshKey):
+        argv += ["-c", "commit.gpgsign=true", "-c", "gpg.format=ssh"]
+        argv += ["-c", f"user.signingkey={signer.private}"]
+    elif isinstance(signer, GpgKey):
+        argv += ["-c", "commit.gpgsign=true", "-c", "gpg.format=openpgp"]
+        argv += ["-c", f"user.signingkey={signer.fingerprint}"]
+        argv += ["-c", f"gpg.program={require_gpg()}"]
+    return argv
 
 
 def require_gpg() -> str:
@@ -173,8 +190,8 @@ class Remote:
     def create(cls, root: Path) -> "Remote":
         """Make a bare repository and a work repository beside it."""
         remote = cls(root / "remote.git", root / "work")
-        run([GIT, "init", "-q", "--bare", "-b", "main", remote.bare])
-        run([GIT, "init", "-q", "-b", "main", remote.work])
+        run([*git_command(), "init", "-q", "--bare", "-b", "main", remote.bare])
+        run([*git_command(), "init", "-q", "-b", "main", remote.work])
         return remote
 
     def commit(
@@ -198,25 +215,26 @@ class Remote:
                 path.symlink_to(content[2:])
             else:
                 path.write_text(content, encoding="utf-8")
-        run([GIT, "add", "-A"], cwd=self.work)
-        tree = run([GIT, "write-tree"], cwd=self.work)
-        argv: list[str | Path] = [GIT]
-        extra: dict[str, str] = {}
-        if isinstance(signer, SshKey):
-            argv += ["-c", "gpg.format=ssh", "-c", f"user.signingkey={signer.private}"]
-        elif isinstance(signer, GpgKey):
-            argv += ["-c", "gpg.format=openpgp", "-c", f"user.signingkey={signer.fingerprint}"]
-            argv += ["-c", f"gpg.program={require_gpg()}"]
-            extra["GNUPGHOME"] = str(signer.home)
+        run([*git_command(), "add", "-A"], cwd=self.work)
+        tree = run([*git_command(), "write-tree"], cwd=self.work)
+        extra = {"GNUPGHOME": str(signer.home)} if isinstance(signer, GpgKey) else {}
+        argv = git_command(signer)
         argv += ["commit-tree", *(["-S"] if signer else []), *(["-p", parent] if parent else [])]
         argv += ["-m", message, tree]
         sha = run(argv, cwd=self.work, extra=extra)
-        run([GIT, "push", "-q", "--force", self.bare, f"{sha}:refs/heads/staging"], cwd=self.work)
+        self.publish(sha)
         return sha
+
+    def publish(self, sha: str) -> None:
+        """Force a commit onto the remote's ``staging`` branch."""
+        run(
+            [*git_command(), "push", "-q", "--force", self.bare, f"{sha}:refs/heads/staging"],
+            cwd=self.work,
+        )
 
     def forge(self, sha: str, old: str, new: str) -> str:
         """Rewrite a commit's message but keep its signature, which then no longer verifies."""
-        text = run([GIT, "cat-file", "commit", sha], cwd=self.work)
+        text = run([*git_command(), "cat-file", "commit", sha], cwd=self.work)
         return self.store(text.replace(f"\n\n{old}", f"\n\n{new}") + "\n")
 
     def resign_in_namespace(self, sha: str, signer: SshKey, namespace: str) -> str:
@@ -226,7 +244,7 @@ class Remote:
         made here is a valid signature by the listed key over the same bytes git
         would sign, except for the namespace it is bound to.
         """
-        text = run([GIT, "cat-file", "commit", sha], cwd=self.work) + "\n"
+        text = run([*git_command(), "cat-file", "commit", sha], cwd=self.work) + "\n"
         payload = self.work.parent / f"payload-{namespace}"
         payload.write_text(text, encoding="utf-8")
         run([SSH_KEYGEN, "-Y", "sign", "-n", namespace, "-f", signer.private, payload])
@@ -237,19 +255,12 @@ class Remote:
 
     def store(self, text: str) -> str:
         """Write a commit object from its text, publish it as ``staging`` and return its id."""
-        process = subprocess.run(  # noqa: S603 - test fixture
-            [str(GIT), "hash-object", "-t", "commit", "-w", "--stdin"],
+        stored = run(
+            [*git_command(), "hash-object", "-t", "commit", "-w", "--stdin"],
             cwd=self.work,
-            env={**os.environ, **ISOLATED},
-            input=text,
-            capture_output=True,
-            text=True,
-            check=True,
+            stdin=text,
         )
-        stored = process.stdout.strip()
-        run(
-            [GIT, "push", "-q", "--force", self.bare, f"{stored}:refs/heads/staging"], cwd=self.work
-        )
+        self.publish(stored)
         return stored
 
     def commit_playbooks_link(
@@ -266,7 +277,7 @@ class Remote:
 
     def set_ref(self, ref: str, sha: str) -> None:
         """Point a branch of the remote at a commit."""
-        run([GIT, "update-ref", f"refs/heads/{ref}", sha], cwd=self.bare)
+        run([*git_command(), "update-ref", f"refs/heads/{ref}", sha], cwd=self.bare)
 
 
 def playbook_text(marker: str) -> str:
@@ -1453,14 +1464,45 @@ class EndToEndTests(unittest.TestCase):
             "GIT_DIR": "/nonexistent/EXAMPLE",
             "GIT_EXEC_PATH": "/nonexistent/EXAMPLE",
             "GIT_OBJECT_DIRECTORY": "/nonexistent/EXAMPLE",
-            "GIT_CONFIG_COUNT": "1",
-            "GIT_CONFIG_KEY_0": "core.hooksPath",
-            "GIT_CONFIG_VALUE_0": "/nonexistent/EXAMPLE",
             "GIT_SSH_COMMAND": "/nonexistent/EXAMPLE",
         }
         with mock_environment(hostile):
             result = self.request(scene, self.commits["c6"])
         self.assertEqual(10, result.code, result.summary + result.errors)
+
+    def test_the_environment_built_for_git_holds_only_the_programs_own_variables(self) -> None:
+        tools = trigger.Tools(
+            git=GIT,
+            gpg=Path(GPG or "/usr/bin/gpg"),
+            gpgconf=Path(GPGCONF or "/usr/bin/gpgconf"),
+            ssh_keygen=SSH_KEYGEN,
+        )
+        home = Path("/nonexistent/EXAMPLE-home")
+        expected = {
+            "PATH",
+            "HOME",
+            "LC_ALL",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_NOSYSTEM",
+            "GIT_TERMINAL_PROMPT",
+            "GIT_ALLOW_PROTOCOL",
+        }
+        hostile = {
+            "GIT_DIR": "/nonexistent/EXAMPLE",
+            "GIT_EXEC_PATH": "/nonexistent/EXAMPLE",
+            "GIT_OBJECT_DIRECTORY": "/nonexistent/EXAMPLE",
+            "GIT_SSH_COMMAND": "/nonexistent/EXAMPLE",
+            "GIT_ASKPASS": "/nonexistent/EXAMPLE",
+            "GNUPGHOME": "/nonexistent/EXAMPLE",
+        }
+        with mock_environment(hostile):
+            environment = trigger.Git(tools, Path("/nonexistent/EXAMPLE.git"), home).environment
+        # The program names every variable it passes: none comes from the caller's environment.
+        self.assertEqual(expected, set(environment))
+        self.assertEqual("/dev/null", environment["GIT_CONFIG_GLOBAL"])
+        self.assertEqual("1", environment["GIT_CONFIG_NOSYSTEM"])
+        self.assertEqual(str(home), environment["HOME"])
+        self.assertEqual("0", environment["GIT_TERMINAL_PROMPT"])
 
     def test_a_missing_program_is_an_error_not_a_refusal(self) -> None:
         missing = Path("/nonexistent/ansible-playbook")

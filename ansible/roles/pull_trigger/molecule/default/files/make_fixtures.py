@@ -16,8 +16,6 @@ PLAYBOOK = "ansible/playbooks/host.yml"
 MARKER_FILE = ROOT / "applied-marker"
 ENVIRONMENT = {
     **os.environ,
-    "GIT_CONFIG_GLOBAL": "/dev/null",
-    "GIT_CONFIG_NOSYSTEM": "1",
     "GIT_AUTHOR_NAME": "TEST_AUTHOR",
     "GIT_AUTHOR_EMAIL": "author@example.invalid",
     "GIT_COMMITTER_NAME": "TEST_AUTHOR",
@@ -28,7 +26,7 @@ ENVIRONMENT = {
 
 
 def run(argv: list[str], cwd: Path | None = None, extra: dict[str, str] | None = None) -> str:
-    """Run a command with the isolated environment and return its stripped output."""
+    """Run a command with the fixed commit identity and dates and return its stripped output."""
     done = subprocess.run(  # noqa: S603 - argument lists, no shell, fixed programs
         argv,
         cwd=cwd,
