@@ -1,0 +1,35 @@
+---
+# What the role carries. Constants of the stack, not inputs, so a caller cannot
+# override them. The paths are relative to the stack directory in the repository
+# (files/stack, a link to hetzner/monitoring/stack). The list is the same as the
+# monitoring_stack role's, because both roles deliver the same stack (see the
+# README, "One home for the stack").
+ntfy_pager_dirs:
+  - alertmanager
+  - blackbox
+  - grafana
+  - grafana/provisioning
+  - grafana/provisioning/datasources
+  - ntfy
+  - prometheus
+
+ntfy_pager_files:
+  - compose.yml
+  - alertmanager/alertmanager.yml.tmpl
+  - alertmanager/email.gotmpl
+  - blackbox/blackbox.yml
+  - grafana/provisioning/datasources/prometheus.yaml
+  - ntfy/server.yml.tmpl
+  - prometheus/alerts.yml
+  - prometheus/prometheus.yml
+
+# The unit of the monitoring stack, the one the runbook restarts.
+ntfy_pager_unit: branchleft-compose@monitoring.service
+
+# The four names the runbook writes into the monitoring secrets file. They are
+# fixed here, so an input cannot rename a key the stack reads.
+ntfy_pager_env_names:
+  pager_token: NTFY_PAGER_TOKEN
+  watcher_token: NTFY_WATCHER_TOKEN
+  owner_password_hash: NTFY_OWNER_PASSWORD_HASH
+  machine_password_hash: NTFY_MACHINE_PASSWORD_HASH

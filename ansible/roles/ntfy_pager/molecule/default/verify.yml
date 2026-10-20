@@ -1,0 +1,95 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the role's constants, so the test takes the list of files from the role
+      ansible.builtin.include_vars:
+        file: '{{ playbook_dir }}/../../vars/main.yml'
+
+    # The file is read under no_log, and the assertions below name no value. A
+    # failure prints only the key or the file.
+    - name: Read the monitoring secrets file
+      ansible.builtin.slurp:
+        src: /etc/branchleft/monitoring.env
+      register: ntfy_pager_verify_env
+      no_log: true
+
+    - name: Assert each NTFY_ key holds its value exactly once and the other key is kept
+      ansible.builtin.assert:
+        that:
+          - "'NTFY_PAGER_TOKEN=test-sentinel-pager-token-0001' in ntfy_pager_verify_lines"
+          - "'NTFY_WATCHER_TOKEN=test-sentinel-watcher-token-0002' in ntfy_pager_verify_lines"
+          - "'NTFY_OWNER_PASSWORD_HASH=test-sentinel-owner-hash-0003' in ntfy_pager_verify_lines"
+          - "'NTFY_MACHINE_PASSWORD_HASH=test-sentinel-machine-hash-0004' in ntfy_pager_verify_lines"
+          - "ntfy_pager_verify_lines | select('match', 'NTFY_PAGER_TOKEN=') | list | length == 1"
+          - "'GRAFANA_ADMIN_PASSWORD=test-keep-me' in ntfy_pager_verify_lines"
+        quiet: true
+        fail_msg: The monitoring secrets file does not hold the four NTFY_ lines once each, or lost a key the role does not own.
+      vars:
+        ntfy_pager_verify_lines: '{{ (ntfy_pager_verify_env.content | b64decode).splitlines() }}'
+      no_log: true
+
+    - name: Forget the file content, which holds the values
+      ansible.builtin.set_fact:
+        ntfy_pager_verify_env: {}
+      no_log: true
+
+    - name: Look at the monitoring secrets file
+      ansible.builtin.stat:
+        path: /etc/branchleft/monitoring.env
+      register: ntfy_pager_verify_env_stat
+
+    - name: Assert the secrets file is owned by root and closed to everyone else
+      ansible.builtin.assert:
+        that:
+          - ntfy_pager_verify_env_stat.stat.pw_name == 'root'
+          - ntfy_pager_verify_env_stat.stat.gr_name == 'root'
+          - ntfy_pager_verify_env_stat.stat.mode == '0600'
+        quiet: true
+        fail_msg: The monitoring secrets file is not root:root mode 0600.
+
+    - name: Look at each file of the stack on the instance
+      ansible.builtin.stat:
+        path: '/opt/branchleft/monitoring/{{ item }}'
+        checksum_algorithm: sha256
+      loop: '{{ ntfy_pager_files }}'
+      loop_control:
+        label: '{{ item }}'
+      register: ntfy_pager_verify_dest
+
+    - name: Look at each file of the stack in the repository, through the role's link
+      ansible.builtin.stat:
+        path: '{{ playbook_dir }}/../../files/stack/{{ item }}'
+        checksum_algorithm: sha256
+      loop: '{{ ntfy_pager_files }}'
+      loop_control:
+        label: '{{ item }}'
+      register: ntfy_pager_verify_src
+
+    - name: Assert each delivered file is a root-owned regular file, mode 0644, equal to its source
+      ansible.builtin.assert:
+        that:
+          - item.0.stat.exists
+          - item.0.stat.isreg
+          - item.0.stat.pw_name == 'root'
+          - item.0.stat.gr_name == 'root'
+          - item.0.stat.mode == '0644'
+          - item.0.stat.checksum == item.1.stat.checksum
+        quiet: true
+        fail_msg: '{{ item.0.item }} is missing, is not a root-owned file with mode 0644, or differs from its source.'
+      loop: '{{ ntfy_pager_verify_dest.results | zip(ntfy_pager_verify_src.results) | list }}'
+      loop_control:
+        label: '{{ item.0.item }}'
+
+    - name: Ask systemd for the monitoring stack unit
+      ansible.builtin.systemd_service:
+        name: '{{ ntfy_pager_unit }}'
+      register: ntfy_pager_verify_unit
+
+    - name: Assert the unit was restarted by the role and is active
+      ansible.builtin.assert:
+        that:
+          - ntfy_pager_verify_unit.status.ActiveState == 'active'
+        quiet: true
+        fail_msg: The monitoring stack unit is not active after the role ran.
