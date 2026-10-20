@@ -1,0 +1,9 @@
+---
+firewall_nat_sysctl_control_port: 2222
+firewall_nat_sysctl_allowed_tcp_ports:
+  - 2222
+firewall_nat_sysctl_nat_source: 192.0.2.0/24
+firewall_nat_sysctl_uplink_interface: UPLINK_INTERFACE
+firewall_nat_sysctl_table: pattern_firewall
+firewall_nat_sysctl_rules_dir: /etc/firewall-nat-sysctl
+firewall_nat_sysctl_sysctl_file: /etc/sysctl.d/99-firewall-nat-sysctl.conf
