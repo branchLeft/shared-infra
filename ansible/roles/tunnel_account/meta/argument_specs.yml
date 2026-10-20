@@ -1,0 +1,56 @@
+---
+# One entry per tasks file. There is no main entry: a caller names the half it
+# runs with tasks_from. The run-time inputs are not role arguments: each half
+# reads them from root-only files in tunnel_account_inputs_dir (vars/main.yml),
+# which the operator places once. The files and the half that reads each one are
+# listed in the description of each entry. No input has a default.
+argument_specs:
+  db1_key:
+    short_description: Create db1's tunnel key and the account that owns it
+    description: >-
+      Creates the tunnel account with no login shell and generates db1's
+      ed25519 key on db1, once (regenerate: never). The private half never leaves
+      the host. The public half is printed in the run output for the replica run.
+      Reads no run-time input, so it can run before any file is placed.
+    author: branchLeft
+    options: {}
+  db1:
+    short_description: Install db1's half of the replica tunnel
+    description: >-
+      Runs db1_key, then reads three root-only input files from
+      tunnel_account_inputs_dir: replica_host (the replica host's public IPv4),
+      replica_host_key (the replica's one-line ssh-ed25519 host key) and
+      db1_subnet_prefix (a private three-octet prefix with a trailing dot, the
+      subnet of db1's bind address). Pins the host key, writes the target file,
+      installs the tunnel unit, held to its ports and its sha256. Starts or
+      restarts the unit. Refuses a bad input before any change. Needs
+      ansible_facts (gather_facts true), to find db1's address on the subnet.
+    author: branchLeft
+    options: {}
+  replica:
+    short_description: Install the replica half of the replica tunnel
+    description: >-
+      Reads two root-only input files from tunnel_account_inputs_dir:
+      from_address (db1's public NAT address as the replica sees it, the only
+      address the key is accepted from) and db1_public_key (db1's one-line
+      ssh-ed25519 public key, copied from the db1_key run output). Creates the
+      tunnel account with no login shell, writes the sshd drop-in and the
+      authorized key with from= and the restrictions, checks the whole sshd
+      configuration, reloads sshd, and reads the effective settings back. A failed
+      check puts the previous files back. Runs under --check.
+    author: branchLeft
+    options: {}
+  teardown:
+    short_description: Remove the tunnel from this host
+    description: >-
+      Stops and removes the unit, db1's key files, the known hosts line and the
+      target file, the sshd drop-in and the authorized keys, then removes the
+      account. Never removes the run-time inputs or the key directory that holds
+      them. Refuses to run unless tunnel_account_teardown_confirm is true.
+    author: branchLeft
+    options:
+      tunnel_account_teardown_confirm:
+        type: bool
+        required: false
+        default: false
+        description: Must be true. Teardown destroys db1's private key on db1.

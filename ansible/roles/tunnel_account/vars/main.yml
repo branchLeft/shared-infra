@@ -1,0 +1,70 @@
+---
+# Constants of the tunnel, not inputs: role variables outrank every value a
+# caller passes, so a caller cannot change a port or a path. The unit file's
+# -R and -L ports are asserted equal to the port constants below (db1.yml), so
+# one copy of each port is the one the unit and the sshd drop-in both use.
+tunnel_account_user: dbtunnel
+tunnel_account_nologin: /usr/sbin/nologin
+tunnel_account_key_dir: /etc/branchleft/db-tunnel
+tunnel_account_key_file: '{{ tunnel_account_key_dir }}/id_ed25519'
+tunnel_account_key_pub_file: '{{ tunnel_account_key_file }}.pub'
+tunnel_account_known_hosts_file: '{{ tunnel_account_key_dir }}/known_hosts'
+tunnel_account_target_env_file: '{{ tunnel_account_key_dir }}/target.env'
+tunnel_account_unit_name: branchleft-db-tunnel.service
+tunnel_account_unit_path: '/etc/systemd/system/{{ tunnel_account_unit_name }}'
+tunnel_account_sshd_service: ssh
+tunnel_account_sshd_config_dir: /etc/ssh/sshd_config.d
+tunnel_account_sshd_dropin: '{{ tunnel_account_sshd_config_dir }}/50-branchleft-db-tunnel.conf'
+tunnel_account_authorized_keys_dir: /etc/ssh/branchleft-db-tunnel
+tunnel_account_authorized_keys_file: '{{ tunnel_account_authorized_keys_dir }}/authorized_keys'
+
+# Run-time inputs. Each is one root-only file (owner and group root, mode 0600,
+# a regular file, not a link) placed once by the operator. The role reads them
+# and never writes them. The directory is root-only too (mode 0700). A pulled
+# host has no -e and no readable run output, so a file is the only channel.
+tunnel_account_inputs_dir: '{{ tunnel_account_key_dir }}/inputs'
+
+# The unit file ships in this role's files/ directory. The pin is a tripwire
+# against an accidental edit of that file, not a control on a deliberate change:
+# a change to the role is reviewed in its diff and lands as a signed commit.
+tunnel_account_unit_sha256: 02479b13ddb9f6100e6727bff0a32dce6cdae250eecbe7d6abc70eab95f7a796
+
+# Ports. The replica listens on its loopback for the reverse forward (-R); the
+# replica side of the metrics forward (-L) is 9104, listened to on db1 as 9105.
+tunnel_account_replica_tunnel_port: 13306
+tunnel_account_db1_mysql_port: 3306
+tunnel_account_db1_metrics_listen_port: 9105
+tunnel_account_replica_metrics_port: 9104
+
+# What sshd must report for the tunnel account once the drop-in is in place:
+# the `sshd -T` keyword and its one value. The replica half reads each back.
+tunnel_account_expected_effective:
+  authenticationmethods: publickey
+  authorizedkeysfile: '{{ tunnel_account_authorized_keys_file }}'
+  allowtcpforwarding: 'yes'
+  permitlisten: '127.0.0.1:{{ tunnel_account_replica_tunnel_port }}'
+  permitopen: '127.0.0.1:{{ tunnel_account_replica_metrics_port }}'
+  gatewayports: 'no'
+  allowagentforwarding: 'no'
+  allowstreamlocalforwarding: 'no'
+  x11forwarding: 'no'
+  permittty: 'no'
+  permittunnel: 'no'
+  forcecommand: '{{ tunnel_account_nologin }}'
+
+# Shapes, matched with \Z so a trailing line break does not pass. An octet is
+# 0 to 255 with no leading zero, so '010' and '999' are refused.
+tunnel_account_octet: '(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])'
+tunnel_account_ipv4_pattern: '^{{ tunnel_account_octet }}(?:\.{{ tunnel_account_octet }}){3}\Z'
+tunnel_account_subnet_pattern: '^{{ tunnel_account_octet }}\.{{ tunnel_account_octet }}\.{{ tunnel_account_octet }}\.\Z'
+# An ed25519 key line: the type, the 68 base64 characters of an ed25519 key
+# (they always begin AAAAC3NzaC1lZDI1NTE5AAAAI) and an optional comment of the
+# characters the ghost-platform program accepts.
+tunnel_account_ed25519_pattern: '^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}(?: [A-Za-z0-9@._-]{1,64})?\Z'
+# The db1 subnet must be a private range (RFC 1918).
+tunnel_account_private_subnet_pattern: '^(?:10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.)'
+# Private, loopback, link-local, shared (100.64/10), reserved and multicast.
+# An address matching this is not a public address. The NAT and the replica
+# host must be public.
+tunnel_account_non_public_pattern: >-
+  ^(?:0\.|10\.|127\.|169\.254\.|192\.168\.|100\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|22[4-9]\.|23[0-9]\.|24[0-9]\.|25[0-5]\.)

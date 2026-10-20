@@ -1,0 +1,66 @@
+---
+# Reads the run-time inputs one half needs, from their root-only files. Each
+# caller names the files it wants in tunnel_account_wanted. Nothing here writes
+# a file, and no message or diff shows a value (ANS-16). A missing or unsafe
+# file fails the run and names its path; the path is a constant, not a value.
+
+- name: Look at the inputs directory
+  ansible.builtin.stat:
+    path: '{{ tunnel_account_inputs_dir }}'
+    follow: false
+  register: tunnel_account_inputs_dir_stat
+  check_mode: false
+
+- name: Refuse an inputs directory that is not a root-only directory
+  ansible.builtin.assert:
+    that:
+      - tunnel_account_inputs_dir_stat.stat.exists
+      - tunnel_account_inputs_dir_stat.stat.isdir
+      - tunnel_account_inputs_dir_stat.stat.pw_name == 'root'
+      - tunnel_account_inputs_dir_stat.stat.gr_name == 'root'
+      - tunnel_account_inputs_dir_stat.stat.mode == '0700'
+    quiet: true
+    fail_msg: >-
+      The inputs directory {{ tunnel_account_inputs_dir }} must exist, be owned
+      by root and group root, and have mode 0700. The operator places the run-time
+      inputs there once.
+
+- name: Look at each run-time input file
+  ansible.builtin.stat:
+    path: '{{ tunnel_account_inputs_dir }}/{{ item }}'
+    follow: false
+  loop: '{{ tunnel_account_wanted }}'
+  register: tunnel_account_input_stats
+  check_mode: false
+
+- name: Refuse an input file that is missing, a link, or not root-only
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'root'
+      - item.stat.mode == '0600'
+    quiet: true
+    fail_msg: >-
+      A run-time input file is missing, is not a regular file, or is not owned by
+      root with mode 0600. Its path is {{ tunnel_account_inputs_dir }}/{{ item.item }}.
+  loop: '{{ tunnel_account_input_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Read the run-time inputs into memory for this run (no value is shown)
+  ansible.builtin.slurp:
+    src: '{{ tunnel_account_inputs_dir }}/{{ item }}'
+  loop: '{{ tunnel_account_wanted }}'
+  register: tunnel_account_input_raw
+  no_log: true
+  check_mode: false
+
+- name: Hold the inputs by name for this run
+  ansible.builtin.set_fact:
+    tunnel_account_in: >-
+      {{ dict(tunnel_account_wanted
+              | zip(tunnel_account_input_raw.results
+                    | map(attribute='content') | map('b64decode') | map('trim') | list)) }}
+  no_log: true

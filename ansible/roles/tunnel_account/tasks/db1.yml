@@ -1,0 +1,148 @@
+---
+# db1's install half. Every run-time input is read from its root-only file and
+# refused here, before the first change to a file, when it is not the shape the
+# unit needs. No message names a value (ANS-16).
+- name: Generate or keep db1's key
+  ansible.builtin.include_tasks: db1_key.yml
+
+- name: Read db1's run-time inputs
+  ansible.builtin.include_tasks: _inputs.yml
+  vars:
+    tunnel_account_wanted:
+      - replica_host
+      - replica_host_key
+      - db1_subnet_prefix
+
+- name: Refuse a replica host that is not a public IPv4 address (control 5)
+  ansible.builtin.assert:
+    that:
+      - tunnel_account_in.replica_host is match(tunnel_account_ipv4_pattern)
+      - not (tunnel_account_in.replica_host is match(tunnel_account_non_public_pattern))
+    quiet: true
+    fail_msg: The replica host must be a public IPv4 address. It is not shown here.
+
+- name: Refuse a subnet prefix that is not a private prefix
+  ansible.builtin.assert:
+    that:
+      - tunnel_account_in.db1_subnet_prefix is match(tunnel_account_subnet_pattern)
+      - tunnel_account_in.db1_subnet_prefix is match(tunnel_account_private_subnet_pattern)
+    quiet: true
+    fail_msg: The db1 subnet must be a private three-octet prefix with a trailing dot. It is not shown here.
+
+- name: Refuse a replica host key that is not one ed25519 line
+  ansible.builtin.assert:
+    that:
+      - tunnel_account_in.replica_host_key is match(tunnel_account_ed25519_pattern)
+    quiet: true
+    fail_msg: >-
+      The replica host key must be one line, 'ssh-ed25519 <base64>', as the
+      replica host printed it. The key is not shown here.
+
+- name: Find db1's address on the private subnet
+  ansible.builtin.set_fact:
+    tunnel_account_db1_candidates: >-
+      {{ ansible_facts['all_ipv4_addresses']
+         | select('match', '^' ~ (tunnel_account_in.db1_subnet_prefix | regex_escape) ~ '[0-9]{1,3}\Z')
+         | list }}
+  no_log: true
+
+- name: Refuse unless exactly one address of db1 is on the subnet
+  ansible.builtin.assert:
+    that:
+      - tunnel_account_db1_candidates | length == 1
+    quiet: true
+    fail_msg: >-
+      Exactly one address of this host must be on the db1 subnet. Is this db1,
+      and is the subnet prefix right? The address is not shown here.
+
+- name: Keep db1's source address for the unit
+  ansible.builtin.set_fact:
+    tunnel_account_db1_source_address: '{{ tunnel_account_db1_candidates | first }}'
+  no_log: true
+
+# The known_hosts line pins the replica host key. The unit's StrictHostKeyChecking
+# is yes, so a key that does not match fails the connection instead of being
+# accepted (control 4). The templates write into the key directory, which a check
+# run on a fresh host does not have yet, so they wait for it there.
+- name: Pin the replica host key
+  ansible.builtin.template:
+    src: known_hosts.j2
+    dest: '{{ tunnel_account_known_hosts_file }}'
+    owner: root
+    group: '{{ tunnel_account_user }}'
+    mode: '0640'
+  when: not ansible_check_mode or tunnel_account_keydir_stat.stat.exists
+  no_log: true
+  diff: false
+  register: tunnel_account_known
+
+- name: Write the target file the unit reads
+  ansible.builtin.template:
+    src: target.env.j2
+    dest: '{{ tunnel_account_target_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+  when: not ansible_check_mode or tunnel_account_keydir_stat.stat.exists
+  no_log: true
+  diff: false
+  register: tunnel_account_target
+
+# Control 12 and control 4: the unit's -R and -L ports and its host-key option,
+# held to the constants, run before the pin, so a sabotage of either shows at
+# its own control and not at the digest.
+- name: Hold the unit's ports to the constants (control 12)
+  ansible.builtin.assert:
+    that:
+      - "('127.0.0.1:' ~ tunnel_account_replica_tunnel_port ~ ':${DB_TUNNEL_SOURCE_ADDRESS}:' ~ tunnel_account_db1_mysql_port) in tunnel_account_unit_text"
+      - >-
+        ('${DB_TUNNEL_SOURCE_ADDRESS}:' ~ tunnel_account_db1_metrics_listen_port
+        ~ ':127.0.0.1:' ~ tunnel_account_replica_metrics_port) in tunnel_account_unit_text
+    quiet: true
+    fail_msg: The tunnel unit's ports no longer match the role's constants.
+  vars:
+    tunnel_account_unit_text: "{{ lookup('ansible.builtin.file', role_path ~ '/files/branchleft-db-tunnel.service') }}"
+
+- name: Hold the unit's host-key check to strict (control 4)
+  ansible.builtin.assert:
+    that:
+      - "'StrictHostKeyChecking=yes' in tunnel_account_unit_text"
+      - "('UserKnownHostsFile=' ~ tunnel_account_known_hosts_file) in tunnel_account_unit_text"
+    quiet: true
+    fail_msg: The tunnel unit's host-key check is not strict.
+  vars:
+    tunnel_account_unit_text: "{{ lookup('ansible.builtin.file', role_path ~ '/files/branchleft-db-tunnel.service') }}"
+
+# Control 6: the unit file is pinned by sha256, checked last of the unit's
+# asserts. It is a tripwire on an accidental edit, not a control on a deliberate
+# one (the diff shows that).
+- name: Hold the unit file to its pinned sha256 (control 6)
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.file', role_path ~ '/files/branchleft-db-tunnel.service', rstrip=false) | hash('sha256') == tunnel_account_unit_sha256
+    quiet: true
+    fail_msg: The tunnel unit file in this role does not match its pinned sha256.
+
+- name: Install the tunnel unit
+  ansible.builtin.copy:
+    src: branchleft-db-tunnel.service
+    dest: '{{ tunnel_account_unit_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+  register: tunnel_account_unit
+
+- name: Reload systemd when the unit file changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: not ansible_check_mode and tunnel_account_unit.changed
+
+# Start the unit, or restart it when any of its files changed, so a changed
+# target or key takes effect. Systemd is not touched in check mode.
+- name: Enable the tunnel and start it, or restart it when its files changed
+  ansible.builtin.systemd_service:
+    name: '{{ tunnel_account_unit_name }}'
+    enabled: true
+    state: >-
+      {{ 'restarted' if (tunnel_account_unit.changed or tunnel_account_target.changed or tunnel_account_known.changed) else 'started' }}
+  when: not ansible_check_mode

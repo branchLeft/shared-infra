@@ -1,0 +1,59 @@
+---
+# db1's key, generated on db1 and never read off it. It reads no run-time input,
+# so it is the first run on db1 and needs nothing placed beforehand. db1.yml runs
+# it first, and a re-run only re-checks the key (regenerate: never keeps it).
+- name: Create the tunnel account on db1
+  ansible.builtin.include_tasks: _account.yml
+
+- name: Create the key directory
+  ansible.builtin.file:
+    path: '{{ tunnel_account_key_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Look at the key directory
+  ansible.builtin.stat:
+    path: '{{ tunnel_account_key_dir }}'
+  register: tunnel_account_keydir_stat
+  check_mode: false
+
+# Generated once, owned by the unit's own user and readable by it alone. The
+# module writes the private half with that owner and mode, and a re-run puts a
+# drifted owner or mode back. A check run on a fresh host has no directory yet,
+# so nothing is generated there (ANS-9). The module returns the public half and
+# a fingerprint only, never the private half, and no_log keeps even those out
+# of the log.
+- name: Generate db1's key on db1, once
+  community.crypto.openssh_keypair:
+    path: '{{ tunnel_account_key_file }}'
+    type: ed25519
+    comment: db1-replica-tunnel
+    owner: '{{ tunnel_account_user }}'
+    group: '{{ tunnel_account_user }}'
+    mode: '0600'
+    regenerate: never
+  when: not ansible_check_mode or tunnel_account_keydir_stat.stat.exists
+  no_log: true
+  diff: false
+
+- name: Look for the public half
+  ansible.builtin.stat:
+    path: '{{ tunnel_account_key_pub_file }}'
+  register: tunnel_account_pub_stat
+  check_mode: false
+
+# The public half is printed for the replica run. It is public data; the
+# private half is never read, copied or logged.
+- name: Read the public half for the replica run
+  ansible.builtin.slurp:
+    src: '{{ tunnel_account_key_pub_file }}'
+  register: tunnel_account_pub
+  when: tunnel_account_pub_stat.stat.exists
+  no_log: true
+
+- name: Show db1's public key for the replica tunnel account
+  ansible.builtin.debug:
+    msg: 'db1 public key for the replica run: {{ tunnel_account_pub.content | b64decode | trim }}'
+  when: tunnel_account_pub is defined and tunnel_account_pub.content is defined
