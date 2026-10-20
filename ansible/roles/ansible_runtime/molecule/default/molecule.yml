@@ -1,0 +1,41 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party test base with the same Debian release as the production
+    # hosts, trusted by digest (see the role README). The digest is the pin; the
+    # tag is informational and may since have moved on. It has Python 3.13, as
+    # the production hosts do. The scenario does not need systemd, so it sets
+    # none of the settings that run systemd: no cgroup mount, no cgroup
+    # namespace mode and no tmpfs. No privileged mode and no added capabilities.
+    # No network or volume key is set: the outside reach is the container's
+    # default bridge, used by prepare.yml for the apt index and by the role's
+    # pip install for the package index (see the role README).
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # The image's own command starts systemd as the first process, and systemd
+    # needs a cgroup mount and a cgroup namespace mode that this scenario does
+    # not grant. A plain sleep keeps the container alive so Ansible can run in
+    # it.
+    command: sleep infinity
+    # The image declares /sys/fs/cgroup as a volume and this scenario does not
+    # bind-mount it, so Docker makes an anonymous volume for every container
+    # started from the image. Molecule's destroy keeps a container's volumes
+    # unless told otherwise, and an anonymous volume carries no label to find it
+    # by, so each run would leave one behind.
+    keep_volumes: false
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+verifier:
+  name: ansible
