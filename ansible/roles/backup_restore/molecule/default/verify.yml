@@ -186,10 +186,21 @@
       BACKUP_DRILL_SIDECAR_IMAGE: '{{ backup_restore_drill_image_sidecar }}'
     backup_restore_marker_value: AGE-SECRET-KEY-1EXAMPLEONLYNOTAKEY00000000000
   tasks:
-    - name: Export backup_worker's variables
+    - name: Export backup_worker's variables to the cases
       ansible.builtin.include_role:
         name: '{{ playbook_dir }}/../../../backup_worker' # noqa: role-name[path]
         public: true
+
+    # A run that stopped early may have left its scratch files, and a case below
+    # asserts that one is absent.
+    - name: Start with no scratch environment files
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - '{{ backup_restore_test_scratch_state_copy_env }}'
+        - '{{ backup_restore_test_scratch_drill_env }}'
+      changed_when: false
 
     # Secret files that are wrong in one way each, made by the test for the cases
     # that follow, and removed in the last section.
