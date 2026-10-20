@@ -1,0 +1,60 @@
+---
+# No private value is a default: the address, the database account, the
+# bucket, the endpoint, the region, the tenants and the three credentials are
+# required inputs (meta/argument_specs.yml), and they come from the private
+# inventory. What is here is public and safe to commit.
+
+# The timer stays off. Turning it on is a production apply (README).
+backup_worker_timer_enabled: false
+
+# False leaves the timer as it is on the host. Set true, together with
+# backup_worker_timer_enabled false, to stop a running timer (README).
+backup_worker_timer_may_disable: false
+
+# Install the mysqldump 8.0 client and age with the pinned installer (runbook
+# section 2) when either is missing. Off for a host that has them by other means.
+backup_worker_install_prereqs: true
+
+# The one home of the programs and units is branchLeft/ghost-platform. They are
+# downloaded from this commit, never copied here, and each file is held to the
+# checksum below. Bump the commit and every checksum together: a checksum that
+# does not match the file at the commit fails the download.
+backup_worker_source_sha: 5e52f78427cab104438057164e4baa16b329875c
+backup_worker_source_base_url: 'https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ backup_worker_source_sha }}'
+
+# Every file of the release, relative to the release root: what the loop
+# imports or loads at run time (the installer's REQUIRED_RELEASE_FILES), the two
+# unit files, the installer, and the pinned prerequisite installer.
+backup_worker_release_files:
+  - path: infra/provisioning/scripts/nightly_dump_loop.py
+    sha256: 48b94567a81abaabdf9606dc02902dd2c3552524134860280f5258b25b829cd5
+  - path: infra/provisioning/scripts/backup_worker.py
+    sha256: 75800f8ace562c5790b9e526f265dfe0747f7f0f79b029ad73eb18fe60902f61
+  - path: infra/provisioning/scripts/backup_recipients.py
+    sha256: 358feeead752e74c5bcaa12b5acdbdd63cee611d74c1354d2d50f715f8f6e207
+  - path: infra/provisioning/scripts/backup_manifest.py
+    sha256: 217bcab170e07a30efa5448b7fbcfc66d410635b5caeab8ecdf7dc615bc9cee8
+  - path: infra/provisioning/scripts/dial_in_transport.py
+    sha256: 3ddd8245507eaff275d76bc01936b553ce089a53b89976c8105fa9b42275ce25
+  - path: infra/provisioning/scripts/pull_encrypt_store.py
+    sha256: 00a46a55aae8365bf33b0d8e6fc6b0e311c7448f6eb23fab7068a9428fd0b717
+  - path: infra/provisioning/scripts/media_backup_restore.py
+    sha256: e9870d44d9da2f51d0ae1e9b2c62c50bcb74863e5c00f160348281d39590b9b3
+  - path: infra/provisioning/scripts/shared_objectstorage.py
+    sha256: a12d240682ed899cc8acab33dd4a344edcf427bee8ddaf687af2bcf160dbd6a7
+  - path: db/provision/bounded_snapshot.py
+    sha256: b0e99f26baade745ed508dee959b8bd9405aecdc84b4cf77237737bc21cacfe0
+  - path: db/provision/dump_tenant.py
+    sha256: d87c3b5f11b6dd82fbeb84919cdbf486ff8b39b906faece2fdfb027cf1777bc4
+  - path: db/provision/naming.py
+    sha256: 288a31eed9758644d6a73928b949bc3607c905adfc2f2f4f563701dc740f6480
+  - path: db/provision/objectstorage.py
+    sha256: 1559ad94f6348c65fc4f3840385c70ab012ca76eb9cd98ba835360594e54589c
+  - path: db/provision/install_host_prereqs.py
+    sha256: 2faee5232fe8488687754e09beefaa4a9dcf4b4aa67123b8623b179b215a52be
+  - path: control/provision/install_backup_worker.py
+    sha256: 272a223cba74530a2defa6f3f512f4cdc175b9483ec72263e70db95cf1fbe30b
+  - path: control/provision/branchleft-backup-worker.service
+    sha256: b31e5787cb76d104eaeace9fe9aab5d6c59a87d3fbd5136e26515632d280069a
+  - path: control/provision/branchleft-backup-worker.timer
+    sha256: 610c45d1bf726db592a534e422138f056d94d24a2d8f67dc19f0d40747b27df4

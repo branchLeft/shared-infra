@@ -533,6 +533,7 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | `branchleft-compose@blog`, and one per further tenant slug | nowhere: rendered by `branchLeft/ghost-platform`'s `infra/tenant/compose.ts`                             | no                |
 | `branchleft-compose@demo-`, the prefix of each demo slot   | nowhere: provisioned by `branchLeft/ghost-platform`'s `demo-host/provision`                              | no                |
 | `branchleft-compose@broker`, which is not an instance      | nowhere: the broker program has its own unit, built from `branchLeft/ghost-platform`'s `services/broker` | no                |
+| `branchleft-compose@backup-worker`                         | nowhere: a systemd unit, not a Compose stack                                                             | no                |
 
 **No means unread, not failed.** Nothing in this repository has an opinion
 about whether those stacks declare a health signal, so a service in one that

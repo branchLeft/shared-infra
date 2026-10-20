@@ -1,0 +1,58 @@
+---
+# The collector program is not rewritten here: it is the repository's own file, read
+# through the link files/snds, and delivered byte for byte to the directory its unit runs
+# it from.
+- name: Create the directory the collector program is installed into
+  ansible.builtin.file:
+    path: '{{ exporters_and_collectors_snds_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the collector program
+  ansible.builtin.copy:
+    src: 'snds/{{ exporters_and_collectors_snds_program }}'
+    dest: '{{ exporters_and_collectors_snds_dir }}/{{ exporters_and_collectors_snds_program }}'
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Create the textfile directory the collector writes its metrics to
+  ansible.builtin.file:
+    path: '{{ exporters_and_collectors_snds_textfile_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# The service and the timer are standalone units, not drop-ins of the monitoring
+# stack, so they are installed here and nowhere else.
+- name: Install the SNDS collector service and timer
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: '{{ exporters_and_collectors_snds_unit_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - snds-collector.service
+    - snds-collector.timer
+  notify: Reload systemd manager
+
+- name: Load queued unit changes before the timer is enabled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no timer file on a fresh host, so there is nothing for systemd to
+# enable yet. The stat runs in check mode as it does in a real run.
+- name: Read back the SNDS timer unit file
+  ansible.builtin.stat:
+    path: '{{ exporters_and_collectors_snds_unit_dir }}/snds-collector.timer'
+  register: exporters_and_collectors_snds_timer_stat
+
+- name: Enable and start the SNDS collector timer
+  ansible.builtin.systemd_service:
+    name: snds-collector.timer
+    enabled: true
+    state: started
+  when: exporters_and_collectors_snds_timer_stat.stat.exists

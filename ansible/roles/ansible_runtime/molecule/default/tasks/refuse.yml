@@ -1,0 +1,35 @@
+---
+# One refusal case: the role is given a lock that must not install. Called once
+# per fixture with ansible_runtime_verify_case set (a dict of name, file, text).
+- name: 'Apply the role to a lock that must be refused: {{ ansible_runtime_verify_case.name }}'
+  block:
+    - name: Apply the role with the bad lock, in its own directory and with its own link
+      ansible.builtin.include_role:
+        name: branchleft.ansible_runtime
+      vars:
+        ansible_runtime_requirements_src: '{{ playbook_dir }}/files/{{ ansible_runtime_verify_case.file }}'
+        ansible_runtime_root: '/var/tmp/ansible-runtime-{{ ansible_runtime_verify_case.name }}'
+        ansible_runtime_link: '/var/tmp/ansible-playbook-{{ ansible_runtime_verify_case.name }}'
+
+    - name: Fail the test if the role accepted the bad lock
+      ansible.builtin.fail:
+        msg: 'The role installed a lock it must refuse: {{ ansible_runtime_verify_case.name }}'
+  rescue:
+    - name: Assert pip refused the lock for the stated reason
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_result.stderr is defined
+          - ansible_runtime_verify_case.text in ansible_failed_result.stderr
+        success_msg: 'The role refused the lock: {{ ansible_runtime_verify_case.name }}'
+        fail_msg: 'The role failed, but not for the hash reason: {{ ansible_failed_result | default({}) }}'
+
+- name: Look for the link the refused run must not have made
+  ansible.builtin.stat:
+    path: '/var/tmp/ansible-playbook-{{ ansible_runtime_verify_case.name }}'
+  register: ansible_runtime_verify_refused_link
+
+- name: Assert the refused lock left no link
+  ansible.builtin.assert:
+    that:
+      - not ansible_runtime_verify_refused_link.stat.exists
+    success_msg: A refused install did not move the link.

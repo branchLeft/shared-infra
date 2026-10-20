@@ -1,0 +1,81 @@
+---
+- name: Install the packages that make a virtual environment
+  ansible.builtin.apt:
+    name: '{{ ansible_runtime_packages }}'
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# Root-owned and not writable by others: whoever can write under this directory
+# runs code as root on every apply. The mode is the point of the task.
+- name: Create the directory that holds the environments
+  ansible.builtin.file:
+    path: '{{ ansible_runtime_root }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# The lock is public and reviewed in the pull request that changes it, so its
+# diff is left off: it is a thousand lines that the job log would otherwise carry.
+- name: Place the hash-locked requirements file on the host
+  ansible.builtin.copy:
+    src: '{{ ansible_runtime_requirements_src }}'
+    dest: '{{ ansible_runtime_lock_copy }}'
+    owner: root
+    group: root
+    mode: '0644'
+  diff: false
+
+# A command task is skipped by check mode on its own, with the creates form
+# reporting a change when the file is missing. That is the stated reason for the
+# skip here and in the install task below (ANS-10).
+- name: Create the virtual environment for this lock
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -m
+      - venv
+      - '{{ ansible_runtime_venv }}'
+    creates: '{{ ansible_runtime_venv }}/bin/python'
+
+- name: Look for the marker that the install from this lock finished
+  ansible.builtin.stat:
+    path: '{{ ansible_runtime_done_marker }}'
+  register: ansible_runtime_marker
+
+# Hash checking is required: pip refuses a file whose hash the lock does not list,
+# and a package the lock does not name. That is the supply-chain control of the role.
+- name: Install the locked packages with hash checking required
+  ansible.builtin.command:
+    argv:
+      - '{{ ansible_runtime_venv }}/bin/pip'
+      - install
+      - --require-virtualenv
+      - --require-hashes
+      - --no-input
+      - --disable-pip-version-check
+      - -r
+      - '{{ ansible_runtime_lock_copy }}'
+  when: not ansible_runtime_marker.stat.exists
+  changed_when: true
+
+- name: Record that the install from this lock finished
+  ansible.builtin.copy:
+    content: "{{ ansible_runtime_lock_fingerprint }}\n"
+    dest: '{{ ansible_runtime_done_marker }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: not ansible_runtime_marker.stat.exists
+
+# The link moves to the new environment only after the install finished, so a
+# failed install leaves the previous environment in service.
+- name: Point the ansible-playbook link at this environment
+  ansible.builtin.file:
+    src: '{{ ansible_runtime_venv }}/bin/ansible-playbook'
+    dest: '{{ ansible_runtime_link }}'
+    state: link
+    force: true
+    owner: root
+    group: root

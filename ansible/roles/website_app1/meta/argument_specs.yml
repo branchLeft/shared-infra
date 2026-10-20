@@ -1,0 +1,59 @@
+---
+argument_specs:
+  main:
+    short_description: Deliver the website stack to app1, enable its unit, deploy the pinned image and smoke test it
+    description: >-
+      Writes the SMTP environment file the stack's unit loads, copies the stack's
+      compose file into its project directory, enables the unit, and, when an
+      image is given, runs the host's deploy program with that digest and smoke
+      tests the app over the private address. The deploy runs only when the
+      image or the compose file differs from the content last deployed.
+    author: branchLeft
+    options:
+      website_app1_project_dir:
+        type: str
+        description: Absolute path of the stack's project directory on the host.
+        default: /opt/branchleft/website
+      website_app1_env_file:
+        type: str
+        description: Absolute path of the environment file the unit loads for the stack's secrets.
+        default: /etc/branchleft/website.env
+      website_app1_env_dir:
+        type: str
+        description: Directory that holds the environment file. Created with mode 0755, root-owned.
+        default: /etc/branchleft
+      website_app1_private_address:
+        type: str
+        description: The private address the app port is bound to, for the smoke test.
+        default: 10.20.1.100
+      website_app1_image:
+        type: str
+        description: >-
+          The website image pinned by digest, as ghcr.io/branchleft/website@sha256:
+          and 64 lower-case hex digits. Empty means no deploy and no smoke test.
+        default: ''
+      website_app1_smoke_paths:
+        type: list
+        elements: str
+        description: Paths the smoke test requests from the app after a deploy.
+        default:
+          - /
+          - /about
+          - /contact
+      website_app1_smtp_host:
+        type: str
+        required: true
+        description: SMTP host of the contact form. Supplied at run time.
+      website_app1_smtp_port:
+        type: str
+        required: true
+        description: SMTP port of the contact form. Supplied at run time.
+      website_app1_smtp_user:
+        type: str
+        required: true
+        description: SMTP user of the contact form. Supplied at run time.
+      website_app1_smtp_password:
+        type: str
+        required: true
+        no_log: true
+        description: SMTP password of the contact form. A secret, supplied at run time, never a default.

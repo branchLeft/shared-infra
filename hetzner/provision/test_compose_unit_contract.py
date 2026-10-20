@@ -120,6 +120,13 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "the path as a stack name. The program is built from branchLeft/ghost-platform "
         "services/broker, and no Compose file exists for it anywhere."
     ),
+    "backup-worker": (
+        "branchLeft/ghost-platform commits the backup worker's programs and "
+        "systemd units, and no Compose file for it. This repository names it "
+        "only in the paths of the backup_worker Ansible role. It is a systemd "
+        "unit, not an instance of the Compose template, and nothing here sees "
+        "whether that repository declares a health signal for it."
+    ),
 }
 
 # The stack-name rule the deploy wrapper actually applies, reused rather than

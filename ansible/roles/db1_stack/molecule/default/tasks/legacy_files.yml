@@ -1,0 +1,31 @@
+---
+# The hand-run installer left a one-line source list and a binary keyring that
+# name the same repository. The role must remove both, and removing them makes
+# the role refresh the index, which fails here because the container has no
+# network: stopping at the refresh task is how the test sees that it ran.
+- name: Put the hand-run installer's source list and keyring in place
+  ansible.builtin.copy:
+    content: PLACEHOLDER_LEGACY_FILE
+    dest: '{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ verify_legacy_files }}'
+
+- name: Apply the role while the hand-run installer's files are there
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refresh the apt index after the repository files changed
+
+- name: Assert the hand-run installer's files were removed before the refresh
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'
+
+- name: Apply the role again
+  ansible.builtin.include_tasks: apply.yml
+
+- name: Assert the host is as declared
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'

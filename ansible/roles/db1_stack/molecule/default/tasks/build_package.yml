@@ -1,0 +1,50 @@
+---
+# Builds one placeholder package file from `package` (name and version). The
+# archive is uncompressed and every file is root-owned, so building needs
+# nothing from the network.
+- name: Create the build tree of the placeholder package
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - /var/tmp/package-build/{{ package.name }}
+    - /var/tmp/package-build/{{ package.name }}/DEBIAN
+    - /var/tmp/package-build/{{ package.name }}/usr
+    - /var/tmp/package-build/{{ package.name }}/usr/share
+    - /var/tmp/package-build/{{ package.name }}/usr/share/{{ package.name }}
+
+- name: Write the control file of the placeholder package
+  ansible.builtin.copy:
+    content: |
+      Package: {{ package.name }}
+      Version: {{ package.version }}
+      Architecture: all
+      Maintainer: AUTHOR_NAME <ADDRESS@example.invalid>
+      Description: PLACEHOLDER_DESCRIPTION
+    dest: /var/tmp/package-build/{{ package.name }}/DEBIAN/control
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Write the payload of the placeholder package
+  ansible.builtin.copy:
+    content: |
+      PLACEHOLDER_PACKAGE_PAYLOAD
+    dest: /var/tmp/package-build/{{ package.name }}/usr/share/{{ package.name }}/PLACEHOLDER
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Build the placeholder package file
+  ansible.builtin.command:
+    argv:
+      - dpkg-deb
+      - -Znone
+      - --root-owner-group
+      - --build
+      - /var/tmp/package-build/{{ package.name }}
+      - '{{ scenario_package_dir }}/{{ package.name }}_{{ package.version }}_all.deb'
+    creates: '{{ scenario_package_dir }}/{{ package.name }}_{{ package.version }}_all.deb'

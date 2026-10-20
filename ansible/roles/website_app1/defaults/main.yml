@@ -1,0 +1,17 @@
+---
+# None of these is a secret, and none is a default that carries one (ANS-16).
+# The four SMTP values have no default: the play that includes the role
+# supplies them at run time (see meta/argument_specs.yml).
+website_app1_project_dir: /opt/branchleft/website
+website_app1_env_file: /etc/branchleft/website.env
+website_app1_env_dir: /etc/branchleft
+# The private address the stack's app port is bound to (files/compose.yml). The
+# smoke test reaches the app there, from the host itself.
+website_app1_private_address: 10.20.1.100
+# Empty: no deploy, no smoke test. A digest-pinned image runs the host's
+# branchleft-deploy program and the smoke test after it.
+website_app1_image: ''
+website_app1_smoke_paths:
+  - /
+  - /about
+  - /contact

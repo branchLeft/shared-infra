@@ -1,0 +1,42 @@
+---
+argument_specs:
+  main:
+    short_description: Install node_exporter and the SNDS reputation collector with its timer
+    description: >-
+      Downloads the pinned node_exporter release and refuses it unless its sha256 digest
+      matches, creates the exporter's system user, writes the environment file with the
+      host's own estate-subnet address and installs the unit that binds to it, then enables
+      and starts the service. It refuses to install when the host has no estate-subnet
+      address or a mount is at or above the stop percentage. It also installs the SNDS
+      collector program and its service and timer, and enables and starts the timer. None
+      of the variables is a secret; the collector's access URL is read from a file the role
+      never writes.
+    author: branchLeft
+    options:
+      exporters_and_collectors_node_exporter_version:
+        type: str
+        description: Version of node_exporter to install, as MAJOR.MINOR.PATCH.
+        default: '1.12.1'
+      exporters_and_collectors_node_exporter_sha256:
+        type: str
+        description: >-
+          The sha256 digest of the release tarball, written as sha256: and 64 lower-case hex digits.
+          The role refuses any download with another digest.
+        default: 'sha256:b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63'
+      exporters_and_collectors_node_exporter_download_url:
+        type: str
+        description: URL of the release tarball. It must be the release named by the version above.
+        default: >-
+          https://github.com/prometheus/node_exporter/releases/download/v1.12.1/node_exporter-1.12.1.linux-amd64.tar.gz
+      exporters_and_collectors_node_exporter_subnet_prefix:
+        type: str
+        description: >-
+          The estate subnet, as a prefix ending in a dot. The exporter binds the first address of
+          the host that starts with it, and the role refuses to install when there is none.
+        default: '10.20.1.'
+      exporters_and_collectors_disk_stop_percent:
+        type: int
+        description: >-
+          A real mount of the host at or above this percentage full stops the install, as the db1
+          runbook's first section does. Between 1 and 100.
+        default: 70

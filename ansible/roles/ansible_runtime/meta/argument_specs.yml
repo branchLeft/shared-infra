@@ -1,0 +1,24 @@
+---
+argument_specs:
+  main:
+    short_description: Install the pinned Ansible toolchain for the host to run its own playbook
+    description: >-
+      Builds a root-owned virtual environment from the repository's hash-locked requirements file,
+      one environment per lock, and points the ansible-playbook link at it.
+    author: AUTHOR_NAME
+    options:
+      ansible_runtime_requirements_src:
+        type: path
+        required: true
+        description: >-
+          Path, on the machine that runs the role, of the hash-locked requirements file (the
+          repository's ansible/requirements.txt). The file is copied to the host and installed with
+          hash checking required.
+      ansible_runtime_root:
+        type: path
+        description: Absolute directory that holds the virtual environments. Root owns it.
+        default: /opt/ansible-runtime
+      ansible_runtime_link:
+        type: path
+        description: Absolute path of the ansible-playbook link the host's trigger program runs.
+        default: /usr/local/bin/ansible-playbook

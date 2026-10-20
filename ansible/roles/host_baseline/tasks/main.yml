@@ -1,0 +1,27 @@
+---
+# The three halves run in the order the provisioning scripts they replace ran
+# in: sshd, then updates and fail2ban, then Docker. The update half comes first
+# on purpose, because it adds Docker's origin to the unattended-upgrades list
+# before Docker is installed (see _docker.yml).
+
+# Read once, before any half installs anything: each half installs a package
+# only when the host does not have it, which is what the scripts did with
+# dpkg -s, and refreshes the apt index only then. A host that has everything
+# makes no apt call, so the apply and the nightly drift run need no network.
+- name: Read which packages are installed
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Harden sshd
+  ansible.builtin.import_tasks: _ssh.yml
+
+- name: Install unattended upgrades and fail2ban
+  ansible.builtin.import_tasks: _updates_fail2ban.yml
+
+- name: Install Docker CE
+  ansible.builtin.import_tasks: _docker.yml
+
+# fail2ban's reload is queued by its configuration file and runs here, after
+# every half, so the role returns with the service reading what is on disk.
+- name: Run the handlers still queued
+  ansible.builtin.meta: flush_handlers

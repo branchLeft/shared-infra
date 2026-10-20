@@ -1,0 +1,88 @@
+---
+# Keeps SSH locked to key-only auth. The drop-in is named 01-, not 99-, and the
+# reason is the opposite of the usual convention: OpenSSH takes the first value
+# it obtains for a keyword, and the Include of /etc/ssh/sshd_config.d/*.conf
+# expands in glob order, so the lowest-sorting drop-in wins. A 99- file would
+# lose to every sibling, including the 50-cloud-init.conf that cloud-init writes
+# whenever ssh_pwauth is set, which would restore password authentication while
+# a comparison of this one file kept reporting it up to date.
+#
+# Debian's stock sshd_config sets PermitRootLogin without-password but leaves
+# the global PasswordAuthentication at its compiled-in default of yes. This
+# drop-in closes that gap for every account. Root stays key-reachable on
+# purpose: it is the provisioning identity, and the other recovery path is the
+# Hetzner console.
+
+# sshd -t resolves the configuration exactly as the daemon would, without
+# restarting anything. It runs in check mode too because it reads and changes
+# nothing. It runs first, so that a configuration another file has already
+# broken stops the role before the drop-in is rewritten: otherwise the file
+# would be in place on the next run, no change would queue a reload, and sshd
+# would keep running with the old settings.
+- name: Refuse to go on while the sshd configuration is already invalid
+  ansible.builtin.command:
+    argv: [/usr/sbin/sshd, -t, -f, /etc/ssh/sshd_config]
+  changed_when: false
+  check_mode: false
+
+# validate checks the new file on its own before it replaces anything, so a
+# file sshd cannot read never lands on the host.
+- name: Install the key-only sshd drop-in
+  ansible.builtin.copy:
+    src: 01-branchleft-hardening.conf
+    dest: /etc/ssh/sshd_config.d/01-branchleft-hardening.conf
+    owner: root
+    group: root
+    mode: '0644'
+    validate: /usr/sbin/sshd -t -f %s
+  register: host_baseline_sshd_dropin
+  notify: Reload sshd
+
+- name: Refuse to reload sshd when its configuration is invalid
+  ansible.builtin.command:
+    argv: [/usr/sbin/sshd, -t, -f, /etc/ssh/sshd_config]
+  changed_when: false
+  check_mode: false
+
+# The reload is queued by the drop-in and runs here, after the two checks
+# above and before the read-back below. A failed check stops the play before
+# this line, so the handler never runs.
+- name: Reload sshd now that its configuration has been checked
+  ansible.builtin.meta: flush_handlers
+
+# The file being present is not the property that matters; the resolved value
+# is. sshd -T prints what the configuration evaluates to across every drop-in,
+# so a sibling that outranks this one is caught here rather than by an operator
+# wondering why password logins still work.
+- name: Read the sshd settings the configuration resolves to
+  ansible.builtin.command:
+    argv: [/usr/sbin/sshd, -T]
+  register: host_baseline_sshd_resolved
+  changed_when: false
+  check_mode: false
+
+# Skipped in check mode when the drop-in would change (ANS-10): check mode
+# writes nothing, so on a host the role has not reached yet the resolved
+# settings are the unhardened ones and the assertion would fail for the reason
+# the apply fixes. On a host that already has the file it runs in check mode too.
+# permitrootlogin is compared through a replace: prohibit-password and
+# without-password are the same setting to sshd, and sshd -T prints whichever
+# spelling it parsed (the deprecated one on Debian 13), so a literal compare
+# would call that a competing drop-in when nothing competes.
+- name: Refuse a resolved sshd setting that is not the hardened one
+  ansible.builtin.assert:
+    that:
+      - host_baseline_sshd_got == item.value
+    quiet: true
+    fail_msg: >-
+      effective {{ item.key }} is '{{ host_baseline_sshd_got | ansible.builtin.default('unset', true) }}', expected '{{ item.value }}':
+      another drop-in in /etc/ssh/sshd_config.d/ outranks /etc/ssh/sshd_config.d/01-branchleft-hardening.conf
+  vars:
+    host_baseline_sshd_got: >-
+      {{ host_baseline_sshd_resolved.stdout_lines | ansible.builtin.select('match', '^' ~ item.key ~ ' ') | ansible.builtin.first
+      | ansible.builtin.default(item.key ~ ' ') | ansible.builtin.split(' ', 1) | ansible.builtin.last
+      | ansible.builtin.replace('without-password', 'prohibit-password') }}
+  loop: '{{ host_baseline_sshd_expected | ansible.builtin.dict2items }}'
+  loop_control:
+    label: '{{ item.key }}'
+  when: not ansible_check_mode or not host_baseline_sshd_dropin.changed

@@ -1,0 +1,3 @@
+---
+# The role has no caller-set option. Its paths and file lists are in vars/main.yml
+# because the unit files fix them; see that file.
