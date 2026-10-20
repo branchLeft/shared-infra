@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  standalone: true
+  author: branchLeft
+  # Molecule derives a fully qualified role name from the namespace, or from
+  # the author when there is none, and refuses an upper-case author.
+  namespace: branchleft
+  description: Installs the node_exporter binary and unit on a host, and the SNDS reputation collector and its timer.
+  license: PolyForm-Shield-1.0.0
+  min_ansible_version: '2.21.5'

@@ -1,0 +1,63 @@
+---
+# The inputs are refused before any task changes the host. A refusal names the rule,
+# never the value it refused.
+- name: Refuse an input that is not in the shape the role takes
+  ansible.builtin.assert:
+    that:
+      - exporters_and_collectors_node_exporter_version is match('^[0-9]+[.][0-9]+[.][0-9]+\Z')
+      - exporters_and_collectors_node_exporter_sha256 is match('^sha256:[0-9a-f]{64}\Z')
+      - exporters_and_collectors_node_exporter_subnet_prefix is match('^([0-9]{1,3}[.]){1,3}\Z')
+      - exporters_and_collectors_disk_stop_percent | int > 0
+      - exporters_and_collectors_disk_stop_percent | int <= 100
+    fail_msg: >-
+      exporters_and_collectors refused its input (rule: shape): a version, a sha256 digest,
+      an address prefix ending in a dot, or a percentage between 1 and 100.
+    quiet: true
+
+# The node exporter's private address is taken from the facts the play gathers, so
+# the address is the one the host holds in the estate subnet, and not a public one.
+- name: Find the address of this host in the estate subnet
+  ansible.builtin.set_fact:
+    exporters_and_collectors_private_address: >-
+      {{ ansible_all_ipv4_addresses | default([])
+         | select('match', '^' ~ (exporters_and_collectors_node_exporter_subnet_prefix | regex_escape))
+         | list | first | default('') }}
+
+- name: Refuse to install when the host has no address in the estate subnet
+  ansible.builtin.assert:
+    that:
+      - exporters_and_collectors_private_address | length > 0
+    fail_msg: >-
+      exporters_and_collectors refused to install (rule: private address): this host holds no
+      address in the estate subnet, so node_exporter would bind a public interface.
+    quiet: true
+
+# The db1 runbook's first section, as a check: a mount at or above the stop percentage
+# means the install waits. Use is taken from the size and the space available, as
+# Ansible reports them; df's own figure can differ by the reserved blocks of a volume.
+- name: Read the real mounts of the host that the disk check covers
+  ansible.builtin.set_fact:
+    exporters_and_collectors_disk_mounts: >-
+      {{ ansible_mounts | default([])
+         | rejectattr('fstype', 'in', exporters_and_collectors_disk_excluded_fstypes)
+         | selectattr('size_total', 'gt', 0) | list }}
+
+- name: Refuse to install when a mount of the host is at or above the stop percentage
+  ansible.builtin.assert:
+    that:
+      - >-
+        ((item.size_total - item.size_available) * 100 / item.size_total) | round(0, 'ceil') | int
+        < exporters_and_collectors_disk_stop_percent | int
+    fail_msg: >-
+      exporters_and_collectors refused to install (rule: disk): a mount of this host is at or above
+      the stop percentage. Free or grow the volume, then run the role again.
+    quiet: true
+  loop: '{{ exporters_and_collectors_disk_mounts }}'
+  loop_control:
+    label: '{{ item.mount }}'
+
+- name: Install the node_exporter exporter
+  ansible.builtin.include_tasks: _node_exporter.yml
+
+- name: Install the SNDS collector and its timer
+  ansible.builtin.include_tasks: _snds_collector.yml

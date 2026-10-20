@@ -1,0 +1,3 @@
+---
+ansible_runtime_root: /opt/ansible-runtime
+ansible_runtime_link: /usr/local/bin/ansible-playbook

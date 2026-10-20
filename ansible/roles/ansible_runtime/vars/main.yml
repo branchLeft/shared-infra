@@ -1,0 +1,13 @@
+---
+# Not part of the interface: role vars outrank inventory vars, so a caller cannot
+# change these. The environment's directory is named by a fingerprint of the lock
+# text, so a bumped lock builds a new environment beside the old one and the
+# running ansible-playbook never has its own packages replaced under it.
+ansible_runtime_lock_text: "{{ lookup('ansible.builtin.file', ansible_runtime_requirements_src) }}"
+ansible_runtime_lock_fingerprint: "{{ ansible_runtime_lock_text | ansible.builtin.hash('sha256') | truncate(16, True, '') }}"
+ansible_runtime_venv: '{{ ansible_runtime_root }}/venv-{{ ansible_runtime_lock_fingerprint }}'
+ansible_runtime_lock_copy: '{{ ansible_runtime_root }}/requirements-{{ ansible_runtime_lock_fingerprint }}.txt'
+ansible_runtime_done_marker: '{{ ansible_runtime_venv }}/.installed-from-lock'
+ansible_runtime_packages:
+  - python3
+  - python3-venv

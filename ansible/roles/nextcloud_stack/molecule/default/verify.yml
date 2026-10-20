@@ -1,0 +1,147 @@
+---
+# What must be on the host is read from the repository, not from the role: the
+# Compose file and the drop-in are compared byte for byte with their sources,
+# read straight from the repository (not through the role's link), so a copy
+# in the role that differs from its source fails here.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_repo: '{{ playbook_dir }}/../../../../..'
+    verify_stack_source: '{{ verify_repo }}/hetzner/nextcloud1/stack'
+    verify_dropin_source: '{{ verify_repo }}/hetzner/nextcloud1/systemd/nextcloud1.override.conf'
+    verify_dir: /opt/branchleft/nextcloud1
+    verify_env_file: /etc/branchleft/nextcloud1.env
+    verify_dropin_dir: /etc/systemd/system/branchleft-compose@nextcloud1.service.d
+  tasks:
+    - name: Read the project directory on the instance
+      ansible.builtin.stat:
+        path: '{{ verify_dir }}'
+      register: nextcloud_stack_verify_dir
+
+    - name: Assert the project directory is root-owned with mode 0755
+      ansible.builtin.assert:
+        that:
+          - nextcloud_stack_verify_dir.stat.isdir
+          - nextcloud_stack_verify_dir.stat.pw_name == 'root'
+          - nextcloud_stack_verify_dir.stat.mode == '0755'
+        quiet: true
+        fail_msg: '{{ verify_dir }} is not a root-owned directory with mode 0755.'
+
+    - name: Read the Compose file on the instance
+      ansible.builtin.stat:
+        path: '{{ verify_dir }}/compose.yml'
+        checksum_algorithm: sha256
+      register: nextcloud_stack_verify_compose
+
+    - name: Read the Compose file's source in the repository, on the machine that runs the test
+      ansible.builtin.stat:
+        path: '{{ verify_stack_source }}/compose.yml'
+        checksum_algorithm: sha256
+      register: nextcloud_stack_verify_compose_src
+      delegate_to: localhost
+
+    - name: Assert the Compose file is byte for byte its source, root-owned with mode 0644
+      ansible.builtin.assert:
+        that:
+          - nextcloud_stack_verify_compose.stat.isreg
+          - nextcloud_stack_verify_compose.stat.pw_name == 'root'
+          - nextcloud_stack_verify_compose.stat.mode == '0644'
+          - nextcloud_stack_verify_compose.stat.checksum == nextcloud_stack_verify_compose_src.stat.checksum
+        quiet: true
+        fail_msg: '{{ verify_dir }}/compose.yml is missing, is not root-owned with mode 0644, or differs from its source.'
+
+    # Every service pins its image by tag and digest; the unit pulls exactly
+    # what the file names, so the source is parsed here.
+    - name: Assert every image in the Compose file is pinned by digest
+      ansible.builtin.assert:
+        that:
+          - verify_images | ansible.builtin.length == 3
+          - verify_images | ansible.builtin.reject('ansible.builtin.match', verify_image_pattern) | ansible.builtin.list | ansible.builtin.length == 0
+        quiet: true
+        fail_msg: 'Every service needs an image ending in @sha256: and 64 lower-case hex digits. Seen: {{ verify_images }}'
+      vars:
+        verify_compose: "{{ lookup('ansible.builtin.file', verify_stack_source ~ '/compose.yml') | ansible.builtin.from_yaml }}"
+        verify_images: >-
+          {{ verify_compose.services.values() | ansible.builtin.selectattr('image', 'ansible.builtin.defined')
+          | ansible.builtin.map(attribute='image') | ansible.builtin.list }}
+        verify_image_pattern: '^[^\s@]+@sha256:[0-9a-f]{64}\Z'
+
+    - name: Read the env file on the instance
+      ansible.builtin.stat:
+        path: '{{ verify_env_file }}'
+      register: nextcloud_stack_verify_env
+
+    - name: Assert the env file is root-owned with mode 0600
+      ansible.builtin.assert:
+        that:
+          - nextcloud_stack_verify_env.stat.isreg
+          - nextcloud_stack_verify_env.stat.pw_name == 'root'
+          - nextcloud_stack_verify_env.stat.mode == '0600'
+        quiet: true
+        fail_msg: '{{ verify_env_file }} is missing, or is not a root-owned file with mode 0600.'
+
+    # Names only, never values: the content is read with no_log.
+    - name: Read the env file's names and check that each secret has a value
+      ansible.builtin.slurp:
+        src: '{{ verify_env_file }}'
+      register: nextcloud_stack_verify_env_content
+      no_log: true
+
+    - name: Assert the env file holds a non-empty value for each of the three secrets
+      ansible.builtin.assert:
+        that:
+          - nextcloud_stack_verify_env_content.content | b64decode is search('(?m)^NEXTCLOUD_DB_PASSWORD=.+$')
+          - nextcloud_stack_verify_env_content.content | b64decode is search('(?m)^NEXTCLOUD_REDIS_PASSWORD=.+$')
+          - nextcloud_stack_verify_env_content.content | b64decode is search('(?m)^NEXTCLOUD_ADMIN_PASSWORD=.+$')
+        quiet: true
+        fail_msg: 'The env file does not hold a value for each of the three secrets.'
+      no_log: true
+
+    - name: Read the drop-in directory and the drop-in on the instance
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - '{{ verify_dropin_dir }}'
+        - '{{ verify_dropin_dir }}/override.conf'
+      register: nextcloud_stack_verify_dropin
+
+    - name: Read the drop-in's source in the repository, on the machine that runs the test
+      ansible.builtin.stat:
+        path: '{{ verify_dropin_source }}'
+        checksum_algorithm: sha256
+      register: nextcloud_stack_verify_dropin_src
+      delegate_to: localhost
+
+    - name: Assert the drop-in is where the unit template looks for it, byte for byte its source
+      ansible.builtin.assert:
+        that:
+          - nextcloud_stack_verify_dropin.results[0].stat.isdir
+          - nextcloud_stack_verify_dropin.results[0].stat.mode == '0755'
+          - nextcloud_stack_verify_dropin.results[1].stat.isreg
+          - nextcloud_stack_verify_dropin.results[1].stat.pw_name == 'root'
+          - nextcloud_stack_verify_dropin.results[1].stat.mode == '0644'
+          - nextcloud_stack_verify_dropin.results[1].stat.checksum == nextcloud_stack_verify_dropin_src.stat.checksum
+        quiet: true
+        fail_msg: 'The drop-in is not at {{ verify_dropin_dir }}/override.conf as expected, or differs from {{ verify_dropin_source }}.'
+
+    - name: Ask systemd for the instance
+      ansible.builtin.systemd_service:
+        name: branchleft-compose@nextcloud1.service
+      register: nextcloud_stack_verify_unit
+
+    # MemoryMax and CPUWeight are the drop-in's values (512M and 100); the
+    # test's placeholder unit has no value of its own for either.
+    - name: Assert systemd holds the drop-in and an active instance
+      ansible.builtin.assert:
+        that:
+          - verify_dropin_dir ~ '/override.conf' in nextcloud_stack_verify_unit.status.DropInPaths
+          - nextcloud_stack_verify_unit.status.ActiveState == 'active'
+          - nextcloud_stack_verify_unit.status.MemoryMax == '536870912'
+          - nextcloud_stack_verify_unit.status.CPUWeight == '100'
+        quiet: true
+        fail_msg: >-
+          systemd does not hold the nextcloud1 drop-in and an active instance: drop-ins
+          {{ nextcloud_stack_verify_unit.status.DropInPaths }}, state {{ nextcloud_stack_verify_unit.status.ActiveState }},
+          MemoryMax {{ nextcloud_stack_verify_unit.status.MemoryMax }}, CPUWeight {{ nextcloud_stack_verify_unit.status.CPUWeight }}.

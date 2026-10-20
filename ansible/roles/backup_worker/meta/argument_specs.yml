@@ -1,0 +1,131 @@
+---
+argument_specs:
+  main:
+    short_description: Install the per-tenant backup worker and hold its nightly timer to a variable
+    description: >-
+      Stages a pinned release of the backup worker's programs (each downloaded
+      from the branchLeft/ghost-platform repository and held to a sha256),
+      creates the service account, writes the environment, tenants and
+      recipients files with their owner and mode, installs the two systemd
+      units and the database CA, and keeps the nightly timer disabled unless
+      backup_worker_timer_enabled is true. A timer that is on stays on unless
+      backup_worker_timer_may_disable is true. It does not create the database
+      account or its grants, make the age keypair, start a run or install
+      node_exporter. Every private value is a required input.
+    author: branchLeft
+    options:
+      backup_worker_db_host:
+        type: str
+        required: true
+        description: >-
+          Address of the database host the worker dumps from. PRIVATE: from the
+          private inventory, never committed to this repository.
+      backup_worker_db_user:
+        type: str
+        required: true
+        description: >-
+          Name of the database account the worker connects as. PRIVATE: from the
+          private inventory. The role does not create the account.
+      backup_worker_db_password:
+        type: str
+        required: true
+        no_log: true
+        description: >-
+          SECRET. The database account's password, supplied at run time. Letters,
+          digits and the symbols / + = _ . - only.
+      backup_worker_db_ca_pem:
+        type: str
+        required: true
+        description: >-
+          The database host's CA certificate as PEM text (public data), written
+          to the CA file the worker verifies the connection with. PRIVATE
+          input: from the private inventory.
+      backup_worker_bucket:
+        type: str
+        required: true
+        description: Name of the object-storage bucket that receives the encrypted dumps. PRIVATE.
+      backup_worker_s3_endpoint:
+        type: str
+        required: true
+        description: Host name of the object-storage endpoint, without a scheme. PRIVATE.
+      backup_worker_s3_region:
+        type: str
+        required: true
+        description: Region name of the object-storage endpoint. PRIVATE.
+      backup_worker_s3_access_key_id:
+        type: str
+        required: true
+        no_log: true
+        description: SECRET. The put-only worker key's id, supplied at run time.
+      backup_worker_s3_secret_access_key:
+        type: str
+        required: true
+        no_log: true
+        description: SECRET. The put-only worker key's secret, supplied at run time.
+      backup_worker_tenants:
+        type: list
+        elements: dict
+        required: true
+        description: >-
+          The tenants to back up, one entry each. PRIVATE: slugs come from the
+          private inventory. The recipient is the PUBLIC age recipient of that
+          tenant's own keypair (the private half never reaches the host). Two
+          tenants never share a recipient.
+        options:
+          slug:
+            type: str
+            required: true
+            description: The tenant's slug.
+          recipient:
+            type: str
+            required: true
+            description: The tenant's public age recipient, a line starting age1.
+      backup_worker_timer_enabled:
+        type: bool
+        default: false
+        description: >-
+          Enable and start the nightly timer. False leaves the timer as it is
+          on the host unless backup_worker_timer_may_disable is true. True is a
+          production apply and goes through the gated workflow; it first
+          requires the installer's own readiness check to pass.
+      backup_worker_timer_may_disable:
+        type: bool
+        default: false
+        description: >-
+          With backup_worker_timer_enabled false, stop and disable the nightly
+          timer when it is on. False never changes a timer the host already
+          has on, so a run with the defaults cannot stop production backups.
+      backup_worker_install_prereqs:
+        type: bool
+        default: true
+        description: >-
+          Run the pinned prerequisite installer when age or the mysqldump 8.0
+          client is missing.
+      backup_worker_source_sha:
+        type: str
+        default: 5e52f78427cab104438057164e4baa16b329875c
+        description: >-
+          Full commit of branchLeft/ghost-platform the release is downloaded
+          from. It names the release directory. Change it together with the
+          checksums in backup_worker_release_files.
+      backup_worker_source_base_url:
+        type: str
+        default: https://raw.githubusercontent.com/branchLeft/ghost-platform/5e52f78427cab104438057164e4baa16b329875c
+        description: >-
+          URL each release file is downloaded from, as base/path. The default is
+          the raw URL at the pinned commit. A test points it at a file:// copy.
+      backup_worker_release_files:
+        type: list
+        elements: dict
+        description: >-
+          Every file of the release with the sha256 it must have. Must hold the
+          installer, the prerequisite installer and the two unit files.
+        options:
+          path:
+            type: str
+            required: true
+            description: Path relative to the release root.
+          sha256:
+            type: str
+            required: true
+            description: Lower-case hex sha256 of the file at the pinned commit.

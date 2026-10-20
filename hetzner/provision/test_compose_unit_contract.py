@@ -107,6 +107,13 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "only slug this repository names; the set is open, and a slug granted "
         "a deploy slot on a host appears in no file here."
     ),
+    "backup-worker": (
+        "branchLeft/ghost-platform commits the backup worker's programs and "
+        "systemd units, and no Compose file for it. This repository names it "
+        "only in the paths of the backup_worker Ansible role. It is a systemd "
+        "unit, not an instance of the Compose template, and nothing here sees "
+        "whether that repository declares a health signal for it."
+    ),
 }
 
 # The stack-name rule the deploy wrapper actually applies, reused rather than

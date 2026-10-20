@@ -1,0 +1,99 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    ansible_runtime_verify_lock: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../../requirements.txt') }}"
+    ansible_runtime_verify_fingerprint: "{{ ansible_runtime_verify_lock | ansible.builtin.hash('sha256') | truncate(16, True, '') }}"
+    ansible_runtime_verify_core: "{{ ansible_runtime_verify_lock | ansible.builtin.regex_search('ansible-core==([0-9.]+)', '\\1') | first }}"
+  tasks:
+    - name: Look at the directory that holds the environments
+      ansible.builtin.stat:
+        path: /opt/ansible-runtime
+      register: ansible_runtime_verify_root
+
+    - name: Assert the directory is root-owned and not writable by others
+      ansible.builtin.assert:
+        that:
+          - ansible_runtime_verify_root.stat.isdir
+          - ansible_runtime_verify_root.stat.pw_name == 'root'
+          - ansible_runtime_verify_root.stat.mode == '0755'
+        success_msg: The environments directory is root-owned with mode 0755.
+
+    - name: Look at the ansible-playbook link
+      ansible.builtin.stat:
+        path: /usr/local/bin/ansible-playbook
+      register: ansible_runtime_verify_link
+
+    - name: Assert the link points into the environment built from this lock
+      ansible.builtin.assert:
+        that:
+          - ansible_runtime_verify_link.stat.islnk
+          - ansible_runtime_verify_link.stat.lnk_source == '/opt/ansible-runtime/venv-' ~ ansible_runtime_verify_fingerprint ~ '/bin/ansible-playbook'
+        success_msg: The link names the environment of this lock.
+
+    - name: Run ansible-playbook through the link
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/ansible-playbook
+          - --version
+      register: ansible_runtime_verify_version
+      changed_when: false
+
+    - name: Assert it is the pinned ansible-core
+      ansible.builtin.assert:
+        that:
+          - "('core ' ~ ansible_runtime_verify_core) in ansible_runtime_verify_version.stdout"
+        success_msg: The installed ansible-core is the pinned one.
+
+    - name: Check that the installed packages agree with one another
+      ansible.builtin.command:
+        argv:
+          - /opt/ansible-runtime/venv-{{ ansible_runtime_verify_fingerprint }}/bin/pip
+          - check
+      register: ansible_runtime_verify_pip_check
+      changed_when: false
+
+    - name: Assert pip check is clean
+      ansible.builtin.assert:
+        that:
+          - ansible_runtime_verify_pip_check.rc == 0
+        success_msg: The environment has no broken requirement.
+
+    - name: Find anything under the directory that is not root-owned or that others can write
+      ansible.builtin.command:
+        argv:
+          - find
+          - /opt/ansible-runtime
+          - '!'
+          - -type
+          - l
+          - '('
+          - '!'
+          - -user
+          - root
+          - -o
+          - -perm
+          - /022
+          - ')'
+      register: ansible_runtime_verify_loose
+      changed_when: false
+
+    - name: Assert nothing there lets another account change what runs as root
+      ansible.builtin.assert:
+        that:
+          - ansible_runtime_verify_loose.stdout == ''
+        success_msg: Every file under the environments directory is root-owned and not writable by others.
+        fail_msg: 'Loose files: {{ ansible_runtime_verify_loose.stdout }}'
+
+    - name: Refuse a lock with a wrong hash, and a lock with no hash
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      vars:
+        ansible_runtime_verify_case: '{{ item }}'
+      loop:
+        - name: wrong-hash
+          file: fixture_wrong_hash.txt
+          text: DO NOT MATCH THE HASHES
+        - name: no-hash
+          file: fixture_no_hash.txt
+          text: Hashes are required in --require-hashes mode
