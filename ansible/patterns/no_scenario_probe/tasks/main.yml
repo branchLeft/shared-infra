@@ -1,0 +1,4 @@
+---
+- name: Probe with no Molecule scenario
+  ansible.builtin.debug:
+    msg: PROBE
