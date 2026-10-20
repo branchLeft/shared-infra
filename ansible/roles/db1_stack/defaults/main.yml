@@ -1,0 +1,31 @@
+---
+# No secret is ever a default (ANS-16): the exporter password has no entry in
+# this file. A test fails if this file holds a variable the spec does not
+# declare or any value that looks like a password.
+
+# The packages apt installs from the index. The two mysql-community packages
+# come from the repository the role delivers; age comes from Debian. They are
+# installed after the local package file below, because the server-core package
+# depends on libaio1.
+db1_stack_apt_packages:
+  - age
+  - mysql-community-client
+  - mysql-community-server-core
+
+# The pinned downloads. Debian 13 ships libaio1t64, which does not provide the
+# old name libaio1 that mysql-community-server-core depends on, so the one
+# package file is fetched from the Debian pool and installed by path. A package
+# file in the pool never changes once published, so the digest stays correct.
+# To move this pin: fetch the new file name from
+# https://deb.debian.org/debian/pool/main/liba/libaio/, compute its sha256, and
+# change the file name in url, dest and debs together with the digest, in the
+# same change as the digest the test expects.
+db1_stack_downloads:
+  - url: https://deb.debian.org/debian/pool/main/liba/libaio/libaio1_0.3.113-4_amd64.deb
+    dest: /var/cache/db1-stack/libaio1_0.3.113-4_amd64.deb
+    checksum: sha256:d1476e4beab3d85f8a7d31de94c27472711ed3ef399ce70708e24b259426125b
+
+# The local package files apt installs by path. Each must be the dest of a
+# download above, never a URL.
+db1_stack_debs:
+  - /var/cache/db1-stack/libaio1_0.3.113-4_amd64.deb
