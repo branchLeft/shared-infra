@@ -98,10 +98,11 @@ path is the Hetzner console.
 
 ### One home for every file
 
-The content of each file is the content of the script heredoc it came from, byte
-for byte, so adopting the role on a host the scripts already set up reports no
-change. `files/docker.asc` is a link to `hetzner/provision/fixtures/docker-apt-key.asc`
-(relative), the file the key's tests already read, so there is one copy of the
+The content of each configuration file is the content of the script heredoc it
+came from, byte for byte, so adopting the role on a host the scripts already set
+up reports no change for them. The key file reports a change if the key Docker
+served to the script differs byte for byte from the pinned one. `files/docker.asc` is a link to
+`hetzner/provision/fixtures/docker-apt-key.asc` (relative), the file the key's tests already read, so there is one copy of the
 key. When the Docker script and its tests are retired, that file moves into this
 role's `files/` and the link is replaced by it.
 
@@ -193,7 +194,18 @@ Each row is one edit to the role, one harness run, and a restore with a clean
 tree afterwards. The harness run is the retrieval: make the row's edit and run it
 to see the message.
 
-SABOTAGE_TABLE_PLACEHOLDER
+| Edit to the role                                                            | Harness step that goes red | The message                                                                                                                                      |
+| --------------------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Remove the first `sshd -t` (before the drop-in)                             | `verify`                   | Expected the role to stop at the first check; it stopped at the check before the reload.                                                         |
+| Remove both `sshd -t` checks                                                | `verify`                   | Expected the role to stop at the first check; it stopped at "Read the sshd settings the configuration resolves to". Does not isolate the second. |
+| Name the drop-in `99-` instead of `01-`                                     | `converge`                 | effective passwordauthentication is 'yes', expected 'no': another drop-in outranks the role's file.                                              |
+| Remove the Docker key digest assertion                                      | `verify`                   | Expected the role to stop at the digest check; it stopped at "NOTHING: the role accepted it".                                                    |
+| Drop the `without-password` to `prohibit-password` mapping in the read-back | `converge`                 | effective permitrootlogin is 'without-password', expected 'prohibit-password'.                                                                   |
+| Remove `notify: Reload sshd` from the drop-in task                          | `verify`                   | ssh was not reloaded exactly once (0 times).                                                                                                     |
+| Break the quote in the unattended-upgrades origins file                     | `converge`                 | failed to validate: Syntax error: Malformed tag.                                                                                                 |
+| Remove the resolved-settings assertion                                      | `verify`                   | Expected the role to stop at the read-back; it stopped at "NOTHING: the role accepted it".                                                       |
+| Remove the architecture-name assertion                                      | `verify`                   | the role stopped at "Work out the architecture name apt uses" instead of the architecture check.                                                 |
+| Change one character of the pinned primary fingerprint in `vars/main.yml`   | `verify`                   | The key file does not hold exactly one key with the primary fingerprint ...EBFCD89.                                                              |
 
 Reviewed or asserted, but not proven by a sabotage run (a control with no row
 above is not shown to fail):
