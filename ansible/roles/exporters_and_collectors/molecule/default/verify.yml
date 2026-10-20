@@ -1,0 +1,86 @@
+---
+# What must be on the host is read from the repository's own files, not from the role,
+# so a copy that differs from its source fails here.
+- name: Verify the exporter and the collector
+  hosts: all
+  gather_facts: true
+  vars:
+    verify_repo: '{{ playbook_dir }}/../../../../..'
+    verify_node_unit_src: '{{ verify_repo }}/hetzner/provision/node-exporter.service'
+    verify_snds_program_src: '{{ verify_repo }}/hetzner/monitoring/stack/snds/collect_snds_metrics.py'
+    verify_snds_service_src: '{{ verify_repo }}/hetzner/monitoring/systemd/snds-collector.service'
+    verify_snds_timer_src: '{{ verify_repo }}/hetzner/monitoring/systemd/snds-collector.timer'
+  tasks:
+    - name: Read each installed file on the instance
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - /usr/local/bin/node_exporter
+        - /etc/default/node-exporter
+        - /etc/systemd/system/node_exporter.service
+        - /var/lib/branchleft/backup-worker-exporter
+        - /opt/branchleft/monitoring/snds/collect_snds_metrics.py
+        - /etc/systemd/system/snds-collector.service
+        - /etc/systemd/system/snds-collector.timer
+        - /var/lib/branchleft/snds-exporter
+      register: exporters_and_collectors_verify_installed
+
+    - name: Read each source file in the repository, on the machine that runs the test
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - '{{ verify_node_unit_src }}'
+        - '{{ verify_snds_program_src }}'
+        - '{{ verify_snds_service_src }}'
+        - '{{ verify_snds_timer_src }}'
+      register: exporters_and_collectors_verify_sources
+      delegate_to: localhost
+
+    - name: Assert the binary is root-owned with mode 0755, and the units and the program are byte for byte their sources
+      ansible.builtin.assert:
+        that:
+          - exporters_and_collectors_verify_installed.results[0].stat.exists
+          - exporters_and_collectors_verify_installed.results[0].stat.pw_name == 'root'
+          - exporters_and_collectors_verify_installed.results[0].stat.mode == '0755'
+          - exporters_and_collectors_verify_installed.results[2].stat.checksum == exporters_and_collectors_verify_sources.results[0].stat.checksum
+          - exporters_and_collectors_verify_installed.results[4].stat.checksum == exporters_and_collectors_verify_sources.results[1].stat.checksum
+          - exporters_and_collectors_verify_installed.results[5].stat.checksum == exporters_and_collectors_verify_sources.results[2].stat.checksum
+          - exporters_and_collectors_verify_installed.results[6].stat.checksum == exporters_and_collectors_verify_sources.results[3].stat.checksum
+          - exporters_and_collectors_verify_installed.results[4].stat.mode == '0644'
+          - exporters_and_collectors_verify_installed.results[5].stat.mode == '0644'
+          - exporters_and_collectors_verify_installed.results[6].stat.mode == '0644'
+        quiet: true
+        fail_msg: A binary, unit or program is missing, not owned as the role owns it, or differs from its source in the repository.
+
+    - name: Read the exporter's environment file
+      ansible.builtin.slurp:
+        src: /etc/default/node-exporter
+      register: exporters_and_collectors_verify_env
+
+    - name: Assert the exporter listens on the container's own bridge address, and its unit names the textfile directory
+      ansible.builtin.assert:
+        that:
+          - (exporters_and_collectors_verify_env.content | b64decode | trim) == 'NODE_EXPORTER_LISTEN_ADDRESS=' ~ (ansible_all_ipv4_addresses | select('match', '^172[.]') | first)
+          - "'--collector.textfile.directory=/var/lib/branchleft/backup-worker-exporter' in lookup('ansible.builtin.file', verify_node_unit_src)"
+        quiet: true
+        fail_msg: The exporter is not bound to the container's own address, or its unit does not name the textfile directory.
+
+    - name: Ask systemd for the exporter service and the SNDS timer
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
+      loop:
+        - node_exporter.service
+        - snds-collector.timer
+      register: exporters_and_collectors_verify_units
+
+    - name: Assert the exporter is active and enabled, and the SNDS timer is active and enabled
+      ansible.builtin.assert:
+        that:
+          - exporters_and_collectors_verify_units.results[0].status.ActiveState == 'active'
+          - exporters_and_collectors_verify_units.results[0].status.UnitFileState == 'enabled'
+          - exporters_and_collectors_verify_units.results[1].status.ActiveState == 'active'
+          - exporters_and_collectors_verify_units.results[1].status.UnitFileState == 'enabled'
+        quiet: true
+        fail_msg: The node_exporter service or the snds-collector timer is not active and enabled.

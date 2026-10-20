@@ -1,0 +1,19 @@
+---
+# The node_exporter release this role installs. The checksum is the one the
+# upstream release publishes for this tarball, copied from the installer the
+# role replaces; the role refuses any download that does not match it.
+exporters_and_collectors_node_exporter_version: '1.12.1'
+exporters_and_collectors_node_exporter_sha256: 'sha256:b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63'
+exporters_and_collectors_node_exporter_download_url: >-
+  https://github.com/prometheus/node_exporter/releases/download/v{{ exporters_and_collectors_node_exporter_version }}/node_exporter-{{ exporters_and_collectors_node_exporter_version }}.linux-amd64.tar.gz
+
+# The estate subnet the exporter must bind to. The role takes the first address
+# of this host in it, and refuses to install when there is none, so the exporter
+# never binds a public interface. Molecule overrides it, because a container has
+# no address in the estate subnet.
+exporters_and_collectors_node_exporter_subnet_prefix: '10.20.1.'
+
+# The role refuses to install when any real mount of the host is at or above this
+# percentage full, the STOP of the db1 runbook's first section. Molecule
+# overrides it, because the container's mounts belong to the test host.
+exporters_and_collectors_disk_stop_percent: 70
