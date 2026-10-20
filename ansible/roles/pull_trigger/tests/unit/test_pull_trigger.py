@@ -1339,7 +1339,8 @@ class EndToEndTests(unittest.TestCase):
         program = beside / "pull_trigger.py"
         shutil.copy(PROGRAM, program)
         flags = program.read_text(encoding="utf-8").split("\n", 1)[0].split()[1:]
-        # shutil, not fcntl: fcntl is built into some interpreters (Debian 13), so a planted fcntl.py never loads there.
+        # shutil, not fcntl: fcntl is built into some interpreters (Debian 13),
+        # so a planted fcntl.py never loads there.
         planted = {beside / "json.py": marks / "beside", elsewhere / "shutil.py": marks / "path"}
         for module, mark in planted.items():
             module.write_text(f"open({str(mark)!r}, 'w').close()\n", encoding="utf-8")
