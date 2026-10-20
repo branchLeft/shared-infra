@@ -1,0 +1,35 @@
+---
+# One group of files: the instance's copy and the role's source, read for each name.
+- name: Read each delivered file on the instance
+  ansible.builtin.stat:
+    path: '{{ verify_group.dir }}/{{ item }}'
+    checksum_algorithm: sha256
+  loop: '{{ verify_group.names }}'
+  register: db1_backup_timers_verify_installed
+  loop_control:
+    label: '{{ item }}'
+
+- name: Read each file's source in the role, on the machine that runs the test
+  ansible.builtin.stat:
+    path: '{{ verify_role_files }}/{{ verify_group.src }}/{{ item }}'
+    checksum_algorithm: sha256
+  loop: '{{ verify_group.names }}'
+  register: db1_backup_timers_verify_sources
+  delegate_to: localhost
+  loop_control:
+    label: '{{ item }}'
+
+- name: Assert each file is its source, root-owned, mode 0644
+  ansible.builtin.assert:
+    that:
+      - item.0.stat.exists
+      - item.0.stat.isreg
+      - item.0.stat.pw_name == 'root'
+      - item.0.stat.gr_name == 'root'
+      - item.0.stat.mode == '0644'
+      - item.0.stat.checksum == item.1.stat.checksum
+    quiet: true
+    fail_msg: '{{ item.0.item }} is missing, or is not its source as a root-owned file with mode 0644.'
+  loop: '{{ db1_backup_timers_verify_installed.results | zip(db1_backup_timers_verify_sources.results) | list }}'
+  loop_control:
+    label: '{{ item.0.item }}'
