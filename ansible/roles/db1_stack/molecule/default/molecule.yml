@@ -1,0 +1,79 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container. Molecule's interpolation
+# has no "required variable" form, so when the variable is unset the name
+# falls back to one the Docker daemon rejects: the run fails at create, loudly,
+# instead of sharing a container name with another run.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party test base with the same Debian release as the production
+    # hosts, trusted by digest. The digest is the pin; the tag is informational
+    # and moves weekly. It has Python, python3-apt, dpkg-deb and runuser in it.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # The image's own command starts systemd as the first process, and systemd
+    # needs a cgroup mount and a cgroup namespace mode that this scenario does
+    # not grant; on a host with cgroup v2 the container can exit at once. The
+    # role runs no service, so a plain sleep keeps the container alive so
+    # Ansible can run in it. There is no cgroup mount, no cgroupns_mode, no
+    # tmpfs, no privileged mode and no added capability.
+    command: sleep infinity
+    # The container has no network at all. The role reaches the network in two
+    # places, the repository index and the downloads, and the test must use
+    # neither: the downloads are local files and the index is never read. With no
+    # network, a task that did reach out would fail at once instead of passing on
+    # a developer machine and failing on a runner. The index refresh the role
+    # runs after a repository file changes fails offline, which the test relies
+    # on to prove that the refresh runs (and that it is the only thing that does).
+    network_mode: none
+    # The image declares /sys/fs/cgroup as a volume and this scenario does not
+    # bind-mount it, so Docker makes an anonymous volume for every container
+    # started from the image. Molecule's destroy keeps a container's volumes
+    # unless told otherwise, and an anonymous volume carries no label to find it
+    # by, so each run would leave one behind.
+    keep_volumes: false
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every Ansible run of this scenario appends its output to one log on the
+    # controller, and verify reads it. Verbosity 3 prints each task's result
+    # with the arguments it was given, so a task that handles the password and
+    # lacks no_log shows it in the log, and verify fails (ANS-16).
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '3'
+  inventory:
+    # Every password below is a throwaway SENTINEL made for this run by
+    # prepare.yml on the controller, in a file under scenario_sentinel_dir, and
+    # read back by the plays. Prepare seeds the generator with the label, so the
+    # same label gives the same value and a run's output can be searched for the
+    # values afterwards. No value is in this file.
+    group_vars:
+      all:
+        scenario_sentinel_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/throwaway-secrets"
+        scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
+        scenario_sentinel_labels:
+          - password
+          - password_rotated
+          - earlier_password
+          - probe_role
+          - probe_echoed
+          - digest_control
+        # Where the placeholder package files are built, and the file the
+        # download entry names. The packages carry the names of the real ones
+        # because the role installs those names; their content is a placeholder.
+        scenario_package_dir: /srv/db1-stack
+        scenario_libaio_name: libaio1_0.0.0-1_all.deb
+        scenario_libaio_path: /var/cache/db1-stack/libaio1_0.0.0-1_all.deb
+        scenario_cnf_path: /etc/branchleft/db-exporter.my.cnf
+verifier:
+  name: ansible

@@ -1,0 +1,70 @@
+---
+# The role runs as root and writes a password, so a link at the path must be
+# replaced and never followed: following it would write the password wherever
+# the link points.
+- name: Remove the exporter file
+  ansible.builtin.file:
+    path: '{{ scenario_cnf_path }}'
+    state: absent
+
+- name: Put a file where the link will point
+  ansible.builtin.copy:
+    content: PLACEHOLDER_UNTOUCHED
+    dest: /root/PLACEHOLDER_LINK_TARGET
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Put a link to that file where the exporter file goes
+  ansible.builtin.file:
+    src: /root/PLACEHOLDER_LINK_TARGET
+    dest: '{{ scenario_cnf_path }}'
+    state: link
+
+- name: Apply the role
+  ansible.builtin.include_tasks: apply.yml
+
+# The link was removed first, so the path held nothing and the closed empty file
+# was created by its own task. Without the removal the link to an existing file
+# makes that task change nothing, and the write would replace the link with a
+# file that took its mode from the link's target.
+- name: Assert the link was removed and a closed file created in its place
+  ansible.builtin.assert:
+    that:
+      - db1_stack_exporter_created is changed
+      - db1_stack_exporter_created is not skipped
+    fail_msg: The task that creates the exporter file empty and closed did not run, so the link was not removed before the write.
+    quiet: true
+
+# The exporter file is read without its checksum: a digest of a file that holds
+# the password must not reach the log (ANS-16).
+- name: Look at the path the link was at
+  ansible.builtin.stat:
+    path: '{{ scenario_cnf_path }}'
+    follow: false
+    get_checksum: false
+  register: db1_stack_path_link_now
+
+- name: Look at the file the link pointed to
+  ansible.builtin.stat:
+    path: /root/PLACEHOLDER_LINK_TARGET
+    follow: false
+  register: db1_stack_path_link_target
+
+- name: Assert the link was replaced by a plain file and its target is untouched
+  ansible.builtin.assert:
+    that:
+      - db1_stack_path_link_now.stat.isreg
+      - not db1_stack_path_link_now.stat.islnk
+      - db1_stack_path_link_target.stat.checksum == ('PLACEHOLDER_UNTOUCHED' | hash('sha1'))
+    quiet: true
+
+- name: Remove the file the link pointed to
+  ansible.builtin.file:
+    path: /root/PLACEHOLDER_LINK_TARGET
+    state: absent
+
+- name: Assert the exporter file is as declared
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'
