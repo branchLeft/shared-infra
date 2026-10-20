@@ -850,7 +850,8 @@ jobs:
   #     custom deployment protection rule of the reviewer App (integration
   #     id 5090756).
   #   - A newer push run cancels older runs of this workflow still `waiting`
-  #     for approval, from each plan job (first step). No `concurrency`
+  #     for approval, from each plan job (the step after its checkout, which
+  #     the script it runs needs on disk). No `concurrency`
   #     group does this job: a run paused for approval counts as in progress,
   #     so a workflow-level group would queue the newer run behind it (and
   #     cancel-in-progress would also cancel an apply that had started).
@@ -946,7 +947,7 @@ jobs:
     outputs:
       has_changes: ${{ steps.noop.outputs.has_changes }}
 
-    # `actions: write` is only for the first step, which cancels older runs
+    # `actions: write` is only for the cancel step, which cancels older runs
     # still waiting for approval; contents and packages repeat the workflow
     # default because a job-level block replaces it.
     permissions:
@@ -980,6 +981,11 @@ jobs:
       # a job in progress or an apply that started, and never a run paused on
       # a stack this push did not plan (that change would then never apply).
       # Hygiene, not a gate: a failure here must not block the plan.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Cancel older runs that are still waiting for approval
         continue-on-error: true
         working-directory: .
@@ -994,32 +1000,20 @@ jobs:
             jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
               '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
           for run in ${older}; do
-            verdict=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
-              jq -r --arg m "${PLANS_MAIL}" --arg n "${PLANS_NETWORK}" --arg e "${PLANS_ESTATE}" '
-                def planned:
-                  if startswith("Apply (mail,") then $m == "true"
-                  elif startswith("Apply (hetzner network,") then $n == "true"
-                  elif startswith("Apply (hetzner estate,") then $e == "true"
-                  else false end;
-                [.jobs[] | select(.name | startswith("Apply ("))] as $applies
-                | if ($applies | length) == 0 then "keep"
-                  elif ([.jobs[] | select(.status == "in_progress")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "completed" and .conclusion != "skipped")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status != "completed" and ((.name | planned) | not))] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "waiting")] | length) == 0 then "keep"
-                  else "cancel" end')
+            decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              python3 scripts/cancel-superseded-waiting.py \
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+              decision="keep: the jobs of run ${run} could not be read"
+            verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
               gh api --method POST "${api}/runs/${run}/cancel" --silent
-              echo "cancelled superseded run ${run}"
+              echo "cancelled superseded run ${run}: ${decision#*: }"
+              echo "- Cancelled run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "kept run ${run}"
+              echo "kept run ${run}: ${decision#*: }"
+              echo "- Kept run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1292,6 +1286,11 @@ jobs:
       # a job in progress or an apply that started, and never a run paused on
       # a stack this push did not plan (that change would then never apply).
       # Hygiene, not a gate: a failure here must not block the plan.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Cancel older runs that are still waiting for approval
         continue-on-error: true
         working-directory: .
@@ -1306,32 +1305,20 @@ jobs:
             jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
               '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
           for run in ${older}; do
-            verdict=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
-              jq -r --arg m "${PLANS_MAIL}" --arg n "${PLANS_NETWORK}" --arg e "${PLANS_ESTATE}" '
-                def planned:
-                  if startswith("Apply (mail,") then $m == "true"
-                  elif startswith("Apply (hetzner network,") then $n == "true"
-                  elif startswith("Apply (hetzner estate,") then $e == "true"
-                  else false end;
-                [.jobs[] | select(.name | startswith("Apply ("))] as $applies
-                | if ($applies | length) == 0 then "keep"
-                  elif ([.jobs[] | select(.status == "in_progress")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "completed" and .conclusion != "skipped")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status != "completed" and ((.name | planned) | not))] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "waiting")] | length) == 0 then "keep"
-                  else "cancel" end')
+            decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              python3 scripts/cancel-superseded-waiting.py \
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+              decision="keep: the jobs of run ${run} could not be read"
+            verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
               gh api --method POST "${api}/runs/${run}/cancel" --silent
-              echo "cancelled superseded run ${run}"
+              echo "cancelled superseded run ${run}: ${decision#*: }"
+              echo "- Cancelled run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "kept run ${run}"
+              echo "kept run ${run}: ${decision#*: }"
+              echo "- Kept run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1604,6 +1591,11 @@ jobs:
       # a job in progress or an apply that started, and never a run paused on
       # a stack this push did not plan (that change would then never apply).
       # Hygiene, not a gate: a failure here must not block the plan.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Cancel older runs that are still waiting for approval
         continue-on-error: true
         working-directory: .
@@ -1618,32 +1610,20 @@ jobs:
             jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
               '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
           for run in ${older}; do
-            verdict=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
-              jq -r --arg m "${PLANS_MAIL}" --arg n "${PLANS_NETWORK}" --arg e "${PLANS_ESTATE}" '
-                def planned:
-                  if startswith("Apply (mail,") then $m == "true"
-                  elif startswith("Apply (hetzner network,") then $n == "true"
-                  elif startswith("Apply (hetzner estate,") then $e == "true"
-                  else false end;
-                [.jobs[] | select(.name | startswith("Apply ("))] as $applies
-                | if ($applies | length) == 0 then "keep"
-                  elif ([.jobs[] | select(.status == "in_progress")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "completed" and .conclusion != "skipped")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status != "completed" and ((.name | planned) | not))] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "waiting")] | length) == 0 then "keep"
-                  else "cancel" end')
+            decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              python3 scripts/cancel-superseded-waiting.py \
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+              decision="keep: the jobs of run ${run} could not be read"
+            verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
               gh api --method POST "${api}/runs/${run}/cancel" --silent
-              echo "cancelled superseded run ${run}"
+              echo "cancelled superseded run ${run}: ${decision#*: }"
+              echo "- Cancelled run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "kept run ${run}"
+              echo "kept run ${run}: ${decision#*: }"
+              echo "- Kept run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

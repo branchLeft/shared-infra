@@ -1,0 +1,29 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml. The include carries no no_log: the role's own
+    # tasks must be the ones that keep the values out of the log, and a keyword
+    # here would hide a missing one.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.secrets_and_no_log
+      vars:
+        secrets_and_no_log_directory: '{{ scenario_directory }}'
+        secrets_and_no_log_owner: '{{ scenario_owner }}'
+        secrets_and_no_log_group: '{{ scenario_group }}'
+        secrets_and_no_log_env_name: '{{ scenario_env_name }}'
+        secrets_and_no_log_secrets: '{{ scenario_secrets }}'
+
+    # The control case for the log check in verify.yml: a task with no no_log
+    # that is given a known value. If the log did not show it, an empty result
+    # of the sentinel scan would mean nothing.
+    - name: Run a harmless command that is given a canary argument
+      ansible.builtin.command:
+        argv:
+          - /bin/true
+          - SCENARIO_LOG_CANARY
+      changed_when: false
+      check_mode: false
