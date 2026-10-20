@@ -1,0 +1,104 @@
+---
+# Requires state_file_value, state_env_value and state_host_value: the values
+# the three secrets must hold on the host. Nothing here prints a value: the
+# files are compared by checksum, and a comparison that fails names the file.
+# The environment file is exactly one line for each secret given as a value. A
+# backslash-n in a folded YAML scalar is not a line break, so the line break is
+# built from its code point.
+- name: Work out the text the environment file must hold
+  ansible.builtin.set_fact:
+    state_env_text: >-
+      {{ 'EXAMPLE_FILE_SECRET=' ~ state_file_value ~ ('%c' | format(10))
+      ~ 'EXAMPLE_ENV_SECRET=' ~ state_env_value ~ ('%c' | format(10)) }}
+  no_log: true
+
+# A key of a mapping written in YAML is not templated, so the environment file's
+# name goes in through a Jinja mapping.
+- name: Work out the checksum each file must have
+  ansible.builtin.set_fact:
+    state_checksums: >-
+      {{ {'EXAMPLE_FILE_SECRET': state_file_value | hash('sha1'),
+      'EXAMPLE_ENV_SECRET': state_env_value | hash('sha1'),
+      'EXAMPLE_HOST_SECRET': state_host_value | hash('sha1'),
+      scenario_env_name: state_env_text | hash('sha1')} }}
+  no_log: true
+
+- name: Read the secrets directory
+  ansible.builtin.stat:
+    path: '{{ scenario_directory }}'
+  register: state_directory
+
+# An earlier release left this directory open to everyone, so the mode proves
+# the role closed it. The owner and group are not root.
+- name: Assert the directory is closed to everyone but its owner
+  ansible.builtin.assert:
+    that:
+      - state_directory.stat.exists
+      - state_directory.stat.isdir
+      - state_directory.stat.mode == '0700'
+      - state_directory.stat.pw_name == scenario_owner
+      - state_directory.stat.gr_name == scenario_group
+    quiet: true
+
+# The listing includes hidden files and every kind of entry, so a backup copy,
+# a temporary file Ansible left, or a file the earlier release left would show.
+- name: List everything in the secrets directory
+  ansible.builtin.find:
+    paths: '{{ scenario_directory }}'
+    file_type: any
+    hidden: true
+    patterns: '*'
+  register: state_listing
+
+- name: Assert the directory holds the declared files and nothing else
+  ansible.builtin.assert:
+    that:
+      - state_listing.files | map(attribute='path') | map('basename') | sort == state_checksums.keys() | sort
+    fail_msg: 'The secrets directory holds {{ state_listing.files | map(attribute="path") | map("basename") | sort }}.'
+    quiet: true
+
+- name: Read each secret file
+  ansible.builtin.stat:
+    path: '{{ scenario_directory }}/{{ item }}'
+  loop: '{{ state_checksums.keys() | sort }}'
+  register: state_files
+  # The results hold the SHA-1 of each secret file, so the task and the assertion
+  # that reads them are hidden from the log (ANS-16: a digest is a leak too).
+  no_log: true
+
+# Mode 0600 and an owner that is not root: an earlier file that anyone could
+# read and root owned stays that way unless the role sets both. One link, so
+# no second name for the file exists. The checksum is of exactly the value (the
+# environment file: exactly its lines), so a trailing line break would fail.
+- name: Assert each file is private to its owner and holds exactly its value
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.mode == '0600'
+      - item.stat.pw_name == scenario_owner
+      - item.stat.gr_name == scenario_group
+      - item.stat.nlink == 1
+      - item.stat.checksum == state_checksums[item.item]
+    fail_msg: 'The file {{ item.item }} is not as declared.'
+    quiet: true
+  loop: '{{ state_files.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+  no_log: true
+
+- name: Read the source file of the host-file secret
+  ansible.builtin.stat:
+    path: '{{ scenario_host_source }}'
+  register: state_source
+  no_log: true
+
+- name: Assert the source file is untouched and still root-only
+  ansible.builtin.assert:
+    that:
+      - state_source.stat.exists
+      - state_source.stat.mode == '0600'
+      - state_source.stat.uid == 0
+      - state_source.stat.checksum == state_checksums['EXAMPLE_HOST_SECRET']
+    quiet: true
+  no_log: true
