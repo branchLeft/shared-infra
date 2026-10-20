@@ -1,0 +1,41 @@
+---
+# Constants of the baseline, not inputs: they live here and not in defaults/ so
+# that an inventory variable cannot change them. Only a role parameter can (the
+# scenario uses that to give the role a wrong pin and see it refuse).
+
+# The sshd settings the drop-in must make true. The role reads them back from
+# the resolved configuration after the reload. Quoted, because an unquoted
+# no or yes is a boolean to YAML.
+host_baseline_sshd_expected:
+  passwordauthentication: 'no'
+  kbdinteractiveauthentication: 'no'
+  permitrootlogin: prohibit-password
+  pubkeyauthentication: 'yes'
+
+# The packages the update and ban-list half installs, and the packages of
+# Docker's own apt repository.
+host_baseline_update_packages:
+  - unattended-upgrades
+  - apt-listchanges
+  - fail2ban
+host_baseline_docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-compose-plugin
+
+# Docker's apt signing key ships with the role (files/docker.asc, one home
+# with the fixture the key tests read). The role refuses a key file whose
+# sha256 is not the one below, before it writes anything. The fingerprint is
+# the identity the digest stands for: the scenario reads the file with gpg on
+# the machine that runs the test and requires exactly one key with this
+# primary fingerprint. Change the file, the digest and the fingerprint together.
+host_baseline_docker_key_sha256: 1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570
+host_baseline_docker_key_fingerprint: 9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+
+# The architecture name apt uses, by the machine name the host reports. A host
+# of any other kind stops the role instead of getting a source line for the
+# wrong architecture.
+host_baseline_dpkg_architectures:
+  x86_64: amd64
+  aarch64: arm64

@@ -1,0 +1,45 @@
+---
+# Applies the role with one thing wrong and requires that the role stops at the
+# task named in refused_task. Naming the task matters: a refusal for some other
+# reason must not count as the refusal under test. The things that can be wrong
+# are role parameters, which outrank the role's own constants: a Docker key
+# digest (refused_key_sha256) and the table of apt architecture names
+# (refused_architectures). The state a case sets up is set up and undone by the
+# caller.
+- name: Apply the role with a wrong input or a broken host
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.host_baseline
+      vars:
+        host_baseline_docker_key_sha256: '{{ refused_key_sha256 | ansible.builtin.default(verify_constants.host_baseline_docker_key_sha256) }}'
+        host_baseline_dpkg_architectures: '{{ refused_architectures | ansible.builtin.default(verify_constants.host_baseline_dpkg_architectures) }}'
+
+    - name: Record that the role accepted the input
+      ansible.builtin.set_fact:
+        host_baseline_refused_by: 'NOTHING: the role accepted it'
+        host_baseline_refused_message: ''
+  rescue:
+    # A task in a loop reports its failure per item; the message sits there.
+    - name: Record which task refused it
+      ansible.builtin.set_fact:
+        host_baseline_refused_by: '{{ ansible_failed_task.name }}'
+        host_baseline_refused_message: >-
+          {{ ansible_failed_result.msg | ansible.builtin.default('') }}
+          {{ ansible_failed_result.results | ansible.builtin.default([]) | ansible.builtin.selectattr('failed', 'defined')
+          | ansible.builtin.selectattr('failed') | ansible.builtin.map(attribute='msg') | ansible.builtin.join(' ') }}
+
+- name: Assert the role stopped at the expected task
+  ansible.builtin.assert:
+    that:
+      - host_baseline_refused_by == refused_task
+    fail_msg: 'Expected the role to stop at "{{ refused_task }}"; it stopped at "{{ host_baseline_refused_by }}".'
+    quiet: true
+
+- name: Assert the refusal says what is wrong
+  ansible.builtin.assert:
+    that:
+      - refused_message_part in host_baseline_refused_message
+    fail_msg: 'Expected the refusal to say "{{ refused_message_part }}"; it said "{{ host_baseline_refused_message }}".'
+    quiet: true
+  when: refused_message_part is defined
