@@ -1,0 +1,359 @@
+---
+# Order matters. Every input is checked before anything changes the host; the
+# repository, its key and its pin are in place before the index is refreshed;
+# the local package file is installed before the packages that depend on it; and
+# the exporter file is created closed before it holds the password.
+#
+# The exporter password is the one secret. Each task that reads, templates or
+# passes it sets no_log: true, and diff: false where a diff would show it
+# (ANS-16). The tasks that handle none say so in a comment.
+
+# ----- The inputs -----
+
+# The password is read here and only here, and the result holds booleans, never
+# the value. The assertions after this task name the rule, never the value: a
+# no_log assertion would hide its own message, and a plain one that printed its
+# input would publish the password.
+- name: Find the rules the exporter password breaks
+  ansible.builtin.set_fact:
+    db1_stack_password_problems:
+      not_text: '{{ (db1_stack_exporter_password is not string) | bool }}'
+      empty: '{{ ((db1_stack_exporter_password | string | length) == 0) | bool }}'
+      short: '{{ ((db1_stack_exporter_password | string | length) < db1_stack_password_min_length) | bool }}'
+      unsafe: '{{ (db1_stack_exporter_password | string is not match(db1_stack_password_alphabet_pattern)) | bool }}'
+  no_log: true
+
+# YAML reads an unquoted run of digits as a number, and a number that began with
+# a zero loses it; the value written to the file would not be the one intended.
+- name: Refuse an exporter password that is not text
+  ansible.builtin.assert:
+    that:
+      - not db1_stack_password_problems.not_text
+    quiet: true
+    fail_msg: The exporter password is not text. Quote it in the file that sets it.
+
+- name: Refuse an empty exporter password
+  ansible.builtin.assert:
+    that:
+      - not db1_stack_password_problems.empty
+    quiet: true
+    fail_msg: >-
+      The exporter password is empty. Generate one with:
+      LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40
+
+- name: Refuse an exporter password shorter than the minimum length
+  ansible.builtin.assert:
+    that:
+      - not db1_stack_password_problems.short
+    quiet: true
+    fail_msg: >-
+      The exporter password is shorter than {{ db1_stack_password_min_length }} characters.
+      Generate one with: LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40
+
+- name: Refuse an exporter password with a character outside the allowed set
+  ansible.builtin.assert:
+    that:
+      - not db1_stack_password_problems.unsafe
+    quiet: true
+    fail_msg: >-
+      The exporter password holds a character outside A-Z a-z 0-9 dot underscore
+      tilde hyphen. The exporter expands a dollar sign, unquotes a double quote and
+      treats a number sign, a semicolon and a backslash as syntax, any of which
+      makes it send a different password from the one the database holds. Generate
+      one with: LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40
+
+# The pin is enforced here on every real run: a download entry whose checksum is
+# empty, uses another algorithm, or is a URL stops the role before any task
+# changes the host. The patterns end in \Z because $ also matches before a final
+# line break. These tasks handle no secret.
+- name: Refuse a download entry that is not pinned by a sha256 or sha512 digest
+  ansible.builtin.assert:
+    that:
+      - item.checksum is string
+      - item.checksum is match('^(sha256:[0-9a-f]{64}|sha512:[0-9a-f]{128})\Z')
+      - item.dest is string
+      - item.dest is match('^/')
+    fail_msg: >-
+      Every download entry needs a checksum of the form sha256:HEX64 or
+      sha512:HEX128 and an absolute dest. Entry refused for {{ item.dest | default('(no dest)') }}.
+    quiet: true
+  loop: '{{ db1_stack_downloads }}'
+  loop_control:
+    label: "{{ item.dest | default('(no dest)') }}"
+
+# A package file is installed only from a path a pinned download wrote, so the
+# apt module can never be handed a URL or an unchecked file.
+- name: Refuse a package file that is not the destination of a pinned download
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item is match('^/')
+      - item is not search('://')
+      - item in (db1_stack_downloads | map(attribute='dest') | list)
+    fail_msg: >-
+      Each entry of db1_stack_debs must be an absolute local path equal to the
+      dest of an entry of db1_stack_downloads, never a URL.
+    quiet: true
+  loop: '{{ db1_stack_debs }}'
+
+# The repository key is a file of the role, compared on the controller with the
+# digest pinned in vars/main.yml, so the check also holds in check mode and a
+# changed key file stops the run. The key is never fetched at run time.
+- name: Refuse a repository key whose digest is not the pinned one
+  ansible.builtin.assert:
+    that:
+      - db1_stack_mysql_key_sha256 is match('^[0-9a-f]{64}\Z')
+      - lookup('ansible.builtin.file', 'mysql-repo-keys.asc', rstrip=False) | hash('sha256') == db1_stack_mysql_key_sha256
+    fail_msg: The repository key file files/mysql-repo-keys.asc does not match the digest pinned in vars/main.yml.
+    quiet: true
+
+# ----- The host prerequisites -----
+
+- name: Create the download directory
+  ansible.builtin.file:
+    path: '{{ db1_stack_download_directory }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Look at the download directory
+  ansible.builtin.stat:
+    path: '{{ db1_stack_download_directory }}'
+  register: db1_stack_download_directory_stat
+
+# get_url checks the digest of what it fetched and refuses a file that differs;
+# it reports no change when the file already matches. Skipped with a stated
+# reason (ANS-10) in check mode on a host where the directory above does not
+# exist yet, because check mode did not create it and the module refuses a
+# destination in a missing directory. In a real run the directory exists.
+- name: Download each pinned artefact and check its digest
+  ansible.builtin.get_url:
+    url: '{{ item.url }}'
+    dest: '{{ item.dest }}'
+    checksum: '{{ item.checksum }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ db1_stack_downloads }}'
+  loop_control:
+    label: '{{ item.dest }}'
+  when: db1_stack_download_directory_stat.stat.exists
+
+# The files the hand-run installer left name the same repository with another
+# key file, and apt refuses two entries for one repository that disagree about
+# the key.
+- name: Remove the repository files the hand-run installer left
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop: '{{ db1_stack_legacy_files }}'
+  register: db1_stack_legacy_removed
+
+- name: Create the apt keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deliver the repository keys as one file
+  ansible.builtin.copy:
+    src: mysql-repo-keys.asc
+    dest: /etc/apt/keyrings/mysql-community.asc
+    owner: root
+    group: root
+    mode: '0644'
+  register: db1_stack_key_delivered
+
+- name: Deliver the repository source, signed by that key file
+  ansible.builtin.template:
+    src: mysql-community.sources.j2
+    dest: /etc/apt/sources.list.d/mysql-community.sources
+    owner: root
+    group: root
+    mode: '0644'
+  register: db1_stack_source_delivered
+
+- name: Deliver the apt pin that holds the toolchain to its line
+  ansible.builtin.template:
+    src: mysql-community.pref.j2
+    dest: /etc/apt/preferences.d/mysql-community-8.0
+    owner: root
+    group: root
+    mode: '0644'
+
+# A new repository has no index until apt reads it, and a package from it is not
+# found before then. The refresh runs only when a file that decides what apt
+# trusts or reads has just changed. Skipped in check mode with a stated reason
+# (ANS-10): the apt module reports a stale index as a change whenever it would
+# refresh, which would make every plan show drift.
+- name: Refresh the apt index after the repository files changed
+  ansible.builtin.apt:
+    update_cache: true
+  when:
+    - not ansible_check_mode
+    - db1_stack_legacy_removed.changed or db1_stack_key_delivered.changed or db1_stack_source_delivered.changed
+
+# Skipped in check mode with a stated reason (ANS-10): the file is written by
+# the download above, which check mode does not perform, so on a host that has
+# not yet been applied there is no package file to read. The skip is wider than
+# that reason: it also applies to an already configured host.
+- name: Install each local package file the pinned downloads delivered
+  ansible.builtin.apt:
+    deb: '{{ item }}'
+    state: present
+  loop: '{{ db1_stack_debs }}'
+  when: not ansible_check_mode
+
+- name: Install the named apt packages from the index
+  ansible.builtin.apt:
+    name: '{{ db1_stack_apt_packages }}'
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Read the installed packages
+  ansible.builtin.package_facts:
+    manager: apt
+
+# The packages are the programs the host runs. A client one minor ahead of the
+# server breaks the dump, so the installed version is checked, not assumed.
+# Skipped in check mode with a stated reason (ANS-10): on a host not yet applied
+# the packages are not installed, so there is nothing to read.
+- name: Refuse a MySQL toolchain that is not on the pinned line
+  ansible.builtin.assert:
+    that:
+      - item in ansible_facts.packages
+      - ansible_facts.packages[item][0].version is match('^' ~ db1_stack_mysql_version_line ~ '[.]')
+    fail_msg: >-
+      {{ item }} is not installed on the {{ db1_stack_mysql_version_line }} line. A client
+      one minor ahead of an {{ db1_stack_mysql_version_line }} server breaks the dump.
+    quiet: true
+  loop: '{{ db1_stack_mysql_checked_packages }}'
+  when: not ansible_check_mode
+
+# ----- The exporter credentials file -----
+
+# The host's provisioning creates this directory with this owner and mode. This
+# task handles no secret.
+- name: Create the directory the exporter file lives in
+  ansible.builtin.file:
+    path: '{{ db1_stack_branchleft_directory }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Look at the directory the exporter file lives in
+  ansible.builtin.stat:
+    path: '{{ db1_stack_branchleft_directory }}'
+  register: db1_stack_branchleft_directory_stat
+
+# Docker creates a directory at a bind-mount source it cannot find, which
+# happens the first time the stack starts without this file. A rename cannot
+# replace a directory, so it is removed here, but only when it is empty: a
+# directory with anything in it is somebody's data. A link is replaced, never
+# followed. These three tasks handle no secret.
+- name: Look at the path the exporter file is written to
+  ansible.builtin.stat:
+    path: '{{ db1_stack_exporter_cnf_path }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_stack_exporter_path
+
+- name: List what a directory at the exporter file path holds
+  ansible.builtin.find:
+    paths: '{{ db1_stack_exporter_cnf_path }}'
+    file_type: any
+    hidden: true
+  register: db1_stack_exporter_path_listing
+  when: db1_stack_exporter_path.stat.isdir | default(false)
+
+- name: Refuse to remove a directory at the exporter file path that holds anything
+  ansible.builtin.assert:
+    that:
+      - db1_stack_exporter_path_listing.matched == 0
+    fail_msg: >-
+      {{ db1_stack_exporter_cnf_path }} is a directory that holds files. Docker leaves
+      an empty one when the stack starts without this file; this one is not empty,
+      so it is not removed. Inspect it, then remove it and run the role again.
+    quiet: true
+  when: db1_stack_exporter_path.stat.isdir | default(false)
+
+- name: Remove a link or an empty directory left at the exporter file path
+  ansible.builtin.file:
+    path: '{{ db1_stack_exporter_cnf_path }}'
+    state: absent
+  when: (db1_stack_exporter_path.stat.isdir | default(false)) or (db1_stack_exporter_path.stat.islnk | default(false))
+
+- name: Look at the path again after the removal
+  ansible.builtin.stat:
+    path: '{{ db1_stack_exporter_cnf_path }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_stack_exporter_path_now
+
+# A new file is moved into place with the mode the umask allows, and only then
+# does the module set its owner and mode, so a file created by the write below
+# would be readable by others for a moment. A file that exists keeps its owner
+# and mode through the write, because the move copies them from the old file onto
+# the new one. So the file is made closed first, in one of two ways, and the write
+# below only ever replaces a closed file. A path with nothing at it gets an empty
+# file with its final owner and mode; with force: false that task changes nothing
+# for a file that already exists, so a file that exists, left wide by an earlier
+# release, is closed by the next task. The content of the first is empty, so
+# nothing here is a secret. These two tasks and the write are skipped, with a
+# stated reason (ANS-10), in the two cases where a plan run left the way blocked:
+# the directory above does not exist yet because check mode did not create it, or
+# a directory is still in the way because check mode did not remove it. The
+# second look above sees that; in a real run neither holds.
+- name: Create the exporter file empty and closed, before it holds the password
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ db1_stack_exporter_cnf_path }}'
+    owner: '{{ db1_stack_exporter_uid }}'
+    group: '{{ db1_stack_exporter_gid }}'
+    mode: '{{ db1_stack_exporter_cnf_mode }}'
+    force: false
+  # No no_log here: the content is empty and the log scan in the test reads this
+  # task's output on a file that already holds the password.
+  register: db1_stack_exporter_created
+  when:
+    - db1_stack_branchleft_directory_stat.stat.exists
+    - not (db1_stack_exporter_path_now.stat.isdir | default(false))
+
+# The file module sets owner, group and mode on a file that exists and reports
+# a change only when one of them differs. It reads and writes no content and
+# returns no digest, so this task handles no secret.
+- name: Close an exporter file that already exists, before it holds the new password
+  ansible.builtin.file:
+    path: '{{ db1_stack_exporter_cnf_path }}'
+    state: file
+    follow: false
+    owner: '{{ db1_stack_exporter_uid }}'
+    group: '{{ db1_stack_exporter_gid }}'
+    mode: '{{ db1_stack_exporter_cnf_mode }}'
+  register: db1_stack_exporter_closed
+  when:
+    - db1_stack_branchleft_directory_stat.stat.exists
+    - db1_stack_exporter_path_now.stat.isreg | default(false)
+
+- name: Write the exporter credentials file
+  ansible.builtin.template:
+    src: exporter.my.cnf.j2
+    dest: '{{ db1_stack_exporter_cnf_path }}'
+    owner: '{{ db1_stack_exporter_uid }}'
+    group: '{{ db1_stack_exporter_gid }}'
+    mode: '{{ db1_stack_exporter_cnf_mode }}'
+    backup: false
+  no_log: true
+  diff: false
+  when:
+    - db1_stack_branchleft_directory_stat.stat.exists
+    - not (db1_stack_exporter_path_now.stat.isdir | default(false))

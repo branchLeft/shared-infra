@@ -1,0 +1,38 @@
+---
+# Requires gone_value: a password that must be on the host in no file. Every
+# file under the directories below is read, backups and temporary files
+# included. The search is hidden from the log because its argument is the value.
+# The .ansible directory of the connection user is skipped: Ansible keeps the
+# arguments of a running module there for the length of the run and removes them
+# when the module ends.
+- name: Search the host for a password that must be gone
+  ansible.builtin.command:
+    argv:
+      - grep
+      - --recursive
+      - --files-with-matches
+      - --text
+      - --fixed-strings
+      - --exclude-dir=.ansible
+      - --regexp
+      - '{{ gone_value }}'
+      - /etc
+      - /home
+      - /opt
+      - /root
+      - /srv
+      - /tmp
+      - /usr/local
+      - /var
+  register: db1_stack_assert_gone_found
+  changed_when: false
+  failed_when: db1_stack_assert_gone_found.rc not in [0, 1]
+  check_mode: false
+  no_log: true
+
+- name: Assert no file on the host holds the password
+  ansible.builtin.assert:
+    that:
+      - db1_stack_assert_gone_found.rc == 1
+    fail_msg: The password is still in a file on the host.
+    quiet: true

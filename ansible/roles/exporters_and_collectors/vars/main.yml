@@ -1,0 +1,36 @@
+---
+# Internal to the role, not part of its interface: role variables outrank every
+# value a caller passes. These paths are written into the unit files the role
+# installs (node-exporter.service runs the binary with the textfile directory
+# and the port below, and snds-collector.service runs the collector from its
+# directory), so a caller that changed one would install a unit that disagrees
+# with the file it names.
+
+exporters_and_collectors_bin_path: /usr/local/bin/node_exporter
+exporters_and_collectors_unit_path: /etc/systemd/system/node_exporter.service
+exporters_and_collectors_env_dir: /etc/default
+exporters_and_collectors_env_file: /etc/default/node-exporter
+exporters_and_collectors_user: node-exporter
+exporters_and_collectors_port: 9100
+exporters_and_collectors_textfile_dir: /var/lib/branchleft/backup-worker-exporter
+
+exporters_and_collectors_snds_dir: /opt/branchleft/monitoring/snds
+exporters_and_collectors_snds_program: collect_snds_metrics.py
+exporters_and_collectors_snds_textfile_dir: /var/lib/branchleft/snds-exporter
+exporters_and_collectors_snds_unit_dir: /etc/systemd/system
+
+# Mount types the disk check ignores: none of them is a disk the volume check is
+# about.
+exporters_and_collectors_disk_excluded_fstypes:
+  - tmpfs
+  - devtmpfs
+  - overlay
+  - squashfs
+  - proc
+  - sysfs
+  - cgroup
+  - cgroup2
+  - devpts
+  - autofs
+  - mqueue
+  - fuse.lxcfs
