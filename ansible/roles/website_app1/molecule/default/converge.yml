@@ -1,0 +1,68 @@
+---
+# Sentinel values made for this test only. They are not secrets and are not
+# the stack's real values, which the owner's play supplies at run time.
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars:
+    website_app1_smtp_host: sentinel-smtp.example.invalid
+    website_app1_smtp_port: '2525'
+    website_app1_smtp_user: sentinel-user
+    website_app1_smtp_password: SENTINEL_PASSWORD_NOT_A_SECRET
+  tasks:
+    # Refusals come first. Each runs the role with one bad input and expects it to
+    # fail at its first check, before anything is written. The rescue checks the
+    # refusal came from the rule it names, and that no file was written.
+    - name: Refuse an image given as a tag, and write nothing
+      block:
+        - name: Apply the role with a tag in place of a digest
+          ansible.builtin.include_role:
+            name: branchleft.website_app1
+          vars:
+            website_app1_image: 'ghcr.io/branchleft/website:latest'
+      rescue:
+        - name: Assert the refusal named the digest rule
+          ansible.builtin.assert:
+            that:
+              - "'digest' in ansible_failed_result.msg"
+            quiet: true
+            fail_msg: The role did not refuse a tag for the image as a digest refusal.
+
+    - name: Refuse an SMTP value that is not printable ASCII, and write nothing
+      block:
+        - name: Apply the role with a tab in the SMTP host
+          ansible.builtin.include_role:
+            name: branchleft.website_app1
+          vars:
+            website_app1_smtp_host: "bad\thost"
+      rescue:
+        - name: Assert the refusal named the printable rule
+          ansible.builtin.assert:
+            that:
+              - "'printable ASCII' in ansible_failed_result.msg"
+            quiet: true
+            fail_msg: The role did not refuse a non-printable SMTP value.
+
+    - name: Look for any file the refused runs could have written
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /etc/branchleft/website.env
+        - /opt/branchleft/website/compose.yml
+      register: website_app1_converge_refused
+
+    - name: Assert the refused runs wrote no file
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists == false
+        quiet: true
+        fail_msg: A refused run left a file on the instance.
+      loop: '{{ website_app1_converge_refused.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Apply the role
+      ansible.builtin.include_role:
+        # Molecule links the role under its namespace and name, the namespace
+        # from galaxy_info in meta/main.yml.
+        name: branchleft.website_app1
