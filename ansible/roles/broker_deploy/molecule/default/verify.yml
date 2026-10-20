@@ -1,0 +1,185 @@
+---
+# What the role must leave on the host, read back from the instance. The unit
+# and the bundle sources are read from the role's own files, on the machine
+# that runs the test, so a copy in the role that differs from its source is a
+# failure. Nothing here starts the broker: the unit must be loaded and disabled.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_unit_source: '{{ playbook_dir }}/../../files/branchleft-broker.service'
+    verify_key_source: '{{ playbook_dir }}/files/verify-key-stand-in.bin'
+    verify_node: /opt/branchleft/broker/node/bin/node
+    verify_release: /opt/branchleft/broker/releases/test-release-1
+  tasks:
+    - name: Read the Node binary
+      ansible.builtin.stat:
+        path: '{{ verify_node }}'
+      register: broker_deploy_verify_node
+
+    - name: Ask the Node binary its version
+      ansible.builtin.command:
+        argv:
+          - '{{ verify_node }}'
+          - --version
+      register: broker_deploy_verify_node_version
+      changed_when: false
+
+    - name: Assert the pinned Node version is installed and executable
+      ansible.builtin.assert:
+        that:
+          - broker_deploy_verify_node.stat.exists
+          - broker_deploy_verify_node.stat.mode == '0755'
+          - broker_deploy_verify_node_version.stdout == 'v26.5.0'
+        quiet: true
+        fail_msg: The Node binary is missing, not 0755, or is not v26.5.0.
+
+    - name: Read the broker account
+      ansible.builtin.getent:
+        database: passwd
+        key: broker
+      register: broker_deploy_verify_user
+
+    - name: Assert the broker account is a system account with no login shell
+      ansible.builtin.assert:
+        that:
+          - broker_deploy_verify_user.ansible_facts.getent_passwd['broker'][5] == '/usr/sbin/nologin'
+          - broker_deploy_verify_user.ansible_facts.getent_passwd['broker'][1] == 'x'
+        quiet: true
+        fail_msg: The broker account is missing or has a login shell.
+
+    - name: Read the directories the runbook creates
+      ansible.builtin.stat:
+        path: '{{ item.path }}'
+      loop:
+        - { path: /etc/branchleft, owner: root, mode: '0755' }
+        - { path: /var/lib/branchleft, owner: root, mode: '0755' }
+        - { path: /var/lib/branchleft/broker-slots, owner: broker, mode: '0755' }
+        - { path: /var/lib/branchleft/broker-slots/admin-keys, owner: broker, mode: '0700' }
+      register: broker_deploy_verify_dirs
+      loop_control:
+        label: '{{ item.path }}'
+
+    - name: Assert each directory is a directory with the runbook's owner and mode
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir
+          - item.stat.pw_name == item.item.owner
+          - item.stat.mode == item.item.mode
+        quiet: true
+        fail_msg: '{{ item.item.path }} is not a directory owned by {{ item.item.owner }} with mode {{ item.item.mode }}.'
+      loop: '{{ broker_deploy_verify_dirs.results }}'
+      loop_control:
+        label: '{{ item.item.path }}'
+
+    - name: Read the release and the current link
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_release }}/broker.mjs'
+        - /opt/branchleft/broker/current
+      register: broker_deploy_verify_release
+
+    - name: Assert the current link points at the release, and the bundle is in it
+      ansible.builtin.assert:
+        that:
+          - broker_deploy_verify_release.results[0].stat.exists
+          - broker_deploy_verify_release.results[0].stat.isreg
+          - broker_deploy_verify_release.results[0].stat.pw_name == 'root'
+          - broker_deploy_verify_release.results[1].stat.islnk
+          - broker_deploy_verify_release.results[1].stat.lnk_source == verify_release
+        quiet: true
+        fail_msg: The current link does not point at the release, or the bundle is not in it.
+
+    - name: Read the verify key on the instance
+      ansible.builtin.stat:
+        path: /etc/branchleft/broker-verify-key.bin
+        checksum_algorithm: sha256
+      register: broker_deploy_verify_key_installed
+
+    - name: Read the verify key's source on the machine that runs the test
+      ansible.builtin.stat:
+        path: '{{ verify_key_source }}'
+        checksum_algorithm: sha256
+      register: broker_deploy_verify_key_source
+      delegate_to: localhost
+
+    - name: Assert the verify key is owned root:broker, mode 0640, and is the source byte for byte
+      ansible.builtin.assert:
+        that:
+          - broker_deploy_verify_key_installed.stat.exists
+          - broker_deploy_verify_key_installed.stat.pw_name == 'root'
+          - broker_deploy_verify_key_installed.stat.gr_name == 'broker'
+          - broker_deploy_verify_key_installed.stat.mode == '0640'
+          - broker_deploy_verify_key_installed.stat.checksum == broker_deploy_verify_key_source.stat.checksum
+        quiet: true
+        fail_msg: The verify key is not root:broker 0640 or differs from its source.
+
+    - name: Read the environment file on the instance
+      ansible.builtin.slurp:
+        src: /etc/branchleft/broker.env
+      register: broker_deploy_verify_env
+      no_log: true
+
+    - name: Read the environment file's mode and owner
+      ansible.builtin.stat:
+        path: /etc/branchleft/broker.env
+      register: broker_deploy_verify_env_stat
+
+    # The file holds the shipped template and no secret, so a failure may name
+    # the line. Only the slots file line and the absence of LISTEN_HOST are
+    # checked, not the whole text: the template's other lines are the source's.
+    - name: Assert the environment file is root:root 0600, names the slots file, and leaves LISTEN_HOST unset
+      ansible.builtin.assert:
+        that:
+          - broker_deploy_verify_env_stat.stat.pw_name == 'root'
+          - broker_deploy_verify_env_stat.stat.gr_name == 'root'
+          - broker_deploy_verify_env_stat.stat.mode == '0600'
+          - "'BROKER_SLOTS_FILE=/var/lib/branchleft/broker-slots/slots.json' in (broker_deploy_verify_env.content | b64decode).splitlines()"
+          - "'LISTEN_HOST' not in (broker_deploy_verify_env.content | b64decode)"
+        quiet: true
+        fail_msg: The environment file is not root:root 0600, does not name the slots file, or sets LISTEN_HOST.
+      no_log: true
+
+    - name: Read the unit on the instance, and its source in the role's files
+      ansible.builtin.stat:
+        path: /etc/systemd/system/branchleft-broker.service
+        checksum_algorithm: sha256
+      register: broker_deploy_verify_unit
+
+    - name: Read the unit's source on the machine that runs the test
+      ansible.builtin.stat:
+        path: '{{ verify_unit_source }}'
+        checksum_algorithm: sha256
+      register: broker_deploy_verify_unit_source
+      delegate_to: localhost
+
+    - name: Assert the unit is root:root 0644 and is its source byte for byte
+      ansible.builtin.assert:
+        that:
+          - broker_deploy_verify_unit.stat.exists
+          - broker_deploy_verify_unit.stat.pw_name == 'root'
+          - broker_deploy_verify_unit.stat.mode == '0644'
+          - broker_deploy_verify_unit.stat.checksum == broker_deploy_verify_unit_source.stat.checksum
+        quiet: true
+        fail_msg: The unit is not root:root 0644 or differs from its source.
+
+    # Installed and loaded, not started, not enabled: the owner's ruling starts it.
+    - name: Ask systemd for the broker unit
+      ansible.builtin.systemd_service:
+        name: branchleft-broker.service
+      register: broker_deploy_verify_service
+
+    - name: Assert systemd loads the broker unit and holds it stopped and disabled
+      ansible.builtin.assert:
+        that:
+          - broker_deploy_verify_service.status.LoadState == 'loaded'
+          - broker_deploy_verify_service.status.UnitFileState == 'disabled'
+          - broker_deploy_verify_service.status.ActiveState == 'inactive'
+        quiet: true
+        fail_msg: >-
+          systemd does not hold the unit as loaded, disabled and inactive:
+          LoadState {{ broker_deploy_verify_service.status.LoadState }},
+          UnitFileState {{ broker_deploy_verify_service.status.UnitFileState }},
+          ActiveState {{ broker_deploy_verify_service.status.ActiveState }}.

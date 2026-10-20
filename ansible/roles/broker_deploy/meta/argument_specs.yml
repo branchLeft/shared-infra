@@ -1,0 +1,44 @@
+---
+argument_specs:
+  main:
+    short_description: Install the broker's Node, release, state, key, environment file and unit, without starting it
+    description: >-
+      Pins the Node runtime the broker runs on, delivers one release of the
+      broker's bundle and points the current link at it, creates the broker
+      account and its state directories, installs the public half of the
+      request-signing key and the environment file, and installs the broker's
+      systemd unit. It enables and starts nothing: starting the broker is an
+      owner ruling, not part of this role. The sudoers boundary and the slot
+      wrapper are not installed here.
+    author: branchLeft
+    options:
+      broker_deploy_release:
+        type: str
+        required: true
+        description: >-
+          Name of the release directory under the releases directory, for
+          example a timestamp or the build's commit. A release name that already
+          exists is not replaced by a different bundle.
+      broker_deploy_bundle_src:
+        type: path
+        required: true
+        description: >-
+          Path on the controller of the built bundle directory (the output of
+          the broker's bundle build). Its files are delivered as they are. None
+          of its files is a secret.
+      broker_deploy_verify_key_src:
+        type: path
+        required: true
+        description: >-
+          Path on the controller of the 32-byte public half of the broker's
+          request-signing key. The private half never leaves the owner's
+          workstation and is not an input to this role.
+      broker_deploy_node_version:
+        type: str
+        description: The Node version the broker runs, as it appears in the download path.
+        default: v26.5.0
+      broker_deploy_node_arch:
+        type: str
+        choices: [x64, arm64]
+        description: The Node architecture of the target host.
+        default: x64

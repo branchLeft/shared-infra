@@ -1,0 +1,14 @@
+---
+# Test scaffolding, not role tasks. The Node tarball is unpacked on the host
+# with xz, which the host build installs (the runbook's A-2 step); the test
+# container is a bare base image, so the package is installed here.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install xz, which unpacks the Node tarball on a host
+      ansible.builtin.apt:
+        name: xz-utils
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
