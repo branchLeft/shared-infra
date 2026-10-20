@@ -1,0 +1,68 @@
+---
+argument_specs:
+  main:
+    short_description: Install the database host prerequisites and render the exporter credentials file
+    description: >-
+      Installs age and a MySQL 8.0 client toolchain held to that line, with a
+      hash-verified libaio1 package file and a vendored repository key, and renders
+      the metrics exporter's credentials file from a password given at run time.
+      Only the password is a secret.
+    author: branchLeft
+    options:
+      db1_stack_exporter_password:
+        type: str
+        required: true
+        no_log: true
+        description: >-
+          SECRET. The password of the exporter's database account, supplied at run
+          time and never given a default. At least 20 characters, each one of
+          A-Z a-z 0-9 dot underscore tilde hyphen; the role refuses anything else
+          before it changes the host, and names the rule it broke, never the value.
+          A value written as a bare number in YAML is read as a number and refused:
+          quote it.
+      db1_stack_apt_packages:
+        type: list
+        elements: str
+        description: >-
+          Packages installed from the apt index, after the local package files.
+          The versions of the two mysql-community packages must be on the 8.0 line,
+          which the role checks after the install.
+        default:
+          - age
+          - mysql-community-client
+          - mysql-community-server-core
+      db1_stack_downloads:
+        type: list
+        elements: dict
+        description: >-
+          Artefacts fetched with a checksum before anything is installed from them.
+          The role refuses any entry whose checksum is not sha256 or sha512 with its
+          full digest.
+        default:
+          - url: https://deb.debian.org/debian/pool/main/liba/libaio/libaio1_0.3.113-4_amd64.deb
+            dest: /var/cache/db1-stack/libaio1_0.3.113-4_amd64.deb
+            checksum: sha256:d1476e4beab3d85f8a7d31de94c27472711ed3ef399ce70708e24b259426125b
+        options:
+          url:
+            type: str
+            required: true
+            description: Where the artefact is fetched from.
+          dest:
+            type: str
+            required: true
+            description: Absolute path the artefact is written to, owned by root with mode 0644.
+          checksum:
+            type: str
+            required: true
+            description: >-
+              The pinned digest with its algorithm, either sha256:HEX64 (64 lowercase
+              hex digits) or sha512:HEX128 (128). Nothing else is accepted, and a URL
+              is never a checksum.
+      db1_stack_debs:
+        type: list
+        elements: str
+        description: >-
+          Absolute paths of local package files installed with apt. Each must equal
+          the dest of an entry of db1_stack_downloads, and none may be a URL.
+        default:
+          - /var/cache/db1-stack/libaio1_0.3.113-4_amd64.deb

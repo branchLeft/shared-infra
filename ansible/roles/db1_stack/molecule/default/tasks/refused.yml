@@ -1,0 +1,42 @@
+---
+# Applies the role with one input made bad and requires that the role stops at
+# the task named in refused_task. Naming the task matters: a refusal for some
+# other reason, a mistyped role name included, must not count as the refusal
+# under test. Inputs left out take the scenario's good values. The refusal
+# message must not hold a sentinel, which the check below requires for every
+# case and the log scan requires again at the end.
+- name: Apply the role with input it must refuse
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.db1_stack
+      vars:
+        db1_stack_exporter_password: '{{ refused_password | default(verify_password) }}'
+        db1_stack_downloads: '{{ refused_downloads | default(verify_downloads) }}'
+        db1_stack_debs: '{{ refused_debs | default(verify_debs) }}'
+        db1_stack_mysql_key_sha256: '{{ refused_key_sha256 | default(verify_key_sha256) }}'
+        db1_stack_mysql_checked_packages: '{{ refused_checked_packages | default(verify_checked_packages) }}'
+
+    - name: Record that the role accepted the input
+      ansible.builtin.set_fact:
+        db1_stack_refused_by: 'NOTHING: the role accepted the input'
+        db1_stack_refused_message: ''
+  rescue:
+    - name: Record which task refused the input
+      ansible.builtin.set_fact:
+        db1_stack_refused_by: '{{ ansible_failed_task.name }}'
+        db1_stack_refused_message: '{{ ansible_failed_result.msg | default("") }}'
+
+- name: Assert the role stopped at the expected task
+  ansible.builtin.assert:
+    that:
+      - db1_stack_refused_by == refused_task
+    fail_msg: 'Expected the role to stop at "{{ refused_task }}"; it stopped at "{{ db1_stack_refused_by }}".'
+    quiet: true
+
+- name: Assert the refusal holds no sentinel
+  ansible.builtin.assert:
+    that:
+      - db1_stack_refused_message | regex_search(verify_sentinel_pattern) is none
+    quiet: true
+  no_log: true

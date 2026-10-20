@@ -1,0 +1,54 @@
+---
+# Docker leaves an empty directory at a bind-mount source it cannot find. The
+# role must remove it and write the file, and must not fail a plan run while the
+# directory is still there, because check mode removes nothing.
+- name: Remove the exporter file
+  ansible.builtin.file:
+    path: '{{ scenario_cnf_path }}'
+    state: absent
+
+- name: Create an empty directory in its place
+  ansible.builtin.file:
+    path: '{{ scenario_cnf_path }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Plan the role in check mode while the directory is in the way
+  check_mode: true
+  diff: true
+  block:
+    - name: Apply the role in check mode
+      ansible.builtin.include_tasks: apply.yml
+
+- name: Look at the path after the plan
+  ansible.builtin.stat:
+    path: '{{ scenario_cnf_path }}'
+    follow: false
+  register: db1_stack_path_after_plan
+
+- name: Assert the plan removed nothing
+  ansible.builtin.assert:
+    that:
+      - db1_stack_path_after_plan.stat.isdir
+    quiet: true
+
+- name: Apply the role
+  ansible.builtin.include_tasks: apply.yml
+
+# The path held no file, so the closed empty file must have been created by its
+# own task before the write. Skipped or unchanged would mean the write created
+# the file itself and the file was briefly open to others.
+- name: Assert the exporter file was created empty and closed before it was written
+  ansible.builtin.assert:
+    that:
+      - db1_stack_exporter_created is changed
+      - db1_stack_exporter_created is not skipped
+    fail_msg: The task that creates the exporter file empty and closed did not run, so the write created the file.
+    quiet: true
+
+- name: Assert the empty directory was replaced by the exporter file
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'
