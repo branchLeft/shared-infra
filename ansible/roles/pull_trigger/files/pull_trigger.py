@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -I
 """Apply one exact, verified commit of main to this host.
 
 The role installs this file as one root-owned program, the only thing the CI key
@@ -141,6 +141,7 @@ class Why(enum.Enum):
     PLAYBOOK_NOT_LISTED = "the host's playbook is not on the allowlist"
     PLAYBOOK_NOT_REGULAR = "the playbook is not a regular file in the commit"
     PLAYBOOK_ESCAPES = "the playbook resolves outside ansible/playbooks"
+    PLAYBOOK_LINKED = "a part of the playbook path is a link in the checkout"
     LOCK_HELD = "another trigger is running"
     CONFIG_UNREADABLE = "the configuration file cannot be opened"
     CONFIG_NOT_REGULAR = "the configuration is not a regular file"
@@ -513,7 +514,7 @@ def parse_config(text: str) -> Config:
     """
     try:
         data = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         raise ConfigError(Why.CONFIG_JSON) from None
     if not isinstance(data, dict) or set(data) != CONFIG_KEYS:
         raise ConfigError(Why.CONFIG_KEY_SET)
@@ -1252,6 +1253,28 @@ def changed_count(log_path: Path) -> int | None:
     return sum(int(line["changed"]) for line in lines)
 
 
+def require_playbook_in_checkout(checkout: Path, playbook: str) -> None:
+    """Refuse a playbook that is reached through a link, or that is not a file inside the checkout.
+
+    Independent of the ``ls-tree`` test on the commit: it looks at the disk. The
+    root is the checkout this program made, resolved once, so a link in the
+    commit cannot move it. No part of the path may be a link, and the resolved
+    playbook must lie under ``ansible/playbooks`` of that root.
+
+    Raises:
+        PlaybookNotAllowedError: a part of the path is a link, or the file is outside.
+    """
+    root = checkout.resolve()
+    walked = root
+    for part in PurePosixPath(playbook).parts:
+        walked = walked / part
+        if walked.is_symlink():
+            raise PlaybookNotAllowedError(Why.PLAYBOOK_LINKED, part)
+    resolved = (root / playbook).resolve()
+    if not resolved.is_file() or not resolved.is_relative_to(root.joinpath(*PLAYBOOK_PREFIX)):
+        raise PlaybookNotAllowedError(Why.PLAYBOOK_ESCAPES)
+
+
 class Trigger:
     """One run from request to verdict."""
 
@@ -1372,10 +1395,9 @@ class Trigger:
         Raises:
             PlaybookNotAllowedError: the playbook resolves outside ansible/playbooks.
         """
-        playbook_root = (checkout / Path(*PLAYBOOK_PREFIX)).resolve()
-        resolved = (checkout / self._config.playbook).resolve()
-        if not resolved.is_file() or not resolved.is_relative_to(playbook_root):
-            raise PlaybookNotAllowedError(Why.PLAYBOOK_ESCAPES)
+        require_playbook_in_checkout(checkout, self._config.playbook)
+        if self._stop.is_set():
+            return Verdict(Exit.FAILED, "interrupted")
         if mode is Mode.APPLY:
             self._workspace.record_applied(commit)
             self._workspace.promote(checkout)

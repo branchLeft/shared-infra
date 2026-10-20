@@ -330,6 +330,48 @@
           state_dir: '{{ verify_state }}'
           log_dir: '{{ verify_logs }}'
 
+    - name: Make a directory for copies of the program with one guard removed
+      ansible.builtin.file:
+        path: /var/tmp/ptt/mut
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Copy the program twice
+      ansible.builtin.copy:
+        src: '{{ verify_program }}'
+        dest: '/var/tmp/ptt/mut/{{ item }}'
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - no-commit-test
+        - no-checkout-test
+
+    - name: Remove the test on the commit's tree from the first copy
+      ansible.builtin.replace:
+        path: /var/tmp/ptt/mut/no-commit-test
+        regexp: '^(\s+)if not cache\.regular_file_in_commit\(commit, self\._config\.playbook\):$'
+        replace: '\1if False:'
+      register: pull_trigger_cut_commit_test
+
+    - name: Remove the test on the checkout from the second copy
+      ansible.builtin.replace:
+        path: /var/tmp/ptt/mut/no-checkout-test
+        regexp: '^(\s+)require_playbook_in_checkout\(checkout, self\._config\.playbook\)$'
+        replace: '\1pass'
+      register: pull_trigger_cut_checkout_test
+
+    - name: Each copy lost exactly the guard it was made to lose
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_cut_commit_test.changed
+          - pull_trigger_cut_checkout_test.changed
+        fail_msg: the program text no longer matches the lines this test removes; update the test
+        success_msg: both copies were made
+
     - name: Refuse every request that must not run, each leaving the host byte for byte as it was
       ansible.builtin.include_tasks: tasks/refuse.yml
       loop:
@@ -378,6 +420,46 @@
           rc: 20
           reason: playbook-not-allowed
           commit: '{{ pull_trigger_commits.symlink }}'
+        - name: a playbook directory that is a link inside the checkout
+          text: '{{ pull_trigger_commits.dir_link_inside }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.dir_link_inside }}'
+          detail: the playbook is not a regular file in the commit
+        - name: a playbook directory that is a link to a host directory
+          text: '{{ pull_trigger_commits.dir_link_outside }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.dir_link_outside }}'
+          detail: the playbook is not a regular file in the commit
+        - name: a linked inside directory, with the test on the commit's tree removed
+          text: '{{ pull_trigger_commits.dir_link_inside }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.dir_link_inside }}'
+          program: /var/tmp/ptt/mut/no-commit-test
+          detail: a part of the playbook path is a link in the checkout
+        - name: a linked host directory, with the test on the commit's tree removed
+          text: '{{ pull_trigger_commits.dir_link_outside }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.dir_link_outside }}'
+          program: /var/tmp/ptt/mut/no-commit-test
+          detail: a part of the playbook path is a link in the checkout
+        - name: a linked inside directory, with the test on the checkout removed
+          text: '{{ pull_trigger_commits.dir_link_inside }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.dir_link_inside }}'
+          program: /var/tmp/ptt/mut/no-checkout-test
+          detail: the playbook is not a regular file in the commit
+        - name: a linked host directory, with the test on the checkout removed
+          text: '{{ pull_trigger_commits.dir_link_outside }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.dir_link_outside }}'
+          program: /var/tmp/ptt/mut/no-checkout-test
+          detail: the playbook is not a regular file in the commit
         - name: a good commit when the host's playbook is outside the allowlist
           text: '{{ pull_trigger_commits.tip }}'
           rc: 20
@@ -720,6 +802,106 @@
           wrong answer for a timeout: rc={{ pull_trigger_request_result.rc }}
           {{ pull_trigger_request_result.stdout }} after {{ pull_trigger_request_result.delta }}
         success_msg: the run was stopped at the limit and reported with exit 31
+
+    # ---------------------------------- the route from a non-root account
+    - name: Make the account a forced command would log in as
+      ansible.builtin.user:
+        name: ptt-ci
+        shell: /bin/sh
+        create_home: true
+
+    - name: Let that account run the program as root with exactly two argument lists, keeping the caller's text
+      ansible.builtin.copy:
+        content: |
+          Defaults!/usr/local/sbin/pull-trigger env_keep += "SSH_ORIGINAL_COMMAND"
+          ptt-ci ALL=(root) NOPASSWD: /usr/local/sbin/pull-trigger --mode apply, /usr/local/sbin/pull-trigger --mode check
+        dest: /etc/sudoers.d/ptt-ci
+        owner: root
+        group: root
+        mode: '0440'
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Ask for a check through sudo as that account, the way its forced command would
+      ansible.builtin.command:
+        argv:
+          - sudo
+          - -n
+          - -u
+          - ptt-ci
+          - env
+          - 'SSH_ORIGINAL_COMMAND={{ pull_trigger_commits.tip }}'
+          - sudo
+          - -n
+          - '{{ verify_program }}'
+          - --mode
+          - check
+      register: pull_trigger_through_sudo
+      changed_when: false
+      failed_when: false
+
+    - name: Ask through sudo for a different configuration file, which the account may not pass
+      ansible.builtin.command:
+        argv:
+          - sudo
+          - -n
+          - -u
+          - ptt-ci
+          - env
+          - 'SSH_ORIGINAL_COMMAND={{ pull_trigger_commits.tip }}'
+          - sudo
+          - -n
+          - '{{ verify_program }}'
+          - --mode
+          - check
+          - --config
+          - /var/tmp/ptt/cfg/writable.json
+      register: pull_trigger_through_sudo_config
+      changed_when: false
+      failed_when: false
+
+    - name: Take the kept variable away again
+      ansible.builtin.copy:
+        content: |
+          ptt-ci ALL=(root) NOPASSWD: /usr/local/sbin/pull-trigger --mode apply, /usr/local/sbin/pull-trigger --mode check
+        dest: /etc/sudoers.d/ptt-ci
+        owner: root
+        group: root
+        mode: '0440'
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Ask for a check through sudo with sudo's default of dropping the variable
+      ansible.builtin.command:
+        argv:
+          - sudo
+          - -n
+          - -u
+          - ptt-ci
+          - env
+          - 'SSH_ORIGINAL_COMMAND={{ pull_trigger_commits.tip }}'
+          - sudo
+          - -n
+          - '{{ verify_program }}'
+          - --mode
+          - check
+      register: pull_trigger_through_sudo_default
+      changed_when: false
+      failed_when: false
+
+    - name: The sudo route works only with the variable kept and exact arguments
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_through_sudo.rc in [0, 11]
+          - "('mode=check commit=' ~ pull_trigger_commits.tip ~ ' ') in pull_trigger_through_sudo.stdout"
+          - pull_trigger_through_sudo_config.rc != 0
+          - pull_trigger_through_sudo_config.stdout == ''
+          - pull_trigger_through_sudo_default.rc == 20
+          - "'reason=bad-request' in pull_trigger_through_sudo_default.stdout"
+        fail_msg: >-
+          the sudo route is not as the README says:
+          {{ pull_trigger_through_sudo.stdout }} {{ pull_trigger_through_sudo.stderr }} /
+          {{ pull_trigger_through_sudo_config.stderr }} /
+          {{ pull_trigger_through_sudo_default.stdout }} {{ pull_trigger_through_sudo_default.stderr }}
+        success_msg: the sudo route works with the variable kept, refuses other arguments, and fails closed without the variable
 
     # ------------------------------------------- the unit tests, on Debian
     - name: Make a directory for the unit tests

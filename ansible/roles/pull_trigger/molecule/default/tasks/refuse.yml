@@ -18,6 +18,7 @@
     request_text: '{{ case.text }}'
     request_mode: '{{ case.mode | default("apply") }}'
     request_config: '{{ case.config | default(verify_installed_config) }}'
+    request_program: '{{ case.program | default(verify_program) }}'
 
 - name: 'Snapshot after: {{ case.name }}'
   ansible.builtin.include_tasks: snapshot.yml
@@ -33,6 +34,14 @@
         ' commit=' ~ (case.commit | default('-')) ~ ' ') in pull_trigger_request_result.stdout
     fail_msg: 'wrong answer for {{ case.name }}: rc={{ pull_trigger_request_result.rc }} stdout={{ pull_trigger_request_result.stdout }}'
     success_msg: 'refused as expected: {{ case.name }}'
+
+- name: 'Refused by the guard the case names: {{ case.name }}'
+  ansible.builtin.assert:
+    that:
+      - case.detail in pull_trigger_request_result.stderr
+    fail_msg: 'the refusal did not come from the expected guard: {{ pull_trigger_request_result.stderr }}'
+    success_msg: 'refused by the expected guard: {{ case.name }}'
+  when: case.detail is defined
 
 - name: 'The host and the previous checkout are byte for byte unchanged: {{ case.name }}'
   ansible.builtin.assert:

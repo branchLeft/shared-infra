@@ -106,6 +106,19 @@ def commit(
     return run([*argv, "-m", message, tree], cwd=work, extra=extra)
 
 
+def commit_playbooks_link(
+    work: Path, target: str, files: dict[str, str | None], parent: str, signer: Signer
+) -> str:
+    """Commit with ansible/playbooks a link to ``target``, then put the directory back."""
+    directory = work / "ansible" / "playbooks"
+    shutil.rmtree(directory)
+    directory.symlink_to(target)
+    sha = commit(work, files, parent, "playbooks is a link", signer)
+    directory.unlink()
+    directory.mkdir()
+    return sha
+
+
 def make_ssh_key(name: str) -> Path:
     """Make an unencrypted SSH key pair and return the private key's path."""
     path = ROOT / "keys" / name
@@ -180,8 +193,17 @@ def main() -> int:
     ids["symlink"] = commit(
         work, {PLAYBOOK: "->../../../etc/hostname"}, ids["no_playbook"], "link", a
     )
+    outside = ROOT / "outside"
+    outside.mkdir()
+    (outside / "host.yml").write_text(playbook("OUTSIDE"), encoding="utf-8")
+    ids["dir_link_inside"] = commit_playbooks_link(
+        work, "../real", {"real/host.yml": playbook("INSIDE")}, ids["symlink"], a
+    )
+    ids["dir_link_outside"] = commit_playbooks_link(
+        work, str(outside), {}, ids["dir_link_inside"], a
+    )
     ids["broken"] = commit(
-        work, {PLAYBOOK: playbook("BROKEN", fail=True)}, ids["symlink"], "broken", a
+        work, {PLAYBOOK: playbook("BROKEN", fail=True)}, ids["dir_link_outside"], "broken", a
     )
     ids["tip"] = commit(work, {PLAYBOOK: playbook(markers["tip"])}, ids["broken"], "tip", a)
     ids["side"] = commit(work, {PLAYBOOK: playbook("SIDE")}, ids["good"], "side", a)

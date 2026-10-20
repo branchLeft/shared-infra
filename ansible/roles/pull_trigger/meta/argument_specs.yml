@@ -57,7 +57,7 @@ argument_specs:
   packages:
     short_description: Install the programs the trigger runs
     description: >-
-      Installs git, gpg and openssh-client, which the trigger runs to fetch and to verify. A
+      Installs git, gpg, gpgconf and openssh-client, which the trigger runs to fetch and to verify. A
       separate entry point so that a test can prepare a host without applying the rest.
     author: AUTHOR_NAME
     options: {}

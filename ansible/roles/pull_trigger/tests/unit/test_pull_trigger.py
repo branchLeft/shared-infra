@@ -21,6 +21,7 @@ import unittest
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
 import pull_trigger as trigger
 
@@ -227,6 +228,18 @@ class Remote:
             [GIT, "push", "-q", "--force", self.bare, f"{forged}:refs/heads/staging"], cwd=self.work
         )
         return forged
+
+    def commit_playbooks_link(
+        self, target: str, files: Mapping[str, str | None], parent: str, signer: SshKey
+    ) -> str:
+        """Commit with ``ansible/playbooks`` a link to ``target``, then put the directory back."""
+        directory = self.work / "ansible" / "playbooks"
+        shutil.rmtree(directory)
+        directory.symlink_to(target)
+        sha = self.commit(files, "playbooks is a link", parent, signer)
+        directory.unlink()
+        directory.mkdir()
+        return sha
 
     def set_ref(self, ref: str, sha: str) -> None:
         """Point a branch of the remote at a commit."""
@@ -479,6 +492,24 @@ class ConfigTests(unittest.TestCase):
                 "signers": [{"format": "ssh", "key": "ssh-ed25519 " + "A" * 68, "x": 1}]
             },
             "signer pgp garbage": {"signers": [{"format": "openpgp", "key": "EXAMPLE"}]},
+            "signer openssh private key": {
+                "signers": [
+                    {
+                        "format": "ssh",
+                        "key": "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n"
+                        "-----END OPENSSH PRIVATE KEY-----\n",
+                    }
+                ]
+            },
+            "signer pgp private key": {
+                "signers": [
+                    {
+                        "format": "openpgp",
+                        "key": "-----BEGIN PGP PRIVATE KEY BLOCK-----\nAAAA\n"
+                        "-----END PGP PRIVATE KEY BLOCK-----\n",
+                    }
+                ]
+            },
             "signer pgp trailing text": {
                 "signers": [{"format": "openpgp", "key": pgp_open + "extra"}]
             },
@@ -510,7 +541,7 @@ class ConfigTests(unittest.TestCase):
                 trigger.parse_config(json.dumps(data))
 
     def test_text_that_is_not_a_json_object_is_refused(self) -> None:
-        for text in ("", "not json", "[]", "null", '"text"', "{"):
+        for text in ("", "not json", "[]", "null", '"text"', "{", "[" * 200_000):
             with self.subTest(text), self.assertRaises(trigger.ConfigError):
                 trigger.parse_config(text)
 
@@ -519,6 +550,55 @@ class ConfigTests(unittest.TestCase):
     ) -> None:
         config = trigger.parse_config(json.dumps(valid_config_data(playbook="../../etc/EXAMPLE")))
         self.assertNotIn(config.playbook, config.playbooks)
+
+
+class PlaybookInCheckoutTests(unittest.TestCase):
+    """The check on the checkout looks at the files on disk, whatever the commit says."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="pt", dir="/tmp")).resolve()  # noqa: S108
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.checkout = self.root / "checkout"
+        (self.checkout / "ansible" / "playbooks").mkdir(parents=True)
+        (self.checkout / "ansible" / "playbooks" / "host.yml").write_text("x", encoding="utf-8")
+        (self.root / "outside").mkdir()
+        (self.root / "outside" / "host.yml").write_text("x", encoding="utf-8")
+
+    def refusal(self, playbook: str = "ansible/playbooks/host.yml") -> str:
+        """Return the detail of the refusal, or fail if there is none."""
+        with self.assertRaises(trigger.PlaybookNotAllowedError) as caught:
+            trigger.require_playbook_in_checkout(self.checkout, playbook)
+        return caught.exception.detail
+
+    def test_a_plain_file_under_the_playbook_directory_is_accepted(self) -> None:
+        trigger.require_playbook_in_checkout(self.checkout, "ansible/playbooks/host.yml")
+
+    def test_a_playbook_directory_that_is_a_link_inside_the_checkout_is_refused(self) -> None:
+        shutil.move(self.checkout / "ansible" / "playbooks", self.checkout / "real")
+        (self.checkout / "ansible" / "playbooks").symlink_to("../real")
+        self.assertIn(trigger.Why.PLAYBOOK_LINKED.value, self.refusal())
+
+    def test_a_playbook_directory_that_is_a_link_to_a_host_directory_is_refused(self) -> None:
+        shutil.rmtree(self.checkout / "ansible" / "playbooks")
+        (self.checkout / "ansible" / "playbooks").symlink_to(self.root / "outside")
+        self.assertIn(trigger.Why.PLAYBOOK_LINKED.value, self.refusal())
+
+    def test_an_ansible_directory_that_is_a_link_is_refused(self) -> None:
+        shutil.move(self.checkout / "ansible", self.checkout / "alt")
+        (self.checkout / "ansible").symlink_to("alt")
+        self.assertIn(trigger.Why.PLAYBOOK_LINKED.value, self.refusal())
+
+    def test_a_playbook_file_that_is_a_link_is_refused(self) -> None:
+        (self.checkout / "ansible" / "playbooks" / "host.yml").unlink()
+        (self.checkout / "ansible" / "playbooks" / "host.yml").symlink_to(
+            self.root / "outside" / "host.yml"
+        )
+        self.assertIn(trigger.Why.PLAYBOOK_LINKED.value, self.refusal())
+
+    def test_a_missing_playbook_and_a_directory_are_refused(self) -> None:
+        self.assertIn(trigger.Why.PLAYBOOK_ESCAPES.value, self.refusal("ansible/playbooks/no.yml"))
+        (self.checkout / "ansible" / "playbooks" / "d.yml").mkdir()
+        self.assertIn(trigger.Why.PLAYBOOK_ESCAPES.value, self.refusal("ansible/playbooks/d.yml"))
 
 
 class ConfigFileTests(unittest.TestCase):
@@ -762,8 +842,17 @@ class EndToEndTests(unittest.TestCase):
         commits["symlink"] = cls.remote.commit(
             {play: "->../../../etc/hostname"}, "link", commits["no_playbook"], a
         )
+        outside = cls.root / "outside"
+        outside.mkdir()
+        (outside / "host.yml").write_text(playbook_text("outside"), encoding="utf-8")
+        commits["dir_link_inside"] = cls.remote.commit_playbooks_link(
+            "../real", {"real/host.yml": playbook_text("inside")}, commits["symlink"], a
+        )
+        commits["dir_link_outside"] = cls.remote.commit_playbooks_link(
+            str(outside), {}, commits["dir_link_inside"], a
+        )
         commits["tip"] = cls.remote.commit(
-            {play: playbook_text("tip")}, "tip", commits["symlink"], a
+            {play: playbook_text("tip")}, "tip", commits["dir_link_outside"], a
         )
         side = cls.remote.commit({play: playbook_text("side")}, "side", commits["c2"], a)
         commits["side"] = side
@@ -1082,6 +1171,50 @@ class EndToEndTests(unittest.TestCase):
         self.assert_refused(result, "playbook-not-allowed")
         self.assert_no_new_run(scene)
 
+    def test_a_linked_playbook_directory_is_refused_by_each_guard_on_its_own(self) -> None:
+        for name in ("dir_link_inside", "dir_link_outside"):
+            with self.subTest(name):
+                scene = self.make_scene()
+                self.prime(scene)
+                commit = self.commits[name]
+                with self.no_change_to_the_host(scene):
+                    both = self.request(scene, commit)
+                self.assert_refused(both, "playbook-not-allowed")
+                self.assertIn(trigger.Why.PLAYBOOK_NOT_REGULAR.value, both.errors)
+                # The commit test deleted: the check on the checkout alone refuses.
+                with (
+                    self.no_change_to_the_host(scene),
+                    mock.patch.object(trigger.Cache, "regular_file_in_commit", return_value=True),
+                ):
+                    without_commit_test = self.request(scene, commit)
+                self.assert_refused(without_commit_test, "playbook-not-allowed")
+                self.assertIn(trigger.Why.PLAYBOOK_LINKED.value, without_commit_test.errors)
+                # The check on the checkout deleted: the commit test alone refuses.
+                with (
+                    self.no_change_to_the_host(scene),
+                    mock.patch.object(trigger, "require_playbook_in_checkout"),
+                ):
+                    without_checkout_test = self.request(scene, commit)
+                self.assert_refused(without_checkout_test, "playbook-not-allowed")
+                self.assertIn(trigger.Why.PLAYBOOK_NOT_REGULAR.value, without_checkout_test.errors)
+                self.assert_no_new_run(scene)
+
+    def test_the_commit_test_alone_sees_a_linked_directory_and_a_good_commit(self) -> None:
+        scene = self.make_scene()
+        tools = trigger.Tools(git=GIT, ssh_keygen=SSH_KEYGEN)
+        cache = trigger.Cache(
+            trigger.Git(tools, scene.remote.bare, scene.root), f"file://{scene.remote.bare}"
+        )
+        play = "ansible/playbooks/host.yml"
+        for name, expected in (
+            ("dir_link_inside", False),
+            ("dir_link_outside", False),
+            ("symlink", False),
+            ("tip", True),
+        ):
+            with self.subTest(name):
+                self.assertEqual(expected, cache.regular_file_in_commit(self.commits[name], play))
+
     def test_a_commit_older_than_the_one_last_applied_is_refused(self) -> None:
         scene = self.make_scene()
         self.assertEqual(10, self.request(scene, self.commits["c6"]).code)
@@ -1175,6 +1308,32 @@ class EndToEndTests(unittest.TestCase):
         result = self.request(scene, self.commits["c6"], stop=stop)
         self.assertEqual(30, result.code, result.summary + result.errors)
         self.assertTrue(result.has("reason=interrupted"))
+
+    def test_a_stop_that_arrives_before_the_playbook_starts_leaves_the_floor_alone(self) -> None:
+        scene = self.make_scene()
+        stop = threading.Event()
+        stop.set()
+        result = self.request(scene, self.commits["c6"], stop=stop)
+        self.assertEqual(30, result.code, result.summary + result.errors)
+        self.assertTrue(result.has("reason=interrupted"))
+        self.assertFalse((scene.state / "last-applied").exists())
+        self.assertFalse((scene.state / "current").exists())
+        self.assertEqual([], self.calls(scene))
+
+    def test_the_environment_git_runs_in_is_clean_whatever_the_caller_sets(self) -> None:
+        scene = self.make_scene()
+        hostile = {
+            "GIT_DIR": "/nonexistent/EXAMPLE",
+            "GIT_EXEC_PATH": "/nonexistent/EXAMPLE",
+            "GIT_OBJECT_DIRECTORY": "/nonexistent/EXAMPLE",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.hooksPath",
+            "GIT_CONFIG_VALUE_0": "/nonexistent/EXAMPLE",
+            "GIT_SSH_COMMAND": "/nonexistent/EXAMPLE",
+        }
+        with mock_environment(hostile):
+            result = self.request(scene, self.commits["c6"])
+        self.assertEqual(10, result.code, result.summary + result.errors)
 
     def test_a_missing_program_is_an_error_not_a_refusal(self) -> None:
         missing = Path("/nonexistent/ansible-playbook")

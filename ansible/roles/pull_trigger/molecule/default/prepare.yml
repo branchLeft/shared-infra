@@ -11,6 +11,11 @@
       ansible.builtin.apt:
         update_cache: true
 
+    - name: Install sudo, which only the test of the non-root route uses and the role never does
+      ansible.builtin.apt:
+        name: sudo
+        state: present
+
     - name: Install the programs the trigger runs, with the role's own task file
       ansible.builtin.include_role:
         name: branchleft.pull_trigger

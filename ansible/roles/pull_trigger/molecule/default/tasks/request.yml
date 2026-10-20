@@ -8,7 +8,7 @@
 - name: 'Run the trigger: {{ request_name }}'
   ansible.builtin.command:
     argv:
-      - '{{ verify_program }}'
+      - '{{ request_program | default(verify_program) }}'
       - --mode
       - '{{ request_mode | default("apply") }}'
       - --config
