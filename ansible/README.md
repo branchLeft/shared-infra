@@ -122,9 +122,12 @@ changed; when none did, the other jobs are skipped and the gate passes.
 
 The workflow has three kinds of job:
 
-- `discover` lists the roles and patterns that hold a `molecule/` directory,
-  plus the fresh-role skeleton, from the repository tree. It fails if the list
-  is empty, so the shard job cannot skip silently.
+- `discover` lists every directory directly under `ansible/roles/` and
+  `ansible/patterns/`, plus the fresh-role skeleton, from the repository tree.
+  It fails if the list is empty, so the shard job cannot skip silently. A
+  directory with no `molecule/` scenario is still listed, and its shard fails at
+  the `scenario-limits` step. A directory name containing a newline splits into
+  two entries; both fail, so the gate is red.
 - `lint` runs the static checks once: yamllint, ansible-lint, mypy, ruff and the
   harness's unit tests.
 - `shard` runs the harness once for each entry `discover` listed, in parallel.
@@ -133,12 +136,13 @@ The workflow has three kinds of job:
 
 The gate job is named `Lint and test the Ansible roles`. The ruleset requires
 a check with exactly that name, and a matrix job would report its checks under
-other names, so the gate stays one job. It needs every other job and fails
-unless each of them succeeded, skipped jobs included.
+other names, so the gate stays one job. It fails unless `discover` succeeded
+and, when the Ansible inputs changed, `lint` and every shard succeeded. When
+nothing changed, `lint` and the shards are skipped and the gate passes.
 
-How to add a pattern: nothing to edit here. A directory under
-`ansible/patterns/` or `ansible/roles/` with a `molecule/` directory is picked
-up by `discover` on the next run.
+How to add a pattern: nothing to edit here. A directory directly under
+`ansible/patterns/` or `ansible/roles/` is picked up by `discover` on the next
+run. It needs a `molecule/default/molecule.yml` to pass its shard.
 
 ## The scenario limits the harness reads
 
