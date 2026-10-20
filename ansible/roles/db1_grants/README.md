@@ -135,9 +135,10 @@ python3 -m venv .venv
 ```
 
 To run only the refusal cases a change touches, on an instance kept up with
-`molecule converge`, add `-- -e db1_grants_verify_only=REGEX` to `molecule verify`:
-the regex is matched against the cases' names in `molecule/default/vars/cases.yml`,
-and the positive cases are skipped. The harness always runs everything.
+`molecule converge`, run `DB1_GRANTS_VERIFY_ONLY=REGEX molecule verify`: the regex
+is matched against the cases' names in `molecule/default/vars/cases.yml`, and the
+positive cases are skipped unless `DB1_GRANTS_VERIFY_POSITIVE=true`. The harness
+sets neither, so it always runs everything.
 
 The harness needs Docker and creates one container with no network. The unit tests
 need no container and are not run by CI; run them before proposing a change.
