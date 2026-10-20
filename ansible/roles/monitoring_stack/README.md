@@ -182,7 +182,43 @@ What each part of the scenario does:
   `--check --diff` before the first apply and against the configured instance and
   shows no drift.
 
-SABOTAGE_TABLE_PLACEHOLDER
+What breaks which step. Each row is an edit made with the editor, one harness run
+(the whole harness over this role, so the lint and every container step run), and a
+`git restore` with a clean tree afterwards, on 2026-10-20. The harness run is the
+retrieval: make the row's edit and run it to see the message.
+
+| Edit to the role                                                          | Step that fails | Assertion that names it                                                                                                                                                |
+| ------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The task that installs the drop-in removed                                | `converge`      | "systemd does not hold the drop-in the role installed (MemoryMax 1073741824)"                                                                                          |
+| The `notify` of the drop-in task removed (no daemon-reload)               | `converge`      | the same assertion                                                                                                                                                     |
+| Mode of the delivered files changed from `0644` to `0640`                 | `verify`        | "alertmanager/alertmanager.yml.tmpl is missing on the instance, is not a regular file owned by root with mode 0644, or differs from" the source (one failure per file) |
+| `files/stack` replaced by a copy with one byte of `blackbox.yml` changed  | `verify`        | "blackbox/blackbox.yml is ... or differs from" its source in `hetzner/monitoring/stack`                                                                                |
+| `compose.yml` removed from `monitoring_stack_files`                       | `verify`        | "compose.yml is missing on the instance, is not a regular file ..."                                                                                                    |
+| The drop-in directory name changed by one character (`monitorinq`)        | `converge`      | the same assertion as the first row                                                                                                                                    |
+| A new file added to `hetzner/monitoring/stack/` (not touched by the role) | `verify`        | "zz_probe_file.txt is missing on the instance, is not a regular file ..."                                                                                              |
+
+The first two rows share one message because it covers both causes (no drop-in, or no
+reload); the rows differ in the edit, and each was run on its own. The row for the
+copy also made the lint and yamllint steps fail, because a real copy puts the
+stack's YAML under the lint: a second reason for the link.
+
+An earlier version of the converge started no unit, and the second row stayed green:
+systemd unloads an inactive unit that nothing refers to and reads the new drop-in from
+disk with no reload. The converge now starts the placeholder instance so systemd keeps
+the earlier drop-in loaded, and the second row went red. The control for the reload is
+therefore the converge's question to systemd, not the verify play.
+
+Reviewed or asserted, but not proven by a sabotage run (a control with no row above is
+not shown to fail):
+
+- the mode `0755` of the directories, and `owner`/`group` of every file and directory
+  (the last cannot be told from a default on a root instance);
+- the `DropInPaths` and `CPUWeight` assertions in `verify.yml` (`MemoryMax` is proven
+  through the converge rows);
+- the assertion that every image in the Compose file is pinned by digest;
+- the assertion that each file named in `verify_not_carried` still exists;
+- the always-changed variant of the idempotence step: the step is the harness's, not
+  run against a deliberately non-idempotent edit of this role.
 
 ### Named limits
 
