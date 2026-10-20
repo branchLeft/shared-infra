@@ -19,8 +19,10 @@ follows the order the standard sets for a role README (ANS-14).
    `NTFY_OWNER_PASSWORD_HASH` and `NTFY_MACHINE_PASSWORD_HASH`, with the values
    the caller gives. Any other line in the file is left in place.
 2. It creates the project directory `/opt/branchleft/monitoring` and its
-   subdirectories, and copies the committed files of the stack from
-   `hetzner/monitoring/stack/` into it, each owned by root with mode `0644`.
+   subdirectories, and copies the committed files the unit runs from
+   `hetzner/monitoring/stack/` into it, each owned by root with mode `0644`. That
+   includes `render_alertmanager_config.py`, which the unit's drop-in runs before
+   the stack starts (see "One home for the stack" for the files left out).
 3. It restarts `branchleft-compose@monitoring.service` when a credential line or a
    stack file changed. The unit's drop-in runs the Alertmanager and ntfy renderer
    before the stack starts, so the restart is what applies the change.
@@ -93,7 +95,8 @@ repository, not in a playbook, and not in a test.
 - `/opt/branchleft/monitoring` and under it the directories `alertmanager`,
   `blackbox`, `grafana/provisioning/datasources`, `ntfy` and `prometheus` (and their
   parents): `root:root`, mode `0755`.
-- The eight stack files, each `root:root` mode `0644`, copied from the repository.
+- The nine stack files the unit runs, each `root:root` mode `0644`, copied from the
+  repository.
 - `branchleft-compose@monitoring.service` restarted, once, when a credential line or
   a stack file changed. Not restarted on a second run with no change.
 
@@ -119,15 +122,35 @@ Each difference is a choice the runbook's shell made that this role does not cop
   each time. A restart on every run would make every second run report a change,
   so the role restarts only when a credential line or a stack file changed. The
   restart still runs the renderer and reloads the stack with the new files.
+- **The runbook's post-restart journal check is not carried over.** Section 3 of
+  the runbook greps the unit's journal for the line "ntfy pager is DISABLED" after
+  the restart and expects no match. The role has no such task. Its verify checks
+  that the unit is `active` and that the files and the secrets file are as set,
+  not the journal text. Whether to keep the journal check is the owner's call; if
+  it is wanted, it is one task after the restart and is not added here.
 
 ## One home for the stack
 
 `files/stack` is a link to `hetzner/monitoring/stack`, the same link the
 `monitoring_stack` role uses, so the role holds no copy of the files. The file
-list in `vars/main.yml` is the list that role carries. Two roles now deliver the
-same files; applying both to one host copies the same bytes twice, and each role
-restarts the unit on its own change. Choosing one of them as the owner of the stack is a later decision and is
-listed as discovered work in the pull request.
+list in `vars/main.yml` is the list that role carries, plus
+`render_alertmanager_config.py`, because the unit's `ExecStartPre` runs it: the
+unit rewrites `alertmanager.yml` and the ntfy `server.yml` from the `NTFY_` values
+this role writes, so the role delivers the renderer it depends on rather than
+assuming a copy from an earlier install.
+
+Two files of the stack are left out, on purpose:
+
+- `render_alertmanager_config.md`, the notes beside the renderer. Nothing on the
+  host runs it, and the notes are for people reading the repository.
+- `snds/collect_snds_metrics.py`. The unit does not run it: the `snds-collector`
+  timer does, and that timer belongs to the exporters and collectors work named in
+  the `monitoring_stack` README.
+
+Two roles now deliver the same files, and the renderer is delivered by this role
+too. Applying both to one host copies the same bytes twice, and each role restarts
+the unit on its own change. Choosing one of them as the owner of the stack is a
+later decision and is listed as discovered work in the pull request.
 
 ## How to test it
 
@@ -153,10 +176,18 @@ What each part of the scenario does:
   strings, not credentials, and are literals so a second converge writes the same
   lines.
 - `idempotence`: a second converge reports zero changed tasks.
+- `converge.yml` ends with a harmless command given a canary argument, with no
+  `no_log`. It is the control of the log scan.
+- `molecule.yml` writes the Ansible log of the run to the scenario's directory at
+  verbosity 3, so a task's arguments are in it.
 - `verify.yml`: each `NTFY_` key holds its sentinel once, the other key is kept
   (the file is read under `no_log` and no value is printed); the file is `root:root`
   `0600`; every stack file is `root:root` `0644` and equal to its source through the
-  role's link; the unit is `active` after the role ran.
+  role's link, the source read on the controller; the unit is `active` after the
+  role ran; the log holds the canary and the role's task name, and holds none of the
+  four sentinel values. The log scan is the proof that `no_log` is on the tasks that
+  handle a value: removing it from the task that writes the lines makes the scan
+  fail.
 - `check-fresh`, `check-configured` and `molecule-check` run the role under
   `--check --diff` against the fresh and the configured container.
 

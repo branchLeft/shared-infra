@@ -58,6 +58,8 @@
         label: '{{ item }}'
       register: ntfy_pager_verify_dest
 
+    # The repository does not exist inside the container, so this stat runs on the
+    # controller, as monitoring_stack's verify does.
     - name: Look at each file of the stack in the repository, through the role's link
       ansible.builtin.stat:
         path: '{{ playbook_dir }}/../../files/stack/{{ item }}'
@@ -66,6 +68,7 @@
       loop_control:
         label: '{{ item }}'
       register: ntfy_pager_verify_src
+      delegate_to: localhost
 
     - name: Assert each delivered file is a root-owned regular file, mode 0644, equal to its source
       ansible.builtin.assert:
@@ -75,6 +78,7 @@
           - item.0.stat.pw_name == 'root'
           - item.0.stat.gr_name == 'root'
           - item.0.stat.mode == '0644'
+          - item.1.stat.exists
           - item.0.stat.checksum == item.1.stat.checksum
         quiet: true
         fail_msg: '{{ item.0.item }} is missing, is not a root-owned file with mode 0644, or differs from its source.'
@@ -93,3 +97,39 @@
           - ntfy_pager_verify_unit.status.ActiveState == 'active'
         quiet: true
         fail_msg: The monitoring stack unit is not active after the role ran.
+
+    # ----- The log of this scenario's Ansible runs -----
+    # The four values are given to the role as sentinels. A task that handles one
+    # and lacks no_log prints it at verbosity 3, so the log of the run must not
+    # hold any of them. The canary is the control: a task without no_log given a
+    # known argument, which the log must show, so an empty scan proves something.
+    # Nothing below prints a value or a line of the log.
+    - name: Read the log of this scenario's Ansible runs
+      ansible.builtin.set_fact:
+        ntfy_pager_verify_log: "{{ lookup('ansible.builtin.file', lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') ~ '/ansible.log') }}"
+      no_log: true
+
+    - name: Assert the log holds the output the scan is meant to read
+      ansible.builtin.assert:
+        that:
+          - "'NTFY_PAGER_LOG_CANARY' in ntfy_pager_verify_log"
+          - "'Write the four NTFY_ lines into the monitoring secrets file' in ntfy_pager_verify_log"
+        quiet: true
+        fail_msg: The log lacks the canary or the role's task name, so an empty scan would prove nothing.
+      no_log: true
+
+    - name: Assert the log holds none of the four sentinel values
+      ansible.builtin.assert:
+        that:
+          - "'test-sentinel-pager-token-0001' not in ntfy_pager_verify_log"
+          - "'test-sentinel-watcher-token-0002' not in ntfy_pager_verify_log"
+          - "'test-sentinel-owner-hash-0003' not in ntfy_pager_verify_log"
+          - "'test-sentinel-machine-hash-0004' not in ntfy_pager_verify_log"
+        quiet: true
+        fail_msg: A sentinel value of the NTFY_ lines is in the Ansible log, so a task that handles it lacks no_log.
+      no_log: true
+
+    - name: Forget the log content, which may hold the values
+      ansible.builtin.set_fact:
+        ntfy_pager_verify_log: ''
+      no_log: true

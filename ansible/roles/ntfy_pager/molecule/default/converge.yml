@@ -15,3 +15,14 @@
         # Molecule links the role under its namespace and name, the namespace
         # from galaxy_info in meta/main.yml.
         name: branchleft.ntfy_pager
+
+    # The control case for the log scan in verify.yml: a task with no no_log that
+    # is given a known canary. If the log did not show it, an empty result of the
+    # scan would mean nothing.
+    - name: Run a harmless command that is given a canary argument
+      ansible.builtin.command:
+        argv:
+          - /bin/true
+          - NTFY_PAGER_LOG_CANARY
+      changed_when: false
+      check_mode: false
