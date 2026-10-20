@@ -136,4 +136,138 @@ available for this host; until then this role is tested and not delivered.
   pass. A download that cannot satisfy the first, or a password the second
   refuses, is the thing to fix.
 
-PLACEHOLDER_README_REST
+## What it replaces, and why each parameter is set
+
+The two hand-run scripts did these jobs with shell and Python on the host: they
+fetched the repository key live, wrote a repository entry, installed packages
+and wrote the credentials file. The role does the same jobs with modules, and
+differs in these ways, each on purpose.
+
+- **The key is a file of the role, not a fetch.** A key fetched at run time is
+  trusted because of where it came from on that day; a vendored file with a pinned
+  digest is trusted because a human compared it with the vendor's published
+  fingerprint once, and a change to it stops the run. The pattern this role
+  follows (`packages_and_downloads`) forbids the live fetch for that reason.
+- **The repository is a deb822 `.sources` file signed by one named key file**
+  (`Signed-By`), not a key added to the system keyring. The key can then sign this
+  repository only.
+- **The pin file has priority 1001 and covers `mysql-common` too.** A priority above
+  1000 makes apt choose the pinned line even over a newer candidate, and
+  `mysql-common` is shared by all the others: leaving it out would let it move to a
+  newer line and pull the rest with it.
+- **The suite is `bookworm` on a Debian 13 host.** The vendor publishes the 8.0
+  component under that release only.
+- **`libaio1` is a downloaded package file with a pinned sha256**, installed by
+  path, so the apt module is never handed a URL or an unchecked file.
+- **The exporter file is created empty first, then written.** See "What the test
+  proves" below for the reason.
+- **The password rules are the exporter's, not Ansible's.** The exporter expands a
+  dollar sign, unquotes a double quote and treats a number sign, a semicolon and a
+  backslash as syntax, so any of them makes it send a different password from the
+  one the database holds. The role refuses them, and a password shorter than 20
+  characters, before it writes anything. The refusal messages name the rule and
+  never the value. Every pattern ends in `\Z` and not `$`, because `$` also matches
+  before a final line break.
+
+## What the test proves
+
+The test runs in one Debian 13 container with no network. Every control in the
+table is removed in turn, by a single edit, and the whole harness is run: each
+removal makes a named step fail with the message shown, and the file is restored
+afterwards. A control that does not make the test fail when it is removed is not
+claimed.
+
+| Control                                                            | Removed by                                  | The harness then fails at                                                                                                      |
+| ------------------------------------------------------------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| The write task hides its result (`no_log`)                         | deleting `no_log` on the write              | verify, "Assert no sentinel reached the log": the log holds the whole-file text of the exporter file                           |
+| The file mode is `0400`                                            | setting `0644`                              | verify, "Assert the exporter file is private to the exporter's account"                                                        |
+| The file is owned by the exporter's uid                            | setting uid `0`                             | the same task: `mode 0400, uid 0`                                                                                              |
+| The password is refused for a character outside the set            | the anchor `\Z` changed to `$`              | verify, the trailing-line-break case: the role accepted the input                                                              |
+| The same, for every character class                                | the set opened to any text                  | verify, the first bad character: the role accepted the input (the test tries 31 different characters and others)               |
+| The password is refused when shorter than 20                       | the minimum lowered to 1                    | verify, the short case: the role accepted the input                                                                            |
+| The exporter file is created empty and closed before it is written | disabling the task                          | verify, "The task that creates the exporter file empty and closed did not run, so the write created the file"                  |
+| A directory left by Docker at the file path is removed             | disabling the removal                       | verify, the same assertion, because the directory stays in the way                                                             |
+| The key file is compared with its pinned digest                    | deleting the comparison                     | verify, "Expected the role to stop at 'Refuse a repository key whose digest is not the pinned one'"                            |
+| A download carries a sha256 or sha512 digest                       | deleting the form check                     | verify, "Expected the role to stop at 'Refuse a download entry that is not pinned by a sha256 or sha512 digest'"               |
+| The download module checks the digest                              | deleting `checksum:` from `get_url`         | verify, the source scan: "Unpinned download in the role: ... get_url has no checksum"                                          |
+| A package file is installed only from a pinned download            | deleting the destination check              | verify, "Expected the role to stop at 'Refuse a package file that is not the destination of a pinned download'"                |
+| The toolchain is on the 8.0 line                                   | deleting the version match                  | verify, "Expected the role to stop at 'Refuse a MySQL toolchain that is not on the pinned line'"                               |
+| The pin file holds the line                                        | priority `1001` changed to `500`            | verify, "The file /etc/apt/preferences.d/mysql-community-8.0 is not as declared"                                               |
+| The hand-run installer's repository entry is removed               | disabling the removal                       | verify, "Expected the role to stop at 'Refresh the apt index after the repository files changed'": apt refuses the old entry   |
+| The index is refreshed after a repository file changes             | disabling the refresh                       | verify, "Expected the role to stop at 'Refresh the apt index after the repository files changed'": the role accepted the input |
+| No secret is a default                                             | adding one to `defaults/main.yml`           | verify, "The role's defaults/main.yml holds a variable the role does not declare, a password, or a sentinel"                   |
+| The password option is secret in the argument spec                 | deleting `no_log` in `argument_specs.yml`   | verify, "The password option is not required and no_log, or has a default, or the spec holds a sentinel"                       |
+| A second run changes nothing                                       | making the empty-file task rewrite each run | idempotence                                                                                                                    |
+
+Two things the sabotage runs found and the role was changed for:
+
+- Disabling the empty-file task first left every step green: the log check saw
+  only the task's name, which a skipped task still prints. The task now registers
+  its result and the empty-directory case asserts that it changed.
+- Removing `no_log` from the empty-file task also left every step green, so the
+  claim that its output carried a digest of the file was false. The task has no
+  `no_log`, and the scan reads its output on a file that holds the password.
+
+One control is a second layer and is not independently proven: `diff: false` on
+the write. Removing it alone leaves every step green, because `no_log` already
+hides the diff. ANS-16 asks for both, so both stay.
+
+The log scan reads the whole log of every run (verbosity 3): the sentinel text,
+its SHA-1 and MD5, and the SHA-1 and MD5 of the whole file, for the password and
+for the rotated password. Its controls are a canary the converge prints, two task
+names of the role, and a digest the scan must find.
+
+## Where the key comes from, and how a human renews it
+
+`files/mysql-repo-keys.asc` is the vendor's two published signing key files
+joined, the 2025 file first and the 2023 file after it. Both carry the same
+primary key, fingerprint `BCA4 3417 C3B4 85DD 128E C6D4 B7B3 B788 A8D3 785C`,
+and differ in the dates of their self-signatures. The 2025 file's signature
+expires on 2027-10-23; the 2023 file's expired on 2025-10-22. The older one is
+kept because it is the one that still signs some published Release files.
+
+A human renews it. Nothing in this repository fetches the key, and no dependency
+bot sees it.
+
+1. Download the vendor's current signing key files from its repository host and
+   read the fingerprint the vendor publishes in its documentation.
+2. Run `gpg --show-keys --with-colons FILE` on each and compare the `fpr` lines
+   with the published fingerprint.
+3. Join the files into `files/mysql-repo-keys.asc`, compute `sha256sum` of it, and
+   put that digest in `db1_stack_mysql_key_sha256` in `vars/main.yml` and in
+   `verify_key_sha256` in `molecule/default/verify.yml` in the same change.
+4. Run the whole harness.
+
+## Named limits
+
+- The test has no network. It proves the role refreshes the apt index when a
+  repository file changes by letting that refresh fail offline, and the placeholder
+  packages carry the real package names with versions made for the test. It does
+  not prove that the repository serves the 8.0 line, that the key verifies its
+  Release file, or that the pinned `libaio1` file installs on a Debian 13 host.
+- The download runs against a `file://` URL in the test. The real URL, and the
+  digest in `defaults/main.yml`, are checked by the download module on a real run
+  and by nothing before it.
+- Check mode skips three groups of tasks, each with its reason in the task file:
+  the install of the local package files, the version check of the installed
+  toolchain, and the index refresh. A plan does not show them.
+- A write that fails half way cannot be provoked in the container, so the claim
+  that a failed write leaves the old file whole rests on Ansible's atomic move, not
+  on a test. The `no_log` on the step that computes the password's problems is
+  reviewed, not tested.
+- The window in which the file is open to others is closed by the order of two
+  tasks. The test checks that the first task ran and that its name comes before
+  the write in the log; it cannot watch the filesystem between them.
+- The containers ran on one machine type (arm64 Docker Desktop). The role is not
+  tested on an amd64 host.
+- The role has not been applied to the host. After it is, the hand-run
+  prerequisites script must not be run again.
+- MySQL 8.0 reaches the end of its vendor support at a date this README does not
+  state, because it was not checked here; the database's own ticket owns that.
+
+## Clauses this role exercises
+
+ANS-3 (no shell), ANS-9 (a module before a command), ANS-10 (check mode and what is
+skipped in it), ANS-11 (a second run changes nothing), ANS-14 (this order), ANS-15
+(the test runs in a container only), ANS-16 (secrets, `no_log`, no diff of a
+secret) and ANS-17 (delivery through the gated workflow only).
