@@ -65,10 +65,21 @@ another and a `--tags` list can name it by accident. The confirmation alone is n
 enough, because a confirmation is only read when a tag asks for the step. Both are
 needed, and the scenario proves each separately.
 
-The confirmation check and the state directory carry the `always` tag, so a named
-step tag does not skip them. A confirmation is first checked against the step id pattern in `vars/main.yml`,
-which ends with `\Z`, so a confirmation with a line break in it is refused before
-any step reads it.
+The confirmation check and the state directory carry the `always` tag, because
+Ansible skips an untagged task under `--tags`. A confirmation is first checked
+against the step id pattern in `vars/main.yml`, which ends with `\Z`, so a
+confirmation with a line break in it is refused before any step reads it. A
+confirmation that is not one text value (a list, a mapping or null) is refused by
+the same check or by the step's own check, with the `REFUSED:` message.
+
+**How the calling playbook must include the role.** The guard works only when the
+role's tasks run under `--tags`. A playbook that calls the role with
+`ansible.builtin.import_role`, or with `ansible.builtin.include_role` and
+`tags: always` (as `molecule/default/request.yml` does), gets the `REFUSED:` message.
+A playbook that calls it with `include_role` and no tag on the include exits 0 with
+no task run and no message under a named tag, so the person believes the step ran.
+That case is not refused by this role; the calling playbook must use one of the two
+forms above.
 
 The commands, with a placeholder step id:
 
@@ -166,22 +177,44 @@ marker write:
   assertion, not missed.
 - **Check mode.** The stat runs in check mode as it does in a real run, so a
   requested step in check mode reports the effect and the marker it would change,
-  and writes neither. The `copy` of the marker is skipped by check mode, so it
-  reports that it would change the file.
-- **A task that cannot run in check mode must report a change.** The harness's
-  check-configured step fails on any change, and a check-mode run that skips a task
-  reports nothing for it. A task that cannot run in check mode is therefore written to
-  report `changed`, the rule the no-change check relies on. The placeholder effects use
-  modules that support check mode, except the command in `EXAMPLE_STEP_TWO`, which the
-  limits below name.
+  and writes neither. The `copy` of the marker supports check mode, so it reports the
+  change it would make.
+- **What check mode shows, and the true rule.** Ansible skips a task in check mode
+  when the module does not support check mode, and `changed_when` does not apply to a
+  skipped task. A skipped task reports nothing in the recap, so a check run cannot show
+  that it would run. The placeholder effect of `EXAMPLE_STEP_ONE` (a `file` task, which
+  supports check mode) and its marker (a `copy` task) are reported as changes in check
+  mode, and the scenario asserts that per task. The command of `EXAMPLE_STEP_TWO` is
+  skipped in check mode, so its check-mode result is "skipped", not "changed"; the
+  pattern does not claim otherwise, and the limits name it. A real step whose effect
+  must show in check mode uses a module that supports check mode, or a read-only
+  command with `check_mode: false` and a stated reason (ANS-10).
 
 ### (d) What the test proves, and the named limits
 
-The scenario's verify asserts each claim in the order below, and each assertion
-names the claim it tests. The default Molecule sequence runs all of them, so each
-claim fails by default. The limits are listed under "Named limits". Every control
-the scenario claims was proven red by one edit and one harness run each, and green
-again after the restore.
+Verify asserts these claims, in this order, and each assertion names the claim it
+tests. Molecule's default sequence runs them, so each fails by default. A claim
+marked "reviewed" is not run by the scenario.
+
+- A plain apply runs neither step and writes no marker, and the state directory is
+  root-owned, mode `0755`, over an account-owned directory.
+- The tag alone, and a confirmation with a line break, are refused by name.
+- Each wrong confirmation is refused by name: another step's id, a prefix, a list,
+  and null, each with a step tag; and the second step's tag with the first step's id.
+- The refusals changed no effect and no marker.
+- A check-mode request reports the effect and the marker as changes per task, and
+  writes neither.
+- A request with its tag and confirmation runs the step, writes the marker with its
+  owner, group, mode and text, and the effect has its mode.
+- A second request changes nothing.
+- A step whose effect fails writes no marker, and the next request runs the effect
+  again (the command's failure text is asserted).
+- A first request on a state directory that no plain apply made creates the directory
+  and writes the marker in it.
+
+Reviewed, not tested by the scenario: the marker task of `EXAMPLE_STEP_TWO` and its
+group (see the limits), the `--tags never` run (see the limits), and forgery of a
+marker by root (see the limits).
 
 ### (e) How a service role copies it
 
@@ -259,16 +292,22 @@ What each part of the scenario does:
   on the controller against the same container:
   1. checks the plain apply left no effect and no marker, and the state directory is
      root-owned with mode `0755`;
-  2. requests EXAMPLE_STEP_ONE by its tag alone, and with a confirmation holding a line
-     break, and asserts each is refused with its message;
+  2. requests EXAMPLE_STEP_ONE by its tag alone, with a confirmation holding a line
+     break, and with each wrong confirmation (another step's id, a prefix, a list, null,
+     and the other step's tag with the first step's id), and asserts each is refused
+     with its message;
   3. checks the refusals left no effect and no marker;
-  4. requests EXAMPLE_STEP_ONE in check mode and asserts it reports a change, then
-     checks it wrote no marker and ran no effect;
+  4. requests EXAMPLE_STEP_ONE in check mode with the JSON callback, and asserts the
+     effect and the marker are each reported as a change, then checks it wrote no
+     marker and ran no effect;
   5. requests EXAMPLE_STEP_ONE with its tag and confirmation and checks the effect's
-     mode, the marker's owner, mode and text;
+     mode, the marker's owner, group, mode and text;
   6. requests it a second time and asserts zero changes;
   7. requests EXAMPLE_STEP_TWO, whose effect fails, twice, and checks both fail, the
-     second trying the effect again, and that no marker was written.
+     second trying the effect again (the command's failure text), and that no marker was
+     written;
+  8. requests EXAMPLE_STEP_ONE on a state directory that no plain apply made, and checks
+     the directory is created root-owned with mode `0755` and holds the marker.
 - `check-configured` runs the converge in check mode on the configured container. It
   reports no change, because the steps are skipped.
 - `molecule-check` is Molecule's own `check` action.
@@ -319,6 +358,22 @@ a terminal, once that workflow exists. Until then no step runs on any host.
   `ansible.builtin.command` is skipped in check mode, so the scenario makes no claim
   about the check-mode result of that step. A real command effect that must show its
   change in check mode needs a module, or a check of its own.
+- **Step two's marker task never runs to completion.** Step two always fails, so the
+  scenario never writes its marker. The marker task's text and group are the same
+  template as step one's, and they are reviewed, not tested.
+- **`--tags never` runs every never-tagged task, both steps included.** With a
+  confirmation that names only one step, that step runs, then the other step refuses
+  and the play stops: a partial effect followed by a failure. Each step still needs its
+  own confirmation. A calling playbook must request one step per run.
+- **A confirmation set as a variable in an inventory or a play is not a request.** It
+  defeats the second key: any run that carries the variable runs the step whenever the
+  tag is named. The confirmation is meant to be typed on the command line.
+- **`oneoff_guarded_tasks_state_dir` takes any path.** A path that is not a host
+  directory, or one shared with other users, is accepted, and the role sets it root
+  `0755`. The caller chooses the directory; the role does not check it.
+- **Root can forge a marker.** Anyone with root can create a file of a step's name, and
+  the step is then skipped. The marker records that a step ran according to the host's
+  own files; it is not a signed record.
 
 ## What it does not prove
 
@@ -327,8 +382,8 @@ a terminal, once that workflow exists. Until then no step runs on any host.
   host-local.
 - That the approved delivery path runs it. That path is separate work.
 - That every spelling of a command line is refused. The scenario tests the tag alone,
-  the confirmation with a line break, and the tag with its confirmation; it does not test
-  `--tags all` or other tag lists.
+  the wrong confirmations listed above, the confirmation with a line break, and the tag
+  with its confirmation; it does not test `--tags all` or other tag lists.
 - That a changed role still refuses a tag without its confirmation. The scenario
   checks the two shipped steps; a new step needs its own check, which the README's
   "How a service role copies it" asks for.

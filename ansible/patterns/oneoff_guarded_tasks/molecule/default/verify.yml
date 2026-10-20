@@ -54,6 +54,22 @@
     # two characters the extra-vars parser reads back as one.
     oneoff_guarded_tasks_line_break_extra:
       oneoff_guarded_tasks_confirm: "EXAMPLE_STEP_ONE\n"
+    oneoff_guarded_tasks_wrong_confirmations:
+      - tag: oneoff_guarded_tasks_step_one
+        confirm: EXAMPLE_STEP_TWO
+        message: 'REFUSED: EXAMPLE_STEP_ONE was requested by its tag without'
+      - tag: oneoff_guarded_tasks_step_one
+        confirm: EXAMPLE_STEP
+        message: 'REFUSED: EXAMPLE_STEP_ONE was requested by its tag without'
+      - tag: oneoff_guarded_tasks_step_one
+        confirm: ['EXAMPLE_STEP_ONE']
+        message: 'REFUSED: oneoff_guarded_tasks_confirm is not a step id'
+      - tag: oneoff_guarded_tasks_step_one
+        confirm: null
+        message: 'REFUSED: EXAMPLE_STEP_ONE was requested by its tag without'
+      - tag: oneoff_guarded_tasks_step_two
+        confirm: EXAMPLE_STEP_ONE
+        message: 'REFUSED: EXAMPLE_STEP_TWO was requested by its tag without'
   tasks:
     - name: Request the step with its tag and no confirmation
       ansible.builtin.command:
@@ -86,25 +102,50 @@
         quiet: true
         fail_msg: A confirmation with a line break was not refused by the step id check.
 
+    # A wrong confirmation: another step's id, a prefix, a list, and a null. Each
+    # is requested with a real step tag, and each must be refused by its message.
+    # The step-two case asks the other step's tag with the first step's id.
+    - name: Request each step with a wrong confirmation
+      ansible.builtin.command:
+        argv: "{{ oneoff_guarded_tasks_request + ['--tags', item.tag, '-e', {'oneoff_guarded_tasks_confirm': item.confirm} | to_json] }}"
+      loop: '{{ oneoff_guarded_tasks_wrong_confirmations }}'
+      loop_control:
+        label: '{{ item.tag }} with {{ item.confirm | to_json }}'
+      register: oneoff_guarded_tasks_wrong_runs
+      failed_when: false
+      changed_when: false
+
+    - name: Assert each wrong confirmation is refused by its named message
+      ansible.builtin.assert:
+        that:
+          - item.rc != 0
+          - item.item.message in (item.stdout ~ item.stderr)
+        quiet: true
+        fail_msg: A wrong confirmation was not refused by its named message, so a request with it could run the step.
+      loop: '{{ oneoff_guarded_tasks_wrong_runs.results }}'
+      loop_control:
+        label: '{{ item.item.tag }} with {{ item.item.confirm | to_json }}'
+
 # 3. The refusals ran nothing.
 - name: Check the refusals left no effect and no marker
   hosts: all
   gather_facts: false
   tasks:
-    - name: Read the effect and marker of EXAMPLE_STEP_ONE
+    - name: Read the effect and markers of both steps
       ansible.builtin.stat:
         path: '{{ item }}'
       register: oneoff_guarded_tasks_after_refusal
       loop:
         - /var/tmp/EXAMPLE_STEP_ONE.effect
         - '{{ scenario_state_dir }}/EXAMPLE_STEP_ONE'
+        - '{{ scenario_state_dir }}/EXAMPLE_STEP_TWO'
 
     - name: Assert the refused requests changed nothing
       ansible.builtin.assert:
         that:
           - oneoff_guarded_tasks_after_refusal.results | map(attribute='stat') | selectattr('exists') | list | length == 0
         quiet: true
-        fail_msg: A refused request ran EXAMPLE_STEP_ONE or wrote its marker.
+        fail_msg: A refused request ran a step or wrote a marker.
 
 # 4. A check-mode run reports the change it would make, and writes nothing.
 - name: Request EXAMPLE_STEP_ONE in check mode
@@ -117,22 +158,37 @@
       - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
       - '{{ playbook_dir }}/request.yml'
   tasks:
+    # The json callback prints one document with each task's own result, so the
+    # check reads the effect and the marker task by name, not the recap.
     - name: Request the step in check mode with its tag and confirmation
       ansible.builtin.command:
         argv:
           "{{ oneoff_guarded_tasks_request + ['--check', '--tags', 'oneoff_guarded_tasks_step_one',
           '-e', 'oneoff_guarded_tasks_confirm=EXAMPLE_STEP_ONE'] }}"
+      environment:
+        ANSIBLE_STDOUT_CALLBACK: json
       register: oneoff_guarded_tasks_check_run
       failed_when: false
       changed_when: false
 
-    - name: Assert the check run succeeded and reported a change
+    - name: Assert the check run reports the effect and the marker as changes
       ansible.builtin.assert:
         that:
           - oneoff_guarded_tasks_check_run.rc == 0
-          - oneoff_guarded_tasks_check_run.stdout is search('changed=[1-9]')
+          - oneoff_guarded_tasks_effect_tasks | length == 1
+          - (oneoff_guarded_tasks_effect_tasks[0].hosts.values() | first).get('changed', false)
+          - oneoff_guarded_tasks_marker_tasks | length == 1
+          - (oneoff_guarded_tasks_marker_tasks[0].hosts.values() | first).get('changed', false)
         quiet: true
-        fail_msg: The check-mode request did not succeed or did not report the change it would make.
+        fail_msg: The check-mode request did not report the effect and the marker of EXAMPLE_STEP_ONE as changes; a skipped effect would pass silently.
+      vars:
+        oneoff_guarded_tasks_check_tasks: '{{ (oneoff_guarded_tasks_check_run.stdout | from_json).plays[0].tasks }}'
+        oneoff_guarded_tasks_effect_tasks: >-
+          {{ oneoff_guarded_tasks_check_tasks
+          | selectattr('task.name', 'search', 'Run the placeholder effect of EXAMPLE_STEP_ONE') | list }}
+        oneoff_guarded_tasks_marker_tasks: >-
+          {{ oneoff_guarded_tasks_check_tasks
+          | selectattr('task.name', 'search', 'Write the marker of EXAMPLE_STEP_ONE') | list }}
 
 - name: Check the check-mode run wrote nothing
   hosts: all
@@ -206,6 +262,7 @@
           - oneoff_guarded_tasks_after_run.results[0].stat.mode == '0640'
           - oneoff_guarded_tasks_after_run.results[1].stat.exists
           - oneoff_guarded_tasks_after_run.results[1].stat.pw_name == 'root'
+          - oneoff_guarded_tasks_after_run.results[1].stat.gr_name == 'root'
           - oneoff_guarded_tasks_after_run.results[1].stat.mode == '0644'
           - oneoff_guarded_tasks_marker_text.stdout == 'EXAMPLE_STEP_ONE'
         quiet: true
@@ -269,7 +326,7 @@
         that:
           - oneoff_guarded_tasks_fail_first.rc != 0
           - oneoff_guarded_tasks_fail_second.rc != 0
-          - "'Run the failing placeholder command of EXAMPLE_STEP_TWO' in oneoff_guarded_tasks_fail_second.stdout"
+          - "'non-zero return code' in (oneoff_guarded_tasks_fail_second.stdout ~ oneoff_guarded_tasks_fail_second.stderr)"
         quiet: true
         fail_msg: The failing step did not fail both times, or the second request did not try its effect again.
 
@@ -288,3 +345,56 @@
           - not oneoff_guarded_tasks_marker_two.stat.exists
         quiet: true
         fail_msg: A step whose effect failed wrote its marker, so the next request would skip it.
+
+# 8. The first request on a host with no state directory, where no plain apply
+# has run, creates the directory and writes the marker in it.
+- name: Request EXAMPLE_STEP_ONE on a state directory that no plain apply made
+  hosts: localhost
+  gather_facts: false
+  vars:
+    oneoff_guarded_tasks_fresh_dir: /var/lib/oneoff_guarded_tasks_fresh
+    oneoff_guarded_tasks_request:
+      - ansible-playbook
+      - -i
+      - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+      - '{{ playbook_dir }}/request.yml'
+  tasks:
+    - name: Request the step with its tag and confirmation, into the fresh directory
+      ansible.builtin.command:
+        argv: "{{ oneoff_guarded_tasks_request + ['--tags', 'oneoff_guarded_tasks_step_one',
+          '-e', 'oneoff_guarded_tasks_confirm=EXAMPLE_STEP_ONE',
+          '-e', 'scenario_state_dir=' ~ oneoff_guarded_tasks_fresh_dir] }}"
+      register: oneoff_guarded_tasks_fresh_run
+      failed_when: false
+      changed_when: false
+
+    - name: Assert the first request on the fresh directory succeeded
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_fresh_run.rc == 0
+        quiet: true
+        fail_msg: >-
+          The first request on a state directory that no plain apply made did not
+          succeed, so the role does not create that directory itself under a tag.
+
+- name: Check the first request made the directory and wrote the marker in it
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the fresh directory and the marker in it
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      register: oneoff_guarded_tasks_fresh_stat
+      loop:
+        - /var/lib/oneoff_guarded_tasks_fresh
+        - /var/lib/oneoff_guarded_tasks_fresh/EXAMPLE_STEP_ONE
+
+    - name: Assert the directory is root-owned, mode 0755, and holds the marker
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_fresh_stat.results[0].stat.exists
+          - oneoff_guarded_tasks_fresh_stat.results[0].stat.pw_name == 'root'
+          - oneoff_guarded_tasks_fresh_stat.results[0].stat.mode == '0755'
+          - oneoff_guarded_tasks_fresh_stat.results[1].stat.exists
+        quiet: true
+        fail_msg: The first request on a fresh state directory did not leave a root-owned 0755 directory holding the marker.

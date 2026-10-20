@@ -17,7 +17,9 @@ argument_specs:
           id. Created root-owned, mode 0755. Host-local: a rebuilt host has none.
         default: /var/lib/oneoff_guarded_tasks
       oneoff_guarded_tasks_confirm:
-        type: str
+        # raw, not str: a list or a mapping must reach the role's own step id check
+        # and be refused there by name, not by Ansible's type error.
+        type: raw
         description: >-
           The step id this run confirms. Empty on a plain apply. A guarded step
           runs only when its tag is named and this is exactly its step id.

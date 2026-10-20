@@ -10,10 +10,11 @@
 - name: Refuse a confirmation that is not a step id
   ansible.builtin.assert:
     that:
+      - oneoff_guarded_tasks_confirm is string
       - oneoff_guarded_tasks_confirm is match(oneoff_guarded_tasks_step_id_pattern)
     quiet: true
-    fail_msg: 'REFUSED: oneoff_guarded_tasks_confirm is not a step id (capitals, digits and underscore only, no line break).'
-  when: oneoff_guarded_tasks_confirm | length > 0
+    fail_msg: 'REFUSED: oneoff_guarded_tasks_confirm is not a step id (one text value of capitals, digits and underscore, no line break).'
+  when: oneoff_guarded_tasks_confirm is not none and (oneoff_guarded_tasks_confirm | string | length) > 0
   tags:
     - always
 
