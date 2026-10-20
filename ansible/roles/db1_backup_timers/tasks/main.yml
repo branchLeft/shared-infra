@@ -25,6 +25,8 @@
 # Fetched as they are at the pinned ghost-platform commit, never copied into the
 # role, and each fetch is checked against its pinned digest. The units run these
 # with /usr/bin/python3, so no program is executable and no program is rendered.
+# Check mode creates no directory, so on a fresh host there is nowhere for a fetch
+# to write; the fetches are skipped in check mode and run for real.
 - name: Fetch the provision programs and their modules from ghost-platform
   ansible.builtin.get_url:
     url: '{{ db1_backup_timers_ghost_raw_base }}/db/provision/{{ item }}'
@@ -34,6 +36,7 @@
     group: root
     mode: '0644'
   loop: '{{ db1_backup_timers_provision_files }}'
+  when: not ansible_check_mode
 
 - name: Fetch the restore and recovery programs from ghost-platform
   ansible.builtin.get_url:
@@ -44,6 +47,7 @@
     group: root
     mode: '0644'
   loop: '{{ db1_backup_timers_recovery_files }}'
+  when: not ansible_check_mode
 
 - name: Deliver the dump, prune and binlog-ship units
   ansible.builtin.copy:
