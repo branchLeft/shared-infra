@@ -1,0 +1,15 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # The test has no Docker daemon inside its container, so the container
+    # checks of the role are off here. Every host keeps them on; the role's
+    # README says so, and the verify play checks the unit itself.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        # Molecule links the role under its namespace and name, the namespace
+        # from galaxy_info in meta/main.yml.
+        name: branchleft.nextcloud_stack
+      vars:
+        nextcloud_stack_check_containers: false

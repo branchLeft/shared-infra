@@ -1,0 +1,40 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # The role's download entry names a placeholder package file on the instance.
+    # Its digest is read from the file, so the test does not depend on the bytes
+    # the package build produces.
+    - name: Read the digest of the placeholder package file the download names
+      ansible.builtin.stat:
+        path: '{{ scenario_package_dir }}/{{ scenario_libaio_name }}'
+        checksum_algorithm: sha256
+      register: db1_stack_converge_libaio
+
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml. The include carries no no_log: the role's own
+    # tasks must be the ones that keep the password out of the log, and a keyword
+    # here would hide a missing one.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.db1_stack
+      vars:
+        db1_stack_exporter_password: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/password') }}"
+        db1_stack_downloads:
+          - url: file://{{ scenario_package_dir }}/{{ scenario_libaio_name }}
+            dest: '{{ scenario_libaio_path }}'
+            checksum: 'sha256:{{ db1_stack_converge_libaio.stat.checksum }}'
+        db1_stack_debs:
+          - '{{ scenario_libaio_path }}'
+
+    # The control case for the log check in verify.yml: a task with no no_log
+    # that is given a known value. If the log did not show it, an empty result
+    # of the sentinel scan would mean nothing.
+    - name: Run a harmless command that is given a canary argument
+      ansible.builtin.command:
+        argv:
+          - /bin/true
+          - SCENARIO_LOG_CANARY
+      changed_when: false
+      check_mode: false

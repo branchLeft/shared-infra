@@ -1,0 +1,115 @@
+---
+# Test setup only, never part of the role. It makes the throwaway password
+# sentinels on the controller, builds the placeholder package files inside the
+# instance (so no binary is committed), installs the three the role expects to
+# find, marks the apt index fresh, and puts the repository files in place so the
+# converge changes none of them. Every task that handles a sentinel has no_log
+# and diff: false: the scan in verify.yml reads the log of this play too.
+- name: Make the throwaway sentinels on the controller
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Make the directory for this run's sentinels
+      ansible.builtin.file:
+        path: '{{ scenario_sentinel_dir }}'
+        state: directory
+        mode: '0700'
+
+    # The /dev/null path makes the lookup keep nothing, and the seed makes the
+    # value repeat, so the same label gives the same value in every play. The
+    # value is a random-looking string made for this scenario, never a real one.
+    - name: Make one sentinel for each label the scenario uses
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.password', '/dev/null seed=' ~ item ~ ' chars=ascii_letters,digits length=40') }}"
+        dest: '{{ scenario_sentinel_dir }}/{{ item }}'
+        mode: '0600'
+      loop: '{{ scenario_sentinel_labels }}'
+      no_log: true
+      diff: false
+
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  # The role's own fixed values, so the repository files below are rendered from
+  # the role's templates with the role's variables and cannot drift from them.
+  vars_files:
+    - ../../vars/main.yml
+  tasks:
+    - name: Create the directory for the placeholder package files
+      ansible.builtin.file:
+        path: '{{ scenario_package_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    # Four placeholder packages. Three carry the names of the packages the role
+    # installs from the index, because the role installs those names; they are
+    # installed here so the role finds them and needs no index. The fourth is the
+    # one the download entry names, so the role installs it itself.
+    - name: Build each placeholder package file
+      ansible.builtin.include_tasks: tasks/build_package.yml
+      loop:
+        - { name: libaio1, version: 0.0.0-1 }
+        - { name: age, version: 1.0.0-1 }
+        - { name: mysql-community-client, version: 8.0.0-1 }
+        - { name: mysql-community-server-core, version: 8.0.0-1 }
+      loop_control:
+        loop_var: package
+        label: '{{ package.name }}'
+
+    - name: Install the three placeholder packages the role expects to find
+      ansible.builtin.apt:
+        deb: '{{ scenario_package_dir }}/{{ item.name }}_{{ item.version }}_all.deb'
+        state: present
+      loop:
+        - { name: age, version: 1.0.0-1 }
+        - { name: mysql-community-client, version: 8.0.0-1 }
+        - { name: mysql-community-server-core, version: 8.0.0-1 }
+      loop_control:
+        label: '{{ item.name }}'
+
+    # apt skips its index refresh while this stamp is younger than the cache
+    # validity, so no refresh runs and nothing is fetched.
+    - name: Mark the apt index as fresh so no refresh runs
+      ansible.builtin.file:
+        path: /var/lib/apt/periodic/update-success-stamp
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'
+
+    # The role refreshes the index only when one of these files changes, and the
+    # container has no network, so the converge must find them already as the
+    # role writes them. They are rendered from the role's own templates.
+    - name: Create the apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Put the repository key file in place
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../files/mysql-repo-keys.asc', rstrip=False) }}"
+        dest: /etc/apt/keyrings/mysql-community.asc
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Put the repository source in place
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../../templates/mysql-community.sources.j2') }}"
+        dest: /etc/apt/sources.list.d/mysql-community.sources
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Put the apt pin in place
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../../templates/mysql-community.pref.j2') }}"
+        dest: /etc/apt/preferences.d/mysql-community-8.0
+        owner: root
+        group: root
+        mode: '0644'

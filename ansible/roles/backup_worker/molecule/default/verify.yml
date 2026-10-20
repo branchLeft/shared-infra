@@ -1,0 +1,183 @@
+---
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+  tasks:
+    # The release directory is whatever current points at, which must be a
+    # directory named for a full commit under the releases directory.
+    - name: Look at the current link
+      ansible.builtin.stat:
+        path: /opt/branchleft/backup-worker/current
+      register: backup_worker_verify_current
+
+    - name: Assert current is a link to a release directory named for a commit
+      ansible.builtin.assert:
+        that:
+          - backup_worker_verify_current.stat.islnk
+          - backup_worker_verify_current.stat.lnk_source is match('^/opt/branchleft/backup-worker/releases/[0-9a-f]{40}\\Z')
+        quiet: true
+        fail_msg: current is not a link to a release directory named for a full commit.
+
+    - name: Name the release directory
+      ansible.builtin.set_fact:
+        backup_worker_verify_release: '{{ backup_worker_verify_current.stat.lnk_source }}'
+
+    # The environment file: root, 0600, one line for each of the nine names the
+    # installer requires. Values are compared and never printed.
+    - name: Look at the environment file
+      ansible.builtin.stat:
+        path: /etc/branchleft/backup-worker.env
+      register: backup_worker_verify_env
+
+    - name: Assert the environment file is a plain file, root:root, mode 0600
+      ansible.builtin.assert:
+        that:
+          - backup_worker_verify_env.stat.exists
+          - backup_worker_verify_env.stat.isreg
+          - backup_worker_verify_env.stat.pw_name == 'root'
+          - backup_worker_verify_env.stat.gr_name == 'root'
+          - backup_worker_verify_env.stat.mode == '0600'
+        quiet: true
+        fail_msg: The environment file is missing, not a plain file, not root:root or not mode 0600.
+
+    - name: Read the environment file
+      ansible.builtin.slurp:
+        src: /etc/branchleft/backup-worker.env
+      register: backup_worker_verify_env_raw
+      no_log: true
+
+    - name: Assert the environment file holds the nine names with the supplied values and no age line
+      ansible.builtin.assert:
+        that:
+          - "('BACKUP_WORKER_DB_HOST=' ~ backup_worker_db_host) in lines"
+          - "('BACKUP_WORKER_MYSQL_USER=' ~ backup_worker_db_user) in lines"
+          - "'BACKUP_WORKER_MYSQL_SSL_CA=/etc/branchleft/db1-ca.pem' in lines"
+          - "('DB_DUMP_MYSQL_PWD=' ~ backup_worker_db_password) in lines"
+          - "('BACKUP_WORKER_COPY_PRIMARY_BUCKET=' ~ backup_worker_bucket) in lines"
+          - "('BACKUP_WORKER_COPY_PRIMARY_ENDPOINT=' ~ backup_worker_s3_endpoint) in lines"
+          - "('BACKUP_WORKER_COPY_PRIMARY_REGION=' ~ backup_worker_s3_region) in lines"
+          - "('BACKUP_WORKER_COPY_PRIMARY_ACCESS_KEY_ID=' ~ backup_worker_s3_access_key_id) in lines"
+          - "('BACKUP_WORKER_COPY_PRIMARY_SECRET_ACCESS_KEY=' ~ backup_worker_s3_secret_access_key) in lines"
+          - lines | length == 9
+        quiet: true
+        fail_msg: The environment file does not hold exactly the nine names with the supplied values.
+      vars:
+        lines: '{{ (backup_worker_verify_env_raw.content | b64decode).splitlines() }}'
+      no_log: true
+
+    # The tenants and recipients files: only root writes, the service account
+    # reads through its group.
+    - name: Look at the tenants and recipients files
+      ansible.builtin.stat:
+        path: '/etc/branchleft/{{ item }}'
+      loop:
+        - backup-worker-tenants
+        - backup-worker-recipients
+      register: backup_worker_verify_lists
+      no_log: true
+
+    - name: Assert both are root:backup-worker, mode 0640
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'backup-worker'
+          - item.stat.mode == '0640'
+        quiet: true
+        fail_msg: The tenants file or the recipients file is missing, or not root:backup-worker 0640.
+      loop: '{{ backup_worker_verify_lists.results }}'
+      loop_control:
+        label: list file
+      no_log: true
+
+    - name: Read the recipients file
+      ansible.builtin.slurp:
+        src: /etc/branchleft/backup-worker-recipients
+      register: backup_worker_verify_recipients
+      no_log: true
+
+    - name: Assert the recipients file holds one slug and public recipient per tenant
+      ansible.builtin.assert:
+        that:
+          - (backup_worker_verify_recipients.content | b64decode).splitlines() | sort == expected | sort
+        quiet: true
+        fail_msg: The recipients file is not one line of slug and recipient per tenant.
+      vars:
+        expected: "{{ backup_worker_tenants | map(attribute='slug') | zip(backup_worker_tenants | map(attribute='recipient')) | map('join', ' ') | list }}"
+      no_log: true
+
+    # The timer is off by default: disabled, not running, though its unit is
+    # installed, so the state is a decision and not an absent file.
+    - name: Ask systemd for the timer
+      ansible.builtin.systemd_service:
+        name: branchleft-backup-worker.timer
+      register: backup_worker_verify_timer
+
+    - name: Assert the timer unit is installed, disabled and not running
+      ansible.builtin.assert:
+        that:
+          - backup_worker_verify_timer.status.LoadState == 'loaded'
+          - backup_worker_verify_timer.status.UnitFileState == 'disabled'
+          - backup_worker_verify_timer.status.ActiveState == 'inactive'
+        quiet: true
+        fail_msg: The nightly timer is not installed and off.
+
+    # The programs: each file in the release is the file the pin names.
+    - name: Look at each release file
+      ansible.builtin.stat:
+        path: '{{ backup_worker_verify_release }}/{{ item.path }}'
+        checksum_algorithm: sha256
+      loop: '{{ backup_worker_release_files }}'
+      loop_control:
+        label: '{{ item.path }}'
+      register: backup_worker_verify_files
+
+    - name: Assert every release file has the pinned checksum, owner and mode
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.checksum == item.item.sha256
+          - item.stat.pw_name == 'root'
+          - item.stat.mode == '0644'
+        quiet: true
+        fail_msg: A release file is missing or differs from its pinned checksum.
+      loop: '{{ backup_worker_verify_files.results }}'
+      loop_control:
+        label: '{{ item.item.path }}'
+
+    - name: Look at the installed units and the CA
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /opt/branchleft/backup-worker/current
+        - /etc/systemd/system/branchleft-backup-worker.service
+        - /etc/systemd/system/branchleft-backup-worker.timer
+        - /etc/branchleft/db1-ca.pem
+      register: backup_worker_verify_misc
+
+    - name: Assert the units and the CA are in place
+      ansible.builtin.assert:
+        that:
+          - backup_worker_verify_misc.results[1].stat.exists
+          - backup_worker_verify_misc.results[1].stat.mode == '0644'
+          - backup_worker_verify_misc.results[2].stat.exists
+          - backup_worker_verify_misc.results[2].stat.mode == '0644'
+          - backup_worker_verify_misc.results[3].stat.exists
+          - backup_worker_verify_misc.results[3].stat.mode == '0644'
+        quiet: true
+        fail_msg: The current link, a unit or the CA is not as the role should leave it.
+
+    - name: Look at the service account
+      ansible.builtin.getent:
+        database: passwd
+        key: backup-worker
+
+    - name: Assert the account is a system account with no login shell
+      ansible.builtin.assert:
+        that:
+          - getent_passwd['backup-worker'][5] == '/usr/sbin/nologin'
+          - getent_passwd['backup-worker'][1] | int < 1000
+        quiet: true
+        fail_msg: The service account is not a system account with a nologin shell.

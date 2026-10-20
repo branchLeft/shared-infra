@@ -1,0 +1,3 @@
+---
+nextcloud_stack_project_dir: /opt/branchleft/nextcloud1
+nextcloud_stack_check_containers: true

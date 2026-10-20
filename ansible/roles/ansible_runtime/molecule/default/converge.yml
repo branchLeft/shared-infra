@@ -1,0 +1,14 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml. The lock is the repository's own, so the
+    # test installs exactly what a host installs. The scenario directory is
+    # ansible/roles/ansible_runtime/molecule/default, four levels below ansible/.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.ansible_runtime
+      vars:
+        ansible_runtime_requirements_src: '{{ playbook_dir }}/../../../../requirements.txt'
