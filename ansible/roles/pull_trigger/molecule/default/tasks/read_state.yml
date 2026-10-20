@@ -1,0 +1,17 @@
+---
+# Read the marker the placeholder playbooks write and the rollback floor.
+# Takes snap_state. Leaves pull_trigger_state_marker and pull_trigger_state_floor as text.
+- name: Read the marker
+  ansible.builtin.slurp:
+    src: '{{ verify_marker }}'
+  register: pull_trigger_read_marker
+
+- name: Read the rollback floor
+  ansible.builtin.slurp:
+    src: '{{ snap_state }}/last-applied'
+  register: pull_trigger_read_floor
+
+- name: Keep both as text
+  ansible.builtin.set_fact:
+    pull_trigger_state_marker: '{{ pull_trigger_read_marker.content | ansible.builtin.b64decode }}'
+    pull_trigger_state_floor: '{{ pull_trigger_read_floor.content | ansible.builtin.b64decode }}'

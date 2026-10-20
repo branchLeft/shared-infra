@@ -1,0 +1,24 @@
+---
+# Describe, in one text, everything a refused request must leave alone: the
+# marker the placeholder playbooks write, the rollback floor, the link to the
+# current checkout and every file in the checkout, with owner, mode, size, time
+# and a hash of each file. Directories are described without size and time,
+# because a directory's own time moves when a fetch or a discarded scratch
+# checkout comes and goes beside the one in use. Two equal texts mean the host
+# is byte for byte as it was. The cache, scratch and home directories are left
+# out: a fetch may touch them without changing what the host runs.
+#
+# Takes snap_state (the state directory). Leaves the text in pull_trigger_snapshot_result.
+- name: Describe the host and the current checkout
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      ( find '{{ verify_marker }}' '{{ snap_state }}/work' '{{ snap_state }}/last-applied' '{{ snap_state }}/current' \
+          ! -type d -printf 'file|%p|%y|%U|%G|%m|%s|%T@|%l\n' 2>&1 || true ) | sort
+      ( find '{{ snap_state }}/work' -type d -printf 'dir|%p|%U|%G|%m\n' 2>&1 || true ) | sort
+      ( find '{{ snap_state }}' -maxdepth 1 -mindepth 1 ! -name repo.git ! -name tmp ! -name home \
+          -printf 'top|%p|%y|%m|%l\n' 2>&1 || true ) | sort
+      ( find '{{ verify_marker }}' '{{ snap_state }}/work/' '{{ snap_state }}/last-applied' -type f -exec sha256sum {} + 2>&1 || true ) | sort
+  register: pull_trigger_snapshot_result
+  changed_when: false

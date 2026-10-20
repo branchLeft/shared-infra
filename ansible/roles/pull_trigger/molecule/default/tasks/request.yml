@@ -1,0 +1,20 @@
+---
+# Run the installed program once, the way a forced command does: the caller's
+# whole text arrives in SSH_ORIGINAL_COMMAND. A refusal is an answer, not a
+# fault, so the exit status is kept for the assertion that follows.
+#
+# Takes request_name, request_text, and optionally request_mode (default apply)
+# and request_config (default the installed configuration).
+- name: 'Run the trigger: {{ request_name }}'
+  ansible.builtin.command:
+    argv:
+      - '{{ request_program | default(verify_program) }}'
+      - --mode
+      - '{{ request_mode | default("apply") }}'
+      - --config
+      - '{{ request_config | default(verify_installed_config) }}'
+  environment:
+    SSH_ORIGINAL_COMMAND: '{{ request_text | string }}'
+  register: pull_trigger_request_result
+  changed_when: false
+  failed_when: false

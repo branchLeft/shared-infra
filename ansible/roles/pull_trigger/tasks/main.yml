@@ -1,0 +1,68 @@
+---
+# The program refuses anything wrong at run time, and is the authority. These
+# checks only fail the converge early for what the interface schema cannot say.
+- name: Refuse a host playbook that is not on the allowlist, and an empty allowlist of signers
+  ansible.builtin.assert:
+    that:
+      - pull_trigger_signers | length > 0
+      - pull_trigger_playbook in pull_trigger_playbooks
+    fail_msg: The signer allowlist must not be empty and the host's playbook must be on the playbook allowlist.
+    quiet: true
+
+- name: Install the programs the trigger runs
+  ansible.builtin.import_tasks: packages.yml
+
+# Root-owned and not writable by others: whoever can edit this file can run
+# anything as root on every apply. The mode is the point of the task.
+- name: Install the trigger program
+  ansible.builtin.copy:
+    src: pull_trigger.py
+    dest: '{{ pull_trigger_program_path }}'
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the configuration directory
+  ansible.builtin.file:
+    path: '{{ pull_trigger_config_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# No secret reaches this file: the signers are public keys. The diff is left on
+# because an approver must see a key added to the allowlist.
+- name: Write the configuration
+  ansible.builtin.copy:
+    content: "{{ pull_trigger_config | ansible.builtin.to_nice_json }}\n"
+    dest: '{{ pull_trigger_config_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    pull_trigger_config:
+      remote_url: '{{ pull_trigger_remote_url }}'
+      signers: '{{ pull_trigger_signers }}'
+      playbooks: '{{ pull_trigger_playbooks }}'
+      playbook: '{{ pull_trigger_playbook }}'
+      ansible_playbook: '{{ pull_trigger_ansible_playbook }}'
+      state_dir: '{{ pull_trigger_state_dir }}'
+      log_dir: '{{ pull_trigger_log_dir }}'
+      timeout_seconds: '{{ pull_trigger_timeout_seconds | int }}'
+      keep_runs: '{{ pull_trigger_keep_runs | int }}'
+
+- name: Create the state directory
+  ansible.builtin.file:
+    path: '{{ pull_trigger_state_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Create the log directory
+  ansible.builtin.file:
+    path: '{{ pull_trigger_log_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
