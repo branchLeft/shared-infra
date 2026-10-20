@@ -46,7 +46,6 @@
     - name: Run the cases that must succeed
       ansible.builtin.include_tasks: 'tasks/{{ item }}.yml'
       loop:
-        - case_check_mode
         - case_stray_module
         - case_repairs
         - case_rotation

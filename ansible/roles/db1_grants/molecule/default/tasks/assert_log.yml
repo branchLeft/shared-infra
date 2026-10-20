@@ -15,6 +15,7 @@
     db1_grants_verify_log_leaks: "{{ db1_grants_verify_log_text | regex_findall(db1_grants_verify_sentinels | join('|')) | length }}"
     db1_grants_verify_log_saw_role: "{{ 'Run one batch of changing statements through the mysql client' in db1_grants_verify_log_text }}"
     db1_grants_verify_log_saw_arguments: "{{ 'invocation' in db1_grants_verify_log_text }}"
+    db1_grants_verify_log_saw_report: "{{ 'db1_grants would change the database: dump account True' in db1_grants_verify_log_text }}"
   no_log: true
 
 # A control for the scan itself: the log must show the role ran and that the
@@ -25,6 +26,15 @@
       - db1_grants_verify_log_saw_role
       - db1_grants_verify_log_saw_arguments
     fail_msg: The log does not show the role's tasks with their arguments, so the scan proves nothing.
+    quiet: true
+
+# The run in check mode on the fresh host (its dump account holds the old set) must
+# have said that a real run would change the database.
+- name: Assert the check-mode run reported the difference
+  ansible.builtin.assert:
+    that:
+      - db1_grants_verify_log_saw_report
+    fail_msg: The role in check mode did not report that a real run would change the dump account.
     quiet: true
 
 - name: Assert the log holds no password

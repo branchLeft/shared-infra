@@ -17,7 +17,8 @@
       {{ (db1_grants_scenario_baseline_slurp.content | b64decode | from_json)
       | combine({'users': (((db1_grants_scenario_baseline_slurp.content | b64decode | from_json).users | dict2items
       | rejectattr('key', 'in', case.state.drop_users | default([])) | list | items2dict)
-      | combine(case.state.users | default({}), recursive=True))})
+      | combine(case.state.users | default({}), recursive=True)
+      | combine(case.state.replace | default({})))})
       | combine(case.state.top | default({})) }}
 
 - name: Put the database in the case's state
@@ -62,11 +63,17 @@
     - name: Assert the role stopped for the reason the case names
       ansible.builtin.assert:
         that:
-          - ('db1_grants[' ~ case.code ~ ']') in (ansible_failed_result.msg | default(''))
+          - ('db1_grants[' ~ case.code ~ ']') in db1_grants_scenario_stopped
         fail_msg: >-
           The case "{{ case.name }}" must stop with db1_grants[{{ case.code }}]. It stopped with:
-          {{ ansible_failed_result.msg | default('no message') }}
+          {{ db1_grants_scenario_stopped }}
         quiet: true
+      vars:
+        # A looped assertion fails with a summary message and keeps each item's own
+        # message in results, so both are read.
+        db1_grants_scenario_stopped: >-
+          {{ ansible_failed_result.msg | default('') }}
+          {{ ansible_failed_result.results | default([]) | map(attribute='msg', default='') | join(' ') }}
   always:
     - name: Read the database as the role left it
       ansible.builtin.slurp:

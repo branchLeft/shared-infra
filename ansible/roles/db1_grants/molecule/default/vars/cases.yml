@@ -7,15 +7,16 @@
 # Fields: name; code (the refusal); tenants and ops1_host (the role inputs for this
 # case, the scenario's own when absent); state
 # (drop_users: accounts removed from the fake database; users: a recursive patch
-# of accounts; top: other keys of the fake database); files (host files spoiled:
+# of accounts; replace: accounts put in whole; top: other keys of the fake database); files (host files spoiled:
 # path plus mode, owner, content or absent, and directory: true for a directory);
 # now (the fake clock, HHMM); marker_absent (files that must not exist afterwards
 # because a program that must not run would have made them); may_change (the
 # database may differ afterwards).
 #
 # The recipe that makes the second tenant need the provisioning program is
-# state.users['ghost_second_site@10.20.1.%'].db: {}, an account with no database
-# grant, which the readback shows as a difference.
+# state.replace['ghost_second_site@10.20.1.%']: the whole account without its
+# database grant (a patch under users merges, so it cannot remove one), which the
+# readback shows as a difference.
 db1_grants_verify_cases:
   # ----- Inputs -----
   - name: tenant list empty
@@ -109,8 +110,14 @@ db1_grants_verify_cases:
   - name: provisioning program that is not the pinned one
     code: program-digest
     state: &second_needs_program
-      users:
-        'ghost_second_site@10.20.1.%': { db: {} }
+      replace:
+        'ghost_second_site@10.20.1.%': &second_without_grant
+          auth: marker-second
+          ssl_type: ANY
+          muc: 0
+          static: []
+          dynamic: []
+          db: {}
     files:
       - path: '{{ db1_grants_scenario_provision_dir }}/provision_tenant_db.py'
         mode: '0644'
@@ -228,20 +235,17 @@ db1_grants_verify_cases:
     code: post-apply-drift
     may_change: true
     state:
-      users:
-        'ghost_second_site@10.20.1.%': { db: {} }
+      replace: { 'ghost_second_site@10.20.1.%': *second_without_grant }
       top: { ignore_connection_limit: true }
   - name: provisioning program the server makes fail
     code: program-failed
     may_change: true
     state:
-      users:
-        'ghost_second_site@10.20.1.%': { db: {} }
+      replace: { 'ghost_second_site@10.20.1.%': *second_without_grant }
       top: { refuse_connection_limit: true }
   - name: tenant account gone between the readback and the program
     code: mint-detected
     may_change: true
     state:
-      users:
-        'ghost_second_site@10.20.1.%': { db: {} }
+      replace: { 'ghost_second_site@10.20.1.%': *second_without_grant }
       top: { race: [ghost_second_site] }

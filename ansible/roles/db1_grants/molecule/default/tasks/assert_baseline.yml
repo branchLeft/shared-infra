@@ -127,6 +127,20 @@
     fail_msg: The first changing call came before any call that read the grants.
     quiet: true
 
+# Each run of the role reads the clone plugin once. The harness runs the role in
+# check mode on the fresh host before it converges, so two runs of the role read
+# before the first change is sent: a check-mode run that changed anything would
+# put the first change before the converge's read.
+- name: Assert the check-mode run on the fresh host sent no change
+  ansible.builtin.assert:
+    that:
+      - >-
+        (db1_grants_scenario_calls[:(db1_grants_scenario_first_change | int)]
+        | selectattr('statements', 'contains', "SELECT PLUGIN_NAME FROM information_schema.PLUGINS WHERE PLUGIN_NAME='clone'")
+        | list | length) == 2
+    fail_msg: The role in check mode sent a change, or did not read the database, before the real run.
+    quiet: true
+
 - name: Assert the dump account's privilege is added in the same batch before the old one is removed
   ansible.builtin.assert:
     that:
