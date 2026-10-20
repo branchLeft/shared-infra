@@ -17,6 +17,8 @@
           Type=oneshot
           RemainAfterExit=yes
           ExecStart=/bin/true
+          [Install]
+          WantedBy=multi-user.target
         dest: /etc/systemd/system/branchleft-compose@.service
         owner: root
         group: root
