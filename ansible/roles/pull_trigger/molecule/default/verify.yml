@@ -420,6 +420,21 @@
           rc: 20
           reason: playbook-not-allowed
           commit: '{{ pull_trigger_commits.symlink }}'
+          detail: the playbook is not a regular file in the commit
+        - name: a commit whose playbook is a symbolic link, with the test on the commit's tree removed
+          text: '{{ pull_trigger_commits.symlink }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.symlink }}'
+          program: /var/tmp/ptt/mut/no-commit-test
+          detail: a part of the playbook path is a link in the checkout
+        - name: a commit whose playbook is a symbolic link, with the test on the checkout removed
+          text: '{{ pull_trigger_commits.symlink }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.symlink }}'
+          program: /var/tmp/ptt/mut/no-checkout-test
+          detail: the playbook is not a regular file in the commit
         - name: a playbook directory that is a link inside the checkout
           text: '{{ pull_trigger_commits.dir_link_inside }}'
           rc: 20
@@ -892,8 +907,9 @@
         that:
           - pull_trigger_through_sudo.rc in [0, 11]
           - "('mode=check commit=' ~ pull_trigger_commits.tip ~ ' ') in pull_trigger_through_sudo.stdout"
-          - pull_trigger_through_sudo_config.rc != 0
+          - pull_trigger_through_sudo_config.rc == 1
           - pull_trigger_through_sudo_config.stdout == ''
+          - "'sudo: ' in pull_trigger_through_sudo_config.stderr"
           - pull_trigger_through_sudo_default.rc == 20
           - "'reason=bad-request' in pull_trigger_through_sudo_default.stdout"
         fail_msg: >-

@@ -16,7 +16,8 @@ and the work is discarded, not adapted.
 The role installs `pull-trigger`, a single typed Python program, at
 `/usr/local/sbin/pull-trigger`, with its configuration in
 `/etc/pull-trigger/config.json` and two private directories (state and log). It
-installs the three programs the trigger runs (`git`, `gpg`, `ssh-keygen`).
+installs the four programs the trigger runs (`git`, `gpg`, `gpgconf`, `ssh-keygen`),
+from the packages `git`, `gpg`, `gpgconf` and `openssh-client`.
 
 The program is meant to be the only thing a CI key can run. A CI job holds an SSH
 key whose `authorized_keys` line is restricted to this one command (see "How a
@@ -138,7 +139,11 @@ routes are supported:
 
 - **The CI key is in root's own `authorized_keys`**, with the `command=` above.
   SSH then starts the program as root and hands it `SSH_ORIGINAL_COMMAND`. This
-  route is not tested in the harness, which has no SSH server.
+  route is not tested in the harness, which has no SSH server. It also depends on
+  the host's SSH daemon letting root in by key: `PermitRootLogin` must be
+  `prohibit-password` or `forced-commands-only`. With `no`, which is common, the key
+  is refused before the command runs, and this role does not change the daemon's
+  configuration.
 - **The CI key belongs to a non-root account and the `command=` runs `sudo`.** On
   Debian 13, sudo drops `SSH_ORIGINAL_COMMAND`, so the program would see no
   request and answer exit 20 `bad-request`. Keep the variable for this one
@@ -239,6 +244,28 @@ A TERM or INT that has arrived by the time the checkout is done ends the run as
 written raises the floor even if the playbook never got to do anything, and the
 way forward is again a newer commit.
 
+## Taking over by hand
+
+Two states stop every request until a person acts. Both are fail-closed, and a
+unit test makes each of them.
+
+- **A damaged rollback floor.** If `/var/lib/pull-trigger/last-applied` does not hold
+  exactly one 40-digit commit id, every request ends as exit 40 `state-unsafe`
+  and nothing runs. The commit last applied is the start of the name of the
+  directory that `/var/lib/pull-trigger/current` links to. Check it against the
+  history of `main`, then write that id and a newline into `last-applied` (root, mode
+  0600). Removing the file instead also clears the error, but the host then accepts
+  any signed commit of `main` once, with no floor to refuse an older one.
+- **A rewritten `main`.** If history on `main` was rewritten so that the commit
+  last applied is no longer an ancestor of the tip, a request for the new tip ends
+  as exit 20 `rollback`, because it does not descend from the floor. If the cache
+  has also lost the floor commit (for example `repo.git` was removed), the answer is
+  exit 40 `git-failed` instead, because git cannot compare the two. In both cases
+  the program refuses until the floor is moved by a person who has checked that
+  the new history is the intended one: write an id from the new history, one that
+  is already applied or that is older than anything to be applied, into
+  `last-applied`, or remove the file as above.
+
 ## Named limits
 
 - **Signer key handling.** The production signer of a merge is the hosting
@@ -279,8 +306,12 @@ The eight limits found at review of the first version, each with its state:
 - **(b) The playbook's tools are not vetted.** `ansible-playbook` and its Python
   environment run as root, and the program does not check their owner or mode.
   Whoever can write to them can run code as root.
-- **(c) Closed.** The program starts with `-I` in its shebang, so a `PYTHON*`
-  variable or a file beside it cannot change what it imports.
+- **(c) Closed, and tested.** The program starts with `-I` in its shebang, so a
+  `PYTHON*` variable or a file beside it cannot change what it imports. A unit test
+  starts a copy with the flags of its own first line, with a module planted beside it
+  and another on `PYTHONPATH`, and fails if either is imported; it first starts the
+  copy without the flags to show that both would be. The harness runs the installed
+  program through its shebang.
 - **(d) A killed trigger leaves its playbook running.** If the trigger is killed
   with SIGKILL, its playbook keeps running in its own session while the lock is
   free (the lock's file descriptor is close-on-exec), and the next request's sweep
@@ -339,7 +370,8 @@ which control broke:
 - a newer commit applies and only its checkout is kept;
 - a commit that main has moved away from since it was cached is refused;
 - a signed commit in which `ansible/playbooks` is a link, to a directory inside the
-  tree and to one outside it, is refused with the program as installed, and still
+  tree and to one outside it, or in which the playbook file is itself a link, is
+  refused with the program as installed, and still
   refused when a copy of the program has either of the two link checks deleted (the
   other one refuses, and its own message is asserted);
 - a non-root account that may run the program only through `sudo`: with the
@@ -355,7 +387,12 @@ The harness runs the role twice, so the second converge must report no change
 
 The unit tests (`tests/unit/test_pull_trigger.py`) use the standard library only,
 and make real git repositories with real SSH and OpenPGP signatures. They include a
-table of hostile requests and seeded property tests of the argument validator. The
+table of hostile requests and seeded property tests of the argument validator. They
+need `gpg` and `gpgconf` and fail, not skip, on a machine without them. A commit
+signed under an SSH namespace other than `git` is refused, but not because of the
+`namespaces="git"` option on the allowed-signers line: git verifies under `-n git`
+itself, and removing the option leaves that test green. The option stays as a
+second layer and is not counted as a control. The
 type check and lint of the program, from `ansible/`, with the virtual environment's tools:
 
 ```text

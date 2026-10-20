@@ -914,6 +914,9 @@ class Verifier:
         lines: list[str] = []
         for number, signer in enumerate(self._signers):
             if signer.key_format == "ssh":
+                # Not the barrier: git verifies under ``-n git`` itself, and a signature made
+                # under another namespace is refused with or without this option (a unit test
+                # shows it). It only narrows what the listed key could ever be used for.
                 lines.append(f'signer-{number} namespaces="git" {signer.key}')
                 fingerprints.add(self._ssh_fingerprint(home, signer.key))
             else:

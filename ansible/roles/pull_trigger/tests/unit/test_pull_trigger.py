@@ -29,6 +29,7 @@ GIT = Path(shutil.which("git") or "/usr/bin/git")
 SSH_KEYGEN = Path(shutil.which("ssh-keygen") or "/usr/bin/ssh-keygen")
 GPG = shutil.which("gpg")
 GPGCONF = shutil.which("gpgconf")
+PROGRAM = Path(trigger.__file__)
 
 ISOLATED = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -117,14 +118,17 @@ class GpgKey:
 
 
 def require_gpg() -> str:
-    """Return the path of gpg, or skip the test that needs it.
+    """Return the path of gpg, or fail the test that needs it.
+
+    A missing gpg is a failure and not a skip: a skipped OpenPGP test would let the
+    OpenPGP path go unproven while the run still reported success.
 
     Raises:
-        unittest.SkipTest: gpg is not installed on this machine.
+        AssertionError: gpg is not installed on this machine.
     """
-    if GPG is None:
-        message = "gpg is not installed here; the Molecule scenario covers OpenPGP"
-        raise unittest.SkipTest(message)
+    if GPG is None or GPGCONF is None:
+        message = "gpg and gpgconf must be installed: the OpenPGP tests do not skip"
+        raise AssertionError(message)
     return GPG
 
 
@@ -213,21 +217,40 @@ class Remote:
     def forge(self, sha: str, old: str, new: str) -> str:
         """Rewrite a commit's message but keep its signature, which then no longer verifies."""
         text = run([GIT, "cat-file", "commit", sha], cwd=self.work)
-        edited = text.replace(f"\n\n{old}", f"\n\n{new}") + "\n"
+        return self.store(text.replace(f"\n\n{old}", f"\n\n{new}") + "\n")
+
+    def resign_in_namespace(self, sha: str, signer: SshKey, namespace: str) -> str:
+        """Return the same commit with an SSH signature made under another namespace.
+
+        Git always signs and verifies under the namespace ``git``. The signature
+        made here is a valid signature by the listed key over the same bytes git
+        would sign, except for the namespace it is bound to.
+        """
+        text = run([GIT, "cat-file", "commit", sha], cwd=self.work) + "\n"
+        payload = self.work.parent / f"payload-{namespace}"
+        payload.write_text(text, encoding="utf-8")
+        run([SSH_KEYGEN, "-Y", "sign", "-n", namespace, "-f", signer.private, payload])
+        signature = Path(f"{payload}.sig").read_text(encoding="utf-8").rstrip("\n")
+        header, _, body = text.partition("\n\n")
+        armoured = "\n ".join(signature.split("\n"))
+        return self.store(f"{header}\ngpgsig {armoured}\n\n{body}")
+
+    def store(self, text: str) -> str:
+        """Write a commit object from its text, publish it as ``staging`` and return its id."""
         process = subprocess.run(  # noqa: S603 - test fixture
             [str(GIT), "hash-object", "-t", "commit", "-w", "--stdin"],
             cwd=self.work,
             env={**os.environ, **ISOLATED},
-            input=edited,
+            input=text,
             capture_output=True,
             text=True,
             check=True,
         )
-        forged = process.stdout.strip()
+        stored = process.stdout.strip()
         run(
-            [GIT, "push", "-q", "--force", self.bare, f"{forged}:refs/heads/staging"], cwd=self.work
+            [GIT, "push", "-q", "--force", self.bare, f"{stored}:refs/heads/staging"], cwd=self.work
         )
-        return forged
+        return stored
 
     def commit_playbooks_link(
         self, target: str, files: Mapping[str, str | None], parent: str, signer: SshKey
@@ -595,6 +618,20 @@ class PlaybookInCheckoutTests(unittest.TestCase):
         )
         self.assertIn(trigger.Why.PLAYBOOK_LINKED.value, self.refusal())
 
+    def test_a_name_that_climbs_out_of_the_playbook_directory_is_refused_by_the_containment_clause(
+        self,
+    ) -> None:
+        # No part of these paths is a link and each ends at a regular file, so the walk
+        # over the parts passes and the clause on the resolved path is the only barrier.
+        (self.checkout / "ansible" / "other.yml").write_text("x", encoding="utf-8")
+        climbs = (
+            "ansible/playbooks/../other.yml",
+            "ansible/playbooks/../../../outside/host.yml",
+        )
+        for playbook in climbs:
+            with self.subTest(playbook):
+                self.assertIn(trigger.Why.PLAYBOOK_ESCAPES.value, self.refusal(playbook))
+
     def test_a_missing_playbook_and_a_directory_are_refused(self) -> None:
         self.assertIn(trigger.Why.PLAYBOOK_ESCAPES.value, self.refusal("ansible/playbooks/no.yml"))
         (self.checkout / "ansible" / "playbooks" / "d.yml").mkdir()
@@ -806,12 +843,10 @@ class EndToEndTests(unittest.TestCase):
             "a": make_ssh_key(keys_dir, "signer-a"),
             "b": make_ssh_key(keys_dir, "signer-b"),
         }
-        cls.pgp = {}
-        if GPG is not None:
-            cls.pgp = {
-                "g": make_gpg_key(cls.root, "signer-g"),
-                "h": make_gpg_key(cls.root, "signer-h"),
-            }
+        cls.pgp = {
+            "g": make_gpg_key(cls.root, "signer-g"),
+            "h": make_gpg_key(cls.root, "signer-h"),
+        }
         cls.remote = Remote.create(cls.root)
         a, b = cls.keys["a"], cls.keys["b"]
         play = "ansible/playbooks/host.yml"
@@ -1121,7 +1156,6 @@ class EndToEndTests(unittest.TestCase):
         self.assert_refused(result, "bad-signature")
         self.assert_no_new_run(scene)
 
-    @unittest.skipUnless(GPG, "gpg is not installed here; the Molecule scenario covers OpenPGP")
     def test_an_openpgp_commit_by_an_allowlisted_key_is_applied_and_one_by_another_key_is_refused(
         self,
     ) -> None:
@@ -1134,7 +1168,6 @@ class EndToEndTests(unittest.TestCase):
         result = self.request(scene, self.commits["pgp_good"])
         self.assertEqual(10, result.code, result.summary + result.errors)
 
-    @unittest.skipUnless(GPG, "gpg is not installed here; the Molecule scenario covers OpenPGP")
     def test_an_openpgp_signature_made_by_a_key_the_host_holds_but_the_allowlist_lacks_is_refused(
         self,
     ) -> None:
@@ -1171,8 +1204,8 @@ class EndToEndTests(unittest.TestCase):
         self.assert_refused(result, "playbook-not-allowed")
         self.assert_no_new_run(scene)
 
-    def test_a_linked_playbook_directory_is_refused_by_each_guard_on_its_own(self) -> None:
-        for name in ("dir_link_inside", "dir_link_outside"):
+    def test_a_linked_playbook_or_directory_is_refused_by_each_guard_on_its_own(self) -> None:
+        for name in ("dir_link_inside", "dir_link_outside", "symlink"):
             with self.subTest(name):
                 scene = self.make_scene()
                 self.prime(scene)
@@ -1226,6 +1259,100 @@ class EndToEndTests(unittest.TestCase):
         scene = self.make_scene()
         self.assertEqual(10, self.request(scene, self.commits["c6"]).code)
         self.assert_refused(self.request(scene, self.commits["c2"], mode="check"), "rollback")
+
+    def test_a_main_that_was_rewritten_refuses_a_commit_that_does_not_descend_from_the_floor(
+        self,
+    ) -> None:
+        scene = self.make_scene()
+        self.assertEqual(10, self.request(scene, self.commits["c6"]).code)
+        rewritten = scene.remote.commit(
+            {"ansible/playbooks/host.yml": playbook_text("rewritten")},
+            "rewritten",
+            self.commits["c2"],
+            self.keys["a"],
+        )
+        scene.remote.set_ref("main", rewritten)
+        floor = self.commits["c6"]
+        cached = subprocess.run(  # noqa: S603 - a test probe
+            [str(GIT), f"--git-dir={scene.state / 'repo.git'}", "cat-file", "-e", floor],
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, cached.returncode, "the cache must still hold the floor commit")
+        with self.no_change_to_the_host(scene):
+            result = self.request(scene, rewritten)
+        self.assertEqual(20, result.code, result.summary + result.errors)
+        self.assertTrue(result.has("reason=rollback"))
+
+    def test_a_rewritten_main_and_a_cache_that_lost_the_floor_commit_is_an_error_not_a_refusal(
+        self,
+    ) -> None:
+        scene = self.make_scene()
+        self.assertEqual(10, self.request(scene, self.commits["c6"]).code)
+        rewritten = scene.remote.commit(
+            {"ansible/playbooks/host.yml": playbook_text("rewritten")},
+            "rewritten",
+            self.commits["c2"],
+            self.keys["a"],
+        )
+        scene.remote.set_ref("main", rewritten)
+        shutil.rmtree(scene.state / "repo.git")
+        result = self.request(scene, rewritten)
+        self.assertEqual(40, result.code, result.summary + result.errors)
+        self.assertTrue(result.has("reason=git-failed"))
+
+    def test_a_signature_made_under_another_ssh_namespace_is_refused(self) -> None:
+        play = {"ansible/playbooks/host.yml": playbook_text("namespace")}
+        for namespace, expected in (("git", 0), ("file", 20)):
+            with self.subTest(namespace):
+                scene = self.make_scene()
+                base = scene.remote.commit(play, "namespace", self.commits["tip"], None)
+                resigned = scene.remote.resign_in_namespace(base, self.keys["a"], namespace)
+                scene.remote.set_ref("main", resigned)
+                result = self.request(scene, resigned, mode="check")
+                # The control: under the namespace git uses, the same forged commit is accepted.
+                if expected == 0:
+                    self.assertIn(result.code, (0, 11), result.summary + result.errors)
+                else:
+                    self.assertEqual(20, result.code, result.summary + result.errors)
+                    refused_as = ("reason=bad-signature", "reason=signer-not-allowed")
+                    refused = any(result.has(reason) for reason in refused_as)
+                    self.assertTrue(refused, result.summary)
+
+    def test_the_program_ignores_a_module_planted_beside_it_or_on_the_python_path(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="pt-isolated-")).resolve()
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        beside, elsewhere, marks = root / "beside", root / "elsewhere", root / "marks"
+        for directory in (beside, elsewhere, marks):
+            directory.mkdir()
+        program = beside / "pull_trigger.py"
+        shutil.copy(PROGRAM, program)
+        flags = program.read_text(encoding="utf-8").split("\n", 1)[0].split()[1:]
+        planted = {beside / "json.py": marks / "beside", elsewhere / "fcntl.py": marks / "path"}
+        for module, mark in planted.items():
+            module.write_text(f"open({str(mark)!r}, 'w').close()\n", encoding="utf-8")
+
+        def start(arguments: list[str]) -> None:
+            environment = {
+                **os.environ,
+                "PYTHONPATH": str(elsewhere),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            }
+            subprocess.run(  # noqa: S603 - the program under test, an argument list
+                [sys.executable, *arguments, str(program), "--help"],
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                check=False,
+            )
+
+        # The control: without the flags of the program's own first line, both modules load.
+        start([])
+        self.assertEqual(["beside", "path"], sorted(path.name for path in marks.iterdir()))
+        for mark in marks.iterdir():
+            mark.unlink()
+        start(flags)
+        self.assertEqual([], list(marks.iterdir()), "the first line must keep -I")
 
     def test_a_damaged_record_of_the_last_applied_commit_stops_the_run(self) -> None:
         scene = self.make_scene()
