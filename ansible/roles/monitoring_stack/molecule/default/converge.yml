@@ -38,9 +38,14 @@
         daemon_reload: true
       when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
 
-    - name: Ask systemd for the instance so that it holds the earlier release
+    # Started, because systemd unloads an inactive unit that nothing refers to
+    # and would then read the new drop-in from disk with no reload: the test
+    # could not tell a missing reload from a present one. The unit here is the
+    # placeholder from prepare.yml, a oneshot that runs /bin/true.
+    - name: Start the instance so that systemd keeps the earlier release loaded
       ansible.builtin.systemd_service:
         name: branchleft-compose@monitoring.service
+        state: started
       register: monitoring_stack_converge_earlier
       when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
 
@@ -48,6 +53,7 @@
       ansible.builtin.assert:
         that:
           - monitoring_stack_converge_earlier.status.MemoryMax == '1073741824'
+          - monitoring_stack_converge_earlier.status.ActiveState == 'active'
         quiet: true
         fail_msg: The test could not put the earlier drop-in in front of systemd.
       when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
@@ -73,7 +79,7 @@
           - monitoring_stack_converge_loaded.status.MemoryMax == '2147483648'
         quiet: true
         fail_msg: >-
-          systemd still holds the earlier drop-in (MemoryMax
-          {{ monitoring_stack_converge_loaded.status.MemoryMax }}): the role returned before
-          the manager reloaded.
+          systemd does not hold the drop-in the role installed (MemoryMax
+          {{ monitoring_stack_converge_loaded.status.MemoryMax }}): the role did not install
+          it, or returned before the manager reloaded.
       when: not ansible_check_mode
