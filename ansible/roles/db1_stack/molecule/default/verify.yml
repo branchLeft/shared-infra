@@ -151,7 +151,7 @@
       ansible.builtin.assert:
         that:
           - verify_spec_options['db1_stack_exporter_password']['required']
-          - verify_spec_options['db1_stack_exporter_password']['no_log']
+          - verify_spec_options['db1_stack_exporter_password']['no_log'] | default(false)
           - "'default' not in verify_spec_options['db1_stack_exporter_password']"
           - db1_stack_verify_spec_text | regex_search(verify_sentinel_pattern) is none
         fail_msg: The password option is not required and no_log, or has a default, or the spec holds a sentinel.
