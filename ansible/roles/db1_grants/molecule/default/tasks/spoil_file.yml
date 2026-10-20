@@ -1,0 +1,35 @@
+---
+# Test scaffolding: spoil one of the host's files the way a case says (item). The
+# content of a file can be a password, so these tasks hide it.
+- name: Remove the path
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: absent
+  when: item.absent | default(false)
+  no_log: true
+
+- name: Change the owner or the mode of the path
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: '{{ "directory" if item.directory | default(false) else "file" }}'
+    follow: false
+    mode: '{{ item.mode | default(omit) }}'
+    owner: '{{ item.owner | default(omit) }}'
+    group: '{{ item.owner | default(omit) }}'
+  when:
+    - not (item.absent | default(false))
+    - item.content is not defined
+  no_log: true
+
+- name: Replace the content of the file
+  ansible.builtin.copy:
+    content: '{{ item.content }}'
+    dest: '{{ item.path }}'
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  when:
+    - not (item.absent | default(false))
+    - item.content is defined
+  no_log: true
+  diff: false

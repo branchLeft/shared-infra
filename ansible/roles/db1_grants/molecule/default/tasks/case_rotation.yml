@@ -1,0 +1,83 @@
+---
+# A rotation is one file replacement per host. The role sets the ops1 password
+# when the sha256 of the password file differs from the stamp, and only then: a
+# second run with the same file sets nothing. Both halves are measured on the
+# record of the client's calls, which holds the changing statements the role sent.
+- name: Keep the stamp as it is
+  ansible.builtin.slurp:
+    src: /etc/branchleft/db1-backup-ops1.pw.sha256
+  register: db1_grants_scenario_stamp_before
+
+- name: Replace the password file with the rotated password
+  ansible.builtin.copy:
+    content: '{{ db1_grants_scenario_ops1_password_rotated }}'
+    dest: /etc/branchleft/db1-backup-ops1.pw
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+
+- name: Count the changing statements before the rotation
+  ansible.builtin.include_tasks: read_database.yml
+
+- name: Remember the count
+  ansible.builtin.set_fact:
+    db1_grants_scenario_count_before: '{{ db1_grants_scenario_changing }}'
+
+- name: Apply the role with the rotated file
+  ansible.builtin.include_role:
+    name: branchleft.db1_grants
+
+- name: Count the changing statements after the first run
+  ansible.builtin.include_tasks: read_database.yml
+
+- name: Remember the count and the account
+  ansible.builtin.set_fact:
+    db1_grants_scenario_count_first: '{{ db1_grants_scenario_changing }}'
+    db1_grants_scenario_state_first: '{{ db1_grants_scenario_now }}'
+
+- name: Apply the role again with the same file
+  ansible.builtin.include_role:
+    name: branchleft.db1_grants
+
+- name: Count the changing statements after the second run
+  ansible.builtin.include_tasks: read_database.yml
+
+- name: Look at the rotated password file and the stamp
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop:
+    - /etc/branchleft/db1-backup-ops1.pw
+    - /etc/branchleft/db1-backup-ops1.pw.sha256
+  register: db1_grants_scenario_rotation_stat
+
+- name: Read the stamp after the rotation
+  ansible.builtin.slurp:
+    src: /etc/branchleft/db1-backup-ops1.pw.sha256
+  register: db1_grants_scenario_stamp_after
+
+- name: Assert the first run set the new password once and the second run set nothing
+  ansible.builtin.assert:
+    that:
+      - db1_grants_scenario_count_first | int - db1_grants_scenario_count_before | int == 1
+      - db1_grants_scenario_changing | int == db1_grants_scenario_count_first | int
+      - db1_grants_scenario_state_first.users[db1_grants_scenario_ops1_account].auth == (db1_grants_scenario_ops1_password_rotated | hash('sha256'))
+      - db1_grants_scenario_now.users[db1_grants_scenario_ops1_account].auth == (db1_grants_scenario_ops1_password_rotated | hash('sha256'))
+      - db1_grants_scenario_stamp_after.content | b64decode | trim == db1_grants_scenario_rotation_stat.results[0].stat.checksum
+      - db1_grants_scenario_stamp_after.content != db1_grants_scenario_stamp_before.content
+    fail_msg: A rotation did not set the password exactly once, or the second run set it again, or the stamp is wrong.
+    quiet: true
+  no_log: true
+
+- name: Put the stamp back as it was
+  ansible.builtin.copy:
+    content: '{{ db1_grants_scenario_stamp_before.content | b64decode }}'
+    dest: /etc/branchleft/db1-backup-ops1.pw.sha256
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Put the host back as it was configured
+  ansible.builtin.include_tasks: restore.yml

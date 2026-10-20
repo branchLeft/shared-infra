@@ -1,0 +1,35 @@
+---
+# The log of every Ansible run of this scenario, at verbosity 3, which prints each
+# task's result with its arguments. A task that handled a password and lacks
+# no_log would have printed it, so no sentinel may be in the log. The log is read
+# on the controller. The sentinels are letters and digits, so they need no
+# escaping, and the count is made by a task that hides it, so a failure cannot
+# print what it found.
+- name: Read the log of the scenario's runs
+  ansible.builtin.set_fact:
+    db1_grants_verify_log_text: "{{ lookup('ansible.builtin.file', db1_grants_scenario_log_path) }}"
+  no_log: true
+
+- name: Count the passwords in the log
+  ansible.builtin.set_fact:
+    db1_grants_verify_log_leaks: "{{ db1_grants_verify_log_text | regex_findall(db1_grants_verify_sentinels | join('|')) | length }}"
+    db1_grants_verify_log_saw_role: "{{ 'Run one batch of changing statements through the mysql client' in db1_grants_verify_log_text }}"
+    db1_grants_verify_log_saw_arguments: "{{ 'invocation' in db1_grants_verify_log_text }}"
+  no_log: true
+
+# A control for the scan itself: the log must show the role ran and that the
+# verbosity printed arguments, or an empty log would pass.
+- name: Assert the log held the role's tasks and their arguments
+  ansible.builtin.assert:
+    that:
+      - db1_grants_verify_log_saw_role
+      - db1_grants_verify_log_saw_arguments
+    fail_msg: The log does not show the role's tasks with their arguments, so the scan proves nothing.
+    quiet: true
+
+- name: Assert the log holds no password
+  ansible.builtin.assert:
+    that:
+      - db1_grants_verify_log_leaks | int == 0
+    fail_msg: A password is in the log of the scenario's runs.
+    quiet: true

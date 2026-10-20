@@ -1,0 +1,63 @@
+---
+# Internal: run the pinned provisioning program for one tenant
+# (db1_grants_slug), from the private copy, as the admin account over the socket.
+# The tenant's account exists (the checks refused otherwise), so the program takes
+# its existing-account path: it adds the escaped grant beside any existing one and
+# sets the connection limit, and it prints neither a database nor a password.
+#
+# The admin password is in the environment of this one task, never on the command
+# line. The program's text is not shown, because on the create path it prints the
+# password it generated.
+- name: Run the provisioning program for one tenant
+  ansible.builtin.command:
+    argv:
+      - '{{ db1_grants_python }}'
+      - -B
+      - -E
+      - -s
+      - '{{ db1_grants_staging.path }}/provision_tenant_db.py'
+      - '{{ db1_grants_slug }}'
+      - --socket
+      - '{{ db1_grants_socket }}'
+      - --admin-user
+      - '{{ db1_grants_admin_user }}'
+      - --max-user-connections
+      - '{{ db1_grants_max_user_connections }}'
+  environment:
+    MYSQL_PWD: '{{ db1_grants_admin_password }}'
+  register: db1_grants_program_result
+  changed_when: true
+  failed_when: false
+  no_log: true
+  diff: false
+
+- name: Stop when the program failed
+  ansible.builtin.assert:
+    that:
+      - db1_grants_program_result.rc == 0
+    fail_msg: >-
+      db1_grants[program-failed]: the provisioning program exited {{ db1_grants_program_result.rc }} for tenant
+      {{ db1_grants_slug }}. Its text is not shown.
+    quiet: true
+
+# The create path is the only one that prints either marker. The role never
+# reads or stores what follows it. The check is on a boolean made by a task that
+# hides its output, so a failure names the tenant and cannot echo the value.
+- name: Look for what only a created account prints
+  ansible.builtin.set_fact:
+    db1_grants_minted: >-
+      {{ ('database=' in db1_grants_program_result.stdout) or ('password=' in db1_grants_program_result.stdout)
+      or ('database=' in db1_grants_program_result.stderr) or ('password=' in db1_grants_program_result.stderr) }}
+  no_log: true
+  diff: false
+
+- name: Refuse a run that created an account
+  ansible.builtin.assert:
+    that:
+      - not db1_grants_minted
+    fail_msg: >-
+      db1_grants[mint-detected]: the provisioning program created the account of tenant {{ db1_grants_slug }}
+      and printed a password that nobody holds. The role never creates a tenant account. The account was
+      there when the role read it and gone when the program ran; drop it and its database by hand, onboard
+      the tenant properly, and run the role again.
+    quiet: true

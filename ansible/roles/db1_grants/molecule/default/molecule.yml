@@ -1,0 +1,69 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness sets
+# ROLE_TEST_RUN_ID, so the instance name is unique to one run and a destroy can
+# only ever remove this run's container. Molecule's interpolation has no
+# "required variable" form, so when the variable is unset the name falls back to
+# one the Docker daemon rejects: the run fails at create, loudly, instead of
+# sharing a container name with another run.
+#
+# What this scenario is NOT: a MySQL server. The database is a named fake client
+# (files/fakes/fake_mysql.py) that both the role and the real, pinned
+# provisioning program run through. It proves what was sent, in what order and
+# with what secrecy; the live verification after the gated apply is the proof
+# against the real server (README, "What the test proves").
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party test base with the same Debian release as the production
+    # hosts, trusted by digest. The digest is the pin; the tag is informational
+    # and moves weekly. It has Python and the tools the role calls in it.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # The image's own command starts systemd as the first process, and systemd
+    # needs a cgroup mount and a cgroup namespace mode that this scenario does
+    # not grant. The role runs no service, so a plain sleep keeps the container
+    # alive so Ansible can run in it. There is no cgroup mount, no cgroupns_mode,
+    # no tmpfs, no privileged mode and no added capability.
+    command: sleep infinity
+    # The container has no network at all: the role reaches only the database
+    # socket, which is a file, so a task that reached out would fail at once.
+    network_mode: none
+    # The image declares /sys/fs/cgroup as a volume and this scenario does not
+    # bind-mount it, so Docker makes an anonymous volume for every container
+    # started from the image. Molecule's destroy keeps a container's volumes
+    # unless told otherwise, and an anonymous volume carries no label to find it
+    # by, so each run would leave one behind.
+    keep_volumes: false
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every Ansible run of this scenario appends its output to one log on the
+    # controller, and verify reads it. Verbosity 3 prints each task's result
+    # with the arguments it was given, so a task that handles a password and
+    # lacks no_log shows it in the log, and verify fails (ANS-16).
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '3'
+  inventory:
+    # Every password below is a throwaway SENTINEL made for this run by
+    # prepare.yml on the controller, in a file under db1_grants_scenario_sentinel_dir, and
+    # read back by the plays. Prepare seeds the generator with the label, so the
+    # same label gives the same value and a run's output can be searched for the
+    # values afterwards. No value is in this file.
+    group_vars:
+      all:
+        db1_grants_scenario_sentinel_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/throwaway-secrets"
+        db1_grants_scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
+        db1_grants_scenario_sentinel_labels:
+          - admin_password
+          - ops1_password
+          - ops1_password_rotated
+verifier:
+  name: ansible

@@ -1,0 +1,478 @@
+---
+# Order matters. Every input and every fact about the ground the role stands on is
+# checked before the first statement is sent to the database; the database is read
+# before it is changed; and what the role changed is read back and compared again.
+#
+# Two passwords, neither an input. The admin password is read from the host's
+# environment file, where it already lives; the ops1 account's password is read
+# from a root-only file placed once. Each task that reads, derives or passes one
+# sets no_log: true and diff: false (ANS-16). A message of this role names a rule
+# or a tenant and never a value, and every refusal starts with db1_grants[code] so
+# that a test can tell one refusal from another.
+
+# ----- The inputs -----
+
+# The tenant slugs become identifiers and literals inside statements, and the host
+# becomes the host part of an account, so both are checked here against the rule
+# the pinned naming module uses, before anything is read. No message echoes a
+# value: a refused input is not shown.
+- name: Refuse a tenant list that is not a set of plain names
+  ansible.builtin.assert:
+    that:
+      - db1_grants_tenants is sequence
+      - db1_grants_tenants is not string
+      - db1_grants_tenants | length > 0
+      - db1_grants_tenants | reject('string') | list | length == 0
+      - db1_grants_tenants | unique | list | length == db1_grants_tenants | length
+    fail_msg: >-
+      db1_grants[tenants-shape]: db1_grants_tenants must be a list of at least one tenant slug, each a
+      string, none repeated.
+    quiet: true
+
+- name: Refuse a tenant slug the pinned tenant name rule refuses
+  ansible.builtin.assert:
+    that:
+      - db1_grants_tenants | select('match', db1_grants_slug_pattern) | list | length == db1_grants_tenants | length
+      - db1_grants_tenants | map('length') | max <= db1_grants_slug_max_length
+    fail_msg: >-
+      db1_grants[tenant-slug]: a tenant slug in db1_grants_tenants breaks the tenant name rule (lowercase
+      letters, digits and hyphens, starting with a letter, ending with a letter or digit, at most
+      {{ db1_grants_slug_max_length }} characters). The entry is not shown.
+    quiet: true
+
+- name: Refuse an ops1 host that is not an IPv4 address
+  ansible.builtin.assert:
+    that:
+      - db1_grants_ops1_host is string
+      - db1_grants_ops1_host is match(db1_grants_ipv4_pattern)
+    fail_msg: >-
+      db1_grants[ops1-host]: db1_grants_ops1_host must be one IPv4 address. A wildcard in the host part of an
+      account would widen who can use it, so none is accepted. The value is not shown.
+    quiet: true
+
+# ----- The ground the role stands on -----
+
+# The two secret files and the admin environment file live in one directory. A
+# directory another user can write is a directory in which a file can be swapped.
+- name: Look at the directory the secret files live in
+  ansible.builtin.stat:
+    path: '{{ db1_grants_config_dir }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_grants_config_dir_stat
+
+- name: Refuse a secrets directory that is not root's or that others can write
+  ansible.builtin.assert:
+    that:
+      - db1_grants_config_dir_stat.stat.isdir | default(false)
+      - db1_grants_config_dir_stat.stat.uid | default(-1) == 0
+      - (((db1_grants_config_dir_stat.stat.mode | default('0777')) | int(base=8)) // 16) % 2 == 0
+      - (((db1_grants_config_dir_stat.stat.mode | default('0777')) | int(base=8)) // 2) % 2 == 0
+    fail_msg: >-
+      db1_grants[config-dir]: {{ db1_grants_config_dir }} must be a directory owned by root that neither
+      the group nor others can write.
+    quiet: true
+
+# The admin password has one home, the hand-written environment file of the stack.
+# Before the role reads it, the file must be root's and closed to everyone else, so
+# a password read from a file others could have written is never sent anywhere.
+- name: Look at the admin environment file
+  ansible.builtin.stat:
+    path: '{{ db1_grants_db_env_path }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_grants_db_env_stat
+
+- name: Refuse an admin environment file that is not a root-only regular file
+  ansible.builtin.assert:
+    that:
+      - db1_grants_db_env_stat.stat.isreg | default(false)
+      - db1_grants_db_env_stat.stat.uid | default(-1) == 0
+      - db1_grants_db_env_stat.stat.gid | default(-1) == 0
+      - ((db1_grants_db_env_stat.stat.mode | default('0777')) | int(base=8)) % 64 == 0
+    fail_msg: >-
+      db1_grants[db-env-mode]: {{ db1_grants_db_env_path }} must be a regular file owned by root:root with no
+      group or other permission (mode 0600). The role reads the admin password from it and will not read it
+      from a file others could have written.
+    quiet: true
+
+# slurp, not lookup('file'): the file is on the host being configured, and the
+# lookup reads the controller's. The value is taken verbatim from the line, the
+# way the stack's own runbook reads a key (never by sourcing the file).
+- name: Read the admin environment file
+  ansible.builtin.slurp:
+    src: '{{ db1_grants_db_env_path }}'
+  register: db1_grants_db_env_slurp
+  no_log: true
+  diff: false
+
+- name: Find the admin password lines
+  ansible.builtin.set_fact:
+    db1_grants_admin_matches: >-
+      {{ db1_grants_db_env_slurp.content | b64decode | regex_findall('(?m)^' ~ db1_grants_admin_key ~ '=(.*)$') }}
+  no_log: true
+  diff: false
+
+# Booleans only: this task hides the value, so the assertion after it can state
+# the rule without a risk of printing the password.
+- name: Find the rules the admin password line breaks
+  ansible.builtin.set_fact:
+    db1_grants_admin_problems:
+      count: '{{ db1_grants_admin_matches | length }}'
+      empty: '{{ (db1_grants_admin_matches | first | default("")) | length == 0 }}'
+      carriage_return: '{{ db1_grants_cr in (db1_grants_admin_matches | first | default("")) }}'
+  no_log: true
+  diff: false
+
+- name: Refuse an admin environment file with no usable password line
+  ansible.builtin.assert:
+    that:
+      - db1_grants_admin_problems.count | int == 1
+      - not db1_grants_admin_problems.empty
+      - not db1_grants_admin_problems.carriage_return
+    fail_msg: >-
+      db1_grants[db-env-key]: {{ db1_grants_db_env_path }} must hold exactly one non-empty
+      {{ db1_grants_admin_key }}= line with no carriage return. The value is not shown.
+    quiet: true
+
+- name: Keep the admin password
+  ansible.builtin.set_fact:
+    db1_grants_admin_password: '{{ db1_grants_admin_matches | first }}'
+  no_log: true
+  diff: false
+
+# The one new secret. Read the same way: root's file, closed to everyone else.
+- name: Look at the ops1 password file
+  ansible.builtin.stat:
+    path: '{{ db1_grants_ops1_password_path }}'
+    follow: false
+    checksum_algorithm: sha256
+    get_mime: false
+    get_attributes: false
+  register: db1_grants_ops1_file_stat
+
+- name: Refuse an ops1 password file that is not a root-only regular file
+  ansible.builtin.assert:
+    that:
+      - db1_grants_ops1_file_stat.stat.isreg | default(false)
+      - db1_grants_ops1_file_stat.stat.uid | default(-1) == 0
+      - db1_grants_ops1_file_stat.stat.gid | default(-1) == 0
+      - ((db1_grants_ops1_file_stat.stat.mode | default('0777')) | int(base=8)) % 64 == 0
+    fail_msg: >-
+      db1_grants[ops1-password-file-mode]: {{ db1_grants_ops1_password_path }} must be a regular file owned by
+      root:root with no group or other permission (mode 0600), holding the ops1 account's password and
+      nothing else. It is placed once by hand; the role does not choose its source.
+    quiet: true
+
+- name: Read the ops1 password file
+  ansible.builtin.slurp:
+    src: '{{ db1_grants_ops1_password_path }}'
+  register: db1_grants_ops1_slurp
+  no_log: true
+  diff: false
+
+- name: Keep the ops1 password
+  ansible.builtin.set_fact:
+    db1_grants_ops1_password: '{{ db1_grants_ops1_slurp.content | b64decode }}'
+  no_log: true
+  diff: false
+
+# The password goes inside a single-quoted literal of a statement, so it is held
+# to a set with no quote, backslash or space. The pattern ends in \Z, because $
+# also matches before a final line break and a file written with a trailing
+# newline would be a different password from the one meant.
+- name: Find the rules the ops1 password breaks
+  ansible.builtin.set_fact:
+    db1_grants_ops1_problems:
+      shape: '{{ db1_grants_ops1_password is match(db1_grants_password_pattern) }}'
+  no_log: true
+  diff: false
+
+- name: Refuse an ops1 password the statement cannot carry
+  ansible.builtin.assert:
+    that:
+      - db1_grants_ops1_problems.shape
+    fail_msg: >-
+      db1_grants[ops1-password-shape]: the ops1 password file must hold at least 20 characters from
+      A-Z a-z 0-9 dot underscore tilde hyphen, with no trailing line break. Place it with
+      printf '%s' PASSWORD, never echo. The value is not shown.
+    quiet: true
+
+- name: Keep the checksum of the ops1 password file
+  ansible.builtin.set_fact:
+    db1_grants_ops1_checksum: '{{ db1_grants_ops1_file_stat.stat.checksum }}'
+
+# The stamp says which file the password was last set from. A stamp that is
+# missing, that others could have written or that holds another checksum means the
+# password is set again, from the file, which is the safe direction.
+- name: Look at the stamp of the ops1 password
+  ansible.builtin.stat:
+    path: '{{ db1_grants_ops1_stamp_path }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_grants_stamp_stat
+
+- name: Read the stamp of the ops1 password
+  ansible.builtin.slurp:
+    src: '{{ db1_grants_ops1_stamp_path }}'
+  register: db1_grants_stamp_slurp
+  when: db1_grants_stamp_stat.stat.isreg | default(false)
+
+- name: Compare the stamp with the password file
+  ansible.builtin.set_fact:
+    db1_grants_stamp_matches: >-
+      {{ (db1_grants_stamp_stat.stat.isreg | default(false))
+      and (db1_grants_stamp_stat.stat.uid | default(-1) == 0)
+      and ((((db1_grants_stamp_stat.stat.mode | default('0777')) | int(base=8)) // 16) % 2 == 0)
+      and ((((db1_grants_stamp_stat.stat.mode | default('0777')) | int(base=8)) // 2) % 2 == 0)
+      and ((db1_grants_stamp_slurp.content | default('') | b64decode | trim) == db1_grants_ops1_checksum) }}
+
+# The socket directory is mode 0777 by design, so any local user can put another
+# socket there and read the password a client sends to it. The password is sent
+# only to a socket owned by the uid mysqld runs as.
+- name: Look at the database socket
+  ansible.builtin.stat:
+    path: '{{ db1_grants_socket }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_grants_socket_stat
+
+- name: Refuse a socket that is not the database's
+  ansible.builtin.assert:
+    that:
+      - db1_grants_socket_stat.stat.issock | default(false)
+      - db1_grants_socket_stat.stat.uid | default(-1) == db1_grants_socket_owner_uid
+    fail_msg: >-
+      db1_grants[socket-owner]: {{ db1_grants_socket }} is not a socket owned by uid {{ db1_grants_socket_owner_uid }}
+      (the user mysqld runs as in its container). The admin password is not sent to it.
+    quiet: true
+
+# The program is run from a private copy, but it is copied from here, so this
+# directory and every directory above it must be root's and closed to writes.
+- name: Look at the program directory and its parents
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ db1_grants_parent_dirs }}'
+  register: db1_grants_parent_stat
+
+- name: Refuse a program directory that is not root's or that others can write
+  ansible.builtin.assert:
+    that:
+      - item.stat.isdir | default(false)
+      - item.stat.uid | default(-1) == 0
+      - (((item.stat.mode | default('0777')) | int(base=8)) // 16) % 2 == 0
+      - (((item.stat.mode | default('0777')) | int(base=8)) // 2) % 2 == 0
+    fail_msg: >-
+      db1_grants[program-dir]: {{ item.item }} must be a directory owned by root that neither the group nor
+      others can write. The program is copied from it and run as root.
+    quiet: true
+  loop: '{{ db1_grants_parent_stat.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Look at the programs the role may run
+  ansible.builtin.stat:
+    path: '{{ db1_grants_provision_dir }}/{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ db1_grants_staged_files }}'
+  register: db1_grants_program_stat
+
+- name: Refuse a host that does not hold the provisioning program
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+    fail_msg: >-
+      db1_grants[program-missing]: {{ db1_grants_provision_dir }}/{{ item.item }} is not there. The role consumes
+      the provisioning programs and does not deliver them; deliver the database host's program directory first.
+    quiet: true
+  loop: '{{ db1_grants_program_stat.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+# ----- What the role manages -----
+
+# One entry per account. A tenant's account and its database share one name: the
+# prefix, then the slug with its hyphens as underscores. The escaped form is the
+# pinned provisioning program's rule: the backslash first, so the escapes that
+# follow are not doubled, then the underscore, then the percent sign. The unit
+# test renders this task against the pinned function over a table that includes
+# the backslash, the underscore and the percent sign.
+- name: Start the tenant list again
+  ansible.builtin.set_fact:
+    db1_grants_tenant_base: []
+    db1_grants_tenant_table: []
+
+- name: Derive each tenant's account and its grant target
+  ansible.builtin.set_fact:
+    db1_grants_tenant_base: >-
+      {{ db1_grants_tenant_base + [{
+      'key': 'tenant-' ~ item,
+      'slug': item,
+      'user': db1_grants_user,
+      'host': db1_grants_tenant_host,
+      'escaped': db1_grants_user
+      | replace(db1_grants_bs, db1_grants_bs ~ db1_grants_bs)
+      | replace('_', db1_grants_bs ~ '_')
+      | replace('%', db1_grants_bs ~ '%')
+      }] }}
+  vars:
+    # The backslash is made from its code, not typed: a backslash in a template
+    # literal is read differently by the templating engine and by plain Jinja,
+    # and the escape must not depend on which one reads it.
+    db1_grants_bs: "{{ '%c' | format(92) }}"
+    db1_grants_user: "{{ db1_grants_tenant_prefix ~ (item | replace('-', '_')) }}"
+  loop: '{{ db1_grants_tenants }}'
+
+# The two lines SHOW GRANTS prints for a tenant's database grant: the escaped
+# target the role wants and the unescaped target the older provisioning program
+# wrote. Compared as whole lines, so a different privilege list is a difference.
+- name: Derive each tenant's two grant lines
+  ansible.builtin.set_fact:
+    db1_grants_tenant_table: >-
+      {{ db1_grants_tenant_table + [item | combine({
+      'escaped_line': 'GRANT ALL PRIVILEGES ON `' ~ item.escaped ~ '`.* TO `' ~ item.user ~ '`@`' ~ item.host ~ '`',
+      'unescaped_line': 'GRANT ALL PRIVILEGES ON `' ~ item.user ~ '`.* TO `' ~ item.user ~ '`@`' ~ item.host ~ '`'
+      })] }}
+  loop: '{{ db1_grants_tenant_base }}'
+  loop_control:
+    label: '{{ item.slug }}'
+
+- name: List the accounts the role reads
+  ansible.builtin.set_fact:
+    db1_grants_backup_account: "'{{ db1_grants_backup_user }}'@'{{ db1_grants_backup_host }}'"
+    db1_grants_ops1_account: "'{{ db1_grants_ops1_user }}'@'{{ db1_grants_ops1_host }}'"
+    db1_grants_accounts: >-
+      {{ [{'key': 'backup', 'user': db1_grants_backup_user, 'host': db1_grants_backup_host},
+      {'key': 'ops1', 'user': db1_grants_ops1_user, 'host': db1_grants_ops1_host}] + db1_grants_tenant_table }}
+
+# ----- Read, refuse, compare -----
+
+- name: Read what the database holds
+  ansible.builtin.include_tasks: _state.yml
+
+- name: Refuse the states the role cannot call correct
+  ansible.builtin.include_tasks: _checks.yml
+
+- name: Compare what the database holds with the declared state
+  ansible.builtin.include_tasks: _drift.yml
+
+# ----- The dump account is changed only whole -----
+
+# The dump program of the host and the dump account's grants belong together: the
+# old program needs RELOAD, the new one needs BACKUP_ADMIN, and a change of the
+# grants without the program it belongs to loses the night's only backup. So the
+# role changes the dump account only when the delivered dump program is the pinned
+# one, and not while the dump or the shipper may be running.
+- name: Look at the dump program on the host
+  ansible.builtin.stat:
+    path: '{{ db1_grants_provision_dir }}/dump_nightly.py'
+    follow: false
+    checksum_algorithm: sha256
+    get_mime: false
+    get_attributes: false
+  register: db1_grants_dump_stat
+  when: db1_grants_backup_drift
+
+- name: Refuse to change the dump account without the pinned dump program
+  ansible.builtin.assert:
+    that:
+      - db1_grants_dump_stat.stat.isreg | default(false)
+      - db1_grants_dump_stat.stat.checksum | default('') == db1_grants_program_sha256['dump_nightly.py']
+    fail_msg: >-
+      db1_grants[dump-code-not-delivered]: the dump account's grants differ from the declared state, but the
+      dump program on the host is not the pinned one (commit {{ db1_grants_source_commit }}). The grants and the
+      program change together or not at all: deliver the pinned dump program first, then run the role again.
+    quiet: true
+  when: db1_grants_backup_drift
+
+- name: Read the time in UTC
+  ansible.builtin.command:
+    argv:
+      - date
+      - -u
+      - +%H%M
+  register: db1_grants_clock
+  changed_when: false
+  check_mode: false
+  when: db1_grants_backup_drift
+
+- name: Refuse to change the dump account while the dump may be running
+  ansible.builtin.assert:
+    that:
+      - not (db1_grants_window_start <= (db1_grants_clock.stdout | trim | int) and (db1_grants_clock.stdout | trim | int) <= db1_grants_window_end)
+    fail_msg: >-
+      db1_grants[dump-window]: the dump account's grants differ from the declared state, but it is between
+      {{ db1_grants_window_start }} and {{ db1_grants_window_end }} UTC (HHMM), when the nightly dump and the
+      shipper run. The role changes the dump account outside that window only; run it again after
+      {{ db1_grants_window_end }} UTC.
+    quiet: true
+  when: db1_grants_backup_drift
+
+# ----- Check mode: say what a real run would change -----
+
+# A command task is skipped in check mode, so the changes themselves report
+# nothing there. This task carries the readback's answer instead: it reports a
+# change exactly when a real run would change something (ANS-10), and the plan an
+# approver reads shows it.
+- name: Report that a real run would change the database
+  ansible.builtin.debug:
+    msg: >-
+      db1_grants would change the database: dump account {{ db1_grants_backup_drift }}, ops1 account
+      {{ db1_grants_ops1_drift }}, tenants {{ db1_grants_drift.tenants | length }}.
+  changed_when: db1_grants_any_drift
+  when: ansible_check_mode
+
+# ----- Make the changes, then prove them -----
+
+- name: Make the changes the readback called for
+  ansible.builtin.include_tasks: _apply.yml
+  when:
+    - not ansible_check_mode
+    - db1_grants_any_drift
+
+- name: Note that the stamp now matches the file
+  ansible.builtin.set_fact:
+    db1_grants_stamp_matches: true
+  when:
+    - not ansible_check_mode
+    - db1_grants_any_drift
+
+# A check that can fail: the database is read again and compared with the same
+# rules, and any difference left stops the run by name.
+- name: Read what the database holds after the changes
+  ansible.builtin.include_tasks: _state.yml
+  when:
+    - not ansible_check_mode
+    - db1_grants_any_drift
+
+- name: Compare what the database holds after the changes
+  ansible.builtin.include_tasks: _drift.yml
+  when:
+    - not ansible_check_mode
+    - db1_grants_any_drift
+
+- name: Refuse a run that left the database different from the declared state
+  ansible.builtin.assert:
+    that:
+      - not db1_grants_any_drift
+    fail_msg: >-
+      db1_grants[post-apply-drift]: after the changes the database still differs from the declared state (dump
+      account {{ db1_grants_backup_drift }}, ops1 account {{ db1_grants_ops1_drift }}, tenants
+      {{ db1_grants_drift.tenants | length }}). Look at the accounts by hand.
+    quiet: true
+  when: not ansible_check_mode

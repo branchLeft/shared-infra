@@ -1,0 +1,43 @@
+---
+# The role makes one private directory when it runs the provisioning program and
+# removes it when it is done, whether the run went well or not. After every case
+# nothing of the role's may be left, and the directories the role reads hold only
+# what the host holds.
+- name: Look for a private directory the role left
+  ansible.builtin.find:
+    paths:
+      - /run
+      - /tmp
+    patterns: 'db1-grants-*'
+    file_type: directory
+  register: db1_grants_scenario_left_dirs
+
+- name: Assert no private directory was left
+  ansible.builtin.assert:
+    that:
+      - db1_grants_scenario_left_dirs.files | length == 0
+    fail_msg: The role left a private directory behind.
+    quiet: true
+
+- name: List the host's directories the role reads
+  ansible.builtin.find:
+    paths: '{{ item.path }}'
+    file_type: any
+    hidden: true
+  loop:
+    - { path: /etc/branchleft, expect: [db.env, db1-backup-ops1.pw, db1-backup-ops1.pw.sha256] }
+    - path: '{{ db1_grants_scenario_provision_dir }}'
+      expect: [dump_nightly.py, naming.py, provision_tenant_db.py]
+  loop_control:
+    label: '{{ item.path }}'
+  register: db1_grants_scenario_left_listing
+
+- name: Assert the directories hold only what the host holds
+  ansible.builtin.assert:
+    that:
+      - item.files | map(attribute='path') | map('basename') | sort == item.item.expect | sort
+    fail_msg: 'The directory {{ item.item.path }} holds {{ item.files | map(attribute="path") | map("basename") | sort }}.'
+    quiet: true
+  loop: '{{ db1_grants_scenario_left_listing.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'

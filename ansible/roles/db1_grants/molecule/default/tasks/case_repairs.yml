@@ -1,0 +1,48 @@
+---
+# One host with every kind of difference the role repairs, at once: the ops1
+# account without its TLS requirement and with a privilege and the grant option it
+# must not hold, the dump account short of a privilege, and a tenant with the wrong
+# connection limit. After one run the database is exactly the configured one.
+- name: Read the configured database
+  ansible.builtin.slurp:
+    src: '{{ db1_grants_scenario_baseline_path }}'
+  register: db1_grants_scenario_baseline_slurp
+
+- name: Spoil the accounts
+  ansible.builtin.copy:
+    content: >-
+      {{ db1_grants_scenario_configured
+      | combine({'users': db1_grants_scenario_configured.users | combine(db1_grants_scenario_spoilt, recursive=True)})
+      | to_nice_json }}
+    dest: '{{ db1_grants_scenario_state_path }}'
+    owner: root
+    group: root
+    mode: '0600'
+  vars:
+    db1_grants_scenario_configured: '{{ db1_grants_scenario_baseline_slurp.content | b64decode | from_json }}'
+    db1_grants_scenario_spoilt:
+      'backup_ops1@192.0.2.50':
+        ssl_type: ''
+        static: [SELECT, SHOW VIEW, TRIGGER, LOCK TABLES, RELOAD]
+        grant_option: true
+      'backup@localhost':
+        static: [SELECT, LOCK TABLES, REPLICATION CLIENT, SHOW VIEW, EVENT, TRIGGER]
+      'ghost_blog@10.20.1.%':
+        muc: 3
+
+- name: Apply the role
+  ansible.builtin.include_role:
+    name: branchleft.db1_grants
+
+- name: Read the database after the run
+  ansible.builtin.include_tasks: read_database.yml
+
+- name: Assert one run repaired everything and nothing else
+  ansible.builtin.assert:
+    that:
+      - db1_grants_scenario_now == (db1_grants_scenario_baseline_slurp.content | b64decode | from_json)
+    fail_msg: One run did not bring the database back to the configured state.
+    quiet: true
+
+- name: Put the host back as it was configured
+  ansible.builtin.include_tasks: restore.yml

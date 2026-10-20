@@ -1,0 +1,81 @@
+---
+# Documentation values only: addresses from 192.0.2.0/24 and made-up slugs.
+# Nothing here is a real value. These are the role's own inputs, set as play
+# variables by converge.yml and verify.yml. The two tenants are tenant-shaped on
+# purpose: the first is the plain case, the second carries a hyphen, which becomes
+# two underscores in its account and escaped grant.
+db1_grants_scenario_tenants:
+  - blog
+  - second-site
+db1_grants_scenario_ops1_host: 192.0.2.50
+db1_grants_tenants: '{{ db1_grants_scenario_tenants }}'
+db1_grants_ops1_host: '{{ db1_grants_scenario_ops1_host }}'
+
+# The sentinels, read from the files prepare.yml made on the controller. A task
+# that prints one of these variables prints a sentinel, so every task that handles
+# one has no_log.
+db1_grants_scenario_admin_password: "{{ lookup('ansible.builtin.file', db1_grants_scenario_sentinel_dir ~ '/admin_password') }}"
+db1_grants_scenario_ops1_password: "{{ lookup('ansible.builtin.file', db1_grants_scenario_sentinel_dir ~ '/ops1_password') }}"
+db1_grants_scenario_ops1_password_rotated: "{{ lookup('ansible.builtin.file', db1_grants_scenario_sentinel_dir ~ '/ops1_password_rotated') }}"
+
+db1_grants_scenario_fake_dir: /var/lib/fake-mysql
+db1_grants_scenario_state_path: /var/lib/fake-mysql/state.json
+db1_grants_scenario_baseline_path: /var/lib/fake-mysql/baseline.json
+db1_grants_scenario_calls_path: /var/lib/fake-mysql/calls.log
+db1_grants_scenario_provision_dir: /opt/branchleft/db/provision
+db1_grants_scenario_socket_dir: /opt/branchleft/db/run/mysqld
+db1_grants_scenario_socket_path: /opt/branchleft/db/run/mysqld/mysqld.sock
+db1_grants_scenario_ops1_account: backup_ops1@192.0.2.50
+
+# What the fake database holds before the role runs: db1 as it is today. The dump
+# account still holds the old grant set (RELOAD, no BACKUP_ADMIN), there is no ops1
+# account, the first tenant's grant is already escaped and the second tenant's
+# account has no database grant and no connection limit yet. The exporter account
+# is not the role's and must come out unchanged. Every auth value is a marker, not
+# a password.
+db1_grants_scenario_initial_state:
+  databases:
+    - ghost_blog
+    - ghost_second_site
+  plugins: []
+  race: []
+  ignore_connection_limit: false
+  users:
+    'backup@localhost':
+      auth: marker-backup
+      ssl_type: ''
+      muc: 0
+      static: [SELECT, PROCESS, LOCK TABLES, REPLICATION CLIENT, SHOW VIEW, EVENT, TRIGGER, RELOAD]
+      dynamic: []
+      db: {}
+    'exporter@localhost':
+      auth: marker-exporter
+      ssl_type: ''
+      muc: 3
+      static: [PROCESS, REPLICATION CLIENT, SELECT]
+      dynamic: []
+      db: {}
+    'ghost_blog@10.20.1.%':
+      auth: marker-blog
+      ssl_type: ANY
+      muc: 10
+      static: []
+      dynamic: []
+      db:
+        'ghost\_blog': [ALL PRIVILEGES]
+    'ghost_second_site@10.20.1.%':
+      auth: marker-second
+      ssl_type: ANY
+      muc: 0
+      static: []
+      dynamic: []
+      db: {}
+
+# The tampered programs the cases put in place. Each writes a marker file if it
+# runs at all, so a test can tell "refused" from "ran and failed".
+db1_grants_scenario_tampered_provision: |
+  import pathlib
+  pathlib.Path('/tmp/db1-grants-tampered-ran').touch()
+db1_grants_scenario_stray_module: |
+  import pathlib
+  pathlib.Path('/tmp/db1-grants-stray-ran').touch()

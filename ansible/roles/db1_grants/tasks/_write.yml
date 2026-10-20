@@ -1,0 +1,37 @@
+---
+# Internal: one batch of changing statements through the mysql client, as the
+# admin account over the socket. The caller sets db1_grants_step and
+# db1_grants_sql. It is included only outside check mode, and check mode skips a
+# command task anyway.
+#
+# The batch goes in on standard input, because a statement that sets a password
+# would put it on the command line otherwise. The client stops at the first
+# statement that fails, so a grant that fails leaves its revoke unrun. The message
+# names the step and the exit status and never the client's text: the text of a
+# failed statement can quote the statement.
+- name: Run one batch of changing statements through the mysql client
+  ansible.builtin.command:
+    argv:
+      - mysql
+      - --socket={{ db1_grants_socket }}
+      - --user={{ db1_grants_admin_user }}
+      - --batch
+      - --raw
+      - --skip-column-names
+    stdin: '{{ db1_grants_sql }}'
+  environment:
+    MYSQL_PWD: '{{ db1_grants_admin_password }}'
+  register: db1_grants_write_result
+  changed_when: true
+  failed_when: false
+  no_log: true
+  diff: false
+
+- name: Stop when a batch failed
+  ansible.builtin.assert:
+    that:
+      - db1_grants_write_result.rc | default(-1) == 0
+    fail_msg: >-
+      db1_grants[sql-write]: the mysql client exited {{ db1_grants_write_result.rc | default('without running') }}
+      while {{ db1_grants_step }}. Its text is not shown, because it can quote the statement.
+    quiet: true

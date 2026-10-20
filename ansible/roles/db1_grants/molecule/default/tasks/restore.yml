@@ -1,0 +1,16 @@
+---
+# Test scaffolding: put the host back as the converge left it, after a case spoiled
+# it. The host's files come from the same tasks prepare.yml used, and the database
+# from the copy kept when the converge was verified. The stamp is not touched here:
+# no case but the rotation changes it, and that one puts it back itself.
+- name: Put the host's files back
+  ansible.builtin.include_tasks: fixtures.yml
+
+- name: Put the database back
+  ansible.builtin.copy:
+    src: '{{ db1_grants_scenario_baseline_path }}'
+    dest: '{{ db1_grants_scenario_state_path }}'
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0600'

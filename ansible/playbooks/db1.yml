@@ -1,0 +1,26 @@
+---
+# db1: the database host. Two roles, in order: the host's prerequisites, then the
+# accounts and grants. The roles read their private inputs (the tenants' slugs, the
+# address the ops1 backup worker connects from, the exporter's password) from the
+# channel the delivery of this host uses; no file of this repository holds them, so
+# a run without them stops at the role's input check.
+#
+# Run against more than one host this playbook would apply db1's values to every
+# one, so the first play refuses any host but db1 (or the localhost the trigger
+# names).
+- name: Bring db1's accounts under Ansible
+  hosts: all
+  gather_facts: false
+  pre_tasks:
+    - name: Refuse any host but db1
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in ['db1', 'localhost']
+        fail_msg: This playbook is db1's. Limit the run to db1.
+        quiet: true
+  # The roles live in ansible/roles/ (ANS-13), one level above this directory, and a
+  # playbook finds roles only beside itself unless a path is given. One suppression
+  # per line.
+  roles:
+    - role: ../roles/db1_stack # noqa: role-name[path]
+    - role: ../roles/db1_grants # noqa: role-name[path]

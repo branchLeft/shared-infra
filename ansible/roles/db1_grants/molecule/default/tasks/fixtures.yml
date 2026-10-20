@@ -1,0 +1,115 @@
+---
+# Test scaffolding, never part of the role. It puts the host's files where the role
+# expects to find them, exactly as a correctly prepared db1 has them: the fake
+# client and the fake clock, the database socket, the hand-written admin
+# environment file, the ops1 password file, and the pinned programs. prepare.yml
+# runs it once, and the cases in verify.yml run it again to put a file back after
+# a case spoiled it. Every task that handles a sentinel has no_log and diff: false:
+# the scan in verify.yml reads the log of these plays too.
+- name: Create the directories the host has
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop:
+    - { path: /var/lib/fake-mysql, mode: '0700' }
+    - { path: /etc/branchleft, mode: '0755' }
+    - { path: /opt/branchleft, mode: '0755' }
+    - { path: /opt/branchleft/db, mode: '0755' }
+    - { path: /opt/branchleft/db/provision, mode: '0755' }
+    - { path: /opt/branchleft/db/run, mode: '0755' }
+    - { path: /opt/branchleft/db/run/mysqld, mode: '0777' }
+  loop_control:
+    label: '{{ item.path }}'
+
+- name: Put the fake clients in place
+  ansible.builtin.copy:
+    src: '{{ item.src }}'
+    dest: '{{ item.dest }}'
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - { src: files/fakes/fake_mysql.py, dest: /usr/local/bin/mysql }
+    - { src: files/fakes/fake_date, dest: /usr/local/bin/date }
+    - { src: files/fakes/make_socket.py, dest: /usr/local/bin/make-socket }
+  loop_control:
+    label: '{{ item.dest }}'
+
+# A time well outside the dump's window, so a run is never refused for the clock
+# unless a case sets one.
+- name: Set the fake clock outside the dump window
+  ansible.builtin.copy:
+    content: '1200'
+    dest: /etc/fake-now
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Tell the fake client the admin password it must be given
+  ansible.builtin.copy:
+    content: "{{ db1_grants_scenario_admin_password | hash('sha256') }}"
+    dest: /var/lib/fake-mysql/admin.sha256
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+
+# The hand-written environment file of the stack: other keys, one of them the admin
+# password, root's and closed to everyone else.
+- name: Put the admin environment file in place
+  ansible.builtin.copy:
+    content: |
+      DB_BACKUP_BUCKET=example-bucket
+      MYSQL_ROOT_PASSWORD={{ db1_grants_scenario_admin_password }}
+      DB_BACKUP_REGION=example-region
+    dest: /etc/branchleft/db.env
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+
+# Placed with no trailing line break, as the README says to place it.
+- name: Put the ops1 password file in place
+  ansible.builtin.copy:
+    content: '{{ db1_grants_scenario_ops1_password }}'
+    dest: /etc/branchleft/db1-backup-ops1.pw
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+
+- name: Make the database socket
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/make-socket
+      - '{{ db1_grants_scenario_socket_path }}'
+      - '999'
+  changed_when: false
+
+- name: Put the pinned programs in place
+  ansible.builtin.copy:
+    src: 'files/fixtures/{{ item }}'
+    dest: '{{ db1_grants_scenario_provision_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - provision_tenant_db.py
+    - naming.py
+    - dump_nightly.py
+
+# What a case may have left.
+- name: Remove what a case may have left behind
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - '{{ db1_grants_scenario_provision_dir }}/secrets.py'
+    - /tmp/db1-grants-tampered-ran
+    - /tmp/db1-grants-stray-ran

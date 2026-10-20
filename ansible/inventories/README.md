@@ -1,8 +1,10 @@
 # Inventories
 
 This directory holds the inventories and the group variables that go with
-them. It holds one host, `edge1`, in the group `edge`, with that group's role
-variables. A role applied to a new host adds its host and variables in the same pull request.
+them. It holds two hosts: `edge1`, in the group `edge`, with that group's role
+variables, and `db1`, in the group `db`, which has no group variables because
+its inputs are private and reach the host through its delivery channel
+(`roles/db1_grants`). A role applied to a new host adds its host and variables in the same pull request.
 `ANS-13` leaves the placement of inventories undecided; this layout is a
 proposal that the repository owner confirms or changes.
 
