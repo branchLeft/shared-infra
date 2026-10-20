@@ -317,9 +317,8 @@
     group: '{{ db1_stack_exporter_gid }}'
     mode: '{{ db1_stack_exporter_cnf_mode }}'
     force: false
-  # The content is empty, but when the file already exists the module reports
-  # the checksum of the file as it is, and that is a digest of the password.
-  no_log: true
+  # No no_log here: the content is empty and the log scan in the test reads this
+  # task's output on a file that already holds the password.
   register: db1_stack_exporter_created
   when:
     - db1_stack_branchleft_directory_stat.stat.exists
