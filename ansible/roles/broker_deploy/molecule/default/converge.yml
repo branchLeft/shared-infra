@@ -1,8 +1,13 @@
 ---
 - name: Converge
   hosts: all
-  gather_facts: false
+  # Facts are gathered for the architecture only: the Node tarball must be the
+  # one the test container can run, or the role would find the binary it just
+  # unpacked unusable and unpack it again on every run.
+  gather_facts: true
+  gather_subset: [min]
   vars:
+    broker_deploy_node_arch: "{{ 'arm64' if ansible_facts.architecture == 'aarch64' else 'x64' }}"
     broker_deploy_release: test-release-1
     # Stand-ins for the owner-built bundle and the owner's public key, both
     # in this scenario's files directory. Neither is a real broker artefact.

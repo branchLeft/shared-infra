@@ -8,8 +8,9 @@ argument_specs:
       account and its state directories, installs the public half of the
       request-signing key and the environment file, and installs the broker's
       systemd unit. It enables and starts nothing: starting the broker is an
-      owner ruling, not part of this role. The sudoers boundary and the slot
-      wrapper are not installed here.
+      owner ruling, not part of this role. It also installs the sudoers
+      boundary that lets the broker run the slot wrapper as root for a fixed
+      list of invocations. The slot wrapper itself is not installed here.
     author: branchLeft
     options:
       broker_deploy_release:
@@ -42,3 +43,28 @@ argument_specs:
         choices: [x64, arm64]
         description: The Node architecture of the target host.
         default: x64
+      broker_deploy_slot_names:
+        type: list
+        elements: str
+        description: >-
+          The demo slots the broker may drive, each a string of digits and
+          nothing else. The sudoers boundary grants the broker, for each slot,
+          exactly one reset, and a start, a stop and an email-batches check for
+          each of the two colours, as literal lines. Must match the slot table
+          of the wrapper on the host.
+        default: ['0', '1', '2', '3', '4', '5', '6']
+      broker_deploy_wrapper_path:
+        type: path
+        description: Absolute path of the slot wrapper the broker may run as root.
+        default: /usr/local/sbin/branchleft-slot
+      broker_deploy_image_stage_dir:
+        type: path
+        description: >-
+          Directory the broker stages a demo image in, as image.tar. It is
+          the one file the load grant names, and the broker's image temporary
+          directory setting.
+        default: /var/lib/branchleft-broker/image-tmp
+      broker_deploy_sudoers_path:
+        type: path
+        description: Where the sudoers grant is installed, a file under /etc/sudoers.d.
+        default: /etc/sudoers.d/branchleft-slot

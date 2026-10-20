@@ -20,11 +20,34 @@
     quiet: true
     fail_msg: The Node tarball for {{ broker_deploy_node_arch }} needs a pinned sha256 digest.
 
+# The sudoers grant is literal text written as root's permission to run the
+# wrapper, so each value that reaches it is held to a plain shape first: a slot
+# name of digits only, and absolute paths of path characters only. A space, a
+# glob character or a line break would change what a grant line matches.
+- name: Refuse a slot name that is not a bare digit string
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_slot_names | length > 0
+      - broker_deploy_slot_names | map('string') | reject('match', '^[0-9]+\Z') | list | length == 0
+    quiet: true
+    fail_msg: The slot names must be a list of one or more strings of digits and nothing else.
+
+- name: Refuse a wrapper path or an image directory that is not a plain absolute path
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_wrapper_path is match('^/[A-Za-z0-9._/-]+\Z')
+      - broker_deploy_image_stage_dir is match('^/[A-Za-z0-9._/-]+\Z')
+    quiet: true
+    fail_msg: The wrapper path and the image directory must be absolute paths of letters, digits, dot, underscore, hyphen and slash.
+
 - name: Read the Node binary the host already has
   ansible.builtin.stat:
     path: '{{ broker_deploy_node_dir }}/bin/node'
   register: broker_deploy_node_bin
 
+# A read, so it runs in check mode too (ANS-10): the command module otherwise
+# skips itself under --check, the version then reads as empty, and a configured
+# host would be planned for a Node download on every check.
 - name: Ask the Node binary its version when it is there
   ansible.builtin.command:
     argv:
@@ -33,6 +56,7 @@
   register: broker_deploy_node_version_out
   changed_when: false
   failed_when: false
+  check_mode: false
   when: broker_deploy_node_bin.stat.exists
 
 # The runbook skips the download when the version is already installed and
@@ -70,6 +94,12 @@
     mode: '0644'
   when: broker_deploy_node_needed
 
+# Skipped in check mode (ANS-10), for a reason of the module and not of the
+# role: unarchive requires dest to exist before it reports anything, even
+# under --check, and on a host the role has not touched the directory above is
+# only reported as to be created, and the tarball above only as to be fetched.
+# Without this skip the first plan of a fresh host fails here instead of
+# showing the change. A configured host does not reach this task at all.
 - name: Unpack the checked Node tarball into the runtime directory
   ansible.builtin.unarchive:
     src: '/var/tmp/branchleft-broker-node-{{ broker_deploy_node_arch }}.tar.xz'
@@ -78,7 +108,7 @@
     extra_opts:
       - --strip-components=1
       - --no-same-owner
-  when: broker_deploy_node_needed
+  when: broker_deploy_node_needed and not ansible_check_mode
 
 - name: Remove the Node tarball once it is unpacked
   ansible.builtin.file:
@@ -93,6 +123,10 @@
     shell: /usr/sbin/nologin
     home: '{{ broker_deploy_user_home }}'
     create_home: false
+
+# After the account, as the runbook has it: the grant names the broker account.
+- name: Install the sudoers boundary for the slot wrapper
+  ansible.builtin.include_tasks: _sudoers.yml
 
 - name: Create the configuration directory
   ansible.builtin.file:

@@ -22,3 +22,11 @@ broker_deploy_verify_key: /etc/branchleft/broker-verify-key.bin
 broker_deploy_unit_path: /etc/systemd/system/branchleft-broker.service
 broker_deploy_user: broker
 broker_deploy_user_home: /var/lib/branchleft-broker
+# The sudoers boundary: the broker may run the slot wrapper as root for exactly
+# the invocations the template lists, one per slot name below, and no other.
+# The slot names are a host-build parameter and must match the wrapper's slot
+# table. Each is a bare digit string, written out as a literal grant.
+broker_deploy_slot_names: ['0', '1', '2', '3', '4', '5', '6']
+broker_deploy_wrapper_path: /usr/local/sbin/branchleft-slot
+broker_deploy_image_stage_dir: /var/lib/branchleft-broker/image-tmp
+broker_deploy_sudoers_path: /etc/sudoers.d/branchleft-slot

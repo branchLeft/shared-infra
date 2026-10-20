@@ -11,6 +11,14 @@
     verify_key_source: '{{ playbook_dir }}/files/verify-key-stand-in.bin'
     verify_node: /opt/branchleft/broker/node/bin/node
     verify_release: /opt/branchleft/broker/releases/test-release-1
+    # The seven legal invocations of a slot in 0 to 6, and the one load.
+    verify_grant_line_pattern: >-
+      ^broker ALL=\(root\) NOPASSWD: /usr/local/sbin/branchleft-slot
+      ([0-6] (reset|[ab] (start|stop|email-batches))|load
+      /var/lib/branchleft-broker/image-tmp/image\.tar)\Z
+    verify_sudoers_dir_allowed:
+      - /etc/sudoers.d/README
+      - /etc/sudoers.d/branchleft-slot
   tasks:
     - name: Read the Node binary
       ansible.builtin.stat:
@@ -44,7 +52,7 @@
       ansible.builtin.assert:
         that:
           - broker_deploy_verify_user.ansible_facts.getent_passwd['broker'][5] == '/usr/sbin/nologin'
-          - broker_deploy_verify_user.ansible_facts.getent_passwd['broker'][1] == 'x'
+          - broker_deploy_verify_user.ansible_facts.getent_passwd['broker'][0] == 'x'
         quiet: true
         fail_msg: The broker account is missing or has a login shell.
 
@@ -137,7 +145,7 @@
           - broker_deploy_verify_env_stat.stat.gr_name == 'root'
           - broker_deploy_verify_env_stat.stat.mode == '0600'
           - "'BROKER_SLOTS_FILE=/var/lib/branchleft/broker-slots/slots.json' in (broker_deploy_verify_env.content | b64decode).splitlines()"
-          - "'LISTEN_HOST' not in (broker_deploy_verify_env.content | b64decode)"
+          - "(broker_deploy_verify_env.content | b64decode).splitlines() | select('match', '^\\s*LISTEN_HOST\\s*=') | list | length == 0"
         quiet: true
         fail_msg: The environment file is not root:root 0600, does not name the slots file, or sets LISTEN_HOST.
       no_log: true
@@ -183,3 +191,130 @@
           LoadState {{ broker_deploy_verify_service.status.LoadState }},
           UnitFileState {{ broker_deploy_verify_service.status.UnitFileState }},
           ActiveState {{ broker_deploy_verify_service.status.ActiveState }}.
+
+    # The sudoers boundary. The grant is exactly the 50 literal lines the slot
+    # table gives (7 slots x 7 invocations, and one load), root-owned 0440, and
+    # visudo accepts the file as it stands.
+    - name: Read the sudoers grant on the instance
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/branchleft-slot
+        checksum_algorithm: sha256
+      register: broker_deploy_verify_sudoers
+
+    - name: Read the sudoers grant's text
+      ansible.builtin.slurp:
+        src: /etc/sudoers.d/branchleft-slot
+      register: broker_deploy_verify_sudoers_text
+
+    - name: Check the sudoers grant with visudo, strictly
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/visudo
+          - -csf
+          - /etc/sudoers.d/branchleft-slot
+      register: broker_deploy_verify_visudo
+      changed_when: false
+      failed_when: false
+
+    - name: Ask sudo what the broker account may run
+      ansible.builtin.command:
+        argv:
+          - sudo
+          - -n
+          - -l
+          - -U
+          - broker
+      register: broker_deploy_verify_sudo_list
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the grant is root:root 0440 and visudo accepts it
+      ansible.builtin.assert:
+        that:
+          - broker_deploy_verify_sudoers.stat.exists
+          - broker_deploy_verify_sudoers.stat.pw_name == 'root'
+          - broker_deploy_verify_sudoers.stat.gr_name == 'root'
+          - broker_deploy_verify_sudoers.stat.mode == '0440'
+          - broker_deploy_verify_visudo.rc == 0
+        quiet: true
+        fail_msg: The sudoers grant is missing, is not root:root 0440, or visudo refuses it.
+
+    # Distinct lines of the seven legal forms, a slot in 0 to 6, and nothing
+    # else: with 50 of them all different, every legal line is there once.
+    - name: Assert the grant is exactly the literal lines of the slot table, with no wildcard
+      ansible.builtin.assert:
+        that:
+          - >-
+            (broker_deploy_verify_sudoers_text.content | b64decode).splitlines()
+            | select('match', '^[^#\s]') | list | length == 50
+          - >-
+            (broker_deploy_verify_sudoers_text.content | b64decode).splitlines()
+            | select('match', '^[^#\s]') | unique | list | length == 50
+          - >-
+            (broker_deploy_verify_sudoers_text.content | b64decode).splitlines()
+            | select('match', '^[^#\s]')
+            | reject('match', verify_grant_line_pattern)
+            | list | length == 0
+        quiet: true
+        fail_msg: The sudoers grant is not exactly the 50 literal invocation lines.
+
+    - name: Assert sudo reports the broker may run one slot command and the one load, and not ALL
+      ansible.builtin.assert:
+        that:
+          - broker_deploy_verify_sudo_list.rc == 0
+          - "'(root) NOPASSWD: /usr/local/sbin/branchleft-slot 3 b stop' in broker_deploy_verify_sudo_list.stdout"
+          - "'/usr/local/sbin/branchleft-slot load /var/lib/branchleft-broker/image-tmp/image.tar' in broker_deploy_verify_sudo_list.stdout"
+          - "'NOPASSWD: ALL' not in broker_deploy_verify_sudo_list.stdout"
+        quiet: true
+        fail_msg: sudo does not list the broker's slot commands, or lists an unrestricted grant.
+
+    # The refusal. The role's own install task is run with a slot name that holds
+    # a line break and a line that is not sudoers syntax, past the input check
+    # that main.yml makes (so only the validate stands in the way). visudo must
+    # refuse it, the install must stop there, and the grant on the instance must
+    # be the one it was, with no temporary file left in the directory.
+    - name: Try to install a grant that visudo refuses
+      block:
+        - name: Run the role's sudoers install with a slot name that breaks the file
+          ansible.builtin.include_role:
+            name: branchleft.broker_deploy
+            tasks_from: _sudoers.yml
+          vars:
+            broker_deploy_slot_names:
+              - "0\nthis line is not sudoers syntax"
+        - name: Note that the install was not refused
+          ansible.builtin.set_fact:
+            broker_deploy_verify_refused: false
+      rescue:
+        - name: Note which task the install stopped at
+          ansible.builtin.set_fact:
+            broker_deploy_verify_refused: true
+            broker_deploy_verify_refused_at: '{{ ansible_failed_task.name }}'
+            broker_deploy_verify_refused_msg: '{{ ansible_failed_result.msg | default("") }}'
+
+    - name: Read the grant again, and the sudoers directory
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/branchleft-slot
+        checksum_algorithm: sha256
+      register: broker_deploy_verify_sudoers_after
+
+    - name: List the files in the sudoers directory
+      ansible.builtin.find:
+        paths: /etc/sudoers.d
+        file_type: any
+        hidden: true
+      register: broker_deploy_verify_sudoers_dir
+
+    - name: Assert the broken grant was refused at the install, and the good one is untouched
+      ansible.builtin.assert:
+        that:
+          - broker_deploy_verify_refused
+          - broker_deploy_verify_refused_at == 'Install the sudoers grant for the slot wrapper'
+          - "'failed to validate' in broker_deploy_verify_refused_msg"
+          - broker_deploy_verify_sudoers_after.stat.checksum == broker_deploy_verify_sudoers.stat.checksum
+          - broker_deploy_verify_sudoers_dir.files | map(attribute='path') | difference(verify_sudoers_dir_allowed) | list | length == 0
+        quiet: true
+        fail_msg: >-
+          Expected the role to stop at the sudoers install with visudo's refusal and leave the
+          grant as it was. Refused: {{ broker_deploy_verify_refused }}, at
+          {{ broker_deploy_verify_refused_at | default('nothing') }}.

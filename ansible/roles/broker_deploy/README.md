@@ -23,10 +23,29 @@ role and the patterns under `ansible/patterns/`.
 | `/opt/branchleft/broker/current` (link)           | root        | link                  | the release directory                                                        |
 | `/etc/branchleft/broker-verify-key.bin`           | root:broker | 0640                  | `broker_deploy_verify_key_src`                                               |
 | `/etc/branchleft/broker.env`                      | root        | 0600                  | `templates/broker.env.j2`, the shipped template with the slots-file line set |
+| `/etc/sudoers.d/branchleft-slot`                  | root        | 0440                  | `templates/branchleft-slot.sudoers.j2`, one literal line per invocation      |
 | `/etc/systemd/system/branchleft-broker.service`   | root        | 0644                  | `files/branchleft-broker.service`                                            |
 
 The unit is loaded, disabled and inactive after the role. Nothing enables or
 starts it.
+
+## The sudoers boundary
+
+The broker account may run the slot wrapper as root for a fixed list of
+invocations and nothing else: for each slot in `broker_deploy_slot_names`, a
+reset, and a start, a stop and an email-batches check for each of the colours
+`a` and `b`; and one load of `image.tar` in `broker_deploy_image_stage_dir`.
+Every line is a literal command, because a wildcard in a sudoers command matches
+spaces and would let an extra argument reach the wrapper as root.
+
+The file is written to a temporary file, checked with `visudo -csf`, and only
+then moved over the old one, so a grant visudo refuses never replaces a good one.
+Check mode skips that check (the module runs it only on a real write), so a plan
+shows the file as changed and a refusal shows at the live apply.
+
+The role holds the slot table twice: here, as `broker_deploy_slot_names`, and in
+the wrapper's own generator on the host. Nothing in this repository compares
+them, so changing the number of slots means changing both.
 
 ## Inputs
 
@@ -44,6 +63,7 @@ of them is a secret. The private half of the key never reaches the role.
 
 - `xz` (the Node tarball is unpacked with it).
 - systemd, to load the unit.
+- `sudo`, which provides `visudo`, to check the grant.
 
 ## Steps the role does not take
 
@@ -53,8 +73,8 @@ These stay with an owner, as the runbook already says:
 - Making the request-signing key pair, and saving the private half in the
   owner's password manager.
 - Starting the broker. That needs an owner ruling and is the runbook's B-7 step.
-- The sudoers boundary and the slot wrapper (the runbook's A-5 step, from the
-  host build). They are not in this role's scope.
+- Installing the slot wrapper program itself, which the sudoers grant names.
+  The grant is installed here; the wrapper comes from the host build.
 
 ## Tests
 
@@ -64,3 +84,13 @@ artefact: they only prove where files land. `verify.yml` reads the result back,
 and compares the unit and the verify key with their sources. It checks the
 environment file's owner, mode, slots-file line and that `LISTEN_HOST` is unset,
 but not every line of it.
+
+It checks the sudoers grant: root-owned 0440, accepted by `visudo -csf`, exactly
+the 50 literal invocation lines of the default slot table, and listed by
+`sudo -l` for the broker account with no unrestricted grant. It also runs the
+role's sudoers install with a line that is not sudoers syntax and expects the
+install to stop at visudo's refusal and leave the good grant untouched.
+
+The Node unpack is skipped in check mode: `unarchive` needs its destination to
+exist even then, and on a host the role has not touched the directory and the
+download are only reported, not made.

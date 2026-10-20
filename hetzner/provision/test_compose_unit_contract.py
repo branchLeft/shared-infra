@@ -107,6 +107,19 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "only slug this repository names; the set is open, and a slug granted "
         "a deploy slot on a host appears in no file here."
     ),
+    "demo-": (
+        "The prefix of one instance per demo slot, `demo-<slot>`: the scan reads "
+        "the name up to the placeholder. Provisioned by branchLeft/ghost-platform's "
+        "demo-host/provision and never committed as a Compose file at all, so "
+        "there is no file here for any static check to read."
+    ),
+    "broker": (
+        "Not an instance of the template: `/opt/branchleft/broker` is the path of "
+        "the broker program, which runs under its own unit installed by the "
+        "ansible/roles/broker_deploy role. It is registered because the scan reads "
+        "the path as a stack name. The program is built from branchLeft/ghost-platform "
+        "services/broker, and no Compose file exists for it anywhere."
+    ),
 }
 
 # The stack-name rule the deploy wrapper actually applies, reused rather than
@@ -174,6 +187,11 @@ UNSCANNED_SUFFIXES: dict[str, str] = {
     ".pyc": (
         "compiled bytecode. The source it was compiled from is scanned, and a "
         "name reachable only through a stale .pyc is not one anybody wrote down."
+    ),
+    ".bin": (
+        "raw bytes, not text. The one file of this type is a Molecule stand-in "
+        "for a public key, 32 zero bytes, and a binary holds no prose or "
+        "configuration anybody authored for a name to be written down in."
     ),
 }
 
