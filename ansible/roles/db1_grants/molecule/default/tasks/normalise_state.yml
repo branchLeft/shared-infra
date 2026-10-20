@@ -1,0 +1,25 @@
+---
+# Test scaffolding: the fake database as the server would show it to a reader that
+# does not care about order. A real server lists privileges in its own order and
+# has no grant-option key for an account that never held the option, so two
+# databases are the same when every account has the same password hash, TLS
+# requirement, connection limit, grant option and set of privileges. Takes
+# db1_grants_scenario_to_normalise and sets db1_grants_scenario_normalised.
+- name: Put the database into an order-free form
+  ansible.builtin.set_fact:
+    db1_grants_scenario_normalised: >-
+      {%- set ns = namespace(out={}) -%}
+      {%- for name, account in db1_grants_scenario_to_normalise.users.items() -%}
+      {%- set objects = namespace(out={}) -%}
+      {%- for target, privileges in account.db.items() -%}
+      {%- set objects.out = objects.out | combine({target: privileges | sort}) -%}
+      {%- endfor -%}
+      {%- set ns.out = ns.out | combine({name: {'auth': account.auth,
+      'ssl_type': account.ssl_type,
+      'muc': account.muc,
+      'grant_option': account.grant_option | default(false),
+      'static': account.static | sort,
+      'dynamic': account.dynamic | sort,
+      'db': objects.out}}) -%}
+      {%- endfor -%}
+      {{ ns.out | to_json(sort_keys=True) }}

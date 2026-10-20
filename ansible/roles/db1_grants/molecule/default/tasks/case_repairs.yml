@@ -37,10 +37,26 @@
 - name: Read the database after the run
   ansible.builtin.include_tasks: read_database.yml
 
+# Compared as the server would show them: the order of a list of privileges and a
+# grant option that was never held are not differences.
+- name: Put the database after the run into an order-free form
+  ansible.builtin.include_tasks: normalise_state.yml
+  vars:
+    db1_grants_scenario_to_normalise: '{{ db1_grants_scenario_now }}'
+
+- name: Keep the database after the run
+  ansible.builtin.set_fact:
+    db1_grants_scenario_after: '{{ db1_grants_scenario_normalised }}'
+
+- name: Put the configured database into an order-free form
+  ansible.builtin.include_tasks: normalise_state.yml
+  vars:
+    db1_grants_scenario_to_normalise: '{{ db1_grants_scenario_baseline_slurp.content | b64decode | from_json }}'
+
 - name: Assert one run repaired everything and nothing else
   ansible.builtin.assert:
     that:
-      - db1_grants_scenario_now == (db1_grants_scenario_baseline_slurp.content | b64decode | from_json)
+      - db1_grants_scenario_after == db1_grants_scenario_normalised
     fail_msg: One run did not bring the database back to the configured state.
     quiet: true
 
