@@ -1,0 +1,22 @@
+---
+# What the role expects to find on a host before it runs: the account, and a
+# state directory the account owns with no access for anyone else. The role
+# must change both the owner and the mode, which only a directory that is not
+# already root-owned and 0755 can show.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create the placeholder account
+      ansible.builtin.user:
+        name: '{{ scenario_user }}'
+        shell: /bin/bash
+        create_home: true
+
+    - name: Leave a state directory owned by the account, not by root
+      ansible.builtin.file:
+        path: '{{ scenario_state_dir }}'
+        state: directory
+        owner: '{{ scenario_user }}'
+        group: '{{ scenario_user }}'
+        mode: '0700'
