@@ -7,6 +7,10 @@
 # The timer stays off. Turning it on is a production apply (README).
 backup_worker_timer_enabled: false
 
+# False leaves the timer as it is on the host. Set true, together with
+# backup_worker_timer_enabled false, to stop a running timer (README).
+backup_worker_timer_may_disable: false
+
 # Install the mysqldump 8.0 client and age with the pinned installer (runbook
 # section 2) when either is missing. Off for a host that has them by other means.
 backup_worker_install_prereqs: true

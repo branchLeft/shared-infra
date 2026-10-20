@@ -1,14 +1,15 @@
 ---
 argument_specs:
   main:
-    short_description: Install the per-tenant backup worker and keep its nightly timer off
+    short_description: Install the per-tenant backup worker and hold its nightly timer to a variable
     description: >-
       Stages a pinned release of the backup worker's programs (each downloaded
       from the branchLeft/ghost-platform repository and held to a sha256),
       creates the service account, writes the environment, tenants and
       recipients files with their owner and mode, installs the two systemd
       units and the database CA, and keeps the nightly timer disabled unless
-      backup_worker_timer_enabled is true. It does not create the database
+      backup_worker_timer_enabled is true. A timer that is on stays on unless
+      backup_worker_timer_may_disable is true. It does not create the database
       account or its grants, make the age keypair, start a run or install
       node_exporter. Every private value is a required input.
     author: branchLeft
@@ -83,10 +84,17 @@ argument_specs:
         type: bool
         default: false
         description: >-
-          Enable and start the nightly timer. False keeps it disabled and
-          stopped. True is a production apply and goes through the gated
-          workflow; it first requires the installer's own readiness check to
-          pass.
+          Enable and start the nightly timer. False leaves the timer as it is
+          on the host unless backup_worker_timer_may_disable is true. True is a
+          production apply and goes through the gated workflow; it first
+          requires the installer's own readiness check to pass.
+      backup_worker_timer_may_disable:
+        type: bool
+        default: false
+        description: >-
+          With backup_worker_timer_enabled false, stop and disable the nightly
+          timer when it is on. False never changes a timer the host already
+          has on, so a run with the defaults cannot stop production backups.
       backup_worker_install_prereqs:
         type: bool
         default: true

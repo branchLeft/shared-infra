@@ -272,9 +272,15 @@
   check_mode: false
   when: backup_worker_timer_enabled | bool
 
+# A timer the host already has on is left alone unless backup_worker_timer_may_disable
+# is true: with the defaults this task does nothing, so a first apply cannot stop
+# nightly backups that were enabled by hand. The gate is the second variable,
+# never a change to the default.
 - name: Hold the nightly timer to the state the variable asks for
   ansible.builtin.systemd_service:
     name: '{{ backup_worker_timer_unit }}'
     enabled: '{{ backup_worker_timer_enabled | bool }}'
     state: "{{ 'started' if backup_worker_timer_enabled | bool else 'stopped' }}"
-  when: backup_worker_release_stat.stat.exists
+  when:
+    - backup_worker_release_stat.stat.exists
+    - backup_worker_timer_enabled | bool or backup_worker_timer_may_disable | bool

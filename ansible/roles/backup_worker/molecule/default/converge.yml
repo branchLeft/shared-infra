@@ -40,3 +40,43 @@
               - "'did not match' in (ansible_failed_result | string | lower)"
             quiet: true
             fail_msg: The role failed on the wrong checksum for a reason other than the checksum.
+
+    # The control case for the timer default: a timer the host already has on is
+    # left on by a run with the defaults. The enable and the disable are test
+    # setup, not role tasks, so they report no change; the idempotence step
+    # measures the role, and the role's own timer task must report none. The
+    # disable at the end leaves the off state that verify.yml checks. Check mode
+    # skips it: nothing is enabled there.
+    - name: Prove the defaults leave an enabled timer on
+      when: not ansible_check_mode
+      block:
+        - name: Enable the timer before the defaults are applied
+          ansible.builtin.systemd_service:
+            name: branchleft-backup-worker.timer
+            enabled: true
+            state: started
+          changed_when: false
+
+        - name: Apply the role with the defaults
+          ansible.builtin.include_role:
+            name: branchleft.backup_worker
+
+        - name: Read the timer after the defaults are applied
+          ansible.builtin.systemd_service:
+            name: branchleft-backup-worker.timer
+          register: backup_worker_converge_timer
+          changed_when: false
+
+        - name: Assert the defaults left the enabled timer enabled
+          ansible.builtin.assert:
+            that:
+              - backup_worker_converge_timer.status.UnitFileState == 'enabled'
+            quiet: true
+            fail_msg: The default apply changed a timer that was enabled; the timer task must be gated on backup_worker_timer_may_disable.
+
+        - name: Disable the timer again for the later steps
+          ansible.builtin.systemd_service:
+            name: branchleft-backup-worker.timer
+            enabled: false
+            state: stopped
+          changed_when: false

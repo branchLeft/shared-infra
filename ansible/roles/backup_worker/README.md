@@ -25,8 +25,10 @@ follows the order the standard sets for a role README (ANS-14).
    (runbook 5d): the first two `root:backup-worker` `0640`, the environment file
    `root:root` `0600`.
 6. **Holds the timer to a variable** (runbook 6.2): `backup_worker_timer_enabled`,
-   default `false`. False keeps `branchleft-backup-worker.timer` disabled and
-   stopped.
+   default `false`. True enables and starts `branchleft-backup-worker.timer`. False
+   leaves the timer as it is on the host, unless `backup_worker_timer_may_disable`
+   is true; then it stops and disables it. A fresh host therefore stays off, and a
+   timer enabled by hand is not stopped by a run with the defaults.
 
 It does not run the ghost-platform installer to install. The installer enables
 the timer itself once its inputs are present, which would bypass the variable,
@@ -50,9 +52,7 @@ as inputs.
 ### Not in this role
 
 - **Section 7** (Prometheus and the backup alerts) covers `node_exporter` on the
-  worker host. That belongs to the `exporters_and_collectors` role in
-  [PR branchLeft/shared-infra#336](https://github.com/branchLeft/shared-infra/pull/336),
-  not here.
+  worker host. That belongs to the `exporters_and_collectors` role, not here.
 - Deleting an old release directory. Releases accumulate; the role never removes one.
 
 ### Turning the timer on is a production apply
@@ -60,9 +60,12 @@ as inputs.
 `backup_worker_timer_enabled: true` starts nightly dumps of production data. It
 is a production apply and goes through the gated workflow (ANS-17), never a
 laptop. The role first runs the installer's `--check` and fails if any input is
-missing, so a half-prepared host does not get a timer. Leaving the variable
-`false` on a host whose timer is already on will turn the timer off: the role
-declares the state it is given.
+missing, so a half-prepared host does not get a timer.
+
+Leaving the variable `false` does not change a timer the host already has on.
+Turning the timer off is a second, explicit decision: set
+`backup_worker_timer_may_disable: true` as well, and the role stops and disables
+it. Both variables are production applies when they change a running timer.
 
 ## Interface
 
@@ -78,7 +81,7 @@ credentials (`backup_worker_db_password`, `backup_worker_s3_access_key_id`,
 The tests use documentation values only (`192.0.2.x`, `example.invalid`).
 
 Public defaults: `backup_worker_timer_enabled` (`false`),
-`backup_worker_install_prereqs` (`true`), `backup_worker_source_sha` (the
+`backup_worker_timer_may_disable` (`false`), `backup_worker_install_prereqs` (`true`), `backup_worker_source_sha` (the
 ghost-platform commit), `backup_worker_source_base_url` (the raw URL at that
 commit, so a test can point it at a `file://` copy) and
 `backup_worker_release_files` (each file with its `sha256`).
@@ -136,6 +139,9 @@ systemd, which treats quotes and backslashes specially.
 - The role does not run the installer to install, for the reason above.
 - The role writes the CA from an input where the runbook copies it from the
   database host's container.
+- The runbook's timer step enables the timer; the role never does so unless
+  `backup_worker_timer_enabled` is true, and a false value leaves an enabled
+  timer alone unless `backup_worker_timer_may_disable` is true.
 
 ## How to test it
 
@@ -152,7 +158,9 @@ needs no network: `prepare.yml` writes a test-only `file://` copy of four
 placeholder programs and stand-ins for `age`, `mysql` and `mysqldump`.
 
 - `converge.yml` applies the role, then applies it again with one wrong checksum
-  and requires that the role stops at the download, naming the checksum.
+  and requires that the role stops at the download, naming the checksum. It then
+  enables the timer, applies the role with the defaults, requires the timer to
+  stay enabled, and disables it again so the later steps see the off state.
 - `verify.yml` checks: the environment file is a plain file, `root:root`, mode
   `0600`, and holds exactly the nine names with the supplied values; the tenants
   and recipients files are `root:backup-worker` `0640` and the recipients file is
@@ -168,14 +176,15 @@ placeholder programs and stand-ins for `age`, `mysql` and `mysqldump`.
 One row per edit, with the harness run over this role and a restore afterwards.
 The retrieval is the run itself.
 
-| Edit to the role                                                   | Step that fails | Assertion that names it                                                              |
-| ------------------------------------------------------------------ | --------------- | ------------------------------------------------------------------------------------ |
-| The environment file's mode `0600` changed to `0644` in both tasks | `verify`        | "The environment file is missing, not a plain file, not root:root or not mode 0600." |
+| Edit to the role                                                       | Step that fails | Assertion that names it                                                                                                |
+| ---------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| The environment file's mode `0600` changed to `0644` in both tasks     | `verify`        | "The environment file is missing, not a plain file, not root:root or not mode 0600."                                   |
+| The `backup_worker_timer_may_disable` gate removed from the timer task | `converge`      | "The default apply changed a timer that was enabled; the timer task must be gated on backup_worker_timer_may_disable." |
 
 Reviewed or asserted, but not shown to fail by a sabotage run: the tenants and
-recipients file modes, the timer being disabled, the release-file checksum
-assertion in `verify`, the wrong-checksum control in `converge`, the service
-account assertion and the input checks at the top of `tasks/main.yml`.
+recipients file modes, the timer being disabled in `verify`, the release-file
+checksum assertion in `verify`, the wrong-checksum control in `converge`, the
+service account assertion and the input checks at the top of `tasks/main.yml`.
 
 ### Named limits
 
@@ -188,7 +197,8 @@ account assertion and the input checks at the top of `tasks/main.yml`.
   pinned commit with `git show <commit>:<path> | shasum -a 256`; no test fetches
   them from `raw.githubusercontent.com`.
 - **The timer-on path is not tested.** It needs the real installer's `--check`;
-  the test has a placeholder. Only the default (off) is exercised.
+  the test has a placeholder. The default (off) and the default leaving an enabled
+  timer alone are exercised; a true `backup_worker_timer_enabled` is not.
 - **The prerequisite installer is not run.** The test provides stand-ins for the
   tools, so the probe finds them and the installer step is skipped.
 - **A silent skip passes.** The download, unit and timer tasks are skipped in
@@ -213,7 +223,9 @@ any host yet.
 
 1. To change the release, change `backup_worker_source_sha` and every checksum in
    `backup_worker_release_files` together, using the command in the limits above.
-   A checksum that does not match fails the download.
+   Change the same values in `meta/argument_specs.yml` as well as in
+   `defaults/main.yml`: the spec repeats the pinned commit and the URL. A checksum
+   that does not match fails the download.
 2. Keep every task able to run under `--check --diff`, keep the modes explicit,
    and keep `no_log: true` and `diff: false` on any task that touches a value.
 3. A private value never becomes a default.
