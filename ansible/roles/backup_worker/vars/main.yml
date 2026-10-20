@@ -1,0 +1,41 @@
+---
+# Constants of the service, not inputs: role variables outrank every value a
+# caller passes, so a caller cannot change them. The paths are the ones the
+# installer, the unit and the runbook share.
+backup_worker_account: backup-worker
+backup_worker_base_dir: /opt/branchleft/backup-worker
+backup_worker_releases_dir: /opt/branchleft/backup-worker/releases
+backup_worker_current_link: /opt/branchleft/backup-worker/current
+backup_worker_release_dir: '{{ backup_worker_releases_dir }}/{{ backup_worker_source_sha }}'
+backup_worker_config_dir: /etc/branchleft
+backup_worker_env_file: /etc/branchleft/backup-worker.env
+backup_worker_ca_file: /etc/branchleft/db1-ca.pem
+backup_worker_tenants_file: /etc/branchleft/backup-worker-tenants
+backup_worker_recipients_file: /etc/branchleft/backup-worker-recipients
+backup_worker_unit_dir: /etc/systemd/system
+backup_worker_timer_unit: branchleft-backup-worker.timer
+backup_worker_service_unit: branchleft-backup-worker.service
+
+# The directories of a release that hold a file. The installer refuses a
+# release with an entry owned by anyone but root or writable by group or other.
+backup_worker_release_subdirs:
+  - infra
+  - infra/provisioning
+  - infra/provisioning/scripts
+  - db
+  - db/provision
+  - control
+  - control/provision
+
+# The patterns end in \Z, not $, so a trailing line break does not pass.
+backup_worker_host_pattern: '^[A-Za-z0-9][A-Za-z0-9.:-]*\Z'
+backup_worker_name_pattern: '^[A-Za-z0-9_][A-Za-z0-9_-]*\Z'
+backup_worker_bucket_pattern: '^[a-z0-9][a-z0-9.-]*\Z'
+backup_worker_region_pattern: '^[a-z0-9][a-z0-9-]*\Z'
+backup_worker_slug_pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]*\Z'
+backup_worker_recipient_pattern: '^age1[0-9a-z]{58}\Z'
+backup_worker_sha_pattern: '^[0-9a-f]{40}\Z'
+backup_worker_checksum_pattern: '^[0-9a-f]{64}\Z'
+# A credential goes on one line of the environment file, which systemd parses
+# for quotes and backslashes: letters, digits and a few safe symbols only.
+backup_worker_credential_pattern: '^[A-Za-z0-9/+=_.-]+\Z'

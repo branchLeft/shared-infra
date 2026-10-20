@@ -1,0 +1,42 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+  tasks:
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml. The include carries no no_log: the role's own
+    # tasks must be the ones that keep the values out of the log, and a keyword
+    # here would hide a missing one.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.backup_worker
+
+    # The control case for the checksum pin. A release file whose pinned sha256
+    # is wrong must stop the role at the download. The file on the host is
+    # already right, so a refusal here changes nothing and the second converge
+    # still reports zero changes. The assertion names the checksum so that a
+    # failure of any other kind does not pass for this one. Check mode skips it:
+    # get_url does not compare a checksum there.
+    - name: Prove a wrong checksum is refused
+      when: not ansible_check_mode
+      block:
+        - name: Apply the role with one wrong checksum
+          ansible.builtin.include_role:
+            name: branchleft.backup_worker
+          vars:
+            backup_worker_release_files: >-
+              {{ [{'path': 'control/provision/install_backup_worker.py',
+              'sha256': '0000000000000000000000000000000000000000000000000000000000000000'}]
+              + (backup_worker_test_files | rejectattr('path', 'equalto', 'control/provision/install_backup_worker.py') | list) }}
+        - name: Fail if the wrong checksum was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a release file whose checksum was wrong.
+      rescue:
+        - name: Assert the failure was the checksum
+          ansible.builtin.assert:
+            that:
+              - "'did not match' in (ansible_failed_result | string | lower)"
+            quiet: true
+            fail_msg: The role failed on the wrong checksum for a reason other than the checksum.

@@ -1,0 +1,280 @@
+---
+# Inputs first, refused before any task changes anything. No message names a
+# value: the private inputs and the credentials never reach a log (ANS-16). The
+# argument spec has already run; it coerces a wrong type rather than rejecting
+# it, and it accepts an empty string for a required input, so these reject both.
+- name: Refuse a private input that is empty or not plain text
+  ansible.builtin.assert:
+    that:
+      - backup_worker_db_host is string
+      - backup_worker_db_host is match(backup_worker_host_pattern)
+      - backup_worker_db_user is string
+      - backup_worker_db_user is match(backup_worker_name_pattern)
+      - backup_worker_bucket is string
+      - backup_worker_bucket is match(backup_worker_bucket_pattern)
+      - backup_worker_s3_endpoint is string
+      - backup_worker_s3_endpoint is match(backup_worker_host_pattern)
+      - backup_worker_s3_region is string
+      - backup_worker_s3_region is match(backup_worker_region_pattern)
+      - backup_worker_db_ca_pem is string
+      - backup_worker_db_ca_pem is search('-----BEGIN CERTIFICATE-----')
+      - backup_worker_db_ca_pem is search('-----END CERTIFICATE-----')
+      - backup_worker_db_ca_pem is not search('PRIVATE KEY')
+    quiet: true
+    fail_msg: >-
+      A required private input is empty or has the wrong shape: the database
+      host, account, bucket, endpoint, region or the CA certificate. They come
+      from the private inventory and have no default.
+
+- name: Refuse a credential that is empty or cannot be one line of the environment file
+  ansible.builtin.assert:
+    that:
+      - backup_worker_db_password is string
+      - backup_worker_db_password is match(backup_worker_credential_pattern)
+      - backup_worker_s3_access_key_id is string
+      - backup_worker_s3_access_key_id is match(backup_worker_credential_pattern)
+      - backup_worker_s3_secret_access_key is string
+      - backup_worker_s3_secret_access_key is match(backup_worker_credential_pattern)
+    quiet: true
+    fail_msg: >-
+      A credential is empty or holds a character outside letters, digits and
+      the symbols / + = _ . - . No credential is shown here.
+
+# The tenants hold slugs (private) and public age recipients. A private key
+# (AGE-SECRET-KEY-) fails the recipient pattern, which is its second use here.
+- name: Refuse a tenant list that is empty, malformed or reuses a slug or a recipient
+  ansible.builtin.assert:
+    that:
+      - backup_worker_tenants is sequence
+      - backup_worker_tenants | length > 0
+      - backup_worker_tenants | map(attribute='slug') | select('match', backup_worker_slug_pattern) | list | length == backup_worker_tenants | length
+      - backup_worker_tenants | map(attribute='recipient') | select('match', backup_worker_recipient_pattern) | list | length == backup_worker_tenants | length
+      - backup_worker_tenants | map(attribute='slug') | unique | list | length == backup_worker_tenants | length
+      - backup_worker_tenants | map(attribute='recipient') | unique | list | length == backup_worker_tenants | length
+    quiet: true
+    fail_msg: >-
+      The tenant list must hold at least one tenant, each with a plain slug and
+      a public age1 recipient, and no slug or recipient may appear twice. A
+      private key is refused here too.
+
+- name: Refuse a release that is not pinned to a commit and a checksum for every file
+  ansible.builtin.assert:
+    that:
+      - backup_worker_source_sha is match(backup_worker_sha_pattern)
+      - >-
+        backup_worker_release_files | map(attribute='sha256') | select('match', backup_worker_checksum_pattern) | list | length
+        == backup_worker_release_files | length
+      - backup_worker_release_files | map(attribute='path') | unique | list | length == backup_worker_release_files | length
+      - "'control/provision/install_backup_worker.py' in backup_worker_release_files | map(attribute='path')"
+      - "'db/provision/install_host_prereqs.py' in backup_worker_release_files | map(attribute='path')"
+      - "'control/provision/branchleft-backup-worker.service' in backup_worker_release_files | map(attribute='path')"
+      - "'control/provision/branchleft-backup-worker.timer' in backup_worker_release_files | map(attribute='path')"
+    quiet: true
+    fail_msg: >-
+      The release needs a full 40-character commit, a 64-character sha256 for
+      every file, and must list the installer, the prerequisite installer and
+      the two unit files.
+
+# The service account (runbook section 3). The installer creates the same
+# account; the role does it here so the files below can be owned by its group.
+- name: Create the service account
+  ansible.builtin.user:
+    name: '{{ backup_worker_account }}'
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+
+- name: Create the directories above the releases
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - /opt/branchleft
+    - '{{ backup_worker_base_dir }}'
+    - '{{ backup_worker_releases_dir }}'
+    - '{{ backup_worker_config_dir }}'
+    - '{{ backup_worker_release_dir }}'
+
+- name: Create the directories of the release
+  ansible.builtin.file:
+    path: '{{ backup_worker_release_dir }}/{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: '{{ backup_worker_release_subdirs }}'
+
+# Runbook section 1 staged the release with git archive and tar. Here each file
+# comes from the one home of the programs, at the pinned commit, and the
+# download fails unless it has the pinned sha256. The installer refuses a file
+# that anyone but root could rewrite, so owner and mode are explicit. In check
+# mode the directories above do not exist yet on a fresh host, and get_url
+# refuses a destination whose directory is missing, so it is skipped there.
+- name: Look at the release directory
+  ansible.builtin.stat:
+    path: '{{ backup_worker_release_dir }}/control/provision'
+  register: backup_worker_release_stat
+
+- name: Download the release files and hold each to its checksum
+  ansible.builtin.get_url:
+    url: '{{ backup_worker_source_base_url }}/{{ item.path }}'
+    dest: '{{ backup_worker_release_dir }}/{{ item.path }}'
+    checksum: 'sha256:{{ item.sha256 }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ backup_worker_release_files }}'
+  loop_control:
+    label: '{{ item.path }}'
+  when: backup_worker_release_stat.stat.exists
+
+# Section 2: age and the mysqldump 8.0 client, through the pinned installer the
+# database host uses. It changes apt sources and installs packages, so it runs
+# only when a probe finds a tool missing. The probes change nothing.
+- name: Look for age
+  ansible.builtin.command:
+    argv: [age, --version]
+  register: backup_worker_probe_age
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: backup_worker_install_prereqs
+
+- name: Look for the mysqldump client
+  ansible.builtin.command:
+    argv: [mysqldump, --version]
+  register: backup_worker_probe_mysqldump
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: backup_worker_install_prereqs
+
+- name: Install age and the mysqldump 8.0 client with the pinned installer
+  ansible.builtin.command:
+    argv: [python3, '{{ backup_worker_release_dir }}/db/provision/install_host_prereqs.py']
+  changed_when: true
+  when:
+    - backup_worker_install_prereqs
+    - backup_worker_release_stat.stat.exists
+    - backup_worker_probe_age.rc != 0 or backup_worker_probe_mysqldump.rc != 0 or ('Ver 8.0.' not in backup_worker_probe_mysqldump.stdout)
+
+# Section 3: the current link and the units. The link is a real link or the
+# task fails: the installer also refuses to replace anything else.
+- name: Point current at this release
+  ansible.builtin.file:
+    path: '{{ backup_worker_current_link }}'
+    src: '{{ backup_worker_release_dir }}'
+    state: link
+    owner: root
+    group: root
+  when: backup_worker_release_stat.stat.exists
+
+- name: Install the service and timer units from the release
+  ansible.builtin.copy:
+    src: '{{ backup_worker_release_dir }}/control/provision/{{ item }}'
+    remote_src: true
+    dest: '{{ backup_worker_unit_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - '{{ backup_worker_service_unit }}'
+    - '{{ backup_worker_timer_unit }}'
+  when: backup_worker_release_stat.stat.exists
+  notify: Reload systemd manager
+
+# Section 4c: db1's CA, which is public. The installer requires a world-readable
+# regular file. The text is a private input, so nothing about it is logged.
+- name: Install the database CA
+  ansible.builtin.copy:
+    content: '{{ backup_worker_db_ca_pem }}'
+    dest: '{{ backup_worker_ca_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  no_log: true
+  diff: false
+
+# Section 5d, the tenants and recipients files. The tenants file decides which
+# tenants are dumped and the recipients file decides whose key opens whose dump,
+# so only root may write them; the service account reads them (mode 0640, its
+# group). Slugs are private, so these tasks hide them. The public recipients are
+# the only age material the host ever holds.
+- name: Write the tenants file
+  ansible.builtin.template:
+    src: backup-worker-tenants.j2
+    dest: '{{ backup_worker_tenants_file }}'
+    owner: root
+    group: '{{ backup_worker_account }}'
+    mode: '0640'
+  no_log: true
+  diff: false
+
+- name: Write the recipients file
+  ansible.builtin.template:
+    src: backup-worker-recipients.j2
+    dest: '{{ backup_worker_recipients_file }}'
+    owner: root
+    group: '{{ backup_worker_account }}'
+    mode: '0640'
+  no_log: true
+  diff: false
+
+# Section 5d, the environment file. It holds credentials, so it is made root
+# 0600 and empty first, and only then is anything written to it: no instant
+# exists when a value is in a wider file. A file already there is left as it is
+# (force: false), and the template task below sets owner and mode again. The
+# tasks that handle a value say no_log and diff: false; the register of neither
+# is kept.
+- name: Create the environment file empty, closed to everyone but root
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ backup_worker_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+    force: false
+  no_log: true
+  diff: false
+
+- name: Write the environment file
+  ansible.builtin.template:
+    src: backup-worker.env.j2
+    dest: '{{ backup_worker_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+    backup: false
+  no_log: true
+  diff: false
+
+# Without this the handler runs at the end of the play, and the timer task below
+# would meet a unit systemd has not read.
+- name: Load the units before the timer is handled
+  ansible.builtin.meta: flush_handlers
+
+# Section 6.2, the one step that turns the backups on. The installer's own
+# read-only check says whether every input is in place; it prints the names of
+# what is missing, never a value. Skipped, with the timer held off, unless the
+# variable is true.
+- name: Ask the installer whether every input is in place
+  ansible.builtin.command:
+    argv:
+      [
+        python3,
+        '{{ backup_worker_current_link }}/control/provision/install_backup_worker.py',
+        --check,
+      ]
+  changed_when: false
+  check_mode: false
+  when: backup_worker_timer_enabled | bool
+
+- name: Hold the nightly timer to the state the variable asks for
+  ansible.builtin.systemd_service:
+    name: '{{ backup_worker_timer_unit }}'
+    enabled: '{{ backup_worker_timer_enabled | bool }}'
+    state: "{{ 'started' if backup_worker_timer_enabled | bool else 'stopped' }}"
+  when: backup_worker_release_stat.stat.exists
