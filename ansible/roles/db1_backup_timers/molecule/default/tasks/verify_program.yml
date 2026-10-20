@@ -1,0 +1,27 @@
+---
+# One group of programs: the instance's copy of each, read for its name. Each must
+# be the digest the role pins for it, the file as it is at the pinned ghost-platform
+# commit. The role has no source copy of a program to compare with.
+- name: Read each delivered program on the instance
+  ansible.builtin.stat:
+    path: '{{ verify_group.dir }}/{{ item }}'
+    checksum_algorithm: sha256
+  loop: '{{ verify_group.names }}'
+  register: db1_backup_timers_verify_programs
+  loop_control:
+    label: '{{ item }}'
+
+- name: Assert each program is the pinned file, root-owned, mode 0644
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'root'
+      - item.stat.mode == '0644'
+      - item.stat.checksum == db1_backup_timers_program_sha256[item.item]
+    quiet: true
+    fail_msg: '{{ item.item }} is missing, or is not the pinned ghost-platform file as a root-owned file with mode 0644.'
+  loop: '{{ db1_backup_timers_verify_programs.results }}'
+  loop_control:
+    label: '{{ item.item }}'

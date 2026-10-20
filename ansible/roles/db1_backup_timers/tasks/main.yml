@@ -22,21 +22,24 @@
     - '{{ db1_backup_timers_provision_dir }}'
     - '{{ db1_backup_timers_recovery_dir }}'
 
-# Copied as they are in the source. The units run these with /usr/bin/python3, so
-# no program is executable and no program is rendered.
-- name: Deliver the provision programs and their modules
-  ansible.builtin.copy:
-    src: 'provision/{{ item }}'
+# Fetched as they are at the pinned ghost-platform commit, never copied into the
+# role, and each fetch is checked against its pinned digest. The units run these
+# with /usr/bin/python3, so no program is executable and no program is rendered.
+- name: Fetch the provision programs and their modules from ghost-platform
+  ansible.builtin.get_url:
+    url: '{{ db1_backup_timers_ghost_raw_base }}/db/provision/{{ item }}'
     dest: '{{ db1_backup_timers_provision_dir }}/{{ item }}'
+    checksum: 'sha256:{{ db1_backup_timers_program_sha256[item] }}'
     owner: root
     group: root
     mode: '0644'
   loop: '{{ db1_backup_timers_provision_files }}'
 
-- name: Deliver the restore and recovery programs
-  ansible.builtin.copy:
-    src: 'recovery/{{ item }}'
+- name: Fetch the restore and recovery programs from ghost-platform
+  ansible.builtin.get_url:
+    url: '{{ db1_backup_timers_ghost_raw_base }}/db/recovery/{{ item }}'
     dest: '{{ db1_backup_timers_recovery_dir }}/{{ item }}'
+    checksum: 'sha256:{{ db1_backup_timers_program_sha256[item] }}'
     owner: root
     group: root
     mode: '0644'

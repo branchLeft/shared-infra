@@ -1,9 +1,9 @@
 ---
-# What must be on the host is the role's own copies, byte for byte, owned by root
-# with mode 0644, in the directories the units name. The file lists are read from
-# the role's vars file, so a file dropped from the role's lists is missing on the
-# host and fails this play. The sources are read from the role's files directory
-# on the machine that runs the test, so a copy that differs from its source fails.
+# What must be on the host: each program is the file at the pinned ghost-platform
+# commit, checked by its digest; each unit is the role's own copy, byte for byte.
+# All are owned by root with mode 0644, in the directories the units name. The file
+# lists are read from the role's vars file, so a file dropped from the role's lists
+# is missing on the host and fails this play.
 - name: Verify the backup programs, units and timers
   hosts: all
   gather_facts: false
@@ -18,20 +18,23 @@
       ansible.builtin.include_vars:
         file: '{{ verify_role_dir }}/vars/main.yml'
 
-    - name: Assert each listed file is on the instance, its source, root-owned, mode 0644
-      ansible.builtin.include_tasks: verify_file.yml
+    - name: Assert each program is the pinned ghost-platform file, root-owned, mode 0644
+      ansible.builtin.include_tasks: tasks/verify_program.yml
       loop:
-        - {
-            dir: '{{ verify_provision_dir }}',
-            src: 'provision',
-            names: '{{ db1_backup_timers_provision_files }}',
-          }
-        - {
-            dir: '{{ verify_recovery_dir }}',
-            src: 'recovery',
-            names: '{{ db1_backup_timers_recovery_files }}',
-          }
-        - { dir: '{{ verify_unit_dir }}', src: 'units', names: '{{ db1_backup_timers_units }}' }
+        - dir: '{{ verify_provision_dir }}'
+          names: '{{ db1_backup_timers_provision_files }}'
+        - dir: '{{ verify_recovery_dir }}'
+          names: '{{ db1_backup_timers_recovery_files }}'
+      loop_control:
+        loop_var: verify_group
+        label: '{{ verify_group.dir }}'
+
+    - name: Assert each unit is its source, root-owned, mode 0644
+      ansible.builtin.include_tasks: tasks/verify_file.yml
+      loop:
+        - dir: '{{ verify_unit_dir }}'
+          src: 'units'
+          names: '{{ db1_backup_timers_units }}'
       loop_control:
         loop_var: verify_group
         label: '{{ verify_group.src }}'

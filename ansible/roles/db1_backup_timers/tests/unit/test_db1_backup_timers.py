@@ -1,8 +1,10 @@
-"""Unit tests for the db1_backup_timers role's files and its schedule.
+"""Unit tests for the db1_backup_timers role's files, its pins and its schedule.
 
-The role copies programs and units; these tests read the role's own files and
-its vars, and fail when a unit names a program the role does not deliver, when a
-local import is not delivered, or when a schedule value drifts from the runbook.
+The role copies the unit files and fetches the programs from ghost-platform at a
+pinned commit. These tests read the role's own files and its vars, and fail when a
+unit names a program the role does not fetch, when the pins are not a full commit
+and a digest per program, when a schedule value drifts from the runbook, or when a
+program has crept back into the role as a copy.
 """
 
 import re
@@ -13,8 +15,6 @@ ROLE = Path(__file__).resolve().parents[2]
 FILES = ROLE / "files"
 VARS = ROLE / "vars" / "main.yml"
 UNITS = FILES / "units"
-PROVISION = FILES / "provision"
-RECOVERY = FILES / "recovery"
 
 
 def _list_under(key: str) -> list[str]:
@@ -32,6 +32,31 @@ def _list_under(key: str) -> list[str]:
             elif line.strip():
                 break
     return items
+
+
+def _mapping_under(key: str) -> dict[str, str]:
+    """Return the key and value pairs of one YAML mapping in vars/main.yml, read as text."""
+    pairs: dict[str, str] = {}
+    inside = False
+    for line in VARS.read_text(encoding="utf-8").splitlines():
+        if line.startswith(f"{key}:"):
+            inside = True
+            continue
+        if inside:
+            match = re.match(r"^  (\S+): (\S+)\s*$", line)
+            if match:
+                pairs[match.group(1)] = match.group(2)
+            elif line.strip():
+                break
+    return pairs
+
+
+def _scalar(key: str) -> str:
+    """Return the value of one top-level scalar in vars/main.yml, read as text."""
+    for line in VARS.read_text(encoding="utf-8").splitlines():
+        if line.startswith(f"{key}:"):
+            return line.split(":", 1)[1].strip()
+    raise AssertionError(f"{key} is not set in vars/main.yml")
 
 
 def _unit_value(unit: str, key: str) -> list[str]:
@@ -57,8 +82,8 @@ class DeliveryTests(unittest.TestCase):
         for unit in _list_under("db1_backup_timers_units"):
             self.assertTrue((UNITS / unit).is_file(), unit)
 
-    def test_every_program_a_service_runs_is_delivered(self) -> None:
-        delivered = set(_list_under("db1_backup_timers_provision_files")) | set(
+    def test_every_program_a_service_runs_is_fetched(self) -> None:
+        fetched = set(_list_under("db1_backup_timers_provision_files")) | set(
             _list_under("db1_backup_timers_recovery_files")
         )
         for unit in _list_under("db1_backup_timers_units"):
@@ -66,22 +91,28 @@ class DeliveryTests(unittest.TestCase):
                 continue
             for exec_start in _unit_value(unit, "ExecStart"):
                 program = Path(exec_start.split()[-1]).name
-                self.assertIn(program, delivered, f"{unit} runs {program}, which the role does not deliver")
+                self.assertIn(program, fetched, f"{unit} runs {program}, which the role does not fetch")
 
-    def test_every_local_import_of_a_delivered_program_is_delivered(self) -> None:
-        provision = set(_list_under("db1_backup_timers_provision_files"))
-        for program in provision:
-            text = (PROVISION / program).read_text(encoding="utf-8")
-            for match in re.finditer(r"^from (\w+) import", text, re.MULTILINE):
-                module = match.group(1) + ".py"
-                if (PROVISION / module).exists():
-                    self.assertIn(module, provision, f"{program} imports {module}, which the role does not deliver")
+    def test_every_fetched_program_has_a_pinned_digest(self) -> None:
+        digests = _mapping_under("db1_backup_timers_program_sha256")
+        fetched = set(_list_under("db1_backup_timers_provision_files")) | set(
+            _list_under("db1_backup_timers_recovery_files")
+        )
+        self.assertEqual(set(digests), fetched)
+        for name, digest in digests.items():
+            self.assertRegex(digest, r"^[0-9a-f]{64}$", name)
 
-    def test_listed_programs_exist_in_their_directories(self) -> None:
-        for name in _list_under("db1_backup_timers_provision_files"):
-            self.assertTrue((PROVISION / name).is_file(), name)
-        for name in _list_under("db1_backup_timers_recovery_files"):
-            self.assertTrue((RECOVERY / name).is_file(), name)
+    def test_no_program_is_copied_into_the_role(self) -> None:
+        self.assertEqual(list(FILES.rglob("*.py")), [])
+
+
+class PinTests(unittest.TestCase):
+    def test_the_commit_is_a_full_forty_character_sha(self) -> None:
+        self.assertRegex(_scalar("db1_backup_timers_ghost_commit"), r"^[0-9a-f]{40}$")
+
+    def test_the_fetch_base_names_the_pinned_commit(self) -> None:
+        self.assertIn("{{ db1_backup_timers_ghost_commit }}", _scalar("db1_backup_timers_ghost_raw_base"))
+        self.assertIn("raw.githubusercontent.com/branchLeft/ghost-platform/", _scalar("db1_backup_timers_ghost_raw_base"))
 
 
 if __name__ == "__main__":
