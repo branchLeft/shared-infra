@@ -1,0 +1,32 @@
+---
+# A person (or an earlier release) leaves another key file at the keyring path.
+# The role puts the pinned one back, and because only the key file changed it
+# refreshes the index, which fails here because the container has no network:
+# stopping at the refresh task is how the test sees that it ran. The repository
+# source and the hand-run installer's files are as declared, so the key is the
+# only change that can start the refresh.
+- name: Change the repository key file
+  ansible.builtin.copy:
+    content: PLACEHOLDER_OTHER_KEY_FILE
+    dest: /etc/apt/keyrings/mysql-community.asc
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Apply the role while the key file differs
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refresh the apt index after the repository files changed
+
+- name: Assert the role put the pinned key file back before the refresh
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'
+
+- name: Apply the role again
+  ansible.builtin.include_tasks: apply.yml
+
+- name: Assert the host is as declared
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'

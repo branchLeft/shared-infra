@@ -1,0 +1,99 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs, and an
+# inventory value does not loosen them. Every pin is here with the reason for
+# it, so a bump is one reviewed change to this file and the files next to it.
+# Nothing raises a bump of these: no dependency bot reads them (see the README).
+
+# ----- The MySQL 8.0 client toolchain -----
+
+# The server runs the 8.0 line, and a client one minor ahead is not a safe
+# substitute: mysqldump 8.4 asks an 8.0 server for SHOW BINARY LOG STATUS under
+# --source-data, which the server rejects outright. So the client is held to
+# exactly this line, by the pin file below and by the version check after the
+# install.
+db1_stack_mysql_version_line: '8.0'
+
+# The repository carries the 8.0 component only under its bookworm release; its
+# trixie release has no such component. The suite is therefore bookworm
+# whatever Debian release the host runs. apt checks the signed Release file
+# against the key below, so plain http carries no trust of its own.
+db1_stack_mysql_repository_uri: http://repo.mysql.com/apt/debian
+db1_stack_mysql_repository_suite: bookworm
+db1_stack_mysql_repository_component: mysql-8.0
+
+# The sha256 of files/mysql-repo-keys.asc: the two signing key files the vendor
+# publishes (the 2025 file, then the 2023 file, in that order), joined. Both
+# carry the same primary key and differ in their self-signature dates; the
+# older one still signs some published Release files, so both stay. The file is
+# compared with this digest on the controller before it is delivered, so a
+# changed key file stops the run. The key is never fetched at run time. See the
+# README for the fingerprint and for how a human re-pins it.
+db1_stack_mysql_key_sha256: 5c35d3f5f79ef8755693f7458f4eeaad23974bcbf3a56a906e76eaa68a915d05
+
+# The packages the pin file holds to the line above. mysql-common is the shared
+# base package the others depend on: pinning only the client-facing ones would
+# still let it drift to a newer line.
+db1_stack_mysql_pinned_packages:
+  - mysql-community-client
+  - mysql-community-client-core
+  - mysql-community-client-plugins
+  - mysql-community-server-core
+  - mysql-common
+
+# The packages whose installed version must be on the line above. The client
+# package carries mysql and mysqldump; the server-core package carries
+# mysqlbinlog and the other server programs the host runs.
+db1_stack_mysql_checked_packages:
+  - mysql-community-client
+  - mysql-community-server-core
+
+# Files the hand-run installer left. They name the same repository with another
+# key file, and apt refuses two entries for one repository that disagree about
+# the key, so they are removed when the role takes the repository over.
+db1_stack_legacy_files:
+  - /etc/apt/sources.list.d/mysql-community.list
+  - /usr/share/keyrings/mysql.gpg
+
+# Where the pinned downloads are kept between runs, so a second run finds the
+# file with the right digest and downloads nothing.
+db1_stack_download_directory: /var/cache/db1-stack
+
+# ----- The exporter credentials file -----
+
+# The directory every host-level file of the stack lives in. The host's
+# provisioning creates it with this owner and mode; the role states them so a
+# run that finds another mode puts it back.
+db1_stack_branchleft_directory: /etc/branchleft
+
+# The file the exporter container reads through a bind mount.
+db1_stack_exporter_cnf_path: /etc/branchleft/db-exporter.my.cnf
+
+# The account and the socket are fixed by the stack's compose file and the
+# database's account setup. Neither is a secret, so neither is an input.
+db1_stack_exporter_user: exporter
+db1_stack_exporter_socket: /var/run/mysqld/mysqld.sock
+
+# The exporter image runs as the user nobody. A bind-mounted file is read as
+# the container-side uid whatever wrote it on the host, so a root-owned 0400
+# file would be unreadable to the one process it exists for. The owner moves
+# and the mode does not widen: the file holds a plaintext password and 0444
+# would show it to every account on the host.
+db1_stack_exporter_uid: 65534
+db1_stack_exporter_gid: 65534
+db1_stack_exporter_cnf_mode: '0400'
+
+# The password rules. Each refused character was found to change what the
+# exporter authenticates with, or where its parser thinks the value ends, and
+# in every case the exporter still starts and serves, so the only symptom is a
+# metric that says the database is down:
+# - $ is expanded as an environment variable, so the value becomes another one;
+# - a double quote is unquoted, so the value loses its ends;
+# - # and ; start a comment and a backslash is an escape;
+# - a line break would start another key, and leading or trailing space is
+#   trimmed, so the file and the database would disagree about the password.
+# The allowed set is a list of what is safe, not an escape of what is not, and
+# no escape of those characters survives both the parser and the expansion.
+# The patterns end in \Z, not $, because $ also matches before a final line
+# break.
+db1_stack_password_alphabet_pattern: '^[A-Za-z0-9._~-]*\Z'
+db1_stack_password_min_length: 20
