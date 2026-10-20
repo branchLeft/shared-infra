@@ -1,0 +1,18 @@
+---
+# A request for one guarded step, as a maintainer makes it: this playbook with
+# the step's tag named on the command line and its step id in
+# oneoff_guarded_tasks_confirm. verify.yml runs it with ansible-playbook once for
+# each case. Molecule's default sequence does not run it.
+- name: Request one guarded step
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role with the tag named on the command line
+      ansible.builtin.include_role:
+        name: branchleft.oneoff_guarded_tasks
+      # always: the include itself must run under --tags, so the role's own
+      # tasks are the ones the named tag selects.
+      tags:
+        - always
+      vars:
+        oneoff_guarded_tasks_state_dir: '{{ scenario_state_dir }}'

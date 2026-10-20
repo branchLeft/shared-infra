@@ -1,0 +1,263 @@
+---
+# The result facts. They are reset first so that a value left by an earlier run
+# on the same host cannot be read as this run's. A test or a caller reads them
+# after the role ends; the README lists them.
+- name: Reset the result facts
+  ansible.builtin.set_fact:
+    firewall_nat_sysctl_drift: []
+    firewall_nat_sysctl_reloaded: false
+    firewall_nat_sysctl_rolled_back: false
+    firewall_nat_sysctl_failed_task: ''
+    firewall_nat_sysctl_rejected_listing: ''
+
+# Whether this run is a plan. ansible_check_mode is set only by --check on the
+# command line; a play or a task that sets check_mode: true leaves it false even
+# though its modules run in check mode. A command is skipped in both, so a
+# skipped command is the one signal that covers both. There is deliberately no
+# check_mode: false on this task (ANS-10).
+- name: Detect check mode, however it was asked for
+  ansible.builtin.command:
+    argv: [/bin/true]
+  register: firewall_nat_sysctl_check_probe
+  changed_when: false
+
+- name: Keep whether this run is a plan
+  ansible.builtin.set_fact:
+    firewall_nat_sysctl_plan: '{{ (firewall_nat_sysctl_check_probe.skipped | default(false)) | bool }}'
+
+# The string inputs are rendered into a rules file, so each is refused here
+# unless it is a plain value. A newline in the NAT source once loaded a second
+# masquerade rule, and the connection check passed it.
+- name: Refuse a NAT source that is not a plain IPv4 address or CIDR
+  ansible.builtin.assert:
+    that:
+      - firewall_nat_sysctl_nat_source is match(firewall_nat_sysctl_source_pattern)
+    quiet: true
+    fail_msg: firewall_nat_sysctl_nat_source must be a dotted IPv4 address with an optional /length and nothing else.
+
+- name: Refuse an uplink interface name that is not a plain name
+  ansible.builtin.assert:
+    that:
+      - firewall_nat_sysctl_uplink_interface is match(firewall_nat_sysctl_interface_pattern)
+    quiet: true
+    fail_msg: firewall_nat_sysctl_uplink_interface must be letters, digits, underscore, dot and hyphen only.
+
+- name: Refuse a table name that is not a plain name
+  ansible.builtin.assert:
+    that:
+      - firewall_nat_sysctl_table is match(firewall_nat_sysctl_table_pattern)
+    quiet: true
+    fail_msg: firewall_nat_sysctl_table must start with a letter or underscore and hold letters, digits and underscores only.
+
+# Forwarding is persisted in a drop-in file only. sysctl_set is false and
+# reload is false, so the module never writes /proc/sys: the container runtime
+# mounts that read-only, so the runtime write is reviewed, not tested here. The
+# first live consumer's gated run is where the runtime effect is observed.
+- name: Persist IPv4 forwarding in the sysctl drop-in
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    state: present
+    sysctl_set: false
+    sysctl_file: '{{ firewall_nat_sysctl_sysctl_file }}'
+    reload: false
+
+- name: Create the rules directory
+  ansible.builtin.file:
+    path: '{{ firewall_nat_sysctl_rules_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+# The desired rules, as text, in memory. Nothing is written to the host to
+# compute them, so the plan in check mode can compare them with the host.
+- name: Render the desired rules
+  ansible.builtin.set_fact:
+    firewall_nat_sysctl_rules: "{{ lookup('ansible.builtin.template', 'rules.nft.j2') }}"
+
+- name: Read the active rules file, if one is on the host
+  ansible.builtin.stat:
+    path: '{{ firewall_nat_sysctl_rules_dir }}/active.nft'
+    checksum_algorithm: sha256
+    get_checksum: true
+  register: firewall_nat_sysctl_active
+
+- name: Read the boot rules file, if one is on the host
+  ansible.builtin.stat:
+    path: '{{ firewall_nat_sysctl_boot_file }}'
+    checksum_algorithm: sha256
+    get_checksum: true
+  register: firewall_nat_sysctl_boot
+
+# The listing the kernel gave when the active set was last confirmed. It is the
+# kernel's own normal form of the desired rules, which the role cannot compute
+# for itself without loading them. check_mode is false because the read changes
+# nothing and the next tasks need its result (ANS-10).
+- name: Read the listing recorded when the active set was confirmed
+  ansible.builtin.command:
+    argv: [cat, '{{ firewall_nat_sysctl_rules_dir }}/active.list']
+  register: firewall_nat_sysctl_recorded
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Read the tables that are loaded now
+  ansible.builtin.include_tasks: _read_loaded.yml
+
+# The decision to do nothing is made from three facts, and the loaded tables
+# are one of them: the active file and the boot file must both equal the
+# desired rules, and the kernel's tables must equal what the kernel listed when
+# the active set was confirmed. A flush, a reboot or a foreign reload changes
+# the third and nothing else, and is found here.
+- name: Compare the desired rules with the host
+  ansible.builtin.set_fact:
+    firewall_nat_sysctl_drift: >-
+      {{
+        (['the active rules file is absent or differs from the desired rules']
+          if (firewall_nat_sysctl_active.stat.checksum | default('')) != (firewall_nat_sysctl_rules | hash('sha256'))
+          else [])
+        + (['the boot rules file is absent or differs from the desired rules']
+          if (firewall_nat_sysctl_boot.stat.checksum | default('')) != (firewall_nat_sysctl_rules | hash('sha256'))
+          else [])
+        + (['the loaded tables differ from the listing recorded when the active set was confirmed']
+          if firewall_nat_sysctl_listing != firewall_nat_sysctl_recorded.stdout
+          else [])
+      }}
+
+# Syntax check, loading nothing. It runs in check mode on purpose, and it is the
+# task that reports "changed" there when the host differs from the desired
+# rules, because a check-mode run loads nothing and so has no other task to
+# report with (ANS-10). It reads and changes nothing, hence check_mode: false.
+- name: Check the desired rules parse, loading nothing
+  ansible.builtin.command:
+    argv: [nft, -c, -f, '-']
+    stdin: '{{ firewall_nat_sysctl_rules }}'
+  changed_when: firewall_nat_sysctl_plan and (firewall_nat_sysctl_drift | length > 0)
+  check_mode: false
+
+# The guard. The set is loaded only when the host differs from it, so a second
+# run loads nothing. Check mode skips the guard because it loads nothing and
+# promotes nothing; the "Check the desired rules parse" task above is what
+# reports the plan, and that is the reason for this skip (ANS-10).
+- name: Load the desired ruleset behind a revert guard
+  when:
+    - not firewall_nat_sysctl_plan
+    - firewall_nat_sysctl_drift | length > 0
+  block:
+    - name: Keep the active rules file as the previous set
+      ansible.builtin.copy:
+        src: '{{ firewall_nat_sysctl_rules_dir }}/active.nft'
+        dest: '{{ firewall_nat_sysctl_rules_dir }}/previous.nft'
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+      when: firewall_nat_sysctl_active.stat.exists
+
+    - name: Remove any earlier previous set when there is no active set
+      ansible.builtin.file:
+        path: '{{ firewall_nat_sysctl_rules_dir }}/previous.nft'
+        state: absent
+      when: not firewall_nat_sysctl_active.stat.exists
+
+    - name: Load the desired ruleset
+      ansible.builtin.command:
+        argv: [nft, -f, '-']
+        stdin: '{{ firewall_nat_sysctl_rules }}'
+      changed_when: true
+
+    # What the kernel holds at the moment of the check. It is kept so that a
+    # failed check can say which set it failed, and promoted when it passes.
+    - name: Read the tables the connection check will test
+      ansible.builtin.include_tasks: _read_loaded.yml
+
+    # The loopback connection enters the input chain, so a set that does not
+    # accept the control port refuses it here. Connecting, not listing the
+    # ruleset, is what proves the port still answers.
+    - name: Connect to the control port after the load
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: '{{ firewall_nat_sysctl_control_port }}'
+        state: started
+        timeout: 5
+
+    - name: Promote the desired rules to the active rules file
+      ansible.builtin.copy:
+        content: '{{ firewall_nat_sysctl_rules }}'
+        dest: '{{ firewall_nat_sysctl_rules_dir }}/active.nft'
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Record the listing the kernel gave for the confirmed set
+      ansible.builtin.copy:
+        content: '{{ firewall_nat_sysctl_listing }}'
+        dest: '{{ firewall_nat_sysctl_rules_dir }}/active.list'
+        owner: root
+        group: root
+        mode: '0600'
+
+    # The distribution's loader unit reads this file at boot. It is written
+    # only after the check passed, so a set that locks the host out is never
+    # what a reboot loads.
+    - name: Persist the confirmed rules for the boot-time loader
+      ansible.builtin.copy:
+        content: '{{ firewall_nat_sysctl_rules }}'
+        dest: '{{ firewall_nat_sysctl_boot_file }}'
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Record that the ruleset was reloaded
+      ansible.builtin.set_fact:
+        firewall_nat_sysctl_reloaded: true
+  rescue:
+    - name: Record the task that failed and the tables the check was run against
+      ansible.builtin.set_fact:
+        firewall_nat_sysctl_failed_task: '{{ ansible_failed_task.name }}'
+        firewall_nat_sysctl_rejected_listing: '{{ firewall_nat_sysctl_listing }}'
+
+    - name: Read whether a previous set was kept
+      ansible.builtin.stat:
+        path: '{{ firewall_nat_sysctl_rules_dir }}/previous.nft'
+      register: firewall_nat_sysctl_previous
+
+    - name: Restore the previous ruleset
+      ansible.builtin.command:
+        argv: [nft, -f, '{{ firewall_nat_sysctl_rules_dir }}/previous.nft']
+      when: firewall_nat_sysctl_previous.stat.exists
+      changed_when: true
+
+    # With no previous set, the only state to return to is no table at all.
+    - name: Remove the tables when there was no previous set
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop:
+        - [nft, delete, table, inet, '{{ firewall_nat_sysctl_table }}']
+        - [nft, delete, table, ip, '{{ firewall_nat_sysctl_table }}_nat']
+      when: not firewall_nat_sysctl_previous.stat.exists
+      changed_when: true
+      failed_when: false
+
+    - name: Record that the rollback completed
+      ansible.builtin.set_fact:
+        firewall_nat_sysctl_rolled_back: true
+
+    - name: Fail after the rollback
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'The previous ruleset was restored' if firewall_nat_sysctl_previous.stat.exists
+          else 'There was no previous ruleset, so the role removed its tables' }}
+          because the task "{{ firewall_nat_sysctl_failed_task }}" failed. The new
+          ruleset was not promoted and the boot rules file was not changed.
+
+# The nftables unit reads the boot rules file when the host starts. Enabling it
+# is state the role owns, so a host where it is disabled is reported and fixed
+# on the next run. The unit is enabled, not started: starting it would load the
+# file the guard has just confirmed, and stopping it later flushes the whole
+# ruleset (see the README).
+- name: Enable the nftables unit that loads the boot rules file at start
+  ansible.builtin.systemd_service:
+    name: nftables.service
+    enabled: true

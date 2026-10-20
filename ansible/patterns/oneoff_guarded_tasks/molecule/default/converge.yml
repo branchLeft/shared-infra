@@ -1,0 +1,14 @@
+---
+# The plain apply: no tag is named and no confirmation is given, so both guarded
+# steps are skipped. Molecule runs this twice (converge, then idempotence).
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml.
+    - name: Apply the role as a plain apply
+      ansible.builtin.include_role:
+        name: branchleft.oneoff_guarded_tasks
+      vars:
+        oneoff_guarded_tasks_state_dir: '{{ scenario_state_dir }}'

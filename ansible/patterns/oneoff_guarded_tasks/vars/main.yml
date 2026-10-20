@@ -1,0 +1,8 @@
+---
+# Not part of the interface: a caller cannot change these by setting a variable
+# of the same name in an inventory, because role vars outrank inventory vars.
+
+# A step id is a name the role writes into a file name and a marker: capitals,
+# digits and underscore, starting with a capital. \Z, not $, so a trailing
+# newline does not pass.
+oneoff_guarded_tasks_step_id_pattern: '^[A-Z][A-Z0-9_]*\Z'
