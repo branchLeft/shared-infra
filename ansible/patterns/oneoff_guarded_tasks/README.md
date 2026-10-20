@@ -181,14 +181,16 @@ marker write:
   change it would make.
 - **What check mode shows, and the true rule.** Ansible skips a task in check mode
   when the module does not support check mode, and `changed_when` does not apply to a
-  skipped task. A skipped task reports nothing in the recap, so a check run cannot show
-  that it would run. The placeholder effect of `EXAMPLE_STEP_ONE` (a `file` task, which
-  supports check mode) and its marker (a `copy` task) are reported as changes in check
-  mode, and the scenario asserts that per task. The command of `EXAMPLE_STEP_TWO` is
-  skipped in check mode, so its check-mode result is "skipped", not "changed"; the
-  pattern does not claim otherwise, and the limits name it. A real step whose effect
-  must show in check mode uses a module that supports check mode, or a read-only
-  command with `check_mode: false` and a stated reason (ANS-10).
+  skipped task. A skipped task is counted under `skipped=` in the recap, not under
+  `changed=`, so a check run's recap cannot show that the task would run. The
+  placeholder effect of `EXAMPLE_STEP_ONE` (a `file` task, which supports check mode)
+  and its marker (a `copy` task) are reported as changes in check mode, and the
+  scenario asserts that per task. The command of `EXAMPLE_STEP_TWO` is skipped in check
+  mode, so its check-mode result is "skipped", not "changed"; the pattern does not
+  claim otherwise, and the limits name it. A real step whose effect must show in check
+  mode uses a module that supports check mode. A command with `check_mode: false` runs
+  in check mode, so it shows a read of the state, not the effect's change; use it only
+  with a stated reason (ANS-10).
 
 ### (d) What the test proves, and the named limits
 
@@ -332,7 +334,9 @@ a terminal, once that workflow exists. Until then no step runs on any host.
   make a request pass. Each one is what a scenario assertion checks, so a change
   shows in `verify.yml`.
 - Do not write the marker before the effect. Do not write it in check mode.
-- A step's effect must support check mode, or it must report a change (see (c)).
+- A step's effect must use a module that supports check mode, or a read-only command
+  with `check_mode: false` and a stated reason (see (c)). A skipped task shows nothing
+  in a check run, so an effect that is skipped in check mode cannot be checked there.
 - A new step is added with its own file, its own tag and its own confirmation. It
   does not reuse another step's tag or marker.
 - The validators, the lint floor and the harness are not edited in a role pull
