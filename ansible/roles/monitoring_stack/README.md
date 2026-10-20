@@ -23,6 +23,33 @@ It does two things, both with `ansible.builtin.copy`:
    the destination `hetzner/provision/install-systemd-drop-ins.sh` uses for the
    instance named `monitoring`, and reloads systemd when that file changed.
 
+### How it relates to the patterns
+
+The role applies two recipes from `ansible/patterns/`: `files_and_units` (explicit
+owner, group and mode; a notify and a handler for the daemon-reload; a
+`flush_handlers` so the role returns with systemd current; a converge that asks
+systemd, straight after the role, what it holds) and the file-delivery half of
+`compose_stack` (explicit modes on a project directory and its files, no handler
+that starts the stack). It does not call them: a pattern is a recipe a service role
+copies and renames, not a library, and ANS-12 keeps composition in playbooks (the
+standard leaves open whether one role may include another). So the tasks are
+written out here, as the recipes direct.
+
+Parts of the `compose_stack` recipe this role does not carry, and why:
+
+- the apply-time refusal of an image not pinned by digest and of a compose override
+  file in the project directory: the role never runs Compose, so nothing here reads
+  either. The images are checked in the test instead (see below); an override file
+  next to the Compose file would be merged by the unit's own `docker compose up`,
+  and nothing refuses it until the role that starts the stack does;
+- the `validate` of the Compose file with `docker compose config`, for the reason
+  above;
+- the stamp, the `docker_compose_v2` call that brings the stack up, and the health
+  check that fails the role when a service is not running and healthy. The unit
+  brings the stack up, and the health check belongs with whatever starts it.
+
+### What it does not start or delete
+
 It does not start, restart or recreate anything. The stack is brought up by the
 `branchleft-compose@monitoring` unit, whose drop-in runs the Alertmanager
 renderer first; bringing it up from here, before that renderer has written
@@ -49,11 +76,9 @@ decides how.
 - `snds-collector.service`, `snds-collector.timer` and `snds/collect_snds_metrics.py`,
   and the `/var/lib/branchleft/snds-exporter` directory node-exporter mounts:
   the exporters and collectors ticket (the SNDS collector with its timer).
-- `nextcloud1.override.conf`: the Nextcloud ticket, whose scope says it
-  installs the override.
-- `edge.override.conf`: the monitoring ticket's scope lists it, but it belongs to
-  the edge stack and no other ticket's scope names it; this role does not carry
-  it and the gap is reported on the pull request.
+- `edge.override.conf` and `nextcloud1.override.conf`, the drop-ins of the other
+  two stacks: the monitoring work's scope lists them, so the second part carries
+  them. They are not in this role.
 - Docker, the shared Compose unit template and the deploy tooling: the host
   baseline and deploy tooling tickets. The test installs a placeholder for the
   unit template; the real one is not tested here.
@@ -113,9 +138,11 @@ cannot drift from it. The images stay pinned by tag and digest inside
 
 What the link does not cover is the list of files. `vars/main.yml` names the files
 and directories, and a file added to `hetzner/monitoring/stack/` is not delivered
-until it is listed. The test closes that: its last play lists every file under the
-stack directory and fails unless each is carried or named as deliberately not
-carried (below).
+until it is listed. The test closes that: it takes the list of what must be on the
+host from the stack directory itself (every file under it except the few named in
+`verify_not_carried`), so a file the role does not list is missing on the host and
+`verify` fails. There is no second hand-written list of the files or directories
+in the test.
 
 ## How to test it
 
@@ -144,13 +171,13 @@ What each part of the scenario does:
   again, straight away: a reload that is missing, or left to the end of the play,
   fails on `MemoryMax`.
 - `idempotence`: a second converge reports zero changed tasks.
-- `verify.yml`: every directory and file exists with its owner, group and mode;
+- `verify.yml`: works out the expected files and directories from the stack
+  directory of the repository; every one exists with its owner, group and mode;
   every delivered file's SHA-256 equals the SHA-256 of its source read directly from
   the repository (not through the role's link), so a copy that differs from the
   source fails; the drop-in is where the unit template looks for it, equals its
   source and is the one systemd has loaded (`DropInPaths`, `MemoryMax`,
-  `CPUWeight`); every image in the Compose file is pinned by digest; and every file
-  under the stack directory is carried or named as not carried.
+  `CPUWeight`); and every image in the Compose file is pinned by digest.
 - `check-fresh`, `check-configured` and `molecule-check`: the role runs under
   `--check --diff` before the first apply and against the configured instance and
   shows no drift.
@@ -174,9 +201,8 @@ SABOTAGE_TABLE_PLACEHOLDER
   else, so no test value tells the two apart.
 - **A file removed from the repository stays on the host** (no `--delete`). See
   above.
-- **The directory list is not completeness-checked.** The files are (the last
-  play of `verify.yml`); a new directory under the stack that holds a new file
-  fails that play, but a new empty directory is not noticed.
+- **An empty directory is not noticed.** The test derives the directories from
+  the files, so a new directory with no file in it is neither required nor checked.
 - **A silent skip passes.** The converge skips its earlier-release setup and its
   systemd questions in check mode because nothing is written there; the harness
   does not catch a silent skip, and this is the review of it (ANS-10).
@@ -205,9 +231,9 @@ place makes it fail.
 1. To change what the stack is, change the files under `hetzner/monitoring/stack/`
    or the drop-in under `hetzner/monitoring/systemd/`; the role delivers them as
    they are. To add a file, add it to `monitoring_stack_files` (and its directory
-   to `monitoring_stack_dirs`) in `vars/main.yml` and to `verify_files` and
-   `verify_carried` in `molecule/default/verify.yml`; to leave one out on purpose,
-   name it in `verify_not_carried`.
+   to `monitoring_stack_dirs`) in `vars/main.yml`; the test finds it by itself and
+   fails until the role carries it. To leave one out on purpose, name it in
+   `verify_not_carried` in `molecule/default/verify.yml`.
 2. Keep every task able to run under `--check --diff`, and keep the modes explicit.
 3. Do not add a `docker compose` task here without reading the paragraph above on
    why the role does not start the stack.
