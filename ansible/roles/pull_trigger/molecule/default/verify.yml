@@ -1,0 +1,977 @@
+---
+# What the role must leave true. Every task name states a behaviour, so a red
+# line from a sabotaged copy of the program names the case it broke. Everything
+# runs in the test container against a throwaway remote, throwaway keys and a
+# signed history that prepare.yml built; see make_fixtures.py for the history.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_program: /usr/local/sbin/pull-trigger
+    verify_installed_config: /etc/pull-trigger/config.json
+    verify_state: /var/lib/pull-trigger
+    verify_logs: /var/log/pull-trigger
+    verify_marker: /var/tmp/ptt/applied-marker
+    verify_remote: /var/tmp/ptt/remote.git
+    verify_playbook: ansible/playbooks/host.yml
+    verify_role_directory: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+  tasks:
+    # ------------------------------------------------------------ set up
+    - name: Read the fixtures
+      ansible.builtin.slurp:
+        src: /var/tmp/ptt/fixtures.json
+      register: pull_trigger_fixtures_file
+
+    - name: Read the configuration the role wrote
+      ansible.builtin.slurp:
+        src: '{{ verify_installed_config }}'
+      register: pull_trigger_config_file
+
+    - name: Keep both as data
+      ansible.builtin.set_fact:
+        pull_trigger_fixtures: '{{ pull_trigger_fixtures_file.content | ansible.builtin.b64decode | ansible.builtin.from_json }}'
+        pull_trigger_base_config: '{{ pull_trigger_config_file.content | ansible.builtin.b64decode | ansible.builtin.from_json }}'
+
+    - name: Name the commits and markers
+      ansible.builtin.set_fact:
+        pull_trigger_commits: '{{ pull_trigger_fixtures.commits }}'
+        pull_trigger_markers: '{{ pull_trigger_fixtures.markers }}'
+
+    - name: Start from a host that has never applied anything
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - '{{ verify_marker }}'
+        - '{{ verify_state }}/last-applied'
+        - '{{ verify_state }}/current'
+        - '{{ verify_state }}/current.new'
+        - '{{ verify_state }}/work'
+        - '{{ verify_state }}/repo.git'
+        - '{{ verify_state }}/tmp'
+        - '{{ verify_state }}/home'
+        - '{{ verify_logs }}/pull-trigger.log'
+        - '{{ verify_logs }}/runs'
+        - /var/tmp/ptt/cfg
+
+    - name: Make the directory the test configurations live in, root-owned like the real one
+      ansible.builtin.file:
+        path: /var/tmp/ptt/cfg
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    # ------------------------------------------- what the role installed
+    - name: Look at the installed program and its directories
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_program }}'
+        - /etc/pull-trigger
+        - '{{ verify_installed_config }}'
+        - '{{ verify_state }}'
+        - '{{ verify_logs }}'
+      register: pull_trigger_installed
+
+    - name: The wrapper file, its directories and the work area are root-owned and not writable by others
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - not item.stat.wgrp
+          - not item.stat.woth
+        fail_msg: '{{ item.item }} is not root-owned or is writable by others'
+        success_msg: '{{ item.item }} is root-owned and not writable by others'
+      loop: '{{ pull_trigger_installed.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: The wrapper is executable by everyone and the state and log directories are root only
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_installed.results[0].stat.mode == '0755'
+          - pull_trigger_installed.results[1].stat.mode == '0755'
+          - pull_trigger_installed.results[2].stat.mode == '0644'
+          - pull_trigger_installed.results[3].stat.mode == '0700'
+          - pull_trigger_installed.results[4].stat.mode == '0700'
+        fail_msg: 'a mode is wrong: {{ pull_trigger_installed.results | map(attribute="stat.mode") | list }}'
+        success_msg: modes are as documented
+
+    - name: The configuration names only public keys and holds no private key material
+      ansible.builtin.assert:
+        that:
+          - "'PRIVATE KEY' not in (pull_trigger_config_file.content | ansible.builtin.b64decode)"
+          - pull_trigger_base_config.signers | length == 2
+          - pull_trigger_base_config.playbooks == [verify_playbook]
+        fail_msg: the configuration holds private key material or the wrong allowlist
+        success_msg: the configuration holds public keys and the allowlist only
+
+    # ------------------------------------------------------ check mode
+    - name: Ask for a check-mode run of a good commit on a host that has never applied
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: check mode of a good commit
+        request_mode: check
+        request_text: '{{ pull_trigger_commits.good }}'
+
+    - name: Check mode reports that an apply would change something
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_request_result.rc == 11
+          - "('verdict=would-change exit=11 reason=ok mode=check commit=' ~ pull_trigger_commits.good ~ ' ') in pull_trigger_request_result.stdout"
+          - "'changed=1' in pull_trigger_request_result.stdout"
+        fail_msg: 'check mode answered wrongly: rc={{ pull_trigger_request_result.rc }} {{ pull_trigger_request_result.stdout }}'
+        success_msg: check mode reported a change
+
+    - name: Look for anything check mode may have left that applying would leave
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_marker }}'
+        - '{{ verify_state }}/last-applied'
+        - '{{ verify_state }}/current'
+      register: pull_trigger_after_check
+
+    - name: Check mode wrote no marker, no rollback floor and no current checkout
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        fail_msg: 'check mode left {{ item.item }}'
+        success_msg: 'check mode left no {{ item.item }}'
+      loop: '{{ pull_trigger_after_check.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Apply an earlier good commit, so that a later check has a current checkout to leave alone
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: an earlier good commit
+        request_text: '{{ pull_trigger_commits.old }}'
+
+    - name: Take a snapshot before a check-mode request
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        snap_state: '{{ verify_state }}'
+
+    - name: Keep the snapshot taken before a check-mode request
+      ansible.builtin.set_fact:
+        pull_trigger_before_check: '{{ pull_trigger_snapshot_result.stdout }}'
+
+    - name: Ask for a check-mode run of the next good commit
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: check mode of the next good commit
+        request_mode: check
+        request_text: '{{ pull_trigger_commits.good }}'
+
+    - name: Take a snapshot after a check-mode request
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        snap_state: '{{ verify_state }}'
+
+    - name: Check mode changes nothing on the host and leaves the current checkout and floor alone
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_request_result.rc == 11
+          - "'verdict=would-change exit=11 reason=ok mode=check' in pull_trigger_request_result.stdout"
+          - pull_trigger_snapshot_result.stdout == pull_trigger_before_check
+        fail_msg: 'check mode changed the host: rc={{ pull_trigger_request_result.rc }} {{ pull_trigger_request_result.stdout }}'
+        success_msg: check mode left the host as it was
+
+    # ------------------------------------ a good commit applies exactly once
+    - name: Apply a good commit signed by the first allowlisted SSH key
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: a good commit
+        request_text: '{{ pull_trigger_commits.good }}'
+
+    - name: Read what the apply left
+      ansible.builtin.include_tasks: tasks/read_state.yml
+      vars:
+        snap_state: '{{ verify_state }}'
+
+    - name: Find the playbook output of the applies of that commit
+      ansible.builtin.find:
+        paths: '{{ verify_logs }}/runs'
+        patterns: '*-apply-{{ pull_trigger_commits.good[:12] }}.log'
+      register: pull_trigger_apply_logs
+
+    - name: A good commit applies exactly once and is recorded as the rollback floor
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_request_result.rc == 10
+          - "('verdict=applied exit=10 reason=ok mode=apply commit=' ~ pull_trigger_commits.good ~ ' ') in pull_trigger_request_result.stdout"
+          - "'changed=1' in pull_trigger_request_result.stdout"
+          - pull_trigger_state_marker == pull_trigger_markers.good ~ '\n'
+          - pull_trigger_state_floor == pull_trigger_commits.good ~ '\n'
+          - pull_trigger_apply_logs.matched == 1
+        fail_msg: 'the apply was wrong: rc={{ pull_trigger_request_result.rc }} {{ pull_trigger_request_result.stdout }}'
+        success_msg: the good commit applied once
+
+    - name: Look at the current checkout, which must hold the commit's files and no repository
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_state }}/current/{{ verify_playbook }}'
+        - '{{ verify_state }}/current/.git'
+      register: pull_trigger_checkout
+
+    - name: Read the playbook as the checkout has it
+      ansible.builtin.slurp:
+        src: '{{ verify_state }}/current/{{ verify_playbook }}'
+      register: pull_trigger_checkout_playbook
+
+    - name: Read the same playbook from the remote's copy of that commit
+      ansible.builtin.command:
+        argv:
+          - git
+          - --git-dir
+          - '{{ verify_remote }}'
+          - show
+          - '{{ pull_trigger_commits.good }}:{{ verify_playbook }}'
+      register: pull_trigger_remote_playbook
+      changed_when: false
+
+    - name: The checkout is exactly the commit, with no repository of its own
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_checkout.results[0].stat.exists
+          - not pull_trigger_checkout.results[1].stat.exists
+          - (pull_trigger_checkout_playbook.content | ansible.builtin.b64decode) == pull_trigger_remote_playbook.stdout ~ '\n'
+        fail_msg: the checkout is not exactly the commit
+        success_msg: the checkout is exactly the commit
+
+    - name: Ask for the same commit a second time
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: the same commit again
+        request_text: '{{ pull_trigger_commits.good }}'
+
+    - name: Find the playbook output after the second request
+      ansible.builtin.find:
+        paths: '{{ verify_logs }}/runs'
+        patterns: '*-apply-{{ pull_trigger_commits.good[:12] }}.log'
+      register: pull_trigger_apply_logs_again
+
+    - name: A second request for the same commit is a clean second run that changes nothing
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_request_result.rc == 0
+          - "('verdict=unchanged exit=0 reason=ok mode=apply commit=' ~ pull_trigger_commits.good ~ ' ') in pull_trigger_request_result.stdout"
+          - "'changed=0' in pull_trigger_request_result.stdout"
+          - pull_trigger_apply_logs_again.matched == 2
+        fail_msg: 'the second request was not clean: rc={{ pull_trigger_request_result.rc }} {{ pull_trigger_request_result.stdout }}'
+        success_msg: the second request ran again and changed nothing
+
+    # ------------------------------------------------- OpenPGP signature
+    - name: Apply a good commit signed by the allowlisted OpenPGP key
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: a good commit signed with OpenPGP
+        request_text: '{{ pull_trigger_commits.pgp_good }}'
+
+    - name: Read what that apply left
+      ansible.builtin.include_tasks: tasks/read_state.yml
+      vars:
+        snap_state: '{{ verify_state }}'
+
+    - name: A commit signed by the allowlisted OpenPGP key applies
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_request_result.rc == 10
+          - "('verdict=applied exit=10 reason=ok mode=apply commit=' ~ pull_trigger_commits.pgp_good ~ ' ') in pull_trigger_request_result.stdout"
+          - pull_trigger_state_marker == pull_trigger_markers.pgp_good ~ '\n'
+          - pull_trigger_state_floor == pull_trigger_commits.pgp_good ~ '\n'
+        fail_msg: 'the OpenPGP commit did not apply: rc={{ pull_trigger_request_result.rc }} {{ pull_trigger_request_result.stdout }}'
+        success_msg: the OpenPGP commit applied
+
+    # -------------------------------------------------------- refusals
+    - name: Write a configuration whose allowlist does not hold the host's playbook
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: not-listed
+        scene_fresh: false
+        scene_overrides:
+          state_dir: '{{ verify_state }}'
+          log_dir: '{{ verify_logs }}'
+          playbooks:
+            - ansible/playbooks/other.yml
+
+    - name: Write a configuration whose host playbook climbs out of the playbook directory
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: climbing
+        scene_fresh: false
+        scene_overrides:
+          state_dir: '{{ verify_state }}'
+          log_dir: '{{ verify_logs }}'
+          playbook: ansible/playbooks/../../etc/hostname
+
+    - name: Write a configuration whose allowlist climbs out of the playbook directory
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: bad-allowlist
+        scene_fresh: false
+        scene_overrides:
+          state_dir: '{{ verify_state }}'
+          log_dir: '{{ verify_logs }}'
+          playbooks:
+            - ansible/playbooks/../../etc/hostname
+
+    - name: Write a configuration anyone can write to
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: writable
+        scene_fresh: false
+        scene_mode: '0666'
+        scene_overrides:
+          state_dir: '{{ verify_state }}'
+          log_dir: '{{ verify_logs }}'
+
+    - name: Make a directory for copies of the program with one guard removed
+      ansible.builtin.file:
+        path: /var/tmp/ptt/mut
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Copy the program twice
+      ansible.builtin.copy:
+        src: '{{ verify_program }}'
+        dest: '/var/tmp/ptt/mut/{{ item }}'
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - no-commit-test
+        - no-checkout-test
+
+    - name: Remove the test on the commit's tree from the first copy
+      ansible.builtin.replace:
+        path: /var/tmp/ptt/mut/no-commit-test
+        regexp: '^(\s+)if not cache\.regular_file_in_commit\(commit, self\._config\.playbook\):$'
+        replace: '\1if False:'
+      register: pull_trigger_cut_commit_test
+
+    - name: Remove the test on the checkout from the second copy
+      ansible.builtin.replace:
+        path: /var/tmp/ptt/mut/no-checkout-test
+        regexp: '^(\s+)require_playbook_in_checkout\(checkout, self\._config\.playbook\)$'
+        replace: '\1pass'
+      register: pull_trigger_cut_checkout_test
+
+    - name: Each copy lost exactly the guard it was made to lose
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_cut_commit_test.changed
+          - pull_trigger_cut_checkout_test.changed
+        fail_msg: the program text no longer matches the lines this test removes; update the test
+        success_msg: both copies were made
+
+    - name: Refuse every request that must not run, each leaving the host byte for byte as it was
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      loop:
+        - name: a commit that is not in the history of main
+          text: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+          rc: 20
+          reason: not-on-main
+          commit: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+        - name: a commit that is an ancestor only of another branch
+          text: '{{ pull_trigger_commits.side }}'
+          rc: 20
+          reason: not-on-main
+          commit: '{{ pull_trigger_commits.side }}'
+        - name: an unsigned commit
+          text: '{{ pull_trigger_commits.unsigned }}'
+          rc: 20
+          reason: unsigned
+          commit: '{{ pull_trigger_commits.unsigned }}'
+        - name: a commit signed by an SSH key that is not on the allowlist
+          text: '{{ pull_trigger_commits.other_ssh }}'
+          rc: 20
+          reason: signer-not-allowed
+          commit: '{{ pull_trigger_commits.other_ssh }}'
+        - name: a commit signed by an OpenPGP key that is not on the allowlist
+          text: '{{ pull_trigger_commits.other_pgp }}'
+          rc: 20
+          reason: signer-not-allowed
+          commit: '{{ pull_trigger_commits.other_pgp }}'
+        - name: a commit whose message was changed after it was signed
+          text: '{{ pull_trigger_commits.tampered }}'
+          rc: 20
+          reason: bad-signature
+          commit: '{{ pull_trigger_commits.tampered }}'
+        - name: a commit older than the one last applied
+          text: '{{ pull_trigger_commits.good }}'
+          rc: 20
+          reason: rollback
+          commit: '{{ pull_trigger_commits.good }}'
+        - name: a commit with no playbook in it
+          text: '{{ pull_trigger_commits.no_playbook }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.no_playbook }}'
+        - name: a commit whose playbook is a symbolic link
+          text: '{{ pull_trigger_commits.symlink }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.symlink }}'
+          detail: the playbook is not a regular file in the commit
+        - name: a commit whose playbook is a symbolic link, with the test on the commit's tree removed
+          text: '{{ pull_trigger_commits.symlink }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.symlink }}'
+          program: /var/tmp/ptt/mut/no-commit-test
+          detail: a part of the playbook path is a link in the checkout
+        - name: a commit whose playbook is a symbolic link, with the test on the checkout removed
+          text: '{{ pull_trigger_commits.symlink }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.symlink }}'
+          program: /var/tmp/ptt/mut/no-checkout-test
+          detail: the playbook is not a regular file in the commit
+        - name: a playbook directory that is a link inside the checkout
+          text: '{{ pull_trigger_commits.dir_link_inside }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.dir_link_inside }}'
+          detail: the playbook is not a regular file in the commit
+        - name: a playbook directory that is a link to a host directory
+          text: '{{ pull_trigger_commits.dir_link_outside }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.dir_link_outside }}'
+          detail: the playbook is not a regular file in the commit
+        - name: a linked inside directory, with the test on the commit's tree removed
+          text: '{{ pull_trigger_commits.dir_link_inside }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.dir_link_inside }}'
+          program: /var/tmp/ptt/mut/no-commit-test
+          detail: a part of the playbook path is a link in the checkout
+        - name: a linked host directory, with the test on the commit's tree removed
+          text: '{{ pull_trigger_commits.dir_link_outside }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.dir_link_outside }}'
+          program: /var/tmp/ptt/mut/no-commit-test
+          detail: a part of the playbook path is a link in the checkout
+        - name: a linked inside directory, with the test on the checkout removed
+          text: '{{ pull_trigger_commits.dir_link_inside }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.dir_link_inside }}'
+          program: /var/tmp/ptt/mut/no-checkout-test
+          detail: the playbook is not a regular file in the commit
+        - name: a linked host directory, with the test on the checkout removed
+          text: '{{ pull_trigger_commits.dir_link_outside }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.dir_link_outside }}'
+          program: /var/tmp/ptt/mut/no-checkout-test
+          detail: the playbook is not a regular file in the commit
+        - name: a good commit when the host's playbook is outside the allowlist
+          text: '{{ pull_trigger_commits.tip }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.tip }}'
+          config: /var/tmp/ptt/cfg/not-listed.json
+        - name: a good commit when the host's playbook climbs out of the playbook directory
+          text: '{{ pull_trigger_commits.tip }}'
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_commits.tip }}'
+          config: /var/tmp/ptt/cfg/climbing.json
+        - name: a configuration whose allowlist climbs out of the playbook directory
+          text: '{{ pull_trigger_commits.tip }}'
+          rc: 40
+          reason: config-invalid
+          shown_mode: '-'
+          config: /var/tmp/ptt/cfg/bad-allowlist.json
+        - name: a configuration that anyone can write to
+          text: '{{ pull_trigger_commits.tip }}'
+          rc: 40
+          reason: config-invalid
+          shown_mode: '-'
+          config: /var/tmp/ptt/cfg/writable.json
+      loop_control:
+        loop_var: case
+        label: '{{ case.name }}'
+
+    - name: Refuse every malformed request, each leaving the host byte for byte as it was
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      loop:
+        - name: malformed - a short hex abbreviation
+          text: '{{ pull_trigger_commits.tip[:7] }}'
+          rc: 20
+          reason: bad-request
+        - name: malformed - uppercase hex
+          text: '{{ pull_trigger_commits.tip | upper }}'
+          rc: 20
+          reason: bad-request
+        - name: malformed - a ref name
+          text: main
+          rc: 20
+          reason: bad-request
+        - name: malformed - HEAD
+          text: HEAD
+          rc: 20
+          reason: bad-request
+        - name: malformed - an option
+          text: '--mode'
+          rc: 20
+          reason: bad-request
+        - name: malformed - an option that would run something
+          text: '--upload-pack=touch /var/tmp/ptt/pwned'
+          rc: 20
+          reason: bad-request
+        - name: malformed - two commits
+          text: '{{ pull_trigger_commits.tip }} {{ pull_trigger_commits.tip }}'
+          rc: 20
+          reason: bad-request
+        - name: malformed - a commit followed by a command
+          text: '{{ pull_trigger_commits.tip }}; touch /var/tmp/ptt/pwned'
+          rc: 20
+          reason: bad-request
+        - name: malformed - a commit and a newline
+          text: "{{ pull_trigger_commits.tip }}\n"
+          rc: 20
+          reason: bad-request
+        - name: malformed - a commit, a newline and a second commit
+          text: "{{ pull_trigger_commits.tip }}\n{{ pull_trigger_commits.tip }}"
+          rc: 20
+          reason: bad-request
+        - name: malformed - a leading space
+          text: ' {{ pull_trigger_commits.tip }}'
+          rc: 20
+          reason: bad-request
+        - name: malformed - nothing at all
+          text: ''
+          rc: 20
+          reason: bad-request
+      loop_control:
+        loop_var: case
+        label: '{{ case.name }}'
+
+    - name: Look for anything a malformed request could have run
+      ansible.builtin.stat:
+        path: /var/tmp/ptt/pwned
+      register: pull_trigger_pwned
+
+    - name: No text from a caller was ever run
+      ansible.builtin.assert:
+        that:
+          - not pull_trigger_pwned.stat.exists
+        fail_msg: a caller's text was run
+        success_msg: no caller text was run
+
+    # ------------------------------------ an apply replaces the checkout
+    - name: Apply the newest commit
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: the newest commit
+        request_text: '{{ pull_trigger_commits.tip }}'
+
+    - name: Read what that apply left
+      ansible.builtin.include_tasks: tasks/read_state.yml
+      vars:
+        snap_state: '{{ verify_state }}'
+
+    - name: Count the checkouts kept
+      ansible.builtin.find:
+        paths: '{{ verify_state }}/work'
+        file_type: directory
+        recurse: false
+      register: pull_trigger_kept
+
+    - name: A newer commit applies and only its checkout is kept
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_request_result.rc == 10
+          - pull_trigger_state_marker == pull_trigger_markers.tip ~ '\n'
+          - pull_trigger_state_floor == pull_trigger_commits.tip ~ '\n'
+          - pull_trigger_kept.matched == 1
+        fail_msg: 'the newer apply was wrong: rc={{ pull_trigger_request_result.rc }} {{ pull_trigger_request_result.stdout }}'
+        success_msg: the newer commit applied and the old checkout was removed
+
+    # ----------------------------------------------- main moved away
+    - name: Write a configuration for the main-moved-away scene
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: moved
+
+    - name: Cache the newest commit while main still has it
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: check the newest commit before main moves
+        request_mode: check
+        request_text: '{{ pull_trigger_commits.tip }}'
+        request_config: /var/tmp/ptt/cfg/moved.json
+
+    - name: Main still has the newest commit, so the check ran
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_request_result.rc in [0, 11]
+          - "'reason=ok' in pull_trigger_request_result.stdout"
+        fail_msg: 'the first check was refused:{{ pull_trigger_request_result.stdout }}'
+        success_msg: the newest commit was cached
+
+    - name: Move main on the remote back to an earlier commit, then ask again
+      block:
+        - name: Move main back
+          ansible.builtin.command:
+            argv:
+              - git
+              - --git-dir
+              - '{{ verify_remote }}'
+              - update-ref
+              - refs/heads/main
+              - '{{ pull_trigger_commits.good }}'
+          changed_when: true
+
+        - name: Ask for the commit that is no longer on main
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          loop:
+            - name: a commit that main has moved away from since it was cached
+              text: '{{ pull_trigger_commits.tip }}'
+              mode: check
+              rc: 20
+              reason: not-on-main
+              commit: '{{ pull_trigger_commits.tip }}'
+              config: /var/tmp/ptt/cfg/moved.json
+              state: /var/tmp/ptt/st-moved
+          loop_control:
+            loop_var: case
+            label: '{{ case.name }}'
+      always:
+        - name: Put main back where it was
+          ansible.builtin.command:
+            argv:
+              - git
+              - --git-dir
+              - '{{ verify_remote }}'
+              - update-ref
+              - refs/heads/main
+              - '{{ pull_trigger_commits.tip }}'
+          changed_when: true
+
+    # ----------------------------------------------- a playbook that fails
+    - name: Write a configuration for the failing-playbook scene
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: broken
+
+    - name: Apply a commit whose playbook fails
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: a commit whose playbook fails
+        request_text: '{{ pull_trigger_commits.broken }}'
+        request_config: /var/tmp/ptt/cfg/broken.json
+
+    - name: A failing playbook is reported as failed, not as refused or applied
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_request_result.rc == 30
+          - "('verdict=failed exit=30 reason=playbook-failed mode=apply commit=' ~ pull_trigger_commits.broken ~ ' ') in pull_trigger_request_result.stdout"
+        fail_msg: 'wrong answer for a failing playbook: rc={{ pull_trigger_request_result.rc }} {{ pull_trigger_request_result.stdout }}'
+        success_msg: the failing playbook was reported with exit 30
+
+    - name: Ask for an older commit after the failed apply
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: an older commit after a failed apply
+        request_text: '{{ pull_trigger_commits.good }}'
+        request_config: /var/tmp/ptt/cfg/broken.json
+
+    - name: A failed apply still raises the rollback floor, so the older commit is refused
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_request_result.rc == 20
+          - "'reason=rollback' in pull_trigger_request_result.stdout"
+        fail_msg: 'the floor did not hold after a failed apply: {{ pull_trigger_request_result.stdout }}'
+        success_msg: the floor held after a failed apply
+
+    # ------------------------------------------------ overlapping triggers
+    - name: Write a configuration whose playbook is the slow stand-in
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: slow
+        scene_overrides:
+          ansible_playbook: /var/tmp/ptt/slow-ansible
+
+    - name: Forget earlier calls of the slow stand-in
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - /var/tmp/ptt/slow-calls
+        - /var/tmp/ptt/slow-started
+
+    - name: Start a trigger that holds the lock for a while
+      ansible.builtin.command:
+        argv:
+          - '{{ verify_program }}'
+          - --mode
+          - apply
+          - --config
+          - /var/tmp/ptt/cfg/slow.json
+      environment:
+        SSH_ORIGINAL_COMMAND: '{{ pull_trigger_commits.good }}'
+      async: 120
+      poll: 0
+      register: pull_trigger_slow
+      changed_when: false
+
+    - name: Wait until the slow stand-in is running
+      ansible.builtin.wait_for:
+        path: /var/tmp/ptt/slow-started
+        timeout: 60
+
+    - name: Ask for a second apply while the first holds the lock
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: a second apply while another runs
+        request_text: '{{ pull_trigger_commits.tip }}'
+        request_config: /var/tmp/ptt/cfg/slow.json
+
+    - name: Keep the answer to the second apply
+      ansible.builtin.set_fact:
+        pull_trigger_second_apply: '{{ pull_trigger_request_result }}'
+
+    - name: Ask for a check while the first holds the lock
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: a check while another runs
+        request_mode: check
+        request_text: '{{ pull_trigger_commits.good }}'
+        request_config: /var/tmp/ptt/cfg/slow.json
+
+    - name: Overlapping triggers are refused as busy and are not both run
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_second_apply.rc == 21
+          - "'verdict=busy exit=21 reason=busy' in pull_trigger_second_apply.stdout"
+          - pull_trigger_request_result.rc == 21
+          - "'verdict=busy exit=21 reason=busy' in pull_trigger_request_result.stdout"
+        fail_msg: 'an overlapping trigger was not refused as busy: {{ pull_trigger_second_apply.stdout }} / {{ pull_trigger_request_result.stdout }}'
+        success_msg: both overlapping requests were refused as busy
+
+    - name: Wait for the first trigger to finish
+      ansible.builtin.async_status:
+        jid: '{{ pull_trigger_slow.ansible_job_id }}'
+      register: pull_trigger_slow_done
+      until: pull_trigger_slow_done.finished
+      retries: 40
+      delay: 2
+      # An apply that changed something exits 10, which the command module
+      # reports as a failure of the job; the assertion below reads the status.
+      failed_when: false
+
+    - name: Read the calls the slow stand-in recorded
+      ansible.builtin.slurp:
+        src: /var/tmp/ptt/slow-calls
+      register: pull_trigger_slow_calls
+
+    - name: Read the rollback floor the scene left
+      ansible.builtin.slurp:
+        src: /var/tmp/ptt/st-slow/last-applied
+      register: pull_trigger_slow_floor
+
+    - name: Only the first trigger ran its playbook, and it finished normally
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_slow_done.rc == 10
+          - (pull_trigger_slow_calls.content | ansible.builtin.b64decode).splitlines() | length == 1
+          - (pull_trigger_slow_floor.content | ansible.builtin.b64decode) == pull_trigger_commits.good ~ '\n'
+        fail_msg: 'the playbook ran more than once or the first trigger failed: rc={{ pull_trigger_slow_done.rc }}'
+        success_msg: exactly one playbook run happened
+
+    # ---------------------------------------------------------- time out
+    - name: Write a configuration whose time limit is one second
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: timeout
+        scene_overrides:
+          ansible_playbook: /var/tmp/ptt/slow-ansible
+          timeout_seconds: 1
+
+    - name: Ask for an apply that outlasts the limit
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: an apply that outlasts the time limit
+        request_text: '{{ pull_trigger_commits.good }}'
+        request_config: /var/tmp/ptt/cfg/timeout.json
+
+    - name: A run past the limit is stopped and reported as timed out
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_request_result.rc == 31
+          - "'verdict=timed-out exit=31 reason=timed-out' in pull_trigger_request_result.stdout"
+          - pull_trigger_request_result.delta.split(':')[2] | float < 10
+        fail_msg: >-
+          wrong answer for a timeout: rc={{ pull_trigger_request_result.rc }}
+          {{ pull_trigger_request_result.stdout }} after {{ pull_trigger_request_result.delta }}
+        success_msg: the run was stopped at the limit and reported with exit 31
+
+    # ---------------------------------- the route from a non-root account
+    - name: Make the account a forced command would log in as
+      ansible.builtin.user:
+        name: ptt-ci
+        shell: /bin/sh
+        create_home: true
+
+    - name: Let that account run the program as root with exactly two argument lists, keeping the caller's text
+      ansible.builtin.copy:
+        content: |
+          Defaults!/usr/local/sbin/pull-trigger env_keep += "SSH_ORIGINAL_COMMAND"
+          ptt-ci ALL=(root) NOPASSWD: /usr/local/sbin/pull-trigger --mode apply, /usr/local/sbin/pull-trigger --mode check
+        dest: /etc/sudoers.d/ptt-ci
+        owner: root
+        group: root
+        mode: '0440'
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Ask for a check through sudo as that account, the way its forced command would
+      ansible.builtin.command:
+        argv:
+          - sudo
+          - -n
+          - -u
+          - ptt-ci
+          - env
+          - 'SSH_ORIGINAL_COMMAND={{ pull_trigger_commits.tip }}'
+          - sudo
+          - -n
+          - '{{ verify_program }}'
+          - --mode
+          - check
+      register: pull_trigger_through_sudo
+      changed_when: false
+      failed_when: false
+
+    - name: Ask through sudo for a different configuration file, which the account may not pass
+      ansible.builtin.command:
+        argv:
+          - sudo
+          - -n
+          - -u
+          - ptt-ci
+          - env
+          - 'SSH_ORIGINAL_COMMAND={{ pull_trigger_commits.tip }}'
+          - sudo
+          - -n
+          - '{{ verify_program }}'
+          - --mode
+          - check
+          - --config
+          - /var/tmp/ptt/cfg/writable.json
+      register: pull_trigger_through_sudo_config
+      changed_when: false
+      failed_when: false
+
+    - name: Take the kept variable away again
+      ansible.builtin.copy:
+        content: |
+          ptt-ci ALL=(root) NOPASSWD: /usr/local/sbin/pull-trigger --mode apply, /usr/local/sbin/pull-trigger --mode check
+        dest: /etc/sudoers.d/ptt-ci
+        owner: root
+        group: root
+        mode: '0440'
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Ask for a check through sudo with sudo's default of dropping the variable
+      ansible.builtin.command:
+        argv:
+          - sudo
+          - -n
+          - -u
+          - ptt-ci
+          - env
+          - 'SSH_ORIGINAL_COMMAND={{ pull_trigger_commits.tip }}'
+          - sudo
+          - -n
+          - '{{ verify_program }}'
+          - --mode
+          - check
+      register: pull_trigger_through_sudo_default
+      changed_when: false
+      failed_when: false
+
+    - name: The sudo route works only with the variable kept and exact arguments
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_through_sudo.rc in [0, 11]
+          - "('mode=check commit=' ~ pull_trigger_commits.tip ~ ' ') in pull_trigger_through_sudo.stdout"
+          - pull_trigger_through_sudo_config.rc == 1
+          - pull_trigger_through_sudo_config.stdout == ''
+          - "'sudo: ' in pull_trigger_through_sudo_config.stderr"
+          - pull_trigger_through_sudo_default.rc == 20
+          - "'reason=bad-request' in pull_trigger_through_sudo_default.stdout"
+        fail_msg: >-
+          the sudo route is not as the README says:
+          {{ pull_trigger_through_sudo.stdout }} {{ pull_trigger_through_sudo.stderr }} /
+          {{ pull_trigger_through_sudo_config.stderr }} /
+          {{ pull_trigger_through_sudo_default.stdout }} {{ pull_trigger_through_sudo_default.stderr }}
+        success_msg: the sudo route works with the variable kept, refuses other arguments, and fails closed without the variable
+
+    # ------------------------------------------- the unit tests, on Debian
+    - name: Make a directory for the unit tests
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /var/tmp/ptt-unit
+        - /var/tmp/ptt-unit/files
+        - /var/tmp/ptt-unit/tests
+        - /var/tmp/ptt-unit/tests/unit
+
+    - name: Copy the program and its unit tests into the container
+      ansible.builtin.copy:
+        src: '{{ item.src }}'
+        dest: '{{ item.dest }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - src: '{{ verify_role_directory }}/files/pull_trigger.py'
+          dest: /var/tmp/ptt-unit/files/pull_trigger.py
+        - src: '{{ verify_role_directory }}/tests/unit/test_pull_trigger.py'
+          dest: /var/tmp/ptt-unit/tests/unit/test_pull_trigger.py
+      loop_control:
+        label: '{{ item.dest }}'
+
+    - name: Run the unit tests, which make real git, SSH and OpenPGP signatures
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -m
+          - unittest
+          - discover
+          - -b
+          - -s
+          - tests/unit
+          - -p
+          - test_*.py
+        chdir: /var/tmp/ptt-unit
+      environment:
+        PYTHONPATH: files:tests/unit
+        PYTHONDONTWRITEBYTECODE: '1'
+      register: pull_trigger_unit
+      changed_when: false
+      failed_when: false
+
+    - name: The unit tests pass on the production Debian release
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_unit.rc == 0
+          - "'OK' in pull_trigger_unit.stderr"
+        fail_msg: 'unit tests failed: {{ pull_trigger_unit.stderr }}'
+        success_msg: the unit tests pass

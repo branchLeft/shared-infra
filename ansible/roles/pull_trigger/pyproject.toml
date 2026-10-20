@@ -1,0 +1,17 @@
+[project]
+name = "pull-trigger-role"
+version = "0.0.0"
+# The oldest interpreter any target host provides (PY-3): Debian 13 ships Python 3.13.
+requires-python = ">=3.13"
+
+[tool.mypy]
+strict = true
+disallow_any_explicit = true
+python_version = "3.13"
+# The program is a single file in files/, imported by the tests by its own name.
+mypy_path = "$MYPY_CONFIG_FILE_DIR/files"
+
+[tool.ruff]
+# The repository's ruff policy (ansible/pyproject.toml), with this role's Python floor.
+extend = "../../pyproject.toml"
+target-version = "py313"

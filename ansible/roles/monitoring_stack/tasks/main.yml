@@ -1,0 +1,56 @@
+---
+# The directories first, each explicit: the shell copy this replaces made them
+# root-owned and 0755 with rsync --no-owner --no-group --chmod=u=rwX,go=rX, and a
+# container reads its bind-mounted configuration as its own user, not as root.
+- name: Create the project directory
+  ansible.builtin.file:
+    path: '{{ monitoring_stack_project_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the directories of the stack
+  ansible.builtin.file:
+    path: '{{ monitoring_stack_project_dir }}/{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: '{{ monitoring_stack_dirs }}'
+
+# Copied, not templated: the Compose file holds ${...} and $$ that Compose reads
+# and the .tmpl files hold the placeholders a later step fills, so none of them
+# may pass through Jinja. The source is the stack directory in the repository,
+# reached through the link files/stack, so there is one copy of every file.
+- name: Deliver the stack's files
+  ansible.builtin.copy:
+    src: 'stack/{{ item }}'
+    dest: '{{ monitoring_stack_project_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ monitoring_stack_files }}'
+
+- name: Create the drop-in directory of the monitoring instance
+  ansible.builtin.file:
+    path: '{{ monitoring_stack_dropin_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the drop-in of the monitoring instance
+  ansible.builtin.copy:
+    src: monitoring.override.conf
+    dest: '{{ monitoring_stack_dropin_dir }}/override.conf'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
+# Without this the handler runs at the end of the play, and the role would
+# return with systemd still holding the old drop-in. The converge asks systemd
+# for the loaded value straight after the role.
+- name: Load the drop-in before the role returns
+  ansible.builtin.meta: flush_handlers
