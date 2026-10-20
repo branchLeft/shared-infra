@@ -1,0 +1,28 @@
+---
+# What the role carries. These are constants of the stack, not inputs, so they
+# live here and not in defaults/: a caller cannot override them. The paths are
+# relative to the stack directory in the repository (files/stack, a link to it).
+# Not carried, on purpose: render_alertmanager_config.py and its notes, and
+# snds/collect_snds_metrics.py. The README says which work owns each.
+monitoring_stack_dirs:
+  - alertmanager
+  - blackbox
+  - grafana
+  - grafana/provisioning
+  - grafana/provisioning/datasources
+  - ntfy
+  - prometheus
+
+monitoring_stack_files:
+  - compose.yml
+  - alertmanager/alertmanager.yml.tmpl
+  - alertmanager/email.gotmpl
+  - blackbox/blackbox.yml
+  - grafana/provisioning/datasources/prometheus.yaml
+  - ntfy/server.yml.tmpl
+  - prometheus/alerts.yml
+  - prometheus/prometheus.yml
+
+# The shared Compose unit template names a stack's drop-in directory after the
+# instance, and the instance of this stack is "monitoring".
+monitoring_stack_dropin_dir: /etc/systemd/system/branchleft-compose@monitoring.service.d

@@ -1,0 +1,79 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read whether the drop-in is already on the instance
+      ansible.builtin.stat:
+        path: /etc/systemd/system/branchleft-compose@monitoring.service.d/override.conf
+      register: monitoring_stack_converge_existing_dropin
+
+    # An instance with no drop-in stands for a host that has an earlier release
+    # of it: systemd is given a drop-in with a different MemoryMax and asked
+    # about the instance, so it holds that value. The role then replaces the
+    # drop-in, and systemd must be told. Once the drop-in exists this is
+    # skipped, so a second converge changes nothing.
+    - name: Create the drop-in directory for an earlier release
+      ansible.builtin.file:
+        path: /etc/systemd/system/branchleft-compose@monitoring.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
+
+    - name: Install an earlier release of the drop-in
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          MemoryMax=1024M
+        dest: /etc/systemd/system/branchleft-compose@monitoring.service.d/override.conf
+        owner: root
+        group: root
+        mode: '0644'
+      when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
+
+    - name: Make systemd read the earlier release
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
+
+    - name: Ask systemd for the instance so that it holds the earlier release
+      ansible.builtin.systemd_service:
+        name: branchleft-compose@monitoring.service
+      register: monitoring_stack_converge_earlier
+      when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
+
+    - name: Assert systemd holds the earlier release
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_converge_earlier.status.MemoryMax == '1073741824'
+        quiet: true
+        fail_msg: The test could not put the earlier drop-in in front of systemd.
+      when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
+
+    - name: Apply the role
+      ansible.builtin.include_role:
+        # Molecule links the role under its namespace and name, the namespace
+        # from galaxy_info in meta/main.yml.
+        name: branchleft.monitoring_stack
+
+    # Asked of systemd straight after the role, before the end of the play, so
+    # a reload that is missing or left to the end of the play fails here. A
+    # check-mode run writes no drop-in, so there is nothing to ask.
+    - name: Ask systemd for the instance as soon as the role has run
+      ansible.builtin.systemd_service:
+        name: branchleft-compose@monitoring.service
+      register: monitoring_stack_converge_loaded
+      when: not ansible_check_mode
+
+    - name: Assert systemd has loaded the drop-in the role installed
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_converge_loaded.status.MemoryMax == '2147483648'
+        quiet: true
+        fail_msg: >-
+          systemd still holds the earlier drop-in (MemoryMax
+          {{ monitoring_stack_converge_loaded.status.MemoryMax }}): the role returned before
+          the manager reloaded.
+      when: not ansible_check_mode

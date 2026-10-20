@@ -1,0 +1,214 @@
+---
+# What must be on the host, written here and not read from the role, so that a
+# file dropped from the role's list is a failure of this play. The sources are
+# read straight from the repository (not through the role's link), so a copy of
+# a file in the role that differs from its source is a failure too.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_repo: '{{ playbook_dir }}/../../../../..'
+    verify_stack_source: '{{ verify_repo }}/hetzner/monitoring/stack'
+    verify_dropin_source: '{{ verify_repo }}/hetzner/monitoring/systemd/monitoring.override.conf'
+    verify_dir: /opt/branchleft/monitoring
+    verify_dropin_dir: /etc/systemd/system/branchleft-compose@monitoring.service.d
+    verify_dirs:
+      - ''
+      - alertmanager
+      - blackbox
+      - grafana
+      - grafana/provisioning
+      - grafana/provisioning/datasources
+      - ntfy
+      - prometheus
+    verify_files:
+      - compose.yml
+      - alertmanager/alertmanager.yml.tmpl
+      - alertmanager/email.gotmpl
+      - blackbox/blackbox.yml
+      - grafana/provisioning/datasources/prometheus.yaml
+      - ntfy/server.yml.tmpl
+      - prometheus/alerts.yml
+      - prometheus/prometheus.yml
+  tasks:
+    - name: Read the project directory and the stack's directories
+      ansible.builtin.stat:
+        path: '{{ verify_dir }}/{{ item }}'
+      loop: '{{ verify_dirs }}'
+      register: monitoring_stack_verify_dir_stats
+      loop_control:
+        label: '{{ verify_dir }}/{{ item }}'
+
+    - name: Assert every directory exists, owned by root, mode 0755
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == '0755'
+        quiet: true
+        fail_msg: '{{ verify_dir }}/{{ item.item }} is missing, or is not a root-owned directory with mode 0755.'
+      loop: '{{ monitoring_stack_verify_dir_stats.results }}'
+      loop_control:
+        label: '{{ verify_dir }}/{{ item.item }}'
+
+    - name: Read each delivered file on the instance
+      ansible.builtin.stat:
+        path: '{{ verify_dir }}/{{ item }}'
+        checksum_algorithm: sha256
+      loop: '{{ verify_files }}'
+      register: monitoring_stack_verify_installed
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Read each file's source in the repository, on the machine that runs the test
+      ansible.builtin.stat:
+        path: '{{ verify_stack_source }}/{{ item }}'
+        checksum_algorithm: sha256
+      loop: '{{ verify_files }}'
+      register: monitoring_stack_verify_sources
+      loop_control:
+        label: '{{ item }}'
+      delegate_to: localhost
+
+    - name: Assert every file is on the instance, owned by root, mode 0644, byte for byte its source
+      ansible.builtin.assert:
+        that:
+          - item.0.stat.exists
+          - item.1.stat.exists
+          - item.0.stat.isreg
+          - item.0.stat.pw_name == 'root'
+          - item.0.stat.gr_name == 'root'
+          - item.0.stat.mode == '0644'
+          - item.0.stat.checksum == item.1.stat.checksum
+        quiet: true
+        fail_msg: >-
+          {{ item.0.item }} is missing on the instance, is not a regular file owned by root with
+          mode 0644, or differs from {{ verify_stack_source }}/{{ item.0.item }}.
+      loop: '{{ monitoring_stack_verify_installed.results | ansible.builtin.zip(monitoring_stack_verify_sources.results) | ansible.builtin.list }}'
+      loop_control:
+        label: '{{ item.0.item }}'
+
+    - name: Read the drop-in directory and the drop-in on the instance
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - '{{ verify_dropin_dir }}'
+        - '{{ verify_dropin_dir }}/override.conf'
+      register: monitoring_stack_verify_dropin
+
+    - name: Read the drop-in's source in the repository, on the machine that runs the test
+      ansible.builtin.stat:
+        path: '{{ verify_dropin_source }}'
+        checksum_algorithm: sha256
+      register: monitoring_stack_verify_dropin_src
+      delegate_to: localhost
+
+    - name: Assert the drop-in is installed where the unit template looks for it, byte for byte its source
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_dropin.results[0].stat.exists
+          - monitoring_stack_verify_dropin.results[0].stat.isdir
+          - monitoring_stack_verify_dropin.results[0].stat.pw_name == 'root'
+          - monitoring_stack_verify_dropin.results[0].stat.gr_name == 'root'
+          - monitoring_stack_verify_dropin.results[0].stat.mode == '0755'
+          - monitoring_stack_verify_dropin.results[1].stat.exists
+          - monitoring_stack_verify_dropin.results[1].stat.isreg
+          - monitoring_stack_verify_dropin.results[1].stat.pw_name == 'root'
+          - monitoring_stack_verify_dropin.results[1].stat.gr_name == 'root'
+          - monitoring_stack_verify_dropin.results[1].stat.mode == '0644'
+          - monitoring_stack_verify_dropin_src.stat.exists
+          - monitoring_stack_verify_dropin.results[1].stat.checksum == monitoring_stack_verify_dropin_src.stat.checksum
+        quiet: true
+        fail_msg: >-
+          The drop-in is not at {{ verify_dropin_dir }}/override.conf as a root-owned file with mode 0644
+          in a directory with mode 0755, or differs from {{ verify_dropin_source }}.
+
+    - name: Ask systemd for the instance
+      ansible.builtin.systemd_service:
+        name: branchleft-compose@monitoring.service
+      register: monitoring_stack_verify_unit
+
+    - name: Assert systemd has the drop-in loaded
+      ansible.builtin.assert:
+        that:
+          - verify_dropin_dir ~ '/override.conf' in monitoring_stack_verify_unit.status.DropInPaths
+          - monitoring_stack_verify_unit.status.MemoryMax == '2147483648'
+          - monitoring_stack_verify_unit.status.CPUWeight == '200'
+        quiet: true
+        fail_msg: >-
+          systemd does not hold the monitoring drop-in: drop-in paths {{ monitoring_stack_verify_unit.status.DropInPaths }},
+          MemoryMax {{ monitoring_stack_verify_unit.status.MemoryMax }}, CPUWeight {{ monitoring_stack_verify_unit.status.CPUWeight }}.
+
+    # The Compose file pins every image by tag and digest, and the unit pulls
+    # exactly what the file names. The installed file is byte for byte the
+    # source (above), so the source is parsed here.
+    - name: Assert every image in the Compose file is pinned by digest
+      ansible.builtin.assert:
+        that:
+          - verify_services | ansible.builtin.length > 0
+          - verify_images | ansible.builtin.length == verify_services | ansible.builtin.length
+          - verify_images | ansible.builtin.reject('ansible.builtin.match', verify_image_pattern) | ansible.builtin.list | ansible.builtin.length == 0
+        quiet: true
+        fail_msg: >-
+          Every service in the Compose file needs an image ending in @sha256: and 64 lower-case hex digits.
+          Seen: {{ verify_images }}
+      vars:
+        verify_compose: "{{ lookup('ansible.builtin.file', verify_stack_source ~ '/compose.yml') | ansible.builtin.from_yaml }}"
+        verify_services: '{{ verify_compose.services.values() | ansible.builtin.list }}'
+        verify_images: >-
+          {{ verify_services | ansible.builtin.selectattr('image', 'ansible.builtin.defined')
+          | ansible.builtin.map(attribute='image') | ansible.builtin.list }}
+        verify_image_pattern: '^[^\s@]+@sha256:[0-9a-f]{64}\Z'
+      delegate_to: localhost
+
+# Every file in the stack directory is either carried by the role or named here
+# as not carried, so a file added to the directory that neither list names fails
+# this play and someone has to decide.
+- name: Verify that every file of the stack directory is accounted for
+  hosts: localhost
+  gather_facts: false
+  vars:
+    verify_stack_source: '{{ playbook_dir }}/../../../../../hetzner/monitoring/stack'
+    verify_carried:
+      - compose.yml
+      - alertmanager/alertmanager.yml.tmpl
+      - alertmanager/email.gotmpl
+      - blackbox/blackbox.yml
+      - grafana/provisioning/datasources/prometheus.yaml
+      - ntfy/server.yml.tmpl
+      - prometheus/alerts.yml
+      - prometheus/prometheus.yml
+    # Rendering and the program that renders (the second part of the monitoring
+    # work) and the SNDS collector (the exporters role).
+    verify_not_carried:
+      - render_alertmanager_config.md
+      - render_alertmanager_config.py
+      - snds/collect_snds_metrics.py
+  tasks:
+    - name: List every file in the stack directory of the repository
+      ansible.builtin.find:
+        paths: '{{ verify_stack_source }}'
+        recurse: true
+        file_type: file
+        hidden: true
+        excludes: ['*.pyc']
+      register: monitoring_stack_verify_all
+
+    - name: Assert every file is carried or named as not carried
+      ansible.builtin.assert:
+        that:
+          - verify_unaccounted | ansible.builtin.length == 0
+          - verify_missing | ansible.builtin.length == 0
+        quiet: true
+        fail_msg: >-
+          The stack directory and the two lists disagree. In the directory and in neither list:
+          {{ verify_unaccounted }}. Named in a list and not in the directory: {{ verify_missing }}.
+      vars:
+        verify_found: >-
+          {{ monitoring_stack_verify_all.files | ansible.builtin.map(attribute='path')
+          | ansible.builtin.map('ansible.builtin.relpath', verify_stack_source) | ansible.builtin.list }}
+        verify_unaccounted: '{{ verify_found | ansible.builtin.difference(verify_carried + verify_not_carried) }}'
+        verify_missing: '{{ (verify_carried + verify_not_carried) | ansible.builtin.difference(verify_found) }}'
