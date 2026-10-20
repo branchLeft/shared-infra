@@ -1,0 +1,213 @@
+---
+# The runbook's order, step for step: host directories, the environment file and
+# the master key (each written only when absent), the stack's files, the bring-up
+# of the database and then the sign-in service, the stack's unit and the deploy
+# wrapper, and last the DOCKER-USER isolation policy.
+
+- name: Create the host configuration directories of the control plane
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: directory
+    owner: '{{ item.owner }}'
+    group: '{{ item.group }}'
+    mode: '{{ item.mode }}'
+  loop: '{{ control_plane_host_dirs }}'
+  loop_control:
+    label: '{{ item.path }}'
+
+# Written once. copy with force false leaves an existing file exactly as it is,
+# so a second run never replaces a secret, and a master key is never overwritten.
+- name: Write the environment file once, if it is absent
+  ansible.builtin.copy:
+    content: '{{ control_plane_env_content }}'
+    dest: '{{ control_plane_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+    force: false
+  no_log: true
+  diff: false
+
+- name: Write the master key once, if it is absent
+  ansible.builtin.copy:
+    content: '{{ control_plane_masterkey }}'
+    dest: '{{ control_plane_masterkey_file }}'
+    owner: '1000'
+    group: '1000'
+    mode: '0400'
+    force: false
+  no_log: true
+  diff: false
+
+- name: Create the project directory of the control-plane stack
+  ansible.builtin.file:
+    path: '{{ control_plane_project_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# Copied with explicit modes, not rsync. The runbook's rsync used --delete, so a
+# file removed from the repository was removed from the host; this does not
+# delete, and a file dropped from the list stays on the host until removed by hand.
+- name: Deliver the stack's files
+  ansible.builtin.copy:
+    src: 'stack/{{ item }}'
+    dest: '{{ control_plane_project_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ control_plane_stack_files }}'
+
+- name: Start the database and wait until it is healthy
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --env-file
+      - '{{ control_plane_env_file }}'
+      - up
+      - -d
+      - --wait
+      - db
+    chdir: '{{ control_plane_project_dir }}'
+  environment:
+    IMAGE: '{{ control_plane_app_image }}'
+  # Compose itself reports the containers it started or left alone, and --wait
+  # fails the task when the database is not healthy. The task reports no change
+  # so that a second apply of the same commit reports zero changes.
+  changed_when: false
+  when: control_plane_bring_up | ansible.builtin.bool
+
+- name: Read whether the sign-in service's init phase has run
+  ansible.builtin.stat:
+    path: '{{ control_plane_init_stamp }}'
+  register: control_plane_init_stat
+
+# The init phase creates the sign-in service's own login and database. It needs
+# the database administrator's credential, which only compose.init.yml carries,
+# so it runs once here and never from the unit. The stamp records that it ran.
+- name: Run the sign-in service's init phase once, on a fresh database
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --env-file
+      - '{{ control_plane_env_file }}'
+      - -f
+      - compose.yml
+      - -f
+      - compose.init.yml
+      - run
+      - --rm
+      - zitadel
+    chdir: '{{ control_plane_project_dir }}'
+  environment:
+    IMAGE: '{{ control_plane_app_image }}'
+  changed_when: true
+  when:
+    - control_plane_bring_up | ansible.builtin.bool
+    - not control_plane_init_stat.stat.exists
+
+- name: Record that the init phase has completed
+  ansible.builtin.file:
+    path: '{{ control_plane_init_stamp }}'
+    state: touch
+    owner: root
+    group: root
+    mode: '0600'
+  when:
+    - control_plane_bring_up | ansible.builtin.bool
+    - not control_plane_init_stat.stat.exists
+
+- name: Start the sign-in service and wait until it is healthy
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --env-file
+      - '{{ control_plane_env_file }}'
+      - up
+      - -d
+      - --wait
+      - zitadel
+    chdir: '{{ control_plane_project_dir }}'
+  environment:
+    IMAGE: '{{ control_plane_app_image }}'
+  # As for the database: --wait fails the task when the service is not healthy,
+  # and the task reports no change so a second apply reports zero changes.
+  changed_when: false
+  when: control_plane_bring_up | ansible.builtin.bool
+
+- name: Enable the stack's unit
+  ansible.builtin.systemd_service:
+    name: '{{ control_plane_stack_unit }}'
+    enabled: true
+  when: control_plane_start_units | ansible.builtin.bool
+
+# The wrapper writes the digest pin, starts the four services, waits for each to
+# be healthy and restores the previous pin if the start fails. It reports its own
+# outcome in its exit status, so a failure stops the run here.
+- name: Start the stack through the deploy wrapper with the pinned image
+  ansible.builtin.command:
+    argv:
+      - '{{ control_plane_deploy_wrapper }}'
+      - control-plane
+      - '{{ control_plane_app_image }}'
+  changed_when: false
+  when: control_plane_start_units | ansible.builtin.bool
+
+- name: Read the stack's unit as systemd holds it
+  ansible.builtin.systemd_service:
+    name: '{{ control_plane_stack_unit }}'
+  register: control_plane_stack_unit_state
+  when: control_plane_start_units | ansible.builtin.bool
+
+- name: Refuse a stack unit that is not active after the deploy
+  ansible.builtin.assert:
+    that:
+      - control_plane_stack_unit_state.status.ActiveState == 'active'
+    quiet: true
+    fail_msg: 'The stack unit is {{ control_plane_stack_unit_state.status.ActiveState }}, not active, after the deploy wrapper ran.'
+  when: control_plane_start_units | ansible.builtin.bool
+
+# The reconciler and its unit are stay-as-code programs: the role installs them
+# byte for byte from the repository and does not rewrite them. The installer the
+# runbook ran restarted the unit on every run; here the restart happens only
+# when the reconciler or its unit changed. The unit runs at every boot and is
+# PartOf docker.service, so it is reasserted after a Docker restart either way.
+- name: Install the DOCKER-USER isolation reconciler
+  ansible.builtin.copy:
+    src: branchleft_docker_user_policy.sh
+    dest: '{{ control_plane_isolation_reconciler }}'
+    owner: root
+    group: root
+    mode: '0755'
+  register: control_plane_reconciler
+
+- name: Install the isolation policy's unit
+  ansible.builtin.copy:
+    src: branchleft-docker-user-policy.service
+    dest: '{{ control_plane_isolation_unit }}'
+    owner: root
+    group: root
+    mode: '0644'
+  register: control_plane_isolation_unit_file
+  notify: Reload systemd manager
+
+- name: Load the isolation policy's unit before the role goes on
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable the isolation policy's unit
+  ansible.builtin.systemd_service:
+    name: '{{ control_plane_isolation_unit_name }}'
+    enabled: true
+  when: control_plane_start_units | ansible.builtin.bool
+
+- name: Apply the isolation policy when its reconciler or its unit changed
+  ansible.builtin.systemd_service:
+    name: '{{ control_plane_isolation_unit_name }}'
+    state: restarted
+  when:
+    - control_plane_start_units | ansible.builtin.bool
+    - control_plane_reconciler is ansible.builtin.changed or control_plane_isolation_unit_file is ansible.builtin.changed

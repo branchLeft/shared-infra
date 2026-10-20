@@ -1,0 +1,158 @@
+---
+# What must be on the host is read from the repository, not from the role: the
+# stack's files and the two isolation files are compared byte for byte with
+# their sources (read by the controller, not through the role's links), so a
+# copy in the role that differs from its source fails here.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_repo: '{{ playbook_dir }}/../../../../../'
+    verify_stack_source: '{{ verify_repo }}hetzner/control-plane/stack'
+    verify_provision_source: '{{ verify_repo }}hetzner/provision'
+    verify_project_dir: /opt/branchleft/control-plane
+    verify_env_file: /etc/branchleft/control-plane.env
+    verify_masterkey_file: /etc/branchleft/control-plane/zitadel-masterkey
+    verify_stack_files:
+      - compose.yml
+      - compose.init.yml
+      - pg_hba.conf
+  tasks:
+    - name: Read each stack file and each isolation file from the repository
+      ansible.builtin.set_fact:
+        control_plane_verify_sources: >-
+          {{ control_plane_verify_sources | default({}) | combine({item.key: lookup('ansible.builtin.file', item.value)}) }}
+      loop:
+        - { key: 'compose.yml', value: '{{ verify_stack_source }}/compose.yml' }
+        - { key: 'compose.init.yml', value: '{{ verify_stack_source }}/compose.init.yml' }
+        - { key: 'pg_hba.conf', value: '{{ verify_stack_source }}/pg_hba.conf' }
+        - {
+            key: 'branchleft_docker_user_policy.sh',
+            value: '{{ verify_provision_source }}/branchleft_docker_user_policy.sh',
+          }
+        - {
+            key: 'branchleft-docker-user-policy.service',
+            value: '{{ verify_provision_source }}/branchleft-docker-user-policy.service',
+          }
+      loop_control:
+        label: '{{ item.key }}'
+      no_log: true
+
+    - name: Read the stack's files on the instance
+      ansible.builtin.slurp:
+        src: '{{ verify_project_dir }}/{{ item }}'
+      loop: '{{ verify_stack_files }}'
+      register: control_plane_verify_stack_slurp
+      loop_control:
+        label: '{{ item }}'
+      no_log: true
+
+    - name: Assert each stack file is on the instance, root-owned, mode 0644 and byte-equal to its source
+      ansible.builtin.assert:
+        that:
+          - item.item in control_plane_verify_sources
+          - (item.content | ansible.builtin.b64decode) == control_plane_verify_sources[item.item]
+        quiet: true
+        fail_msg: '{{ item.item }} differs from its source in the repository.'
+      loop: '{{ control_plane_verify_stack_slurp.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+      no_log: true
+
+    - name: Read the mode and owner of the project directory and each stack file
+      ansible.builtin.stat:
+        path: '{{ verify_project_dir }}/{{ item }}'
+      loop: '{{ ["."] + verify_stack_files }}'
+      register: control_plane_verify_stats
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert the project directory and each stack file have the owner and mode of the role
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == ('0755' if item.item == '.' else '0644')
+        quiet: true
+        fail_msg: '{{ item.item }} is not root:root with the mode the role sets.'
+      loop: '{{ control_plane_verify_stats.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Read the environment file and the master key
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_secret_stats
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert the environment file is 0600 root and the master key is 0400 uid and gid 1000
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_secret_stats.results[0].stat.mode == '0600'
+          - control_plane_verify_secret_stats.results[0].stat.pw_name == 'root'
+          - control_plane_verify_secret_stats.results[1].stat.mode == '0400'
+          - control_plane_verify_secret_stats.results[1].stat.uid == 1000
+          - control_plane_verify_secret_stats.results[1].stat.gid == 1000
+        quiet: true
+        fail_msg: The environment file or the master key does not have the mode and owner the runbook sets.
+
+    # The secret values are written on the instance, and must not appear in the
+    # run's log, which the controller keeps. The log is read on the controller.
+    - name: Read the environment file's content on the instance
+      ansible.builtin.slurp:
+        src: '{{ verify_env_file }}'
+      register: control_plane_verify_env
+      no_log: true
+
+    - name: Read the run's log on the controller
+      ansible.builtin.slurp:
+        src: '{{ lookup("ansible.builtin.env", "ANSIBLE_LOG_PATH") }}'
+      register: control_plane_verify_log
+      delegate_to: localhost
+      no_log: true
+
+    - name: Assert the secret is on the instance and absent from the run's log
+      ansible.builtin.assert:
+        that:
+          - "'THROWAWAY-' in (control_plane_verify_env.content | ansible.builtin.b64decode)"
+          - "'THROWAWAY-' not in (control_plane_verify_log.content | ansible.builtin.b64decode)"
+        quiet: true
+        fail_msg: The secret is missing from the instance, or it appears in the run's log.
+      no_log: true
+
+    - name: Read the isolation reconciler and its unit on the instance
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /usr/local/sbin/branchleft-docker-user-policy
+        - /etc/systemd/system/branchleft-docker-user-policy.service
+      register: control_plane_verify_isolation
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert the isolation reconciler and its unit are byte-equal to their sources
+      ansible.builtin.assert:
+        that:
+          - (control_plane_verify_isolation.results[0].content | ansible.builtin.b64decode) == control_plane_verify_sources['branchleft_docker_user_policy.sh']
+          - (control_plane_verify_isolation.results[1].content | ansible.builtin.b64decode) == control_plane_verify_sources['branchleft-docker-user-policy.service']
+        quiet: true
+        fail_msg: The isolation reconciler or its unit differs from its source.
+      no_log: true
+
+    - name: Read the reconciler's mode
+      ansible.builtin.stat:
+        path: /usr/local/sbin/branchleft-docker-user-policy
+      register: control_plane_verify_reconciler_stat
+
+    - name: Assert the reconciler is root-owned and mode 0755
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_reconciler_stat.stat.mode == '0755'
+          - control_plane_verify_reconciler_stat.stat.pw_name == 'root'
+        quiet: true
+        fail_msg: The reconciler is not root-owned with mode 0755; systemd runs it as root at every boot.
