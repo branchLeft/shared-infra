@@ -31,6 +31,17 @@ is delivered"). After it is applied, the hand-run prerequisites script must not
 be run again: it would put back the repository entry the role removes (see
 "What it changes on a host").
 
+**The role must not be applied to the live host before part two.** A second
+writer of the exporter file exists today: the database stack's systemd drop-in
+(`db/systemd/db.override.conf` in the `ghost-platform` repository) runs
+`render_exporter_my_cnf.py` before every start of the database stack, and that
+script rewrites the same `/etc/branchleft/db-exporter.my.cnf` from the password
+in `db.env`. The drop-in is the legacy writer and this role is the target one.
+Until part two removes the drop-in, the two share the file, and if the password
+this role is given differs from the one in `db.env` the file flips to the other
+value on every restart of the stack. This change touches nothing in
+`ghost-platform`.
+
 It does not decide where the password comes from, create the database account the
 password belongs to, or rotate the password in the database. The role makes the
 file match a password it is given; putting the same password in the database is a
@@ -68,8 +79,8 @@ with the reason for it. An inventory value does not change them.
 - No collection beyond `ansible.builtin`.
 - Target: Debian 13 with Python 3 and `python3-apt`. Debian 13 is the release
   every production host runs.
-- A controller that can reach `deb.debian.org` (the download) and, from the host,
-  `repo.mysql.com` (the index). The test needs neither.
+- A host that can reach `deb.debian.org` (the download runs on the host, not on
+  the controller) and `repo.mysql.com` (the index). The test needs neither.
 
 ## What it changes on a host
 
@@ -159,8 +170,19 @@ differs in these ways, each on purpose.
   component under that release only.
 - **`libaio1` is a downloaded package file with a pinned sha256**, installed by
   path, so the apt module is never handed a URL or an unchecked file.
-- **The exporter file is created empty first, then written.** See "What the test
-  proves" below for the reason.
+- **The exporter file is closed before it is written.** A missing file is created
+  empty with its final owner and mode; a file that exists, left wide by an
+  earlier release, is closed by a separate task that sets its owner and mode,
+  because the create task changes nothing for a file that exists. See "What the
+  test proves" below.
+- **What is not carried over from the scripts.** The warning about the retired
+  data-source variable is not carried. `mysqldump --version` and
+  `mysqlbinlog --version` are not run; the role checks the installed package
+  versions instead. The run-time refusal of a key file that carries an extra
+  primary key is not carried: the role compares the digest of the whole key file
+  with the pinned one, and a human fixes the pin. The script's explicit handling
+  of a leftover `.tmp` file is not needed, because Ansible writes through a
+  temporary name of its own.
 - **The password rules are the exporter's, not Ansible's.** The exporter expands a
   dollar sign, unquotes a double quote and treats a number sign, a semicolon and a
   backslash as syntax, so any of them makes it send a different password from the
@@ -183,7 +205,13 @@ claimed.
 | The file mode is `0400`                                            | setting `0644`                              | verify, "Assert the exporter file is private to the exporter's account"                                                        |
 | The file is owned by the exporter's uid                            | setting uid `0`                             | the same task: `mode 0400, uid 0`                                                                                              |
 | The password is refused for a character outside the set            | the anchor `\Z` changed to `$`              | verify, the trailing-line-break case: the role accepted the input                                                              |
-| The same, for every character class                                | the set opened to any text                  | verify, the first bad character: the role accepted the input (the test tries 31 different characters and others)               |
+| The same, for every character class                                | the set opened to any text                  | verify, the first bad character: the role accepted the input (the test tries a list of different characters and others)        |
+| The allowed set is exact                                           | adding one character to the set in `vars`   | verify, "Assert the password pattern accepts exactly the allowed ASCII characters": the code point is on the wrong side        |
+| An existing wide file is closed before the write                   | deleting the close task                     | verify, "Assert the wide file was closed by the task that runs before the write"                                               |
+| A link at the file path is removed before the write                | dropping the link test from the removal     | verify, "Assert the link was removed and a closed file created in its place"                                                   |
+| A directory holding only a hidden file is not removed              | `hidden: false` on the listing              | verify, the hidden-file case: the role accepted the input                                                                      |
+| A directory holding only a subdirectory is not removed             | `file_type: file` on the listing            | verify, the subdirectory case: the role accepted the input                                                                     |
+| A key change alone refreshes the index                             | dropping the key from the refresh condition | verify, the key case: "Expected the role to stop at 'Refresh the apt index after the repository files changed'"                |
 | The password is refused when shorter than 20                       | the minimum lowered to 1                    | verify, the short case: the role accepted the input                                                                            |
 | The exporter file is created empty and closed before it is written | disabling the task                          | verify, "The task that creates the exporter file empty and closed did not run, so the write created the file"                  |
 | A directory left by Docker at the file path is removed             | disabling the removal                       | verify, the same assertion, because the directory stays in the way                                                             |
@@ -213,18 +241,28 @@ the write. Removing it alone leaves every step green, because `no_log` already
 hides the diff. ANS-16 asks for both, so both stay.
 
 The log scan reads the whole log of every run (verbosity 3): the sentinel text,
-its SHA-1 and MD5, and the SHA-1 and MD5 of the whole file, for the password and
-for the rotated password. Its controls are a canary the converge prints, two task
-names of the role, and a digest the scan must find.
+its SHA-1, MD5 and SHA-256, and its base64 form (whole, and as the middle of the
+encoding at the three alignments it can have inside a longer encoded blob), and
+the same forms of the whole file, for the password and for the rotated password.
+Its controls are a canary the converge prints, task names of the role, and a
+digest the scan must find in its SHA-1, SHA-256 and base64 forms.
 
 ## Where the key comes from, and how a human renews it
 
 `files/mysql-repo-keys.asc` is the vendor's two published signing key files
 joined, the 2025 file first and the 2023 file after it. Both carry the same
-primary key, fingerprint `BCA4 3417 C3B4 85DD 128E C6D4 B7B3 B788 A8D3 785C`,
-and differ in the dates of their self-signatures. The 2025 file's signature
-expires on 2027-10-23; the 2023 file's expired on 2025-10-22. The older one is
-kept because it is the one that still signs some published Release files.
+primary key, fingerprint `BCA43417C3B485DD128EC6D4B7B3B788A8D3785C` (written
+without spaces, as it is in the code), and differ in the dates of their
+self-signatures. The 2025 file's signature expires on 2027-10-23; the 2023
+file's expired on 2025-10-22. The older one is kept because it is the one that
+still signs some published Release files.
+
+Where the fingerprint was read: it is the constant in the hand-run prerequisites
+script, whose notes say it was cross-checked against the value Oracle publishes
+on its own page about checking the signature of a package. This change did not
+read that page again, and did not fetch the key: it ran `gpg --show-keys` on the
+vendored file and compared the result with the script's constant. A human who
+renews the key reads the vendor's page afresh (step 1 below).
 
 A human renews it. Nothing in this repository fetches the key, and no dependency
 bot sees it.
@@ -255,9 +293,22 @@ bot sees it.
   that a failed write leaves the old file whole rests on Ansible's atomic move, not
   on a test. The `no_log` on the step that computes the password's problems is
   reviewed, not tested.
-- The window in which the file is open to others is closed by the order of two
-  tasks. The test checks that the first task ran and that its name comes before
-  the write in the log; it cannot watch the filesystem between them.
+- The window in which the file is open to others is closed by the order of the
+  tasks. A missing file is created closed and an existing file is closed by its
+  own task; the test checks that the task that applies to the case ran and
+  changed something, and that the names come before the write in the log. It
+  cannot watch the filesystem between them. The write moves the new file over
+  the old one and the move copies the old file's owner and mode, which is why the
+  existing file has to be closed first.
+- The role must not be applied to the live host before part two removes the
+  drop-in that also writes the exporter file (see the top of this README). The
+  password the role is given and the one in `db.env` must be the same until then.
+- The plan limit on a host that was never applied: on a host whose apt index has
+  never held the MySQL repository, the task that installs the named packages
+  from the index fails even under `--check`, because the package is not known to
+  apt. The `check-fresh` step passes only because the prepare step installs
+  placeholder packages first, so it does not exercise a never-applied host. The
+  database host already has the packages, so its plan works.
 - The containers ran on one machine type (arm64 Docker Desktop). The role is not
   tested on an amd64 host.
 - The role has not been applied to the host. After it is, the hand-run

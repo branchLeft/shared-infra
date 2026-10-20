@@ -302,13 +302,17 @@
 # A new file is moved into place with the mode the umask allows, and only then
 # does the module set its owner and mode, so a file created by the write below
 # would be readable by others for a moment. A file that exists keeps its owner
-# and mode through a rewrite. So the file is created first, empty, with its final
-# owner and mode, and the write below only ever replaces a closed file. The
-# content is empty, so nothing here is a secret. Both this task and the write are
-# skipped, with a stated reason (ANS-10), in the two cases where a plan run left
-# the way blocked: the directory above does not exist yet because check mode did
-# not create it, or a directory is still in the way because check mode did not
-# remove it. The second look above sees that; in a real run neither holds.
+# and mode through the write, because the move copies them from the old file onto
+# the new one. So the file is made closed first, in one of two ways, and the write
+# below only ever replaces a closed file. A path with nothing at it gets an empty
+# file with its final owner and mode; with force: false that task changes nothing
+# for a file that already exists, so a file that exists, left wide by an earlier
+# release, is closed by the next task. The content of the first is empty, so
+# nothing here is a secret. These two tasks and the write are skipped, with a
+# stated reason (ANS-10), in the two cases where a plan run left the way blocked:
+# the directory above does not exist yet because check mode did not create it, or
+# a directory is still in the way because check mode did not remove it. The
+# second look above sees that; in a real run neither holds.
 - name: Create the exporter file empty and closed, before it holds the password
   ansible.builtin.copy:
     content: ''
@@ -323,6 +327,22 @@
   when:
     - db1_stack_branchleft_directory_stat.stat.exists
     - not (db1_stack_exporter_path_now.stat.isdir | default(false))
+
+# The file module sets owner, group and mode on a file that exists and reports
+# a change only when one of them differs. It reads and writes no content and
+# returns no digest, so this task handles no secret.
+- name: Close an exporter file that already exists, before it holds the new password
+  ansible.builtin.file:
+    path: '{{ db1_stack_exporter_cnf_path }}'
+    state: file
+    follow: false
+    owner: '{{ db1_stack_exporter_uid }}'
+    group: '{{ db1_stack_exporter_gid }}'
+    mode: '{{ db1_stack_exporter_cnf_mode }}'
+  register: db1_stack_exporter_closed
+  when:
+    - db1_stack_branchleft_directory_stat.stat.exists
+    - db1_stack_exporter_path_now.stat.isreg | default(false)
 
 - name: Write the exporter credentials file
   ansible.builtin.template:

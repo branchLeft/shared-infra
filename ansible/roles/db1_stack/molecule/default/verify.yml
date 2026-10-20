@@ -78,8 +78,18 @@
     # tab, form feed, braces, single quote, backtick, equals, ampersand, percent,
     # brackets, comma, slash, colon, question mark, at, caret, exclamation, one
     # letter outside ASCII, and the line separator.
+    # The role is also given the characters the first version of this list never
+    # tried that a person could plausibly add to the set: vertical bar, asterisk,
+    # plus, less-than, greater-than and delete.
+    verify_allowed_codes: '{{ [45, 46, 95, 126] + (range(48, 58) | list) + (range(65, 91) | list) + (range(97, 123) | list) }}'
     verify_unsafe_codes:
       [
+        124,
+        42,
+        43,
+        60,
+        62,
+        127,
         36,
         34,
         35,
@@ -254,6 +264,22 @@
         loop_var: verify_code
         label: code point {{ verify_code }}
 
+    # The allowed set is exact: every ASCII code point is checked against the
+    # pattern the role reads, and only the letters, the digits and the four
+    # punctuation characters match. The role's own use of that pattern is the
+    # refusal cases above and below. This loop is what fails when the set is
+    # widened by a character the cases above never try.
+    - name: Assert the password pattern accepts exactly the allowed ASCII characters
+      ansible.builtin.assert:
+        that:
+          - (('%c' | format(verify_code)) is match(db1_stack_verify_vars.db1_stack_password_alphabet_pattern)) == (verify_code in verify_allowed_codes)
+        fail_msg: The password pattern does not accept exactly the allowed characters; code point {{ verify_code }} is on the wrong side.
+        quiet: true
+      loop: '{{ range(0, 128) | list }}'
+      loop_control:
+        loop_var: verify_code
+        label: code point {{ verify_code }}
+
     # A final line break is the case a pattern ending in a dollar sign accepts.
     - name: Refuse a password that ends in a line break
       ansible.builtin.include_tasks: tasks/refused.yml
@@ -422,7 +448,22 @@
       ansible.builtin.include_tasks: tasks/path_empty_directory.yml
 
     - name: Put a directory that holds a file where the exporter file goes
-      ansible.builtin.include_tasks: tasks/path_full_directory.yml
+      ansible.builtin.include_tasks: tasks/path_kept_directory.yml
+      vars:
+        kept_name: PLACEHOLDER_KEEP
+        kept_kind: file
+
+    - name: Put a directory that holds only a hidden file where the exporter file goes
+      ansible.builtin.include_tasks: tasks/path_kept_directory.yml
+      vars:
+        kept_name: .PLACEHOLDER_KEEP
+        kept_kind: file
+
+    - name: Put a directory that holds only a subdirectory where the exporter file goes
+      ansible.builtin.include_tasks: tasks/path_kept_directory.yml
+      vars:
+        kept_name: PLACEHOLDER_KEEP_DIRECTORY
+        kept_kind: directory
 
     - name: Put a link to another file where the exporter file goes
       ansible.builtin.include_tasks: tasks/path_link.yml
@@ -443,6 +484,22 @@
 
     - name: Apply the role over the wide file
       ansible.builtin.include_tasks: tasks/apply.yml
+
+    # The final owner, mode and content alone would also hold if the write
+    # closed the file after moving it into place, which leaves the new password
+    # open to others for a moment. The task that closes an existing file before
+    # the write must itself have run and changed the file. The task that creates
+    # a missing file changes nothing here, because the file exists. The earlier
+    # run left a skipped result in the registered variable, so a missing task
+    # cannot pass on a stale one.
+    - name: Assert the wide file was closed by the task that runs before the write
+      ansible.builtin.assert:
+        that:
+          - db1_stack_exporter_closed | default({}) is changed
+          - db1_stack_exporter_closed | default({}) is not skipped
+          - db1_stack_exporter_created is not changed
+        fail_msg: The task that closes an exporter file that already exists did not change the wide file, so the write met an open file.
+        quiet: true
 
     - name: Assert the wide file was closed and replaced
       ansible.builtin.include_tasks: tasks/assert_state.yml
@@ -560,6 +617,9 @@
     - name: Change the repository source by hand
       ansible.builtin.include_tasks: tasks/source_changed.yml
 
+    - name: Change the repository key file by hand
+      ansible.builtin.include_tasks: tasks/key_changed.yml
+
     # ----- The host is as the converge left it -----
     - name: Assert the host ends as the converge left it
       ansible.builtin.include_tasks: tasks/assert_state.yml
@@ -574,9 +634,11 @@
     # check-mode runs with diff, the rotations, the refusals and the failures. The
     # controls show the scan reads the output: the canary of the converge, two
     # task names of the role, and the digest control.
-    - name: Print the SHA-1 of the digest control, the scan's control for digests
+    - name: Print the SHA-1, SHA-256 and base64 of the digest control, the scan's control for those forms
       ansible.builtin.debug:
-        msg: 'SCENARIO_DIGEST_CONTROL {{ verify_digest_control | hash("sha1") }}'
+        msg: >-
+          SCENARIO_DIGEST_CONTROL {{ verify_digest_control | hash("sha1") }}
+          {{ verify_digest_control | hash("sha256") }} {{ verify_digest_control | b64encode }}
 
     - name: Read the log of this scenario's Ansible runs
       ansible.builtin.set_fact:
@@ -598,17 +660,23 @@
         db1_stack_verify_found: []
       no_log: true
 
-    # A sentinel counts as held when its text, its SHA-1 or its MD5 is in the log.
-    # A fingerprint of a secret is a leak too: a digest of a human-chosen password
-    # can be checked offline. The digest control is found only by its SHA-1.
-    - name: Look in the log for each sentinel, its SHA-1 and its MD5, and for the digest control
+    # A sentinel counts as held when its text, its SHA-1, MD5 or SHA-256, or its
+    # base64 form is in the log. A fingerprint of a secret is a leak too: a digest
+    # of a human-chosen password can be checked offline. The base64 form is
+    # looked for whole, and as the stable middle of the encoding at the three
+    # alignments the text can have inside a longer encoded blob (a file read and
+    # encoded whole puts the password at any of them). The digest control is
+    # printed in each digest form and the base64 form, and found by them only.
+    - name: Look in the log for each sentinel in each form, and for the digest control
       ansible.builtin.set_fact:
         db1_stack_verify_found: '{{ db1_stack_verify_found + [item.key] }}'
       loop: '{{ verify_scan_items }}'
-      when: >-
-        item.value in db1_stack_verify_log
-        or (item.value | hash('sha1')) in db1_stack_verify_log
-        or (item.value | hash('md5')) in db1_stack_verify_log
+      vars:
+        verify_forms: >-
+          {{ [item.value, item.value | hash('sha1'), item.value | hash('md5'), item.value | hash('sha256'),
+          item.value | b64encode, (item.value | b64encode)[4:-4], (('x' ~ item.value) | b64encode)[4:-4],
+          (('xy' ~ item.value) | b64encode)[4:-4]] }}
+      when: db1_stack_verify_log is search(verify_forms | map('regex_escape') | join('|'))
       no_log: true
 
     - name: Work out which sentinels the log holds
@@ -620,8 +688,19 @@
       ansible.builtin.assert:
         that:
           - "'digest_control' in db1_stack_verify_found"
-        fail_msg: The scan did not find the SHA-1 of the digest control in the log, so an empty scan of digests would prove nothing.
+        fail_msg: The scan did not find the digest control in the log, so an empty scan of digests would prove nothing.
         quiet: true
+
+    # The scan builds each form with the same filter used here, so the control
+    # being in the log in each form shows that form can be found.
+    - name: Assert the log holds the control in the SHA-256 form and the base64 form
+      ansible.builtin.assert:
+        that:
+          - (verify_digest_control | hash('sha256')) in db1_stack_verify_log
+          - (verify_digest_control | b64encode) in db1_stack_verify_log
+        fail_msg: The log lacks the SHA-256 or base64 form of the digest control, so a scan for those forms would prove nothing.
+        quiet: true
+      no_log: true
 
     - name: Assert no sentinel reached the log
       ansible.builtin.assert:
@@ -638,6 +717,13 @@
           - "db1_stack_verify_log.find(' : Create the exporter file empty and closed') >= 0"
           - "db1_stack_verify_log.find(' : Write the exporter credentials file') >= 0"
           - "db1_stack_verify_log.find(' : Create the exporter file empty and closed') < db1_stack_verify_log.find(' : Write the exporter credentials file')"
+          - "db1_stack_verify_log.find(' : Close an exporter file that already exists') >= 0"
+          - >-
+            db1_stack_verify_log.find(' : Create the exporter file empty and closed')
+            < db1_stack_verify_log.find(' : Close an exporter file that already exists')
+          - >-
+            db1_stack_verify_log.find(' : Close an exporter file that already exists')
+            < db1_stack_verify_log.find(' : Write the exporter credentials file')
         quiet: true
       no_log: true
 

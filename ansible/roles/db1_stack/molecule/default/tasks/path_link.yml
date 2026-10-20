@@ -24,6 +24,18 @@
 - name: Apply the role
   ansible.builtin.include_tasks: apply.yml
 
+# The link was removed first, so the path held nothing and the closed empty file
+# was created by its own task. Without the removal the link to an existing file
+# makes that task change nothing, and the write would replace the link with a
+# file that took its mode from the link's target.
+- name: Assert the link was removed and a closed file created in its place
+  ansible.builtin.assert:
+    that:
+      - db1_stack_exporter_created is changed
+      - db1_stack_exporter_created is not skipped
+    fail_msg: The task that creates the exporter file empty and closed did not run, so the link was not removed before the write.
+    quiet: true
+
 # The exporter file is read without its checksum: a digest of a file that holds
 # the password must not reach the log (ANS-16).
 - name: Look at the path the link was at
