@@ -1,0 +1,29 @@
+---
+argument_specs:
+  main:
+    short_description: Deliver and start the nextcloud1 Compose stack
+    description: >-
+      Writes the stack's three secrets once, into the env file, when that file
+      is absent; copies the stack's Compose file into the project directory;
+      installs the instance's systemd drop-in; enables and starts the unit; then
+      checks that the unit is active and that every service has one healthy
+      container. It never removes a file, a volume or a secret, and never edits
+      an env file that exists.
+    author: branchLeft
+    options:
+      nextcloud_stack_project_dir:
+        type: str
+        description: >-
+          Absolute path of the stack's project directory. It must equal the
+          WorkingDirectory the shared Compose unit template derives from the
+          instance name, which is /opt/branchleft/nextcloud1 for the instance
+          named nextcloud1. A caller has no reason to change it.
+        default: /opt/branchleft/nextcloud1
+      nextcloud_stack_check_containers:
+        type: bool
+        description: >-
+          Whether the play asks Docker for the containers of the stack and
+          requires each service to have one healthy container, and asks the app
+          container for its status page. A test without a Docker daemon sets it
+          false; every host keeps the default.
+        default: true

@@ -1,0 +1,11 @@
+---
+# Order matters: the restart runs after the daemon-reload, so systemd reads the
+# drop-in before it starts the stack.
+- name: Reload systemd manager
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Restart the nextcloud1 stack
+  ansible.builtin.systemd_service:
+    name: '{{ nextcloud_stack_unit }}'
+    state: restarted
