@@ -1,0 +1,194 @@
+---
+# The order is the runbook's, step for step: the secrets (1), the stack's files
+# (2), the drop-in (3), enable (4), start (5), then the checks of step 6.
+
+# Step 1. The runbook writes the three secrets only on a host where the env
+# file is absent: "absent means there is nothing to lose. Anything else: edit
+# the file in place rather than overwriting it." The role keeps that rule: when
+# the file exists, nothing here generates or writes a secret.
+- name: Read whether the env file of the stack exists
+  ansible.builtin.stat:
+    path: '{{ nextcloud_stack_env_file }}'
+  register: nextcloud_stack_env_stat
+
+- name: Create the directory of the env file
+  ansible.builtin.file:
+    path: '{{ nextcloud_stack_env_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Generate the stack's secrets on the host, once, when the env file is absent
+  ansible.builtin.command:
+    argv: ['openssl', 'rand', '-base64', '24']
+  register: nextcloud_stack_generated
+  loop: '{{ nextcloud_stack_secret_names }}'
+  changed_when: true
+  # Runs in check mode too: the template task that writes these values is
+  # rendered for the check and needs the values. Nothing is written in check
+  # mode, so a generated value there is never stored.
+  check_mode: false
+  when: not nextcloud_stack_env_stat.stat.exists
+  no_log: true
+
+# Written in one step with mode 0600 from the start, so no reader sees the
+# secrets with a looser mode. Values are never printed: no_log.
+- name: Write the env file of the stack, once, with mode 0600
+  ansible.builtin.template:
+    src: nextcloud1.env.j2
+    dest: '{{ nextcloud_stack_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+  when: not nextcloud_stack_env_stat.stat.exists
+  notify: Restart the nextcloud1 stack
+  no_log: true
+
+# Step 2. Copied, not templated: the Compose file holds ${...} that Compose
+# reads at run time. The source is the stack directory in the repository,
+# reached through the link files/stack, so there is one copy of every file.
+- name: Create the project directory of the stack
+  ansible.builtin.file:
+    path: '{{ nextcloud_stack_project_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deliver the stack's files
+  ansible.builtin.copy:
+    src: 'stack/{{ item }}'
+    dest: '{{ nextcloud_stack_project_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ nextcloud_stack_files }}'
+  notify: Restart the nextcloud1 stack
+
+# Step 3. The instance drop-in: resets the image-pin assert and the env file
+# this stack does not use, and switches ExecStart to --force-recreate.
+- name: Create the drop-in directory of the instance
+  ansible.builtin.file:
+    path: '{{ nextcloud_stack_dropin_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the drop-in of the instance
+  ansible.builtin.copy:
+    src: nextcloud1.override.conf
+    dest: '{{ nextcloud_stack_dropin_dir }}/override.conf'
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd manager
+    - Restart the nextcloud1 stack
+
+# Without this the handlers run at the end of the play, and the role would
+# return with systemd still holding the old drop-in or the old stack.
+- name: Run the handlers before the unit is enabled and started
+  ansible.builtin.meta: flush_handlers
+
+# Step 4. Enable the unit.
+- name: Enable the unit of the stack
+  ansible.builtin.systemd_service:
+    name: '{{ nextcloud_stack_unit }}'
+    enabled: true
+
+# Step 5. Start the stack. A first bring-up is a start, not a restart; the
+# handler above already restarts it after any change, so this is then a no-op.
+- name: Start the stack
+  ansible.builtin.systemd_service:
+    name: '{{ nextcloud_stack_unit }}'
+    state: started
+
+# Step 6. The unit's own state is the first evidence: its ExecStart runs
+# docker compose up --wait, so an active unit means every service with a
+# healthcheck reported healthy.
+- name: Ask systemd for the unit of the stack
+  ansible.builtin.systemd_service:
+    name: '{{ nextcloud_stack_unit }}'
+  register: nextcloud_stack_unit_status
+
+- name: Assert the unit is active with the drop-in loaded
+  ansible.builtin.assert:
+    that:
+      - nextcloud_stack_unit_status.status.ActiveState == 'active'
+      - nextcloud_stack_dropin_dir ~ '/override.conf' in nextcloud_stack_unit_status.status.DropInPaths
+    quiet: true
+    fail_msg: >-
+      The unit {{ nextcloud_stack_unit }} is not active with its drop-in loaded
+      (state {{ nextcloud_stack_unit_status.status.ActiveState }}, drop-ins
+      {{ nextcloud_stack_unit_status.status.DropInPaths }}).
+  # A check-mode run writes no drop-in and starts nothing, so systemd has
+  # nothing to report on a fresh host; the reason is stated here (ANS-10).
+  when: not ansible_check_mode
+
+# Step 6, the container checks. They ask Docker by Compose's own labels, never
+# through a fresh `docker compose` (an interactive shell carries none of the
+# unit's EnvironmentFile variables, so compose would refuse to parse the file).
+# They need a Docker daemon, so the test turns them off; they run on every host.
+- name: Find the containers of the stack
+  ansible.builtin.command:
+    argv:
+      - docker
+      - ps
+      - --filter
+      - 'label=com.docker.compose.project={{ nextcloud_stack_name }}'
+      - --format
+      - '{% raw %}{{.Names}} {{.Status}}{% endraw %}'
+  register: nextcloud_stack_containers
+  changed_when: false
+  check_mode: false
+  when: nextcloud_stack_check_containers and not ansible_check_mode
+
+- name: Assert every service of the stack has one healthy container
+  ansible.builtin.assert:
+    that:
+      - nextcloud_stack_containers.stdout_lines | length == nextcloud_stack_services | length
+      - nextcloud_stack_containers.stdout_lines | select('search', '\\(healthy\\)') | list | length == nextcloud_stack_services | length
+    quiet: true
+    fail_msg: 'Expected {{ nextcloud_stack_services | length }} healthy containers, saw: {{ nextcloud_stack_containers.stdout_lines }}'
+  when: nextcloud_stack_check_containers and not ansible_check_mode
+
+- name: Find the app container of the stack
+  ansible.builtin.command:
+    argv:
+      - docker
+      - ps
+      - -q
+      - --filter
+      - 'label=com.docker.compose.project={{ nextcloud_stack_name }}'
+      - --filter
+      - label=com.docker.compose.service=app
+  register: nextcloud_stack_app
+  changed_when: false
+  check_mode: false
+  when: nextcloud_stack_check_containers and not ansible_check_mode
+
+# The runbook's first live confirmation that curl exists in the image: a
+# failure here reads "curl: not found", not a connection error.
+- name: Ask the app container for its status page
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - '{{ nextcloud_stack_app.stdout }}'
+      - curl
+      - -fsS
+      - http://localhost/status.php
+  register: nextcloud_stack_status
+  changed_when: false
+  check_mode: false
+  when: nextcloud_stack_check_containers and not ansible_check_mode
+
+- name: Assert Nextcloud reports itself installed
+  ansible.builtin.assert:
+    that:
+      - nextcloud_stack_status.stdout is search('installed":true')
+    quiet: true
+    fail_msg: The status page of the app container does not report installed true.
+  when: nextcloud_stack_check_containers and not ansible_check_mode

@@ -1,0 +1,160 @@
+---
+# Requires state_password: the password the exporter file must hold. Nothing
+# here prints a value: the file is compared by checksum, the stat of the file
+# and the assertion that reads its checksum are hidden, and an assertion that
+# fails names the file and the attribute, never the content. A digest of the
+# password is a leak too (ANS-16), so the checksum never reaches the log.
+- name: Work out the checksum the exporter file must have
+  ansible.builtin.set_fact:
+    db1_stack_state_cnf_checksum: >-
+      {{ ('[client]' ~ state_nl ~ 'user = exporter' ~ state_nl ~ 'password = ' ~ state_password ~ state_nl
+      ~ 'socket = /var/run/mysqld/mysqld.sock' ~ state_nl) | hash('sha1') }}
+  vars:
+    state_nl: "{{ '%c' | format(10) }}"
+  no_log: true
+
+# ----- The directory and the exporter file -----
+
+- name: Read the directory the exporter file lives in
+  ansible.builtin.stat:
+    path: /etc/branchleft
+  register: db1_stack_state_directory
+
+- name: Assert the directory is owned by root and open for reading
+  ansible.builtin.assert:
+    that:
+      - db1_stack_state_directory.stat.exists
+      - db1_stack_state_directory.stat.isdir
+      - db1_stack_state_directory.stat.mode == '0755'
+      - db1_stack_state_directory.stat.pw_name == 'root'
+      - db1_stack_state_directory.stat.gr_name == 'root'
+    quiet: true
+
+- name: List everything in the directory, hidden files and temporary files included
+  ansible.builtin.find:
+    paths: /etc/branchleft
+    file_type: any
+    hidden: true
+    patterns: '*'
+  register: db1_stack_state_listing
+
+- name: Assert the directory holds the exporter file and nothing else
+  ansible.builtin.assert:
+    that:
+      - db1_stack_state_listing.files | map(attribute='path') | list == ['/etc/branchleft/db-exporter.my.cnf']
+    fail_msg: 'The directory holds {{ db1_stack_state_listing.files | map(attribute="path") | list }}.'
+    quiet: true
+
+- name: Read the exporter file
+  ansible.builtin.stat:
+    path: '{{ scenario_cnf_path }}'
+  register: db1_stack_state_cnf
+  no_log: true
+
+# The owner is the uid the exporter image runs as, which is not root, so a
+# root-owned default cannot pass. The mode is the script's: readable by the
+# owner only. One link: no second name for the file exists.
+- name: Assert the exporter file is private to the exporter's account
+  ansible.builtin.assert:
+    that:
+      - db1_stack_state_cnf.stat.exists
+      - db1_stack_state_cnf.stat.isreg
+      - db1_stack_state_cnf.stat.mode == '0400'
+      - db1_stack_state_cnf.stat.uid == 65534
+      - db1_stack_state_cnf.stat.gid == 65534
+      - db1_stack_state_cnf.stat.nlink == 1
+    fail_msg: >-
+      The exporter file is not private to its account: mode {{ db1_stack_state_cnf.stat.mode | default('absent') }},
+      uid {{ db1_stack_state_cnf.stat.uid | default('absent') }}, gid {{ db1_stack_state_cnf.stat.gid | default('absent') }}.
+    quiet: true
+
+- name: Assert the exporter file holds exactly the client section with the password
+  ansible.builtin.assert:
+    that:
+      - db1_stack_state_cnf.stat.checksum == db1_stack_state_cnf_checksum
+    fail_msg: The exporter file does not hold the expected content.
+    quiet: true
+  no_log: true
+
+# ----- The repository files, the pin and the download -----
+
+- name: Read the repository key file
+  ansible.builtin.stat:
+    path: /etc/apt/keyrings/mysql-community.asc
+    checksum_algorithm: sha256
+  register: db1_stack_state_key
+
+- name: Assert the key file is the pinned one
+  ansible.builtin.assert:
+    that:
+      - db1_stack_state_key.stat.exists
+      - db1_stack_state_key.stat.mode == '0644'
+      - db1_stack_state_key.stat.pw_name == 'root'
+      - db1_stack_state_key.stat.gr_name == 'root'
+      - db1_stack_state_key.stat.checksum == verify_key_sha256
+    quiet: true
+
+- name: Read the repository source and the pin file
+  ansible.builtin.stat:
+    path: '{{ item }}'
+  loop:
+    - /etc/apt/sources.list.d/mysql-community.sources
+    - /etc/apt/preferences.d/mysql-community-8.0
+  register: db1_stack_state_apt_files
+
+- name: Assert the repository source and the pin file hold the declared text
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.mode == '0644'
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'root'
+      - item.stat.checksum == (verify_apt_texts[item.item] | hash('sha1'))
+    fail_msg: 'The file {{ item.item }} is not as declared.'
+    quiet: true
+  loop: '{{ db1_stack_state_apt_files.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Look for the files the hand-run installer left
+  ansible.builtin.stat:
+    path: '{{ item }}'
+  loop: '{{ verify_legacy_files }}'
+  register: db1_stack_state_legacy
+
+- name: Assert the hand-run installer's files are gone
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists
+    fail_msg: 'The file {{ item.item }} is still there.'
+    quiet: true
+  loop: '{{ db1_stack_state_legacy.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Read the downloaded package file
+  ansible.builtin.stat:
+    path: '{{ scenario_libaio_path }}'
+  register: db1_stack_state_download
+
+- name: Assert the downloaded package file is root's and read-only to others
+  ansible.builtin.assert:
+    that:
+      - db1_stack_state_download.stat.exists
+      - db1_stack_state_download.stat.mode == '0644'
+      - db1_stack_state_download.stat.pw_name == 'root'
+      - db1_stack_state_download.stat.gr_name == 'root'
+    quiet: true
+
+- name: Gather the installed apt packages
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: Assert the package file and the three packages are installed
+  ansible.builtin.assert:
+    that:
+      - "'libaio1' in ansible_facts.packages"
+      - "'age' in ansible_facts.packages"
+      - "'mysql-community-client' in ansible_facts.packages"
+      - "'mysql-community-server-core' in ansible_facts.packages"
+    quiet: true

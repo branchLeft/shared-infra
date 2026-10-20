@@ -1,0 +1,10 @@
+---
+# Test setup only, never part of the role. The image ships an empty apt index,
+# and the role's own package task needs one. This is the apt mirror contact.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Refresh the apt index, which the image ships empty
+      ansible.builtin.apt:
+        update_cache: true
