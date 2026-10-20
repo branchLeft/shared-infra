@@ -1,0 +1,232 @@
+---
+# The values come from the scenario's inventory variables (molecule.yml), the
+# same values the role was converged with.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    # A real newline, to join the two tables' listings the way the role does.
+    firewall_nat_sysctl_verify_newline: "\n"
+  tasks:
+    - name: Read the sysctl drop-in's owner, group and mode
+      ansible.builtin.stat:
+        path: '{{ firewall_nat_sysctl_sysctl_file }}'
+      register: firewall_nat_sysctl_verify_dropin_stat
+
+    - name: Assert the drop-in exists with root ownership and mode 0644
+      ansible.builtin.assert:
+        that:
+          - firewall_nat_sysctl_verify_dropin_stat.stat.exists
+          - firewall_nat_sysctl_verify_dropin_stat.stat.pw_name == 'root'
+          - firewall_nat_sysctl_verify_dropin_stat.stat.gr_name == 'root'
+          - firewall_nat_sysctl_verify_dropin_stat.stat.mode == '0644'
+        success_msg: The sysctl drop-in is on the host with root ownership and mode 0644.
+
+    - name: Read the persisted sysctl drop-in
+      ansible.builtin.command:
+        argv: [cat, '{{ firewall_nat_sysctl_sysctl_file }}']
+      register: firewall_nat_sysctl_verify_dropin
+      changed_when: false
+
+    - name: Assert the drop-in persists IPv4 forwarding with the value 1
+      ansible.builtin.assert:
+        that:
+          - "'net.ipv4.ip_forward=1' in firewall_nat_sysctl_verify_dropin.stdout_lines"
+        fail_msg: The sysctl drop-in does not carry the line net.ipv4.ip_forward=1.
+        success_msg: The sysctl drop-in persists IPv4 forwarding.
+
+    - name: Read the active rules file and the boot rules file
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - '{{ firewall_nat_sysctl_rules_dir }}/active.nft'
+        - /etc/nftables.conf
+      register: firewall_nat_sysctl_verify_files
+
+    - name: Assert both rules files exist with their mode and hold the same rules
+      ansible.builtin.assert:
+        that:
+          - firewall_nat_sysctl_verify_files.results[0].stat.exists
+          - firewall_nat_sysctl_verify_files.results[1].stat.exists
+          - firewall_nat_sysctl_verify_files.results[0].stat.mode == '0600'
+          - firewall_nat_sysctl_verify_files.results[1].stat.mode == '0600'
+          - firewall_nat_sysctl_verify_files.results[0].stat.checksum == firewall_nat_sysctl_verify_files.results[1].stat.checksum
+        fail_msg: The active rules file and the boot rules file are not both present with mode 0600 and the same content.
+        success_msg: The active rules file and the boot rules file hold the same rules.
+
+    - name: Read the nftables unit
+      ansible.builtin.systemd_service:
+        name: nftables.service
+      register: firewall_nat_sysctl_verify_unit
+
+    - name: Read the link the host's start-up follows to the unit
+      ansible.builtin.stat:
+        path: /etc/systemd/system/sysinit.target.wants/nftables.service
+      register: firewall_nat_sysctl_verify_wants
+
+    - name: Assert the nftables unit that loads the boot rules file at start is enabled
+      ansible.builtin.assert:
+        that:
+          - firewall_nat_sysctl_verify_unit.status.UnitFileState == 'enabled'
+          - firewall_nat_sysctl_verify_wants.stat.exists
+        fail_msg: The nftables unit is not enabled, so a restart of the host loads no rules.
+        success_msg: The nftables unit is enabled and linked into the start-up target.
+
+    - name: Read the listing recorded when the active set was confirmed
+      ansible.builtin.command:
+        argv: [cat, '{{ firewall_nat_sysctl_rules_dir }}/active.list']
+      register: firewall_nat_sysctl_verify_recorded
+      changed_when: false
+
+    - name: Read the loaded tables the role owns
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop:
+        - [nft, list, table, inet, '{{ firewall_nat_sysctl_table }}']
+        - [nft, list, table, ip, '{{ firewall_nat_sysctl_table }}_nat']
+      register: firewall_nat_sysctl_verify_tables
+      changed_when: false
+
+    - name: Assert the loaded tables are the recorded set
+      ansible.builtin.assert:
+        that:
+          - >-
+            ((firewall_nat_sysctl_verify_tables.results | map(attribute='stdout') | join(firewall_nat_sysctl_verify_newline))
+            == firewall_nat_sysctl_verify_recorded.stdout)
+        fail_msg: The loaded tables differ from the listing recorded for the active set.
+        success_msg: The loaded tables are the recorded set.
+
+    - name: Assert the loaded filter table accepts the control port and established traffic
+      ansible.builtin.assert:
+        that:
+          - "'tcp dport ' ~ firewall_nat_sysctl_control_port ~ ' accept' in firewall_nat_sysctl_verify_tables.results[0].stdout"
+          - "'ct state established,related accept' in firewall_nat_sysctl_verify_tables.results[0].stdout"
+          - "'policy drop' in firewall_nat_sysctl_verify_tables.results[0].stdout"
+        fail_msg: The loaded filter table does not carry the rules the rendered file names.
+        success_msg: The loaded filter table carries the control port rule and the drop policy.
+
+    - name: Assert the loaded NAT table masquerades the source out of the uplink
+      ansible.builtin.assert:
+        that:
+          - >-
+            'ip saddr ' ~ firewall_nat_sysctl_nat_source ~ ' oifname "' ~
+            firewall_nat_sysctl_uplink_interface ~ '" masquerade' in
+            firewall_nat_sysctl_verify_tables.results[1].stdout
+          - firewall_nat_sysctl_verify_tables.results[1].stdout | regex_findall('masquerade') | length == 1
+        fail_msg: The loaded NAT table does not masquerade the configured source out of the configured uplink, once.
+        success_msg: The loaded NAT table masquerades the configured source out of the configured uplink.
+
+    - name: Connect to the control port the role must keep reachable
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: '{{ firewall_nat_sysctl_control_port }}'
+        state: started
+        timeout: 5
+
+    # A start of the host cannot be made from inside the container. The unit is
+    # the thing a start runs: it is enabled (asserted above) and its start-up
+    # action loads the boot rules file. So the ruleset is flushed, as a start
+    # leaves it, the unit is started, and the loaded tables must be the
+    # recorded set again. A boot file that is missing, stale or out of step
+    # with the loaded set fails here.
+    - name: Flush the whole kernel ruleset, as a start of the host leaves it
+      ansible.builtin.command:
+        argv: [nft, flush, ruleset]
+      changed_when: true
+
+    - name: Start the nftables unit, which loads the boot rules file
+      ansible.builtin.systemd_service:
+        name: nftables.service
+        state: restarted
+
+    - name: Read the loaded tables after the unit ran
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop:
+        - [nft, list, table, inet, '{{ firewall_nat_sysctl_table }}']
+        - [nft, list, table, ip, '{{ firewall_nat_sysctl_table }}_nat']
+      register: firewall_nat_sysctl_verify_booted
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the boot-time loader restores the recorded set
+      ansible.builtin.assert:
+        that:
+          - (firewall_nat_sysctl_verify_booted.results | map(attribute='rc') | list) == [0, 0]
+          - >-
+            ((firewall_nat_sysctl_verify_booted.results | map(attribute='stdout') | join(firewall_nat_sysctl_verify_newline))
+            == firewall_nat_sysctl_verify_recorded.stdout)
+        fail_msg: The nftables unit did not restore the recorded set from the boot rules file, so a restarted host loses its firewall and NAT.
+        success_msg: The nftables unit restores the recorded set from the boot rules file.
+
+    # Drift. The kernel is flushed again and the unit is not used, as when a
+    # foreign tool clears the ruleset. The role must see it, say so in check mode
+    # without loading, and then repair it. A role that decides from its files
+    # sees nothing here, because no file changed.
+    - name: Flush the whole kernel ruleset, as a foreign reload or a restart leaves it
+      ansible.builtin.command:
+        argv: [nft, flush, ruleset]
+      changed_when: true
+
+    - name: Run the role in check mode against the flushed kernel
+      ansible.builtin.include_role:
+        name: branchleft.firewall_nat_sysctl
+        apply:
+          check_mode: true
+
+    - name: Keep what the check-mode run reported
+      ansible.builtin.set_fact:
+        firewall_nat_sysctl_verify_planned: '{{ firewall_nat_sysctl_drift }}'
+        firewall_nat_sysctl_verify_planned_reload: '{{ firewall_nat_sysctl_reloaded }}'
+
+    - name: Read the ruleset after the check-mode run
+      ansible.builtin.command:
+        argv: [nft, list, ruleset]
+      register: firewall_nat_sysctl_verify_after_plan
+      changed_when: false
+
+    - name: Assert check mode reported the flushed kernel and loaded nothing
+      ansible.builtin.assert:
+        that:
+          - firewall_nat_sysctl_verify_planned | length > 0
+          - not (firewall_nat_sysctl_verify_planned_reload | bool)
+          - firewall_nat_sysctl_verify_after_plan.stdout == ''
+        fail_msg: The check-mode run did not report that the loaded tables are gone, or it loaded them.
+        success_msg: The check-mode run reported the flushed kernel and loaded nothing.
+
+    - name: Run the role for real against the flushed kernel
+      ansible.builtin.include_role:
+        name: branchleft.firewall_nat_sysctl
+
+    - name: Read the loaded tables after the repair
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop:
+        - [nft, list, table, inet, '{{ firewall_nat_sysctl_table }}']
+        - [nft, list, table, ip, '{{ firewall_nat_sysctl_table }}_nat']
+      register: firewall_nat_sysctl_verify_repaired
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the role reloaded the ruleset it found missing
+      ansible.builtin.assert:
+        that:
+          - firewall_nat_sysctl_reloaded | bool
+          - >-
+            ((firewall_nat_sysctl_verify_repaired.results | map(attribute='stdout') | join(firewall_nat_sysctl_verify_newline))
+            == firewall_nat_sysctl_verify_recorded.stdout)
+        fail_msg: The role did not reload the tables after the kernel ruleset was flushed.
+        success_msg: The role found the flushed kernel and loaded the recorded set again.
+
+    - name: Run the role again on the repaired kernel
+      ansible.builtin.include_role:
+        name: branchleft.firewall_nat_sysctl
+
+    - name: Assert a repaired host reports nothing to do
+      ansible.builtin.assert:
+        that:
+          - firewall_nat_sysctl_drift | length == 0
+          - not (firewall_nat_sysctl_reloaded | bool)
+        fail_msg: The role still reports drift after it repaired the kernel.
+        success_msg: The repaired host reports nothing to do.
