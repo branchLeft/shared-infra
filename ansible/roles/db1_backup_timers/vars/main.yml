@@ -1,0 +1,41 @@
+---
+# Internal to the role, not part of its interface. The unit files name these
+# paths in their own lines (WorkingDirectory and ExecStart), so a caller that
+# could change them would install programs the units never run.
+db1_backup_timers_db_dir: /opt/branchleft/db
+db1_backup_timers_provision_dir: /opt/branchleft/db/provision
+db1_backup_timers_recovery_dir: /opt/branchleft/db/recovery
+db1_backup_timers_unit_dir: /etc/systemd/system
+
+# The programs the units run, and the modules they import from the same
+# directory: the closure of dump_nightly, ship_binlogs, prune_backups,
+# dump_tenant and promotion_gate. Each file is copied as it is in the source.
+db1_backup_timers_provision_files:
+  - bounded_snapshot.py
+  - dump_nightly.py
+  - dump_tenant.py
+  - extract_tenant_binlog.py
+  - naming.py
+  - objectstorage.py
+  - prune_backups.py
+  - promotion_gate.py
+  - ship_binlogs.py
+
+# The restore and recovery programs. Nothing on the host runs them: a person runs
+# them in a restore, so the role delivers them and starts nothing.
+db1_backup_timers_recovery_files:
+  - check_toolchain_version.py
+  - restore_drained.py
+
+db1_backup_timers_units:
+  - branchleft-db-dump.service
+  - branchleft-db-dump.timer
+  - branchleft-db-prune.service
+  - branchleft-db-prune.timer
+  - branchleft-db-binlog-ship.service
+  - branchleft-db-binlog-ship.timer
+
+db1_backup_timers_timers:
+  - branchleft-db-dump.timer
+  - branchleft-db-prune.timer
+  - branchleft-db-binlog-ship.timer

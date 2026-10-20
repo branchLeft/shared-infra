@@ -1,0 +1,74 @@
+---
+# The directories first, each explicit. The runbook's own delivery is a tar
+# extract with --owner=root --group=root --numeric-owner under umask 0022, which
+# gives root-owned directories with mode 0755 and files with mode 0644; the role
+# states those modes rather than inheriting a umask.
+- name: Create the directory the backup programs live under
+  ansible.builtin.file:
+    path: '{{ db1_backup_timers_db_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the provision and recovery directories
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - '{{ db1_backup_timers_provision_dir }}'
+    - '{{ db1_backup_timers_recovery_dir }}'
+
+# Copied as they are in the source. The units run these with /usr/bin/python3, so
+# no program is executable and no program is rendered.
+- name: Deliver the provision programs and their modules
+  ansible.builtin.copy:
+    src: 'provision/{{ item }}'
+    dest: '{{ db1_backup_timers_provision_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ db1_backup_timers_provision_files }}'
+
+- name: Deliver the restore and recovery programs
+  ansible.builtin.copy:
+    src: 'recovery/{{ item }}'
+    dest: '{{ db1_backup_timers_recovery_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ db1_backup_timers_recovery_files }}'
+
+- name: Deliver the dump, prune and binlog-ship units
+  ansible.builtin.copy:
+    src: 'units/{{ item }}'
+    dest: '{{ db1_backup_timers_unit_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ db1_backup_timers_units }}'
+  notify: Reload systemd manager
+
+# Queued handlers run here, before the timers are enabled, so the enable below
+# starts each timer with the unit file as it now is on disk.
+- name: Load queued unit changes before the timers are enabled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no unit file, so on a fresh host there is nothing for systemd
+# to enable. The stat runs in check mode as it does in a real run.
+- name: Read back each timer unit file
+  ansible.builtin.stat:
+    path: '{{ db1_backup_timers_unit_dir }}/{{ item }}'
+  loop: '{{ db1_backup_timers_timers }}'
+  register: db1_backup_timers_timer_units
+
+- name: Enable and start each timer that is on disk
+  ansible.builtin.systemd_service:
+    name: '{{ item.item }}'
+    enabled: true
+    state: started
+  loop: '{{ db1_backup_timers_timer_units.results }}'
+  when: item.stat.exists
