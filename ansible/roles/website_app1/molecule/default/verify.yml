@@ -1,0 +1,102 @@
+---
+# What must be on the instance, checked against the role's own copy of the compose
+# file (files/compose.yml, read on the machine that runs the test). The
+# environment file's expected content is the sentinels from converge.yml. The
+# values are sentinels, so the file's text may be compared; the assertion prints
+# nothing about it.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  vars:
+    website_app1_verify_project: /opt/branchleft/website
+    website_app1_verify_env_dir: /etc/branchleft
+    website_app1_verify_env_file: /etc/branchleft/website.env
+    website_app1_verify_unit: branchleft-compose@website.service
+    website_app1_verify_expected_env: |
+      CONTACT_SMTP_HOST=sentinel-smtp.example.invalid
+      CONTACT_SMTP_PORT=2525
+      CONTACT_SMTP_USER=sentinel-user
+      CONTACT_SMTP_PASSWORD=SENTINEL_PASSWORD_NOT_A_SECRET
+  tasks:
+    - name: Read the project directory, the compose file and the environment file directory
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - '{{ website_app1_verify_project }}'
+        - '{{ website_app1_verify_project }}/compose.yml'
+        - '{{ website_app1_verify_env_dir }}'
+      register: website_app1_verify_paths
+
+    - name: Read the compose file's source in the role, on the machine that runs the test
+      ansible.builtin.stat:
+        path: '{{ playbook_dir }}/../../files/compose.yml'
+        checksum_algorithm: sha256
+      register: website_app1_verify_source
+      delegate_to: localhost
+
+    - name: Assert the directories are root-owned with mode 0755, and the compose file is byte for byte its source
+      ansible.builtin.assert:
+        that:
+          - website_app1_verify_paths.results[0].stat.isdir
+          - website_app1_verify_paths.results[0].stat.pw_name == 'root'
+          - website_app1_verify_paths.results[0].stat.mode == '0755'
+          - website_app1_verify_paths.results[2].stat.isdir
+          - website_app1_verify_paths.results[2].stat.pw_name == 'root'
+          - website_app1_verify_paths.results[2].stat.mode == '0755'
+          - website_app1_verify_paths.results[1].stat.isreg
+          - website_app1_verify_paths.results[1].stat.pw_name == 'root'
+          - website_app1_verify_paths.results[1].stat.gr_name == 'root'
+          - website_app1_verify_paths.results[1].stat.mode == '0644'
+          - website_app1_verify_paths.results[1].stat.checksum == website_app1_verify_source.stat.checksum
+        quiet: true
+        fail_msg: >-
+          The project directory or the environment directory is not root-owned with mode 0755, or the
+          compose file is missing, not root:root 0644, or differs from files/compose.yml.
+
+    - name: Read the environment file on the instance
+      ansible.builtin.slurp:
+        src: '{{ website_app1_verify_env_file }}'
+      register: website_app1_verify_env
+      no_log: true
+
+    - name: Read the environment file's stat
+      ansible.builtin.stat:
+        path: '{{ website_app1_verify_env_file }}'
+      register: website_app1_verify_env_stat
+
+    - name: Assert the environment file is root 0600 and holds exactly the four SMTP lines
+      ansible.builtin.assert:
+        that:
+          - website_app1_verify_env_stat.stat.pw_name == 'root'
+          - website_app1_verify_env_stat.stat.gr_name == 'root'
+          - website_app1_verify_env_stat.stat.mode == '0600'
+          - (website_app1_verify_env.content | b64decode) == website_app1_verify_expected_env
+        quiet: true
+        fail_msg: The environment file is not root 0600 with exactly the four SMTP lines.
+      no_log: true
+
+    - name: Assert no stamp was recorded, because no image was deployed
+      ansible.builtin.stat:
+        path: '{{ website_app1_verify_project }}/.website_app1_stamp'
+      register: website_app1_verify_stamp
+
+    - name: Assert no deploy was recorded
+      ansible.builtin.assert:
+        that:
+          - website_app1_verify_stamp.stat.exists == false
+        quiet: true
+        fail_msg: A stamp was recorded although the converge gave no image.
+
+    - name: Ask systemd for the stack's unit
+      ansible.builtin.systemd_service:
+        name: '{{ website_app1_verify_unit }}'
+      register: website_app1_verify_unit_state
+
+    - name: Assert the unit is enabled and was not started by the role
+      ansible.builtin.assert:
+        that:
+          - website_app1_verify_unit_state.status.UnitFileState == 'enabled'
+          - website_app1_verify_unit_state.status.ActiveState != 'active'
+        quiet: true
+        fail_msg: The stack's unit is not enabled, or the role started it.

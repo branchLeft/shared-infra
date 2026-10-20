@@ -1,0 +1,20 @@
+---
+# Constants of the stack, not inputs, so an inventory cannot loosen them.
+# An absolute path of plain characters.
+website_app1_path_pattern: '^/[A-Za-z0-9._/-]+\Z'
+
+# The one image this stack runs, pinned by digest. A tag alone can move.
+website_app1_image_pattern: '^ghcr\.io/branchleft/website@sha256:[0-9a-f]{64}\Z'
+
+# A value that goes on one line of the environment file: printable ASCII only.
+website_app1_value_pattern: '^[ -~]+\Z'
+
+# The host's program that pins the digest and restarts the stack. It is
+# installed by the host provisioning in shared-infra, not by this role.
+website_app1_deploy_program: /usr/local/sbin/branchleft-deploy
+
+# The shared Compose unit template and the instance this stack runs as.
+website_app1_unit: branchleft-compose@website.service
+
+# Where the record of the last deployed content is kept, in the project directory.
+website_app1_stamp_name: .website_app1_stamp
