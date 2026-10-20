@@ -4,6 +4,14 @@
 # egress_nat_item (vars/main.yml). It is the install-and-restart of
 # 05-configure-host-egress.sh and nat-gateway.sh, written once.
 
+# The two copy registers are read by the rescue, and both includes write them, so
+# each include starts them empty. Without this a rescue in the second include reads
+# the first include's register, whose kept copy the first include already removed.
+- name: Clear the copy registers left by the previous include
+  ansible.builtin.set_fact:
+    egress_nat_reconciler_copy: {}
+    egress_nat_unit_copy: {}
+
 # What was on the host before this run, so a failed run can tell a first
 # install (remove what it wrote) from an update (put the old files back).
 - name: Read whether the reconciler is already installed
@@ -22,9 +30,11 @@
     # root at every boot, so a group- or world-writable copy is a root shell for
     # whoever can write it. backup keeps the file it replaces next to it, and
     # only when the content differs, so a second run writes nothing.
+    # The source is the program in hetzner/provision, read in place: one home, no copy.
+    # role_path is ansible/roles/egress_nat, so three levels up is the repository root.
     - name: Install the reconciler of the unit {{ egress_nat_item.unit_name }}
       ansible.builtin.copy:
-        src: '{{ egress_nat_item.reconciler_src }}'
+        src: '{{ role_path }}/../../../hetzner/provision/{{ egress_nat_item.reconciler_src }}'
         dest: '{{ egress_nat_item.reconciler_dest }}'
         owner: root
         group: root
@@ -35,7 +45,7 @@
     # The reconciler is on disk before the unit that names it.
     - name: Install the unit {{ egress_nat_item.unit_name }}
       ansible.builtin.copy:
-        src: '{{ egress_nat_item.unit_src }}'
+        src: '{{ role_path }}/../../../hetzner/provision/{{ egress_nat_item.unit_src }}'
         dest: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.unit_name }}'
         owner: root
         group: root

@@ -1,6 +1,6 @@
 ---
 # The sources of the four installed files are read straight from the repository
-# (not through the role's links), so a copy in the role that differs from its
+# (not through the role's path to them), so a copy in the role that differs from its
 # source fails here. The expected owner, group and mode are written out once,
 # in egress_nat_verify_files, and are the ones the shell scripts used (install -m 0755 for
 # the reconcilers and -m 0644 for the units, both -o root -g root).

@@ -14,7 +14,7 @@ ROLE = Path(__file__).resolve().parents[2]
 REPO = ROLE.parents[2]
 PROVISION = REPO / "hetzner" / "provision"
 
-# The four files the role delivers, by their name in files/ and in hetzner/provision.
+# The four files the role delivers, by their name in hetzner/provision.
 SOURCES = (
     "branchleft_host_egress.sh",
     "branchleft_nat.sh",
@@ -91,18 +91,23 @@ def position(tasks: list[dict[str, object]], start: str) -> int:
 
 
 class OneHomeTests(unittest.TestCase):
-    """Every delivered file is a link to the file in hetzner/provision, never a copy."""
+    """Every delivered file is read from hetzner/provision, never copied into the role."""
 
-    def test_each_source_is_a_link_to_its_original(self) -> None:
+    def test_the_role_holds_no_copy_of_any_source(self) -> None:
+        self.assertFalse((ROLE / "files").exists(), "the role must not keep a files/ directory")
+
+    def test_each_copy_reads_its_source_from_hetzner_provision(self) -> None:
+        tasks, block, _ = reconciler_tasks()
+        for start in ("Install the reconciler", "Install the unit"):
+            src = str(as_dict(named(block, start)["ansible.builtin.copy"])["src"])
+            with self.subTest(task=start):
+                self.assertTrue(src.startswith("{{ role_path }}/../../../hetzner/provision/"), src)
+
+    def test_the_role_path_reaches_the_repository_provision_directory(self) -> None:
+        self.assertEqual((ROLE / "../../../hetzner/provision").resolve(), PROVISION.resolve())
         for name in SOURCES:
-            path = ROLE / "files" / name
             with self.subTest(name=name):
-                self.assertTrue(path.is_symlink(), f"files/{name} must be a link, not a copy")
-                self.assertEqual(path.resolve(), (PROVISION / name).resolve())
-
-    def test_files_holds_nothing_else(self) -> None:
-        present = sorted(path.name for path in (ROLE / "files").iterdir())
-        self.assertEqual(present, sorted(SOURCES))
+                self.assertTrue((PROVISION / name).is_file(), f"{name} must exist in hetzner/provision")
 
     def test_vars_name_only_files_the_role_holds(self) -> None:
         constants = as_dict(load("vars/main.yml"))
@@ -119,7 +124,7 @@ class UnitContractTests(unittest.TestCase):
         constants = as_dict(load("vars/main.yml"))
         for key in ("egress_nat_host_egress", "egress_nat_nat_gateway"):
             item = as_dict(constants[key])
-            unit = (ROLE / "files" / str(item["unit_src"])).read_text(encoding="utf-8")
+            unit = (PROVISION / str(item["unit_src"])).read_text(encoding="utf-8")
             with self.subTest(unit=item["unit_name"]):
                 self.assertIn(f"ExecStart={item['reconciler_dest']}\n", unit)
 
@@ -207,6 +212,13 @@ class InstallTests(unittest.TestCase):
 
 class GuardTests(unittest.TestCase):
     """A restart that fails puts the previous files back, runs them, and fails the role."""
+
+    def test_each_include_clears_the_copy_registers_first(self) -> None:
+        tasks = [as_dict(task) for task in as_list(load("tasks/_reconciler.yml"))]
+        clear = named(tasks, "Clear the copy registers")
+        self.assertEqual(as_dict(clear["ansible.builtin.set_fact"]),
+                         {"egress_nat_reconciler_copy": {}, "egress_nat_unit_copy": {}})
+        self.assertEqual(tasks[0], clear)
 
     def test_the_previous_state_is_read_before_the_guard(self) -> None:
         tasks, _, _ = reconciler_tasks()

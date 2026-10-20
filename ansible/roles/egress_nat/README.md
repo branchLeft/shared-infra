@@ -24,7 +24,7 @@ It does what two shell scripts did, in the same order:
 
 The two reconcilers themselves (`branchleft_host_egress.sh` and `branchleft_nat.sh`)
 are programs that stay as code. The role installs them and rewrites none: they are
-the files in `hetzner/provision`, and `files/` holds links to them (below).
+the files in `hetzner/provision`, and the copy tasks read them from there in place (below).
 
 It does not:
 
@@ -81,9 +81,9 @@ The role leaves facts after a failed guard, which a caller or a test reads:
 - No collection beyond `ansible.builtin`.
 - Target: Debian 13 (the release every host runs and the test runs on) with systemd
   and Python 3. The role runs as root.
-- The files come from this repository: the role reaches them through links in
-  `files/`, so it must be run from a checkout of the whole repository, which is what
-  the gated pull delivers (ANS-17).
+- The files come from this repository: the copy tasks read them from
+  `hetzner/provision` through `role_path`, so the role must be run from a checkout of the
+  whole repository, which is what the gated pull delivers (ANS-17).
 - On the host, before the role runs: `resolvconf` (host egress) and `iptables` (NAT).
   On the gateway host, the reconciler also needs the host to hold a public address on
   the interface of its default route and an address in the estate's private subnet; it
@@ -112,10 +112,11 @@ rule and two forwarding rules. The role does not touch those.
 
 ### One home for every file
 
-The role holds no copy of the files it delivers. Each file in `files/` is a link, relative,
-to the same-named file in `hetzner/provision`, so a change to a reconciler or a unit in its
-own directory is what the next apply delivers, and the role cannot drift from it. The unit
-tests fail if a file in `files/` stops being such a link.
+The role holds no copy of the files it delivers. Each copy task's `src` is the same-named
+file in `hetzner/provision`, built from `role_path` (`{{ role_path }}/../../../hetzner/provision/`),
+so a change to a reconciler or a unit in its own directory is what the next apply delivers,
+and the role cannot drift from it. The unit tests fail if the role keeps a `files/` directory
+or a copy task reads from anywhere else.
 
 ## The revert guard
 
