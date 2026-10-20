@@ -1,0 +1,21 @@
+---
+# One apply of both roles, started by verify.yml as a separate ansible-playbook
+# so that everything the run prints can be captured and searched for a secret.
+# Molecule's default sequence does not run it. The roles are named by path for
+# the reason converge.yml gives, and the includes carry no no_log: the roles'
+# own tasks must be the ones that keep the values out of the output.
+- name: Apply both roles, as the play of a host does
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - '{{ playbook_dir }}/../../../backup_worker/molecule/default/vars/test.yml'
+    - '{{ playbook_dir }}/vars/test.yml'
+  tasks:
+    - name: Apply backup_worker
+      ansible.builtin.include_role:
+        name: '{{ playbook_dir }}/../../../backup_worker' # noqa: role-name[path]
+        public: true
+
+    - name: Apply backup_restore
+      ansible.builtin.include_role:
+        name: '{{ playbook_dir }}/../..' # noqa: role-name[path]

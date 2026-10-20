@@ -1,0 +1,6 @@
+[Unit]
+Description=TEST PLACEHOLDER state copy timer
+[Timer]
+OnCalendar=*-*-* 03:40:00
+[Install]
+WantedBy=timers.target

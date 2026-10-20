@@ -1,0 +1,26 @@
+---
+# The two roles, in the order the host's play applies them. backup_worker's
+# variables reach backup_restore the way they do in a play's roles: list;
+# include_role with public: true is the same exposure in a task list. The test
+# variables of backup_worker are loaded from its own scenario, so the placeholder
+# release has one home. Every case that changes state and restores it is in
+# verify.yml, which Molecule does not measure for idempotence.
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - '{{ playbook_dir }}/../../../backup_worker/molecule/default/vars/test.yml'
+    - vars/test.yml
+  tasks:
+    # The includes carry no no_log: the roles' own tasks must be the ones that
+    # keep the values out of the log, and a keyword here would hide a missing one.
+    # The role is named by its path: Molecule puts only the role under test on
+    # the roles path. One suppression, for the path.
+    - name: Apply backup_worker
+      ansible.builtin.include_role:
+        name: '{{ playbook_dir }}/../../../backup_worker' # noqa: role-name[path]
+        public: true
+
+    - name: Apply backup_restore
+      ansible.builtin.include_role:
+        name: branchleft.backup_restore

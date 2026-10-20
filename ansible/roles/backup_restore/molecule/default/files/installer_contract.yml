@@ -1,0 +1,79 @@
+---
+# A recorded copy of what the ghost-platform installers and programs require, as
+# they are at the commit below. The role copies these lists into its own
+# variables, so this file is the second copy that holds the first to account
+# (verify.yml, "The role matches the installers it ports"). It was written by
+# reading the files at that commit:
+#
+#   git show <commit>:control/provision/install_restore_drill.py   (ENV_FILE, REQUIRED_RELEASE_FILES)
+#   git show <commit>:control/provision/install_state_copy.py      (Paths.env_file, REQUIRED_RELEASE_FILES, REQUIRED_ENV_NAMES)
+#   git show <commit>:infra/provisioning/scripts/restore_drill.py  (copies_from_env, images_from_env)
+#   git show <commit>:<path> | shasum -a 256                        (each sha256 below)
+#
+# To move to a new commit, read the files at it again, change this file and the
+# role's lists and pins together, and let the scenario compare them. Nothing
+# here is fetched at test time, so the scenario cannot see an installer that
+# changed after this commit; that is the README's named limit.
+installer_contract_commit: 5e52f78427cab104438057164e4baa16b329875c
+
+# The sha256 of each program the role stages and the installers' own files; the
+# role's pin for each (backup_worker_release_files) must equal it.
+installer_contract_sha256:
+  control/provision/install_backup_worker.py: 272a223cba74530a2defa6f3f512f4cdc175b9483ec72263e70db95cf1fbe30b
+  control/provision/install_restore_drill.py: 51cdea6bfc3524e6359c523948441c00749a359cded99ef2643e37658cbb80cc
+  control/provision/install_state_copy.py: fdf301377f51b60107154ae389f3ddea41c426f2b9f6c00a8b6f097f65e8d6c7
+  control/provision/nextcloud_backup.py: dd451d0652606e5b229dbe6ade7271d5c1a88a7eea12c226e04fed82a8010132
+  infra/provisioning/scripts/restore_drill.py: 0b598b2be1edfbe44b00a477f27242045582ebe3f958aa970aa07d349040732b
+  infra/provisioning/scripts/state_copy.py: 0fb1031a373760d0bb81c32f02adbe8be286826f145e14a642a859a1359b8cd7
+  db/recovery/restore_drained.py: cfd6a02d990359596056dea785fc4881001c20282ba55a77cbfb0c88be97c1d0
+  control/provision/branchleft-restore-drill.service: 9482c19f09dd69505ac15c3aee0cd851826b8a20d54f313ad5501fb961896abc
+  control/provision/branchleft-restore-drill.timer: 8b01aa0f6969b2598bdf6764e4e1d7184e972b24d74f0f3950207329207ca4bf
+  control/provision/branchleft-state-copy.service: fb1d8581605fb6d6a2e7256d0fe55ed22328b1d25df81d1269c884da1b2c9558
+  control/provision/branchleft-state-copy.timer: b103be112e14e3ac69c0565e2e23fd7c2a652d44e56322e3eeea1c67cfcafa0a
+
+installer_contract_env_files:
+  restore_drill: /etc/branchleft/restore-drill.env
+  state_copy: /etc/branchleft/state-copy.env
+
+installer_contract_restore_drill_required_files:
+  - infra/provisioning/scripts/restore_drill.py
+  - db/recovery/restore_drained.py
+  - control/provision/branchleft-restore-drill.service
+  - control/provision/branchleft-restore-drill.timer
+
+installer_contract_state_copy_required_files:
+  - infra/provisioning/scripts/state_copy.py
+  - infra/provisioning/scripts/media_backup_restore.py
+  - infra/provisioning/scripts/shared_objectstorage.py
+  - db/provision/objectstorage.py
+  - control/provision/branchleft-state-copy.service
+  - control/provision/branchleft-state-copy.timer
+
+installer_contract_state_copy_env_names:
+  - STATE_COPY_RECIPIENT
+  - STATE_COPY_DEST_BUCKET
+  - STATE_COPY_DEST_ENDPOINT
+  - STATE_COPY_DEST_REGION
+  - STATE_COPY_DEST_ACCESS_KEY_ID
+  - STATE_COPY_DEST_SECRET_ACCESS_KEY
+  - STATE_COPY_ESTATE_BUCKET
+  - STATE_COPY_ESTATE_ENDPOINT
+  - STATE_COPY_ESTATE_REGION
+  - STATE_COPY_ESTATE_ACCESS_KEY_ID
+  - STATE_COPY_ESTATE_SECRET_ACCESS_KEY
+  - STATE_COPY_TENANT_BUCKET
+  - STATE_COPY_TENANT_ENDPOINT
+  - STATE_COPY_TENANT_REGION
+  - STATE_COPY_TENANT_ACCESS_KEY_ID
+  - STATE_COPY_TENANT_SECRET_ACCESS_KEY
+
+installer_contract_restore_drill_env_names:
+  - BACKUP_DRILL_COPY_PRIMARY_BUCKET
+  - BACKUP_DRILL_COPY_PRIMARY_ENDPOINT
+  - BACKUP_DRILL_COPY_PRIMARY_REGION
+  - BACKUP_DRILL_COPY_PRIMARY_ACCESS_KEY_ID
+  - BACKUP_DRILL_COPY_PRIMARY_SECRET_ACCESS_KEY
+  - BACKUP_DRILL_RECOVERY_IMAGE
+  - BACKUP_DRILL_MYSQL_IMAGE
+  - BACKUP_DRILL_GHOST_IMAGE
+  - BACKUP_DRILL_SIDECAR_IMAGE
