@@ -10,6 +10,13 @@ name: Ansible
 # changed, and the rest run only when they did. Where nothing changed the job
 # passes after a checkout and one diff.
 #
+# Three kinds of job. `discover` lists the roles and patterns and the fresh
+# role skeleton from the repository tree. `lint` runs the static checks once.
+# `shard` runs the harness once per entry `discover` listed, so a new pattern
+# needs no edit here. The gate job, named `Lint and test the Ansible roles`,
+# is the one check the ruleset requires; it needs every other job and fails
+# unless each of them succeeded.
+#
 # The tools install from ansible/requirements.txt at exact versions and the
 # collections from ansible/requirements.yml at exact versions (ANS-4).
 # DOCKER_HOST is deliberately left unset (ANS-15).
@@ -23,11 +30,13 @@ permissions:
   contents: read
 
 jobs:
-  roles:
-    name: Lint and test the Ansible roles
-    # Pinned until the harness is verified on the next Ubuntu LTS image.
+  discover:
+    name: Discover the Ansible shards
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
+    outputs:
+      ansible: ${{ steps.changes.outputs.ansible }}
+      matrix: ${{ steps.shards.outputs.matrix }}
     steps:
       # Full history, so the base commit of the diff below exists on the runner.
       - name: Checkout
@@ -65,19 +74,57 @@ jobs:
             echo "ansible=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Every directory directly under ansible/roles or ansible/patterns is one
+      # shard, whether or not it holds a molecule/ directory: a directory with no
+      # scenario fails its own shard at the scenario-limits step, so it cannot
+      # pass untested. The fresh-role skeleton is one more shard. An empty list
+      # fails the step: an empty matrix would make the shard job skip silently,
+      # and the gate must catch that rather than pass.
+      - name: List the shards from the repository tree
+        id: shards
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=()
+          for dir in ansible/roles/*/ ansible/patterns/*/; do
+            found+=("${dir%/}")
+          done
+          if [ "${#found[@]}" -eq 0 ]; then
+            echo "No role or pattern with a molecule/ directory was found, so nothing would be tested."
+            exit 1
+          fi
+          echo "The harness runs over ${#found[@]} role(s) and pattern(s), and the fresh-role skeleton:"
+          printf '  %s\n' "${found[@]}"
+          matrix=$(printf '%s\n' "${found[@]}" | jq -R -s -c '
+            split("\n") | map(select(length > 0))
+            | map({name: ., path: ., kind: "role"})
+            + [{name: "fresh role from the skeleton", path: "ansible/role_skeleton", kind: "skeleton"}]
+            | {include: .}')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  lint:
+    name: Lint the Ansible inputs
+    needs: [discover]
+    if: needs.discover.outputs.ansible == 'true'
+    # Pinned until the harness is verified on the next Ubuntu LTS image.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Create the tool environment
-        if: steps.changes.outputs.ansible == 'true'
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
 
       - name: Install the pinned tools
-        if: steps.changes.outputs.ansible == 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv -r ansible/requirements.txt'
 
       # The same install, command and flags as the harness runs before Molecule
       # (ansible/harness/run_harness.py), so ansible-lint resolves a pattern's
       # non-builtin modules. Vendoring the collections is decided elsewhere.
       - name: Install the pinned collections
-        if: steps.changes.outputs.ansible == 'true'
         run: |
           set -euo pipefail
           collections="$RUNNER_TEMP/ansible-collections"
@@ -85,57 +132,112 @@ jobs:
           echo "ANSIBLE_COLLECTIONS_PATH=$collections" >> "$GITHUB_ENV"
 
       - name: yamllint every YAML file under ansible/
-        if: steps.changes.outputs.ansible == 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/yamllint" --strict -c .yamllint ansible'
 
       - name: ansible-lint at the production profile
-        if: steps.changes.outputs.ansible == 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/ansible-lint" --strict ansible'
 
       - name: Type-check the harness
-        if: steps.changes.outputs.ansible == 'true'
         working-directory: ansible
         run: '"$RUNNER_TEMP/ansible-venv/bin/mypy" harness'
 
       - name: Lint the harness
-        if: steps.changes.outputs.ansible == 'true'
         working-directory: ansible
         run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" check harness'
 
       - name: Check the harness formatting
-        if: steps.changes.outputs.ansible == 'true'
         working-directory: ansible
         run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" format --check harness'
 
       - name: Test the harness
-        if: steps.changes.outputs.ansible == 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/harness -p "test_*.py"'
 
-      # Roles and patterns are both roles. A directory with no entries expands
-      # to nothing (nullglob) rather than to a literal pattern, and a total of
-      # zero fails the step, so the job cannot pass having tested nothing.
-      - name: Run the harness over every role and pattern
-        if: steps.changes.outputs.ansible == 'true'
+  shard:
+    name: 'Harness: ${{ matrix.name }}'
+    needs: [discover]
+    if: needs.discover.outputs.ansible == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    # Pinned until the harness is verified on the next Ubuntu LTS image.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Create the tool environment
+        run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
+
+      - name: Install the pinned tools
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv -r ansible/requirements.txt'
+
+      # The same install, command and flags as the harness runs before Molecule
+      # (ansible/harness/run_harness.py), so ansible-lint resolves a pattern's
+      # non-builtin modules. Vendoring the collections is decided elsewhere.
+      - name: Install the pinned collections
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          roles=(ansible/roles/*/ ansible/patterns/*/)
-          if [ "${#roles[@]}" -eq 0 ]; then
-            echo "No role or pattern was found under ansible/roles or ansible/patterns, so nothing would be tested."
-            exit 1
-          fi
-          roles=("${roles[@]%/}")
-          echo "The harness runs over ${#roles[@]} role(s):"
-          printf '  %s\n' "${roles[@]}"
-          "$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py "${roles[@]}"
+          collections="$RUNNER_TEMP/ansible-collections"
+          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" collection install -r ansible/requirements.yml -p "$collections"
+          echo "ANSIBLE_COLLECTIONS_PATH=$collections" >> "$GITHUB_ENV"
+
+      - name: Run the harness over this role or pattern
+        if: matrix.kind == 'role'
+        env:
+          SHARD_PATH: ${{ matrix.path }}
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py "$SHARD_PATH"'
 
       - name: Create a role from the skeleton
-        if: steps.changes.outputs.ansible == 'true'
+        if: matrix.kind == 'skeleton'
         run: >-
           "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" role init
           --role-skeleton ansible/role_skeleton
           --init-path "$RUNNER_TEMP/skeleton-probe" skeleton_probe
 
       - name: Run the harness over the new role with no edits
-        if: steps.changes.outputs.ansible == 'true'
+        if: matrix.kind == 'skeleton'
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py "$RUNNER_TEMP/skeleton-probe/skeleton_probe"'
+
+  # The required check. Its name is fixed by ruleset 20952655, which requires
+  # exactly `Lint and test the Ansible roles`; a matrix job would rename its
+  # checks, so this one job stays. It runs even when a needed job failed or was
+  # skipped, and it fails unless each needed job succeeded. When discover found
+  # no Ansible input change, the other two jobs are skipped on purpose and the
+  # gate passes.
+  roles:
+    name: Lint and test the Ansible roles
+    needs: [discover, lint, shard]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to succeed
+        env:
+          DISCOVER: ${{ needs.discover.result }}
+          ANSIBLE: ${{ needs.discover.outputs.ansible }}
+          LINT: ${{ needs.lint.result }}
+          SHARD: ${{ needs.shard.result }}
+        run: |
+          set -euo pipefail
+          if [ "$DISCOVER" != "success" ]; then
+            echo "The discover job reported: $DISCOVER"
+            exit 1
+          fi
+          if [ "$ANSIBLE" = "false" ]; then
+            echo "No Ansible input changed, so the lint and shard jobs were not needed."
+            exit 0
+          fi
+          if [ "$ANSIBLE" != "true" ]; then
+            echo "The discover job did not report whether the Ansible inputs changed: '$ANSIBLE'"
+            exit 1
+          fi
+          if [ "$LINT" != "success" ] || [ "$SHARD" != "success" ]; then
+            echo "The lint job reported: $LINT"
+            echo "The shard job reported: $SHARD"
+            echo "Every job must report success."
+            exit 1
+          fi
+          echo "Every job succeeded: discover, lint and every shard."

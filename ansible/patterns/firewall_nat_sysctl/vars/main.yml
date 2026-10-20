@@ -1,0 +1,17 @@
+---
+# Fixed by the pattern, not by the consumer: the file the distribution's
+# nftables unit loads at boot. The unit reads this path, so the role writes it
+# there rather than to a path the consumer picks.
+firewall_nat_sysctl_boot_file: /etc/nftables.conf
+
+# The line break the listing of the two tables is joined with. It is written here
+# in a quoted scalar so that it is a real newline; an escape written inside a
+# template expression in a folded scalar is not turned into one.
+firewall_nat_sysctl_newline: "\n"
+
+# The shapes the string inputs must have. Each ends in \Z, not $: $ also matches
+# just before a trailing newline, \Z matches only at the end of the string, so a
+# value carrying a newline cannot be read as a plain value.
+firewall_nat_sysctl_source_pattern: '^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?\Z'
+firewall_nat_sysctl_interface_pattern: '^[A-Za-z0-9_.-]+\Z'
+firewall_nat_sysctl_table_pattern: '^[A-Za-z_][A-Za-z0-9_]*\Z'

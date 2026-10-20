@@ -1,0 +1,51 @@
+---
+# Applies the role once and requires what it reports and what it did to the host.
+# Requires step_secrets (the secrets to apply), step_expected_changed (the paths
+# the role must report as changed), step_notified (whether the handler must have
+# run), step_changed_names (the files whose inode must be new: the role replaces
+# a file by rename, so a rewritten file has a new inode and an untouched one
+# keeps its own) and step_file_value, step_env_value, step_host_value (the values
+# the host must hold afterwards).
+- name: Read the inode of each file before the run
+  ansible.builtin.include_tasks: read_inodes.yml
+
+- name: Keep the inodes from before the run
+  ansible.builtin.set_fact:
+    step_inodes_before: '{{ read_inodes_result }}'
+
+- name: Apply the role
+  ansible.builtin.include_tasks: apply.yml
+  vars:
+    apply_secrets: '{{ step_secrets }}'
+
+- name: Assert the role reported the files that changed, and nothing else
+  ansible.builtin.assert:
+    that:
+      - secrets_and_no_log_changed | sort == step_expected_changed | sort
+      - secrets_and_no_log_notified == step_notified
+    fail_msg: >-
+      The role reported {{ secrets_and_no_log_changed | sort }} and notified {{ secrets_and_no_log_notified }};
+      expected {{ step_expected_changed | sort }} and {{ step_notified }}.
+    quiet: true
+
+- name: Read the inode of each file after the run
+  ansible.builtin.include_tasks: read_inodes.yml
+
+# A file that changed was replaced by rename, so it has a new inode and was never
+# written in place; a file that did not change was not touched.
+- name: Assert exactly the changed files were replaced
+  ansible.builtin.assert:
+    that:
+      - (step_inodes_before[item] != read_inodes_result[item]) == (item in step_changed_names)
+    fail_msg: >-
+      The file {{ item }} was {{ "replaced" if step_inodes_before[item] != read_inodes_result[item] else "left alone" }};
+      expected {{ "replaced" if item in step_changed_names else "left alone" }}.
+    quiet: true
+  loop: '{{ verify_file_names }}'
+
+- name: Assert the host holds the values the run delivered
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_file_value: '{{ step_file_value }}'
+    state_env_value: '{{ step_env_value }}'
+    state_host_value: '{{ step_host_value }}'

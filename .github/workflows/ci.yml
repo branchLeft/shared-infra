@@ -816,6 +816,20 @@ jobs:
   # satisfy a branch-protection gate; it only decides whether an apply gets
   # queued at all.
   #
+  # A second, finer skip: each plan job that ran also outputs `has_changes`,
+  # and its apply job's `if:` skips only on an explicit 'false'. A plan that
+  # changes nothing, stack outputs included, skips its apply, so no approval
+  # is asked for it and the run graph shows the apply skipped; the plan job's
+  # summary says so on its first line. An unset output does not skip, and a
+  # plan job that was skipped or failed still skips its apply (the implicit
+  # success() of an `if:` with no status function). `scripts/plan-has-changes.py`
+  # computes it and fails closed: only a plan that parsed and is wholly `same`
+  # is `false`. It reads preview.json and a saved update plan (a second
+  # preview, in its own step), because preview.json cannot show an
+  # outputs-only change. The environments, their reviewers and the
+  # ungated-environment refusal are untouched: only when the gate is asked
+  # changes.
+  #
   # A wrong filter — a path that feeds a stack's plan but isn't listed here —
   # produces a skip with no red anywhere, which would be worse than the
   # unread-approval habit this exists to fix. The lists below are traced
@@ -836,7 +850,8 @@ jobs:
   #     custom deployment protection rule of the reviewer App (integration
   #     id 5090756).
   #   - A newer push run cancels older runs of this workflow still `waiting`
-  #     for approval, from each plan job (first step). No `concurrency`
+  #     for approval, from each plan job (the step after its checkout, which
+  #     the script it runs needs on disk). No `concurrency`
   #     group does this job: a run paused for approval counts as in progress,
   #     so a workflow-level group would queue the newer run behind it (and
   #     cancel-in-progress would also cancel an apply that had started).
@@ -926,7 +941,13 @@ jobs:
     # this environment reads them empty.
     environment: mail-plan
 
-    # `actions: write` is only for the first step, which cancels older runs
+    # Whether this plan changes anything, from the `noop` step below. The apply
+    # job starts, and so asks its environment for approval, only when this is
+    # the string 'true'.
+    outputs:
+      has_changes: ${{ steps.noop.outputs.has_changes }}
+
+    # `actions: write` is only for the cancel step, which cancels older runs
     # still waiting for approval; contents and packages repeat the workflow
     # default because a job-level block replaces it.
     permissions:
@@ -960,6 +981,11 @@ jobs:
       # a job in progress or an apply that started, and never a run paused on
       # a stack this push did not plan (that change would then never apply).
       # Hygiene, not a gate: a failure here must not block the plan.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Cancel older runs that are still waiting for approval
         continue-on-error: true
         working-directory: .
@@ -974,32 +1000,20 @@ jobs:
             jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
               '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
           for run in ${older}; do
-            verdict=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
-              jq -r --arg m "${PLANS_MAIL}" --arg n "${PLANS_NETWORK}" --arg e "${PLANS_ESTATE}" '
-                def planned:
-                  if startswith("Apply (mail,") then $m == "true"
-                  elif startswith("Apply (hetzner network,") then $n == "true"
-                  elif startswith("Apply (hetzner estate,") then $e == "true"
-                  else false end;
-                [.jobs[] | select(.name | startswith("Apply ("))] as $applies
-                | if ($applies | length) == 0 then "keep"
-                  elif ([.jobs[] | select(.status == "in_progress")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "completed" and .conclusion != "skipped")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status != "completed" and ((.name | planned) | not))] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "waiting")] | length) == 0 then "keep"
-                  else "cancel" end')
+            decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              python3 scripts/cancel-superseded-waiting.py \
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+              decision="keep: the jobs of run ${run} could not be read"
+            verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
               gh api --method POST "${api}/runs/${run}/cancel" --silent
-              echo "cancelled superseded run ${run}"
+              echo "cancelled superseded run ${run}: ${decision#*: }"
+              echo "- Cancelled run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "kept run ${run}"
+              echo "kept run ${run}: ${decision#*: }"
+              echo "- Kept run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1046,6 +1060,17 @@ jobs:
       - name: Preview the plan
         run: pulumi preview --stack production --json > preview.json
 
+      # The update plan is saved by a second preview, apart from the one above,
+      # so the preview.json the delete guard reads and the owner reviews is
+      # produced exactly as before. Best effort: a failure leaves no plan file,
+      # which the `noop` step reads as "changes". Only its stdout goes to
+      # /dev/null; stderr is not redirected, and the step above logs the same
+      # stderr. The plan file can hold resource inputs and secrets-provider
+      # ciphertext, and is never uploaded, printed or summarised.
+      - name: Save the update plan for the no-change check
+        continue-on-error: true
+        run: pulumi preview --stack production --save-plan preview-plan.json > /dev/null
+
       - name: Refuse a plan that destroys the mail host
         run: |
           python3 ../scripts/assert-no-hetzner-deletes.py --self-test
@@ -1056,6 +1081,14 @@ jobs:
             python3 -m json.tool preview.json
             exit 1
           fi
+
+      # Fails closed: `has_changes` is `false` only for a plan that parsed and
+      # changes nothing, outputs included; plan-has-changes.md says what else
+      # counts. It also puts the verdict on the first line of the job summary.
+      - name: Decide whether the plan changes anything
+        id: noop
+        if: always()
+        run: python3 ../scripts/plan-has-changes.py preview.json preview-plan.json --github-output "$GITHUB_OUTPUT" --github-summary "$GITHUB_STEP_SUMMARY"
 
       - name: Write the plan to the job summary
         if: always()
@@ -1078,7 +1111,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [mail-plan]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # A plan that changes nothing skips this job, so its environment is never
+    # asked for an approval. Only the string 'false' skips it: an unset output
+    # asks, and a plan the decision step could not understand outputs 'true'.
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.mail-plan.outputs.has_changes != 'false'
 
     # The mail apply has an environment of its own. An approval releases every
     # job waiting in one environment for the run, so sharing `production` with
@@ -1215,6 +1253,10 @@ jobs:
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.changes.outputs.hetzner_network == 'true'
 
+    # See mail-plan: the apply job is skipped only when this is the string 'false'.
+    outputs:
+      has_changes: ${{ steps.noop.outputs.has_changes }}
+
     # See mail-plan: `actions: write` is only for the cancel step.
     permissions:
       contents: read
@@ -1244,6 +1286,11 @@ jobs:
       # a job in progress or an apply that started, and never a run paused on
       # a stack this push did not plan (that change would then never apply).
       # Hygiene, not a gate: a failure here must not block the plan.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Cancel older runs that are still waiting for approval
         continue-on-error: true
         working-directory: .
@@ -1258,32 +1305,20 @@ jobs:
             jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
               '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
           for run in ${older}; do
-            verdict=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
-              jq -r --arg m "${PLANS_MAIL}" --arg n "${PLANS_NETWORK}" --arg e "${PLANS_ESTATE}" '
-                def planned:
-                  if startswith("Apply (mail,") then $m == "true"
-                  elif startswith("Apply (hetzner network,") then $n == "true"
-                  elif startswith("Apply (hetzner estate,") then $e == "true"
-                  else false end;
-                [.jobs[] | select(.name | startswith("Apply ("))] as $applies
-                | if ($applies | length) == 0 then "keep"
-                  elif ([.jobs[] | select(.status == "in_progress")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "completed" and .conclusion != "skipped")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status != "completed" and ((.name | planned) | not))] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "waiting")] | length) == 0 then "keep"
-                  else "cancel" end')
+            decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              python3 scripts/cancel-superseded-waiting.py \
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+              decision="keep: the jobs of run ${run} could not be read"
+            verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
               gh api --method POST "${api}/runs/${run}/cancel" --silent
-              echo "cancelled superseded run ${run}"
+              echo "cancelled superseded run ${run}: ${decision#*: }"
+              echo "- Cancelled run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "kept run ${run}"
+              echo "kept run ${run}: ${decision#*: }"
+              echo "- Kept run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1321,6 +1356,11 @@ jobs:
       - name: Preview the plan
         run: pulumi preview --stack production --json > preview.json
 
+      # See mail-plan: a second preview saves the update plan, best effort.
+      - name: Save the update plan for the no-change check
+        continue-on-error: true
+        run: pulumi preview --stack production --save-plan preview-plan.json > /dev/null
+
       - name: Refuse a plan that destroys the network
         run: |
           python3 ../scripts/assert-no-hetzner-deletes.py --self-test
@@ -1331,6 +1371,12 @@ jobs:
             python3 -m json.tool preview.json
             exit 1
           fi
+
+      # See mail-plan: fails closed, and writes the summary's first line.
+      - name: Decide whether the plan changes anything
+        id: noop
+        if: always()
+        run: python3 ../scripts/plan-has-changes.py preview.json preview-plan.json --github-output "$GITHUB_OUTPUT" --github-summary "$GITHUB_STEP_SUMMARY"
 
       - name: Write the plan to the job summary
         if: always()
@@ -1353,7 +1399,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [hetzner-network-plan]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # See mail-apply: a no-op plan skips this job before its environment is asked.
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.hetzner-network-plan.outputs.has_changes != 'false'
 
     # The Hetzner applies share `production`; the mail apply is in
     # `production-mail`, so an approval here cannot release it.
@@ -1514,6 +1563,10 @@ jobs:
       needs.changes.outputs.hetzner_estate == 'true' &&
       !failure() && !cancelled()
 
+    # See mail-plan: the apply job is skipped only when this is the string 'false'.
+    outputs:
+      has_changes: ${{ steps.noop.outputs.has_changes }}
+
     # See mail-plan: `actions: write` is only for the cancel step.
     permissions:
       contents: read
@@ -1538,6 +1591,11 @@ jobs:
       # a job in progress or an apply that started, and never a run paused on
       # a stack this push did not plan (that change would then never apply).
       # Hygiene, not a gate: a failure here must not block the plan.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Cancel older runs that are still waiting for approval
         continue-on-error: true
         working-directory: .
@@ -1552,32 +1610,20 @@ jobs:
             jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
               '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
           for run in ${older}; do
-            verdict=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
-              jq -r --arg m "${PLANS_MAIL}" --arg n "${PLANS_NETWORK}" --arg e "${PLANS_ESTATE}" '
-                def planned:
-                  if startswith("Apply (mail,") then $m == "true"
-                  elif startswith("Apply (hetzner network,") then $n == "true"
-                  elif startswith("Apply (hetzner estate,") then $e == "true"
-                  else false end;
-                [.jobs[] | select(.name | startswith("Apply ("))] as $applies
-                | if ($applies | length) == 0 then "keep"
-                  elif ([.jobs[] | select(.status == "in_progress")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "completed" and .conclusion != "skipped")] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status != "completed" and ((.name | planned) | not))] | length) > 0 then "keep"
-                  elif ([$applies[] | select(.status == "waiting")] | length) == 0 then "keep"
-                  else "cancel" end')
+            decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              python3 scripts/cancel-superseded-waiting.py \
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+              decision="keep: the jobs of run ${run} could not be read"
+            verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
               gh api --method POST "${api}/runs/${run}/cancel" --silent
-              echo "cancelled superseded run ${run}"
+              echo "cancelled superseded run ${run}: ${decision#*: }"
+              echo "- Cancelled run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "kept run ${run}"
+              echo "kept run ${run}: ${decision#*: }"
+              echo "- Kept run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1619,6 +1665,11 @@ jobs:
       - name: Preview the plan
         run: pulumi preview --stack production --json > preview.json
 
+      # See mail-plan: a second preview saves the update plan, best effort.
+      - name: Save the update plan for the no-change check
+        continue-on-error: true
+        run: pulumi preview --stack production --save-plan preview-plan.json > /dev/null
+
       - name: Refuse a plan that destroys the estate
         run: |
           python3 ../../scripts/assert-no-hetzner-deletes.py --self-test
@@ -1629,6 +1680,12 @@ jobs:
             python3 -m json.tool preview.json
             exit 1
           fi
+
+      # See mail-plan: fails closed, and writes the summary's first line.
+      - name: Decide whether the plan changes anything
+        id: noop
+        if: always()
+        run: python3 ../../scripts/plan-has-changes.py preview.json preview-plan.json --github-output "$GITHUB_OUTPUT" --github-summary "$GITHUB_STEP_SUMMARY"
 
       - name: Write the plan to the job summary
         if: always()
@@ -1651,7 +1708,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [hetzner-estate-plan]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # See mail-apply: a no-op plan skips this job before its environment is asked.
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.hetzner-estate-plan.outputs.has_changes != 'false'
 
     environment: production
 
