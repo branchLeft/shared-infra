@@ -1,0 +1,3 @@
+{% for tenant in backup_worker_tenants %}
+{{ tenant['slug'] }} {{ tenant['recipient'] }}
+{% endfor %}
