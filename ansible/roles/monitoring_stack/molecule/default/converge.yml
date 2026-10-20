@@ -46,6 +46,11 @@
       ansible.builtin.systemd_service:
         name: branchleft-compose@monitoring.service
         state: started
+      when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
+
+    - name: Ask systemd for the instance so that the test sees what it holds
+      ansible.builtin.systemd_service:
+        name: branchleft-compose@monitoring.service
       register: monitoring_stack_converge_earlier
       when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
 
