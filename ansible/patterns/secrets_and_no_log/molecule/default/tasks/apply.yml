@@ -1,0 +1,25 @@
+---
+# Applies the role once with the scenario's inputs, any of them replaced by an
+# apply_ variable, and leaves the role's own facts for the caller to read. The
+# role's facts hold paths and a flag, never a value; the last assertion requires
+# that no registered result of the role still holds a sentinel.
+- name: Apply the role
+  ansible.builtin.include_role:
+    name: branchleft.secrets_and_no_log
+  vars:
+    secrets_and_no_log_directory: '{{ apply_directory | default(scenario_directory) }}'
+    secrets_and_no_log_owner: '{{ apply_owner | default(scenario_owner) }}'
+    secrets_and_no_log_group: '{{ apply_group | default(scenario_group) }}'
+    secrets_and_no_log_env_name: '{{ apply_env_name | default(scenario_env_name) }}'
+    secrets_and_no_log_secrets: '{{ apply_secrets | default(scenario_secrets) }}'
+
+# The registered results of the role's loop tasks keep their items, and the items
+# hold the values. The role empties them at the end, on a failure too.
+- name: Assert no registered result of the role still holds a sentinel
+  ansible.builtin.assert:
+    that:
+      - >-
+        [secrets_and_no_log_written | default({}), secrets_and_no_log_copied | default({}), secrets_and_no_log_env | default({})]
+        | to_json | regex_search(verify_sentinel_pattern) is none
+    quiet: true
+  no_log: true

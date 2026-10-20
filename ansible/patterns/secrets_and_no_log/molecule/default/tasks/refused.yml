@@ -1,0 +1,52 @@
+---
+# Applies the role with one input made bad and requires that the role stops at
+# the task named in refused_task. Naming the task matters: a refusal for some
+# other reason, a mistyped role name included, must not count as the refusal
+# under test. Inputs left out take the scenario's good values. The refusal
+# message must not hold a sentinel, which the check below requires for every
+# case and the log scan requires again at the end.
+- name: Apply the role with input it must refuse
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.secrets_and_no_log
+      vars:
+        secrets_and_no_log_directory: '{{ refused_directory | default(scenario_directory) }}'
+        secrets_and_no_log_owner: '{{ refused_owner | default(scenario_owner) }}'
+        secrets_and_no_log_group: '{{ refused_group | default(scenario_group) }}'
+        secrets_and_no_log_env_name: '{{ refused_env_name | default(scenario_env_name) }}'
+        secrets_and_no_log_secrets: '{{ refused_secrets | default(scenario_secrets) }}'
+
+    - name: Record that the role accepted the input
+      ansible.builtin.set_fact:
+        refused_by: 'NOTHING: the role accepted the input'
+        refused_message: ''
+  rescue:
+    - name: Record which task refused the input
+      ansible.builtin.set_fact:
+        refused_by: '{{ ansible_failed_task.name }}'
+        refused_message: '{{ ansible_failed_result.msg | default("") }}'
+
+- name: Assert the role stopped at the expected task
+  ansible.builtin.assert:
+    that:
+      - refused_by == refused_task
+    fail_msg: 'Expected the role to stop at "{{ refused_task }}"; it stopped at "{{ refused_by }}".'
+    quiet: true
+
+- name: Assert the refusal holds no sentinel
+  ansible.builtin.assert:
+    that:
+      - refused_message | regex_search(verify_sentinel_pattern) is none
+    quiet: true
+  no_log: true
+
+# For a refusal that must name which entry is wrong: the message holds the
+# expected words.
+- name: Assert the refusal names the entry it refused
+  ansible.builtin.assert:
+    that:
+      - refused_message_part in refused_message
+    fail_msg: 'Expected the refusal to say "{{ refused_message_part }}"; it said "{{ refused_message }}".'
+    quiet: true
+  when: refused_message_part is defined
