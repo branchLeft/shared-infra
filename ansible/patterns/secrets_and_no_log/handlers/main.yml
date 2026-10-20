@@ -1,0 +1,8 @@
+---
+# A service role replaces this handler with the reload or restart of its own
+# service. It is given no value: a handler that did need one would take it from
+# the delivered file, never as an argument on a command line, and would carry
+# no_log: true and diff: false like the tasks above.
+- name: Tell the playbook that the consumers of the secrets need a reload
+  ansible.builtin.set_fact:
+    secrets_and_no_log_notified: true

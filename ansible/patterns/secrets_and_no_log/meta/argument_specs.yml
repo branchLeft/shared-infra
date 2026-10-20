@@ -1,0 +1,67 @@
+---
+argument_specs:
+  main:
+    short_description: Deliver secrets as root-only files, and optionally one environment file
+    description: >-
+      Writes each secret to a file of its own in one closed directory, and
+      optionally writes the secrets given as values to one environment file in
+      the same directory. A secret arrives either as a value supplied at run time
+      or as the path of a root-only file already on the host. The role does not
+      decide where either comes from. No value is logged.
+    author: AUTHOR_NAME
+    options:
+      secrets_and_no_log_directory:
+        type: str
+        description: >-
+          Absolute path of the directory that holds the secret files and the
+          environment file. The role creates it with mode 0700 before it writes
+          any file, and sets the owner and group below.
+        default: /etc/example-service/secrets
+      secrets_and_no_log_owner:
+        type: str
+        description: Account that owns the directory and every file in it. It must exist.
+        default: root
+      secrets_and_no_log_group:
+        type: str
+        description: Group of the directory and every file in it. It must exist.
+        default: root
+      secrets_and_no_log_env_name:
+        type: str
+        description: >-
+          File name, inside the directory, of an environment file holding one
+          NAME=value line for every secret given as a value. An empty string
+          writes no environment file. A secret given as a host file is never
+          written to it.
+        default: ''
+      secrets_and_no_log_secrets:
+        type: list
+        elements: dict
+        description: >-
+          The secrets to deliver. SECRET: every value in this list is a secret
+          and is supplied at run time, never committed and never a default. An
+          empty list delivers nothing. Each entry gives exactly one of value and
+          source_file.
+        default: []
+        options:
+          name:
+            type: str
+            required: true
+            description: >-
+              ALL_CAPS name of the secret: upper-case letters, digits and
+              underscore, starting with a letter. It is the file name and the
+              environment variable name. Names are unique.
+          value:
+            type: str
+            default: ''
+            description: >-
+              SECRET. The value, supplied at run time. The file holds exactly
+              this text with no trailing line break. Leave it empty when
+              source_file is given.
+          source_file:
+            type: str
+            default: ''
+            description: >-
+              Absolute path of a file already on the host that holds the value.
+              It must be a plain file owned by root with no group or other
+              permission. The role copies it on the host and never reads it into
+              Ansible. Leave it empty when value is given.

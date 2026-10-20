@@ -82,6 +82,12 @@ def job_block(text: str, job: str) -> str:
     raise AssertionError(f"job {job!r} not found in ci.yml")
 
 
+def job_names(text: str) -> list[str]:
+    """Every top-level job key, in file order."""
+    jobs = text.split("\njobs:\n", 1)[1]
+    return [m.group(1) for m in re.finditer(r"^  ([A-Za-z0-9_-]+):[ \t]*$", jobs, re.M)]
+
+
 def step_blocks(job: str) -> list[tuple[str, str]]:
     """(name, text) for each step of a job, including its leading comments."""
     steps = job.split("\n    steps:\n", 1)[1]
@@ -139,7 +145,7 @@ class StubGh:
     def put(self, name: str, value) -> None:
         (self.dir / name).write_text(json.dumps(value), encoding="utf-8")
 
-    def run(self, script: str, **env: str) -> subprocess.CompletedProcess:
+    def run(self, script: str, cwd: str | None = None, **env: str) -> subprocess.CompletedProcess:
         full = {
             "PATH": f"{self.dir}{os.pathsep}{os.environ['PATH']}",
             "STUB_DIR": str(self.dir),
@@ -152,6 +158,7 @@ class StubGh:
         return subprocess.run(
             ["bash", "-e", "-c", script],
             env=full,
+            cwd=cwd,
             capture_output=True,
             text=True,
             check=False,
@@ -346,12 +353,13 @@ class CancelStepStructureTests(unittest.TestCase):
     def setUp(self):
         self.text = workflow_text()
 
-    def test_each_plan_job_opens_with_the_cancel_step(self):
+    def test_each_plan_job_runs_the_cancel_step_right_after_checkout(self):
         bodies = []
         for job in PLAN_JOBS:
             with self.subTest(job=job):
                 block = job_block(self.text, job)
-                self.assertEqual(step_blocks(block)[0][0], CANCEL_NAME)
+                names = [n for n, _ in step_blocks(block)]
+                self.assertEqual(names[names.index("Checkout") + 1], CANCEL_NAME)
                 bodies.append(step(block, CANCEL_NAME))
         self.assertEqual(len(set(bodies)), 1, "the three copies must not drift")
 
@@ -386,6 +394,41 @@ class CancelStepStructureTests(unittest.TestCase):
         self.assertNotRegex(header, r"(?m)^concurrency:")
 
 
+class CancelStepOrderTests(unittest.TestCase):
+    """The cancel step runs scripts/cancel-superseded-waiting.py from the
+    checkout, so in every job that calls it the checkout step must come first.
+    Line-structure parse of each job's steps list, standard library only."""
+
+    def test_the_script_step_comes_after_checkout_in_every_job_that_calls_it(self):
+        text = workflow_text()
+        callers = []
+        for job in job_names(text):
+            block = job_block(text, job)
+            if "\n    steps:\n" not in block:
+                continue
+            steps = step_blocks(block)
+            calls = [
+                i for i, (_, body) in enumerate(steps)
+                if "cancel-superseded-waiting.py" in body
+            ]
+            if not calls:
+                continue
+            callers.append(job)
+            checkouts = [
+                i for i, (_, body) in enumerate(steps)
+                if "uses: actions/checkout@" in body
+            ]
+            with self.subTest(job=job):
+                self.assertTrue(checkouts, "no checkout step in the job")
+                self.assertLess(
+                    min(checkouts),
+                    calls[0],
+                    "the script call (step %d) runs before Checkout, so the file is "
+                    "missing on the runner" % calls[0],
+                )
+        self.assertEqual(sorted(callers), sorted(PLAN_JOBS))
+
+
 @unittest.skipUnless(shutil.which("jq"), "jq is needed to run the cancel step")
 class CancelBehaviourTests(unittest.TestCase):
     CURRENT = 50
@@ -401,7 +444,9 @@ class CancelBehaviourTests(unittest.TestCase):
             self.stub.put(f"jobs-{run_id}.json", {"jobs": jobs})
         result = self.stub.run(
             self.script,
+            cwd=str(ROOT),
             GITHUB_RUN_NUMBER=str(self.CURRENT),
+            GITHUB_STEP_SUMMARY=str(self.stub.dir / "summary.md"),
             PLANS_MAIL=plans[0],
             PLANS_NETWORK=plans[1],
             PLANS_ESTATE=plans[2],
@@ -456,12 +501,23 @@ class CancelBehaviourTests(unittest.TestCase):
         )
         self.assertEqual(posts, [])
 
-    def test_keeps_a_run_with_an_apply_that_already_finished(self):
+    def test_clears_a_waiting_apply_whose_sibling_apply_already_finished(self):
+        # Run 38425376153's shape: a finished sibling no longer protects a
+        # waiting apply on a stack this push planned.
         posts = self.run_with(
             [self.run_row(101)],
             {101: [self.job(self.MAIL, "completed", "success"), self.job(self.NETWORK, "waiting")]},
         )
-        self.assertEqual(posts, [])
+        self.assertEqual(posts, ["POST repos/ORG/REPO/actions/runs/101/cancel"])
+
+    def test_the_summary_names_a_kept_run_and_why(self):
+        self.run_with(
+            [self.run_row(101)],
+            {101: [self.job(self.MAIL, "in_progress"), self.job(self.NETWORK, "waiting")]},
+        )
+        summary = (self.stub.dir / "summary.md").read_text(encoding="utf-8")
+        self.assertIn("Kept run 101", summary)
+        self.assertIn("in progress", summary)
 
     def test_keeps_a_run_with_any_job_in_progress(self):
         posts = self.run_with(
@@ -533,10 +589,45 @@ class CancelBehaviourTests(unittest.TestCase):
         )
         self.assertEqual(cancelled, ["POST repos/ORG/REPO/actions/runs/101/cancel"])
 
+    def run_outside_repo(self, script):
+        """Run the step from an empty directory with no scripts/ in it."""
+        elsewhere = pathlib.Path(tempfile.mkdtemp(prefix="cancel-elsewhere-"))
+        self.addCleanup(shutil.rmtree, elsewhere, True)
+        self.stub.put("runs.json", {"workflow_runs": [self.run_row(101)]})
+        self.stub.put("jobs-101.json", {"jobs": [self.job(self.ESTATE, "waiting")]})
+        result = self.stub.run(
+            script,
+            cwd=str(elsewhere),
+            GITHUB_RUN_NUMBER=str(self.CURRENT),
+            GITHUB_STEP_SUMMARY=str(self.stub.dir / "summary.md"),
+            PLANS_MAIL="true",
+            PLANS_NETWORK="true",
+            PLANS_ESTATE="true",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return [c for c in self.stub.calls() if c.startswith("POST ")]
+
+    def test_a_missing_script_keeps_every_run_and_says_so(self):
+        # The failure shape of an ordering mistake: the relative script path
+        # does not resolve, so the run is kept and the summary names why.
+        posts = self.run_outside_repo(self.script)
+        self.assertEqual(posts, [])
+        summary = (self.stub.dir / "summary.md").read_text(encoding="utf-8")
+        self.assertIn("Kept run 101", summary)
+        self.assertIn("could not be read", summary)
+
+    def test_the_script_decides_the_same_when_run_by_its_absolute_path(self):
+        absolute = str(ROOT / "scripts" / "cancel-superseded-waiting.py")
+        script = self.script.replace("scripts/cancel-superseded-waiting.py", absolute)
+        posts = self.run_outside_repo(script)
+        self.assertEqual(posts, ["POST repos/ORG/REPO/actions/runs/101/cancel"])
+
     def test_a_listing_failure_cancels_nothing(self):
         result = self.stub.run(
             self.script,
+            cwd=str(ROOT),
             GITHUB_RUN_NUMBER=str(self.CURRENT),
+            GITHUB_STEP_SUMMARY=str(self.stub.dir / "summary.md"),
             PLANS_MAIL="true",
             PLANS_NETWORK="true",
             PLANS_ESTATE="true",
@@ -545,6 +636,291 @@ class CancelBehaviourTests(unittest.TestCase):
         # still runs); the point is that nothing is cancelled on a bad read.
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual([c for c in self.stub.calls() if c.startswith("POST ")], [])
+
+
+NOOP_NAME = "Decide whether the plan changes anything"
+SAVE_NAME = "Save the update plan for the no-change check"
+PLAN_FILE = "preview-plan.json"
+# Each plan job's working directory, which its relative script path depends on.
+PLAN_WORKDIRS = {
+    "mail-plan": "mail",
+    "hetzner-network-plan": "hetzner",
+    "hetzner-estate-plan": "hetzner/estate",
+}
+PLAN_OF_APPLY = {
+    "mail-apply": "mail-plan",
+    "hetzner-network-apply": "hetzner-network-plan",
+    "hetzner-estate-apply": "hetzner-estate-plan",
+}
+
+
+def all_jobs(text: str) -> list[str]:
+    jobs = text.split("\njobs:\n", 1)[1]
+    return re.findall(r"^  ([A-Za-z0-9_-]+):[ \t]*$", jobs, re.M)
+
+
+def gated_apply_jobs(text: str) -> list[str]:
+    """Every job that declares an environment and is not one of the plan jobs."""
+    return [
+        job
+        for job in all_jobs(text)
+        if environment_of(job_block(text, job)) and job not in PLAN_JOBS
+    ]
+
+
+def job_if(job: str) -> str:
+    """The job-level `if:` expression, folded onto one line."""
+    lines = job.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith("    if:"):
+            parts = [line[len("    if:") :].strip()]
+            for follow in lines[i + 1 :]:
+                if not follow.startswith("      "):
+                    break
+                parts.append(follow.strip())
+            return " ".join(p for p in parts if p not in ("", ">-", "|"))
+    return ""
+
+
+def and_operands(condition: str) -> list[str]:
+    """Split an `if:` expression on `&&` outside parentheses and quotes."""
+    operands, current, depth, quote, i = [], "", 0, "", 0
+    while i < len(condition):
+        char = condition[i]
+        if quote:
+            quote = "" if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0 and condition.startswith("&&", i):
+            operands.append(current.strip())
+            current, i = "", i + 2
+            continue
+        current += char
+        i += 1
+    operands.append(current.strip())
+    return operands
+
+
+def needs_of(job: str) -> list[str]:
+    match = re.search(r"^    needs: \[([^\]]*)\]", job, re.M)
+    if not match:
+        return []
+    return [n.strip() for n in match.group(1).split(",") if n.strip()]
+
+
+class NoOpGateStructureTests(unittest.TestCase):
+    def setUp(self):
+        self.text = workflow_text()
+
+    def test_the_gated_apply_jobs_are_the_three_known_ones(self):
+        # A fourth gated apply must be added to APPLY_JOBS and PLAN_OF_APPLY
+        # here, so it cannot arrive without the no-op condition below.
+        self.assertEqual(sorted(gated_apply_jobs(self.text)), sorted(APPLY_JOBS))
+
+    def test_every_gated_apply_job_needs_only_its_plan(self):
+        for job in gated_apply_jobs(self.text):
+            with self.subTest(job=job):
+                self.assertEqual(needs_of(job_block(self.text, job)), [PLAN_OF_APPLY[job]])
+
+    def test_no_gated_apply_condition_has_an_or(self):
+        # An `||` lets one operand alone start the job, whatever the others say.
+        for job in gated_apply_jobs(self.text):
+            with self.subTest(job=job):
+                condition = job_if(job_block(self.text, job))
+                self.assertNotIn("||", condition, f"{job}: an `||` in the apply condition")
+
+    def test_every_gated_apply_condition_is_the_three_exact_operands(self):
+        for job in gated_apply_jobs(self.text):
+            with self.subTest(job=job):
+                operands = and_operands(job_if(job_block(self.text, job)))
+                self.assertEqual(
+                    sorted(operands),
+                    sorted(
+                        [
+                            "github.event_name == 'push'",
+                            "github.ref == 'refs/heads/main'",
+                            f"needs.{PLAN_OF_APPLY[job]}.outputs.has_changes != 'false'",
+                        ]
+                    ),
+                    f"{job}: the apply condition is not push, main and not-an-explicit-false",
+                )
+
+    def test_the_has_changes_operand_skips_only_on_an_explicit_false(self):
+        # Tested alone: an unset output must not skip the apply, so the
+        # operator is `!=` and the literal is 'false', not `== 'true'`.
+        for job in gated_apply_jobs(self.text):
+            with self.subTest(job=job):
+                plan = PLAN_OF_APPLY[job]
+                found = [
+                    o
+                    for o in and_operands(job_if(job_block(self.text, job)))
+                    if "has_changes" in o
+                ]
+                self.assertEqual(
+                    found,
+                    [f"needs.{plan}.outputs.has_changes != 'false'"],
+                    f"{job}: the has_changes operand is not `!= 'false'`, as one operand",
+                )
+
+    def test_the_operand_splitter_reads_top_level_and_only(self):
+        self.assertEqual(and_operands("a == 1 && (b || c) && d"), ["a == 1", "(b || c)", "d"])
+        self.assertEqual(and_operands("a == 'x && y' && b"), ["a == 'x && y'", "b"])
+        self.assertEqual(and_operands("a || b"), ["a || b"])
+
+    def test_each_plan_job_outputs_has_changes_from_the_noop_step(self):
+        for job in PLAN_JOBS:
+            with self.subTest(job=job):
+                block = job_block(self.text, job)
+                self.assertIn(
+                    "\n    outputs:\n      has_changes: ${{ steps.noop.outputs.has_changes }}\n",
+                    block,
+                    f"{job} does not publish has_changes",
+                )
+                noop = step(block, NOOP_NAME)
+                self.assertIn("        id: noop\n", noop)
+                self.assertIn("        if: always()\n", noop)
+                self.assertIn("plan-has-changes.py preview.json " + PLAN_FILE, noop)
+                self.assertIn('--github-output "$GITHUB_OUTPUT"', noop)
+                self.assertIn('--github-summary "$GITHUB_STEP_SUMMARY"', noop)
+
+    def test_the_noop_step_comes_before_the_summary_so_its_line_is_first(self):
+        for job in PLAN_JOBS:
+            with self.subTest(job=job):
+                names = [n for n, _ in step_blocks(job_block(self.text, job))]
+                self.assertLess(
+                    names.index(NOOP_NAME), names.index("Write the plan to the job summary")
+                )
+
+    def test_the_update_plan_is_saved_by_its_own_step_in_the_plan_jobs_only(self):
+        self.assertEqual(self.text.count("--save-plan"), len(PLAN_JOBS))
+        self.assertNotIn("PULUMI_EXPERIMENTAL", self.text)
+        for job in PLAN_JOBS:
+            with self.subTest(job=job):
+                block = job_block(self.text, job)
+                save = step(block, SAVE_NAME)
+                self.assertIn("        continue-on-error: true\n", save)
+                self.assertIn(
+                    f"pulumi preview --stack production --save-plan {PLAN_FILE} > /dev/null",
+                    save,
+                )
+                # The preview.json the delete guard reads is produced as before.
+                self.assertIn(
+                    "run: pulumi preview --stack production --json > preview.json\n",
+                    step(block, "Preview the plan"),
+                )
+        for job in set(all_jobs(self.text)) - set(PLAN_JOBS):
+            with self.subTest(job=job):
+                block = job_block(self.text, job)
+                self.assertNotIn("--save-plan", block)
+                self.assertNotIn(PLAN_FILE, block)
+
+    def test_the_plan_file_is_only_ever_read_by_the_script(self):
+        # It can hold resource inputs and ciphertext: never uploaded, printed
+        # or summarised.
+        self.assertNotIn("upload-artifact", self.text)
+        for job in PLAN_JOBS:
+            for name, body in step_blocks(job_block(self.text, job)):
+                if PLAN_FILE in body:
+                    with self.subTest(job=job, step=name):
+                        self.assertIn(name, (SAVE_NAME, NOOP_NAME))
+
+
+@unittest.skipUnless(shutil.which("bash"), "bash is needed to run the decision step")
+class NoOpStepBehaviourTests(unittest.TestCase):
+    """Run each plan job's decision step, as written, against fixture files."""
+
+    ROOT_URN = "urn:pulumi:production::STACK::pulumi:pulumi:Stack::STACK-production"
+
+    def setUp(self):
+        self.text = workflow_text()
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="noop-step-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        (self.tmp / "scripts").symlink_to(ROOT / "scripts")
+
+    def run_step(self, job: str, preview, plan_file):
+        workdir = self.tmp / PLAN_WORKDIRS[job]
+        workdir.mkdir(parents=True, exist_ok=True)
+        (workdir / "preview.json").write_text(json.dumps(preview), encoding="utf-8")
+        if plan_file is not None:
+            (workdir / PLAN_FILE).write_text(json.dumps(plan_file), encoding="utf-8")
+        out = self.tmp / f"{job}.output"
+        summary = self.tmp / f"{job}.summary"
+        line = re.search(
+            r"^        run: (.+)$", step(job_block(self.text, job), NOOP_NAME), re.M
+        )
+        self.assertIsNotNone(line, f"{job}: the decision step has no one-line run")
+        script = line.group(1)
+        result = subprocess.run(
+            ["bash", "-e", "-c", script],
+            cwd=workdir,
+            env={
+                "PATH": os.environ["PATH"],
+                "GITHUB_OUTPUT": str(out),
+                "GITHUB_STEP_SUMMARY": str(summary),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        read = lambda p: p.read_text(encoding="utf-8") if p.exists() else ""  # noqa: E731
+        return result, read(out), read(summary)
+
+    def preview(self, op="same"):
+        step = {"op": op, "urn": self.ROOT_URN}
+        if op == "same":
+            # A same step carries both states; the old one holds the id and outputs.
+            step["oldState"] = {"urn": self.ROOT_URN, "custom": False, "id": "ID", "outputs": {"k": "v"}}
+            step["newState"] = {"urn": self.ROOT_URN, "custom": False}
+        return {"steps": [step], "changeSummary": {op: 3}}
+
+    def plan(self, diff=None):
+        return {
+            "resourcePlans": {
+                self.ROOT_URN: {
+                    "goal": {"inputDiff": {}, "outputDiff": diff or {}},
+                    "steps": ["same"],
+                }
+            }
+        }
+
+    def test_a_no_op_plan_publishes_false_and_says_so_first(self):
+        for job in PLAN_JOBS:
+            with self.subTest(job=job):
+                result, out, summary = self.run_step(job, self.preview(), self.plan())
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(out, "has_changes=false\n")
+                self.assertEqual(
+                    summary.splitlines()[0],
+                    "No changes: the apply job is skipped and no approval is requested",
+                )
+
+    def test_a_changing_plan_publishes_true_and_counts_first(self):
+        for job in PLAN_JOBS:
+            with self.subTest(job=job):
+                preview = self.preview("update")
+                result, out, summary = self.run_step(job, preview, self.plan())
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(out, "has_changes=true\n")
+                self.assertEqual(summary.splitlines()[0], "1 change: approval required")
+
+    def test_an_output_only_change_publishes_true(self):
+        for job in PLAN_JOBS:
+            with self.subTest(job=job):
+                plan = self.plan({"updates": {"greeting": "hello"}})
+                _, out, summary = self.run_step(job, self.preview(), plan)
+                self.assertEqual(out, "has_changes=true\n")
+                self.assertEqual(summary.splitlines()[0], "1 change: approval required")
+
+    def test_a_missing_plan_file_publishes_true(self):
+        for job in PLAN_JOBS:
+            with self.subTest(job=job):
+                result, out, _ = self.run_step(job, self.preview(), None)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(out, "has_changes=true\n")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,20 @@
+---
+# What the role expects to find on a host before it runs: the user and group
+# that own the program. The names are the scenario's inventory variables
+# (molecule.yml), so the role, this play and the verify play read one value.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create the placeholder service group
+      ansible.builtin.group:
+        name: '{{ program_and_timer_service_group }}'
+        system: true
+
+    - name: Create the placeholder service user
+      ansible.builtin.user:
+        name: '{{ program_and_timer_service_user }}'
+        group: '{{ program_and_timer_service_group }}'
+        system: true
+        create_home: false
+        shell: /usr/sbin/nologin
