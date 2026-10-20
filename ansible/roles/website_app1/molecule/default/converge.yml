@@ -9,16 +9,24 @@
     website_app1_smtp_port: '2525'
     website_app1_smtp_user: sentinel-user
     website_app1_smtp_password: SENTINEL_PASSWORD_NOT_A_SECRET
+    # A scratch directory for the refusal runs only. It is on the tmpfs /run.
+    website_app1_refusal_dir: /run/website_app1_refusal
   tasks:
     # Refusals come first. Each runs the role with one bad input and expects it to
     # fail at its first check, before anything is written. The rescue checks the
     # refusal came from the rule it names, and that no file was written.
+    # The refusal runs write to a scratch directory, never to the real paths, so
+    # the absence check below holds on every converge, including the second one
+    # (idempotence), when the real converge has already written the real files.
     - name: Refuse an image given as a tag, and write nothing
       block:
         - name: Apply the role with a tag in place of a digest
           ansible.builtin.include_role:
             name: branchleft.website_app1
           vars:
+            website_app1_project_dir: '{{ website_app1_refusal_dir }}'
+            website_app1_env_dir: '{{ website_app1_refusal_dir }}'
+            website_app1_env_file: '{{ website_app1_refusal_dir }}/website.env'
             website_app1_image: 'ghcr.io/branchleft/website:latest'
       rescue:
         - name: Assert the refusal named the digest rule
@@ -28,13 +36,19 @@
             quiet: true
             fail_msg: The role did not refuse a tag for the image as a digest refusal.
 
+    # The tab is built by the format filter from code point 9 ("%c" | format(9)), so
+    # this file holds no literal tab byte (ansible-lint no-tabs). A "\x09" escape in
+    # the Jinja string would stay a backslash and test nothing.
     - name: Refuse an SMTP value that is not printable ASCII, and write nothing
       block:
         - name: Apply the role with a tab in the SMTP host
           ansible.builtin.include_role:
             name: branchleft.website_app1
           vars:
-            website_app1_smtp_host: "bad\thost"
+            website_app1_project_dir: '{{ website_app1_refusal_dir }}'
+            website_app1_env_dir: '{{ website_app1_refusal_dir }}'
+            website_app1_env_file: '{{ website_app1_refusal_dir }}/website.env'
+            website_app1_smtp_host: '{{ "bad" ~ ("%c" | format(9)) ~ "host" }}'
       rescue:
         - name: Assert the refusal named the printable rule
           ansible.builtin.assert:
@@ -47,8 +61,8 @@
       ansible.builtin.stat:
         path: '{{ item }}'
       loop:
-        - /etc/branchleft/website.env
-        - /opt/branchleft/website/compose.yml
+        - '{{ website_app1_refusal_dir }}/website.env'
+        - '{{ website_app1_refusal_dir }}/compose.yml'
       register: website_app1_converge_refused
 
     - name: Assert the refused runs wrote no file
