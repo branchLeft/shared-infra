@@ -118,10 +118,11 @@ db1_grants_slug_max_length: 26
 # ----- Characters a template literal cannot hold -----
 
 # The templating engine does not read a backslash escape in a template literal (a
-# typed backslash-n stays two characters), so the characters the role splits and
-# tests on are made here, by YAML, which does read them.
+# typed backslash-n stays two characters), so the character the role splits on is
+# made here, by YAML, which does read it. (In a regular expression the engine
+# passes the backslash on and the regular expression reads it, so a pattern may
+# use one.)
 db1_grants_tab: "\t"
-db1_grants_cr: "\r"
 
 # ----- Input shapes -----
 

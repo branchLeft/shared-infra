@@ -124,7 +124,7 @@
     db1_grants_admin_problems:
       count: '{{ db1_grants_admin_matches | length }}'
       empty: '{{ (db1_grants_admin_matches | first | default("")) | length == 0 }}'
-      carriage_return: '{{ db1_grants_cr in (db1_grants_admin_matches | first | default("")) }}'
+      carriage_return: '{{ (db1_grants_admin_matches | first | default("")) is search("\r") }}'
   no_log: true
   diff: false
 

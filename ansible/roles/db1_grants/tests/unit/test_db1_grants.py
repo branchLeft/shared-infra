@@ -288,10 +288,12 @@ class HygieneTests(unittest.TestCase):
     def test_no_task_types_a_backslash_escape_in_a_template(self) -> None:
         # The templating engine does not read an escape in a template literal: a typed backslash-n stays two
         # characters, which splits and joins nothing. The role makes such characters in vars/main.yml, where
-        # YAML reads them. A backslash in a regular expression (backslash, then a symbol) is not an escape.
+        # YAML reads them. A backslash in a regular expression (backslash, then a symbol) is not an escape,
+        # and the one carriage-return test is a regular expression, which reads the backslash itself.
         escape = re.compile(r"\\[ntr\\]")
         for path in sorted(TASKS.glob("*.yml")) + sorted((ROLE / "molecule" / "default" / "tasks").glob("*.yml")):
-            self.assertIsNone(escape.search(path.read_text(encoding="utf-8")), str(path))
+            text = path.read_text(encoding="utf-8").replace('is search("\\r")', "")
+            self.assertIsNone(escape.search(text), str(path))
 
     def test_no_placeholder_left_from_the_skeleton(self) -> None:
         for path in self.shipped():

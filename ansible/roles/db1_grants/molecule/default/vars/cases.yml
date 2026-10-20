@@ -4,7 +4,8 @@
 # (every refusal of the role starts db1_grants[CODE]) and, unless may_change is set,
 # to have changed nothing in the database. Then the host is put back.
 #
-# Fields: name; code (the refusal); vars (role inputs for this case); state
+# Fields: name; code (the refusal); tenants and ops1_host (the role inputs for this
+# case, the scenario's own when absent); state
 # (drop_users: accounts removed from the fake database; users: a recursive patch
 # of accounts; top: other keys of the fake database); files (host files spoiled:
 # path plus mode, owner, content or absent, and directory: true for a directory);
@@ -230,6 +231,13 @@ db1_grants_verify_cases:
       users:
         'ghost_second_site@10.20.1.%': { db: {} }
       top: { ignore_connection_limit: true }
+  - name: provisioning program the server makes fail
+    code: program-failed
+    may_change: true
+    state:
+      users:
+        'ghost_second_site@10.20.1.%': { db: {} }
+      top: { refuse_connection_limit: true }
   - name: tenant account gone between the readback and the program
     code: mint-detected
     may_change: true

@@ -9,8 +9,10 @@
     # A regular expression over the refusal cases' names, empty for all of them.
     # A maintainer sets it on the command line to run the cases one change touches
     # (`molecule verify -- -e db1_grants_verify_only=unescaped`); the positive cases
-    # are skipped then, and the whole scenario still runs in the harness.
+    # are skipped then unless db1_grants_verify_positive is true, and the whole
+    # scenario still runs in the harness.
     db1_grants_verify_only: ''
+    db1_grants_verify_positive: false
     # Every text the log and the client's recorded arguments must not hold. The
     # sentinels are letters and digits, so they need no escaping.
     db1_grants_verify_sentinels:
@@ -50,7 +52,7 @@
         - case_rotation
       loop_control:
         label: '{{ item }}'
-      when: db1_grants_verify_only | length == 0
+      when: db1_grants_verify_only | length == 0 or db1_grants_verify_positive | bool
 
     # ----- What the whole run must not have done -----
     - name: Assert the client's recorded calls held no password and no statement on a command line

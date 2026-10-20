@@ -192,6 +192,9 @@ def run_statement(state, statement, out):
     match = re.fullmatch(r"ALTER USER '([^']*)'@'([^']*)' WITH MAX_USER_CONNECTIONS (\d+)", text)
     if match:
         entry = lookup(state, match.group(1), match.group(2))
+        # A test switch: with it on, the statement fails, as a server would refuse it.
+        if state.get("refuse_connection_limit"):
+            raise Refused("ERROR 1227 (42000): Access denied; you need the SYSTEM_USER privilege for this operation")
         # A test switch: with it on, the limit is accepted and not applied, as a
         # server that ignored the statement would, so the role's readback after
         # its changes has a difference to find.
