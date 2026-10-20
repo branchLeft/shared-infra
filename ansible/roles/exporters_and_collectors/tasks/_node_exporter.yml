@@ -38,6 +38,7 @@
   when: not exporters_and_collectors_bin_current and not ansible_check_mode
 
 - name: Fetch the pinned node_exporter release and check its digest
+  when: not exporters_and_collectors_bin_current and not ansible_check_mode
   block:
     - name: Download the release tarball
       ansible.builtin.get_url:
@@ -67,7 +68,6 @@
         path: '{{ exporters_and_collectors_tmp.path }}'
         state: absent
       when: exporters_and_collectors_tmp is defined and exporters_and_collectors_tmp.path is defined
-  when: not exporters_and_collectors_bin_current and not ansible_check_mode
 
 # The system user has no home and no login shell, and is created only when absent.
 - name: Create the unprivileged user the exporter runs as

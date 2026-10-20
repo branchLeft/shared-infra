@@ -9,7 +9,9 @@
       - exporters_and_collectors_node_exporter_subnet_prefix is match('^([0-9]{1,3}[.]){1,3}\Z')
       - exporters_and_collectors_disk_stop_percent | int > 0
       - exporters_and_collectors_disk_stop_percent | int <= 100
-    fail_msg: 'exporters_and_collectors refused its input (rule: shape): a version, a sha256 digest, an address prefix ending in a dot, or a percentage between 1 and 100.'
+    fail_msg: >-
+      exporters_and_collectors refused its input (rule: shape): a version, a sha256 digest,
+      an address prefix ending in a dot, or a percentage between 1 and 100.
     quiet: true
 
 # The node exporter's private address is taken from the facts the play gathers, so

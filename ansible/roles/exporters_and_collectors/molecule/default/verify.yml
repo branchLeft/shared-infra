@@ -62,7 +62,9 @@
     - name: Assert the exporter listens on the container's own bridge address, and its unit names the textfile directory
       ansible.builtin.assert:
         that:
-          - (exporters_and_collectors_verify_env.content | b64decode | trim) == 'NODE_EXPORTER_LISTEN_ADDRESS=' ~ (ansible_all_ipv4_addresses | select('match', '^172[.]') | first)
+          - >-
+            (exporters_and_collectors_verify_env.content | b64decode | trim)
+            == 'NODE_EXPORTER_LISTEN_ADDRESS=' ~ (ansible_all_ipv4_addresses | select('match', '^172[.]') | first)
           - "'--collector.textfile.directory=/var/lib/branchleft/backup-worker-exporter' in lookup('ansible.builtin.file', verify_node_unit_src)"
         quiet: true
         fail_msg: The exporter is not bound to the container's own address, or its unit does not name the textfile directory.

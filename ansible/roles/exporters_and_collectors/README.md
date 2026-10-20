@@ -52,6 +52,9 @@ It runs in this order, and each step changes only what it names.
     `/etc/systemd/system` (root, 0644) and reloads systemd when they changed.
 13. Enables and starts `snds-collector.timer`.
 
+The SNDS textfile directory (`/var/lib/branchleft/snds-exporter`) is read by the
+Compose node_exporter on edge1, not by the native unit this role installs.
+
 ## Where the files come from
 
 The unit files and the collector program are not copied into this role. They are
