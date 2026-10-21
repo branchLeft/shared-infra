@@ -1,0 +1,7 @@
+# Test fixture for verbatim mode: delivered byte for byte, its ${IMAGE} is read
+# from the image env file. Never started: the scenario only checks the digest
+# refusal on it, in check mode, so nothing is written to the instance.
+name: compose_stack_example
+services:
+  app:
+    image: ${IMAGE}

@@ -29,10 +29,41 @@ argument_specs:
         default: root
       compose_stack_app_image:
         type: str
-        required: true
+        default: ''
         description: >-
-          Image of the app service, pinned by digest as NAME@sha256:64 hex digits,
-          or NAME:TAG@sha256:64 hex digits. A reference without a digest is refused.
+          Image of the app service in template mode, pinned by digest as
+          NAME@sha256:64 hex digits, or NAME:TAG@sha256:64 hex digits. A reference
+          without a digest is refused. Not used in verbatim mode.
+      compose_stack_compose_source:
+        type: str
+        default: ''
+        description: >-
+          Controller path to a compose file delivered verbatim, instead of the
+          template. Empty selects the template. Its ${IMAGE} is read from
+          compose_stack_image_env_file and judged by the same digest check.
+      compose_stack_compose_name:
+        type: str
+        default: compose.yaml
+        description: File name of the compose file in the project directory.
+      compose_stack_env_files:
+        type: list
+        elements: str
+        default: []
+        description: >-
+          Absolute host paths of env files Compose reads for interpolation (through
+          COMPOSE_ENV_FILES for the module, and --env-file for the validator). Only
+          the paths are passed. The role never reads or writes their content.
+      compose_stack_image_env_file:
+        type: str
+        default: ''
+        description: >-
+          Absolute host path of an env file holding exactly one IMAGE= line (the
+          variable named by compose_stack_image_var). Read by the role for that one
+          line only.
+      compose_stack_image_var:
+        type: str
+        default: IMAGE
+        description: Name of the variable in compose_stack_image_env_file that holds the app image.
       compose_stack_app_greeting:
         type: str
         description: Value written into the configuration file. Not a secret.
@@ -53,7 +84,7 @@ argument_specs:
       compose_stack_secret_files:
         type: list
         elements: dict
-        required: true
+        default: []
         description: Secret files to write into the project directory with mode 0600. The content is a secret, supplied at run time.
         options:
           name:

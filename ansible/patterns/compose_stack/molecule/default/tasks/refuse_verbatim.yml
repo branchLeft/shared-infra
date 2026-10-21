@@ -1,0 +1,29 @@
+---
+# Applies the role in verbatim mode with an image env file whose IMAGE= value is
+# not pinned by digest, and asserts the role refused it with the digest check's
+# own message. The image reaches the check only through ${IMAGE}, so a check that
+# skips the substitution would still refuse, and this case is what shows that the
+# value in the env file is judged. Run in check mode: the refusal is before any
+# write, so the instance is the same whether or not the role refuses.
+- name: Refuse a verbatim compose file whose image comes from an env file
+  check_mode: true
+  block:
+    - name: Apply the role in verbatim mode with the image env file
+      ansible.builtin.include_role:
+        name: branchleft.compose_stack
+      vars:
+        compose_stack_compose_source: '{{ playbook_dir }}/files/verbatim.compose.yml'
+        compose_stack_image_env_file: '/var/lib/compose_stack_standin/{{ refuse_env_name }}'
+
+    - name: Fail because the role accepted the image
+      ansible.builtin.fail:
+        msg: The role accepted an image from the env file that is not pinned by digest.
+  rescue:
+    - name: Assert the digest check refused the image
+      ansible.builtin.assert:
+        that:
+          - "'ending in @sha256:' in ansible_failed_result.msg"
+        quiet: true
+        fail_msg: >-
+          {{ refuse_title }}: the role did not refuse the image with the digest check.
+          It stopped with: {{ ansible_failed_result.msg }}

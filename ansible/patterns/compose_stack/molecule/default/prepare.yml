@@ -59,3 +59,22 @@
         owner: root
         group: root
         mode: '0644'
+
+    # One-line image env files for verbatim mode (ws#2350 PR A). The tag file is
+    # refused by the digest check; the digest file is accepted. Both are read only
+    # in check mode by the verify play, so nothing else changes.
+    - name: Write an image env file that names a tag
+      ansible.builtin.copy:
+        content: "IMAGE=example.invalid/example-app:1.2.3\n"
+        dest: /var/lib/compose_stack_standin/image-tag.env
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Write an image env file that names a digest
+      ansible.builtin.copy:
+        content: "IMAGE=example.invalid/example-app@sha256:{{ '2' * 64 }}\n"
+        dest: /var/lib/compose_stack_standin/image-digest.env
+        owner: root
+        group: root
+        mode: '0644'

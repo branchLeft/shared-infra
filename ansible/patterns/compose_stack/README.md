@@ -3,7 +3,10 @@
 This role is a pattern. It is the recipe a maintainer follows when a shell script
 installs a Docker Compose file and its configuration files and runs
 `docker compose up -d`. It delivers one example stack with placeholder names, and no
-real service. Copy the shape, not the names.
+real service. A role that needs a stack calls this role with its own names and paths
+(ws#2350 PR A): it does not copy the recipe. A verbatim compose file, its env files
+and its image env file are inputs, so a service's own files need no second copy of
+the digest check or the stamp.
 
 ## What it does, and what it does not
 
@@ -40,6 +43,17 @@ refers to the secret files by name, so a service role that renames one renames i
 means every service in the project. It exists so that a stack with a database next to
 the app can recreate the app alone (see the limits for what that does and does not
 protect).
+
+Verbatim mode (`compose_stack_compose_source` set) delivers a compose file byte for
+byte under `compose_stack_compose_name`, and reads its `${IMAGE}` from the one
+`IMAGE=` line of `compose_stack_image_env_file`. That value must pass the same digest
+check, so a tag in the env file is refused. `compose_stack_env_files` are passed to
+Compose as `COMPOSE_ENV_FILES` (the module has no env-file option in the pinned
+collection) and to the validator as `--env-file`. Compose reads them; this role never
+reads or writes their content. The stamp covers the image value and the env file
+paths, not the env files' content, so an edit to an env file alone does not bring the
+stack up. Limits: the verbatim delivery is covered by the digest check and the
+validator in tests (the test scenario runs in check mode for the positive case).
 
 ## Requirements
 

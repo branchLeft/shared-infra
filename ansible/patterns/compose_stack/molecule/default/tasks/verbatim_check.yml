@@ -1,0 +1,19 @@
+---
+# Applies the role in verbatim mode, in check mode, with a digest in the image env
+# file, and asserts the role got past the digest check. The digest check reads
+# ${IMAGE} through the substitution: with the substitution skipped the literal
+# ${IMAGE} is refused, and this block fails. Check mode writes nothing.
+- name: Accept a verbatim compose file whose image digest comes from an env file
+  check_mode: true
+  block:
+    - name: Apply the role in verbatim mode with the digest env file
+      ansible.builtin.include_role:
+        name: branchleft.compose_stack
+      vars:
+        compose_stack_compose_source: '{{ playbook_dir }}/files/verbatim.compose.yml'
+        compose_stack_image_env_file: /var/lib/compose_stack_standin/image-digest.env
+  rescue:
+    - name: Fail because the role refused a digest from the env file
+      ansible.builtin.fail:
+        msg: >-
+          The role refused a digest read from the image env file: {{ ansible_failed_result.msg }}

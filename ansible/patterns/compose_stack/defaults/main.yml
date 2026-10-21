@@ -6,3 +6,18 @@ compose_stack_group: root
 compose_stack_app_greeting: EXAMPLE_GREETING
 compose_stack_wait_timeout: 120
 compose_stack_services: []
+# Verbatim mode (ws#2350 PR A). Empty means the template path: the compose file
+# is templates/compose.yaml.j2 and app.conf is written. Set, it is a controller
+# path to a compose file delivered byte for byte under compose_stack_compose_name,
+# with no app.conf written (secret files are still delivered if given), and the
+# digest check reads ${IMAGE}
+# from compose_stack_image_env_file before it judges the image.
+compose_stack_compose_source: ''
+compose_stack_compose_name: compose.yaml
+# Host paths handed to Compose as --env-file, for config and for the module.
+# Read by Compose, never read or written by this role.
+compose_stack_env_files: []
+# Host path of a one-line env file whose IMAGE= value is the stack's image. It is
+# read here, and only that one variable is parsed out of it.
+compose_stack_image_env_file: ''
+compose_stack_image_var: IMAGE

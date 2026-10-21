@@ -202,6 +202,17 @@
       loop_control:
         label: '{{ item.title }}'
 
+    # Verbatim mode (PR A). A tag read from the image env file is refused; a digest
+    # from the same file passes the digest check (check mode, nothing written).
+    - name: Refuse a tag that comes from the image env file in verbatim mode
+      ansible.builtin.include_tasks: tasks/refuse_verbatim.yml
+      vars:
+        refuse_title: A tag read from the image env file
+        refuse_env_name: image-tag.env
+
+    - name: Accept a digest that comes from the image env file in verbatim mode
+      ansible.builtin.include_tasks: tasks/verbatim_check.yml
+
     - name: Fail the role on each state of the stack that is not healthy
       ansible.builtin.include_tasks: tasks/refuse_unhealthy.yml
       vars:
