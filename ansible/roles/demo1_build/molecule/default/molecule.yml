@@ -5,6 +5,10 @@
 # has no "required variable" form, so when the variable is unset the name
 # falls back to one the Docker daemon rejects: the run fails at create, loudly,
 # instead of sharing a container name with another run.
+#
+# The refusals scenario's molecule.yml is a link to this file, so the platform
+# and its pin have this one home. The harness reads the link as it reads any
+# scenario file.
 dependency:
   name: galaxy
   # The harness installs the pinned collections before it starts Molecule.

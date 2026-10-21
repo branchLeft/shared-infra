@@ -46,6 +46,13 @@ IMAGE_DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 ENGINE_SOCKET = re.compile(r"(docker|podman)\.sock")
 PRIVILEGE_LINE = re.compile(r"^(privileged|capabilities):\s*(.*)$")
 
+# A role has a scenario called default, and may have more (a directory under
+# molecule/). One run of the harness runs one scenario, named by --scenario, so
+# each scenario can be its own shard with its own time limit. The name is a
+# directory name that is passed to Molecule, so it is a plain one.
+DEFAULT_SCENARIO = "default"
+SCENARIO_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
 
 @dataclass(frozen=True)
 class Step:
@@ -231,15 +238,24 @@ def scenario_problems(scenario: Path) -> list[str]:
     return sorted(set(problems))
 
 
-def check_scenarios(role: Path) -> list[str]:
-    """Return every way the role's Molecule scenarios break the limits of ANS-15."""
-    problems = (
-        []
-        if (role / "molecule" / "default" / "molecule.yml").is_file()
-        else ["molecule/default/molecule.yml is missing"]
-    )
+def check_scenarios(role: Path, scenario: str = DEFAULT_SCENARIO) -> list[str]:
+    """Return every way the role's Molecule scenarios break the limits of ANS-15.
+
+    Every scenario file of the role is read, whichever one this run executes. The
+    default scenario and the one being run must exist: a shard for a scenario that
+    is not there fails here and is not skipped.
+    """
+    problems = [
+        f"molecule/{name}/molecule.yml is missing"
+        for name in dict.fromkeys((DEFAULT_SCENARIO, scenario))
+        if not (role / "molecule" / name / "molecule.yml").is_file()
+    ]
     for path in sorted((role / "molecule").glob("*/molecule.yml")):
         relative = path.relative_to(role)
+        if not path.is_file():
+            # A link to nothing: reported, not read, so a broken link cannot crash the run.
+            problems.append(f"{relative}: is not a readable file (a link to nothing?)")
+            continue
         problems.extend(f"{relative}: {found}" for found in scenario_problems(path))
     return problems
 
@@ -273,28 +289,32 @@ def static_steps(role: Path, tools: Path) -> list[Step]:
     ]
 
 
-def molecule_steps(role: Path, tools: Path) -> list[Step]:
-    """Return the Molecule steps for a role, in the order they run.
+def molecule_steps(role: Path, tools: Path, scenario: str = DEFAULT_SCENARIO) -> list[Step]:
+    """Return the Molecule steps for one scenario of a role, in the order they run.
 
-    ``check-fresh`` precedes any real converge; ``molecule-check`` is Molecule's own action.
+    Every command names the scenario with ``-s``: Molecule runs ``default`` when it is
+    not told, so a second scenario that was not named would never run and its shard
+    would pass on the first. ``check-fresh`` precedes any real converge;
+    ``molecule-check`` is Molecule's own action; ``destroy`` names the scenario too.
     """
     molecule = str(tools / "molecule")
-    in_check_mode = ("converge", "--", "--check", "--diff")
+    named = ("-s", scenario)
+    in_check_mode = ("converge", *named, "--", "--check", "--diff")
     commands: list[tuple[str, tuple[str, ...]]] = [
-        ("create", ("create",)),
-        ("prepare", ("prepare",)),
+        ("create", ("create", *named)),
+        ("prepare", ("prepare", *named)),
         ("check-fresh", in_check_mode),
-        ("converge", ("converge",)),
-        ("idempotence", ("idempotence",)),
-        ("verify", ("verify",)),
+        ("converge", ("converge", *named)),
+        ("idempotence", ("idempotence", *named)),
+        ("verify", ("verify", *named)),
         ("check-configured", in_check_mode),
-        ("molecule-check", ("check",)),
+        ("molecule-check", ("check", *named)),
     ]
     steps = [
         Step(name, (molecule, *args), role, no_changes=name == "check-configured")
         for name, args in commands
     ]
-    steps.append(Step("destroy", (molecule, "destroy"), role, always=True))
+    steps.append(Step("destroy", (molecule, "destroy", *named), role, always=True))
     return steps
 
 
@@ -365,8 +385,13 @@ def run_role(
     run: Runner,
     env: Mapping[str, str],
     reasons: dict[str, str] | None = None,
+    scenario: str = DEFAULT_SCENARIO,
 ) -> list[tuple[str, str]]:
-    """Run every step for one role; ``reasons`` receives why each failed check failed."""
+    """Run every step for one scenario of a role.
+
+    ``reasons`` receives why each failed check failed. The static checks read the whole
+    role and run in every scenario's run; the Molecule steps run the one scenario.
+    """
     outcomes: list[tuple[str, str]] = []
     reasons = {} if reasons is None else reasons
     pinned = pinned_version(REQUIREMENTS, "ansible-core")
@@ -382,17 +407,17 @@ def run_role(
     outcomes.append(("argument-specs", FAIL if problem else OK))
     if problem:
         reasons["argument-specs"] = problem
-    scenario = check_scenarios(role)
-    outcomes.append(("scenario-limits", FAIL if scenario else OK))
-    if scenario:
-        reasons["scenario-limits"] = "; ".join(scenario)
+    limits = check_scenarios(role, scenario)
+    outcomes.append(("scenario-limits", FAIL if limits else OK))
+    if limits:
+        reasons["scenario-limits"] = "; ".join(limits)
     for name in ("min-version", "argument-specs", "scenario-limits"):
         if name in reasons:
             print(f"{name} FAIL: {reasons[name]}")
     for step in static_steps(role, tools):
         outcomes.append((step.name, report(step, run(step.argv, step.cwd, env))))
-    steps = molecule_steps(role, tools)
-    if scenario:
+    steps = molecule_steps(role, tools, scenario)
+    if limits:
         outcomes.extend((step.name, SKIP) for step in steps)
     else:
         outcomes.extend(run_molecule(steps, run, env))
@@ -424,7 +449,15 @@ def main(
     """Run the harness over the roles named in argv; return the exit status."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n", maxsplit=1)[0])
     parser.add_argument("roles", nargs="+", type=Path, help="role directories to test")
+    parser.add_argument(
+        "--scenario",
+        default=DEFAULT_SCENARIO,
+        help="the Molecule scenario to run, a directory under molecule/ (default: %(default)s)",
+    )
     args = parser.parse_args(argv)
+    if SCENARIO_NAME.fullmatch(args.scenario) is None:
+        print(f"refused: {args.scenario!r} is not a scenario name")
+        return 2
     environment = dict(os.environ if base_env is None else base_env)
     refusal = refuse_remote_engine(environment)
     if refusal:
@@ -446,8 +479,8 @@ def main(
         for role in roles:
             run_env = role_environment(environment, work, tools_dir, uuid.uuid4().hex[:12])
             reasons: dict[str, str] = {}
-            outcomes = run_role(role, tools_dir, run, run_env, reasons)
-            print(f"== {role.name} ==")
+            outcomes = run_role(role, tools_dir, run, run_env, reasons, args.scenario)
+            print(f"== {role.name} ({args.scenario}) ==")
             for name, status in outcomes:
                 print(f"{status} {name}")
                 if status == FAIL and name in reasons:

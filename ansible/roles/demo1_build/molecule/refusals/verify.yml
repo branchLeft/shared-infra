@@ -1,0 +1,79 @@
+---
+# What the refusal cases must leave behind: nothing. The grant is the one
+# broker_deploy's template rendered, owner, mode and content, and the role
+# installed nothing, because this scenario stages the release and runs the grant
+# check and no more. The expected values are written out here, not read from the
+# role, so a role that left a different grant is a failure and not a test that
+# agrees with it.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at the grant after the cases
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/branchleft-slot
+        follow: false
+      register: demo1_build_verify_grant
+
+    - name: Read the grant after the cases
+      ansible.builtin.slurp:
+        src: /etc/sudoers.d/branchleft-slot
+      register: demo1_build_verify_grant_text
+
+    - name: Check the grant with visudo, strictly
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/visudo
+          - -csf
+          - /etc/sudoers.d/branchleft-slot
+      changed_when: false
+
+    - name: Assert the grant is broker_deploy's, root:root mode 0440, with its fifty rules in place
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_grant.stat.isreg
+          - demo1_build_verify_grant.stat.pw_name == 'root'
+          - demo1_build_verify_grant.stat.gr_name == 'root'
+          - demo1_build_verify_grant.stat.mode == '0440'
+          - (demo1_build_verify_grant_text.content | b64decode).splitlines()[0].startswith('# Installed by the broker_deploy role')
+          - (demo1_build_verify_grant_text.content | b64decode).splitlines() | select('match', '^broker ') | list | length == 50
+          - (demo1_build_verify_grant_text.content | b64decode).splitlines() | reject('match', '^(broker |#( .*)?$|$)') | list | length == 0
+        quiet: true
+        fail_msg: A refusal case left the sudoers grant changed.
+
+    - name: Look at the paths the role must not have written
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - /usr/local/sbin/branchleft-slot
+        - /usr/local/sbin/branchleft-slot-refused-probe
+        - /usr/local/lib/branchleft
+        - /var/lib/branchleft/demo-router
+        - /etc/branchleft/tenant-uids
+      register: demo1_build_verify_absent
+
+    - name: Assert none of them exists
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        quiet: true
+        fail_msg: A refusal case, or the release step, wrote {{ item.item }}.
+      loop: '{{ demo1_build_verify_absent.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Look at the staged release
+      ansible.builtin.stat:
+        path: /opt/branchleft/demo-host/releases/5e52f78427cab104438057164e4baa16b329875c/demo-host/provision/render_slot_sudoers.py
+        follow: false
+        checksum_algorithm: sha256
+      register: demo1_build_verify_generator
+
+    - name: Assert the generator is the pinned file
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_generator.stat.isreg
+          - demo1_build_verify_generator.stat.checksum == '80bd64fccb1f56260a7dc1824e783548a80a14a691942060cfff1aba9a058319'
+        quiet: true
+        fail_msg: The staged generator is not the pinned render_slot_sudoers.py.

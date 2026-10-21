@@ -38,13 +38,29 @@ What the role does, in the order of `tasks/main.yml`:
 4. **Compares the sudoers grant with the pinned generator** (`_sudoers_check.yml`),
    read-only, and before any program is installed, so a grant it refuses leaves
    the wrapper uninstalled by that run: the file is a regular file, `root:root`,
-   `0440`, and passes `visudo -csf`; every rule runs exactly `demo1_build_wrapper_path`,
-   the path step 5 installs the wrapper at, so a path the grant does not name is
-   refused before anything is written there; every rule is one literal `NOPASSWD`
-   line for the broker with no wildcard; the number of rules is what the slot table implies;
-   the sorted rules equal the sorted output of the pinned `render_slot_sudoers.py`;
-   and the slots in the generator's rules are the slots in the role's table. It
-   needs only the staged release, so it follows step 3.
+   `0440`, and passes `visudo -csf`; the **body** of the file equals the body of the
+   output of the pinned `render_slot_sudoers.py`, line for line and in order; the
+   slots in the generator's rules are the slots in the role's table; and every rule
+   runs exactly `demo1_build_wrapper_path`, the path step 5 installs the wrapper
+   at, so a path the grant does not name is refused before anything is written
+   there. It needs only the staged release, so it follows step 3.
+
+   The body is everything from the first line that is not part of the header. The
+   header is the leading run of blank lines and comment lines, a comment being `#`
+   alone or `#` and a space (`^#( .*)?$` in `vars/main.yml`), and a comment
+   ending in a backslash is not header, because sudoers joins it to the next line.
+   The header is the one part not compared, because `broker_deploy`'s template and
+   the generator word it differently. From the first rule on nothing is exempt: a
+   comment, a `#1000` uid rule and a `#includedir` line all differ from the
+   generator's body and are refused, wherever they sit. Nothing is sorted.
+   Trailing blank lines are dropped, as they are inert.
+
+   In a plan on a host with no staged release there is no generator to compare
+   with. The comparison is then **skipped, with a stated reason**, and the plan says
+   so in a visible line, "Sudoers grant NOT verified", so a skip does not read as a
+   pass (ANS-10). The checks that need no generator still run. An apply cannot
+   reach that branch: `_release.yml` refuses to go on without the whole release.
+
 5. **Installs three programs where something else runs them** (`_programs.yml`):
    the slot wrapper at the path of the sudoers grant, and the drain sidecar and the
    health router in `/usr/local/lib/branchleft/` (root, `0755`), the paths the
@@ -129,10 +145,13 @@ no secret.
   a copy).
 - `demo1_build_release_files`: each program's path under the commit and its sha256.
 - `demo1_build_slot_names`: the slot table, taken from `broker_deploy_slot_names`
-  when that is set; the count of grant lines is derived from it.
+  when that is set; the role checks it against the slots in the generator's grant.
 - `demo1_build_wrapper_path`: taken from `broker_deploy_wrapper_path` when that is
-  set; the role refuses to run unless every rule of the installed grant names exactly
-  this path.
+  set. The pinned generator hard-codes `/usr/local/sbin/branchleft-slot`, so on an
+  apply this input has exactly one value that can pass: any other path makes the
+  installed grant differ from the generator's, and every rule must name this path
+  anyway. The input exists so the role states the path it installs at; it is not a
+  place to choose another one.
 
 `vars/main.yml` holds the constants (paths, accounts, uids, patterns). A caller
 cannot override them.
@@ -218,6 +237,7 @@ the task. In order:
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Reads (`stat`, `slurp`, `getent`, `find`, `visudo -csf`) | Run.                                                                                                                                                         |
 | Pinned renderers (stdout only)                           | Run with `check_mode: false`, only on a host that has the release; otherwise skipped, because there is no release to run.                                    |
+| Sudoers grant against the generator                      | Compared where the release is staged. On a host with none it is skipped and the plan prints "Sudoers grant NOT verified", with the reason; it never fails.   |
 | Directories, links, accounts, files, units               | Modules report what would change.                                                                                                                            |
 | `get_url` of the programs                                | Run where the release directory exists (nothing to do); skipped where the directory does not exist, because `get_url` cannot write into a missing directory. |
 | Colour drop-ins and edge candidate                       | Skipped where their directories do not exist yet, for the same reason.                                                                                       |
@@ -228,7 +248,10 @@ the task. In order:
 The Molecule `converge.yml` runs the role in check mode and compares a list of
 watched paths before and after: a path that did not exist must still not exist and
 one that did must have the same modification time. That control holds on a fresh
-host and on a configured one.
+host and on a configured one. The same play reads whether the release link
+exists before the plan and asserts the other half of the rule: a plan on a host
+with no staged release must print the NOT verified notice, and a plan on a
+configured host must not, so a skipped comparison cannot pass silently.
 
 ## How to test it
 
@@ -239,10 +262,31 @@ describes (Docker running locally, Python 3.12 or later):
 .venv/bin/python ansible/harness/run_harness.py ansible/roles/demo1_build
 ```
 
-The scenario runs the role on one systemd container (the same Debian 13 image and
-settings as `broker_deploy`; the reason for each key is in `molecule.yml`, including
-the host cgroup namespace, which is the stated exception). It takes about six
-minutes.
+There are two scenarios, and CI runs each as its own job (a shard, below):
+
+- `molecule/default` applies the role and checks the result. It holds every
+  control that needs the role applied: the plan, the writers' boundaries, the
+  drain flags, the install order, and `verify.yml`.
+- `molecule/refusals` does not apply the role. It stages the pinned release with the
+  role's own `_release.yml` and runs the grant check alone against edited grants,
+  one case at a time. Its `molecule.yml` is a link to the default scenario's, so
+  the platform pin and settings have one home, and its `prepare.yml` imports the
+  default one's, so the grant it edits is still rendered by `broker_deploy`'s own
+  template.
+
+To run one scenario, add `--scenario refusals` (the default is `default`):
+
+```text
+.venv/bin/python ansible/harness/run_harness.py --scenario refusals ansible/roles/demo1_build
+```
+
+Each runs on one systemd container (the same Debian 13 image and settings as
+`broker_deploy`; the reason for each key is in `molecule.yml`, including the host
+cgroup namespace, which is the stated exception). Applying the role takes about
+five minutes of the real downloads and unit work, which is why the role is
+applied three times in `default` and never in `refusals`: a shard is one job with
+a 25-minute limit, and the earlier version of this scenario applied it eleven
+times and was cancelled at the limit.
 
 ### What runs for real
 
@@ -262,14 +306,43 @@ minutes.
 - No colour unit and no router is enabled or started.
 - Docker, Caddy and the tenant images are absent.
 
-### What `converge.yml` proves
+### What `default/converge.yml` proves
 
-- A check run changes nothing on the host (above).
+- A check run changes nothing on the host (above), and says whether the sudoers
+  grant was verified.
 - The role leaves the sudoers grant and the broker's slots directory exactly as it
   found them: same checksum, same modification time, same entries.
 - A drain flag the broker cleared is not put back by a later run.
-- A pinned checksum with one digit changed stops the role at the download, naming
-  the checksum.
+- A refusal by the grant check stops the run before the install: the probe path
+  `/usr/local/sbin/branchleft-slot-refused-probe` is not a file after the refusal.
+  This is the one refusal that needs the whole role, so it stays here. A second
+  case, a dotted spelling of a system binary, is refused by the input check before
+  anything runs.
+
+### What `refusals/converge.yml` proves
+
+The first play stages the release, so the generator is on the host, and keeps the
+grant as prepared. Each later play (`refused_grant.yml`) writes an edited grant with
+`visudo -csf` as the validator, runs `_sudoers_check.yml` alone, and puts the
+prepared grant back in every outcome. Each expects the refusal named in its case:
+
+- the grant as prepared is **accepted** (the control: without it a role that
+  refused every grant would pass every case);
+- a `#1000` uid rule and a `#includedir` line, each before the first rule and after
+  the last, and a comment after the last rule;
+- the first rule with `, ALL` added, the last rule with `, /bin/sh` added, and the
+  first rule replaced by a wildcard rule;
+- the first two rules swapped (the comparison is ordered);
+- a wrapper path the grant does not name (`/usr/bin/passwd`), refused by the
+  last assertion of the grant check;
+- an eighth slot in the role's slot table, refused by the slot-table assertion;
+- a pinned checksum with one digit changed, which stops the role at the download,
+  naming the checksum.
+
+What `refusals` cannot see is an install, since it never applies the role. It
+also cannot stage a stand-in for the generator: the real one is staged through
+`_release.yml`, because a stand-in would be a second copy of the grant table, which
+is the thing the check exists to compare with.
 
 ### What `verify.yml` checks
 
@@ -286,38 +359,66 @@ wrapper lock directory.
 
 ### What breaks which step
 
-One row per edit, with the Molecule steps run over the role and a restore afterwards.
-The retrieval is the run itself.
+One row per mechanism. The first column is what to remove or change, the second is
+the scenario and Molecule step that goes red, the third is the assertion that owns
+the refusal and the words of its message, which the case matches, so a different
+failure does not pass for the right one. The retrieval is the run itself: the
+harness prints the step and the message, and the shard's log at the head of a pull
+request shows the same.
 
-| Edit                                                       | Step that fails    | Assertion that names it                                                                                                                         |
-| ---------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| A task that writes a different valid sudoers file          | `converge`         | "The role wrote the sudoers grant."                                                                                                             |
-| A line of the host's grant replaced by another valid line  | `converge`         | "The installed sudoers grant is not what render_slot_sudoers.py renders."                                                                       |
-| A line of the host's grant removed                         | `converge`         | "The installed sudoers grant holds N rules; the slot table of 7 slots expects 50."                                                              |
-| The wrapper-path assertion of `_sudoers_check.yml` removed | `converge`         | the case for a path the grant does not name: "The role accepted a wrapper path that the sudoers grant does not name."                           |
-| `_programs.yml` run before `_sudoers_check.yml`            | `converge`         | "The role installed the wrapper at /usr/local/sbin/branchleft-slot and then refused the sudoers grant."                                         |
-| The wildcard assertion of `_sudoers_check.yml` removed     | `converge`         | the case for a wildcard rule: "The role failed on the line ... for a reason other than holds a line that is not a single literal NOPASSWD rule" |
-| The dot-segment condition of `_inputs.yml` removed         | `converge`         | the case for a dotted wrapper path: "for a reason other than The wrapper path must be an absolute path"                                         |
-| The socket directory mode changed                          | `verify`           | "The router's socket tree is not root's 0755 at the top and the router's 0700 below."                                                           |
-| The drain-flag directory's owner changed to root           | `verify`           | "The broker's state directory is not broker:broker 0750, or the drain-flag directory is not broker:broker 0755."                                |
-| The candidate written as a `Caddyfile`                     | `verify`           | "A Caddyfile exists, a slot directory exists, or the wrapper's lock directory exists."                                                          |
-| The real wrapper's `reset` run by a task                   | `verify`           | the same assertion (the real wrapper leaves its lock directory)                                                                                 |
-| An eighth slot added to the role's slot table              | `converge`         | "The installed sudoers grant holds 50 rules; the slot table of 8 slots expects 57."                                                             |
-| The register directory made `0755` on the host             | `converge`         | "is not a directory owned by root with mode 0700."                                                                                              |
-| The wrapper installed group-writable                       | `converge`         | the integrity assertion on the installed programs                                                                                               |
-| One digit of a pin flipped                                 | `converge`         | "did not match" at the download                                                                                                                 |
-| The claim program run in check mode                        | `converge` (check) | "The check run changed"                                                                                                                         |
-| A file added to the broker's slots directory               | `converge`         | "The role changed the broker's slots directory"                                                                                                 |
-| The pre-seed guard removed                                 | `converge`         | "The role put a cleared drain flag back."                                                                                                       |
+The grant check (`_sudoers_check.yml`) runs its assertions in this order, and each
+`refusals` case names the one that owns it, so a case goes red when an earlier
+assertion fires in its place or a later one is the only one left:
+
+1. the file is root's regular file, mode `0440`;
+2. `visudo -csf` accepts it;
+3. the installed body equals the generator's body (the grant bodies in `vars/main.yml`);
+4. the slots in the generator's grant are the slots of the role;
+5. every rule runs the wrapper path the role installs at.
+
+| Mechanism removed or changed                                          | Scenario, step         | Owning assertion and message                                                                                      |
+| --------------------------------------------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| A task that writes a different valid sudoers file                     | default, `converge`    | "The role wrote the sudoers grant."                                                                               |
+| The header split of the body reverted to a filter on any `#` line     | refusals, `converge`   | 3: "is not what render_slot_sudoers.py renders" for the `#1000` and `#includedir` cases, in both positions        |
+| The body equality weakened to a prefix match on each rule             | refusals, `converge`   | 3: the same message, for the `, ALL` and `, /bin/sh` cases                                                        |
+| Both sides sorted before the comparison                               | refusals, `converge`   | 3: the same message, for the swapped-rules case                                                                   |
+| The body equality assertion removed                                   | refusals, `converge`   | 3: every grant case in that scenario but the control, which then fails the next assertion that sees the edit      |
+| The slot-table assertion removed                                      | refusals, `converge`   | 4: "are not the slots in demo1_build_slot_names", for the eighth-slot case                                        |
+| The wrapper tie (assertion 5) removed                                 | refusals, `converge`   | 5: "does not run /usr/bin/passwd in every rule"; and in default, the probe-path play                              |
+| `_programs.yml` run before `_sudoers_check.yml`                       | default, `converge`    | "The role installed the wrapper at ... and then refused the sudoers grant." (the probe path exists after the run) |
+| The NOT verified notice removed or made conditional on the wrong test | default, `check-fresh` | "A plan on a host with no staged release did not say the sudoers grant was NOT verified"                          |
+| The dot-segment condition of `_inputs.yml` removed                    | default, `converge`    | the dotted-path play: "for a reason other than The wrapper path must be an absolute path"                         |
+| One digit of a pin flipped                                            | refusals, `converge`   | "did not match" at the download                                                                                   |
+| The socket directory mode changed                                     | default, `verify`      | "The router's socket tree is not root's 0755 at the top and the router's 0700 below."                             |
+| The drain-flag directory's owner changed to root                      | default, `verify`      | "The broker's state directory is not broker:broker 0750, or the drain-flag directory is not broker:broker 0755."  |
+| The candidate written as a `Caddyfile`                                | default, `verify`      | "A Caddyfile exists, a slot directory exists, or the wrapper's lock directory exists."                            |
+| The real wrapper's `reset` run by a task                              | default, `verify`      | the same assertion (the real wrapper leaves its lock directory)                                                   |
+| The register directory made `0755` on the host                        | default, `converge`    | "is not a directory owned by root with mode 0700."                                                                |
+| The wrapper installed group-writable                                  | default, `converge`    | the integrity assertion on the installed programs                                                                 |
+| The claim program run in check mode                                   | default, `check-*`     | "The check run changed"                                                                                           |
+| A file added to the broker's slots directory                          | default, `converge`    | "The role changed the broker's slots directory"                                                                   |
+| The pre-seed guard removed                                            | default, `converge`    | "The role put a cleared drain flag back."                                                                         |
+
+The harness's own controls (a failing second scenario fails its shard, a role with
+no `molecule/` still gets a shard and fails at the scenario limits, a privileged
+second scenario without a comment is refused, and shard names are unique) are in
+`ansible/harness/test_run_harness.py` and `test_list_shards.py`, and run with the
+other unit tests of `ansible/harness`.
 
 ### Named limits
 
 - **The sidecar is not run.** It needs an image environment file that this role
   does not deliver; see the gaps. The test proves the text and the paths, not that
   a colour starts.
-- **A silent skip passes.** Tasks skipped in check mode on a host with no release
-  are not caught by the harness; this table and the comments at each skip are the
-  review of it (ANS-10).
+- **A silent skip passes, except one.** Tasks skipped in check mode on a host with
+  no release are not caught by the harness; this table and the comments at each
+  skip are the review of it (ANS-10). The grant comparison is the exception: its
+  skip must print "Sudoers grant NOT verified" and `default/converge.yml` asserts
+  it.
+- **A plan on a fresh host does not compare the grant.** There is no generator to
+  compare with until a release is staged, so the first plan reports the grant as
+  not verified. The apply compares it, and refuses any difference before anything
+  is installed.
 - **The mode at the instant of writing** of a file is a property of Ansible's
   temporary file and atomic move, not of anything the test observes.
 - **A release directory is never removed.** Old releases stay.
@@ -327,8 +428,9 @@ The retrieval is the run itself.
   boot). Every file is written atomically, so none is ever half-written.
 - Python unit tests, if any are added under `roles/*/tests`, are not run by CI.
   The Molecule scenario carries the controls.
-- CI runs this scenario: the Ansible workflow runs the harness over every
-  directory under `ansible/roles/`.
+- CI runs both scenarios: the Ansible workflow runs one job per scenario of every
+  directory under `ansible/roles/` (`ansible/harness/list_shards.py` lists them),
+  and this role's shards are `demo1_build` and `demo1_build (refusals)`.
 
 ## Gaps the role names and does not close
 

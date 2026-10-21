@@ -19,10 +19,12 @@
   ansible.builtin.include_tasks: _release.yml
 
 # The comparison comes before the install on purpose. The grant is what makes the
-# wrapper reachable as root, so a grant this refuses (a wildcard, the wrong number
-# of rules, drift from the generator, or an extra slot) must stop the run before
-# the wrapper is put anywhere, wherever the wrapper path points. It needs only the
-# staged release above, never the installed wrapper.
+# wrapper reachable as root, so a grant this refuses (any difference from the
+# generator's body, a slot table that is not the generator's, or a rule that does
+# not run the wrapper path) must stop the run before the wrapper is put anywhere,
+# wherever the wrapper path points. It needs only the staged release above, never
+# the installed wrapper. On a host with no release (a first plan) it says the
+# grant was not verified; an apply always has the release.
 - name: Compare the sudoers grant with the pinned generator
   ansible.builtin.include_tasks: _sudoers_check.yml
 

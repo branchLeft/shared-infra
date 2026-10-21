@@ -1,0 +1,206 @@
+---
+# The refusal cases of the role. Each is one edit of the grant that
+# broker_deploy installed, or one bad input, and the role's grant check must
+# refuse it with its own message. They live in their own scenario so that the
+# default scenario applies the role only a few times (its shard is bound by the
+# time limit); here the role is not applied. The first play stages the pinned
+# programs, which holds the generator the grant is compared with, with the role's
+# own release tasks and the real download. Every other play runs
+# tasks/_sudoers_check.yml alone against an edited grant. That is all these cases
+# can see: with no install in this scenario, whether a refusal comes before the
+# install is proved in the default scenario, which runs the whole role.
+#
+# The grant on the host is rendered by broker_deploy's own template (prepare.yml,
+# the default scenario's), and the generator is the real pinned one, so the
+# header of the first differs from the header of the second, as it does on a real
+# host. A plan makes no change, so a check run skips every play.
+- name: Stage the pinned programs and read the grant as prepared
+  hosts: all
+  gather_facts: false
+  vars:
+    converge_grant: /etc/sudoers.d/branchleft-slot
+  tasks:
+    - name: Stage the release, which holds the generator, with the role's own release tasks
+      ansible.builtin.include_role:
+        name: branchleft.demo1_build
+        tasks_from: _release.yml
+      when: not ansible_check_mode
+
+    - name: Read the grant as prepared
+      ansible.builtin.slurp:
+        src: '{{ converge_grant }}'
+      register: demo1_build_converge_pristine
+      when: not ansible_check_mode
+
+    - name: Keep the grant as prepared, to put back after each case
+      ansible.builtin.set_fact:
+        demo1_build_converge_pristine_text: '{{ demo1_build_converge_pristine.content | b64decode }}'
+      when: not ansible_check_mode
+
+# The control case: the grant as broker_deploy renders it, with its own header,
+# is accepted. Without it, a role that refused every grant would pass every case.
+- name: Accept the grant as prepared
+  ansible.builtin.import_playbook: refused_grant.yml
+  vars:
+    converge_case:
+      name: the grant as prepared
+      accepted: true
+
+# A comment is "#" alone or "#" and a space. "#1000" is a uid rule and
+# "#includedir" an include, whatever follows. Each is placed after the last rule
+# and before the first, because the header ends at the first line that is not a
+# comment and a refusal that only looks at the end would miss the other.
+- name: Refuse a uid rule after the last rule
+  ansible.builtin.import_playbook: refused_grant.yml
+  vars:
+    converge_case:
+      name: a uid rule after the last rule
+      append: '#1000 ALL=(ALL) NOPASSWD: ALL'
+      expect: 'is not what render_slot_sudoers.py renders'
+
+- name: Refuse a uid rule before the first rule
+  ansible.builtin.import_playbook: refused_grant.yml
+  vars:
+    converge_case:
+      name: a uid rule before the first rule
+      insert_before: '#1001 ALL=(ALL) NOPASSWD: ALL'
+      expect: 'is not what render_slot_sudoers.py renders'
+
+- name: Refuse an include after the last rule
+  ansible.builtin.import_playbook: refused_grant.yml
+  vars:
+    converge_case:
+      name: an include after the last rule
+      append: '#includedir /tmp/x'
+      expect: 'is not what render_slot_sudoers.py renders'
+
+- name: Refuse an include before the first rule
+  ansible.builtin.import_playbook: refused_grant.yml
+  vars:
+    converge_case:
+      name: an include before the first rule
+      insert_before: '#includedir /tmp/y'
+      expect: 'is not what render_slot_sudoers.py renders'
+
+# Nothing after the first rule is exempt, a comment included.
+- name: Refuse a comment after the last rule
+  ansible.builtin.import_playbook: refused_grant.yml
+  vars:
+    converge_case:
+      name: a comment after the last rule
+      append: '# a comment after the last rule'
+      expect: 'is not what render_slot_sudoers.py renders'
+
+# A rule that keeps its prefix and adds a second command.
+- name: Refuse a rule with a command list ending in ALL
+  ansible.builtin.import_playbook: refused_grant.yml
+  vars:
+    converge_case:
+      name: the first rule with ", ALL" added
+      first_suffix: ', ALL'
+      expect: 'is not what render_slot_sudoers.py renders'
+
+- name: Refuse a rule with a command list ending in a shell
+  ansible.builtin.import_playbook: refused_grant.yml
+  vars:
+    converge_case:
+      name: the last rule with ", /bin/sh" added
+      last_suffix: ', /bin/sh'
+      expect: 'is not what render_slot_sudoers.py renders'
+
+- name: Refuse a wildcard rule
+  ansible.builtin.import_playbook: refused_grant.yml
+  vars:
+    converge_case:
+      name: the first rule replaced by a wildcard rule
+      first_replace: 'broker ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot *'
+      expect: 'is not what render_slot_sudoers.py renders'
+
+# The same rules in another order: the comparison is of ordered lists, and sorting
+# both sides would pass this.
+- name: Refuse the same rules in another order
+  ansible.builtin.import_playbook: refused_grant.yml
+  vars:
+    converge_case:
+      name: the first two rules swapped
+      swap: true
+      expect: 'is not what render_slot_sudoers.py renders'
+
+# The wrapper path. The grant is valid and whole; only the path the role is asked
+# to install at differs from the one every rule names. The second case is a system
+# binary that exists. This scenario runs the check alone, so it proves the check
+# refuses; that nothing is written first is proved in the default scenario.
+- name: Refuse a wrapper path the grant does not name, an existing system binary
+  ansible.builtin.import_playbook: ../default/refused_wrapper_path.yml
+  vars:
+    converge_case:
+      path: /usr/bin/passwd
+      tasks_from: _sudoers_check.yml
+      expect: 'does not run /usr/bin/passwd in every rule'
+
+# The grant is the generator's and whole; the role's slot table has an eighth
+# slot that the grant does not hold.
+- name: Refuse a slot table that is not the generator's
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Prove a slot table the generator does not render is refused
+      when: not ansible_check_mode
+      block:
+        - name: Run the role's grant check with an eighth slot
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+            tasks_from: _sudoers_check.yml
+          vars:
+            demo1_build_slot_names: ['0', '1', '2', '3', '4', '5', '6', '7']
+
+        - name: Fail if the slot table was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a slot table the pinned generator does not render.
+      rescue:
+        - name: Assert the refusal was the slot table
+          ansible.builtin.assert:
+            that:
+              - "'are not the slots in demo1_build_slot_names' in (ansible_failed_result.msg | default(''))"
+            quiet: true
+            fail_msg: >-
+              The role failed on the eighth slot for a reason other than the slot table:
+              {{ ansible_failed_result.msg | default('') }}
+
+# A program whose pinned sha256 is wrong must stop the release step at the
+# download. The file on the host is already right, so a refusal changes nothing.
+# The assertion names the checksum, so a failure of any other kind does not pass
+# for this one.
+- name: Refuse a program whose pin is wrong
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the role's own pins
+      ansible.builtin.include_vars:
+        file: '{{ playbook_dir }}/../../defaults/main.yml'
+        name: converge_defaults
+      when: not ansible_check_mode
+
+    - name: Prove a wrong pin is refused
+      when: not ansible_check_mode
+      block:
+        - name: Stage the release with one digit of one pin changed
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+            tasks_from: _release.yml
+          vars:
+            demo1_build_release_files: >-
+              {{ [{'path': 'demo-host/provision/branchleft_slot.py',
+              'sha256': '3e2279f0067d91296e1b309f6cbe71a3d276d7ccdbbd58aa4f99f81ce85ba80b'}]
+              + (converge_defaults.demo1_build_release_files | rejectattr('path', 'equalto', 'demo-host/provision/branchleft_slot.py') | list) }}
+
+        - name: Fail if the wrong pin was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a program whose pinned checksum was wrong.
+      rescue:
+        - name: Assert the failure was the checksum
+          ansible.builtin.assert:
+            that:
+              - "'did not match' in (ansible_failed_result | string | lower)"
+            quiet: true
+            fail_msg: The role failed on the wrong pin for a reason other than the checksum.

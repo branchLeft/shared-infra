@@ -76,12 +76,10 @@ demo1_build_path_pattern: '^/[A-Za-z0-9._/-]+\Z'
 demo1_build_release_path_pattern: '^demo-host/provision/[a-z_]+\.py\Z'
 demo1_build_instance_pattern: '^branchleft-compose@demo-[0-9]+-[a-z]\Z'
 
-# The slot table as strings, whatever type the host's variables gave, and the
-# number of grant lines it implies: per slot one reset and, per colour, a start,
-# a stop and an email-batches check; and one image load in all.
+# The slot table as strings, whatever type the host's variables gave. The
+# pinned generator's grant is compared with the installed one line for line, so
+# no count is derived from this table: it is checked against the generator's.
 demo1_build_slots: "{{ demo1_build_slot_names | map('string') | list }}"
-demo1_build_grants_per_slot: '{{ 1 + (demo1_build_colours | length) * 3 }}'
-demo1_build_expected_grants: '{{ (demo1_build_slots | length) * (demo1_build_grants_per_slot | int) + 1 }}'
 
 # The programs the role needs from the release, by file name.
 demo1_build_required_programs:
@@ -96,11 +94,41 @@ demo1_build_required_programs:
   - render_router_unit.py
   - render_slot_sudoers.py
 
-# Patterns for reading a sudoers grant back. A rule is one literal line for the
-# broker; a wildcard character anywhere in a rule would let an extra argument
-# reach the wrapper as root.
-demo1_build_grant_line_pattern: '^broker ALL=\(root\) NOPASSWD: /'
-demo1_build_wildcard_pattern: '[*?\[]'
+# What a comment of the grant's header is: "#" alone, or "#" and a space. It is
+# not "#1000" or "#includedir", which sudoers reads as a uid and an include, and
+# the split below also refuses a comment ending in a backslash.
+demo1_build_grant_header_pattern: '^#( .*)?$'
+
+# The installed grant and the pinned generator's output, each cut into a header
+# and a body, as {installed: [...], generated: [...]} (generated only once the
+# release is staged). The header is the leading run of blank lines and comments;
+# it is the one part not compared, because broker_deploy's template and the
+# generator word it differently. The body is everything from the first line that
+# is not header, and _sudoers_check.yml compares it as an ordered list: no comment
+# is exempt after the first rule, and nothing is sorted. A comment ending in a
+# backslash is not header, as sudoers joins such a line to the next. Trailing
+# newlines are dropped before the split, as blank lines at the end are inert.
+# Both texts go through this one template. It reads the registered results of
+# _sudoers_check.yml, so it is a variable and not a copy in a task.
+demo1_build_grant_bodies: |-
+  {%- set texts = {'installed': demo1_build_sudoers_raw.content | b64decode} -%}
+  {%- if demo1_build_release_ready | bool -%}
+  {%- set _ = texts.update({'generated': demo1_build_generated_sudoers.stdout}) -%}
+  {%- endif -%}
+  {%- set bodies = {} -%}
+  {%- for name, text in texts.items() -%}
+  {%- set ns = namespace(in_body=false, lines=[]) -%}
+  {%- for line in text.rstrip('\n').split('\n') -%}
+  {%- if not (line == '' or (line is match(demo1_build_grant_header_pattern) and not line.endswith('\\'))) -%}
+  {%- set ns.in_body = true -%}
+  {%- endif -%}
+  {%- if ns.in_body -%}
+  {%- set _ = ns.lines.append(line) -%}
+  {%- endif -%}
+  {%- endfor -%}
+  {%- set _ = bodies.update({name: ns.lines}) -%}
+  {%- endfor -%}
+  {{ bodies }}
 
 # The wrapper is installed as root at demo1_build_wrapper_path, so the path the
 # grant was checked for is the path the install uses: every rule must run exactly

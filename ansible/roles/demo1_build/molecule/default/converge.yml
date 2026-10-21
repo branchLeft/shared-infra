@@ -52,6 +52,16 @@
       register: demo1_build_converge_before
       when: ansible_check_mode
 
+    # The link to the staged release exists only on a host the role has applied,
+    # so it says which state a plan meets: a fresh host, where no generator is
+    # staged and the grant cannot be compared, or a configured one.
+    - name: Look at the release link before a plan
+      ansible.builtin.stat:
+        path: /opt/branchleft/demo-host/current
+        follow: false
+      register: demo1_build_converge_release_before
+      when: ansible_check_mode
+
     - name: Look at the sudoers grant before the role runs
       ansible.builtin.stat:
         path: '{{ converge_sudoers_path }}'
@@ -83,6 +93,24 @@
     - name: Apply the role
       ansible.builtin.include_role:
         name: branchleft.demo1_build
+
+    # The control for the grant check in a plan (ANS-10). A fresh host has no
+    # staged generator, so the check is skipped with a reason and must say the
+    # grant was NOT verified; it must not fail the plan (there would be nothing to
+    # approve) and must not stay silent (a skip would read as a pass). A configured
+    # host has the generator, so the comparison runs and the notice is skipped.
+    - name: Assert a plan says whether the sudoers grant was verified
+      ansible.builtin.assert:
+        that:
+          - demo1_build_converge_release_before.stat.exists == (demo1_build_grant_notice.skipped | default(false))
+          - >-
+            demo1_build_converge_release_before.stat.exists
+            or ('NOT verified' in (demo1_build_grant_notice.msg | default('')))
+        quiet: true
+        fail_msg: >-
+          A plan on a host with no staged release did not say the sudoers grant was NOT verified,
+          or a plan on a configured host said it. A skipped comparison must not look like a pass.
+      when: ansible_check_mode
 
     - name: Look at the watched paths after a plan
       ansible.builtin.stat:
@@ -183,111 +211,19 @@
         fail_msg: The role put a cleared drain flag back. That would drain a colour that is serving traffic.
       when: not ansible_check_mode
 
-    # The control for the pin. A program whose pinned sha256 is wrong must stop
-    # the role at the download, and the file on the host is already right, so a
-    # refusal changes nothing and the later steps still see a configured host.
-    # The assertion names the checksum, so a failure of any other kind does not
-    # pass for this one. Check mode skips it: get_url does not compare a checksum
-    # there.
-    - name: Read the role's own pins
-      ansible.builtin.include_vars:
-        file: '{{ playbook_dir }}/../../defaults/main.yml'
-        name: converge_defaults
-
-    - name: Prove a wrong pin is refused
-      when: not ansible_check_mode
-      block:
-        - name: Apply the role with one digit of one pin changed
-          ansible.builtin.include_role:
-            name: branchleft.demo1_build
-          vars:
-            demo1_build_release_files: >-
-              {{ [{'path': 'demo-host/provision/branchleft_slot.py',
-              'sha256': '3e2279f0067d91296e1b309f6cbe71a3d276d7ccdbbd58aa4f99f81ce85ba80b'}]
-              + (converge_defaults.demo1_build_release_files | rejectattr('path', 'equalto', 'demo-host/provision/branchleft_slot.py') | list) }}
-        - name: Fail if the wrong pin was accepted
-          ansible.builtin.fail:
-            msg: The role accepted a program whose pinned checksum was wrong.
-      rescue:
-        - name: Assert the failure was the checksum
-          ansible.builtin.assert:
-            that:
-              - "'did not match' in (ansible_failed_result | string | lower)"
-            quiet: true
-            fail_msg: The role failed on the wrong pin for a reason other than the checksum.
-
-    # The controls for the sudoers grant. The grant is what makes the wrapper
-    # reachable as root, so a grant or a wrapper path the check refuses must stop
-    # the run before the wrapper is put anywhere. A role that only fails does not
-    # prove that: it can fail after the install and leave the wrapper live under
-    # the refused grant. So each case below reads the host after the failure, and
-    # each assertion names its own refusal (not a shared phrase), so a failure of
-    # any other kind does not pass for it. Nothing here restores by running the
-    # role: what a case moves or edits it puts back as it found it.
-
-    # The order, for the count refusal. The real wrapper is moved aside first, so
-    # an install that came before the check would put a file back at its path.
-    - name: Prove a grant the check refuses leaves the wrapper uninstalled
-      when: not ansible_check_mode
-      vars:
-        converge_wrapper: /usr/local/sbin/branchleft-slot
-        converge_wrapper_aside: /root/branchleft-slot.wrapper.aside
-      block:
-        - name: Move the installed wrapper aside
-          ansible.builtin.command:
-            argv:
-              - /bin/mv
-              - '{{ converge_wrapper }}'
-              - '{{ converge_wrapper_aside }}'
-            removes: '{{ converge_wrapper }}'
-          changed_when: false
-
-        - name: Apply the role with a slot the installed grant does not hold
-          ansible.builtin.include_role:
-            name: branchleft.demo1_build
-          vars:
-            demo1_build_slot_names: ['0', '1', '2', '3', '4', '5', '6', '7']
-
-        - name: Fail if the refused grant was accepted
-          ansible.builtin.fail:
-            msg: The role accepted a sudoers grant that does not match the slot table.
-      rescue:
-        - name: Assert the failure was the count of rules
-          ansible.builtin.assert:
-            that:
-              - "'rules; the slot table of 8 slots expects 57' in (ansible_failed_result.msg | default(''))"
-            quiet: true
-            fail_msg: The role failed on the extra slot for a reason other than the count of rules.
-
-        - name: Look at the wrapper's path after the refusal
-          ansible.builtin.stat:
-            path: '{{ converge_wrapper }}'
-            follow: false
-          register: demo1_build_converge_order_wrapper
-
-        - name: Assert the refused grant left no wrapper installed
-          ansible.builtin.assert:
-            that:
-              - not demo1_build_converge_order_wrapper.stat.exists
-            quiet: true
-            fail_msg: >-
-              The role installed the wrapper at {{ converge_wrapper }} and then refused the
-              sudoers grant. A grant the check refuses must stop the run before any install.
-      always:
-        - name: Put the installed wrapper back
-          ansible.builtin.command:
-            argv:
-              - /bin/mv
-              - '{{ converge_wrapper_aside }}'
-              - '{{ converge_wrapper }}'
-            removes: '{{ converge_wrapper_aside }}'
-          changed_when: false
-
-# The wrapper path. The grant is valid and whole; only the path the role is
-# asked to install at differs from the one every rule names. The second case is a
-# system binary that exists, so a write would overwrite it; the third is a dotted
-# spelling that reaches the same binary. Each case is its own play, run on the
-# host as it was left by the one before.
+# The one control that needs the whole role: a refusal by the grant check must
+# stop the run before the install. The grant is valid and whole; only the path the
+# role is asked to install the wrapper at differs from the one every rule names.
+# The probe path does not exist, so a role that installed before it checked would
+# leave a file there, and the play reads the path after the refusal. A role that
+# only fails does not prove the order: it can fail after the install and leave the
+# wrapper live under a refused grant. The second case is a dotted spelling of a
+# system binary, refused by the input check before anything runs.
+#
+# Every other refusal case lives in the refusals scenario, where the role is not
+# applied again for each case (the default scenario's shard has to stay under its
+# time limit). That scenario cannot see an install, because it runs the check
+# alone, so the order control stays here.
 - name: Refuse a wrapper path the grant does not name, a probe path
   ansible.builtin.import_playbook: refused_wrapper_path.yml
   vars:
@@ -295,48 +231,9 @@
       path: /usr/local/sbin/branchleft-slot-refused-probe
       expect: 'does not run /usr/local/sbin/branchleft-slot-refused-probe in every rule'
 
-- name: Refuse a wrapper path the grant does not name, an existing system binary
-  ansible.builtin.import_playbook: refused_wrapper_path.yml
-  vars:
-    converge_case:
-      path: /usr/bin/passwd
-      expect: 'does not run /usr/bin/passwd in every rule'
-
 - name: Refuse a wrapper path the grant does not name, a dotted spelling
   ansible.builtin.import_playbook: refused_wrapper_path.yml
   vars:
     converge_case:
       path: /usr/local/sbin/../../bin/passwd
       expect: 'The wrapper path must be an absolute path'
-
-# The grant's content. One prepared rule is replaced by a line that keeps the
-# count: three wildcards and a line that is not the broker's. On a host with no
-# release the generator comparison is skipped, so these assertions are the only
-# content check on the grant there.
-- name: Refuse a grant with a star
-  ansible.builtin.import_playbook: refused_grant_line.yml
-  vars:
-    converge_case:
-      line: 'broker ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot *'
-      expect: 'holds a line that is not a single literal NOPASSWD rule for the broker, or a wildcard'
-
-- name: Refuse a grant with a question mark
-  ansible.builtin.import_playbook: refused_grant_line.yml
-  vars:
-    converge_case:
-      line: 'broker ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot ?'
-      expect: 'holds a line that is not a single literal NOPASSWD rule for the broker, or a wildcard'
-
-- name: Refuse a grant with a bracket
-  ansible.builtin.import_playbook: refused_grant_line.yml
-  vars:
-    converge_case:
-      line: 'broker ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot [0-6] reset'
-      expect: 'holds a line that is not a single literal NOPASSWD rule for the broker, or a wildcard'
-
-- name: Refuse a grant with a rule that is not the broker's
-  ansible.builtin.import_playbook: refused_grant_line.yml
-  vars:
-    converge_case:
-      line: 'root ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot 0 reset'
-      expect: 'does not run /usr/local/sbin/branchleft-slot in every rule'

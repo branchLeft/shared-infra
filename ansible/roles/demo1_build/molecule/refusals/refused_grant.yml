@@ -1,0 +1,116 @@
+---
+# One case of the grant-content control, imported by converge.yml. The grant is
+# broker_deploy's file, so the case writes an edited copy of the prepared grant
+# (demo1_build_converge_pristine_text, read by the first play of converge.yml), runs the
+# role's grant check alone against it, and puts the prepared grant back, bytes,
+# owner and mode, in every outcome. A plan makes no change, so a check run skips
+# it.
+#
+# converge_case.expect is the phrase of the refusal that must fire, and the edit
+# is named by exactly one of:
+#   insert_before: a line placed after the header, before the first rule
+#   append: a line placed after the last rule
+#   first_suffix, last_suffix: text added to the end of the first or last rule
+#   first_replace: a line that replaces the first rule
+#   swap: true, which swaps the first two rules
+# Without an edit the grant is the prepared one and the check must accept it
+# (converge_case.accepted: true), which shows the cases are refused for the edit
+# and not because the check refuses everything.
+- name: Refuse a grant the check must refuse
+  hosts: all
+  gather_facts: false
+  vars:
+    converge_grant: /etc/sudoers.d/branchleft-slot
+    # The prepared grant is a header and then only rules, each starting "broker ".
+    converge_head_lines: "{{ demo1_build_converge_pristine_text.rstrip('\n').split('\n') | reject('match', '^broker ') | list }}"
+    converge_rule_lines: "{{ demo1_build_converge_pristine_text.rstrip('\n').split('\n') | select('match', '^broker ') | list }}"
+    converge_text: |-
+      {%- set rules = converge_rule_lines -%}
+      {%- if converge_case.first_replace is defined -%}
+      {%- set rules = [converge_case.first_replace] + rules[1:] -%}
+      {%- endif -%}
+      {%- if converge_case.first_suffix is defined -%}
+      {%- set rules = [rules[0] ~ converge_case.first_suffix] + rules[1:] -%}
+      {%- endif -%}
+      {%- if converge_case.last_suffix is defined -%}
+      {%- set rules = rules[:-1] + [rules[-1] ~ converge_case.last_suffix] -%}
+      {%- endif -%}
+      {%- if converge_case.swap | default(false) -%}
+      {%- set rules = [rules[1], rules[0]] + rules[2:] -%}
+      {%- endif -%}
+      {%- if converge_case.insert_before is defined -%}
+      {%- set rules = [converge_case.insert_before] + rules -%}
+      {%- endif -%}
+      {%- if converge_case.append is defined -%}
+      {%- set rules = rules + [converge_case.append] -%}
+      {%- endif -%}
+      {%- set nl = '\n' -%}
+      {{ (converge_head_lines + rules) | join(nl) }}
+  tasks:
+    - name: Prove a grant the check refuses stops the check
+      when: not ansible_check_mode
+      block:
+        # The line break is spelled where Ansible reads it as one: in a statement
+        # tag of the template above, and as a YAML escape here. In a {{ }}
+        # expression a quoted \n stays a backslash and an n.
+        - name: Write the case's grant, validated, in place of the prepared one
+          ansible.builtin.copy:
+            content: "{{ converge_text }}\n"
+            dest: '{{ converge_grant }}'
+            owner: root
+            group: root
+            mode: '0440'
+            validate: /usr/sbin/visudo -csf %s
+          changed_when: false
+
+        - name: Run the role's grant check against the edited grant
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+            tasks_from: _sudoers_check.yml
+
+        - name: Fail if the refused grant was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a sudoers grant with an edit it must refuse.
+          when: not (converge_case.accepted | default(false))
+
+        # The accepted case must have been compared, and not skipped: the generator
+        # ran and rendered 50 rules (7 slots x 7 rules and one image load, written
+        # here and not read from the role), and the grant the check accepted holds
+        # the same 50. The role's own variables are not visible to a play, so this
+        # reads the results the role registered.
+        - name: Assert the comparison ran on the grant it accepted
+          ansible.builtin.assert:
+            that:
+              - demo1_build_generated_sudoers.stdout | regex_findall('(?m)^broker ') | length == 50
+              - demo1_build_sudoers_raw.content | b64decode | regex_findall('(?m)^broker ') | length == 50
+            quiet: true
+            fail_msg: The accepted grant was not compared with 50 rendered rules.
+          when: converge_case.accepted | default(false)
+      rescue:
+        - name: Assert the control case was not refused
+          ansible.builtin.assert:
+            that:
+              - not (converge_case.accepted | default(false))
+            quiet: true
+            fail_msg: >-
+              The role refused the grant as prepared, which is the case that must be accepted:
+              {{ ansible_failed_result.msg | default('') }}
+
+        - name: Assert the refusal was the one this case is for
+          ansible.builtin.assert:
+            that:
+              - converge_case.expect in (ansible_failed_result.msg | default(''))
+            quiet: true
+            fail_msg: >-
+              The role failed on the case {{ converge_case.name }} for a reason other than {{ converge_case.expect }}:
+              {{ ansible_failed_result.msg | default('') }}
+      always:
+        - name: Put the prepared grant back as it was
+          ansible.builtin.copy:
+            content: '{{ demo1_build_converge_pristine_text }}'
+            dest: '{{ converge_grant }}'
+            owner: root
+            group: root
+            mode: '0440'
+          changed_when: false
+          when: not ansible_check_mode

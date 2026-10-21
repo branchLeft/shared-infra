@@ -87,6 +87,8 @@ argument_specs:
           variables set it. The role refuses to run, before it installs anything,
           unless every rule of the installed sudoers grant runs exactly this path,
           and it refuses a path with a dot segment, a doubled slash or a trailing
-          slash. The pinned generator names /usr/local/sbin/branchleft-slot, so any
-          other value is also refused by the comparison with the generator.
+          slash. The pinned generator hard-codes /usr/local/sbin/branchleft-slot,
+          and the installed grant must equal the generator's output, so this input
+          has exactly one value that can pass on an apply; any other value is
+          refused by the comparison or by the path check, whichever comes first.
         default: /usr/local/sbin/branchleft-slot
