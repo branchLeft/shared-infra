@@ -16,8 +16,12 @@
 # Two modes, run in this order by the role:
 #   validate  the candidates, before any file is placed: the candidate Caddyfile in
 #             the pinned image, the candidate Compose file with `docker compose config -q`.
+#             It prints "EDGE_PIN <ref>", the reference it read from the pin file. The
+#             role runs it whenever it will run apply, even with no candidate.
 #   apply     after the files are placed: write the Caddyfile in place, restart the
-#             unit, restart CrowdSec, reload Caddy, and read each back.
+#             unit, restart CrowdSec, reload Caddy, and read each back. The role gives
+#             it the reference validate printed in EDGE_VALIDATED_PIN, and it acts only
+#             if the pin file still holds exactly that reference.
 #
 # It prints a marker line "EDGE_APPLY <name>" for each thing that was done and read
 # back, and the role stamps exactly those. Exit codes (75 is the lock's, never ours):
@@ -31,6 +35,8 @@
 #   71 CrowdSec's read-back failed (its API did not answer, or a file differs inside it)
 #   72 the Caddy reload failed
 #   73 the Caddyfile inside the container is not the one on the host
+#   74 apply was given no validated pin, or the pin file no longer holds the one validate
+#      read: a deploy moved the pin between the two sections, and nothing was done
 set -eu
 
 mode=$1
@@ -88,6 +94,9 @@ grep -Eq -- "$EDGE_IMAGE_PATTERN" "$EDGE_IMAGE_ENV" || fail 64 "$EDGE_IMAGE_ENV 
 image=$(sed -e 's/^IMAGE=//' "$EDGE_IMAGE_ENV")
 
 if [ "$mode" = validate ]; then
+  # The reference the candidates are validated in. The role hands it to apply, which
+  # refuses to act on a different one.
+  echo "EDGE_PIN $image"
   # The placeholders are the ones CI and the runbook use. The check parses and
   # adapts the file; it contacts nothing and issues no certificate. The Caddy
   # check needs no real value, so edge.env is not given to it. The Compose check
@@ -118,6 +127,12 @@ if [ "$mode" = validate ]; then
 fi
 
 [ "$mode" = apply ] || fail 64 "unknown mode $mode"
+
+# The digest the candidates were validated in is the digest the classes are applied
+# with. Only the whole reference is compared: a pin that merely still matches the
+# pattern is a different digest. Nothing has been done when this fails.
+[ -n "${EDGE_VALIDATED_PIN:-}" ] || fail 74 "no validated pin was given, so nothing was validated in this run"
+[ "$EDGE_VALIDATED_PIN" = "$image" ] || fail 74 "$EDGE_IMAGE_ENV changed since the candidates were validated"
 
 # 1. The Caddyfile, written into the existing file, so the inode the container's
 # single-file bind mount holds is the inode that changes. A rename would leave the

@@ -4,6 +4,9 @@
 # the decision has two parts that are both read from the host: the file on the host
 # against the file in the repository (drift, which a hand edit or a torn file
 # shows), and the stamp against the fingerprint of what the repository holds now.
+# This role works out the hashes, the fingerprints and the drift; the restart_stamp
+# role reads the stamps and says what is to be adopted, what is due and what is
+# marked (README, "Shared home").
 
 - name: Hash every file of the stack in the repository
   ansible.builtin.stat:
@@ -34,29 +37,14 @@
     hidden: true
   register: edge_stack_host_acquis
 
-- name: Look for the three stamps
-  ansible.builtin.stat:
-    path: '{{ item.value }}'
-    follow: false
-    get_checksum: false
-  loop: '{{ edge_stack_stamp_files | dict2items }}'
-  register: edge_stack_stamp_stats
-  loop_control:
-    label: '{{ item.key }}'
-
-# Only a stamp that is not there is `absent`, and only `absent` can be adopted. A
-# stamp that is there and cannot be read (a directory, a link to nothing, an I/O
-# error) fails this task and so the run, before anything is placed: it is not a
-# host nobody has applied the role to.
-- name: Read the stamps that are there
-  ansible.builtin.slurp:
-    src: '{{ item.item.value }}'
-  loop: '{{ edge_stack_stamp_stats.results }}'
-  register: edge_stack_stamp_reads
-  when: item.stat.exists
-  no_log: true
-  loop_control:
-    label: '{{ item.item.key }}'
+# A stamp that is there and cannot be read fails the run here, before anything is
+# placed; only a stamp that is not there is `absent` (restart_stamp, entry point read).
+- name: Read the three stamps
+  ansible.builtin.include_role:
+    name: '{{ edge_stack_stamp_role }}'
+    tasks_from: read
+  vars:
+    restart_stamp_classes: "{{ edge_stack_stamp_files | dict2items(key_name='name', value_name='file') }}"
 
 # Read-only; a unit that is not enabled is a host awaiting the owner's first start.
 - name: Read the edge unit
@@ -64,18 +52,12 @@
     name: '{{ edge_stack_unit }}'
   register: edge_stack_unit_status
 
-- name: Keep the hashes and the stamps by name
+- name: Keep the hashes by name
   ansible.builtin.set_fact:
     edge_stack_repo_sha: >-
       {{ dict(edge_stack_hashed | zip(edge_stack_repo_stats.results | map(attribute='stat.checksum', default='absent'))) }}
     edge_stack_host_sha: >-
       {{ dict(edge_stack_hashed | zip(edge_stack_host_stats.results | map(attribute='stat.checksum', default='absent'))) }}
-    edge_stack_stamp: >-
-      {%- set ns = namespace(out={}) -%}
-      {%- for read in edge_stack_stamp_reads.results -%}
-      {%- set _ = ns.out.update({read.item.item.key: (read.content | b64decode | trim) if read.content is defined else 'absent'}) -%}
-      {%- endfor -%}
-      {{ ns.out }}
     edge_stack_stale_acquis: >-
       {{ edge_stack_host_acquis.files | map(attribute='path')
       | reject('in', edge_stack_acquis_files | map('regex_replace', '^', edge_stack_project_dir ~ '/') | list) | sort | list }}
@@ -111,37 +93,43 @@
     edge_stack_compose_drift: '{{ edge_stack_compose_file in edge_stack_differs }}'
     edge_stack_crowdsec_drift: '{{ ((edge_stack_differs | intersect(edge_stack_crowdsec_all)) | length > 0) or (edge_stack_stale_acquis | length > 0) }}'
 
-# adopt: no stamp and nothing differs. The host already has the repository's files,
-# as a hand-delivered host does, so the stamp is written and nothing is acted on.
-# The Compose class is adopted only while its unit is enabled; one that is not is
-# the owner's first start. due: a stamp that is not this fingerprint (`pending` is
-# never one) or a file that differs, and not adopted.
-- name: Work out what to adopt and what is due
-  ansible.builtin.set_fact:
-    edge_stack_caddy_adopt: '{{ edge_stack_stamp.caddy == "absent" and not edge_stack_caddy_drift | bool }}'
-    edge_stack_compose_adopt: >-
-      {{ edge_stack_stamp.compose == "absent" and not edge_stack_compose_drift | bool and edge_stack_unit_enabled | bool }}
-    edge_stack_crowdsec_adopt: '{{ edge_stack_stamp.crowdsec == "absent" and not edge_stack_crowdsec_drift | bool }}'
-  no_log: true
+# What the three classes are to the decision. All three can be adopted (a hand-delivered
+# host has the repository's files and no stamp). The Compose class is gated by its unit:
+# a unit that is not enabled is the owner's first start, so it is neither adopted nor
+# due, but its mark is still written when its file drifts, so the placed file never
+# makes a host with no stamp look hand-delivered (README, "Adoption").
+- name: Decide what to adopt, what is due and what to mark pending
+  ansible.builtin.include_role:
+    name: '{{ edge_stack_stamp_role }}'
+    tasks_from: decide
+  vars:
+    restart_stamp_classes:
+      - name: caddy
+        stamp: '{{ restart_stamp_found.caddy }}'
+        fingerprint: '{{ edge_stack_fp_caddy }}'
+        drift: '{{ edge_stack_caddy_drift }}'
+        adoptable: true
+      - name: compose
+        stamp: '{{ restart_stamp_found.compose }}'
+        fingerprint: '{{ edge_stack_fp_compose }}'
+        drift: '{{ edge_stack_compose_drift }}'
+        adoptable: true
+        gate: '{{ edge_stack_unit_enabled }}'
+      - name: crowdsec
+        stamp: '{{ restart_stamp_found.crowdsec }}'
+        fingerprint: '{{ edge_stack_fp_crowdsec }}'
+        drift: '{{ edge_stack_crowdsec_drift }}'
+        adoptable: true
 
-- name: Work out what is due
+- name: Keep what is due under the names this role uses
   ansible.builtin.set_fact:
-    edge_stack_caddy_due: >-
-      {{ not edge_stack_caddy_adopt | bool and (edge_stack_caddy_drift | bool or edge_stack_stamp.caddy != edge_stack_fp_caddy) }}
-    edge_stack_compose_due: >-
-      {{ not edge_stack_compose_adopt | bool and edge_stack_unit_enabled | bool
-      and (edge_stack_compose_drift | bool or edge_stack_stamp.compose != edge_stack_fp_compose) }}
-    edge_stack_crowdsec_due: >-
-      {{ not edge_stack_crowdsec_adopt | bool and (edge_stack_crowdsec_drift | bool or edge_stack_stamp.crowdsec != edge_stack_fp_crowdsec) }}
-  no_log: true
+    edge_stack_caddy_due: '{{ restart_stamp_decisions.caddy.due }}'
+    edge_stack_compose_due: '{{ restart_stamp_decisions.compose.due }}'
+    edge_stack_crowdsec_due: '{{ restart_stamp_decisions.crowdsec.due }}'
 
-# The Compose class is marked `pending` before its file is placed whenever the file
-# drifts, whether or not the unit is enabled (and so whether or not the class is due
-# now). A file placed with no mark would make a host with no stamp look hand-delivered:
-# once the unit was enabled, the class would be adopted and the unit never restarted.
-- name: Work out which classes are marked pending before a file is placed
+- name: Say whether any class is due
   ansible.builtin.set_fact:
-    edge_stack_compose_mark: '{{ edge_stack_compose_due | bool or edge_stack_compose_drift | bool }}'
+    edge_stack_any_due: '{{ edge_stack_caddy_due | bool or edge_stack_compose_due | bool or edge_stack_crowdsec_due | bool }}'
 
 - name: Say that the unit is not enabled and is left alone
   ansible.builtin.debug:

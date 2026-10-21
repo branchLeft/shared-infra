@@ -32,6 +32,12 @@
 
 - name: Validate, place, apply and record
   block:
+    # A pin from an earlier validation in the same play is not this run's: the apply is
+    # given the pin this run's validation printed, or none.
+    - name: Forget the pin of an earlier validation
+      ansible.builtin.set_fact:
+        edge_stack_validated_pin: ''
+
     # The candidates of the classes that will change are put in a directory closed to
     # root, so the validation reads exactly the bytes that will be placed. Nothing is
     # put there in check mode, and nothing is put there when no file differs.
@@ -63,7 +69,9 @@
       when: edge_stack_compose_drift | bool and not ansible_check_mode
 
     # Under the deploy lock, because it reads the pin. Nothing has been placed yet:
-    # a candidate that is refused stops the run with the host as it was.
+    # a candidate that is refused stops the run with the host as it was. It runs
+    # whenever the apply below will run, even when no candidate differs, because the
+    # pin it prints is the one the apply is held to (README, "The locked script").
     - name: Validate the candidates under the deploy lock
       ansible.builtin.command:
         argv:
@@ -88,7 +96,7 @@
       register: edge_stack_validate
       changed_when: false
       failed_when: false
-      when: (edge_stack_caddy_drift | bool or edge_stack_compose_drift | bool) and not ansible_check_mode
+      when: (edge_stack_any_due | bool or edge_stack_compose_drift | bool) and not ansible_check_mode
 
     - name: Refuse to place anything when a candidate is refused or the lock is not free
       ansible.builtin.assert:
@@ -102,35 +110,38 @@
           else ('A candidate was refused (exit code ' ~ edge_stack_validate.rc ~ '). Nothing was placed. ' ~ edge_stack_validate.stderr) }}
       when: edge_stack_validate is not skipped
 
+    # The pin the validation read, inside its lock. The apply is given it and refuses to
+    # act on any other (exit code 74), so the digest the candidates were validated in is
+    # the digest the classes are applied with, and a deploy that moves the pin between
+    # the two sections stops the apply instead of being used by it.
+    - name: Keep the pin the validation used
+      ansible.builtin.set_fact:
+        edge_stack_validated_pin: >-
+          {{ edge_stack_validate.stdout_lines | select('match', '^EDGE_PIN ')
+          | map('regex_replace', '^EDGE_PIN ', '') | first | default('') }}
+      when: edge_stack_validate is not skipped
+
     # `pending` goes in after every candidate is accepted and before the first file
-    # is placed or acted on. A run that dies anywhere after this point leaves a stamp
-    # that is no fingerprint, so the next run acts on the class again. Placed later,
-    # a run that died after a file was placed and before this mark would leave a
-    # class with no stamp and no difference, which the next run takes for a host
-    # that was delivered by hand: it would stamp the class and never act on it. A
-    # refused candidate stops the run above, with the host and its stamps as they were.
-    #
-    # The Compose class is marked whenever its file drifts, and not only when it is
-    # due. It is not due while its unit is not enabled (the owner's first start), but
-    # the file is still placed below. Left unmarked, the placed file would equal the
-    # repository's and a host with no stamp would look hand-delivered: once the owner
-    # enabled the unit without starting it, the next run would adopt the class and stamp
-    # a fingerprint the running containers never got. Marked `pending`, the class is
-    # never adopted and is due as soon as the unit is enabled.
+    # is placed or acted on (restart_stamp, entry point mark_pending). A run that dies
+    # anywhere after this point leaves a stamp that is no fingerprint, so the next run
+    # acts on the class again. A refused candidate stops the run above, with the host
+    # and its stamps as they were. The Compose class is marked whenever its file
+    # drifts, not only when it is due (README, "Adoption").
     - name: Mark each class that is due as pending
-      ansible.builtin.copy:
-        content: "pending\n"
-        dest: '{{ edge_stack_stamp_files[item.name] }}'
-        owner: root
-        group: root
-        mode: '0600'
-      loop:
-        - { name: caddy, due: '{{ edge_stack_caddy_due }}' }
-        - { name: compose, due: '{{ edge_stack_compose_mark }}' }
-        - { name: crowdsec, due: '{{ edge_stack_crowdsec_due }}' }
-      loop_control:
-        label: '{{ item.name }}'
-      when: item.due | bool and not ansible_check_mode
+      ansible.builtin.include_role:
+        name: '{{ edge_stack_stamp_role }}'
+        tasks_from: mark_pending
+      vars:
+        restart_stamp_classes:
+          - name: caddy
+            file: '{{ edge_stack_stamp_files.caddy }}'
+            mark: '{{ restart_stamp_decisions.caddy.mark }}'
+          - name: compose
+            file: '{{ edge_stack_stamp_files.compose }}'
+            mark: '{{ restart_stamp_decisions.compose.mark }}'
+          - name: crowdsec
+            file: '{{ edge_stack_stamp_files.crowdsec }}'
+            mark: '{{ restart_stamp_decisions.crowdsec.mark }}'
 
     # copy puts a file in place by rename, which is right for these: the Compose file
     # is not bind-mounted, the CrowdSec files are read again at the restart below, and
@@ -215,6 +226,7 @@
         EDGE_ENV_FILE: '{{ edge_stack_env_file }}'
         EDGE_IMAGE_PATTERN: '{{ edge_stack_image_pin_pattern }}'
         EDGE_UNIT: '{{ edge_stack_unit }}'
+        EDGE_VALIDATED_PIN: '{{ edge_stack_validated_pin | default("") }}'
         EDGE_CADDY_CANDIDATE: '{{ edge_stack_candidate_dir }}/Caddyfile'
         EDGE_CADDY_WRITE: "{{ '1' if edge_stack_caddy_drift | bool else '0' }}"
         EDGE_CADDY_RELOAD: "{{ '1' if edge_stack_caddy_due | bool else '0' }}"
@@ -225,34 +237,52 @@
       register: edge_stack_apply
       changed_when: "'EDGE_APPLY ' in edge_stack_apply.stdout"
       failed_when: false
-      when: (edge_stack_caddy_due | bool or edge_stack_compose_due | bool or edge_stack_crowdsec_due | bool) and not ansible_check_mode
+      when: edge_stack_any_due | bool and not ansible_check_mode
 
-    # One file for the stamp of every class (README, "Shared home"). A stamp is
-    # written for what the script printed a marker for, whether or not a later
-    # step failed, and last of all.
-    - name: Record the Caddy class
-      ansible.builtin.include_tasks: _stamp.yml
+    # A class with no stamp whose files equal the repository's is adopted: the stamp is
+    # the whole change (restart_stamp, entry point adopt). It runs in check mode too,
+    # which is how a plan shows the adoption.
+    - name: Adopt the classes the host already has
+      ansible.builtin.include_role:
+        name: '{{ edge_stack_stamp_role }}'
+        tasks_from: adopt
       vars:
-        edge_stack_stamp_name: caddy
-        edge_stack_stamp_fingerprint: '{{ edge_stack_fp_caddy }}'
-        edge_stack_stamp_adopt: '{{ edge_stack_caddy_adopt }}'
-        edge_stack_stamp_marker: 'EDGE_APPLY caddy-reloaded'
+        restart_stamp_classes:
+          - name: caddy
+            file: '{{ edge_stack_stamp_files.caddy }}'
+            fingerprint: '{{ edge_stack_fp_caddy }}'
+            adopt: '{{ restart_stamp_decisions.caddy.adopt }}'
+          - name: compose
+            file: '{{ edge_stack_stamp_files.compose }}'
+            fingerprint: '{{ edge_stack_fp_compose }}'
+            adopt: '{{ restart_stamp_decisions.compose.adopt }}'
+          - name: crowdsec
+            file: '{{ edge_stack_stamp_files.crowdsec }}'
+            fingerprint: '{{ edge_stack_fp_crowdsec }}'
+            adopt: '{{ restart_stamp_decisions.crowdsec.adopt }}'
 
-    - name: Record the Compose class
-      ansible.builtin.include_tasks: _stamp.yml
+    # A stamp is written for a class whose marker the locked script printed after the
+    # read-back, whether or not a later step failed, and last of all
+    # (restart_stamp, entry point record). The marker is the caller's: the script
+    # prints it, this role reads it.
+    - name: Record the classes the locked script read back
+      ansible.builtin.include_role:
+        name: '{{ edge_stack_stamp_role }}'
+        tasks_from: record
       vars:
-        edge_stack_stamp_name: compose
-        edge_stack_stamp_fingerprint: '{{ edge_stack_fp_compose }}'
-        edge_stack_stamp_adopt: '{{ edge_stack_compose_adopt }}'
-        edge_stack_stamp_marker: 'EDGE_APPLY compose-restarted'
-
-    - name: Record the CrowdSec class
-      ansible.builtin.include_tasks: _stamp.yml
-      vars:
-        edge_stack_stamp_name: crowdsec
-        edge_stack_stamp_fingerprint: '{{ edge_stack_fp_crowdsec }}'
-        edge_stack_stamp_adopt: '{{ edge_stack_crowdsec_adopt }}'
-        edge_stack_stamp_marker: 'EDGE_APPLY crowdsec-restarted'
+        restart_stamp_classes:
+          - name: caddy
+            file: '{{ edge_stack_stamp_files.caddy }}'
+            fingerprint: '{{ edge_stack_fp_caddy }}'
+            read_back: "{{ edge_stack_apply is not skipped and 'EDGE_APPLY caddy-reloaded' in edge_stack_apply.stdout }}"
+          - name: compose
+            file: '{{ edge_stack_stamp_files.compose }}'
+            fingerprint: '{{ edge_stack_fp_compose }}'
+            read_back: "{{ edge_stack_apply is not skipped and 'EDGE_APPLY compose-restarted' in edge_stack_apply.stdout }}"
+          - name: crowdsec
+            file: '{{ edge_stack_stamp_files.crowdsec }}'
+            fingerprint: '{{ edge_stack_fp_crowdsec }}'
+            read_back: "{{ edge_stack_apply is not skipped and 'EDGE_APPLY crowdsec-restarted' in edge_stack_apply.stdout }}"
 
     - name: Fail the run when the locked step failed or the lock was not free
       ansible.builtin.assert:

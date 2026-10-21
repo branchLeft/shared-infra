@@ -13,6 +13,22 @@
     edge_stack_verify_dir: /opt/branchleft/edge
     edge_stack_verify_pin_good: IMAGE=ghcr.io/branchleft/edge-caddy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     edge_stack_verify_hex64: '^[0-9a-f]{64}$'
+    edge_stack_verify_pin_other: ghcr.io/branchleft/edge-caddy@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+    # What the role gives the locked script, for the case that runs the script by itself. Every
+    # action is off, so only the pin can stop it.
+    edge_stack_verify_script_env:
+      EDGE_PROJECT_DIR: /opt/branchleft/edge
+      EDGE_IMAGE_ENV: /etc/branchleft/edge.image.env
+      EDGE_ENV_FILE: /etc/branchleft/edge.env
+      EDGE_IMAGE_PATTERN: '^IMAGE=[a-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$'
+      EDGE_UNIT: branchleft-compose@edge.service
+      EDGE_CADDY_CANDIDATE: /nonexistent/Caddyfile
+      EDGE_CADDY_WRITE: '0'
+      EDGE_CADDY_RELOAD: '0'
+      EDGE_COMPOSE_RESTART: '0'
+      EDGE_CROWDSEC_RESTART: '0'
+      EDGE_WAIT_TRIES: '1'
+      EDGE_WAIT_INTERVAL: '1'
   tasks:
     - name: Make a directory for the variants of the stack, on the machine that runs the test
       ansible.builtin.tempfile:
@@ -1599,6 +1615,117 @@
             quiet: true
             fail_msg: The first delivery to a host with nothing was wrong. The calls were {{ edge_stack_verify_runs.p24.kinds }}.
 
+    # ----- p26: the apply acts only on the pin the validation used -----
+    # A deploy that moves the pin to another valid digest after the validation read it
+    # and before the apply takes the lock. The pattern still matches, so only a comparison
+    # with the validated pin can refuse it. On a refusal nothing is acted on: the Caddyfile
+    # is as it was, no unit or container is touched, the class stays pending, and the next
+    # run, which validates in the new digest, acts.
+    - name: Case p26, a pin that moves between the validation and the apply
+      tags: [p26]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make a variant whose Caddyfile differs
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: pinmove
+            edge_stack_verify_variant_edits:
+              - { path: Caddyfile, append: "\n# case pin move\n" }
+
+        - name: Ask the stand-in to move the pin while it validates the Caddyfile
+          ansible.builtin.copy:
+            content: ''
+            dest: /run/standin.pin.change
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p26move
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.pinmove.path }}'
+
+        - name: Apply the role again, which validates in the pin that is there now
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p26rerun
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.pinmove.path }}'
+
+        - name: Assert the apply was refused with its own exit code and did nothing
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs.p26move.failed
+              - "'exit code 74' in edge_stack_verify_runs.p26move.msg"
+              - "'changed since the candidates were validated' in edge_stack_verify_runs.p26move.msg"
+              - edge_stack_verify_runs.p26move.after.caddy_sha == edge_stack_verify_runs.p26move.before.caddy_sha
+              - edge_stack_verify_runs.p26move.after.view_sha == edge_stack_verify_runs.p26move.before.view_sha
+              - edge_stack_verify_runs.p26move.kinds == ['validate-caddy']
+              - edge_stack_verify_runs.p26move.after.stamps.caddy == 'pending'
+              - edge_stack_verify_runs.p26move.after.stamps.compose == edge_stack_verify_runs.p26move.before.stamps.compose
+              - edge_stack_verify_runs.p26move.after.stamps.crowdsec == edge_stack_verify_runs.p26move.before.stamps.crowdsec
+            quiet: true
+            fail_msg: >-
+              A pin that moved between the validation and the apply was not refused with exit code 74 and nothing
+              done. It said '{{ edge_stack_verify_runs.p26move.msg }}', called {{ edge_stack_verify_runs.p26move.kinds }}
+              and left the Caddy stamp '{{ edge_stack_verify_runs.p26move.after.stamps.caddy }}'.
+
+        - name: Assert the next run acted on the class that was left pending
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p26rerun.failed
+              - edge_stack_verify_runs.p26rerun.kinds == ['validate-caddy', 'caddy-reload']
+              - edge_stack_verify_runs.p26rerun.after.caddy_sha == edge_stack_verify_variants.pinmove.caddy
+              - edge_stack_verify_runs.p26rerun.after.stamps.caddy is match(edge_stack_verify_hex64)
+            quiet: true
+            fail_msg: >-
+              The run after a refused apply did not reload Caddy and record the class. It called
+              {{ edge_stack_verify_runs.p26rerun.kinds }} and said '{{ edge_stack_verify_runs.p26rerun.msg }}'.
+
+        # The script by itself, with every action off. Each of the three runs is stopped,
+        # or not, by the pin alone, so a refusal below cannot be a refusal for another
+        # reason, and the third is the control: the same call is let through when the pin is
+        # the validated one.
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Run the apply mode with no validated pin, with another valid one, and with the pin that is there
+          ansible.builtin.include_tasks: tasks/script_apply.yml
+          vars:
+            edge_stack_verify_script_name: '{{ item.name }}'
+            edge_stack_verify_script_pin: '{{ item.pin }}'
+          loop:
+            - name: other
+              pin: '{{ edge_stack_verify_pin_other }}'
+            - name: same
+              pin: '{{ edge_stack_verify_pin_good | regex_replace("^IMAGE=", "") }}'
+          loop_control:
+            label: '{{ item.name }}'
+
+        - name: Run the apply mode with no validated pin at all
+          ansible.builtin.include_tasks: tasks/script_apply.yml
+          vars:
+            edge_stack_verify_script_name: none
+
+        - name: Assert the script refuses no pin and another pin, and lets the same pin through
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_script.none.rc == 74
+              - "'no validated pin' in edge_stack_verify_script.none.stderr"
+              - edge_stack_verify_script.other.rc == 74
+              - "'changed since the candidates were validated' in edge_stack_verify_script.other.stderr"
+              - edge_stack_verify_script.same.rc == 0
+              - edge_stack_verify_script.same.stdout == ''
+              - edge_stack_verify_script.none.calls == 0
+              - edge_stack_verify_script.other.calls == 0
+              - edge_stack_verify_script.same.calls == 0
+            quiet: true
+            fail_msg: >-
+              The apply mode did not refuse a missing or a different validated pin with exit code 74, or refused the pin
+              that is there. It said {{ edge_stack_verify_script }}.
+
     # ----- p25: the restore, and the log -----
     - name: Case p25, put the host back, and scan the log for the values
       tags: [p25]
@@ -1630,6 +1757,11 @@
             - test-sentinel-edge-key-0001
             - test-sentinel-0002
             - test-sentinel-edge-key-0003
+            # The fingerprints hold the hash of edge.env. They pass through the calls of
+            # the restart_stamp role as arguments, which this scan reads.
+            - '{{ edge_stack_verify_base.stamps.caddy }}'
+            - '{{ edge_stack_verify_base.stamps.compose }}'
+            - '{{ edge_stack_verify_base.stamps.crowdsec }}'
           loop_control:
             label: scan
           no_log: true

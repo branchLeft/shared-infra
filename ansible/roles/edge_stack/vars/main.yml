@@ -22,12 +22,19 @@ edge_stack_enabled_states:
 edge_stack_image_pin_pattern: '^IMAGE=[a-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$'
 
 # One stamp per class of file. Each holds a sha256 and a newline, or `pending`
-# while an action is under way, root only (README, "Restart shape").
+# while an action is under way, root only (README, "Restart shape"). The role only
+# names them: the restart_stamp role is the one place a stamp is read or written.
 edge_stack_stamp_dir: /var/lib/branchleft
 edge_stack_stamp_files:
   caddy: /var/lib/branchleft/edge.caddy.applied
   compose: /var/lib/branchleft/edge.compose.applied
   crowdsec: /var/lib/branchleft/edge.crowdsec.applied
+
+# The role that reads, decides and writes the stamps, found beside this one: a path
+# built from this role's own, so it resolves the same way when the playbook names this
+# role by a relative path, when the lint runs from the repository root and when
+# Molecule links this role under its namespace (README, "Shared home").
+edge_stack_stamp_role: '{{ role_path | realpath | dirname }}/restart_stamp'
 
 # The candidates (a Caddyfile and a Compose file that have not been validated yet)
 # wait here, closed to root, and the directory is removed at the end of every run.

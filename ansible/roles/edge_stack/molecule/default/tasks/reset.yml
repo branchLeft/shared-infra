@@ -15,6 +15,7 @@
     - /run/standin.fail.reload
     - /run/standin.lapi.down
     - /run/standin.stale.caddy
+    - /run/standin.pin.change
     - /run/edge-unit.fail
     - /var/lib/branchleft/edge.candidate
     - /opt/branchleft/edge

@@ -13,7 +13,9 @@
 #     old bytes, as a real container's mount would be, and a write in place does not;
 #   - fails, or lies, where a flag file in /run asks (standin.fail.crowdsec,
 #     standin.fail.reload, standin.lapi.down, standin.stale.caddy), and reports the
-#     services listed in /run/standin.running as running.
+#     services listed in /run/standin.running as running;
+#   - moves the pin to another valid digest while it validates a Caddyfile, once, when
+#     /run/standin.pin.change is there (a deploy between the two locked sections).
 echo "docker $*" >> /var/log/docker-standin.calls
 
 project=/opt/branchleft/edge
@@ -41,6 +43,13 @@ case $1 in
     if grep -q BROKEN-CADDYFILE "$candidate"; then
       echo "Error: adapting config using caddyfile: broken"
       exit 1
+    fi
+    # A deploy that moves the pin after the validation read it: the next read of the
+    # file is the apply's. The flag is used once. The new digest is a valid one, so
+    # only a comparison with the pin that was validated can refuse it.
+    if [ -e /run/standin.pin.change ]; then
+      rm -f /run/standin.pin.change
+      echo "IMAGE=ghcr.io/branchleft/edge-caddy@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" > /etc/branchleft/edge.image.env
     fi
     echo "Valid configuration"
     exit 0

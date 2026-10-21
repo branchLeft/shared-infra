@@ -16,7 +16,7 @@ A role that restarts something when its files change (the shape of `edge_stack` 
 | `adopt`        | Writes the fingerprint into the stamp of each adopted class and acts on nothing.                                                 | the fingerprint, in check mode too |
 | `record`       | Writes the fingerprint into the stamp of each class whose action the caller says was read back, and into no other.               | the fingerprint, not in check mode |
 
-The caller keeps everything that depends on its host: the fingerprint of each class (which files, hashed how), whether a file differs on the host (drift), whether the class may be touched now (the gate), the action itself and its read-back. The role never sees a file of the caller's, never restarts a unit, a service or a container, and never edits a file that is not a stamp. A mechanical check holds it to that: `ansible/checks/test_restart_stamp_single_home.py` fails when this role uses a module that acts on anything but the stamps and the facts, and when any other role writes, reads or names a stamp itself.
+The caller keeps everything that depends on its host: the fingerprint of each class (which files, hashed how), whether a file differs on the host (drift), whether the class may be touched now (the gate), the action itself and its read-back. The role never sees a file of the caller's, never restarts a unit, a service or a container, and never edits a file that is not a stamp. A mechanical check holds it to that: `ansible/checks/test_restart_stamp_single_home.py` fails when this role uses a module that acts on anything but the stamps and the facts, and when any other role reads a stamp, writes one (or the `pending` mark), runs a command on one, or names a stamp file in a task or a script. A caller's `vars/` may name the files it hands to this role; that is data.
 
 **A stamp** is `/var/lib/branchleft/<name>.applied`, root, mode 0600, holding a sha256 in hex and a newline, or `pending`. The role refuses any other path, so a mistake in a caller cannot make it write anywhere else. It refuses a fingerprint that is not 64 lowercase hex digits, so `pending` can never be written as the record of a finished action.
 
@@ -80,7 +80,7 @@ A role that calls this one composes two roles, and ANS-12 carries a named limit 
 1. It is a cross-cutting capability with one reason to change (the stamp steps), not a service.
 2. It computes and records only. It never restarts a unit, a service or a container, and never edits a file another role owns.
 3. Its inputs are typed in `meta/argument_specs.yml`, and it reads no variable of its caller except through them.
-4. It is named by a path built from `role_path` (`{{ role_path }}/../restart_stamp`), not by a bare name. The host trigger starts in `ansible/`, the lint at the repository root and Molecule in a role directory, and a bare name is found by a search path they do not share.
+4. It is named by a path built from the caller's own `role_path` (`{{ role_path | realpath | dirname }}/restart_stamp`), not by a bare name. The host trigger starts in `ansible/`, the lint at the repository root and Molecule in a role directory, and a bare name is found by a search path they do not share. `realpath` is there because Molecule links the caller under its namespace, and the path must be that of the real directory.
 5. Only this role is included by another role. A second one needs its own review against the clause.
 
 **Gate.** The pull request that adds this role does not merge until that amendment is merged in the standards repository and cited in the pull request. The text proposed there is in the pull request description.
@@ -105,7 +105,7 @@ The container is a plain Python image: the role reads and writes files and does 
 | `r5` | Only a class that was read back is recorded; nothing is written in check mode.                                                                                                            |
 | `r6` | Lists the role refuses (a path outside the stamp directory, a repeated name, `pending` as a fingerprint and so on), with nothing written, not even for the good class beside the bad one. |
 | `r7` | A plan (`ansible-playbook --check`) reports the adoption as a change and the other two as nothing.                                                                                        |
-| `r8` | No fingerprint is in the Ansible log of the scenario, which runs at the highest verbosity with a diff on every task.                                                                      |
+| `r8` | No fingerprint, made for the run, is in the Ansible log of the scenario, which runs at the highest verbosity with a diff on every task.                                                   |
 
 A block can be run alone with `ANSIBLE_RUN_TAGS=r2 molecule verify`. The rows of the stamp logic are proved here and only here: the `edge_stack` scenario keeps the rows that need its host and re-runs its own, with the real role.
 
