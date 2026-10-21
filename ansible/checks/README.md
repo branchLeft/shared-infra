@@ -10,14 +10,16 @@ copy per rule, and asserts that each sabotage hit its text.
 
 It sees the literal keys of every file under `ansible/` that R6 reads: a file whose name
 ends in `.yml`, `.yaml` or `.json`, or has no extension, in a loaded directory. The
-exception is a role's or pattern's `molecule/` directory and a role's
+exception is a role's or pattern's `molecule/` directory and a role's or pattern's
 `meta/argument_specs.yml`, which are fixtures and schema. A file that does not parse is
 refused. A symlink that leads out of `ansible/` under a loaded directory is refused.
 
 Under `playbooks/` and `trust/` the name rule is stricter, and R6 reads all of it. Every
 entry there that is not a directory must be an exact `.yml` (case-sensitive, no other
 suffix), or one of the two README paths named exactly: `playbooks/README.md` and
-`trust/README.md`. A README anywhere else is refused. A link is refused whatever its name,
+`trust/README.md`. A README anywhere else is refused. Each of the two exception READMEs is
+refused if it parses as a YAML list, because `ansible-playbook` would run a list as plays.
+A link is refused whatever its name,
 so the check never follows one. The rule is one function, shared by R2, R4 and R5.
 
 It catches a protected key (`pull_trigger_signers`, `pull_trigger_remote_url`,

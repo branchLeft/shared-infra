@@ -242,9 +242,21 @@ class Sabotage(unittest.TestCase):
         self._assert_rule("R2 includes/sub/x.yml")
 
     # D1, exact README paths: a README.md at any other path is not the exception, so refused.
+    # The body is prose, not a play list, so only the exact-path pin refuses it (row 7).
     def test_nested_readme_is_not_the_exception(self) -> None:
-        self._write("playbooks/sub/README.md", EVIL_PLAY)
+        self._write("playbooks/sub/README.md", "# Notes\n\nProse only.\n")
         self._assert_rule("R2 sub/README.md")
+
+    # Plan-review finding 1: a README exception that parses as a YAML list is refused, because
+    # ansible-playbook would run it as plays. R6 does not read .md, so the name is no guard.
+    def test_playbooks_readme_play_list_is_refused(self) -> None:
+        self._write("playbooks/README.md", EVIL_PLAY)
+        self._assert_rule("R2 README.md")
+
+    def test_trust_readme_play_list_is_refused(self) -> None:
+        play = "- hosts: all\n  vars:\n    pull_trigger_signers: [attacker]\n"
+        self._write("trust/README.md", play)
+        self._assert_rule("R5 README.md")
 
     # Link handling: a link is refused whatever its name, so the check never follows it.
     def test_symlink_named_yml_in_trust_is_refused(self) -> None:

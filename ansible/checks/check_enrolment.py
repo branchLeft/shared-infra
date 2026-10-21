@@ -432,6 +432,15 @@ def _check_no_other_definition(ansible: Path, findings: list[str]) -> None:
             _scan(doc, path.parent.resolve(), resolved, where, allowed, findings)
 
 
+def _is_play_list(path: Path) -> bool:
+    """True when the file parses as a YAML list, which ansible-playbook would run as plays. A
+    file that does not parse as YAML is not a playbook, so it is not a finding here."""
+    try:
+        return isinstance(yaml.safe_load(path.read_text(encoding="utf-8")), list)
+    except (OSError, ValueError, yaml.YAMLError):
+        return False
+
+
 def _in_place(tree: str, inside: tuple[str, ...]) -> bool:
     """A .yml sits where Ansible reads it: at the top of its tree, or in playbooks/includes/."""
     if len(inside) == 1:
@@ -458,7 +467,8 @@ def _check_names(ansible: Path, findings: list[str]) -> None:
             elif path.is_dir():
                 continue
             elif f"{tree}/{inside.as_posix()}" in README_EXCEPTIONS:
-                continue
+                if _is_play_list(path):
+                    findings.append(f"{label}: a README that parses as a YAML list is refused")
             elif path.suffix != ".yml":
                 findings.append(f"{label}: must be an exact .yml, as Ansible reads it")
             elif not _in_place(tree, inside.parts):
