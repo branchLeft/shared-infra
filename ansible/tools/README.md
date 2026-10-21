@@ -19,7 +19,7 @@ commands refuse a shallow clone, whose history cannot say which commit last chan
 fetch `main` from `origin` afresh and refuse without it. Both then refuse unless HEAD is the tip
 of that fetched `main`: the history a pin is read from and the files the configuration is rendered
 from are HEAD's, so a checkout behind `main` would call a record current that `main` has since
-superseded. `verify` also refuses a record whose pin is not an ancestor of the tip, so a record
+replaced. `verify` also refuses a record whose pin is not an ancestor of the tip, so a record
 built on a branch, or one that names a commit that only a pull request's ref or a fork holds, is
 never accepted. `origin` is taken to be `branchLeft/shared-infra`: the tool runs in a checkout of
 it.

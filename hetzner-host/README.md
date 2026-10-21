@@ -150,7 +150,7 @@ regenerated). With it:
   reads as HEAD, so no pin could be stale), then fetch `main` from `origin`
   afresh and refuse unless HEAD is the tip of it, because the history a pin is read from and the
   files the configuration is rendered from are HEAD's: a checkout behind `main`
-  would otherwise call current a record that `main` has since superseded.
+  would otherwise call current a record that `main` has since replaced.
   `verify` also refuses a record whose pin is not an ancestor of the tip, so a
   record built on a branch, or one naming a commit that only a pull request ref
   or a fork holds, is never accepted.
