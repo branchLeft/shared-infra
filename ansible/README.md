@@ -460,7 +460,7 @@ oversight. Each is a decision the standard assigns to later work.
 - **The standard's own checks.** Of the checks the standard's check plans
   describe, the scenario limits and the pins are scripted. No `shell` tasks and
   no loosened lint file are still review.
-- **Inventories.** The trees under `inventories/` hold one host, and their
+- **Inventories.** The trees under `inventories/` hold two hosts, edge1 and mx1, and their
   layout is a proposal.
 - **A required check.** The Ansible job runs on every pull request, so it can be
   required (CI-14), but making it required is a repository ruleset change and

@@ -1,21 +1,17 @@
 """The pull's trust anchor is declared once, and every pulled host loads it.
 
-The signer allowlist and the remote are the trust anchor of the pull: whoever can
-land a commit that a listed key signed gets root on every pulled host. So each
-must be declared in exactly one file of the inventory, and each host playbook
-must load that file. The host's trigger runs its playbook with `-i localhost,`,
-which loads no group variables, so the load is made by vars_files in the playbook
-itself. A check of the inventory alone would pass while that load is wrong.
-
-The group variable files are flat, so their top-level keys are read by pattern
-and no YAML library is needed (the lock carries none with type stubs).
-
-Run by the Ansible job: python -m unittest discover -b -s ansible/checks -p "test_*.py".
+The signer allowlist and the remote are the anchor: whoever lands a commit a listed
+key signed gets root on each pulled host. The trigger runs playbooks with
+`-i localhost,`, which loads no group variables, so each host's play must load the
+shared file in vars_files. An inventory check alone would pass while that is wrong.
+Run by the Ansible job.
 """
 
 import re
 import unittest
 from pathlib import Path
+
+import yaml  # type: ignore[import-untyped]
 
 ANSIBLE: Path = Path(__file__).resolve().parents[1]
 INVENTORY: Path = ANSIBLE / "inventories" / "production"
@@ -66,14 +62,21 @@ class EveryPulledHostLoadsTheAnchor(unittest.TestCase):
     def test_each_host_playbook_loads_the_shared_file_and_its_group_file(self) -> None:
         for playbook, group_file in PULLED_HOSTS.items():
             with self.subTest(playbook=playbook):
-                text = (PLAYBOOKS / playbook).read_text(encoding="utf-8")
-                self.assertIn(
-                    f"group_vars/{SHARED}",
-                    text,
-                    f"{playbook} must load {SHARED} in vars_files: "
-                    "the trigger runs with localhost,",
+                host = playbook.removesuffix(".yml")
+                plays: list[dict[str, object]] = yaml.safe_load(
+                    (PLAYBOOKS / playbook).read_text(encoding="utf-8")
                 )
-                self.assertIn(f"group_vars/{group_file}", text)
+                # The play that targets the host: `all` reaches it, and so does its name.
+                targeted = [p for p in plays if p.get("hosts") in ("all", "localhost", host)]
+                self.assertEqual(len(targeted), 1, f"{playbook} needs one play that targets {host}")
+                vars_files = targeted[0].get("vars_files")
+                loaded = [str(f) for f in vars_files] if isinstance(vars_files, list) else []
+                for name in (SHARED, group_file):
+                    self.assertTrue(
+                        any(f.endswith(f"group_vars/{name}") for f in loaded),
+                        f"{playbook} must load {name} in vars_files of its play for {host}: "
+                        "the trigger runs with localhost,",
+                    )
 
     def test_each_group_names_its_own_playbook_on_the_allowlist(self) -> None:
         for playbook, group_file in PULLED_HOSTS.items():
