@@ -13,7 +13,7 @@ name: Ansible delivery
 # Pulumi applies in ci.yml, and one approval must not release both. The owner creates
 # it before the first run, with all of these set:
 #   - required reviewer: the user Rob-branchLeft alone, no team and no other user;
-#   - Prevent self-review: ticked (the owner's ruling, kept on);
+#   - Prevent self-review: ticked, so the person who merged a change cannot approve its deploy;
 #   - Allow administrators to bypass configured protection rules: unticked;
 #   - deployment branches: main only;
 #   - environment secret: ssh_apply_key.

@@ -351,8 +351,8 @@ def environment(
 ) -> dict[str, object]:
     """Return an environment answer set up as the owner step says.
 
-    Prevent self-review is ticked, as owner ruling 6320444361 requires for the gated apply, and
-    administrators may not bypass the rules.
+    Prevent self-review is ticked, as the gated apply requires, and administrators may not bypass
+    the rules.
     """
     rules: list[dict[str, object]] = [
         {
@@ -403,7 +403,7 @@ class EnvironmentTests(unittest.TestCase):
         self.assertEqual([], self.judge(environment()))
 
     def test_the_owner_team_may_not_review_instead_of_the_owner(self) -> None:
-        # The approved plan names Rob alone, and the probe does not read a team's members.
+        # Only the owner may approve, and the probe does not read a team's members.
         described = environment(reviewers=[reviewer("Team", "branchleft-admin")])
         self.assert_names(self.judge(described), "Team branchleft-admin approve")
 
@@ -420,7 +420,7 @@ class EnvironmentTests(unittest.TestCase):
             "deployment_branch_policy": None,
             "protection_rules": [
                 {
-                    "id": 63366295,
+                    "id": 3,
                     "type": "required_reviewers",
                     "prevent_self_review": False,
                     "reviewers": [reviewer("User", "Rob-branchLeft")],
@@ -434,7 +434,7 @@ class EnvironmentTests(unittest.TestCase):
 
     def test_administrators_who_may_bypass_are_not_ready(self) -> None:
         # A new environment answers True, and the admin whose merge started the run could then
-        # release it with no reviewer, which defeats owner ruling 6320444361.
+        # release it with no reviewer, which defeats the bypass rule.
         self.assert_names(
             self.judge(environment(can_admins_bypass=True)), "lets administrators bypass"
         )
@@ -455,17 +455,18 @@ class EnvironmentTests(unittest.TestCase):
         self.assertEqual([], self.judge(environment(can_admins_bypass=False)))
 
     def test_prevent_self_review_ticked_is_ready(self) -> None:
-        # Owner ruling 6320444361 (answer A): the gated apply keeps Prevent self-review on.
+        # The gated apply keeps Prevent self-review on.
         self.assertEqual([], self.judge(environment(prevent_self_review=True)))
 
     def test_prevent_self_review_unticked_is_not_ready(self) -> None:
-        # Unticked is the opposite of the ruling, so the probe names it.
+        # Unticked lets the merging person approve their own deploy, so the probe names it.
         self.assert_names(
             self.judge(environment(prevent_self_review=False)),
             "does not have Prevent self-review ticked",
         )
         self.assert_names(
-            self.judge(environment(prevent_self_review=False)), "owner ruling 6320444361"
+            self.judge(environment(prevent_self_review=False)),
+            "could approve the deploy that merge started",
         )
 
     def test_a_missing_self_review_setting_is_not_ready(self) -> None:

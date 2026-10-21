@@ -56,9 +56,9 @@ WHY = {
     "permissions": "the token is set once, for the whole workflow",
 }
 
-# Who may approve the apply: the owner alone, as the approved plan (6324329915) says. No other
-# user, team or app is an approver of this environment, the owner-only team included: the probe
-# does not read a team's members, so a team entry would stay green after anyone joined it.
+# Who may approve the apply: the owner alone. No other user, team or app is an approver of this
+# environment, the owner-only team included: the probe does not read a team's members, so a team
+# entry would stay green after anyone joined it.
 OWNER_REVIEWERS = frozenset({("User", "Rob-branchLeft")})
 BRANCH = "main"
 
@@ -266,9 +266,9 @@ def environment_findings(
     # ruled value and not an absence of the field.
     if described.get("can_admins_bypass") is not False:
         findings.append(
-            f"environment {name} lets administrators bypass its protection rules: owner ruling "
-            "6320444361 needs the approval path to hold for the admin whose merge started the "
-            "run, so 'Allow administrators to bypass configured protection rules' must be off"
+            f"environment {name} lets administrators bypass its protection rules: an administrator "
+            "whose merge started a run could then release it without the approval path, so 'Allow "
+            "administrators to bypass configured protection rules' must be off"
         )
     rules = described.get("protection_rules")
     reviewer_rules = [
@@ -281,14 +281,14 @@ def environment_findings(
             f"environment {name} has no required reviewers rule: the apply would not wait"
         )
     for rule in reviewer_rules:
-        # Owner ruling 6320444361 (self-review-deploy-2338, answer A): Prevent self-review stays
-        # on for this environment. Anything but exactly True, a missing key included, is a
-        # finding, so the probe proves the ruled value and not an absence of the field.
+        # The owner keeps Prevent self-review on for this environment, so a person who merged a
+        # change cannot approve the deploy their merge started. Anything but exactly True, a
+        # missing key included, is a finding, so the probe proves the set value and not an
+        # absence of the field.
         if rule.get("prevent_self_review") is not True:
             findings.append(
-                f"environment {name} does not have Prevent self-review ticked: owner ruling "
-                "6320444361 requires it on, so the owner's own merge cannot release a run "
-                "it started without the approval path recorded in ws#2338"
+                f"environment {name} does not have Prevent self-review ticked: without it, a "
+                "person who merged a change could approve the deploy that merge started"
             )
         listed = rule.get("reviewers")
         reviewers = [as_mapping(entry) for entry in (listed if isinstance(listed, list) else [])]
