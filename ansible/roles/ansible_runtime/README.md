@@ -82,10 +82,19 @@ allowed marker characters from `files/install_runtime.py` by path and keeps no
 copy of them. The patterns it matches a pin with (`REQUIREMENT`, `VERSION`) are
 its own. `install_runtime.py` is owner-reviewed in `.github/CODEOWNERS`
 because the gate reads it. The parity with pip is tested against pip's own
-code in `ansible/checks/test_lock_reader_parity.py`. It asks the pip of the
-virtual environment that holds the pinned toolchain (the one bundled with that
-Python, since the lock does not pin pip), and every failure message names the
-pip version it asked.
+code in `ansible/checks/test_lock_reader_parity.py`. It asks one pip only: the
+version pinned, with its wheel hash, in `ansible/checks/pip-requirements.txt`.
+It refuses any other pip and names both versions in the failure message.
+`ansible/checks/README.md` holds the pin and the steps to change it.
+
+The parity table is therefore proven against that pinned pip and no other. The
+host does not run that pip. `install_runtime.py` makes the environment with
+`python -m venv`, and the pip it installs with is the one `ensurepip` bundles
+with the host's Python, which the lock does not pin and nothing here tests. What
+holds the host's install is not that pip's version: it is the lock's SHA-256, which
+the program checks against the record built from reviewed `main` (`--lock-sha256`),
+and `--require-hashes --only-binary=:all:`, so every file pip installs is a wheel
+checked against a hash in the lock.
 
 A run that dies part-way recovers by being run again. The environment is made
 when its `bin/pip` is not executable, and pip is the last thing `python -m venv`
