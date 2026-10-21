@@ -342,6 +342,14 @@ unset SMTP_USERNAME SMTP_PASSWORD HEALTHCHECKS_PING_URL ALERT_RECIPIENT_EMAIL MA
 Expect `-rw------- 1 root root` and `6`. Anything else: stop and read the error.
 Do not print the file.
 
+**Gap: rotating one of the six keys above has no runnable path yet.** The block
+refuses when the file exists, because a rewrite would overwrite the `NTFY_` and
+`STALWART_` lines, and the `STALWART_PROMETHEUS_SECRET` block below replaces only
+its own key. The role is not wired to any host, so until the first gated converge
+no hand command replaces `SMTP_PASSWORD`, `GRAFANA_ADMIN_PASSWORD` or another of
+the six in place. The fix is a single-key replace for these keys, or the gated run.
+That is the owner's to decide. Until then, a rotation of one of them waits.
+
 Check the file's shape without printing it:
 
 ```bash
@@ -382,6 +390,15 @@ Expect `OK: STALWART_PROMETHEUS_SECRET replaced, N characters, exactly one line`
 
 `$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
 first if you are entering here independently.
+
+**The `monitoring_stack` role covers this copy, and this rsync stays the runnable
+path until the first gated converge.** The role delivers the same files with the
+same modes, from the same directory. It never deletes, so the `--delete` below
+has no counterpart in the role: a file removed from the repository stays on a host
+the role has converged, and must be removed by hand. Once the role runs on a host,
+retire this command for that host. Sections 3, 4, 5 and 14 keep their hand paths
+until then. That is a deviation from the plan's Done-when, which asked for no hand
+command the role covers; it is recorded in the PR body.
 
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
@@ -819,6 +836,16 @@ or the cgroup containment), the same pattern applies to
 section is everything specific to it on top of that: the automated-access
 URL, node-exporter's textfile-collector mount, and the systemd timer that
 actually runs it.
+
+**Two writers of `SNDS_DATA_URL`: read this before you rotate the URL.** The
+`monitoring_stack` role (`ansible/roles/monitoring_stack`) writes this key from
+its input on every run, and it does not restart the stack, so nothing signals a
+conflict. The hand write in this section is the other writer. Once the role runs
+on a host, the next run puts back the value it was given. A rotation changes the
+role's input and this key, in that order, before the role runs again (the role's
+README, "Secrets"). Until a gated path exists for the rotation, this section is the
+one that rotates the key. An operator who rotates here alone loses the change on
+the next gated run, and the collector then fails without warning.
 
 **First, generate an automated-access URL.** Sign in to the SNDS portal at
 `https://sendersupport.olc.protection.outlook.com/snds/` as the registered

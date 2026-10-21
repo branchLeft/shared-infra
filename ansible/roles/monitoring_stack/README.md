@@ -80,9 +80,20 @@ unit"). So a play that changes only `ntfy_pager` does not run this handler, and 
 play that changes only this role does not run `ntfy_pager`'s.
 
 The handler runs at the end of this role (a `flush_handlers`), not at the end of
-the play. A play that fails after this role's writes therefore cannot leave a
-changed secret on disk with the unit still on its old value: the restart has
-already run, or the failure came before it. A play that changes both roles still
+the play. That narrows the crash window but does not close it. The stack-key
+tasks notify the handler, and the flush comes after the stack-file copies, the
+edge drop-in copy and the daemon-reload task. If the play fails after a stack
+key changed and before the handler runs, the file holds the new value while the
+unit runs the old one. On a rerun the key is unchanged, so no restart is queued,
+and the unit keeps the old value until someone restarts it by hand (runbook step
+7b). Three failures do this: the edge drop-in copy fails, the daemon-reload
+fails, or the renderer check refuses inside the handler. The daemon-reload is a
+task gated on the drop-in copy's `changed` result, so a failed reload is not
+retried on a rerun either: the copy is unchanged then, and the reload is skipped.
+This residual is recorded, not fixed. A fix is a check that does not depend on
+the handler (restart when the env file or a drop-in is newer than the unit's
+`ActiveEnterTimestamp`, reload when systemd reports `NeedDaemonReload`). That is
+an owner decision, because it changes the restart design. A play that changes both roles still
 restarts the unit twice, once per role, because each role flushes its own
 handler. Removing that second restart needs one handler for both roles, which is
 a change to `ntfy_pager` and is not made here.
@@ -113,6 +124,16 @@ wires neither, and this change does not add them: a playbook that runs
 reach a run (the secrets pattern, not a file in the repository) is a decision
 that belongs to the owner. So the order is written here and not yet tested
 across the two roles. The fresh-host run is open until that wiring exists.
+
+Two defects of the documented order are not tested and are not fixed here. They
+belong to the wiring or to the `ntfy_pager` ticket, and are discovered work:
+
+- (a) Under `--check`, which the gated plan job runs, `monitoring_stack` creates
+  no file on a fresh host. `ntfy_pager`'s non-empty assert on the secrets file
+  then fails the plan.
+- (b) In a real run, `ntfy_pager`'s restart handler is unconditional and is
+  flushed inside its own role. It starts the inactive monitoring unit before
+  `STALWART_PROMETHEUS_SECRET` is written and before runbook step 7a.
 
 ### How it relates to the patterns
 
@@ -291,14 +312,18 @@ retrieval: make the row's edit and run it to see the message.
 | Edit to the role                                                          | Step that fails | Assertion that names it                                                                                                                                                |
 | ------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The task that installs the drop-in removed                                | `converge`      | "systemd does not hold the drop-in the role installed (MemoryMax 1073741824)"                                                                                          |
-| The `notify` of the drop-in task removed (no daemon-reload)               | `converge`      | the same assertion                                                                                                                                                     |
+| The daemon-reload task removed (no reload)                                | `converge`      | the same assertion                                                                                                                                                     |
 | Mode of the delivered files changed from `0644` to `0640`                 | `verify`        | "alertmanager/alertmanager.yml.tmpl is missing on the instance, is not a regular file owned by root with mode 0644, or differs from" the source (one failure per file) |
 | `files/stack` replaced by a copy with one byte of `blackbox.yml` changed  | `verify`        | "blackbox/blackbox.yml is ... or differs from" its source in `hetzner/monitoring/stack`                                                                                |
 | `compose.yml` removed from `monitoring_stack_files`                       | `verify`        | "compose.yml is missing on the instance, is not a regular file ..."                                                                                                    |
 | The drop-in directory name changed by one character (`monitorinq`)        | `converge`      | the same assertion as the first row                                                                                                                                    |
 | A new file added to `hetzner/monitoring/stack/` (not touched by the role) | `verify`        | "zz_probe_file.txt is missing on the instance, is not a regular file ..."                                                                                              |
 
-The first two rows share one message because it covers both causes (no drop-in, or no
+The daemon-reload row was run against an earlier form of the drop-in task, which
+used a `notify`. The task now uses `register` and a `when` on the copy's `changed`
+result, so that row is the edit to the current task, and it has not been run:
+Molecule cannot run on the builder's host, where Docker holds more containers than
+the cap of three. The first two rows share one message because it covers both causes (no drop-in, or no
 reload); the rows differ in the edit, and each was run on its own. The row for the
 copy also made the lint and yamllint steps fail, because a real copy puts the
 stack's YAML under the lint: a second reason for the link.
@@ -320,6 +345,16 @@ not shown to fail):
 - the assertion that each file named in `verify_not_carried` still exists;
 - the always-changed variant of the idempotence step: the step is the harness's, not
   run against a deliberately non-idempotent edit of this role.
+- Not yet proven by any run (the Molecule scenario has no input for these): the
+  inactive-unit branch of the restart handler (a changed key with the unit not
+  `active` must skip the restart and the renderer check; converge always starts
+  the placeholder, so that branch is not reached); the renderer check with the
+  stand-in removed, or with mode `0664`, which must fail in the handler; a secret
+  with a newline, for the single-line check; the notify removed from the stack-key
+  task or from the stack-file copy, for a restart only on change; a default added
+  for a secret input, for the defaults assertion; and the mode-order row (`0600`
+  moved after a value is written). These are the open proof of the controls in
+  this role. They need a Molecule run, which the builder could not make.
 
 ### Named limits
 
