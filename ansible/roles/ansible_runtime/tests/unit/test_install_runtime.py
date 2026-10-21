@@ -270,6 +270,7 @@ class LockChecksTest(Case):
             "sys_platform == 'linux' or sys_platform == 'linux2'",
             "platform_python_implementation != 'PyPy'",
             "sys_platform == 'linux' and (python_version >= '3.8' or os_name != 'nt')",
+            'sys_platform == "linux"',
         ):
             with self.subTest(marker=marker):
                 program.check_lock_is_hashed(
@@ -280,6 +281,27 @@ class LockChecksTest(Case):
         runner = FakeRunner()
         self.refused(self.request(LOCK_A + b"zeta==1.0 \\\n"), runner, program.Reason.LOCK_UNHASHED)
         self.nothing_made(runner)
+
+    def test_a_continuation_cannot_hide_an_option_from_the_check(self) -> None:
+        # pip ends a continuation at a comment-only line, and tests the raw line for its
+        # backslash, so in each shape below --index-url is a line of its own for pip. A check
+        # that joins the two lines and then strips a comment from the join would swallow it, and
+        # would accept a lock that pip runs with --index-url. The requirement line is refused.
+        hashed = f"alpha==1.0 --hash=sha256:{HASH_A}"
+        shapes = {
+            "a comment-only line after a continued line": (
+                f"{hashed} \\\n # c \\\n--index-url=https://evil.example/simple\n"
+            ),
+            "a space after the backslash, then a comment": (
+                f"{hashed} # c \\ \n--index-url=https://evil.example/simple\n"
+            ),
+        }
+        for name, text in shapes.items():
+            with self.subTest(shape=name):
+                with self.assertRaises(program.Refusal) as caught:
+                    program.check_lock_is_hashed(LOCK_A + text.encode())
+                self.assertEqual(program.Reason.LOCK_UNHASHED, caught.exception.reason)
+                self.assertEqual("alpha==1.0", caught.exception.detail)
 
     def test_a_link_in_place_of_the_lock_is_refused(self) -> None:
         real = self.base / "real.txt"

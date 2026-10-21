@@ -6,15 +6,44 @@ It fails on anything ansible/README.md lists under "How a check proves the lock"
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from types import ModuleType
 
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# install_runtime.py is the one home of the lock reader and of the marker set. It runs alone on
+# the host under python3 -I, with nothing installed, so it cannot be imported from here. This
+# file loads it by path and keeps no copy, so a change to the reader is the change this checks.
+RUNTIME_PROGRAM = (
+    REPO_ROOT / "ansible" / "roles" / "ansible_runtime" / "files" / "install_runtime.py"
+)
+
+
+def load_runtime_program() -> ModuleType:
+    """Load install_runtime.py by path under its own name and return the module.
+
+    Raises:
+        ImportError: The file cannot be loaded as a module.
+    """
+    spec = importlib.util.spec_from_file_location("install_runtime", RUNTIME_PROGRAM)
+    if spec is None or spec.loader is None:
+        raise ImportError(RUNTIME_PROGRAM.name)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+RUNTIME: ModuleType = load_runtime_program()
+logical_lines = RUNTIME.logical_lines
+MARKER_CHARS: str = RUNTIME.MARKER_CHARS
 
 # The community package carries the collections, so it is pinned like a tool.
 # The others are the tools ANS-4 names and yamllint, which the harness runs
@@ -38,7 +67,7 @@ REQUIRED_TOOLS = frozenset(
 VERSION = r"\d+(?:\.\d+)*(?:(?:a|b|rc)\d+)?(?:\.post\d+)?"
 REQUIREMENT = re.compile(
     rf"(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[A-Za-z0-9._,-]+\])?==(?P<version>{VERSION})"
-    r"(?: ?; ?[A-Za-z0-9_.'\" =!<>()]+?)?"
+    rf"(?: ?; ?{MARKER_CHARS}+?)?"
     r"(?P<hashes>(?: +--hash=sha256:[0-9a-f]{64})*)",
     re.ASCII,
 )
@@ -74,27 +103,6 @@ UPDATE_ECOSYSTEM = "uv"
 UPDATE_DIRECTORY = "/ansible"
 # Anything that makes a copy of a collection live in git hides it from the lock.
 COPY_SUFFIXES = (".tar.gz", ".tgz", ".tar")
-
-
-def logical_lines(text: str) -> list[tuple[int, str]]:
-    """Return the requirement lines of a pip file, with backslash continuations joined."""
-    joined: list[tuple[int, str]] = []
-    pending = ""
-    start = 0
-    for number, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
-        if not pending and (not line or line.startswith("#")):
-            continue
-        if not pending:
-            start = number
-        if line.endswith("\\"):
-            pending += line[:-1].rstrip() + " "
-            continue
-        joined.append((start, (pending + line).strip()))
-        pending = ""
-    if pending:
-        joined.append((start, pending.strip()))
-    return joined
 
 
 def locked_packages(requirements: Path) -> tuple[dict[str, str], list[str]]:

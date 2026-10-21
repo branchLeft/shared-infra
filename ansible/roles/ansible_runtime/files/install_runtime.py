@@ -50,7 +50,8 @@ MAX_LOCK_BYTES: Final = 4_000_000
 # One pinned requirement: a name, optional extras, an exact version, an optional
 # environment marker, then one or more hashes and nothing else on the line. The marker is
 # written only from a positive set of characters (letters, digits, "_", ".", quotes, space,
-# "=", "!", "<", ">", "(", ")"), the set ansible/checks/check_pins.py enforces on main. That
+# "=", "!", "<", ">", "(", ")"), the set MARKER_CHARS names here, and check_pins reads it from
+# this file. That
 # set holds no "-" and no ";" at all, so no option such as --index-url or -i can sit in the
 # marker, however it is spaced or nested. It is a set to allow, not a list of forms to refuse.
 #
@@ -61,14 +62,17 @@ MAX_LOCK_BYTES: Final = 4_000_000
 # and pip's own --require-hashes (always passed, below) is the maintained refusal of an unpinned
 # or unhashed requirement and verifies every downloaded file against its hash. This pattern only
 # refuses early, with a reason of this program's own, and leaves nothing behind.
+MARKER_CHARS: Final = r"[A-Za-z0-9_.'\" =!<>()]"
 REQUIREMENT: Final = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]+\])?"
     r"==[A-Za-z0-9.!+_-]+"
-    r"(?:\s*;\s*[A-Za-z0-9_.'\" =!<>()]+)?"
+    rf"(?:\s*;\s*{MARKER_CHARS}+)?"
     r"(?:\s+--hash=sha256:[0-9a-f]{64})+",
 )
 HASH_OPTION: Final = re.compile(r"--hash=sha256:[0-9a-f]{64}")
-TRAILING_COMMENT: Final = re.compile(r"\s+#.*$")
+# pip's own comment pattern (COMMENT_RE in pip's req_file.py), used with match: a line that is
+# only a comment, once any white space before the "#" is allowed for.
+COMMENT_LINE: Final = re.compile(r"(^|\s+)#.*$")
 
 
 class Reason(enum.StrEnum):
@@ -185,25 +189,35 @@ def fingerprint(lock: bytes) -> str:
     return hashlib.sha256(text.rstrip().encode("utf-8")).hexdigest()[:FINGERPRINT_LENGTH]
 
 
-def logical_lines(text: str) -> list[str]:
-    """Return the lock's requirement lines, continuations joined and comments dropped.
+def logical_lines(text: str) -> list[tuple[int, str]]:
+    """Return the lock's requirement lines as pip reads them, each with the line it starts on.
 
-    Raises:
-        Refusal: The lock ends in the middle of a continued line.
+    This is pip's rule (join_lines in pip's req_file.py), copied exactly so that the lock is
+    read as pip reads it. A line continues the one before when its raw text ends in a backslash,
+    tested before any strip, so a space after the backslash ends it. A comment-only line ends a
+    continuation. No comment is stripped from a joined line, so a comment that sits on a
+    requirement is not a requirement and is refused, never skipped. The function is the lock
+    reader for both callers: ansible/checks/check_pins.py loads it from this file.
     """
-    lines: list[str] = []
-    pending = ""
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not pending and (not line or line.startswith("#")):
+    lines: list[tuple[int, str]] = []
+    pending: str | None = None
+    start = 0
+    for number, raw in enumerate(text.splitlines(), 1):
+        comment = COMMENT_LINE.match(raw) is not None
+        if pending is None:
+            if comment or not raw.strip():
+                continue
+            start = number
+            pending = ""
+        if raw.endswith("\\") and not comment:
+            pending += raw.strip("\\")
             continue
-        if line.endswith("\\"):
-            pending = f"{pending} {line[:-1].strip()}".strip()
-            continue
-        lines.append(TRAILING_COMMENT.sub("", f"{pending} {line}".strip()))
-        pending = ""
-    if pending:
-        raise Refusal(Reason.LOCK_UNHASHED, "the last line is continued")
+        joined = pending + (f" {raw}" if comment else raw)
+        if joined.strip():
+            lines.append((start, joined.strip()))
+        pending = None
+    if pending is not None and pending.strip():
+        lines.append((start, pending.strip()))
     return lines
 
 
@@ -221,7 +235,7 @@ def check_lock_is_hashed(lock: bytes) -> None:
     lines = logical_lines(lock.decode("utf-8"))
     if not lines:
         raise Refusal(Reason.LOCK_EMPTY)
-    for line in lines:
+    for _number, line in lines:
         if REQUIREMENT.fullmatch(line) is None or HASH_OPTION.search(line) is None:
             raise Refusal(Reason.LOCK_UNHASHED, line.split()[0])
 

