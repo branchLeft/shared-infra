@@ -152,6 +152,11 @@ db1_grants_verify_cases:
     state:
       users:
         'backup@localhost': { static: [ALL PRIVILEGES] }
+  - name: ops1 account holding every privilege
+    code: account-all-privileges
+    state:
+      users:
+        'backup_ops1@192.0.2.50': { static: [ALL PRIVILEGES] }
   - name: ops1 account also at another host
     code: ops1-other-host
     state:
@@ -191,6 +196,11 @@ db1_grants_verify_cases:
     state:
       users:
         'ghost_second_site@10.20.1.%': { db: { 'ghost\_second\_site': [SELECT] } }
+  - name: tenant holding the grant option
+    code: tenant-unexpected-grant
+    state:
+      users:
+        'ghost_second_site@10.20.1.%': { grant_option: true }
   - name: tenant holding a global privilege
     code: tenant-unexpected-grant
     state:
