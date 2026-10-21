@@ -236,7 +236,7 @@
             and item['ansible.builtin.command'].argv[5] is match('^[{][{] breakglass_mint_host_node_image [}][}]$'))
         fail_msg: 'A command task runs something other than the three Docker commands the role may run, in their exact shapes: {{ item.name }}.'
         quiet: true
-      loop: "{{ verify_tasks | select('contains', 'ansible.builtin.command') | list }}"
+      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.command') | list }}"
       loop_control:
         label: '{{ item.name }}'
 
@@ -246,7 +246,7 @@
           - item['ansible.builtin.file'].state == 'directory'
         fail_msg: 'A file task does something other than make a directory: {{ item.name }}.'
         quiet: true
-      loop: "{{ verify_tasks | select('contains', 'ansible.builtin.file') | list }}"
+      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.file') | list }}"
       loop_control:
         label: '{{ item.name }}'
 
@@ -256,7 +256,7 @@
           - item['ansible.builtin.get_url'].url is match('^[{][{] breakglass_mint_host_source_base_url [}][}]/')
         fail_msg: 'A download does not start from the pinned base URL: {{ item.name }}.'
         quiet: true
-      loop: "{{ verify_tasks | select('contains', 'ansible.builtin.get_url') | list }}"
+      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.get_url') | list }}"
       loop_control:
         label: '{{ item.name }}'
 
@@ -268,7 +268,7 @@
       ansible.builtin.set_fact:
         breakglass_mint_host_v_key_tasks: >-
           {% set out = [] %}
-          {% for t in verify_tasks if 'breakglass_mint_host_key_path' in (t | to_json) %}{% set _ = out.append(t.name) %}{% endfor %}
+          {% for t in (verify_tasks + playbook_guard_v_tasks) if 'breakglass_mint_host_key_path' in (t | to_json) %}{% set _ = out.append(t.name) %}{% endfor %}
           {{ out | to_json }}
 
     - name: Assert only the stat and its assertion name the key path, and nothing spells the real path
@@ -278,7 +278,7 @@
             breakglass_mint_host_v_key_tasks | from_json ==
             ['Look at the signing key and its directory without reading either',
             'Refuse a host whose signing key is missing or not private to root']
-          - "'/etc/branchleft' not in (verify_tasks | to_json)"
+          - "'/etc/branchleft' not in ((verify_tasks + playbook_guard_v_tasks) | to_json)"
         fail_msg: 'The key path is named by tasks other than the one stat and its assertion: {{ breakglass_mint_host_v_key_tasks }}.'
         quiet: true
 
