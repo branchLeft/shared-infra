@@ -306,8 +306,12 @@ REFUSED = {
         "cancel-in-progress is True",
     ),
     "zz-p2-quoted-top": (
-        PUSH_ON + '"concurrency":\n  group: deploy-shared\n  cancel-in-progress: true\n' + deploy_jobs(),
+        PUSH_ON + '"concurrency":\n  group: deploy-shared\n' + deploy_jobs(),
         "shared across runs",
+    ),
+    "zz-p2-quoted-top-cancel-true": (
+        PUSH_ON + '"concurrency":\n  group: deploy-shared\n  cancel-in-progress: true\n' + deploy_jobs(),
+        "cancel-in-progress is True",
     ),
     "zz-p2-quoted-top-cancel-false": (
         PUSH_ON + '"concurrency":\n  group: deploy-shared\n  cancel-in-progress: false\n' + deploy_jobs(),
