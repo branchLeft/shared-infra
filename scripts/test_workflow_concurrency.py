@@ -41,9 +41,15 @@ The rules, each on the parsed data:
   let a pull request run cancel a push run, and the per-pull-request group is
   the workflow's own group. Anything else (true, a string, "false", an
   expression, null) is refused.
-- A job whose group is the workflow's top-level group is refused: GitHub keeps
-  one group namespace for a workflow run and its jobs, so the job would wait on
-  its own run.
+- A job's group is a plain literal: any `${{` in it is refused, whatever it
+  would evaluate to, so no expression can make it equal the workflow's group.
+  This test does not evaluate expressions.
+- A job literal is refused when it is the workflow's group. Both are compared
+  case-folded, because GitHub treats group names as case-insensitive. When the
+  top-level group holds an expression, its literal text outside `${{ }}` is the
+  prefix, and a job literal starting with it (case-folded) is refused, since the
+  job would wait on its own run. A broken `${{` in the top-level group is refused
+  the same way. GitHub keeps one group namespace for a run and its jobs.
 
 Every check fails closed: a file that does not parse, whose top level is not a
 mapping, whose trigger block is missing or unreadable, or whose concurrency
@@ -187,11 +193,22 @@ def run_keyed(group: object, pull_request: bool) -> bool:
     return all(term in allowed for term in terms) and any("github.run_id" in term for term in terms)
 
 
-def canonical(group: object) -> object:
-    """The group with the spacing inside each ${{ }} normalised, so two spellings of one group compare equal."""
-    if not isinstance(group, str):
-        return group
-    return EXPRESSION.sub(lambda match: "${{ " + " ".join(match.group(1).split()) + " }}", group)
+def job_group_matches_top(job_group: str, top_group: object) -> bool:
+    """True when a job literal is, or starts with the prefix of, the workflow's group. Both are case-folded.
+
+    A top-level group with no expression must equal the job literal. One with an
+    expression yields its literal text outside ${{ }} as a prefix, and a broken
+    `${{` in it counts as a match, so an unreadable group fails closed.
+    """
+    if not isinstance(top_group, str):
+        return False
+    job = job_group.casefold()
+    if "${{" not in top_group:
+        return job == top_group.casefold()
+    prefix = EXPRESSION.sub("", top_group)
+    if "${{" in prefix or "}}" in prefix:
+        return True
+    return job.startswith(prefix.casefold())
 
 
 def cancel_problem(where: str, config: dict) -> str | None:
@@ -260,7 +277,9 @@ def job_problems(name: str, job_name: str, job: dict, top_group: object) -> list
     config = job["concurrency"]
     found = []
     group = config.get("group")
-    if isinstance(group, str) and isinstance(top_group, str) and canonical(group) == canonical(top_group):
+    if isinstance(group, str) and "${{" in group:
+        found.append(f"{name}: {where} group must be a plain literal, not an expression: {group!r}")
+    elif isinstance(group, str) and job_group_matches_top(group, top_group):
         found.append(
             f"{name}: {where} has the same group as the workflow, so it would wait on its own run: {group!r}"
         )
@@ -364,6 +383,12 @@ PR_WORKFLOW = PR_ON + PR_BLOCK + JOBS
 JOBS_WITH_CHECK_GROUP = (
     "jobs:\n  check:\n    runs-on: ubuntu-latest\n" + job_concurrency(PR_EXPRESSION, "check")
 )
+
+def job_group_under(job_group: str, top_group: str = "x-${{ github.run_id }}", pull_request: bool = False) -> str:
+    """A workflow with the given top-level group and one check job with the given group, never cancelling."""
+    head = PR_ON + PR_BLOCK if pull_request else PUSH_ON + f"concurrency:\n  group: {top_group}\n  cancel-in-progress: false\n"
+    return head + "jobs:\n  check:\n    runs-on: ubuntu-latest\n" + job_concurrency("false", job_group)
+
 
 # name -> (workflow text, a fragment that must appear in a violation). The
 # fragment keeps a fixture from being refused for the wrong reason, such as a
@@ -534,25 +559,25 @@ REFUSED = {
     ),
     "h1-job-group-equals-the-workflow-group-never-cancels": (
         PR_ON + PR_BLOCK + "jobs:\n  check:\n    runs-on: ubuntu-latest\n" + job_concurrency("false", PR_GROUP),
-        "same group as the workflow",
+        "plain literal",
     ),
     "h1-job-group-equals-the-workflow-group-no-cancel-key": (
         PR_ON + PR_BLOCK + "jobs:\n  check:\n    runs-on: ubuntu-latest\n    concurrency:\n      group: " + PR_GROUP + "\n",
-        "same group as the workflow",
+        "plain literal",
     ),
     "h1-push-job-group-equals-the-workflow-group": (
         PUSH_ON
         + "concurrency:\n  group: x-${{ github.run_id }}\n  cancel-in-progress: false\n"
         + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
         + job_concurrency("false", "x-${{ github.run_id }}"),
-        "same group as the workflow",
+        "plain literal",
     ),
     "h1-job-group-equals-the-workflow-group-spaced-differently": (
         PUSH_ON
         + "concurrency:\n  group: x-${{ github.run_id }}\n  cancel-in-progress: false\n"
         + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
         + job_concurrency("false", "x-${{github.run_id}}"),
-        "same group as the workflow",
+        "plain literal",
     ),
     # Cycle 4, finding 2: the run id counts only as a term inside ${{ }}.
     "g2-literal-run-id-text": (
@@ -656,6 +681,30 @@ REFUSED = {
     "f3-yaml11-no": (PUSH_ON + deploy_jobs(job_concurrency("no")), "cancel-in-progress is 'no'"),
     "f3-yaml11-yes": (PUSH_ON + deploy_jobs(job_concurrency("yes")), "cancel-in-progress is 'yes'"),
     "f3-null-cancel": (PUSH_ON + deploy_jobs(job_concurrency("")), "cancel-in-progress is None"),
+    # Cycle 7 (r3 D1, D2, D3): the verdict's probes (a) to (e), and the case-folded
+    # literal and prefix comparisons. A job group holding ${{ }} is refused whatever
+    # it evaluates to; a job literal is compared case-folded with the workflow group.
+    "r3-a-format-call": (job_group_under("${{ format('x-{0}', github.run_id) }}"), "plain literal"),
+    "r3-b-parenthesised-run-id": (job_group_under("x-${{ (github.run_id) }}"), "plain literal"),
+    "r3-c-operator-spacing": (
+        job_group_under("${{github.workflow}}-${{github.event.pull_request.number||github.run_id}}", pull_request=True),
+        "plain literal",
+    ),
+    "r3-d-split-literal": (job_group_under("${{ 'x-' }}${{ github.run_id }}"), "plain literal"),
+    "r3-e-case-of-the-workflow-group": (job_group_under("X-${{ github.run_id }}"), "plain literal"),
+    "r3-literal-case-folded-prefix": (job_group_under("X-Deploy"), "same group as the workflow"),
+    "r3-prefix-case-folded": (
+        job_group_under("x-deploy", top_group="X-${{ github.run_id }}"),
+        "same group as the workflow",
+    ),
+    "r3-literal-case-folded-equal": (
+        job_group_under("deploy-shared", top_group="Deploy-Shared"),
+        "same group as the workflow",
+    ),
+    "r3-broken-top-expression": (
+        job_group_under("deploy", top_group="x-${{ github.run_id"),
+        "same group as the workflow",
+    ),
 }
 
 # name -> workflow text the rules must pass: the shapes a refusal must not catch.
@@ -678,10 +727,10 @@ ACCEPTED = {
     "a job with its own group and no cancel key in a pull_request workflow": PR_ON
     + PR_BLOCK
     + "jobs:\n  check:\n    runs-on: ubuntu-latest\n    concurrency:\n      group: check\n",
-    "a job group that differs from the run-keyed workflow group": PUSH_ON
+    "a job literal that differs from the run-keyed workflow group": PUSH_ON
     + "concurrency:\n  group: x-${{ github.run_id }}\n  cancel-in-progress: false\n"
     + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
-    + job_concurrency("false", "y-${{ github.run_id }}"),
+    + job_concurrency("false", "y-deploy"),
     "a '!' inside plain text is not a tag": PUSH_ON
     + "jobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo !!bool !important\n",
     "a quoted string that starts with '!!'": PUSH_ON
