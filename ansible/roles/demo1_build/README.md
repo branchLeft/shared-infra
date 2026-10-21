@@ -282,11 +282,34 @@ To run one scenario, add `--scenario refusals` (the default is `default`):
 
 Each runs on one systemd container (the same Debian 13 image and settings as
 `broker_deploy`; the reason for each key is in `molecule.yml`, including the host
-cgroup namespace, which is the stated exception). Applying the role takes about
-five minutes of the real downloads and unit work, which is why the role is
-applied three times in `default` and never in `refusals`: a shard is one job with
-a 25-minute limit, and the earlier version of this scenario applied it eleven
-times and was cancelled at the limit.
+cgroup namespace, which is the stated exception).
+
+Time is the reason there are two. A shard is one job with a 25-minute limit, and
+the first version of this scenario, which applied the role for every refusal case
+(eleven applications), was cancelled at the limit. The numbers below were measured
+on a developer machine while three other Molecule runs were going, by running each
+Molecule step on its own; CI is the record at each head, and the limit has not
+been raised.
+
+| Step                | `default`  | `refusals` |
+| ------------------- | ---------- | ---------- |
+| `create`, `prepare` | 20 s       | 22 s       |
+| `check-fresh`       | 103 s      | 3 s        |
+| `converge`          | 276 s      | 104 s      |
+| `idempotence`       | 260 s      | 96 s       |
+| `verify`            | 70 s       | 8 s        |
+| `check-configured`  | 113 s      | 3 s        |
+| `molecule-check`    | 415 s      | 131 s      |
+| `destroy`           | 8 s        | 9 s        |
+| All container steps | 21 minutes | 6 minutes  |
+
+The first application of the role in `default` takes 140 s (the downloads, the
+units and the integrity read-back), the second 100 s, and the two refusal plays
+that follow 29 s and 3 s. What left `default/converge.yml` for `refusals` is every
+case that needed no install: the grant edits (nine), the wrong-pin case, the
+eighth-slot case and the `/usr/bin/passwd` wrapper-path case. What stayed is the
+case that proves a refusal comes before the install, which only a whole-role run
+can show.
 
 ### What runs for real
 
