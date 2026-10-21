@@ -309,7 +309,30 @@ that follow 29 s and 3 s. What left `default/converge.yml` for `refusals` is eve
 case that needed no install: the grant edits (ten), the wrong-pin case, the
 eighth-slot case and the `/usr/bin/passwd` wrapper-path case. What stayed is the
 case that proves a refusal comes before the install, which only a whole-role run
-can show.
+can show. `default/converge.yml` still enters the role four times (two
+applications and two refusal plays), and the `idempotence` step is a third
+application. The grant cases that `refusals` took out each used to apply the role.
+
+### The time bar, and what to do when it is missed
+
+The table is local. The record is CI, read from the harness step of each shard
+(the step named "Run the harness over this role or pattern") at the head under
+review. The bar for that step is:
+
+| Shard      | The step must take at most | Why this number                                                           |
+| ---------- | -------------------------- | ------------------------------------------------------------------------- |
+| `default`  | 20 minutes                 | 80% of the 25-minute cap, so a slow runner does not cancel it             |
+| `refusals` | 10 minutes                 | 40% of the cap; the scenario applies nothing, and takes 6 minutes locally |
+
+Read the step times with `gh run view <run id> --json jobs`, looking at the
+`startedAt` and `completedAt` of that step. A shard over its bar is a failed
+done-when even when it is green, and the 25-minute limit is not raised to make it
+pass. The fallback, which is not built unless the bar is missed: move the three
+plan-only steps (`check-fresh`, `check-configured` and `molecule-check`, about
+9 minutes of the local `default` time) into a third scenario, `plan`, that
+applies the role once and then runs the plans. Its `molecule.yml` is a link to the
+default one's, as `refusals` has, and no workflow edit is needed, because the
+shard list takes every directory under `molecule/` as a scenario.
 
 ### What runs for real
 
