@@ -1,0 +1,42 @@
+name: Ansible delivery
+
+# Delivers the Ansible roles to the hosts by the gated pull (ANS-17). It calls the
+# reusable workflow of branchLeft/github-workflows, which lints, runs Molecule over
+# every role and pattern, asks each host in check mode what this commit would change,
+# and then waits on the deployment environment below before the apply.
+#
+# It runs on a push to main and on nothing else. A pull request is gated by
+# ansible.yml, whose required check keeps its name. No pull request, schedule or
+# manual run may reach a host, and no `paths:` filter may skip a delivery.
+#
+# The environment is its own, not `production` or `production-mail`: those release the
+# Pulumi applies in ci.yml, and one approval must not release both. The owner creates
+# it before the first run (required reviewer, no self-review, main only, secret
+# ssh_apply_key). ansible/checks/check_delivery.py fails on every line of this file
+# that would weaken that, and reads the environment's protection when given the
+# answers of three read-only GitHub calls.
+#
+# The apply key is an environment secret and is never passed here. The three secrets
+# below are repository secrets, named one by one: `secrets: inherit` would pass all.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  delivery:
+    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.11
+    with:
+      environment: ansible-hosts
+      role-directories: |
+        roles/*
+        patterns/*
+      python-paths: harness checks
+    secrets:
+      ssh_hosts: ${{ secrets.ANSIBLE_HOSTS }}
+      ssh_known_hosts: ${{ secrets.ANSIBLE_KNOWN_HOSTS }}
+      ssh_check_key: ${{ secrets.ANSIBLE_CHECK_KEY }}
