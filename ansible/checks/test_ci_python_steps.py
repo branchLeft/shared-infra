@@ -191,8 +191,9 @@ class WorkflowPythonStepsTest(unittest.TestCase):
         self.assertIsNone(pattern.search(text))
 
     def test_the_install_scan_finds_the_commands_it_is_meant_to_find(self) -> None:
-        # A control: a scan that matched nothing would make the next two tests pass.
-        self.assertEqual(2, len(lock_installs(WORKFLOW)))
+        # A control: a scan that matched nothing would make the next two tests pass. Four: the
+        # lock and the pinned pip, each installed in both tool environments.
+        self.assertEqual(4, len(lock_installs(WORKFLOW)))
         self.assertLessEqual(3, len(lock_installs(README.read_text("utf-8"))))
 
     def test_every_workflow_install_of_the_lock_is_wheels_only(self) -> None:

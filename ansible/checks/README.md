@@ -13,8 +13,15 @@ and `break_args_options` in `pip/_internal/req/req_file.py`) and holds the progr
 is a list of shapes, each saying what the program must do and what pip must see, and pip is asked
 as well, so a wrong entry in the table fails too.
 
-The pip it asks is the one in the interpreter that runs this file: in CI the ensurepip-bundled pip
-of the virtual environment that holds the pinned toolchain (the lock does not pin pip). The version
-is in every failure message. pip's `req_file` module is not a public interface; if a pip release
-moves it, this file fails with a message that says so, and it is not skipped, because a skipped
-oracle would read as a pass. Re-checking the parity against the new pip is the repair.
+The pip it asks is pinned. The pin is `ansible/checks/pip-requirements.txt`, a hashed requirement
+for one version (26.1.2), which both CI tool environments in `.github/workflows/ansible.yml` install
+with `--require-hashes --only-binary=:all:` before the lock. The lock does not pin pip, so without
+this file the oracle would run whatever ensurepip bundles with the runner's Python. Before it calls
+any pip internal, this file reads the interpreter's `pip.__version__` and fails, naming both
+versions, when it is not the pin. It never skips and never falls back to `auto_decode`.
+
+pip's `req_file` module is not a public interface. A pip upgrade is therefore two steps, done
+together: change the pin in `pip-requirements.txt` to the new version with its hash from PyPI's JSON
+API, and re-check the table above against the new pip's `req_file` (the parity). Until both are done
+the test fails, which is the intended result. Dependabot does not watch the pin: `check_pins.py`
+watches only `requirements.in`, and the pin is not an input it lists.

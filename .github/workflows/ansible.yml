@@ -177,6 +177,11 @@ jobs:
       - name: Create the tool environment
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
 
+      # The pip the parity oracle reads is pinned by hash before the lock, so the oracle
+      # does not depend on the runner image's ensurepip (ansible/checks/README.md).
+      - name: Install the pinned pip
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt'
+
       - name: Install the pinned tools
         run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt'
 
@@ -326,6 +331,11 @@ jobs:
 
       - name: Create the tool environment
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
+
+      # The pip the parity oracle reads is pinned by hash before the lock, so the oracle
+      # does not depend on the runner image's ensurepip (ansible/checks/README.md).
+      - name: Install the pinned pip
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt'
 
       - name: Install the pinned tools
         run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt'

@@ -57,12 +57,43 @@ class OracleUnavailable(Exception):  # noqa: N818 - the word for it in this file
     """pip's req_file module is not where, or what, this file expects."""
 
 
-def load_oracle() -> ModuleType:
-    """Return pip's req_file module.
+PIP_PIN = Path(__file__).resolve().parent / "pip-requirements.txt"
+PIP_PIN_LINE = re.compile(r"^pip==(?P<version>[0-9][^\s\\]*)", re.MULTILINE)
+
+
+def pinned_pip() -> str:
+    """Return the pip version that pip-requirements.txt pins, the one this oracle was written for.
 
     Raises:
-        OracleUnavailable: The module, or a function this file calls in it, is not there.
+        OracleUnavailable: The file does not pin pip.
     """
+    match = PIP_PIN_LINE.search(PIP_PIN.read_text(encoding="utf-8"))
+    if match is None:
+        message = f"{PIP_PIN.name} does not pin pip, so the oracle has no version to check"
+        raise OracleUnavailable(message)
+    return match.group("version")
+
+
+def load_oracle() -> ModuleType:
+    """Return pip's req_file module, after checking that it is the pinned pip.
+
+    Raises:
+        OracleUnavailable: The pip is not the pinned one, or the module, or a function this
+            file calls in it, is not there.
+    """
+    pinned = pinned_pip()
+    try:
+        pip = importlib.import_module("pip")
+    except ImportError as error:
+        message = f"pip is not importable ({error!r}); the oracle needs pip {pinned}"
+        raise OracleUnavailable(message) from error
+    running = str(pip.__version__)
+    if running != pinned:
+        message = (
+            f"the oracle needs pip {pinned} (pinned in {PIP_PIN.name}) but this interpreter "
+            f"runs pip {running}; install the pinned pip, the test is never skipped"
+        )
+        raise OracleUnavailable(message)
     try:
         module = importlib.import_module("pip._internal.req.req_file")
         for name in ("_decode_req_file", "preprocess", "break_args_options"):
