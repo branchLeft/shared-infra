@@ -4,6 +4,7 @@
 -N DOCKER-USER
 -A INPUT -i br-mailspool -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 -A INPUT -i br-mailspool -j DROP
+-A FORWARD -j DOCKER-USER
 -A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 -A DOCKER-USER -i br-mailspool ! -o br-mailspool -j DROP
 -A DOCKER-USER ! -s 10.20.1.10/32 -p tcp -m conntrack --ctorigdst 10.20.1.50 --ctorigdstport 8302 -j DROP

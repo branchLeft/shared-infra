@@ -6,7 +6,7 @@
 # role runs, and the instance is still the same invocation.
 - name: Start the probe instance of the compose unit
   ansible.builtin.systemd_service:
-    name: branchleft-compose@molecule-probe.service
+    name: branchleft-compose@Molecule-Probe.service
     state: started
 
 - name: Read the probe instance
@@ -15,7 +15,7 @@
       [
         systemctl,
         show,
-        branchleft-compose@molecule-probe.service,
+        branchleft-compose@Molecule-Probe.service,
         '--property=InvocationID,ActiveState',
       ]
   register: deploy_tooling_scenario_probe_before
@@ -49,7 +49,7 @@
       [
         systemctl,
         show,
-        branchleft-compose@molecule-probe.service,
+        branchleft-compose@Molecule-Probe.service,
         '--property=InvocationID,ActiveState',
       ]
   register: deploy_tooling_scenario_probe_after
@@ -83,5 +83,5 @@
 
 - name: Stop the probe instance
   ansible.builtin.systemd_service:
-    name: branchleft-compose@molecule-probe.service
+    name: branchleft-compose@Molecule-Probe.service
     state: stopped

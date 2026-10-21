@@ -2,9 +2,11 @@
 
 The fixtures under ``fixtures/`` are what ``iptables -S`` printed in a Debian 13 test
 container for the policy program, captured from a real run (the module's docstring says
-how they print). The program tested is the one the role installs, read from its one home
-in ``hetzner/provision``. The pattern README gives the command, with the library
-directory on PYTHONPATH.
+how they print). The container has no Docker, so its test puts the jump from FORWARD to
+DOCKER-USER in place the way Docker does, and the captured listings carry that one line.
+The program tested is the one the role installs, read from its one home in
+``hetzner/provision``. The pattern README gives the command, with the library directory
+on PYTHONPATH.
 """
 
 import dataclasses
@@ -418,7 +420,57 @@ class ForeignRuleTests(unittest.TestCase):
     def test_a_matched_accept_above_the_policy_fails(self) -> None:
         with self.assertRaises(chain.RuleBypassError) as caught:
             self.put_above("-A DOCKER-USER -s 172.17.0.0/16 -j ACCEPT")
-        self.assertIn("172.17.0.0/16", str(caught.exception))
+        self.assertIn(
+            "iptables DOCKER-USER: rule 1 of the chain (target: ACCEPT)", str(caught.exception)
+        )
+
+    def test_a_failure_prints_no_text_of_the_foreign_rule_only_its_place_and_target(self) -> None:
+        rule = (
+            "-A DOCKER-USER -s 172.17.0.0/16 -p tcp -m tcp --dport 2222"
+            " -m comment --comment admin-ssh -j ACCEPT"
+        )
+        with self.assertRaises(chain.RuleBypassError) as caught:
+            self.put_above(rule)
+        message = str(caught.exception)
+        for leaked in ("172.17.0.0/16", "2222", "admin-ssh", "comment", "--dport", rule):
+            with self.subTest(leaked=leaked):
+                self.assertNotIn(leaked, message)
+        self.assertEqual(
+            message,
+            "iptables DOCKER-USER: rule 1 of the chain (target: ACCEPT) is above the policy's last "
+            "drop and can let a packet past it; the chain holds 2 other rules",
+        )
+
+    def test_a_target_that_is_not_a_chain_name_is_not_printed(self) -> None:
+        with self.assertRaises(chain.RuleBypassError) as caught:
+            self.put_above("-A DOCKER-USER -j ACCEPT;secret")
+        self.assertNotIn("secret", str(caught.exception))
+        self.assertIn("target: none or unreadable", str(caught.exception))
+
+    def test_every_failure_of_a_chain_says_how_many_other_rules_it_holds(self) -> None:
+        missing = V4_STANDARD_DELETIONS["metadata drop"]
+        with self.assertRaises(chain.RuleMissingError) as gone:
+            check(STANDARD, v4=listing(STANDARD, without(missing)))
+        self.assertTrue(str(gone.exception).endswith("the chain holds 1 other rule"))
+        extra = V4_PROTECTED_DELETIONS["protected-port drop 8302"]
+        with self.assertRaises(chain.RuleForbiddenError) as forbidden:
+            check(
+                STANDARD,
+                v4=listing(
+                    STANDARD, inserted(extra, before=V4_STANDARD_DELETIONS["database accept"])
+                ),
+            )
+        self.assertTrue(str(forbidden.exception).endswith("the chain holds 1 other rule"))
+
+        def reorder(lines: list[str]) -> list[str]:
+            accept = V4_STANDARD_DELETIONS["established accept"]
+            kept = [line for line in lines if line != accept]
+            index = kept.index(V4_STANDARD_DELETIONS["metadata drop"])
+            return [*kept[: index + 1], accept, *kept[index + 1 :]]
+
+        with self.assertRaises(chain.RuleMisplacedError) as moved:
+            check(STANDARD, v4=listing(STANDARD, reorder))
+        self.assertTrue(str(moved.exception).endswith("the chain holds 1 other rule"))
 
     def test_a_matched_return_above_the_policy_fails(self) -> None:
         with self.assertRaises(chain.RuleBypassError):
@@ -460,6 +512,77 @@ class ForeignRuleTests(unittest.TestCase):
         lines = listing(STANDARD).splitlines()
         lines.append("-A DOCKER-USER -j ACCEPT")
         self.assertEqual(check(STANDARD, v4="\n".join(lines) + "\n").foreign_rules, 3)
+
+
+class ForwardChainTests(unittest.TestCase):
+    """DOCKER-USER is only worth checking if a forwarded packet reaches it first.
+
+    Docker puts the jump to DOCKER-USER first in FORWARD. The captured listings carry that
+    jump (the container test puts it there, as Docker does). A rule put above it is evaluated
+    before every rule of the policy.
+    """
+
+    JUMP = "-A FORWARD -j DOCKER-USER"
+
+    def v4_with(self, edit: Callable[[list[str]], list[str]]) -> chain.Result:
+        return check(STANDARD, v4=listing(STANDARD, edit))
+
+    def test_the_captured_listings_carry_the_jump_first(self) -> None:
+        for name in ("v4-standard.txt", "v4-protected_no_db.txt", "v6-standard.txt"):
+            with self.subTest(listing=name):
+                forward = [ln for ln in fixture(name).splitlines() if ln.startswith("-A FORWARD")]
+                self.assertEqual(forward, [self.JUMP])
+
+    def test_an_accept_above_the_jump_fails(self) -> None:
+        with self.assertRaises(chain.ForwardBypassError) as caught:
+            self.v4_with(inserted("-A FORWARD -j ACCEPT", before=self.JUMP))
+        self.assertEqual(
+            str(caught.exception),
+            "iptables FORWARD: its first rule is not the jump to DOCKER-USER, so a forwarded "
+            "packet can be accepted before the policy sees it; the chain holds 2 rules",
+        )
+
+    def test_a_matched_accept_above_the_jump_fails_without_printing_it(self) -> None:
+        with self.assertRaises(chain.ForwardBypassError) as caught:
+            self.v4_with(inserted("-A FORWARD -s 192.0.2.7/32 -j ACCEPT", before=self.JUMP))
+        self.assertNotIn("192.0.2.7", str(caught.exception))
+
+    def test_a_forward_chain_with_no_jump_fails(self) -> None:
+        with self.assertRaises(chain.ForwardBypassError) as caught:
+            self.v4_with(without(self.JUMP))
+        self.assertIn("the chain holds 0 rules", str(caught.exception))
+
+    def test_a_jump_that_only_some_packets_take_fails(self) -> None:
+        with self.assertRaises(chain.ForwardBypassError):
+            self.v4_with(
+                lambda lines: [
+                    "-A FORWARD -i eth0 -j DOCKER-USER" if ln == self.JUMP else ln for ln in lines
+                ]
+            )
+
+    def test_the_jump_below_other_rules_fails(self) -> None:
+        def moved(lines: list[str]) -> list[str]:
+            kept = [ln for ln in lines if ln != self.JUMP]
+            return [*kept, "-A FORWARD -j DROP", self.JUMP]
+
+        with self.assertRaises(chain.ForwardBypassError):
+            self.v4_with(moved)
+
+    def test_the_ipv6_forward_chain_is_read_where_the_chain_exists(self) -> None:
+        edit = inserted("-A FORWARD -j ACCEPT", before=self.JUMP)
+        with self.assertRaises(chain.ForwardBypassError) as caught:
+            check(STANDARD, v6=v6_listing(edit))
+        self.assertTrue(str(caught.exception).startswith("ip6tables FORWARD:"))
+
+    def test_the_ipv6_forward_chain_is_not_read_where_docker_made_no_chain(self) -> None:
+        no_chain = v6_listing(lambda lines: [ln for ln in lines if "DOCKER-USER" not in ln])
+        accept = no_chain.replace(
+            "-A INPUT -i br-mailspool -j DROP\n",
+            "-A INPUT -i br-mailspool -j DROP\n-A FORWARD -j ACCEPT\n",
+        )
+        self.assertIn("-A FORWARD -j ACCEPT", accept)
+        found = check(STANDARD, v6=accept)
+        self.assertEqual(found.owned_rules, 5 + 2 + 2)
 
 
 class ToolFailureTests(unittest.TestCase):

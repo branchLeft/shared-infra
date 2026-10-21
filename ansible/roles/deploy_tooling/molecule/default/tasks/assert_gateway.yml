@@ -47,10 +47,10 @@
   register: deploy_tooling_scenario_rules
   changed_when: false
 
-- name: Assert the chains hold only Docker's own return and nothing of the policy
+- name: Assert the chains hold only Docker's own jump and return and nothing of the policy
   ansible.builtin.assert:
     that:
-      - deploy_tooling_scenario_rules.stdout_lines | select('match', '^-A ') | list == ['-A DOCKER-USER -j RETURN']
+      - deploy_tooling_scenario_rules.stdout_lines | select('match', '^-A ') | list == ['-A FORWARD -j DOCKER-USER', '-A DOCKER-USER -j RETURN']
     fail_msg: 'The gateway carries firewall rules: {{ deploy_tooling_scenario_rules.stdout_lines | select("match", "^-A ") | list }}'
     quiet: true
 

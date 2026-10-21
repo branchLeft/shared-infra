@@ -18,6 +18,9 @@
 - name: Case, a link or a directory where a file belongs
   ansible.builtin.include_tasks: case_target_kinds.yml
 
+- name: Case, the directory that holds a target is root's to change alone
+  ansible.builtin.include_tasks: case_parent_directories.yml
+
 - name: Case, the sudoers drop-in is verified and never written
   ansible.builtin.include_tasks: case_sudoers.yml
 

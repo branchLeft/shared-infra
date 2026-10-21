@@ -26,8 +26,13 @@ description:
     writes to, without changing anything.
   - Fails when an owned rule is missing, is out of order, is one this host's variant must not
     carry, or when a foreign rule above the policy's last drop could let a packet past it.
+  - Fails when the first rule of FORWARD is not the jump to DOCKER-USER, in each family
+    where that chain exists, because a rule above the jump is evaluated before the policy.
   - Reads the rules' literals from the policy program installed on the host.
   - The IPv6 DOCKER-USER chain is checked only when the chain exists.
+  - A failure names the chain and says how many other rules it holds. It never prints
+    the text of a rule the policy did not put there, and for a rule above the last drop
+    it names only the rule's place in the chain and its target.
 version_added: "1.0.0"
 author:
   - branchLeft
@@ -46,7 +51,9 @@ options:
     choices: [standard, protected_no_db]
   foreign_chain_allowlist:
     description:
-      - Names of chains other tools own. A rule above the policy's last drop may jump to one.
+      - Names of chains other tools own. A rule above the policy's last drop may jump to one,
+        if the rule has no match module beyond conntrack, tcp and udp. The chain jumped to
+        is not read.
       - Any other rule there must be a drop or a reject with a match.
     type: list
     elements: str
@@ -86,6 +93,7 @@ Variant = Literal["standard", "protected_no_db"]
 Family = Literal["iptables", "ip6tables"]
 
 DOCKER_USER = "DOCKER-USER"
+FORWARD = "FORWARD"
 INPUT = "INPUT"
 ACCEPT = "ACCEPT"
 DROP = "DROP"
@@ -119,8 +127,9 @@ DEFAULTED = re.compile(r"^\$\{[A-Z_]+:-(?P<default>[^}]*)\}$")
 class PolicyError(Exception):
     """A reason the chains are not the policy, or the check could not be made.
 
-    Each subclass owns its message. None carries a rule from outside the policy except
-    the one that broke it, and none a secret.
+    Each subclass owns its message. None carries the text of a rule from outside the
+    policy: the log of a plan is public, and a real chain holds the host's administration
+    addresses and ports. A message may count such rules, and name the target of one.
     """
 
 
@@ -162,38 +171,66 @@ class ChainAbsentError(PolicyError):
         super().__init__(f"{family} has no {chain} chain")
 
 
+def _others(count: int) -> str:
+    """Return how many rules the chain holds that the policy did not put there."""
+    return f"the chain holds {count} other rule{'' if count == 1 else 's'}"
+
+
 class RuleMissingError(PolicyError):
     """An owned rule is not in its chain."""
 
-    def __init__(self, family: Family, chain: str, label: str, rendered: str) -> None:
-        super().__init__(f"{family} {chain}: the {label} is missing; expected {rendered}")
+    def __init__(self, family: Family, chain: str, label: str, rendered: str, others: int) -> None:
+        super().__init__(
+            f"{family} {chain}: the {label} is missing; expected {rendered}; {_others(others)}"
+        )
 
 
 class RuleMisplacedError(PolicyError):
     """An owned rule is in its chain, below a rule it must come before."""
 
-    def __init__(self, family: Family, chain: str, label: str, order: Sequence[str]) -> None:
+    def __init__(
+        self, family: Family, chain: str, label: str, order: Sequence[str], others: int
+    ) -> None:
         super().__init__(
             f"{family} {chain}: the {label} is in the wrong place; the policy's rules must run in "
-            f"this order: {', '.join(order)}"
+            f"this order: {', '.join(order)}; {_others(others)}"
         )
 
 
 class RuleForbiddenError(PolicyError):
     """The chain carries an owned rule this host's variant must not carry."""
 
-    def __init__(self, family: Family, chain: str, label: str, variant: str) -> None:
+    def __init__(self, family: Family, chain: str, label: str, variant: str, others: int) -> None:
         super().__init__(
-            f"{family} {chain}: the {label} is present, and a {variant} host must not carry it"
+            f"{family} {chain}: the {label} is present, and a {variant} host must not carry it; "
+            f"{_others(others)}"
         )
 
 
 class RuleBypassError(PolicyError):
-    """A foreign rule above the policy's last drop could let a packet past it."""
+    """A foreign rule above the policy's last drop could let a packet past it.
 
-    def __init__(self, family: Family, chain: str, text: str) -> None:
+    The message names the chain, the rule's place in it and the rule's target, and
+    nothing else of the rule. A real chain carries addresses and ports of the host's
+    administration, and this repository's Actions logs are public.
+    """
+
+    def __init__(self, family: Family, chain: str, position: int, target: str, others: int) -> None:
+        shown = target if CHAIN_NAME.fullmatch(target) else "none or unreadable"
         super().__init__(
-            f"{family} {chain}: a rule above the policy's last drop can let a packet past: {text}"
+            f"{family} {chain}: rule {position} of the chain (target: {shown}) is above the "
+            f"policy's last drop and can let a packet past it; {_others(others)}"
+        )
+
+
+class ForwardBypassError(PolicyError):
+    """Forwarded packets can reach Docker's rules without first passing through DOCKER-USER."""
+
+    def __init__(self, family: Family, others: int) -> None:
+        super().__init__(
+            f"{family} FORWARD: its first rule is not the jump to {DOCKER_USER}, so a forwarded "
+            f"packet can be accepted before the policy sees it; the chain holds {others} rule"
+            f"{'' if others == 1 else 's'}"
         )
 
 
@@ -249,7 +286,6 @@ class Rule:
     ctorigdst: str = ""
     ctorigdstport: str = ""
     extra: tuple[str, ...] = ()
-    text: str = dataclasses.field(default="", compare=False)
 
     @property
     def has_match(self) -> bool:
@@ -402,7 +438,7 @@ def parse_rule(line: str) -> tuple[str, Rule]:
     try:
         words = shlex.split(line)
     except ValueError:
-        return "", Rule(extra=("unparsed",), text=line)
+        return "", Rule(extra=("unparsed",))
     chain = words[1] if len(words) > 1 else ""
     fields: dict[str, object] = {}
     extra: list[str] = []
@@ -439,7 +475,7 @@ def parse_rule(line: str) -> tuple[str, Rule]:
             extra.append("!")
         negate = False
         index += consumed
-    return chain, _build_rule(fields, tuple(extra), line)
+    return chain, _build_rule(fields, tuple(extra))
 
 
 _PLAIN_OPTIONS: Mapping[str, str] = {
@@ -456,7 +492,7 @@ _PLAIN_OPTIONS: Mapping[str, str] = {
 }
 
 
-def _build_rule(fields: Mapping[str, object], extra: tuple[str, ...], text: str) -> Rule:
+def _build_rule(fields: Mapping[str, object], extra: tuple[str, ...]) -> Rule:
     """Build a rule from the parsed fields, with addresses normalised."""
     state = fields.get("ctstate")
     return Rule(
@@ -474,7 +510,6 @@ def _build_rule(fields: Mapping[str, object], extra: tuple[str, ...], text: str)
         ctorigdst=normalise_address(str(fields.get("ctorigdst", ""))),
         ctorigdstport=str(fields.get("ctorigdstport", "")),
         extra=extra,
-        text=text,
     )
 
 
@@ -612,6 +647,7 @@ def check_chain(
             return Result(0, 0)
         raise ChainAbsentError(policy.family, policy.chain)
     observed = table.rules.get(policy.chain, ())
+    others = _others_count(policy, observed)
     matched: dict[int, int] = {}
     for index, rule in enumerate(observed):
         wanted = len(matched)
@@ -625,11 +661,14 @@ def check_chain(
                 policy.chain,
                 _displaced(policy, observed, missing.label),
                 [o.label for o in policy.owned],
+                others,
             )
-        raise RuleMissingError(policy.family, policy.chain, missing.label, render(missing.rule))
+        raise RuleMissingError(
+            policy.family, policy.chain, missing.label, render(missing.rule), others
+        )
     for forbidden in policy.forbidden:
         if any(rule == forbidden.rule for rule in observed):
-            raise RuleForbiddenError(policy.family, policy.chain, forbidden.label, variant)
+            raise RuleForbiddenError(policy.family, policy.chain, forbidden.label, variant, others)
     last_drop = max(
         (matched[i] for i, owned in enumerate(policy.owned) if owned.rule.target == DROP),
         default=-1,
@@ -637,8 +676,31 @@ def check_chain(
     owned_positions = set(matched.values())
     for index, rule in enumerate(observed[:last_drop]):
         if index not in owned_positions and not _cannot_bypass(rule, allowed_chains):
-            raise RuleBypassError(policy.family, policy.chain, rule.text)
+            raise RuleBypassError(policy.family, policy.chain, index + 1, rule.target, others)
     return Result(len(policy.owned), len(observed) - len(policy.owned))
+
+
+def _others_count(policy: ChainPolicy, observed: Sequence[Rule]) -> int:
+    """Return how many rules of the chain are neither ones the policy owns nor forbids."""
+    known = [owned.rule for owned in (*policy.owned, *policy.forbidden)]
+    return sum(1 for rule in observed if rule not in known)
+
+
+def check_forward(family: Family, table: Table) -> None:
+    """Check that a forwarded packet reaches DOCKER-USER before any other rule of FORWARD.
+
+    Docker puts the jump to DOCKER-USER first in FORWARD, and every rule of the policy sits
+    in DOCKER-USER. A rule put above that jump is evaluated first, so an accept there lets a
+    forwarded packet past every drop. Only a chain that exists is reached, so this runs for a
+    family only where DOCKER-USER does.
+
+    Raises:
+        ForwardBypassError: when the first rule of FORWARD is not a plain jump to DOCKER-USER.
+    """
+    forward = table.rules.get(FORWARD, ())
+    first = forward[0] if forward else None
+    if first != Rule(target=DOCKER_USER):
+        raise ForwardBypassError(family, len(forward))
 
 
 def _displaced(policy: ChainPolicy, observed: Sequence[Rule], fallback: str) -> str:
@@ -697,6 +759,9 @@ def check_all(params: Params, runner: Runner) -> Result:
         )
         owned += found.owned_rules
         foreign += found.foreign_rules
+    for family, table in tables.items():
+        if DOCKER_USER in table.chains:
+            check_forward(family, table)
     return Result(owned, foreign)
 
 

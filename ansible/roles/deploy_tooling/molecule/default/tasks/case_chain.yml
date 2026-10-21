@@ -115,7 +115,12 @@
     expect_label: accept above the policy, even with a chain listed
     chain_variant: standard
     chain_allowlist: [f2b-sshd]
-    expect_msg: 'can let a packet past'
+    # The whole message, anchored: it names the chain, the rule's place and its target
+    # and says how many other rules the chain holds. It prints no part of the rule (its
+    # source address), because the log of a plan is public.
+    expect_msg: >-
+      ^iptables DOCKER-USER: rule 1 of the chain \(target: ACCEPT\) is above the policy's last
+      drop and can let a packet past it; the chain holds 2 other rules$
 
 - name: Take the accept out again
   ansible.builtin.iptables:
@@ -198,6 +203,37 @@
     expect_label: IPv6 spool bridge input accept deleted
     chain_variant: standard
     expect_msg: 'ip6tables INPUT: the spool bridge established accept is missing'
+
+- name: Reset the chains and run the program to repair
+  ansible.builtin.include_tasks: reapply_policy.yml
+
+# ----- A rule above Docker's jump to DOCKER-USER bypasses every drop -----
+
+- name: Put an accept for one address above Docker's jump to DOCKER-USER in FORWARD
+  ansible.builtin.iptables:
+    chain: FORWARD
+    jump: ACCEPT
+    source: 192.0.2.7
+    action: insert
+    rule_num: '1'
+
+- name: Read the chains back, with the rest of the policy intact
+  ansible.builtin.include_tasks: expect_chain_failure.yml
+  vars:
+    expect_label: an accept above the jump to DOCKER-USER
+    chain_variant: standard
+    expect_msg: 'iptables FORWARD: its first rule is not the jump to DOCKER-USER'
+
+# A restart of the policy unit does not move a rule in FORWARD, so the role's repair
+# fails too and the run stops at the second read-back.
+- name: Apply the role to the host with the rule above the jump
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: an accept above the jump to DOCKER-USER
+    expect_msg: 'iptables FORWARD: its first rule is not the jump to DOCKER-USER'
+    expect_task: 'Read the chains back again'
+    run_class: app
+    run_variant: standard
 
 - name: Reset the chains and run the program to repair
   ansible.builtin.include_tasks: reapply_policy.yml

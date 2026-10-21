@@ -1,0 +1,128 @@
+---
+# The directory that holds the wrapper (and the policy program) is checked as well as
+# the files: an account that can write to it can replace a file that runs as root.
+# /usr/local/sbin is the directory used here. Each case changes it, runs the role,
+# and puts it back to the owner, group and mode it had, which is read first.
+- name: Read the directory that holds the wrapper, as it stands
+  ansible.builtin.stat:
+    path: /usr/local/sbin
+  register: deploy_tooling_scenario_sbin
+
+- name: Read who is in the group staff
+  ansible.builtin.getent:
+    database: group
+    key: staff
+    split: ':'
+  register: deploy_tooling_scenario_staff
+
+# The cases below depend on the directory being the one Debian ships and on nobody being in
+# staff. A test that started from another state would prove something else.
+- name: Assert the directory is root's and staff has no members
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_sbin.stat.isdir
+      - deploy_tooling_scenario_sbin.stat.pw_name == 'root'
+      - deploy_tooling_scenario_staff.ansible_facts.getent_group.staff[2] == ''
+    fail_msg: >-
+      The test image is not the starting state this case needs:
+      {{ deploy_tooling_scenario_sbin.stat.mode }}
+      {{ deploy_tooling_scenario_sbin.stat.pw_name }}:{{ deploy_tooling_scenario_sbin.stat.gr_name }}
+    quiet: true
+
+# ----- Written by any account -----
+
+- name: Let every account write to the directory
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    mode: 'o+w'
+
+- name: Apply the role to the directory that anyone can write to
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: directory that holds the wrapper writable by any account
+    expect_msg: 'can be written to by any account'
+    expect_task: 'Refuse a directory that holds a target and that any account can write to'
+    run_class: app
+    run_variant: standard
+
+- name: Put the directory back
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    mode: '{{ deploy_tooling_scenario_sbin.stat.mode }}'
+
+# ----- Not owned by root -----
+
+- name: Give the directory to another account
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    owner: nobody
+    mode: '{{ deploy_tooling_scenario_sbin.stat.mode }}'
+
+- name: Apply the role to the directory another account owns
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: directory that holds the wrapper owned by another account
+    expect_msg: 'not a directory owned by root'
+    expect_task: 'Refuse a path that holds a target and is not a directory owned by root'
+    run_class: app
+    run_variant: standard
+
+- name: Put the owner back
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    owner: root
+    mode: '{{ deploy_tooling_scenario_sbin.stat.mode }}'
+
+# ----- Writable by a group: only an empty one is allowed -----
+
+- name: Make the directory writable by staff, as Debian ships it
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    owner: root
+    group: staff
+    mode: '2775'
+
+- name: Apply the role to a directory writable by staff, which has no members
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+- name: Put an account into staff
+  ansible.builtin.user:
+    name: deploy
+    groups: staff
+    append: true
+
+- name: Apply the role to a directory writable by a group that has a member
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: directory that holds the wrapper writable by a group with a member
+    expect_msg: 'has members or is not known to the system'
+    expect_task: 'Refuse a directory that holds a target and that a group with members can write to'
+    run_class: app
+    run_variant: standard
+
+- name: Take the account out of staff again
+  ansible.builtin.user:
+    name: deploy
+    groups: ''
+    append: false
+
+- name: Put the directory back to what it was
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    owner: '{{ deploy_tooling_scenario_sbin.stat.pw_name }}'
+    group: '{{ deploy_tooling_scenario_sbin.stat.gr_name }}'
+    mode: '{{ deploy_tooling_scenario_sbin.stat.mode }}'
+
+- name: Assert the host is as the role leaves it
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: standard
