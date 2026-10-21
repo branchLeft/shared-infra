@@ -270,10 +270,13 @@ def environment(
     *,
     name: str = "ansible-hosts",
     reviewers: list[dict[str, object]] | None = None,
-    prevent_self_review: bool = True,
+    prevent_self_review: bool = False,
     custom_branch_policies: bool = True,
 ) -> dict[str, object]:
-    """Return an environment answer shaped like the live ones, protected as designed."""
+    """Return an environment answer shaped like the live ones, set up as the owner step says.
+
+    Prevent self-review is unticked, as in the estate's production and production-mail.
+    """
     rules: list[dict[str, object]] = [
         {
             "id": 1,
@@ -341,16 +344,32 @@ class EnvironmentTests(unittest.TestCase):
             ],
         }
         findings = check_delivery.environment_findings("production", live, NOT_FOUND, None)
-        self.assertFalse(any("approve the apply" in finding for finding in findings), findings)
+        self.assertFalse(any("Prevent self-review" in finding for finding in findings), findings)
         self.assert_names(findings, "no custom branch policy")
         self.assert_names(findings, "no branch policy list")
 
     def test_self_review_allowed_is_ready(self) -> None:
-        # The owner is the only approver and also the one who merges, so prevent_self_review
-        # true would leave a run he started with nobody who may approve it. The estate's
-        # working environments (production, production-mail) leave it false.
-        for setting in (False, True):
-            self.assertEqual([], self.judge(environment(prevent_self_review=setting)))
+        # The estate's working environments (production, production-mail) leave it false.
+        self.assertEqual([], self.judge(environment(prevent_self_review=False)))
+
+    def test_a_missing_self_review_setting_is_ready(self) -> None:
+        described = environment()
+        described["protection_rules"] = [
+            {
+                "id": 1,
+                "type": "required_reviewers",
+                "reviewers": [reviewer("User", "Rob-branchLeft")],
+            },
+            {"id": 2, "type": "branch_policy"},
+        ]
+        self.assertEqual([], self.judge(described))
+
+    def test_prevent_self_review_is_not_ready(self) -> None:
+        # The owner is the only approver and also the one who merges, so ticking it leaves a
+        # run his own merge or re-run started with nobody who may approve it.
+        findings = self.judge(environment(prevent_self_review=True))
+        self.assert_names(findings, "Prevent self-review ticked")
+        self.assert_names(findings, "no one could approve")
 
     def test_no_reviewer_rule_is_not_ready(self) -> None:
         described = environment()

@@ -249,9 +249,15 @@ def environment_findings(
             f"environment {name} has no required reviewers rule: the apply would not wait"
         )
     for rule in reviewer_rules:
-        # prevent_self_review is not judged either way. The owner is the only approver and
-        # also merges every owner-only path, so requiring it would leave a run he started
-        # with nobody who may approve it. The estate's working environments leave it false.
+        # prevent_self_review true is a finding: the owner is the only approver and also
+        # merges every owner-only path, so a run his own merge or re-run started would have
+        # nobody who may approve it. The estate's working environments leave it false.
+        if rule.get("prevent_self_review") is True:
+            findings.append(
+                f"environment {name} has Prevent self-review ticked: the owner is the only "
+                "approver and also starts the run by merging, so no one could approve an "
+                "apply that his own merge or re-run started (untick it)"
+            )
         listed = rule.get("reviewers")
         reviewers = [as_mapping(entry) for entry in (listed if isinstance(listed, list) else [])]
         if not reviewers:
