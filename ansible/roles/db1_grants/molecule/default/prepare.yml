@@ -4,10 +4,32 @@
 # host's files (tasks/fixtures.yml) and the fake database as it is today. Every
 # task that handles a sentinel has no_log and diff: false: the scan in verify.yml
 # reads the log of this play too.
-- name: Make the throwaway sentinels on the controller
+- name: Make the throwaway sentinels and fetch the pinned programs on the controller
   hosts: localhost
   gather_facts: false
+  vars_files:
+    - ../../vars/main.yml
   tasks:
+    # The programs are ghost-platform's own code and that repository is their one
+    # home: none is copied into this one. They are fetched here, on the controller,
+    # at the pinned commit and held to the pinned digest, and tasks/fixtures.yml
+    # copies them into the container, which has no network.
+    - name: Make the directory for the pinned programs
+      ansible.builtin.file:
+        path: '{{ db1_grants_scenario_program_dir }}'
+        state: directory
+        mode: '0700'
+
+    - name: Fetch each pinned program from ghost-platform at the pinned commit
+      ansible.builtin.get_url:
+        url: '{{ db1_grants_source_raw_base }}/{{ item.key }}'
+        dest: '{{ db1_grants_scenario_program_dir }}/{{ item.key }}'
+        checksum: 'sha256:{{ item.value }}'
+        mode: '0600'
+      loop: '{{ db1_grants_program_sha256 | dict2items }}'
+      loop_control:
+        label: '{{ item.key }}'
+
     - name: Make the directory for this run's sentinels
       ansible.builtin.file:
         path: '{{ db1_grants_scenario_sentinel_dir }}'

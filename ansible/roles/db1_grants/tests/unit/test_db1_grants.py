@@ -1,32 +1,21 @@
 """Unit tests for the db1_grants role's pins, its derived names and its secret handling.
 
-The role runs a pinned program from another repository and derives, in Jinja, the
-names and the escaped grant target that program uses. These tests hold the role to
-that program: the pins are the digests of the fixtures byte for byte, the derived
-account and grant target are the program's own functions' answers over a table that
-includes the characters the escape exists for, and the slug rule is the program's
-pattern. They also read the role's tasks and fail when a task that handles a secret
-does not hide its log and its diff, and when a work-item reference or an absolute
-home path crept into a shipped file.
-
-Run with the Python of the virtual environment that holds the pinned tools (it
-brings Jinja2 and PyYAML), from the repository root:
-
-    .venv/bin/python -m unittest discover -b -s ansible/roles/db1_grants/tests/unit -p "test_*.py"
-
-One test reads the vars of the role that delivers the dump programs and fails while
-that role is not in the tree: the digests of the two files both roles pin must be
-equal, and a test that skipped when the other role was missing would pass on the
-day it proved nothing.
+The programs are fetched from ghost-platform at the pinned commit, held to their digests,
+and imported from a temporary directory: this repository keeps no copy. The README
+("How to run its test") says what the tests cover and how to run them; they need the network.
 """
 
 import ast
+import atexit
 import hashlib
 import importlib
 import json
 import re
+import shutil
 import sys
+import tempfile
 import unittest
+import urllib.request
 from pathlib import Path
 
 import jinja2
@@ -34,14 +23,9 @@ import yaml
 
 ROLE = Path(__file__).resolve().parents[2]
 ROLES = ROLE.parent
-FIXTURES = ROLE / "molecule" / "default" / "files" / "fixtures"
 TASKS = ROLE / "tasks"
 VARS = yaml.safe_load((ROLE / "vars" / "main.yml").read_text(encoding="utf-8"))
 SIBLING_VARS = ROLES / "db1_backup_timers" / "vars" / "main.yml"
-
-sys.path.insert(0, str(FIXTURES))
-naming = importlib.import_module("naming")
-provision = importlib.import_module("provision_tenant_db")
 
 
 def sha256(path: Path) -> str:
@@ -50,6 +34,27 @@ def sha256(path: Path) -> str:
 
 def render(expression: str, **context: object) -> str:
     return jinja2.Environment(undefined=jinja2.StrictUndefined).from_string(expression).render(**context)
+
+
+def fetch_programs() -> Path:
+    """Fetch each pinned program from its one home into a temporary directory; refuse bytes that are not pinned."""
+    directory = Path(tempfile.mkdtemp(prefix="db1-grants-programs-"))
+    atexit.register(shutil.rmtree, directory, ignore_errors=True)
+    base = render(VARS["db1_grants_source_raw_base"], db1_grants_source_commit=VARS["db1_grants_source_commit"])
+    for name, digest in VARS["db1_grants_program_sha256"].items():
+        with urllib.request.urlopen(f"{base}/{name}", timeout=60) as response:  # noqa: S310 - a fixed https URL
+            body = response.read()
+        if hashlib.sha256(body).hexdigest() != digest:
+            raise AssertionError(f"{name} fetched from {base} is not the pinned bytes; nothing was imported")
+        (directory / name).write_bytes(body)
+    return directory
+
+
+PROGRAMS = fetch_programs()
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(PROGRAMS))
+naming = importlib.import_module("naming")
+provision = importlib.import_module("provision_tenant_db")
 
 
 def main_tasks() -> list[dict]:
@@ -74,9 +79,9 @@ def all_tasks() -> list[tuple[str, dict]]:
 
 
 class PinTests(unittest.TestCase):
-    def test_every_fixture_is_the_pinned_program_byte_for_byte(self) -> None:
+    def test_every_program_fetched_from_the_pinned_commit_is_the_pinned_bytes(self) -> None:
         for name, digest in VARS["db1_grants_program_sha256"].items():
-            self.assertEqual(sha256(FIXTURES / name), digest, name)
+            self.assertEqual(sha256(PROGRAMS / name), digest, name)
 
     def test_the_pins_are_full_digests_and_a_full_commit(self) -> None:
         for name, digest in VARS["db1_grants_program_sha256"].items():
@@ -85,12 +90,19 @@ class PinTests(unittest.TestCase):
 
     def test_the_staged_files_are_the_program_and_the_module_it_imports(self) -> None:
         self.assertEqual(sorted(VARS["db1_grants_staged_files"]), ["naming.py", "provision_tenant_db.py"])
-        imports = re.findall(r"^from (\w+) import", (FIXTURES / "provision_tenant_db.py").read_text(), re.MULTILINE)
-        local = [name for name in imports if (FIXTURES / f"{name}.py").exists()]
+        imports = re.findall(r"^from (\w+) import", (PROGRAMS / "provision_tenant_db.py").read_text(), re.MULTILINE)
+        local = [name for name in imports if (PROGRAMS / f"{name}.py").exists()]
         self.assertEqual(local, ["naming"])
 
-    def test_the_fixtures_hold_no_other_python_file(self) -> None:
-        self.assertEqual(sorted(p.name for p in FIXTURES.glob("*.py")), ["dump_nightly.py", "naming.py", "provision_tenant_db.py"])
+    def test_no_program_is_copied_into_the_role(self) -> None:
+        # ghost-platform is the programs' one home; a copy here is a second home. Neither a file of a program's
+        # name nor any file holding a program's bytes may be under the role.
+        pinned = set(VARS["db1_grants_program_sha256"].values())
+        for path in ROLE.rglob("*"):
+            if path.is_file() and "__pycache__" not in path.parts:
+                self.assertNotIn(path.name, VARS["db1_grants_program_sha256"], str(path))
+                self.assertNotIn(sha256(path), pinned, str(path))
+        self.assertFalse((ROLE / "molecule" / "default" / "files" / "fixtures").exists())
 
     def test_the_role_that_delivers_the_dump_programs_pins_the_same_bytes(self) -> None:
         self.assertTrue(
@@ -321,9 +333,9 @@ class HygieneTests(unittest.TestCase):
 
     @staticmethod
     def shipped() -> list[Path]:
-        # This file holds the patterns it looks for, so it does not scan itself; the fixtures are another repository's bytes.
+        # This file holds the patterns it looks for, so it does not scan itself.
         mine = Path(__file__).resolve()
-        return [p for p in ROLE.rglob("*") if p.is_file() and "__pycache__" not in p.parts and p.parent != FIXTURES and p.resolve() != mine]
+        return [p for p in ROLE.rglob("*") if p.is_file() and "__pycache__" not in p.parts and p.resolve() != mine]
 
     def test_no_work_item_reference(self) -> None:
         for path in self.shipped():

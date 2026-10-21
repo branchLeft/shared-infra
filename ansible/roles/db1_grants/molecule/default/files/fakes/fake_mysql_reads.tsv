@@ -1,0 +1,4 @@
+connection_limit	SELECT ssl_type, max_user_connections FROM mysql\.user WHERE User='([^']*)' AND Host='([^']*)'
+other_host	SELECT Host FROM mysql\.user WHERE User='([^']*)' AND Host<>'([^']*)'
+clone_plugin	SELECT PLUGIN_NAME FROM information_schema\.PLUGINS WHERE PLUGIN_NAME='clone'
+account_count	SELECT COUNT\(\*\) FROM mysql\.user WHERE User='([^']*)' AND Host='([^']*)'

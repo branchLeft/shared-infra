@@ -63,6 +63,7 @@ provisioner:
     group_vars:
       all:
         db1_grants_scenario_sentinel_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/throwaway-secrets"
+        db1_grants_scenario_program_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/pinned-programs"
         db1_grants_scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
         db1_grants_scenario_sentinel_labels:
           - admin_password

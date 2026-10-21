@@ -145,10 +145,28 @@ is matched against the cases' names in `molecule/default/vars/cases.yml`, and th
 positive cases are skipped unless `DB1_GRANTS_VERIFY_POSITIVE=true`. The harness
 sets neither, so it always runs everything.
 
-The harness needs Docker and creates one container with no network. The unit tests
-need no container and are not run by CI; run them before proposing a change.
-One of them reads the vars of the `db1_backup_timers` role, which pins two of the
-same programs, and fails while that role is not in the tree.
+The harness needs Docker and creates one container with no network. Its prepare step
+fetches the three pinned programs from ghost-platform on the controller, so the
+harness needs the network too; the container is given the fetched bytes.
+
+**Where the programs live.** The programs are ghost-platform's own code and that
+repository is their one home. This role holds no copy of any of them (the unit test
+`test_no_program_is_copied_into_the_role` keeps it that way, as it does for
+`db1_backup_timers`). The commit and the digests are in `vars/main.yml`; the scenario
+and the unit tests fetch each program from `db1_grants_source_raw_base` at that
+commit and refuse bytes that are not the pinned ones.
+
+The unit tests need no container and are not run by CI; run them before proposing a
+change. They need the network, for the same fetch. They hold the role to the
+programs: the derived account and grant target are the programs' own functions'
+answers over a table that includes the characters the escape exists for, and the
+slug rule is the program's pattern. They read the role's tasks and fail when a task
+that handles a secret does not hide its log and its diff, and when a work-item
+reference or an absolute home path crept into a shipped file. One of them reads the
+vars of the `db1_backup_timers` role, which pins two of the same programs, and fails
+while that role is not in the tree: the digests both roles pin must be equal, and a
+test that skipped when the other role was missing would pass on the day it proved
+nothing.
 
 ## How it is delivered
 
@@ -161,10 +179,10 @@ has not been applied to the live host.
 
 ## How to change it safely
 
-- A pin changes in one place and in one change: the digest in `vars/main.yml` and
-  the fixture under `molecule/default/files/fixtures`, which the unit test holds
-  to the digest byte for byte. Take the program from the commit named in
-  `vars/main.yml`, and update that commit with it.
+- A pin changes in one place and in one change: the digest and the commit in
+  `vars/main.yml`. Take the digest of the program at the commit named there. The
+  scenario and the unit tests fetch the program at that commit and fail on any
+  other bytes; no copy is kept in this directory.
 - Run the whole harness and the unit tests, not only the step you touched. Every
   refusal above has a case in `molecule/default/vars/cases.yml` that fails when the
   refusal is removed; keep it that way.
@@ -180,8 +198,8 @@ has not been applied to the live host.
 
 The scenario runs the role in a container against a named fake of the `mysql`
 client (`molecule/default/files/fakes/fake_mysql.py`): a small table of accounts,
-a log of every call it received, and the real pinned programs, byte for byte,
-running through it.
+a log of every call it received, and the real pinned programs, byte for byte as
+fetched from ghost-platform at the pinned commit, running through it.
 
 - The refusal cases each start from the configured host, spoil one thing, run the
   role and require that it stops with the code named, with the database unchanged.
@@ -203,6 +221,28 @@ statements, that the real `SHOW GRANTS` prints what the fake prints, that a real
 account has the shape the fake gives it, or the effect of `REQUIRE SSL`. The live
 verification after the gated apply is the proof against the real server: the role's
 own post-run assertion, and then a read of the accounts by a human.
+
+## The fake client
+
+The role and the pinned provisioning program both reach the database by running the
+`mysql` client over a socket, so one stand-in at the client serves both. It is
+installed as `/usr/local/bin/mysql` in the test container and never anywhere else.
+
+It records every call (the arguments, where the statements came from, and each
+statement with any password hidden) so the test can check what was sent and in what
+order, and it keeps a small account table so the test can check what the statements
+did. The table follows the statements the role and the program send and nothing
+more: it is not a MySQL server. How a real server prints `SHOW GRANTS`, matches the
+host `10.20.1.%`, orders privileges or treats a `REVOKE` of a privilege that is not
+held is not proven here.
+
+It refuses any statement it does not know, so a changed statement fails the test
+instead of being accepted, and it refuses a call whose password, socket or user is
+not the one the test set, as a server would refuse a wrong login. The statements it
+answers by reading the table are listed in
+`molecule/default/files/fakes/fake_mysql_reads.tsv`, one name and one pattern a
+line, each answered by the function of the same name in the fake; the fake refuses
+to answer if the two lists differ. A statement it does not list is refused.
 
 ## Live blockers
 

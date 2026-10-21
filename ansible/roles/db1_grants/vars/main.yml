@@ -2,7 +2,7 @@
 # Fixed by the role, not by the inventory: these are not inputs, and an inventory
 # value does not loosen them (role vars outrank play and inventory variables).
 # Every pin is here with the reason for it, so a bump is one reviewed change to
-# this file and the fixtures next to the test.
+# this file.
 
 # ----- The programs the role relies on, pinned -----
 
@@ -12,11 +12,16 @@
 # run one whose bytes differ from these.
 db1_grants_source_commit: 5e52f78427cab104438057164e4baa16b329875c
 
+# Where ghost-platform, the one home of the programs, serves them at that commit.
+# Only the test reads this (the scenario's prepare and the unit tests fetch each
+# program from here and check it against the digest below); the role never does.
+# No copy of a program lives in this repository.
+db1_grants_source_raw_base: 'https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ db1_grants_source_commit }}/db/provision'
+
 # provision_tenant_db.py has no other home in this repository: the role that
 # delivers the dump programs pins naming.py and dump_nightly.py as well, and the
 # unit test fails when those two pins disagree with this table. A bump of this
-# table is one reviewed change to this file and to the fixtures under
-# molecule/default/files/fixtures, which the same test holds to these digests.
+# table and of the commit above is one reviewed change to this file.
 db1_grants_program_sha256:
   provision_tenant_db.py: d4115369168125ea0e72f46aa66f90a2443d6f26fda603dd8a76ec882e4d5e3e
   naming.py: 288a31eed9758644d6a73928b949bc3607c905adfc2f2f4f563701dc740f6480
