@@ -1,25 +1,10 @@
 #!/usr/bin/env python3
 """Unit tests for install-systemd-drop-ins.sh.
 
-`test_compose_unit_contract.py`'s `drop_in_for()` proves a committed drop-in
-is internally consistent -- the right EnvironmentFile reset, the right
-secrets file re-added -- but never that it reaches a host. It also globs
-`*/systemd/*.override.conf` anywhere under hetzner/, so a drop-in committed
-in a directory no script or runbook references would still satisfy it.
-
-This closes that gap from the other side: `committed_drop_ins()` below walks
-the identical tree, and the tests prove that running
-install-systemd-drop-ins.sh actually copies every one of them to its
-instance's `.service.d` directory. If a future drop-in landed somewhere
-`drop_in_for()` cannot see, both this file and that one would go blind
-together -- but neither can drift ahead of the other on its own, because
-they search exactly the same path.
-
-The script itself talks to a real `ssh`/`scp` to a real host, neither of
-which a test process may do. Both are replaced by fakes earlier on `PATH`
-that record their own argv instead of connecting anywhere -- the same
-technique test_00_harden_ssh.py and test_branchleft_nat.py use for `sshd`,
-`systemctl`, `ip` and `iptables`.
+The script must copy every committed drop-in to its instance's `.service.d`
+directory. `drop_in_for()` in test_compose_unit_contract.py checks each drop-in's
+content, not that it reaches a host. `committed_drop_ins()` walks the same tree.
+ssh and scp are replaced by fakes on PATH that record their argv.
 """
 
 import os
