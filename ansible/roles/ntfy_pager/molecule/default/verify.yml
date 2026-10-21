@@ -86,17 +86,39 @@
       loop_control:
         label: '{{ item.0.item }}'
 
-    - name: Ask systemd for the monitoring stack unit
-      ansible.builtin.systemd_service:
-        name: '{{ ntfy_pager_unit }}'
-      register: ntfy_pager_verify_unit
+    # The role delivers the renderer and nothing else of the stack: the eight
+    # other files and the subdirectories are monitoring_stack's alone, and the
+    # role restarts nothing. The project directory is the one place both roles
+    # create, with the same owner and mode.
+    - name: Look at the project directory and at what is in it
+      ansible.builtin.find:
+        paths: /opt/branchleft/monitoring
+        recurse: true
+        file_type: any
+        hidden: true
+      register: ntfy_pager_verify_project
 
-    - name: Assert the unit was restarted by the role and is active
+    - name: Look at the project directory itself
+      ansible.builtin.stat:
+        path: /opt/branchleft/monitoring
+      register: ntfy_pager_verify_project_dir
+
+    - name: Assert the project directory holds the renderer and nothing else
       ansible.builtin.assert:
         that:
-          - ntfy_pager_verify_unit.status.ActiveState == 'active'
+          - ntfy_pager_verify_project_dir.stat.isdir
+          - ntfy_pager_verify_project_dir.stat.pw_name == 'root'
+          - ntfy_pager_verify_project_dir.stat.gr_name == 'root'
+          - ntfy_pager_verify_project_dir.stat.mode == '0755'
+          - ntfy_pager_verify_found == ntfy_pager_verify_expected
         quiet: true
-        fail_msg: The monitoring stack unit is not active after the role ran.
+        fail_msg: >-
+          The project directory is not a root-owned directory with mode 0755 holding exactly
+          the files of ntfy_pager_files: this role delivers the renderer and no other file
+          of the stack. Found: {{ ntfy_pager_verify_found }}.
+      vars:
+        ntfy_pager_verify_found: "{{ ntfy_pager_verify_project.files | map(attribute='path') | sort | list }}"
+        ntfy_pager_verify_expected: "{{ ntfy_pager_files | map('regex_replace', '^', '/opt/branchleft/monitoring/') | sort | list }}"
 
     # ----- The log of this scenario's Ansible runs -----
     # The four values are given to the role as sentinels. A task that handles one

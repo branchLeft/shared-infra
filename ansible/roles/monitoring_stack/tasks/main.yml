@@ -16,15 +16,11 @@
     label: '{{ item.key }}'
   no_log: true
 
-# The renderer is delivered by ntfy_pager, not this role, and the unit's
-# ExecStartPre runs it. This role does not refuse a missing renderer here: a
-# fresh host has none until ntfy_pager runs, and the role must still converge
-# its files and secrets. The check runs in the restart handler instead, and only
-# when that handler would restart an active unit (see the README, "Restart").
-#
-# The directory and the file are created here, because no other role does it.
-# The file is touched with its owner, group and mode in the same task, so it
-# never exists in a wider mode. The times are preserved, so a second run changes
+# The directory and the file are created here and by ntfy_pager, which runs
+# first (see the README, "Order"): whichever runs first creates them, with the
+# same owner, group and mode, so the second finds them and changes nothing. The
+# file is touched with its owner, group and mode in the same task, so it never
+# exists in a wider mode. The times are preserved, so a second run changes
 # nothing.
 - name: Create the directory of the monitoring secrets file
   ansible.builtin.file:
@@ -52,34 +48,21 @@
 # One lineinfile per key, the regexp matching the key at the start of a line, so
 # a second run finds the line and changes nothing, and other keys are left in
 # place. The line is built from the key and a secret value: no_log hides it, and
-# diff is off so no value is shown under --diff.
+# diff is off so no value is shown under --diff. Nothing here notifies anything:
+# the restart is decided by the fingerprint further down.
 #
 # In check mode the file is not created, so these tasks run only when it already
 # exists. Then lineinfile reports what a real run would change, which is what
 # the plan job and the nightly drift check need to see a pending or drifted
 # secret. On a fresh host in check mode they are skipped, because there is no
 # file for lineinfile to edit.
-- name: Write the stack keys into the monitoring secrets file
+- name: Write the keys into the monitoring secrets file
   ansible.builtin.lineinfile:
     path: '{{ monitoring_stack_env_file }}'
     regexp: '^{{ item.key }}='
     line: '{{ item.key }}={{ item.value }}'
     create: false
-  loop: '{{ monitoring_stack_env_keys | selectattr("restarts_stack") | list }}'
-  loop_control:
-    label: '{{ item.key }}'
-  no_log: true
-  diff: false
-  when: not ansible_check_mode or monitoring_stack_env_stat.stat.exists
-  notify: Restart the monitoring stack unit when active
-
-- name: Write the SNDS collector key into the monitoring secrets file
-  ansible.builtin.lineinfile:
-    path: '{{ monitoring_stack_env_file }}'
-    regexp: '^{{ item.key }}='
-    line: '{{ item.key }}={{ item.value }}'
-    create: false
-  loop: '{{ monitoring_stack_env_keys | rejectattr("restarts_stack") | list }}'
+  loop: '{{ monitoring_stack_env_keys }}'
   loop_control:
     label: '{{ item.key }}'
   no_log: true
@@ -116,7 +99,6 @@
     group: root
     mode: '0644'
   loop: '{{ monitoring_stack_files }}'
-  notify: Restart the monitoring stack unit when active
 
 - name: Create the drop-in directory of the monitoring instance
   ansible.builtin.file:
@@ -129,14 +111,15 @@
 - name: Install the drop-in of the monitoring instance
   ansible.builtin.copy:
     src: monitoring.override.conf
-    dest: '{{ monitoring_stack_dropin_dir }}/override.conf'
+    dest: '{{ monitoring_stack_dropin_dest }}'
     owner: root
     group: root
     mode: '0644'
   register: monitoring_stack_dropin_copy
 
 # The edge drop-in is installed here because no edge role exists yet (see the
-# README). Its unit is restarted by runbook step 6, not by this role.
+# README). Its unit is restarted by runbook step 6, not by this role, and a
+# change to it is not part of the fingerprint.
 - name: Create the drop-in directory of the edge instance
   ansible.builtin.file:
     path: '{{ monitoring_stack_edge_dropin_dir }}'
@@ -154,19 +137,170 @@
     mode: '0644'
   register: monitoring_stack_edge_dropin_copy
 
-# Systemd is reloaded here, in the task list and not in a handler, so the role
-# returns with systemd holding the drop-ins it just installed. The converge asks
-# systemd for the loaded value straight after the role.
-- name: Make systemd read the drop-ins the role installed
+# ---- Restart by fingerprint, not by handler ----
+#
+# A handler loses its restart when a run fails between the write and the flush,
+# because the rerun finds nothing changed. So no task above notifies anything.
+# Here the role works out a fingerprint of everything the unit runs from, as it
+# is on disk now, and compares it with a stamp written only after a restart was
+# read back as active. A run that fails anywhere leaves the stamp old, so the
+# next run restarts, however many runs it takes (see the README, "Restart").
+- name: Create the directory of the stamp
+  ansible.builtin.file:
+    path: '{{ monitoring_stack_stamp_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# A read, so it runs in check mode as well: a plan or drift run must see whether
+# the unit is enabled.
+- name: Read the monitoring stack unit
+  ansible.builtin.systemd_service:
+    name: '{{ monitoring_stack_unit }}'
+  register: monitoring_stack_unit_status
+  check_mode: false
+
+# sha256 of each file the unit runs from: the eight stack files, the monitoring
+# drop-in and the renderer. A file that is missing hashes as absent.
+- name: Hash the files the unit runs from
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop: '{{ monitoring_stack_fingerprint_files }}'
+  register: monitoring_stack_fingerprint_stats
+  no_log: true
+
+# The secrets file is hashed on the host without its lines of SNDS_DATA_URL, and
+# only the hash comes back, so no value is read into a variable or a log. It is
+# read-only, so it runs in check mode too. On a fresh host in check mode there is
+# no file yet and the part is absent.
+- name: Hash the monitoring secrets file without the SNDS line
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      sed '/^{{ monitoring_stack_fingerprint_skipped_key }}=/d' {{ monitoring_stack_env_file | quote }}
+      | sha256sum | cut -d ' ' -f 1
+    executable: /bin/bash
+  register: monitoring_stack_env_hash
+  changed_when: false
+  check_mode: false
+  no_log: true
+  diff: false
+  when: monitoring_stack_env_stat.stat.exists or not ansible_check_mode
+
+- name: Read the stamp of the last restart that was applied and read back
+  ansible.builtin.slurp:
+    src: '{{ monitoring_stack_stamp_file }}'
+  register: monitoring_stack_stamp
+  failed_when: false
+  no_log: true
+  diff: false
+
+# restart_due is the whole decision: the fingerprint differs from the stamp, and
+# the unit is enabled. Any ActiveState counts (active, failed, activating,
+# inactive), so a unit that failed on a bad key is restarted when the key is
+# corrected. A unit that is not enabled is a fresh host awaiting the owner's
+# first start (runbook step 7a): it is neither started nor stamped.
+- name: Decide whether a restart is due
+  ansible.builtin.set_fact:
+    monitoring_stack_fingerprint: >-
+      {%- set parts = [] -%}
+      {%- for result in monitoring_stack_fingerprint_stats.results -%}
+      {%- set _ = parts.append(result.item ~ '=' ~ (result.stat.checksum | default('absent'))) -%}
+      {%- endfor -%}
+      {%- set _ = parts.append('env=' ~ (monitoring_stack_env_hash.stdout | default('absent'))) -%}
+      {{ parts | join(';') | hash('sha256') }}
+    monitoring_stack_stamp_value: >-
+      {{ (monitoring_stack_stamp.content | b64decode | trim) if monitoring_stack_stamp.content is defined else 'none' }}
+    monitoring_stack_unit_enabled: >-
+      {{ (monitoring_stack_unit_status.status.UnitFileState | default('')) in monitoring_stack_enabled_states }}
+  no_log: true
+
+- name: Work out whether the restart is due
+  ansible.builtin.set_fact:
+    monitoring_stack_restart_due: '{{ (monitoring_stack_fingerprint != monitoring_stack_stamp_value) and (monitoring_stack_unit_enabled | bool) }}'
+
+- name: Say that the unit is not enabled and is left alone
+  ansible.builtin.debug:
+    msg: >-
+      {{ monitoring_stack_unit }} is not enabled, so it is not started here: runbook step 7a is
+      the first start. The role has nothing recorded as applied until it has restarted the unit.
+  when: not (monitoring_stack_unit_enabled | bool)
+
+# Before the restart, so the restart runs the drop-ins this role installed. It is
+# also done whenever a restart is due, so a reload that failed on an earlier run
+# is not lost. A reload does not report a change.
+- name: Make systemd read the drop-ins before any restart
   ansible.builtin.systemd_service:
     daemon_reload: true
-  when: monitoring_stack_dropin_copy.changed or monitoring_stack_edge_dropin_copy.changed
+  when: >-
+    monitoring_stack_dropin_copy.changed or monitoring_stack_edge_dropin_copy.changed
+    or monitoring_stack_restart_due | bool
 
-# The restart handler runs here, at the end of this role, and not at the end of
-# the play. A play that fails after this role's writes would otherwise leave a
-# changed secret in the file with the unit still running its old value, and a
-# rerun would see no change and never restart (the crash window). Flushing here
-# narrows that window to the end of this role. The handler reads the drop-ins'
-# reload first, so the restart uses the drop-ins this role installed.
-- name: Run the restart now, so the role returns with the stack restarted when it changed
-  ansible.builtin.meta: flush_handlers
+# The renderer is the unit's ExecStartPre, so a restart is the only thing that
+# runs it. The check comes before the restart: after it, it would be moot, and a
+# missing renderer would already have stopped a live alert stack. It refuses to
+# restart with a renderer that is missing or writable by others.
+- name: Look at the renderer before a restart
+  ansible.builtin.stat:
+    path: '{{ monitoring_stack_renderer }}'
+  register: monitoring_stack_renderer_stat
+  when: monitoring_stack_restart_due | bool
+
+- name: Refuse to restart with a renderer that is missing or writable by others
+  ansible.builtin.assert:
+    that:
+      - monitoring_stack_renderer_stat.stat.exists
+      - monitoring_stack_renderer_stat.stat.isreg
+      - monitoring_stack_renderer_stat.stat.pw_name == 'root'
+      - monitoring_stack_renderer_stat.stat.gr_name == 'root'
+      - monitoring_stack_renderer_stat.stat.mode[-2] not in ['2', '3', '6', '7']
+      - monitoring_stack_renderer_stat.stat.mode[-1] not in ['2', '3', '6', '7']
+    quiet: true
+    fail_msg: >-
+      {{ monitoring_stack_renderer }} must be a root-owned regular file with no
+      group or other write bit. It is delivered by the ntfy_pager role, which
+      must run before this one (see the README, "Order").
+  when: monitoring_stack_restart_due | bool
+
+# In check mode this reports a change and restarts nothing: a stale stamp on an
+# enabled unit shows up as a pending restart in the plan and in the drift run.
+- name: Restart the monitoring stack unit
+  ansible.builtin.systemd_service:
+    name: '{{ monitoring_stack_unit }}'
+    state: restarted
+  when: monitoring_stack_restart_due | bool
+
+# The read-back, after the restart: the unit must be active. If it is not, the
+# role fails here and the stamp below is not written.
+- name: Read the monitoring stack unit back after the restart
+  ansible.builtin.systemd_service:
+    name: '{{ monitoring_stack_unit }}'
+  register: monitoring_stack_unit_after
+  when: (monitoring_stack_restart_due | bool) and not ansible_check_mode
+
+- name: Refuse to record a restart that left the unit not active
+  ansible.builtin.assert:
+    that:
+      - monitoring_stack_unit_after.status.ActiveState == 'active'
+    quiet: true
+    fail_msg: >-
+      {{ monitoring_stack_unit }} is not active after the restart. Nothing is
+      recorded as applied, so the next run restarts it again.
+  when: (monitoring_stack_restart_due | bool) and not ansible_check_mode
+
+# Last of all: the stamp says this exact set of inputs was restarted and read back
+# as active. One sha256 and a newline, root only. The hash is of files that hold
+# secrets, so the task is no_log and shows no diff.
+- name: Record the fingerprint as applied
+  ansible.builtin.copy:
+    content: |
+      {{ monitoring_stack_fingerprint }}
+    dest: '{{ monitoring_stack_stamp_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+  when: (monitoring_stack_restart_due | bool) and not ansible_check_mode

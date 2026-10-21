@@ -55,5 +55,28 @@ platforms:
       branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
 provisioner:
   name: ansible
+  env:
+    # Every Ansible run of this scenario appends its output to one log on the
+    # controller, and verify reads it. Verbosity 3 prints each task's arguments,
+    # and a diff is shown on every run, so a task that handles a value and lacks
+    # no_log (or diff: false) shows it in the log, and verify fails.
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '3'
+    ANSIBLE_DIFF_ALWAYS: 'true'
+  inventory:
+    group_vars:
+      all:
+        # The seven inputs of the role, as fixed test sentinels. They are not
+        # secrets: the scenario writes them into a throwaway container. They are
+        # literals so that a second converge writes the same lines and reports no
+        # change, and each is unique, so a scan of the log can tell which task
+        # leaked.
+        monitoring_stack_smtp_username: test-sentinel-smtp-user-0001
+        monitoring_stack_smtp_password: test-sentinel-smtp-password-0002
+        monitoring_stack_healthchecks_ping_url: https://test.invalid/ping/test-sentinel-0003
+        monitoring_stack_alert_recipient_email: test-sentinel-0004@test.invalid
+        monitoring_stack_mailhost_ping_url: https://test.invalid/fail/test-sentinel-0005
+        monitoring_stack_grafana_admin_password: test-sentinel-grafana-0006
+        monitoring_stack_snds_data_url: https://test.invalid/snds/test-sentinel-0007
 verifier:
   name: ansible
