@@ -1,0 +1,33 @@
+---
+# Records what a restart decision can be told by, under the name in
+# monitoring_stack_verify_snap_name: how many times the docker stand-in was
+# called (each restart of the unit calls it once), what the stamp holds, and what
+# systemd says of the unit. The stamp is a hash of files that hold secrets, so it
+# is read under no_log, and no value is printed.
+- name: Read the log of the docker stand-in's calls
+  ansible.builtin.slurp:
+    src: /var/log/docker-standin.calls
+  register: monitoring_stack_verify_snap_calls
+
+- name: Read the stamp, if there is one
+  ansible.builtin.slurp:
+    src: /var/lib/branchleft/monitoring.applied
+  register: monitoring_stack_verify_snap_stamp
+  failed_when: false
+  no_log: true
+
+- name: Ask systemd for the monitoring unit
+  ansible.builtin.systemd_service:
+    name: branchleft-compose@monitoring.service
+  register: monitoring_stack_verify_snap_unit
+
+- name: Keep the snapshot under its name
+  ansible.builtin.set_fact:
+    monitoring_stack_verify_snaps: >-
+      {{ monitoring_stack_verify_snaps | default({}) | combine({monitoring_stack_verify_snap_name: {'calls':
+      (monitoring_stack_verify_snap_calls.content | b64decode).splitlines() | length,
+      'stamp': (monitoring_stack_verify_snap_stamp.content | b64decode | trim)
+      if monitoring_stack_verify_snap_stamp.content is defined else 'none',
+      'active': monitoring_stack_verify_snap_unit.status.ActiveState,
+      'enabled': monitoring_stack_verify_snap_unit.status.UnitFileState}}) }}
+  no_log: true

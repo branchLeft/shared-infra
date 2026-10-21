@@ -5,12 +5,17 @@ argument_specs:
     description: >-
       Writes seven values into the monitoring secrets file, each under its own key
       and the other keys left in place, closes that file to root before any value is
-      written, copies the monitoring stack's committed files into the project
+      written, copies the eight files of the monitoring stack into the project
       directory, installs the monitoring and edge systemd drop-ins, and restarts the
-      monitoring stack unit when a key the stack reads changed and the unit is
-      already active. The seven values arrive from the caller; the role never reads,
-      generates or stores one. It starts nothing and removes nothing. The renderer is
-      delivered by ntfy_pager and only checked here.
+      monitoring stack unit when the fingerprint of what the unit runs from differs
+      from the stamp of the last restart that was read back as active. The
+      fingerprint covers the eight stack files, the monitoring drop-in, the renderer
+      and the secrets file without its SNDS_DATA_URL line. The restart happens only
+      when the unit is enabled, whatever state it is in; a unit that is not enabled
+      is left alone for runbook step 7a. The role sets one fact for its caller,
+      monitoring_stack_restart_due. The seven values arrive from the caller; the role
+      never reads, generates or stores one. It removes nothing. The renderer is
+      delivered by ntfy_pager, which must run before this role.
     author: branchLeft
     options:
       monitoring_stack_project_dir:

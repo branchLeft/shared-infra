@@ -288,33 +288,54 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 `absent` means there is nothing to lose. Anything else: edit the file in
 place rather than overwriting it.
 
-The values are written by the `monitoring_stack` Ansible role, not by a shell
-command in this runbook. The role creates `/etc/branchleft` and
-`/etc/branchleft/monitoring.env` if they are absent, closes the file to
+The values are written by the `monitoring_stack` Ansible role: the role is the
+target, and the shell blocks in this step are interim hand paths, named below,
+for the time until a playbook runs the role. The role creates `/etc/branchleft`
+and `/etc/branchleft/monitoring.env` if they are absent, closes the file to
 `root:root 0600` before any value is written, and writes these keys, each on
 its own line, leaving the other keys in place:
 
 - `SMTP_USERNAME`, `SMTP_PASSWORD`, `HEALTHCHECKS_PING_URL`,
   `ALERT_RECIPIENT_EMAIL`, `MAILHOST_PING_URL`, `GRAFANA_ADMIN_PASSWORD`
-  (a change to any of these restarts the stack, if it is running)
-- `SNDS_DATA_URL` (read by the SNDS collector only; a change does not restart the stack). Until the owner's gated run replaces it, step 14 still writes this key by hand, and that hand write is the one that remains.
+  (a change to any of these restarts the stack, if it is enabled)
+- `SNDS_DATA_URL` (read by the SNDS collector only; a change does not restart
+  the stack). Until a gated run replaces it, step 14 still writes this key by
+  hand, and that hand write is the one that remains.
 
 The owner supplies each value from the password manager. Nothing generates
 one. `GRAFANA_ADMIN_PASSWORD` is read by Grafana only when it first creates its
 database, so changing it later rewrites this file and restarts the stack, but
-does not change the live Grafana password. `NTFY_` keys are written by the
-`ntfy_pager` role, and `STALWART_PROMETHEUS_SECRET` is not written by either
-role: it keeps its own hand step below. The gated run that applies the role is
-an owner step, not a command an agent runs.
+does not change the live Grafana password. The four `NTFY_` keys are written by
+the `ntfy_pager` role, which runs before `monitoring_stack`, and
+`STALWART_PROMETHEUS_SECRET` is not written by either role: it keeps its own
+hand step below. The gated run that applies the role is an owner step, not a
+command an agent runs.
 
-**The role does not yet run on a fresh host, so this hand path stays the
-runnable one until the first gated converge.** `monitoring_stack` writes its
-keys first and `ntfy_pager` runs second (the role's README, "Order"), but no
-playbook in this repository runs either role yet. On a host where the file is
-absent, the block below writes the six keys in one go, with a guard that refuses
-to overwrite a file that exists. Read each value from the password manager into
-the shell; it reaches the host on stdin, not on a command line. Run it only when
-the file is absent (the check above printed `absent`).
+**How the role restarts the stack.** It compares a fingerprint of everything
+the unit runs from (the eight stack files, the monitoring drop-in, the
+renderer, and this file without its `SNDS_DATA_URL` line) with a stamp it
+writes only after a restart was read back as active. When they differ and the
+unit is enabled, it restarts the unit, whatever state the unit is in. A unit
+that is not enabled is left alone: step 7a is its first start. A run that
+fails anywhere leaves the stamp old, so the next run restarts. **The first
+gated run on a host that has no stamp and an enabled, running unit restarts the
+whole alert stack once (`--force-recreate`, a few seconds with no scraping),
+even when nothing changed.** That is expected, and the second run of the same
+commit reports zero changes. The role's README, "Restart", has the detail.
+
+**The role does not yet run on a host, so these hand paths stay the runnable
+ones until the first gated converge.** No playbook in this repository runs
+either role yet. Each interim hand block in steps 3, 4, 5, 13 and 14 is marked with
+an `interim-hand-block` comment and listed in
+`hetzner/provision/test_runbook_monitoring_hand_blocks.py`, which fails on a hand
+block that is not listed. They are retired together, after the first gated
+converge has run on a host. On a host where the file is absent, the block below
+writes the six keys in one go, with a guard that refuses to overwrite a file
+that exists. Read each value from the password manager into the shell; it
+reaches the host on stdin, not on a command line. Run it only when the file is
+absent (the check above printed `absent`).
+
+<!-- interim-hand-block: s3-value-block -->
 
 ```bash
 read -rs SMTP_USERNAME && export SMTP_USERNAME
@@ -347,8 +368,9 @@ refuses when the file exists, because a rewrite would overwrite the `NTFY_` and
 `STALWART_` lines, and the `STALWART_PROMETHEUS_SECRET` block below replaces only
 its own key. The role is not wired to any host, so until the first gated converge
 no hand command replaces `SMTP_PASSWORD`, `GRAFANA_ADMIN_PASSWORD` or another of
-the six in place. The fix is a single-key replace for these keys, or the gated run.
-That is the owner's to decide. Until then, a rotation of one of them waits.
+the six in place. A single-key rotation path is its own ticket in the backlog; once
+the role runs on a host, changing the key's input and running the role is that
+path. Until then, a rotation of one of them waits.
 
 Check the file's shape without printing it:
 
@@ -364,27 +386,36 @@ that key, and never with a `>` redirect, which would overwrite the file and
 every key the role wrote. Read the value from `/opt/stalwart/.env` on mx1 as
 `mail/RUNBOOK-mx1-prometheus-metrics.md` describes. The `>>` append in that
 runbook adds a second line when the key already exists, so use this block for a
-rotation. It replaces the one line, reads it back, and keeps the file's mode:
+rotation. It builds the new file beside the old one, checks the new file, and
+only then moves it over the old one, so a failed run leaves the old file
+untouched and removes its temporary file. The new file is created under a
+`umask` of `077`, so it is `root:root 0600`:
+
+<!-- interim-hand-block: s3-stalwart-block -->
 
 ```bash
 read -rs STALWART_SECRET
 printf '%s' "$STALWART_SECRET" | ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   umask 077
   f=/etc/branchleft/monitoring.env
+  t=$f.tmp
+  trap "rm -f $t" EXIT
   val=$(cat)
   if [ -z "$val" ]; then echo "FAILED: refusing to write an empty STALWART_PROMETHEUS_SECRET" >&2; exit 1; fi
-  { grep -v "^STALWART_PROMETHEUS_SECRET=" "$f" > "$f.tmp" 2>/dev/null || [ ! -s "$f.tmp" ]; } &&
-    printf "STALWART_PROMETHEUS_SECRET=%s\n" "$val" >> "$f.tmp" &&
-    mv "$f.tmp" "$f" &&
-    [ "$(grep -c "^STALWART_PROMETHEUS_SECRET=" "$f")" = 1 ] &&
-    [ "$(sed -n "s/^STALWART_PROMETHEUS_SECRET=//p" "$f" | wc -c | tr -d " ")" = "$(( ${#val} + 1 ))" ] &&
-    echo "OK: STALWART_PROMETHEUS_SECRET replaced, ${#val} characters, exactly one line" ||
+  if [ ! -f "$f" ]; then echo "FAILED: $f is absent; write it with the block above first" >&2; exit 1; fi
+  { grep -v "^STALWART_PROMETHEUS_SECRET=" "$f" || [ $? -eq 1 ]; } > "$t" &&
+    printf "STALWART_PROMETHEUS_SECRET=%s\n" "$val" >> "$t" &&
+    [ "$(grep -c "^STALWART_PROMETHEUS_SECRET=" "$t")" = 1 ] &&
+    [ "$(sed -n "s/^STALWART_PROMETHEUS_SECRET=//p" "$t" | wc -c | tr -d " ")" = "$(( $(printf %s "$val" | wc -c) + 1 ))" ] &&
+    mv "$t" "$f" &&
+    echo "OK: STALWART_PROMETHEUS_SECRET replaced, $(printf %s "$val" | wc -c | tr -d " ") bytes, exactly one line" ||
     { echo "FAILED: monitoring.env was NOT updated -- see the error above" >&2; exit 1; }'
 unset STALWART_SECRET
 ```
 
-Expect `OK: STALWART_PROMETHEUS_SECRET replaced, N characters, exactly one line`
-**and exit 0**. Then the stack reads the new value on its next restart (step 7b).
+Expect `OK: STALWART_PROMETHEUS_SECRET replaced, N bytes, exactly one line`
+**and exit 0**. `OK` is printed only after the move succeeded. Then the stack
+reads the new value on its next restart (step 7b).
 
 ## 4. Copy the monitoring stack directory onto the host
 
@@ -397,8 +428,9 @@ same modes, from the same directory. It never deletes, so the `--delete` below
 has no counterpart in the role: a file removed from the repository stays on a host
 the role has converged, and must be removed by hand. Once the role runs on a host,
 retire this command for that host. Sections 3, 4, 5 and 14 keep their hand paths
-until then. That is a deviation from the plan's Done-when, which asked for no hand
-command the role covers; it is recorded in the PR body.
+until then.
+
+<!-- interim-hand-block: s4-rsync -->
 
 ```bash
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
@@ -453,6 +485,8 @@ into `branchleft-compose@monitoring.service.d/` and `edge.override.conf` into
 `0644`, and it reloads systemd when either changed. The role is not yet wired
 to a host (step 3), so until the first gated converge this script is the
 runnable path, and it installs the same two files:
+
+<!-- interim-hand-block: s5-script-call -->
 
 ```bash
 hetzner/provision/install-systemd-drop-ins.sh root@"$EDGE1_IPV4"
@@ -543,6 +577,12 @@ true first" above; re-set it first if you are entering here independently.
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'systemctl restart branchleft-compose@monitoring'
 ```
+
+Once the `monitoring_stack` role runs on a host, the role does this restart
+itself: it restarts the enabled unit when the fingerprint of its inputs differs
+from the stamp (step 3, "How the role restarts the stack"), so a gated run
+replaces steps 4 and 7b together. A hand restart does not write the stamp, so
+the next gated run restarts the unit once more; that is harmless.
 
 A plain restart reruns `ExecStartPre`, so `alertmanager.yml` is regenerated
 from the current template and secrets. It also recreates every container --
@@ -814,6 +854,14 @@ re-copy, restart. `$EDGE1_IPV4` is set under "What has to be true first"
 above; re-set it first if you are entering here independently -- this is
 the section most likely to be entered mid-incident, days after the deploy.
 
+Once the `monitoring_stack` role runs on a host, a rollback is the checkout
+below followed by a gated run, which copies the same files and restarts the
+unit by fingerprint (step 3), and the copy and restart in this block are
+retired with the other interim hand blocks. Until then this block is the
+runnable path.
+
+<!-- interim-hand-block: s13-rollback -->
+
 ```bash
 git checkout <PREVIOUS_MERGED_SHA> -- hetzner/monitoring/stack
 rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
@@ -876,33 +924,40 @@ if you are entering this section independently -- every command below reuses
 it.
 
 Paste the URL when the shell prompts, so it never enters shell history, and
-let it reach the host **on stdin** rather than on a command line:
+let it reach the host **on stdin** rather than on a command line. The new file is
+built beside the old one and checked before it is moved over, so a failed run
+leaves the old file untouched and removes its temporary file:
+
+<!-- interim-hand-block: s14-snds-write -->
 
 ```bash
 read -rs SNDS_URL
 printf '%s' "$SNDS_URL" | ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   umask 077
   f=/etc/branchleft/monitoring.env
+  t=$f.tmp
+  trap "rm -f $t" EXIT
   url=$(cat)
   if [ -z "$url" ]; then echo "FAILED: refusing to write an empty SNDS_DATA_URL" >&2; exit 1; fi
-  { grep -v "^SNDS_DATA_URL=" "$f" > "$f.tmp" 2>/dev/null || [ ! -s "$f.tmp" ]; } &&
-    printf "SNDS_DATA_URL=%s\n" "$url" >> "$f.tmp" &&
-    mv "$f.tmp" "$f" &&
-    [ "$(grep -c "^SNDS_DATA_URL=" "$f")" = 1 ] &&
-    [ "$(sed -n "s/^SNDS_DATA_URL=//p" "$f" | wc -c | tr -d " ")" = "$(( ${#url} + 1 ))" ] &&
-    echo "OK: SNDS_DATA_URL replaced, ${#url} characters, exactly one line" ||
+  if [ ! -f "$f" ]; then echo "FAILED: $f is absent; write it with step 3 first" >&2; exit 1; fi
+  { grep -v "^SNDS_DATA_URL=" "$f" || [ $? -eq 1 ]; } > "$t" &&
+    printf "SNDS_DATA_URL=%s\n" "$url" >> "$t" &&
+    [ "$(grep -c "^SNDS_DATA_URL=" "$t")" = 1 ] &&
+    [ "$(sed -n "s/^SNDS_DATA_URL=//p" "$t" | wc -c | tr -d " ")" = "$(( $(printf %s "$url" | wc -c) + 1 ))" ] &&
+    mv "$t" "$f" &&
+    echo "OK: SNDS_DATA_URL replaced, $(printf %s "$url" | wc -c | tr -d " ") bytes, exactly one line" ||
     { echo "FAILED: monitoring.env was NOT updated -- see the error above" >&2; exit 1; }'
 unset SNDS_URL
 ```
 
-Expect `OK: SNDS_DATA_URL replaced, N characters, exactly one line` **and exit
-0**. Anything else means the file was not updated and the collector is still
-using the old link -- which, if you have just re-enabled automated access, is
-already invalidated. Do not proceed on the message alone: `echo $?`.
+Expect `OK: SNDS_DATA_URL replaced, N bytes, exactly one line` **and exit
+0**. `OK` is printed only after the move succeeded. Anything else means the file
+was not updated and the collector is still using the old link -- which, if you
+have just re-enabled automated access, is already invalidated. Do not proceed on
+the message alone: `echo $?`.
 
-Expect `wrote SNDS_DATA_URL (N characters)`; check `N` against the URL's real
-length, since that is the one confirmation that does not involve printing the
-credential back.
+Check `N` against the URL's real length in bytes, since that is the one
+confirmation that does not involve printing the credential back.
 
 **Three things this deliberately does not do, each of which corrupts the
 credential when written the obvious way.**

@@ -4,6 +4,10 @@
 # relative to the stack directory in the repository (files/stack, a link to it).
 # Not carried, on purpose: render_alertmanager_config.py and its notes, and
 # snds/collect_snds_metrics.py. The README says which work owns each.
+#
+# monitoring_stack_files is the one list of the eight stack files in the whole
+# repository. No other role delivers any of them, and
+# ansible/checks/test_monitoring_single_home.py fails if one does.
 monitoring_stack_dirs:
   - alertmanager
   - blackbox
@@ -26,6 +30,7 @@ monitoring_stack_files:
 # The shared Compose unit template names a stack's drop-in directory after the
 # instance, and the instance of this stack is "monitoring".
 monitoring_stack_dropin_dir: /etc/systemd/system/branchleft-compose@monitoring.service.d
+monitoring_stack_dropin_dest: /etc/systemd/system/branchleft-compose@monitoring.service.d/override.conf
 
 # The monitoring secrets file. The role closes it to root 0600 before any value
 # is written, creating it first when it is absent (see the README, "Secrets").
@@ -39,35 +44,53 @@ monitoring_stack_env_file: /etc/branchleft/monitoring.env
 monitoring_stack_env_keys:
   - key: SMTP_USERNAME
     value: '{{ monitoring_stack_smtp_username }}'
-    restarts_stack: true
   - key: SMTP_PASSWORD
     value: '{{ monitoring_stack_smtp_password }}'
-    restarts_stack: true
   - key: HEALTHCHECKS_PING_URL
     value: '{{ monitoring_stack_healthchecks_ping_url }}'
-    restarts_stack: true
   - key: ALERT_RECIPIENT_EMAIL
     value: '{{ monitoring_stack_alert_recipient_email }}'
-    restarts_stack: true
   - key: MAILHOST_PING_URL
     value: '{{ monitoring_stack_mailhost_ping_url }}'
-    restarts_stack: true
   - key: GRAFANA_ADMIN_PASSWORD
     value: '{{ monitoring_stack_grafana_admin_password }}'
-    restarts_stack: true
-  # Read by snds-collector.service only, not by the stack: a rotation of this
-  # URL must not recreate the stack, so this key does not restart it.
   - key: SNDS_DATA_URL
     value: '{{ monitoring_stack_snds_data_url }}'
-    restarts_stack: false
 
-# The renderer runs as the unit's ExecStartPre and is delivered by ntfy_pager,
-# its single delivery owner. This role only checks that it is there.
+# The one key whose line is left out of the fingerprint. Only
+# snds-collector.service reads it, not the stack, and it rotates every 30 days:
+# a rotation must not recreate the stack (README, "Restart").
+monitoring_stack_fingerprint_skipped_key: SNDS_DATA_URL
+
+# The renderer runs as the unit's ExecStartPre and is delivered by ntfy_pager, its
+# single delivery owner. This role never writes it. It reads it twice: the
+# fingerprint hashes it, so a changed renderer restarts the unit, and the
+# restart refuses to run with a renderer that is missing or writable by others.
 monitoring_stack_renderer: /opt/branchleft/monitoring/render_alertmanager_config.py
+
+# What the fingerprint hashes, besides the secrets file: the eight stack files,
+# the monitoring drop-in and the renderer. The edge drop-in is deliberately not
+# here (README, "Restart"): it binds branchleft-compose@edge, which this role
+# never restarts.
+monitoring_stack_fingerprint_files: >-
+  {{ monitoring_stack_files | map('regex_replace', '^', monitoring_stack_project_dir ~ '/') | list
+  + [monitoring_stack_dropin_dest, monitoring_stack_renderer] }}
+
+# The stamp: one sha256 and a newline, written only after a restart was read
+# back as active. The directory is shared with broker_deploy, which sets it to
+# 0755 root:root, so this role sets the same: a different mode here would flip
+# every run of one of the two roles.
+monitoring_stack_stamp_dir: /var/lib/branchleft
+monitoring_stack_stamp_file: /var/lib/branchleft/monitoring.applied
 
 # The edge stack's drop-in directory, named after the edge instance by the shared
 # Compose unit template. The file is files/edge.override.conf.
 monitoring_stack_edge_dropin_dir: /etc/systemd/system/branchleft-compose@edge.service.d
 
-# The unit of the monitoring stack, the one the restart handler restarts.
+# The unit of the monitoring stack, the one the restart step restarts.
 monitoring_stack_unit: branchleft-compose@monitoring.service
+
+# The unit file states that count as enabled.
+monitoring_stack_enabled_states:
+  - enabled
+  - enabled-runtime

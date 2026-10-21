@@ -1,31 +1,14 @@
 ---
 # What the role carries. Constants of the stack, not inputs, so a caller cannot
-# override them. The paths are relative to the stack directory in the repository
-# (files/stack, a link to hetzner/monitoring/stack). The list is the monitoring_stack
-# role's plus render_alertmanager_config.py, which the unit's ExecStartPre runs
-# before the stack starts (see the README, "One home for the stack").
-ntfy_pager_dirs:
-  - alertmanager
-  - blackbox
-  - grafana
-  - grafana/provisioning
-  - grafana/provisioning/datasources
-  - ntfy
-  - prometheus
-
+# override them. The path is relative to the stack directory in the repository
+# (files/stack, a link to hetzner/monitoring/stack).
+#
+# The renderer is the only stack file this role delivers: the unit's
+# ExecStartPre runs it, and this role is its single delivery owner. The eight
+# other files of the stack belong to monitoring_stack alone, and
+# ansible/checks/test_monitoring_single_home.py fails if this list names one.
 ntfy_pager_files:
-  - compose.yml
-  - alertmanager/alertmanager.yml.tmpl
-  - alertmanager/email.gotmpl
-  - blackbox/blackbox.yml
-  - grafana/provisioning/datasources/prometheus.yaml
-  - ntfy/server.yml.tmpl
-  - prometheus/alerts.yml
-  - prometheus/prometheus.yml
   - render_alertmanager_config.py
-
-# The unit of the monitoring stack, the one the runbook restarts.
-ntfy_pager_unit: branchleft-compose@monitoring.service
 
 # The four names the runbook writes into the monitoring secrets file. They are
 # fixed here, so an input cannot rename a key the stack reads.
