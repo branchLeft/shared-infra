@@ -48,10 +48,11 @@ FINGERPRINT_PATTERN: Final = re.compile(r"[0-9a-f]{16}")
 MAX_LOCK_BYTES: Final = 4_000_000
 
 # One pinned requirement: a name, optional extras, an exact version, an optional
-# environment marker, then one or more hashes and nothing else on the line. The marker
-# holds no option: no "--" anywhere in it, and no word that starts with "-" (after
-# whitespace, or directly after the ";"), so an option such as --index-url or -i cannot hide
-# in it. A hyphen inside a word (linux-gnu) is fine.
+# environment marker, then one or more hashes and nothing else on the line. The marker is
+# written only from a positive set of characters (letters, digits, "_", ".", quotes, space,
+# "=", "!", "<", ">", "(", ")"), the set ansible/checks/check_pins.py enforces on main. That
+# set holds no "-" and no ";" at all, so no option such as --index-url or -i can sit in the
+# marker, however it is spaced or nested. It is a set to allow, not a list of forms to refuse.
 #
 # Why a pattern and not a maintained parser: this runs under the host's own interpreter with -I
 # before any package is installed, so only the standard library exists (the maintained parser,
@@ -63,7 +64,7 @@ MAX_LOCK_BYTES: Final = 4_000_000
 REQUIREMENT: Final = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]+\])?"
     r"==[A-Za-z0-9.!+_-]+"
-    r"(?:\s*;(?!-)(?:(?!--|\s-).)*?)?"
+    r"(?:\s*;\s*[A-Za-z0-9_.'\" =!<>()]+)?"
     r"(?:\s+--hash=sha256:[0-9a-f]{64})+",
 )
 HASH_OPTION: Final = re.compile(r"--hash=sha256:[0-9a-f]{64}")

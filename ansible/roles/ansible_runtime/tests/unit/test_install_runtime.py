@@ -228,6 +228,17 @@ class LockChecksTest(Case):
             "a short find-links option directly after a spaced semicolon": (
                 f"alpha==1.0 ;-f https://index.invalid/ {hashed}\n"
             ),
+            "an option after a second semicolon": (
+                f"alpha==1.0;x;-i https://index.invalid/simple {hashed}\n"
+            ),
+            "an option after a second semicolon and a space": (
+                f"alpha==1.0; x;-i https://index.invalid/simple {hashed}\n"
+            ),
+            "an option after a comma": (f"alpha==1.0;a,-i https://index.invalid/simple {hashed}\n"),
+            "a quoted option": f"alpha==1.0;'-i' https://index.invalid/simple {hashed}\n",
+            "an option after a bracket": f"alpha==1.0;(-i https://index.invalid/simple {hashed}\n",
+            "a hyphen in the marker": (f"alpha==1.0 ; sys_platform == 'linux-gnu' {hashed}\n"),
+            "a second marker": f"alpha==1.0 ; os_name == 'posix' ; os_name == 'nt' {hashed}\n",
             "an option between the hashes": (
                 f"alpha==1.0 ; os_name == 'posix' {hashed} --index-url=https://index.invalid/"
                 f" {hashed}\n"
@@ -258,7 +269,7 @@ class LockChecksTest(Case):
         for marker in (
             "sys_platform == 'linux' or sys_platform == 'linux2'",
             "platform_python_implementation != 'PyPy'",
-            "sys_platform == 'linux-gnu' and python_version >= '3.8'",
+            "sys_platform == 'linux' and (python_version >= '3.8' or os_name != 'nt')",
         ):
             with self.subTest(marker=marker):
                 program.check_lock_is_hashed(
