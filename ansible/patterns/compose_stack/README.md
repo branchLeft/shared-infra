@@ -47,13 +47,22 @@ protect).
 Verbatim mode (`compose_stack_compose_source` set) delivers a compose file byte for
 byte under `compose_stack_compose_name`, and reads its `${IMAGE}` from the one
 `IMAGE=` line of `compose_stack_image_env_file`. That value must pass the same digest
-check, so a tag in the env file is refused. `compose_stack_env_files` are passed to
-Compose as `COMPOSE_ENV_FILES` (the module has no env-file option in the pinned
-collection) and to the validator as `--env-file`. Compose reads them; this role never
-reads or writes their content. The stamp covers the image value and the env file
-paths, not the env files' content, so an edit to an env file alone does not bring the
-stack up. Limits: the verbatim delivery is covered by the digest check and the
-validator in tests (the test scenario runs in check mode for the positive case).
+check, so a tag in the env file is refused, and a second line that assigns the variable
+in any dotenv spelling (`export IMAGE=`, spaces around `=`) is refused too, because
+Compose would take the later one. The value is given to Compose as the variable itself
+(the validator gets it through `env`), so it is the value judged, whatever the process
+environment holds. `compose_stack_env_files` are passed to Compose as `COMPOSE_ENV_FILES`
+(the module has no env-file option in the pinned collection) and to the validator as
+`--env-file`, with the image env file listed last so it wins over them. Compose reads
+them; this role never reads or writes their content. The stamp covers the image value
+and the env file paths, not the env files' content, so an edit to an env file alone does
+not bring the stack up. Test coverage: the digest check runs in check mode for the
+positive and the refusal cases; a separate real apply, in its own project directory,
+checks that the compose file on the instance is the source byte for byte and that
+Compose was given the judged image and the image env file for the validator and for `up`.
+Not covered: a caller's own list of compose files. The role delivers one compose file
+(`compose_stack_compose_name`); there is no input for a list, so the caller's file list is
+not honoured yet.
 
 ## Requirements
 
@@ -483,14 +492,17 @@ the limits). `state: absent` with `remove_volumes` is not an input (see the limi
   default-deny, not by an assertion about volumes.
 - **Services with no `healthcheck` pass on "running" alone.** The health check treats a
   container that is running and reports no health as healthy.
-- **The compose file validator's output is not `no_log`.** If a malformed secret file
-  named in `env_file` makes `compose config` print a line of it, the failure message
-  would carry that line. This is from knowledge of Compose's error text and was not
-  run; a copy whose secret files can be malformed should wrap the task and censor.
-- **Other files Compose reads.** A `.env` file in the project directory is read by
-  Compose for interpolation. The override check does not look for it, and the compose
-  file is checked as rendered, so a `${NAME}` image is refused by the digest pattern,
-  but a `.env` that changes some other field of a service is not seen.
+- **The compose file validator's output may carry a secret.** The compose file task is
+  `no_log`, so the validator's output is censored. The secret files are not named in that
+  output, but a malformed secret file named in `env_file` is the case this does not
+  show; this is from knowledge of Compose's error text and was not run.
+- **Other files Compose reads.** In template mode a `.env` file in the project directory
+  is read by Compose for interpolation, because `compose_stack_env_files` is empty by
+  default. The override check does not look for it, and the compose file is checked as
+  rendered, so a `${NAME}` image is refused by the digest pattern, but a `.env` that
+  changes some other field of a service is not seen. In verbatim mode `COMPOSE_ENV_FILES`
+  is always set, so the project's `.env` is not read there; the image variable is also
+  set explicitly to the judged value, which beats every env file.
 - **`diff: false` and `no_log: true` overlap.** A probe on the pinned ansible-core
   (2.21.5) showed `no_log: true` alone prints no diff, with `--check --diff` too, so
   the log scan cannot tell `diff: false` from its absence. ANS-16 asks for both and the

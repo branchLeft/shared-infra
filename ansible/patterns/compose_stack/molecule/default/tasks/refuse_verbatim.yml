@@ -22,8 +22,8 @@
     - name: Assert the digest check refused the image
       ansible.builtin.assert:
         that:
-          - "'ending in @sha256:' in ansible_failed_result.msg"
+          - "(refuse_expect | ansible.builtin.default('ending in @sha256:')) in ansible_failed_result.msg"
         quiet: true
         fail_msg: >-
-          {{ refuse_title }}: the role did not refuse the image with the digest check.
+          {{ refuse_title }}: the role did not refuse the image with the expected check.
           It stopped with: {{ ansible_failed_result.msg }}

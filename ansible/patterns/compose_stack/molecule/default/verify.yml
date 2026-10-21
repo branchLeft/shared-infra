@@ -210,6 +210,13 @@
         refuse_title: A tag read from the image env file
         refuse_env_name: image-tag.env
 
+    - name: Refuse an image env file that assigns the variable on two lines
+      ansible.builtin.include_tasks: tasks/refuse_verbatim.yml
+      vars:
+        refuse_title: A digest followed by a tag on an export line
+        refuse_env_name: image-export.env
+        refuse_expect: 'must hold exactly one IMAGE= line'
+
     - name: Accept a digest that comes from the image env file in verbatim mode
       ansible.builtin.include_tasks: tasks/verbatim_check.yml
 
@@ -382,6 +389,11 @@
           - verify_kept.stdout | ansible.builtin.int == 1
         quiet: true
         fail_msg: The compose file on the instance is not the one before the refused edit.
+
+    # The verbatim path, for real and in a project directory of its own, last, so no
+    # assertion above reads its up calls or its compose file.
+    - name: Apply the verbatim compose file for real, in its own project directory
+      ansible.builtin.include_tasks: tasks/verbatim_apply.yml
 
 - name: Verify the run's log on the machine that runs the test
   hosts: localhost

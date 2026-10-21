@@ -12,6 +12,10 @@ case " $* " in
   *) log=argv.log ;;
 esac
 printf '%s\n' "$*" >> "$state/$log"
+# The variables Compose is given for this call, one line per call: the verbatim
+# checks read the image value and the env files from here. "unset" is printed when
+# a variable is not in the environment, so an empty value and no value differ.
+printf 'IMAGE=%s COMPOSE_ENV_FILES=%s\n' "${IMAGE-unset}" "${COMPOSE_ENV_FILES-unset}" >> "$state/env.log"
 case " $* " in
   *" compose version "*)
     version=v2.40.3

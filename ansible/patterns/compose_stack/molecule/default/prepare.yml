@@ -78,3 +78,14 @@
         owner: root
         group: root
         mode: '0644'
+
+    # A digest on the IMAGE= line and a later export line that names a tag. The
+    # one-line check reads the digest; Compose would take the tag, so the count of
+    # assignments refuses it.
+    - name: Write an image env file that assigns the variable twice
+      ansible.builtin.copy:
+        content: "IMAGE=example.invalid/example-app@sha256:{{ '2' * 64 }}\nexport IMAGE=example.invalid/example-app:1.2.3\n"
+        dest: /var/lib/compose_stack_standin/image-export.env
+        owner: root
+        group: root
+        mode: '0644'

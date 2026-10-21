@@ -1,0 +1,85 @@
+---
+# Applies the role in verbatim mode for real, in a project directory of its own, so
+# the converged stack is not touched. The check-mode cases above prove the digest
+# check; this proves the rest of the verbatim path ran: the compose file on the
+# instance is the source byte for byte, and Compose was given the judged image and
+# the image env file for the validator and for `up` (the stand-in logs both). The
+# up count goes up by one, the first real up for this project.
+- name: Read the checksum of the verbatim source
+  ansible.builtin.set_fact:
+    verbatim_source_sha256: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/files/verbatim.compose.yml') | ansible.builtin.hash('sha256') }}"
+
+- name: Count the real up calls before the verbatim apply
+  ansible.builtin.command:
+    argv: [grep, --count, --fixed-strings, ' up --detach', /var/lib/compose_stack_standin/argv.log]
+  register: verbatim_ups_before
+  changed_when: false
+  failed_when: verbatim_ups_before.rc > 1
+  check_mode: false
+
+- name: Apply the role in verbatim mode for real
+  ansible.builtin.include_role:
+    name: branchleft.compose_stack
+  vars:
+    compose_stack_project_dir: /opt/compose_stack_verbatim
+    compose_stack_project_name: compose_stack_verbatim
+    compose_stack_compose_source: '{{ playbook_dir }}/files/verbatim.compose.yml'
+    compose_stack_image_env_file: /var/lib/compose_stack_standin/image-digest.env
+
+- name: Read the checksum of the compose file the role installed
+  ansible.builtin.stat:
+    path: /opt/compose_stack_verbatim/compose.yaml
+    checksum_algorithm: sha256
+  register: verbatim_installed
+
+- name: Count the real up calls after the verbatim apply
+  ansible.builtin.command:
+    argv: [grep, --count, --fixed-strings, ' up --detach', /var/lib/compose_stack_standin/argv.log]
+  register: verbatim_ups_after
+  changed_when: false
+  failed_when: verbatim_ups_after.rc > 1
+  check_mode: false
+
+# The judged value is the digest in image-digest.env. The line the stand-in writes
+# for each call is IMAGE=<value> COMPOSE_ENV_FILES=<files>. The validator is given
+# the image and no COMPOSE_ENV_FILES; `up` and its health check are given both.
+- name: Count the calls that were given the judged image
+  ansible.builtin.command:
+    argv:
+      - grep
+      - --count
+      - --fixed-strings
+      - 'IMAGE=example.invalid/example-app@sha256:{{ "2" * 64 }} COMPOSE_ENV_FILES='
+      - /var/lib/compose_stack_standin/env.log
+  register: verbatim_image_matches
+  changed_when: false
+  failed_when: verbatim_image_matches.rc > 1
+  check_mode: false
+
+- name: Count the calls that were given the image env file
+  ansible.builtin.command:
+    argv:
+      - grep
+      - --count
+      - --fixed-strings
+      - 'COMPOSE_ENV_FILES=/var/lib/compose_stack_standin/image-digest.env'
+      - /var/lib/compose_stack_standin/env.log
+  register: verbatim_env_file_matches
+  changed_when: false
+  failed_when: verbatim_env_file_matches.rc > 1
+  check_mode: false
+
+- name: Assert the verbatim apply delivered the source byte for byte and was given the judged image
+  ansible.builtin.assert:
+    that:
+      - verbatim_installed.stat.checksum == verbatim_source_sha256
+      - (verbatim_ups_after.stdout | ansible.builtin.int) - (verbatim_ups_before.stdout | ansible.builtin.int) == 1
+      - verbatim_image_matches.stdout | ansible.builtin.int >= 2
+      - verbatim_env_file_matches.stdout | ansible.builtin.int >= 1
+    quiet: true
+    fail_msg: >-
+      The verbatim apply did not deliver the source as written, bring the stack up once, or
+      give Compose the judged image and the image env file: checksum match {{ verbatim_installed.stat.checksum == verbatim_source_sha256 }},
+      ups {{ (verbatim_ups_after.stdout | ansible.builtin.int) - (verbatim_ups_before.stdout | ansible.builtin.int) }},
+      calls with the judged image {{ verbatim_image_matches.stdout }},
+      calls with the image env file {{ verbatim_env_file_matches.stdout }}.

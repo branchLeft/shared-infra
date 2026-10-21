@@ -6,11 +6,14 @@
 - name: Work out whether the compose file is verbatim
   ansible.builtin.set_fact:
     compose_stack_verbatim: '{{ compose_stack_compose_source | length > 0 }}'
-    # The module has no env-file option in the pinned collection, so the env files
-    # reach Compose through its environment: a list of paths, never their content.
-    compose_stack_compose_environment: >-
-      {{ {'COMPOSE_ENV_FILES': compose_stack_env_files | ansible.builtin.join(',')}
-      if compose_stack_env_files | length > 0 else {} }}
+
+- name: Refuse an image variable name that is not a plain name
+  ansible.builtin.assert:
+    that:
+      - compose_stack_image_var is match('^[A-Za-z_][A-Za-z0-9_]*\Z')
+    quiet: true
+    fail_msg: compose_stack_image_var must be a plain variable name such as IMAGE.
+  when: compose_stack_verbatim | bool
 
 - name: Read the image env file, which holds the image value and nothing else this role uses
   ansible.builtin.slurp:
@@ -24,6 +27,12 @@
     compose_stack_image_lines: >-
       {{ compose_stack_image_env.content | b64decode
       | ansible.builtin.regex_findall('^' ~ compose_stack_image_var ~ '=(.*)$', multiline=true) }}
+    # Every line that assigns the variable in any dotenv spelling (IMAGE=, export IMAGE=,
+    # spaces around the equals sign). Compose takes the last of them, so the count of
+    # these lines must be the count of the one line the value is read from.
+    compose_stack_image_assignments: >-
+      {{ compose_stack_image_env.content | b64decode
+      | ansible.builtin.regex_findall('^[ \t]*(?:export[ \t]+)?' ~ compose_stack_image_var ~ '[ \t]*=', multiline=true) }}
   when: compose_stack_verbatim | bool and compose_stack_image_env_file | length > 0
   no_log: true
 
@@ -31,9 +40,14 @@
   ansible.builtin.assert:
     that:
       - compose_stack_image_lines | ansible.builtin.length == 1
+      - compose_stack_image_assignments | ansible.builtin.length == 1
+      # The value goes on the validator's command line, so only plain characters pass
+      # here. Whether it is pinned by digest is the digest check's question, below.
+      - compose_stack_image_lines[0] is match('^[A-Za-z0-9._/:@-]+\Z')
     quiet: true
     fail_msg: >-
-      The image env file must hold exactly one {{ compose_stack_image_var }}= line.
+      The image env file must hold exactly one {{ compose_stack_image_var }}= line, with plain
+      characters and no other line that assigns {{ compose_stack_image_var }}.
   when: compose_stack_verbatim | bool and compose_stack_image_env_file | length > 0
 
 - name: Work out the compose text, its image and its rendered form
@@ -44,6 +58,28 @@
     compose_stack_image_value: >-
       {{ compose_stack_image_lines[0] if compose_stack_verbatim | bool and compose_stack_image_env_file | length > 0
       else '' }}
+  no_log: true
+
+# The image the digest check judges is the one Compose is given: the value is passed
+# as the variable itself, which beats the process environment and every env file, and
+# the image env file is listed last, so it also wins over a file that names the variable
+# too. Without an image env file in verbatim mode the value is empty, and the digest
+# check refuses it. The project directory's .env is never read in verbatim mode,
+# because COMPOSE_ENV_FILES is always set there.
+- name: Work out the env files Compose is given
+  ansible.builtin.set_fact:
+    compose_stack_env_files_effective: >-
+      {{ compose_stack_env_files + ([compose_stack_image_env_file]
+      if compose_stack_verbatim | bool and compose_stack_image_env_file | length > 0 else []) }}
+  no_log: true
+
+- name: Work out the environment Compose is given
+  ansible.builtin.set_fact:
+    compose_stack_compose_environment: >-
+      {{ ({'COMPOSE_ENV_FILES': compose_stack_env_files_effective | ansible.builtin.join(',')}
+      if compose_stack_env_files_effective | length > 0 else {})
+      | ansible.builtin.combine({compose_stack_image_var: compose_stack_image_value}
+      if compose_stack_verbatim | bool else {}) }}
   no_log: true
 
 - name: Work out the compose text the digest check reads
@@ -174,9 +210,13 @@
     owner: root
     group: root
     mode: '0644'
+    # `env` sets the image variable for this one command, the same value and the same
+    # env files the stack is brought up with. The validator runs without a shell, so
+    # `env NAME=value` is the only way to set it here.
     validate: >-
-      docker compose --project-directory {{ compose_stack_project_dir }}
-      {% for f in compose_stack_env_files %}--env-file {{ f }} {% endfor %}
+      env {% if compose_stack_verbatim | bool %}{{ compose_stack_image_var }}={{ compose_stack_image_value }} {% endif %}docker compose
+      --project-directory {{ compose_stack_project_dir }}
+      {% for f in compose_stack_env_files_effective %}--env-file {{ f }} {% endfor %}
       --file %s config --quiet
   register: compose_stack_compose_delivery
   no_log: true
