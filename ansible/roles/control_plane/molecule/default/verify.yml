@@ -1,0 +1,415 @@
+---
+# What must be on the host is read from the repository, not from the role: the
+# stack's files and the two isolation files are compared byte for byte with
+# their sources (read by the controller, not through the role's links), so a
+# copy in the role that differs from its source fails here.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_repo: '{{ playbook_dir }}/../../../../../'
+    verify_stack_source: '{{ verify_repo }}hetzner/control-plane/stack'
+    verify_provision_source: '{{ verify_repo }}hetzner/provision'
+    verify_project_dir: /opt/branchleft/control-plane
+    verify_env_file: /etc/branchleft/control-plane.env
+    verify_masterkey_file: /etc/branchleft/control-plane/zitadel-masterkey
+    verify_stack_files:
+      - compose.yml
+      - compose.init.yml
+      - pg_hba.conf
+  tasks:
+    # rstrip=False: the lookup strips trailing whitespace by default, and slurp on
+    # the instance keeps the final newline, so the byte comparison needs it kept.
+    - name: Read each stack file and each isolation file from the repository
+      ansible.builtin.set_fact:
+        control_plane_verify_sources: >-
+          {{ control_plane_verify_sources | default({})
+          | combine({item.key: lookup('ansible.builtin.file', item.value, rstrip=False)}) }}
+      loop:
+        - key: compose.yml
+          value: '{{ verify_stack_source }}/compose.yml'
+        - key: compose.init.yml
+          value: '{{ verify_stack_source }}/compose.init.yml'
+        - key: pg_hba.conf
+          value: '{{ verify_stack_source }}/pg_hba.conf'
+        - key: branchleft_docker_user_policy.sh
+          value: '{{ verify_provision_source }}/branchleft_docker_user_policy.sh'
+        - key: branchleft-docker-user-policy.service
+          value: '{{ verify_provision_source }}/branchleft-docker-user-policy.service'
+      loop_control:
+        label: '{{ item.key }}'
+      no_log: true
+
+    - name: Read the stack's files on the instance
+      ansible.builtin.slurp:
+        src: '{{ verify_project_dir }}/{{ item }}'
+      loop: '{{ verify_stack_files }}'
+      register: control_plane_verify_stack_slurp
+      loop_control:
+        label: '{{ item }}'
+      no_log: true
+
+    - name: Assert each stack file is on the instance, root-owned, mode 0644 and byte-equal to its source
+      ansible.builtin.assert:
+        that:
+          - item.item in control_plane_verify_sources
+          - (item.content | ansible.builtin.b64decode) == control_plane_verify_sources[item.item]
+        quiet: true
+        fail_msg: '{{ item.item }} differs from its source in the repository.'
+      loop: '{{ control_plane_verify_stack_slurp.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+      no_log: true
+
+    - name: Read the mode and owner of the project directory and each stack file
+      ansible.builtin.stat:
+        path: '{{ verify_project_dir }}/{{ item }}'
+      loop: '{{ ["."] + verify_stack_files }}'
+      register: control_plane_verify_stats
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert the project directory and each stack file have the owner and mode of the role
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == ('0755' if item.item == '.' else '0644')
+        quiet: true
+        fail_msg: '{{ item.item }} is not root:root with the mode the role sets.'
+      loop: '{{ control_plane_verify_stats.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Read the environment file and the master key
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_secret_stats
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert the environment file is 0600 root and the master key is 0400 uid and gid 1000
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_secret_stats.results[0].stat.mode == '0600'
+          - control_plane_verify_secret_stats.results[0].stat.pw_name == 'root'
+          - control_plane_verify_secret_stats.results[1].stat.mode == '0400'
+          - control_plane_verify_secret_stats.results[1].stat.uid == 1000
+          - control_plane_verify_secret_stats.results[1].stat.gid == 1000
+        quiet: true
+        fail_msg: The environment file or the master key does not have the mode and owner the runbook sets.
+
+    # The secret values are written on the instance, and must not appear in the
+    # run's log, which the controller keeps. The log is read at the end, after the
+    # role has been applied again below.
+    - name: Read the secrets on the instance after the first apply
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_first
+      loop_control:
+        label: '{{ item }}'
+      no_log: true
+
+    - name: Assert the secrets hold exactly the values of the first apply
+      ansible.builtin.assert:
+        that:
+          - (control_plane_verify_first.results[0].content | ansible.builtin.b64decode) == control_plane_env_content
+          - (control_plane_verify_first.results[1].content | ansible.builtin.b64decode) == control_plane_masterkey
+        quiet: true
+        fail_msg: The environment file or the master key does not hold the value the first apply was given.
+      no_log: true
+
+    # The write-once rule. The role is applied again with DIFFERENT values for both
+    # secrets, and both files must still hold the first values.
+    - name: Apply the role again with different secret values
+      ansible.builtin.include_role:
+        name: branchleft.control_plane
+      vars:
+        control_plane_env_content: 'CONTROL_PLANE_DB_ADMIN_PASSWORD=SECOND-{{ scenario_secret }}'
+        control_plane_masterkey: 'MASTERKEY-SECOND-{{ scenario_secret }}'
+
+    - name: Read the secrets on the instance after the second apply
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_second
+      loop_control:
+        label: '{{ item }}'
+      no_log: true
+
+    - name: Assert the second apply, with different values, changed neither secret
+      ansible.builtin.assert:
+        that:
+          - (control_plane_verify_second.results[0].content | ansible.builtin.b64decode) == control_plane_env_content
+          - (control_plane_verify_second.results[1].content | ansible.builtin.b64decode) == control_plane_masterkey
+          - "'SECOND' not in (control_plane_verify_second.results[0].content | ansible.builtin.b64decode)"
+          - "'SECOND' not in (control_plane_verify_second.results[1].content | ansible.builtin.b64decode)"
+        quiet: true
+        fail_msg: A second apply with different values replaced the environment file or the master key.
+      no_log: true
+
+    # A secret file widened by hand is put back to its declared owner, group and mode
+    # by the next run, and its content is not changed. Both files are widened: the
+    # environment file to nobody:nogroup 0644, the master key to nobody:nogroup 0644.
+    - name: Widen both secret files by hand, as an operator might
+      ansible.builtin.file:
+        path: '{{ item.path }}'
+        owner: nobody
+        group: nogroup
+        mode: '0644'
+      loop:
+        - path: '{{ verify_env_file }}'
+        - path: '{{ verify_masterkey_file }}'
+      loop_control:
+        label: '{{ item.path }}'
+
+    - name: Apply the role again over the widened files, with different secret values
+      ansible.builtin.include_role:
+        name: branchleft.control_plane
+      vars:
+        control_plane_env_content: 'CONTROL_PLANE_DB_ADMIN_PASSWORD=SECOND-{{ scenario_secret }}'
+        control_plane_masterkey: 'MASTERKEY-SECOND-{{ scenario_secret }}'
+
+    - name: Read the mode and owner of both secret files after the run that widened them
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_restored_stats
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert the environment file's owner is root again
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_restored_stats.results[0].stat.pw_name == 'root'
+        quiet: true
+        fail_msg: The environment file's owner was not restored to root.
+
+    - name: Assert the environment file's group is root again
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_restored_stats.results[0].stat.gr_name == 'root'
+        quiet: true
+        fail_msg: The environment file's group was not restored to root.
+
+    - name: Assert the environment file's mode is 0600 again
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_restored_stats.results[0].stat.mode == '0600'
+        quiet: true
+        fail_msg: The environment file's mode was not restored to 0600.
+
+    - name: Assert the master key's owner is uid 1000 again
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_restored_stats.results[1].stat.uid == 1000
+        quiet: true
+        fail_msg: The master key's owner was not restored to uid 1000.
+
+    - name: Assert the master key's group is gid 1000 again
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_restored_stats.results[1].stat.gid == 1000
+        quiet: true
+        fail_msg: The master key's group was not restored to gid 1000.
+
+    - name: Assert the master key's mode is 0400 again
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_restored_stats.results[1].stat.mode == '0400'
+        quiet: true
+        fail_msg: The master key's mode was not restored to 0400.
+
+    - name: Read the secrets after the widened files were restored
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_restored_content
+      loop_control:
+        label: '{{ item }}'
+      no_log: true
+
+    - name: Assert the widened files kept their first values
+      ansible.builtin.assert:
+        that:
+          - (control_plane_verify_restored_content.results[0].content | ansible.builtin.b64decode) == control_plane_env_content
+          - (control_plane_verify_restored_content.results[1].content | ansible.builtin.b64decode) == control_plane_masterkey
+        quiet: true
+        fail_msg: Restoring the owner and mode of a widened secret file changed its content.
+      no_log: true
+
+    # A run that stopped between creating a file empty and writing its content
+    # leaves an empty file. The next apply must fill it, and only then.
+    # A run that stopped between the two steps leaves an empty file, and an operator may
+    # have widened it. Both files are emptied AND widened here, so the next apply must
+    # restore their owner and mode and fill them with the new values.
+    - name: Empty both secret files and widen them, as a stopped run and an operator leave them
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ item }}'
+        owner: nobody
+        group: nogroup
+        mode: '0644'
+        force: true
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Apply the role again over the empty files, with different secret values
+      ansible.builtin.include_role:
+        name: branchleft.control_plane
+      vars:
+        control_plane_env_content: 'CONTROL_PLANE_DB_ADMIN_PASSWORD=SECOND-{{ scenario_secret }}'
+        control_plane_masterkey: 'MASTERKEY-SECOND-{{ scenario_secret }}'
+
+    - name: Read the secrets on the instance after the empty files were filled
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_filled
+      loop_control:
+        label: '{{ item }}'
+      no_log: true
+
+    - name: Read the mode and owner of both files after they were filled
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_filled_stats
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert the empty files were filled with the new values at the same owner and mode
+      ansible.builtin.assert:
+        that:
+          - (control_plane_verify_filled.results[0].content | ansible.builtin.b64decode) == ('CONTROL_PLANE_DB_ADMIN_PASSWORD=SECOND-' ~ scenario_secret)
+          - (control_plane_verify_filled.results[1].content | ansible.builtin.b64decode) == ('MASTERKEY-SECOND-' ~ scenario_secret)
+          - control_plane_verify_filled_stats.results[0].stat.mode == '0600'
+          - control_plane_verify_filled_stats.results[0].stat.pw_name == 'root'
+          - control_plane_verify_filled_stats.results[0].stat.gr_name == 'root'
+          - control_plane_verify_filled_stats.results[1].stat.mode == '0400'
+          - control_plane_verify_filled_stats.results[1].stat.uid == 1000
+          - control_plane_verify_filled_stats.results[1].stat.gid == 1000
+        quiet: true
+        fail_msg: An empty secret file was not filled, or it was filled at the wrong owner or mode.
+      no_log: true
+
+    - name: Read the isolation reconciler and its unit on the instance
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /usr/local/sbin/branchleft-docker-user-policy
+        - /etc/systemd/system/branchleft-docker-user-policy.service
+      register: control_plane_verify_isolation
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert the isolation reconciler and its unit are byte-equal to their sources
+      ansible.builtin.assert:
+        that:
+          - verify_reconciler_content == control_plane_verify_sources['branchleft_docker_user_policy.sh']
+          - verify_unit_content == control_plane_verify_sources['branchleft-docker-user-policy.service']
+        quiet: true
+        fail_msg: The isolation reconciler or its unit differs from its source.
+      vars:
+        verify_reconciler_content: '{{ control_plane_verify_isolation.results[0].content | ansible.builtin.b64decode }}'
+        verify_unit_content: '{{ control_plane_verify_isolation.results[1].content | ansible.builtin.b64decode }}'
+      no_log: true
+
+    - name: Read the reconciler's mode
+      ansible.builtin.stat:
+        path: /usr/local/sbin/branchleft-docker-user-policy
+      register: control_plane_verify_reconciler_stat
+
+    - name: Assert the reconciler is root-owned and mode 0755
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_reconciler_stat.stat.mode == '0755'
+          - control_plane_verify_reconciler_stat.stat.pw_name == 'root'
+        quiet: true
+        fail_msg: The reconciler is not root-owned with mode 0755; systemd runs it as root at every boot.
+
+    # Last, so the log holds every apply above, the two with different values too.
+    # Both marker prefixes contain THROWAWAY-.
+    - name: Read the run's log on the controller
+      ansible.builtin.slurp:
+        src: '{{ lookup("ansible.builtin.env", "ANSIBLE_LOG_PATH") }}'
+      register: control_plane_verify_log
+      delegate_to: localhost
+      no_log: true
+
+    - name: Assert the secrets are absent from the run's log
+      ansible.builtin.assert:
+        that:
+          - "'THROWAWAY-' not in (control_plane_verify_log.content | ansible.builtin.b64decode)"
+        quiet: true
+        fail_msg: A secret appears in the run's log.
+      no_log: true
+
+# The owner, group and mode a secret file is created and corrected with come from the
+# entry the lookup finds BY PATH, never by position in the list. This play runs on the
+# controller only. It loads the role's own variables, then reverses the list, so a
+# lookup by position (entry 0 or 1) would hand each file the other file's values and
+# fail here. Its set_fact sets facts on localhost alone and never reaches the instance.
+- name: Check the lookups find each secret file's entry by its path
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    verify_repo: '{{ playbook_dir }}/../../../../../'
+  vars_files:
+    - '{{ verify_repo }}ansible/roles/control_plane/vars/main.yml'
+  tasks:
+    - name: Reverse the secret file list, so that position and path give different entries
+      ansible.builtin.set_fact:
+        control_plane_secret_files: '{{ control_plane_secret_files | reverse | list }}'
+
+    - name: Assert the lookups find each file's entry by path in the reversed list
+      ansible.builtin.assert:
+        that:
+          - control_plane_env_secret.path == control_plane_env_file
+          - control_plane_env_secret.owner == 'root'
+          - control_plane_env_secret.group == 'root'
+          - control_plane_env_secret.mode == '0600'
+          - control_plane_masterkey_secret.path == control_plane_masterkey_file
+          - control_plane_masterkey_secret.owner == '1000'
+          - control_plane_masterkey_secret.group == '1000'
+          - control_plane_masterkey_secret.mode == '0400'
+        quiet: true
+        fail_msg: A lookup took the owner, group or mode of the other secret file.
+
+    - name: Leave only the master key's entry in the list
+      ansible.builtin.set_fact:
+        control_plane_secret_files: '{{ control_plane_secret_files | selectattr("path", "equalto", control_plane_masterkey_file) | list }}'
+
+    - name: Look up the environment file's entry in a list that has none
+      ansible.builtin.set_fact:
+        control_plane_verify_probe: '{{ control_plane_env_secret.owner }}'
+      ignore_errors: true
+      register: control_plane_verify_missing
+
+    - name: Assert a list without the environment file's entry fails the lookup
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_missing is failed
+        quiet: true
+        fail_msg: A lookup for a file with no entry in the list did not fail.

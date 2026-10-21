@@ -1,0 +1,63 @@
+---
+# A file in the program directory that the program imports by name would run as
+# root with the admin password in its environment if the program were run from
+# that directory. The role runs it from a private copy, so the stray module is
+# never imported: the program does its work and the marker the stray module would
+# make does not exist. (A tenant needs the program here, so it does run.)
+#
+# The case starts from the configured host and removes what an earlier failed run
+# of it left (the stray module and its marker), so one failure does not hide the
+# result of the next run.
+- name: Start from the configured host
+  ansible.builtin.include_tasks: restore.yml
+
+- name: Read the configured database
+  ansible.builtin.slurp:
+    src: '{{ db1_grants_scenario_baseline_path }}'
+  register: db1_grants_scenario_baseline_slurp
+
+- name: Take the grant from the second tenant, so the program has work to do
+  ansible.builtin.copy:
+    content: >-
+      {{ (db1_grants_scenario_baseline_slurp.content | b64decode | from_json)
+      | combine({'users': (db1_grants_scenario_baseline_slurp.content | b64decode | from_json).users
+      | combine({'ghost_second_site@10.20.1.%': {'db': {}, 'muc': 0, 'auth': 'marker-second', 'ssl_type': 'ANY', 'static': [], 'dynamic': []}})})
+      | to_nice_json }}
+    dest: '{{ db1_grants_scenario_state_path }}'
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Put a stray module that the program imports in the program directory
+  ansible.builtin.copy:
+    content: '{{ db1_grants_scenario_stray_module }}'
+    dest: '{{ db1_grants_scenario_provision_dir }}/secrets.py'
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Apply the role
+  ansible.builtin.include_role:
+    name: branchleft.db1_grants
+
+- name: Look for what the stray module would have made
+  ansible.builtin.stat:
+    path: /tmp/db1-grants-stray-ran
+  register: db1_grants_scenario_stray_marker
+
+- name: Read the database after the run
+  ansible.builtin.include_tasks: read_database.yml
+
+- name: Assert the program did its work and the stray module did not run
+  ansible.builtin.assert:
+    that:
+      - not db1_grants_scenario_stray_marker.stat.exists
+      - >-
+        db1_grants_scenario_now.users['ghost_second_site@10.20.1.%'].db
+        == {'ghost\_second\_site': ['ALL PRIVILEGES']}
+      - db1_grants_scenario_now.users['ghost_second_site@10.20.1.%'].muc == 10
+    fail_msg: The stray module in the program directory ran, or the program did not do its work.
+    quiet: true
+
+- name: Put the host back as it was configured
+  ansible.builtin.include_tasks: restore.yml

@@ -1,0 +1,50 @@
+---
+argument_specs:
+  main:
+    short_description: Deliver the control-plane stack, bring it up and install the app-host isolation policy
+    description: >-
+      Creates the control plane's host configuration directories, writes its
+      environment file and master key once when they are absent or empty, copies the
+      committed Compose files into the project directory, starts the database and
+      then the sign-in service (running the one-off init phase once, on a fresh
+      database), enables the stack's unit and runs the deploy wrapper with the
+      pinned image. It then installs the DOCKER-USER isolation reconciler and its
+      unit and applies the policy when either changed. On every run it sets the owner,
+      group and mode of the environment file and the master key back to their declared
+      values, without changing their content. It never removes a volume, an environment
+      file or a master key.
+    author: branchLeft
+    options:
+      control_plane_app_image:
+        type: str
+        required: true
+        description: >-
+          Image of the applications, pinned by digest as NAME@sha256:64 lower-case
+          hex digits. Passed to Compose as IMAGE for the bring-up and to the deploy
+          wrapper. A reference without a digest is refused by the wrapper.
+      control_plane_env_content:
+        type: str
+        required: true
+        no_log: true
+        description: >-
+          Content of /etc/branchleft/control-plane.env, a secret supplied at run
+          time. Written only while the file is absent or empty; a file that holds a
+          value is never replaced, so a changed value here is not applied.
+      control_plane_masterkey:
+        type: str
+        required: true
+        no_log: true
+        description: >-
+          Content of the sign-in service's master key file, a secret supplied at
+          run time, written without a trailing newline. Written only while the file
+          is absent or empty. A different key orphans the sign-in service's encrypted data.
+      control_plane_bring_up:
+        type: bool
+        default: true
+        description: Whether to start the database and the sign-in service and run the init phase. False leaves the containers alone.
+      control_plane_start_units:
+        type: bool
+        default: true
+        description: >-
+          Whether to enable and start the stack's unit, run the deploy wrapper and
+          apply the isolation policy. False writes the files and leaves systemd alone.

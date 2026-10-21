@@ -1,0 +1,16 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+  tasks:
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml. The include carries no no_log: the role's own
+    # tasks must be the ones that keep the values out of the log, and a keyword
+    # here would hide a missing one. The refusal cases are in verify.yml: a case
+    # that spoils the host and puts it back does not belong in a converge that
+    # must report zero changes the second time.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.db1_grants

@@ -1,0 +1,47 @@
+---
+argument_specs:
+  main:
+    short_description: Write the ntfy pager credentials and deliver and restart the monitoring stack
+    description: >-
+      Writes the four NTFY_ credential lines into the monitoring secrets file,
+      each under its own key and the others left in place, closes that file to
+      root, copies the monitoring stack's committed files into the project
+      directory, and restarts the monitoring stack unit when either changed. The
+      four credentials arrive as values from the caller; the role never reads or
+      generates one. It removes nothing from the host.
+    author: branchLeft
+    options:
+      ntfy_pager_project_dir:
+        type: str
+        description: >-
+          Absolute path of the stack's project directory. It must equal the
+          WorkingDirectory the shared Compose unit template derives from the
+          instance name, which is /opt/branchleft/monitoring.
+        default: /opt/branchleft/monitoring
+      ntfy_pager_env_file:
+        type: str
+        description: >-
+          Absolute path of the monitoring secrets file. It must already exist and
+          be non-empty; the role adds or replaces the NTFY_ lines in it and does
+          not create it.
+        default: /etc/branchleft/monitoring.env
+      ntfy_pager_pager_token:
+        type: str
+        required: true
+        no_log: true
+        description: The access token of the pager topic, the value of NTFY_PAGER_TOKEN. Supplied by the caller; no default.
+      ntfy_pager_watcher_token:
+        type: str
+        required: true
+        no_log: true
+        description: The access token of the release watcher, the value of NTFY_WATCHER_TOKEN. Supplied by the caller; no default.
+      ntfy_pager_owner_password_hash:
+        type: str
+        required: true
+        no_log: true
+        description: The password hash of the ntfy owner account, the value of NTFY_OWNER_PASSWORD_HASH. Supplied by the caller; no default.
+      ntfy_pager_machine_password_hash:
+        type: str
+        required: true
+        no_log: true
+        description: The password hash of the ntfy machine account, the value of NTFY_MACHINE_PASSWORD_HASH. Supplied by the caller; no default.

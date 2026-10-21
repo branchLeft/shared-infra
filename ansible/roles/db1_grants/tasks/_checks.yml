@@ -1,0 +1,113 @@
+---
+# Internal: the states the role refuses to act in, each by name. Nothing here
+# changes a host. The role fails closed on every state it cannot call correct, and
+# no message carries a password (a tenant is named by its slug).
+
+- name: Refuse a database host with no dump account
+  ansible.builtin.assert:
+    that:
+      - db1_grants_found.backup.present
+    fail_msg: >-
+      db1_grants[backup-absent]: the dump account {{ db1_grants_backup_user }}@{{ db1_grants_backup_host }} does not
+      exist on the database host. The role never creates it; create it by the database host runbook
+      and run the role again.
+    quiet: true
+
+# A backup account holds global privileges only. A database-level grant, a role or
+# a proxy grant on it is a change someone made on purpose, so the role leaves it
+# to a person.
+- name: Refuse a backup account that holds anything the role cannot compare
+  ansible.builtin.assert:
+    that:
+      - db1_grants_found[item].unrecognised | length == 0
+      - db1_grants_found[item].object_lines | length == 0
+    fail_msg: >-
+      db1_grants[account-extra-grant]: the {{ item }} account holds a grant that is not a global privilege
+      (an object-level grant, a role or a proxy grant). The role compares global privileges only; remove
+      the extra grant by hand and run the role again.
+    quiet: true
+  loop:
+    - backup
+    - ops1
+  when: db1_grants_found[item].present
+
+- name: Refuse a backup account that holds every privilege
+  ansible.builtin.assert:
+    that:
+      - "'ALL PRIVILEGES' not in db1_grants_found[item].global_privs"
+    fail_msg: >-
+      db1_grants[account-all-privileges]: the {{ item }} account holds ALL PRIVILEGES. Revoking it would also
+      revoke the privileges the role grants in the same run, so the role leaves it to a person.
+    quiet: true
+  loop:
+    - backup
+    - ops1
+  when: db1_grants_found[item].present
+
+- name: Refuse an ops1 account that is bound to another host
+  ansible.builtin.assert:
+    that:
+      - db1_grants_other_hosts | length == 0
+    fail_msg: >-
+      db1_grants[ops1-other-host]: the {{ db1_grants_ops1_user }} account also exists at a host other than the
+      declared one. The role does not choose between them; remove the one that is wrong by hand.
+    quiet: true
+
+- name: Refuse a database host with the clone plugin loaded
+  ansible.builtin.assert:
+    that:
+      - db1_grants_clone_rows | length == 0
+    fail_msg: >-
+      db1_grants[clone-plugin]: the clone plugin is loaded. With it, BACKUP_ADMIN would also make a backup
+      account a clone donor, which is a read path to the whole instance. The role grants nothing until it is unloaded.
+    quiet: true
+
+# ----- The tenant accounts -----
+
+# The role never creates a tenant account or its database. The provisioning
+# program would, with a password nobody holds, so an absent account is stopped
+# here, before any program run.
+- name: Refuse a tenant whose account does not exist
+  ansible.builtin.assert:
+    that:
+      - db1_grants_found['tenant-' ~ item.slug].present
+    fail_msg: >-
+      db1_grants[tenant-absent]: the account of tenant {{ item.slug }} does not exist on the database host.
+      The role never creates a tenant account; onboard the tenant first, then run the role again.
+    quiet: true
+  loop: '{{ db1_grants_tenant_table }}'
+  loop_control:
+    label: '{{ item.slug }}'
+
+# The neighbour check, for every tenant. An unescaped grant target treats an
+# underscore as a one-character wildcard, so it also covers the databases of the
+# tenants next to it. The role does not rewrite a production tenant's grant: the
+# escape is done by hand, by the escape runbook, and this refuses until it is.
+- name: Refuse a tenant whose grant is still the unescaped form
+  ansible.builtin.assert:
+    that:
+      - item.unescaped_line not in db1_grants_found['tenant-' ~ item.slug].object_lines
+    fail_msg: >-
+      db1_grants[tenant-unescaped]: the grant of tenant {{ item.slug }} is still the unescaped form, which also
+      covers neighbouring databases. Escape it by hand first (the database tenant grant escape runbook,
+      steps 3 to 7), then run the role again.
+    quiet: true
+  loop: '{{ db1_grants_tenant_table }}'
+  loop_control:
+    label: '{{ item.slug }}'
+
+- name: Refuse a tenant account that holds anything but the escaped grant
+  ansible.builtin.assert:
+    that:
+      - db1_grants_found['tenant-' ~ item.slug].unrecognised | length == 0
+      - db1_grants_found['tenant-' ~ item.slug].global_privs | length == 0
+      - not db1_grants_found['tenant-' ~ item.slug].grant_option
+      - db1_grants_found['tenant-' ~ item.slug].object_lines | difference([item.escaped_line]) | length == 0
+    fail_msg: >-
+      db1_grants[tenant-unexpected-grant]: the account of tenant {{ item.slug }} holds a grant other than the
+      one escaped database grant. The role adds the escaped grant and removes nothing from a tenant; look at
+      the account by hand.
+    quiet: true
+  loop: '{{ db1_grants_tenant_table }}'
+  loop_control:
+    label: '{{ item.slug }}'

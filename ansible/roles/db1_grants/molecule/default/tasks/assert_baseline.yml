@@ -1,0 +1,155 @@
+---
+# What the converge must have done to the database and to the host, asserted from
+# values written here and not from the role's own variables, so a role whose sets
+# were wrong would still be caught. Nothing here prints a password: the fake
+# stores a hash of the one it was given, and the hash is compared with one made
+# here.
+- name: Read the fake database and the client's calls
+  ansible.builtin.include_tasks: read_database.yml
+
+# ----- The dump account: the new set, the old one's RELOAD gone -----
+- name: Assert the dump account holds exactly the bounded dump's privileges
+  ansible.builtin.assert:
+    that:
+      - >-
+        db1_grants_scenario_now.users['backup@localhost'].static | sort
+        == ['EVENT', 'LOCK TABLES', 'PROCESS', 'REPLICATION CLIENT', 'SELECT', 'SHOW VIEW', 'TRIGGER']
+      - db1_grants_scenario_now.users['backup@localhost'].dynamic == ['BACKUP_ADMIN']
+      - db1_grants_scenario_now.users['backup@localhost'].db == {}
+      - not (db1_grants_scenario_now.users['backup@localhost'].grant_option | default(false))
+      - db1_grants_scenario_now.users['backup@localhost'].auth == 'marker-backup'
+    fail_msg: The dump account does not hold exactly the declared privileges, or its password was touched.
+    quiet: true
+
+# ----- The ops1 account: created, bound to one host, TLS required -----
+- name: Assert the ops1 account exists at the declared host and nowhere else
+  ansible.builtin.assert:
+    that:
+      - db1_grants_scenario_now.users.keys() | select('match', '^backup_ops1@') | list == [db1_grants_scenario_ops1_account]
+    fail_msg: The ops1 account is not at exactly the declared host.
+    quiet: true
+
+- name: Assert the ops1 account holds exactly its privileges, requires TLS and has the file's password
+  ansible.builtin.assert:
+    that:
+      - db1_grants_scenario_now.users[db1_grants_scenario_ops1_account].static | sort == ['LOCK TABLES', 'SELECT', 'SHOW VIEW', 'TRIGGER']
+      - db1_grants_scenario_now.users[db1_grants_scenario_ops1_account].dynamic == ['BACKUP_ADMIN']
+      - db1_grants_scenario_now.users[db1_grants_scenario_ops1_account].db == {}
+      - not (db1_grants_scenario_now.users[db1_grants_scenario_ops1_account].grant_option | default(false))
+      - db1_grants_scenario_now.users[db1_grants_scenario_ops1_account].ssl_type == 'ANY'
+      - db1_grants_scenario_now.users[db1_grants_scenario_ops1_account].auth == (db1_grants_scenario_ops1_password | hash('sha256'))
+    fail_msg: The ops1 account does not have the declared privileges, TLS requirement or password.
+    quiet: true
+  no_log: true
+
+# ----- The tenants: the escaped grant, the limit, no password touched -----
+- name: Assert each tenant has only its escaped grant and the limit
+  ansible.builtin.assert:
+    that:
+      - >-
+        db1_grants_scenario_now.users['ghost_blog@10.20.1.%'].db
+        == {'ghost\_blog': ['ALL PRIVILEGES']}
+      - db1_grants_scenario_now.users['ghost_blog@10.20.1.%'].muc == 10
+      - db1_grants_scenario_now.users['ghost_blog@10.20.1.%'].auth == 'marker-blog'
+      - >-
+        db1_grants_scenario_now.users['ghost_second_site@10.20.1.%'].db
+        == {'ghost\_second\_site': ['ALL PRIVILEGES']}
+      - db1_grants_scenario_now.users['ghost_second_site@10.20.1.%'].muc == 10
+      - db1_grants_scenario_now.users['ghost_second_site@10.20.1.%'].auth == 'marker-second'
+    fail_msg: A tenant account does not have exactly its escaped grant and its limit, or its password was touched.
+    quiet: true
+
+# ----- Nothing else -----
+- name: Assert the role touched no other account and made no database or account
+  ansible.builtin.assert:
+    that:
+      - >-
+        db1_grants_scenario_now.users.keys() | sort
+        == ['backup@localhost', db1_grants_scenario_ops1_account, 'exporter@localhost',
+        'ghost_blog@10.20.1.%', 'ghost_second_site@10.20.1.%'] | sort
+      - db1_grants_scenario_now.users['exporter@localhost'] == db1_grants_scenario_initial_state.users['exporter@localhost']
+      - db1_grants_scenario_now.databases == db1_grants_scenario_initial_state.databases
+    fail_msg: An account or a database was made or changed that the role has no business with.
+    quiet: true
+
+# ----- The stamp -----
+- name: Look at the password file and its stamp
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop:
+    - /etc/branchleft/db1-backup-ops1.pw
+    - /etc/branchleft/db1-backup-ops1.pw.sha256
+  register: db1_grants_scenario_stamp_stat
+
+- name: Read the stamp
+  ansible.builtin.slurp:
+    src: /etc/branchleft/db1-backup-ops1.pw.sha256
+  register: db1_grants_scenario_stamp_slurp
+
+- name: Assert the stamp is root's and closed, and records the password file's checksum
+  ansible.builtin.assert:
+    that:
+      - db1_grants_scenario_stamp_stat.results[1].stat.mode == '0600'
+      - db1_grants_scenario_stamp_stat.results[1].stat.uid == 0
+      - db1_grants_scenario_stamp_slurp.content | b64decode | trim == db1_grants_scenario_stamp_stat.results[0].stat.checksum
+    fail_msg: The stamp is not root's, not closed, or does not record the checksum of the password file.
+    quiet: true
+
+# ----- The order of the statements -----
+# FAKE ONLY: a real server cannot be observed from here.
+# Read before change: the first changing call comes after a call that read the
+# grants. Grants before revokes: the call that revokes RELOAD from the dump account
+# grants BACKUP_ADMIN first and holds nothing else, so the account is never left
+# with neither the old privilege nor the new one.
+- name: Work out where the first read and the first change are in the record
+  ansible.builtin.set_fact:
+    db1_grants_scenario_first_read: >-
+      {%- set ns = namespace(at=-1) -%}
+      {%- for call in db1_grants_scenario_calls -%}
+      {%- if ns.at < 0 and (call.statements | select('match', '^SHOW GRANTS') | list | length) > 0 -%}{%- set ns.at = loop.index0 -%}{%- endif -%}
+      {%- endfor -%}
+      {{ ns.at }}
+    db1_grants_scenario_first_change: >-
+      {%- set ns = namespace(at=-1) -%}
+      {%- for call in db1_grants_scenario_calls -%}
+      {%- if ns.at < 0 and (call.statements | select('match', '^(GRANT|REVOKE|CREATE USER|ALTER USER)') | list | length) > 0 -%}
+      {%- set ns.at = loop.index0 -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ ns.at }}
+
+- name: Assert the database was read before it was changed
+  ansible.builtin.assert:
+    that:
+      - db1_grants_scenario_first_read | int >= 0
+      - db1_grants_scenario_first_change | int > db1_grants_scenario_first_read | int
+    fail_msg: The first changing call came before any call that read the grants.
+    quiet: true
+
+# Each run of the role reads the clone plugin once. The harness runs the role in
+# check mode on the fresh host before it converges, so two runs of the role read
+# before the first change is sent: a check-mode run that changed anything would
+# put the first change before the converge's read.
+- name: Assert the check-mode run on the fresh host sent no change
+  ansible.builtin.assert:
+    that:
+      - >-
+        (db1_grants_scenario_calls[:(db1_grants_scenario_first_change | int)]
+        | selectattr('statements', 'contains', "SELECT PLUGIN_NAME FROM information_schema.PLUGINS WHERE PLUGIN_NAME='clone'")
+        | list | length) == 2
+    fail_msg: The role in check mode sent a change, or did not read the database, before the real run.
+    quiet: true
+
+- name: Assert the dump account's privilege is added in the same batch before the old one is removed
+  ansible.builtin.assert:
+    that:
+      - db1_grants_scenario_revoke_calls | length == 1
+      - >-
+        db1_grants_scenario_revoke_calls[0].statements
+        == ["GRANT BACKUP_ADMIN ON *.* TO 'backup'@'localhost'", "REVOKE RELOAD ON *.* FROM 'backup'@'localhost'"]
+    fail_msg: The dump account's RELOAD was not revoked in one batch after BACKUP_ADMIN was granted.
+    quiet: true
+  vars:
+    db1_grants_scenario_revoke_calls: >-
+      {{ db1_grants_scenario_calls | selectattr('statements', 'contains', "REVOKE RELOAD ON *.* FROM 'backup'@'localhost'") | list }}

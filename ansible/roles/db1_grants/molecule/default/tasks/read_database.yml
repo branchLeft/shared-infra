@@ -1,0 +1,28 @@
+---
+# Test scaffolding: read the fake database and the record of the client's calls
+# into facts the assertions use. The sentinels never appear in either (the fake
+# stores only a hash of a password it was given), and the reads are not part of the
+# role, so they report no change.
+- name: Read the fake database
+  ansible.builtin.slurp:
+    src: '{{ db1_grants_scenario_state_path }}'
+  register: db1_grants_scenario_state_slurp
+  changed_when: false
+
+- name: Read the record of the client's calls
+  ansible.builtin.slurp:
+    src: '{{ db1_grants_scenario_calls_path }}'
+  register: db1_grants_scenario_calls_slurp
+  changed_when: false
+
+- name: Keep what was read
+  ansible.builtin.set_fact:
+    db1_grants_scenario_now: '{{ db1_grants_scenario_state_slurp.content | b64decode | from_json }}'
+    db1_grants_scenario_calls: >-
+      {{ (db1_grants_scenario_calls_slurp.content | b64decode).splitlines() | select | map('from_json') | list }}
+
+- name: Count the changing statements the client has been sent so far
+  ansible.builtin.set_fact:
+    db1_grants_scenario_changing: >-
+      {{ db1_grants_scenario_calls | map(attribute='statements') | flatten
+      | select('match', '^(GRANT|REVOKE|CREATE USER|ALTER USER)') | list | length }}

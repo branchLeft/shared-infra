@@ -24,6 +24,7 @@ backup_worker_release_subdirs:
   - infra/provisioning/scripts
   - db
   - db/provision
+  - db/recovery
   - control
   - control/provision
 

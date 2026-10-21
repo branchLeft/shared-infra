@@ -1,0 +1,172 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs, and an inventory
+# value does not loosen them (role vars outrank play and inventory variables).
+# Every pin is here with the reason for it, so a bump is one reviewed change to
+# this file.
+
+# ----- The programs the role relies on, pinned -----
+
+# The commit of the ghost-platform repository the digests below were computed at
+# (sha256 of the git blob of each file at that commit). The role does not fetch
+# the programs: the directory they live in is another role's. It only refuses to
+# run one whose bytes differ from these.
+db1_grants_source_commit: 5e52f78427cab104438057164e4baa16b329875c
+
+# Where ghost-platform, the one home of the programs, serves them at that commit.
+# Only the test reads this (the scenario's prepare and the unit tests fetch each
+# program from here and check it against the digest below); the role never does.
+# No copy of a program lives in this repository.
+db1_grants_source_raw_base: 'https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ db1_grants_source_commit }}/db/provision'
+
+# provision_tenant_db.py has no other home in this repository: the role that
+# delivers the dump programs pins naming.py and dump_nightly.py as well, and the
+# unit test fails when those two pins disagree with this table. A bump of this
+# table and of the commit above is one reviewed change to this file.
+db1_grants_program_sha256:
+  provision_tenant_db.py: d4115369168125ea0e72f46aa66f90a2443d6f26fda603dd8a76ec882e4d5e3e
+  naming.py: 288a31eed9758644d6a73928b949bc3607c905adfc2f2f4f563701dc740f6480
+  dump_nightly.py: fd0ce0daa21a40dae42f4e2913248f25c9fd6bd1977fad2f754ed1f83c26c88d
+
+# The files the provisioning program imports from its own directory. They are
+# copied together into a private directory and run from there, so no other file
+# of the program directory can shadow a module the program imports.
+db1_grants_staged_files:
+  - provision_tenant_db.py
+  - naming.py
+
+db1_grants_provision_dir: /opt/branchleft/db/provision
+db1_grants_parent_dirs:
+  - /opt/branchleft
+  - /opt/branchleft/db
+  - /opt/branchleft/db/provision
+db1_grants_python: /usr/bin/python3
+db1_grants_staging_parent: /run
+
+# ----- The host's files -----
+
+db1_grants_config_dir: /etc/branchleft
+
+# The admin password has one home: this hand-written root-only file, key
+# MYSQL_ROOT_PASSWORD. The role reads it and keeps no copy.
+db1_grants_db_env_path: /etc/branchleft/db.env
+db1_grants_admin_key: MYSQL_ROOT_PASSWORD
+
+# The one new secret: the password of the backup account the ops1 host connects
+# with, placed once by hand as a root-only 0600 file holding the password and
+# nothing else. The stamp beside it records the sha256 of the file the password
+# was last set from, so a rotation is one file replacement and a run that finds
+# the same file sets nothing.
+db1_grants_ops1_password_path: /etc/branchleft/db1-backup-ops1.pw
+db1_grants_ops1_stamp_path: /etc/branchleft/db1-backup-ops1.pw.sha256
+
+# ----- The database -----
+
+# The socket the container's mysqld creates, reached from the host through the
+# bind mount. The directory is mode 0777 by design, so any local user can put
+# another socket there; the role sends the admin password only to a socket owned
+# by the uid the official image runs mysqld as.
+db1_grants_socket: /opt/branchleft/db/run/mysqld/mysqld.sock
+db1_grants_socket_owner_uid: 999
+db1_grants_admin_user: root
+
+# How the admin password reaches a client without being on any command line. Ansible
+# turns a task's `environment` into text in front of the command it runs
+# (`MYSQL_PWD=... python AnsiballZ_command.py`), which every local account can read
+# for as long as that shell lives, and which the controller's log shows at
+# verbosity 3. So the password goes on the command's standard input instead, as
+# its first line, and this fixed wrapper (the same text for every call, with no
+# value in it) reads that one line into MYSQL_PWD and replaces itself with the
+# program. What follows the first line is the rest of the program's standard
+# input: the statements, for the client.
+db1_grants_newline: "\n"
+db1_grants_secret_wrapper:
+  - /bin/sh
+  - -c
+  - 'IFS= read -r MYSQL_PWD && export MYSQL_PWD && exec "$@"'
+  - db1-grants
+db1_grants_mysql_argv:
+  - mysql
+  - --socket={{ db1_grants_socket }}
+  - --user={{ db1_grants_admin_user }}
+  - --batch
+  - --raw
+  - --skip-column-names
+
+# backup@localhost is db1's own dump account. It is never created here: the role
+# fails by name when it is missing and alters it when it is there.
+db1_grants_backup_user: backup
+db1_grants_backup_host: localhost
+
+# The account the ops1 backup worker dumps with. Its host part is the one
+# address input. REQUIRE SSL because it connects over TCP.
+db1_grants_ops1_user: backup_ops1
+
+# Global privileges, compared as sets. The bounded dump needs LOCK TABLES and
+# BACKUP_ADMIN and takes no global read lock, so neither account holds RELOAD.
+# The sets are the ones of the bounded-snapshot runbooks: for backup@localhost
+# the nightly-dump runbook, step 4; for the ops1 account the ops1 install
+# runbook, part 4b. Accounts that are not listed here (exporter, replicator and
+# root) are not touched.
+db1_grants_backup_privileges:
+  - SELECT
+  - PROCESS
+  - LOCK TABLES
+  - REPLICATION CLIENT
+  - SHOW VIEW
+  - EVENT
+  - TRIGGER
+  - BACKUP_ADMIN
+db1_grants_ops1_privileges:
+  - SELECT
+  - SHOW VIEW
+  - TRIGGER
+  - LOCK TABLES
+  - BACKUP_ADMIN
+
+# ssl_type of an account created with REQUIRE SSL.
+db1_grants_ssl_type_required: ANY
+
+# ----- The tenant accounts -----
+
+# One fixed host for every tenant account, the value the pinned naming.py holds
+# in TENANT_USER_HOST (the unit test compares them). Not an input.
+db1_grants_tenant_host: '10.20.1.%'
+db1_grants_tenant_prefix: ghost_
+
+# The program's default, stated here so it is a decision and not an accident.
+db1_grants_max_user_connections: 10
+
+# A tenant's database and its account share one name: the prefix, then the slug
+# with hyphens as underscores. The slug rule and the length limit are the ones of
+# the pinned naming.py (the unit test compares the pattern). 26 is MySQL's
+# 32-character account name limit less the prefix.
+db1_grants_slug_pattern: '\A[a-z]([a-z0-9-]*[a-z0-9])?\Z'
+db1_grants_slug_max_length: 26
+
+# ----- Characters a template literal cannot hold -----
+
+# The templating engine does not read a backslash escape in a template literal (a
+# typed backslash-n stays two characters), so the character the role splits on is
+# made here, by YAML, which does read it. (In a regular expression the engine
+# passes the backslash on and the regular expression reads it, so a pattern may
+# use one.)
+db1_grants_tab: "\t"
+
+# ----- Input shapes -----
+
+# The patterns end in \Z, not $, because $ also matches before a final line break.
+# An IPv4 literal only: a wildcard in the host part of an account widens who can
+# use it.
+db1_grants_ipv4_pattern: '\A(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}\Z'
+
+# The characters the password is placed inside a single-quoted SQL literal with,
+# so none of them can end the literal or start an escape.
+db1_grants_password_pattern: '\A[A-Za-z0-9._~-]{20,}\Z'
+
+# ----- The window the dump runs in -----
+
+# The dump and the shipper run between these UTC times (HHMM). The role changes
+# nothing about the backup account inside the window, or without the dump program
+# the grants belong to on the host.
+db1_grants_window_start: 255
+db1_grants_window_end: 340

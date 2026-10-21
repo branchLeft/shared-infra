@@ -6,8 +6,9 @@ page of the standards repository (clauses ANS-1 to ANS-17).
 
 This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
-the skeleton. Its one real host is `edge1` (`playbooks/edge1.yml`, which applies
-`roles/ansible_runtime` and `roles/pull_trigger`); the other trees hold only what edge1 needs.
+the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
+`roles/ansible_runtime` and `roles/pull_trigger`) and `db1` (`playbooks/db1.yml`, which applies
+`roles/db1_stack` and `roles/db1_grants`); the other trees hold only what those hosts need.
 
 ## Layout
 
@@ -21,7 +22,7 @@ the skeleton. Its one real host is `edge1` (`playbooks/edge1.yml`, which applies
 | `requirements.txt` | The hash-locked toolchain compiled from it, collections included.      |
 | `requirements.yml` | Empty by design: no collection is fetched outside the lock (ANS-4).    |
 | `checks/`          | The pin check and its unit tests (ANS-4).                              |
-| `inventories/`     | The inventory and group-variable trees. `production` holds edge1.      |
+| `inventories/`     | The inventory and group-variable trees. `production` holds edge1, db1. |
 | `playbooks/`       | One playbook per host: selects hosts and lists roles (ANS-13).         |
 | `pyproject.toml`   | The Python floor for the harness: version, mypy strict, ruff (ANS-2).  |
 | `../.ansible-lint` | The lint floor, production profile (ANS-5). Not editable by a role PR. |
@@ -464,7 +465,7 @@ oversight. Each is a decision the standard assigns to later work.
   required (CI-14), but making it required is a repository ruleset change and
   belongs to the owner. Until it is done a red Ansible job does not block a
   merge on its own.
-- **Delivery.** Only edge1 has a playbook, and its first apply is the one-time root bootstrap and then the gated pull. ANS-17 describes the only
+- **Delivery.** Only edge1 and db1 have a playbook, and edge1's first apply is the one-time root bootstrap and then the gated pull; db1's waits on the gated pull. ANS-17 describes the only
   approved path; the trigger and the reusable workflow it needs are separate
   work.
 - **Reuse by other repositories.** The harness is code another repository may

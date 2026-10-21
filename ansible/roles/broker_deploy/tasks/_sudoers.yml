@@ -1,0 +1,17 @@
+---
+# Internal to the role: included from main.yml after the inputs are checked.
+# The fragment is written to a temporary file, checked by visudo, and only then
+# moved over the old one, so a grant visudo refuses never replaces a good one
+# and never leaves sudo with a file it cannot read. -s is strict checking: a
+# line that names an alias nobody defined would otherwise parse as fine and the
+# grant would silently do nothing. /etc/sudoers itself is never edited. Check
+# mode skips validate (the module runs it only on a real write), so the live
+# apply is where a refusal shows.
+- name: Install the sudoers grant for the slot wrapper
+  ansible.builtin.template:
+    src: branchleft-slot.sudoers.j2
+    dest: '{{ broker_deploy_sudoers_path }}'
+    owner: root
+    group: root
+    mode: '0440'
+    validate: /usr/sbin/visudo -csf %s

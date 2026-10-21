@@ -1,0 +1,49 @@
+---
+# Internal: copy the provisioning program and the one module it imports from the
+# program directory into a private directory, and check the copies against the
+# pinned digests. The program is run from the copies and never from its own
+# directory, for two reasons. Python puts the script's directory first on its
+# import path, so any other file in the program directory, a stray secrets.py
+# for one, would run as root with the admin password in its environment. And a
+# check of the file followed by a later run of the same path is two steps; the
+# digest of the copy is the digest of the file that runs.
+#
+# The directory is made by mkdtemp, so it is root's and mode 0700, and the copies
+# are root's and mode 0600: no other user can put a file beside them.
+- name: Make a private directory for the provisioning program
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: db1-grants-
+    path: '{{ db1_grants_staging_parent }}'
+  register: db1_grants_staging
+
+- name: Copy the provisioning program and its module into it
+  ansible.builtin.copy:
+    src: '{{ db1_grants_provision_dir }}/{{ item }}'
+    dest: '{{ db1_grants_staging.path }}/{{ item }}'
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0600'
+  loop: '{{ db1_grants_staged_files }}'
+
+- name: Read the checksums of the copies
+  ansible.builtin.stat:
+    path: '{{ db1_grants_staging.path }}/{{ item }}'
+    follow: false
+    checksum_algorithm: sha256
+  loop: '{{ db1_grants_staged_files }}'
+  register: db1_grants_staged_stat
+
+- name: Refuse a program whose bytes are not the pinned ones
+  ansible.builtin.assert:
+    that:
+      - item.stat.checksum | default('') == db1_grants_program_sha256[item.item]
+    fail_msg: >-
+      db1_grants[program-digest]: {{ item.item }} in the program directory is not the pinned
+      file (commit {{ db1_grants_source_commit }}). The role runs a program only when its
+      sha256 matches; deliver the pinned program, or bump the pin in a reviewed change.
+    quiet: true
+  loop: '{{ db1_grants_staged_stat.results }}'
+  loop_control:
+    label: '{{ item.item }}'

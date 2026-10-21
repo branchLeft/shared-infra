@@ -1,0 +1,50 @@
+---
+# Internal: compare the readback in db1_grants_found with the declared state,
+# into db1_grants_drift and db1_grants_any_drift. Every privilege set is compared
+# as a set, never by the order MySQL prints it in. Only the stamp comparison
+# (db1_grants_stamp_matches) is not from the readback.
+
+- name: Work out what each backup account holds
+  ansible.builtin.set_fact:
+    db1_grants_held_backup: >-
+      {{ db1_grants_found.backup.global_privs + (['GRANT OPTION'] if db1_grants_found.backup.grant_option else []) }}
+    db1_grants_held_ops1: >-
+      {{ db1_grants_found.ops1.global_privs + (['GRANT OPTION'] if db1_grants_found.ops1.grant_option else []) }}
+
+- name: Work out which tenants the program must run for
+  ansible.builtin.set_fact:
+    db1_grants_tenants_to_run: >-
+      {%- set ns = namespace(slugs=[]) -%}
+      {%- for tenant in db1_grants_tenant_table -%}
+      {%- set found = db1_grants_found['tenant-' ~ tenant.slug] -%}
+      {%- if (found.object_lines | length == 0) or (found.muc | int != db1_grants_max_user_connections) -%}
+      {%- set ns.slugs = ns.slugs + [tenant.slug] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ ns.slugs }}
+
+- name: Compare the readback with the declared state
+  ansible.builtin.set_fact:
+    db1_grants_drift:
+      backup_missing: '{{ db1_grants_backup_privileges | difference(db1_grants_held_backup) | sort }}'
+      backup_surplus: '{{ db1_grants_held_backup | difference(db1_grants_backup_privileges) | sort }}'
+      ops1_create: '{{ not db1_grants_found.ops1.present }}'
+      ops1_missing: '{{ db1_grants_ops1_privileges | difference(db1_grants_held_ops1) | sort }}'
+      ops1_surplus: '{{ db1_grants_held_ops1 | difference(db1_grants_ops1_privileges) | sort }}'
+      ops1_ssl: '{{ db1_grants_found.ops1.present and db1_grants_found.ops1.ssl_type != db1_grants_ssl_type_required }}'
+      ops1_password: '{{ not db1_grants_stamp_matches }}'
+      tenants: '{{ db1_grants_tenants_to_run }}'
+
+- name: Say whether anything differs
+  ansible.builtin.set_fact:
+    db1_grants_backup_drift: >-
+      {{ (db1_grants_drift.backup_missing | length > 0) or (db1_grants_drift.backup_surplus | length > 0) }}
+    db1_grants_ops1_drift: >-
+      {{ db1_grants_drift.ops1_create or (db1_grants_drift.ops1_missing | length > 0)
+      or (db1_grants_drift.ops1_surplus | length > 0) or db1_grants_drift.ops1_ssl
+      or db1_grants_drift.ops1_password }}
+
+- name: Say whether anything differs at all
+  ansible.builtin.set_fact:
+    db1_grants_any_drift: >-
+      {{ db1_grants_backup_drift or db1_grants_ops1_drift or (db1_grants_drift.tenants | length > 0) }}

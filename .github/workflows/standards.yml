@@ -4,6 +4,9 @@ on:
   pull_request:
   push:
     branches: [main]
+  # The merge queue reports checks only from this event.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read

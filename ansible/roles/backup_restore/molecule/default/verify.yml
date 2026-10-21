@@ -1,0 +1,758 @@
+---
+# The outcome, in the order the claims are made. Every state check looks at the
+# container, not at a run's own output, and every assertion names the claim it
+# tests. The cases that change state put it back, so the check-mode steps that
+# follow this file meet the configured state and no drift.
+
+# 1. Run alone, the role refuses: it reads backup_worker's variables and
+# declares none of them.
+- name: Apply backup_restore without backup_worker
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - '{{ playbook_dir }}/../../../backup_worker/molecule/default/vars/test.yml'
+    - vars/test.yml
+  tasks:
+    - name: Apply the role alone, expecting a refusal
+      block:
+        - name: Apply the role
+          ansible.builtin.include_role:
+            name: branchleft.backup_restore
+
+        - name: Fail if the role accepted it
+          ansible.builtin.fail:
+            msg: 'ACCEPTED: the role ran without backup_worker having been applied in the play.'
+      rescue:
+        - name: Assert the refusal names backup_worker
+          ansible.builtin.assert:
+            that:
+              - "'reads variables that backup_worker defines' in (ansible_failed_result.msg | default(ansible_failed_result | string))"
+            quiet: true
+            fail_msg: The role was not refused for want of backup_worker's variables.
+
+# 2. The state the converge left.
+- name: Check what the converge left
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - '{{ playbook_dir }}/../../../backup_worker/molecule/default/vars/test.yml'
+    - vars/test.yml
+    - files/installer_contract.yml
+  vars:
+    backup_restore_verify_state_copy_expected:
+      STATE_COPY_RECIPIENT: '{{ backup_restore_state_copy_recipient }}'
+      STATE_COPY_DEST_BUCKET: '{{ backup_worker_bucket }}'
+      STATE_COPY_DEST_ENDPOINT: '{{ backup_worker_s3_endpoint }}'
+      STATE_COPY_DEST_REGION: '{{ backup_worker_s3_region }}'
+      STATE_COPY_DEST_ACCESS_KEY_ID: '{{ backup_restore_state_copy_dest_access_key_id }}'
+      STATE_COPY_DEST_SECRET_ACCESS_KEY: '{{ backup_restore_test_secrets.state_copy_dest }}'
+      STATE_COPY_ESTATE_BUCKET: '{{ backup_restore_state_copy_estate_bucket }}'
+      STATE_COPY_ESTATE_ENDPOINT: '{{ backup_restore_state_copy_estate_endpoint }}'
+      STATE_COPY_ESTATE_REGION: '{{ backup_restore_state_copy_estate_region }}'
+      STATE_COPY_ESTATE_ACCESS_KEY_ID: '{{ backup_restore_state_copy_estate_access_key_id }}'
+      STATE_COPY_ESTATE_SECRET_ACCESS_KEY: '{{ backup_restore_test_secrets.state_copy_estate }}'
+      STATE_COPY_TENANT_BUCKET: '{{ backup_restore_state_copy_tenant_bucket }}'
+      STATE_COPY_TENANT_ENDPOINT: '{{ backup_restore_state_copy_tenant_endpoint }}'
+      STATE_COPY_TENANT_REGION: '{{ backup_restore_state_copy_tenant_region }}'
+      STATE_COPY_TENANT_ACCESS_KEY_ID: '{{ backup_restore_state_copy_tenant_access_key_id }}'
+      STATE_COPY_TENANT_SECRET_ACCESS_KEY: '{{ backup_restore_test_secrets.state_copy_tenant }}'
+    backup_restore_verify_drill_expected:
+      BACKUP_DRILL_COPY_PRIMARY_BUCKET: '{{ backup_worker_bucket }}'
+      BACKUP_DRILL_COPY_PRIMARY_ENDPOINT: '{{ backup_worker_s3_endpoint }}'
+      BACKUP_DRILL_COPY_PRIMARY_REGION: '{{ backup_worker_s3_region }}'
+      BACKUP_DRILL_COPY_PRIMARY_ACCESS_KEY_ID: '{{ backup_restore_drill_access_key_id }}'
+      BACKUP_DRILL_COPY_PRIMARY_SECRET_ACCESS_KEY: '{{ backup_restore_test_secrets.drill_primary }}'
+      BACKUP_DRILL_RECOVERY_IMAGE: '{{ backup_restore_drill_image_recovery }}'
+      BACKUP_DRILL_MYSQL_IMAGE: '{{ backup_restore_drill_image_mysql }}'
+      BACKUP_DRILL_GHOST_IMAGE: '{{ backup_restore_drill_image_ghost }}'
+      BACKUP_DRILL_SIDECAR_IMAGE: '{{ backup_restore_drill_image_sidecar }}'
+  tasks:
+    # The variables of backup_worker reach the checks below the way they reach
+    # the role: exported by the role that defines them.
+    - name: Export backup_worker's variables
+      ansible.builtin.include_role:
+        name: '{{ playbook_dir }}/../../../backup_worker' # noqa: role-name[path]
+        public: true
+
+    # The state-copy environment: the 16 names, each once, each with its value,
+    # root:root 0600. The destination's bucket, endpoint and region are the ones
+    # backup_worker was given.
+    - name: Check the state-copy environment file
+      ansible.builtin.include_tasks: tasks/check_env.yml
+      vars:
+        backup_restore_check_path: '{{ installer_contract_env_files.state_copy }}'
+        backup_restore_check_expected: '{{ backup_restore_verify_state_copy_expected }}'
+        backup_restore_check_names: '{{ installer_contract_state_copy_env_names }}'
+
+    - name: Check the restore-drill environment file
+      ansible.builtin.include_tasks: tasks/check_env.yml
+      vars:
+        backup_restore_check_path: '{{ installer_contract_env_files.restore_drill }}'
+        backup_restore_check_expected: '{{ backup_restore_verify_drill_expected }}'
+        backup_restore_check_names: '{{ installer_contract_restore_drill_env_names }}'
+
+    - name: Look at the four units, the secrets directory and the placed secret files
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - /etc/systemd/system/branchleft-restore-drill.service
+        - /etc/systemd/system/branchleft-restore-drill.timer
+        - /etc/systemd/system/branchleft-state-copy.service
+        - /etc/systemd/system/branchleft-state-copy.timer
+        - /etc/branchleft/secrets
+      register: backup_restore_verify_files
+
+    - name: Assert each unit is root:root 0644 and is the file the release pins
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == '0644'
+          - >-
+            item.stat.checksum == (backup_worker_test_files | selectattr('path', 'equalto', 'control/provision/' ~ (item.item | basename))
+            | map(attribute='sha256') | first)
+        quiet: true
+        fail_msg: A unit is missing, not root:root 0644, or differs from the release file it is installed from.
+      loop: '{{ backup_restore_verify_files.results[:4] }}'
+      loop_control:
+        label: '{{ item.item | basename }}'
+
+    - name: Assert the secrets directory is root:root 0700
+      ansible.builtin.assert:
+        that:
+          - backup_restore_verify_files.results[4].stat.isdir
+          - backup_restore_verify_files.results[4].stat.pw_name == 'root'
+          - backup_restore_verify_files.results[4].stat.gr_name == 'root'
+          - backup_restore_verify_files.results[4].stat.mode == '0700'
+        quiet: true
+        fail_msg: The secrets directory is not a directory owned by root:root with mode 0700.
+
+    # Both timers are installed and off, so the state is a decision and not an
+    # absent file.
+    - name: Check the state-copy timer is installed and off
+      ansible.builtin.include_tasks: tasks/timer_state.yml
+      vars:
+        backup_restore_timer_unit: branchleft-state-copy.timer
+        backup_restore_timer_on: false
+        backup_restore_timer_why: The state-copy timer is not off after a default apply; its default must be false.
+
+    - name: Check the restore-drill timer is installed and off
+      ansible.builtin.include_tasks: tasks/timer_state.yml
+      vars:
+        backup_restore_timer_unit: branchleft-restore-drill.timer
+        backup_restore_timer_on: false
+        backup_restore_timer_why: The restore-drill timer is not off after a default apply.
+
+# 3. The cases. Each refusal is asserted by its own text; each case that changes
+# state puts it back.
+- name: Run the cases
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - '{{ playbook_dir }}/../../../backup_worker/molecule/default/vars/test.yml'
+    - vars/test.yml
+    - files/installer_contract.yml
+  vars:
+    backup_restore_secret_dir: /etc/branchleft/secrets
+    backup_restore_unplaced: /etc/branchleft/secrets/not-placed
+    backup_restore_verify_state_copy_derived:
+      STATE_COPY_RECIPIENT: '{{ backup_restore_state_copy_recipient }}'
+      STATE_COPY_DEST_BUCKET: '{{ backup_worker_bucket }}'
+      STATE_COPY_DEST_ENDPOINT: '{{ backup_worker_s3_endpoint }}'
+      STATE_COPY_DEST_REGION: '{{ backup_worker_s3_region }}'
+      STATE_COPY_DEST_ACCESS_KEY_ID: '{{ backup_restore_state_copy_dest_access_key_id }}'
+      STATE_COPY_DEST_SECRET_ACCESS_KEY: '{{ backup_restore_test_secrets.state_copy_dest }}'
+      STATE_COPY_ESTATE_BUCKET: '{{ backup_restore_state_copy_estate_bucket }}'
+      STATE_COPY_ESTATE_ENDPOINT: '{{ backup_restore_state_copy_estate_endpoint }}'
+      STATE_COPY_ESTATE_REGION: '{{ backup_restore_state_copy_estate_region }}'
+      STATE_COPY_ESTATE_ACCESS_KEY_ID: '{{ backup_restore_state_copy_estate_access_key_id }}'
+      STATE_COPY_ESTATE_SECRET_ACCESS_KEY: '{{ backup_restore_test_secrets.state_copy_estate }}'
+      STATE_COPY_TENANT_BUCKET: '{{ backup_restore_state_copy_tenant_bucket }}'
+      STATE_COPY_TENANT_ENDPOINT: '{{ backup_restore_state_copy_tenant_endpoint }}'
+      STATE_COPY_TENANT_REGION: '{{ backup_restore_state_copy_tenant_region }}'
+      STATE_COPY_TENANT_ACCESS_KEY_ID: '{{ backup_restore_state_copy_tenant_access_key_id }}'
+      STATE_COPY_TENANT_SECRET_ACCESS_KEY: '{{ backup_restore_test_secrets.state_copy_tenant }}'
+    backup_restore_verify_drill_derived:
+      BACKUP_DRILL_COPY_PRIMARY_BUCKET: '{{ backup_worker_bucket }}'
+      BACKUP_DRILL_COPY_PRIMARY_ENDPOINT: '{{ backup_worker_s3_endpoint }}'
+      BACKUP_DRILL_COPY_PRIMARY_REGION: '{{ backup_worker_s3_region }}'
+      BACKUP_DRILL_COPY_PRIMARY_ACCESS_KEY_ID: '{{ backup_restore_drill_access_key_id }}'
+      BACKUP_DRILL_COPY_PRIMARY_SECRET_ACCESS_KEY: '{{ backup_restore_test_secrets.drill_primary }}'
+      BACKUP_DRILL_RECOVERY_IMAGE: '{{ backup_restore_drill_image_recovery }}'
+      BACKUP_DRILL_MYSQL_IMAGE: '{{ backup_restore_drill_image_mysql }}'
+      BACKUP_DRILL_GHOST_IMAGE: '{{ backup_restore_drill_image_ghost }}'
+      BACKUP_DRILL_SIDECAR_IMAGE: '{{ backup_restore_drill_image_sidecar }}'
+    backup_restore_marker_value: AGE-SECRET-KEY-1EXAMPLEONLYNOTAKEY00000000000
+  tasks:
+    - name: Export backup_worker's variables to the cases
+      ansible.builtin.include_role:
+        name: '{{ playbook_dir }}/../../../backup_worker' # noqa: role-name[path]
+        public: true
+
+    # A run that stopped early may have left its scratch files, and a case below
+    # asserts that one is absent.
+    - name: Start with no scratch environment files
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - '{{ backup_restore_test_scratch_state_copy_env }}'
+        - '{{ backup_restore_test_scratch_drill_env }}'
+      changed_when: false
+
+    # Secret files that are wrong in one way each, made by the test for the cases
+    # that follow, and removed in the last section.
+    - name: Make the wrong secret files
+      block:
+        - name: Place a secret file holding a private age identity
+          ansible.builtin.copy:
+            content: "{{ backup_restore_marker_value }}\n"
+            dest: /etc/branchleft/secrets/test-marker
+            owner: root
+            group: root
+            mode: '0600'
+          changed_when: false
+          no_log: true
+
+        - name: Place a good secret file that is open to the group
+          ansible.builtin.copy:
+            content: "EXAMPLEONLYopensecret00000000000005\n"
+            dest: /etc/branchleft/secrets/test-mode
+            owner: root
+            group: root
+            mode: '0640'
+          changed_when: false
+          no_log: true
+
+        - name: Place a link to a good secret file
+          ansible.builtin.file:
+            src: /etc/branchleft/secrets/state-copy-dest-secret-access-key
+            dest: /etc/branchleft/secrets/test-link
+            state: link
+          changed_when: false
+
+        # A device node with the right owner and mode (the same node as /dev/null,
+        # which reads as empty, so nothing can block): only the plain-file check
+        # refuses it first. A link is refused by its mode as well, so it cannot
+        # show the plain-file check.
+        - name: Make a device node where a secret file should be
+          ansible.builtin.command:
+            argv: [mknod, -m, '0600', /etc/branchleft/secrets/test-device, c, '1', '3']
+            creates: /etc/branchleft/secrets/test-device
+          changed_when: false
+
+        - name: Place a secret file holding two lines
+          ansible.builtin.copy:
+            content: "EXAMPLEONLYfirstline000000000000006\nEXAMPLEONLYsecondline0000000000007\n"
+            dest: /etc/branchleft/secrets/test-malformed
+            owner: root
+            group: root
+            mode: '0600'
+          changed_when: false
+          no_log: true
+
+        # One task per input the role must refuse. The role inputs a case sets
+        # are task variables of its include and reach the role through it.
+        - name: Refuse the restore-drill timer asked for
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: drill timer asked for
+            backup_restore_case_message: The restore-drill timer cannot be enabled
+            backup_restore_drill_timer_enabled: true
+
+        - name: Refuse the restore-drill timer asked for as a string
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: drill timer asked for as a string
+            backup_restore_case_message: The restore-drill timer cannot be enabled
+            backup_restore_drill_timer_enabled: 'true'
+
+        - name: Refuse an estate bucket that is not a bucket name
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: estate bucket not a bucket name
+            backup_restore_case_message: A state-copy input is empty or has the wrong shape
+            backup_restore_state_copy_estate_bucket: Estate_Bucket
+
+        - name: Refuse a recipient that is a private identity
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: recipient is a private identity
+            backup_restore_case_message: A state-copy input is empty or has the wrong shape
+            backup_restore_state_copy_recipient: '{{ backup_restore_marker_value }}'
+
+        - name: Refuse a tenant endpoint with a scheme
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: tenant endpoint with a scheme
+            backup_restore_case_message: A state-copy input is empty or has the wrong shape
+            backup_restore_state_copy_tenant_endpoint: https://s3.tenant.example.invalid
+
+        - name: Refuse an estate bucket that is the destination
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: estate bucket is the destination
+            backup_restore_case_message: three state-copy buckets must be three different buckets
+            backup_restore_state_copy_estate_bucket: '{{ backup_worker_bucket }}'
+            backup_restore_state_copy_estate_endpoint: '{{ backup_worker_s3_endpoint }}'
+
+        - name: Refuse a tenant bucket that is the estate bucket
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: tenant bucket is the estate bucket
+            backup_restore_case_message: three state-copy buckets must be three different buckets
+            backup_restore_state_copy_tenant_bucket: '{{ backup_restore_state_copy_estate_bucket }}'
+            backup_restore_state_copy_tenant_endpoint: '{{ backup_restore_state_copy_estate_endpoint }}'
+
+        - name: Refuse a secret path outside the secrets directory
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: secret path outside the secrets directory
+            backup_restore_case_message: A secret file path must be a file directly in
+            backup_restore_state_copy_dest_secret_file: /etc/passwd
+
+        - name: Refuse a secret path that climbs out of the directory
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: secret path that climbs out of the directory
+            backup_restore_case_message: A secret file path must be a file directly in
+            backup_restore_state_copy_tenant_secret_file: /etc/branchleft/secrets/sub/../../shadow
+
+        - name: Refuse a drill image pinned by tag
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: image pinned by tag
+            backup_restore_case_message: A restore-drill input is empty or has the wrong shape
+            backup_restore_drill_image_mysql: example.invalid/mysql:8.0
+
+        - name: Refuse a key id that is a private identity
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: key id is a private identity
+            backup_restore_case_message: environment file would hold a private age identity
+            backup_restore_state_copy_dest_access_key_id: '{{ backup_restore_marker_value }}'
+
+        - name: Refuse a drill key id that is a private identity
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: drill key id is a private identity
+            backup_restore_case_message: environment file would hold a private age identity
+            backup_restore_drill_access_key_id: '{{ backup_restore_marker_value }}'
+
+        - name: Refuse a secret file that holds a private identity
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: secret file holds a private identity
+            backup_restore_case_message: holds a private age identity
+            backup_restore_state_copy_dest_secret_file: /etc/branchleft/secrets/test-marker
+
+        - name: Refuse a secret file that is open to the group
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: secret file is open to the group
+            backup_restore_case_message: must be a plain file owned by root
+            backup_restore_state_copy_dest_secret_file: /etc/branchleft/secrets/test-mode
+
+        - name: Refuse a secret file that is a link
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: secret file is a link
+            backup_restore_case_message: must be a plain file owned by root
+            backup_restore_state_copy_dest_secret_file: /etc/branchleft/secrets/test-link
+
+        - name: Refuse a secret file that is a device node
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: secret file is a device node
+            backup_restore_case_message: must be a plain file owned by root
+            backup_restore_state_copy_dest_secret_file: /etc/branchleft/secrets/test-device
+
+        - name: Refuse a secret file that holds two lines
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: secret file holds two lines
+            backup_restore_case_message: must hold exactly one credential on one line
+            backup_restore_state_copy_dest_secret_file: /etc/branchleft/secrets/test-malformed
+
+        - name: Refuse a current link that is not the release
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: current is not the release
+            backup_restore_case_message: current is not a link to the pinned release
+            backup_worker_current_link: /opt/branchleft/backup-worker/no-such-link
+
+        - name: Refuse a release that lacks a file an installer requires
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: a file an installer requires is not in the release
+            backup_restore_case_message: The release lacks a file an installer requires
+            backup_restore_case_remove_file: db/recovery/restore_drained.py
+
+        - name: Refuse the state-copy timer with a secret file not placed
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: state-copy timer asked for with a secret file not placed
+            backup_restore_case_message: while a secret file it needs is not placed
+            backup_restore_state_copy_timer_enabled: true
+            backup_restore_state_copy_estate_secret_file: '{{ backup_restore_unplaced }}'
+
+        - name: Refuse the state-copy timer while the installer reports a missing input
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: state-copy timer asked for while the installer reports a missing input
+            backup_restore_case_message: the installer reports that an input is missing
+            backup_restore_case_not_ready: true
+            backup_restore_state_copy_timer_enabled: true
+
+        # A secret file that is not placed yet is not an error: the run
+        # succeeds, writes no environment from it and leaves the real one as it
+        # was. The scratch path is where the run would have written.
+        - name: Apply the role with the estate secret file not placed
+          ansible.builtin.include_role:
+            name: branchleft.backup_restore
+          vars:
+            backup_restore_state_copy_estate_secret_file: '{{ backup_restore_unplaced }}'
+            backup_restore_state_copy_env_file: '{{ backup_restore_test_scratch_state_copy_env }}'
+
+        - name: Look for the scratch state-copy environment file
+          ansible.builtin.stat:
+            path: '{{ backup_restore_test_scratch_state_copy_env }}'
+          register: backup_restore_verify_unplaced
+
+        - name: Assert no environment was written for the secret that is not placed
+          ansible.builtin.assert:
+            that:
+              - not backup_restore_verify_unplaced.stat.exists
+            quiet: true
+            fail_msg: The role wrote a state-copy environment file although a secret file it needs is not placed.
+
+        # The drill's environment is opt-in: off, it is not written and none of
+        # its inputs is needed.
+        - name: Apply the role with the restore-drill environment off
+          ansible.builtin.include_role:
+            name: branchleft.backup_restore
+          vars:
+            backup_restore_drill_env_enabled: false
+            backup_restore_drill_env_file: '{{ backup_restore_test_scratch_drill_env }}'
+
+        - name: Look for the scratch restore-drill environment file
+          ansible.builtin.stat:
+            path: '{{ backup_restore_test_scratch_drill_env }}'
+          register: backup_restore_verify_drill_off
+
+        - name: Assert no restore-drill environment was written while it is off
+          ansible.builtin.assert:
+            that:
+              - not backup_restore_verify_drill_off.stat.exists
+            quiet: true
+            fail_msg: The role wrote a restore-drill environment file although backup_restore_drill_env_enabled is false.
+
+        # The destination and the drill's primary copy are backup_worker's
+        # bucket, endpoint and region. Other values than the converge used, so a
+        # constant that happened to match would not pass.
+        - name: Apply the role with other backup_worker values and scratch environment files
+          ansible.builtin.include_role:
+            name: branchleft.backup_restore
+          vars:
+            backup_worker_bucket: derived-example-bucket
+            backup_worker_s3_endpoint: s3.derived.example.invalid
+            backup_worker_s3_region: derived-example-region
+            backup_restore_state_copy_env_file: '{{ backup_restore_test_scratch_state_copy_env }}'
+            backup_restore_drill_env_file: '{{ backup_restore_test_scratch_drill_env }}'
+
+        - name: Check the scratch state-copy environment holds the derived values
+          ansible.builtin.include_tasks: tasks/check_env.yml
+          vars:
+            backup_worker_bucket: derived-example-bucket
+            backup_worker_s3_endpoint: s3.derived.example.invalid
+            backup_worker_s3_region: derived-example-region
+            backup_restore_check_path: '{{ backup_restore_test_scratch_state_copy_env }}'
+            backup_restore_check_expected: '{{ backup_restore_verify_state_copy_derived }}'
+            backup_restore_check_names: '{{ installer_contract_state_copy_env_names }}'
+
+        - name: Check the scratch restore-drill environment holds the derived values
+          ansible.builtin.include_tasks: tasks/check_env.yml
+          vars:
+            backup_worker_bucket: derived-example-bucket
+            backup_worker_s3_endpoint: s3.derived.example.invalid
+            backup_worker_s3_region: derived-example-region
+            backup_restore_check_path: '{{ backup_restore_test_scratch_drill_env }}'
+            backup_restore_check_expected: '{{ backup_restore_verify_drill_derived }}'
+            backup_restore_check_names: '{{ installer_contract_restore_drill_env_names }}'
+
+        # The state-copy timer. A timer the host has on is left alone by a run
+        # with the defaults, stopped only when may_disable is true, and started
+        # when the variable asks for it.
+        - name: Turn the state-copy timer on by hand, as an owner might
+          ansible.builtin.systemd_service:
+            name: branchleft-state-copy.timer
+            enabled: true
+            state: started
+          changed_when: false
+
+        - name: Apply the role with the defaults
+          ansible.builtin.include_role:
+            name: branchleft.backup_restore
+
+        - name: Check the defaults left the state-copy timer on
+          ansible.builtin.include_tasks: tasks/timer_state.yml
+          vars:
+            backup_restore_timer_unit: branchleft-state-copy.timer
+            backup_restore_timer_on: true
+            backup_restore_timer_why: >-
+              The default apply stopped a state-copy timer that was on; the timer task must be gated on
+              backup_restore_state_copy_timer_may_disable.
+
+        - name: Apply the role with may_disable
+          ansible.builtin.include_role:
+            name: branchleft.backup_restore
+          vars:
+            backup_restore_state_copy_timer_may_disable: true
+
+        - name: Check may_disable stopped the state-copy timer
+          ansible.builtin.include_tasks: tasks/timer_state.yml
+          vars:
+            backup_restore_timer_unit: branchleft-state-copy.timer
+            backup_restore_timer_on: false
+            backup_restore_timer_why: The state-copy timer is still on after an apply with may_disable true.
+
+        - name: Apply the role asking for the state-copy timer
+          ansible.builtin.include_role:
+            name: branchleft.backup_restore
+          vars:
+            backup_restore_state_copy_timer_enabled: true
+
+        - name: Check the variable turned the state-copy timer on
+          ansible.builtin.include_tasks: tasks/timer_state.yml
+          vars:
+            backup_restore_timer_unit: branchleft-state-copy.timer
+            backup_restore_timer_on: true
+            backup_restore_timer_why: The state-copy timer is not on after an apply with the variable true and the installer ready.
+
+        - name: Apply the role to turn the state-copy timer off again
+          ansible.builtin.include_role:
+            name: branchleft.backup_restore
+          vars:
+            backup_restore_state_copy_timer_may_disable: true
+
+        - name: Check the state-copy timer is off again
+          ansible.builtin.include_tasks: tasks/timer_state.yml
+          vars:
+            backup_restore_timer_unit: branchleft-state-copy.timer
+            backup_restore_timer_on: false
+            backup_restore_timer_why: The state-copy timer was not turned off again.
+
+        # The restore-drill timer is never turned on by the role; it is stopped
+        # only when may_disable is true.
+        - name: Turn the restore-drill timer on by hand
+          ansible.builtin.systemd_service:
+            name: branchleft-restore-drill.timer
+            enabled: true
+            state: started
+          changed_when: false
+
+        - name: Apply the role with the defaults, over a restore-drill timer that is on
+          ansible.builtin.include_role:
+            name: branchleft.backup_restore
+
+        - name: Check the defaults left the restore-drill timer on
+          ansible.builtin.include_tasks: tasks/timer_state.yml
+          vars:
+            backup_restore_timer_unit: branchleft-restore-drill.timer
+            backup_restore_timer_on: true
+            backup_restore_timer_why: >-
+              The default apply stopped a restore-drill timer that was on; the task must be gated on
+              backup_restore_drill_timer_may_disable.
+
+        - name: Apply the role with the restore-drill may_disable
+          ansible.builtin.include_role:
+            name: branchleft.backup_restore
+          vars:
+            backup_restore_drill_timer_may_disable: true
+
+        - name: Check may_disable stopped the restore-drill timer
+          ansible.builtin.include_tasks: tasks/timer_state.yml
+          vars:
+            backup_restore_timer_unit: branchleft-restore-drill.timer
+            backup_restore_timer_on: false
+            backup_restore_timer_why: The restore-drill timer is still on after an apply with may_disable true.
+      always:
+        - name: Remove the wrong secret files and the scratch files
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /etc/branchleft/secrets/test-marker
+            - /etc/branchleft/secrets/test-mode
+            - /etc/branchleft/secrets/test-link
+            - /etc/branchleft/secrets/test-device
+            - /etc/branchleft/secrets/test-malformed
+            - '{{ backup_restore_test_scratch_state_copy_env }}'
+            - '{{ backup_restore_test_scratch_drill_env }}'
+          changed_when: false
+
+        - name: Leave both timers off
+          ansible.builtin.systemd_service:
+            name: '{{ item }}'
+            enabled: false
+            state: stopped
+          loop:
+            - branchleft-state-copy.timer
+            - branchleft-restore-drill.timer
+          changed_when: false
+
+# 4. Nothing a run prints holds a secret. The run is a separate ansible-playbook
+# with the JSON callback and --diff, writing to scratch paths so that it changes
+# nothing the other steps measure. Each secret is searched for as itself and as
+# the base64 that slurp returns.
+- name: Capture a run's output and search it for the secrets
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+  vars:
+    backup_restore_request:
+      - ansible-playbook
+      - -i
+      - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+      - '{{ playbook_dir }}/request.yml'
+      - --diff
+      - -e
+      - '{{ {"backup_restore_state_copy_env_file": backup_restore_test_scratch_state_copy_env,
+        "backup_restore_drill_env_file": backup_restore_test_scratch_drill_env} | to_json }}'
+  tasks:
+    - name: Run both roles with the output captured
+      ansible.builtin.command:
+        argv: '{{ backup_restore_request }}'
+      environment:
+        ANSIBLE_STDOUT_CALLBACK: json
+      register: backup_restore_capture
+      failed_when: false
+      changed_when: false
+      no_log: true
+
+    - name: Assert the captured run succeeded
+      ansible.builtin.assert:
+        that:
+          - backup_restore_capture.rc == 0
+        quiet: true
+        fail_msg: The captured run of both roles failed, so its output says nothing about the secrets.
+
+    - name: Assert no secret, plain or base64, is in the captured output
+      ansible.builtin.assert:
+        that:
+          - item not in (backup_restore_capture.stdout ~ backup_restore_capture.stderr)
+        quiet: true
+        fail_msg: A secret reached the output of a run, in plain text or as the base64 slurp returns it. A no_log is missing.
+      loop: >-
+        {{ backup_restore_test_secrets.values() | list
+        + (backup_restore_test_secrets.values() | map('b64encode') | list)
+        + (backup_restore_test_secrets.values() | map('regex_replace', '$', '\n') | map('b64encode') | list) }}
+      loop_control:
+        label: a secret form
+
+- name: Check the captured run wrote its scratch files, and clean up
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+  tasks:
+    - name: Look for the scratch environment files the captured run wrote
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ backup_restore_test_scratch_state_copy_env }}'
+        - '{{ backup_restore_test_scratch_drill_env }}'
+      register: backup_restore_verify_capture_files
+
+    - name: Assert the captured run wrote both, so the search looked at a run that handled the secrets
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        quiet: true
+        fail_msg: The captured run did not write its scratch environment file, so the secret search proved nothing.
+      loop: '{{ backup_restore_verify_capture_files.results }}'
+      loop_control:
+        label: '{{ item.item | basename }}'
+
+    - name: Remove the scratch environment files
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - '{{ backup_restore_test_scratch_state_copy_env }}'
+        - '{{ backup_restore_test_scratch_drill_env }}'
+      changed_when: false
+
+# 5. The role matches the installers it ports: the second copy holds the first.
+- name: The role matches the installers it ports
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - files/installer_contract.yml
+  tasks:
+    - name: Read the pins and the staged list from backup_worker's defaults
+      ansible.builtin.include_vars:
+        file: '{{ playbook_dir }}/../../../backup_worker/defaults/main.yml'
+        name: backup_restore_verify_worker
+
+    - name: Read the role's own lists and paths
+      ansible.builtin.include_vars:
+        file: '{{ playbook_dir }}/../../vars/main.yml'
+        name: backup_restore_verify_role
+
+    - name: Assert the release is the commit the recorded copy was read at
+      ansible.builtin.assert:
+        that:
+          - backup_restore_verify_worker.backup_worker_source_sha == installer_contract_commit
+        quiet: true
+        fail_msg: The pinned release commit is not the commit the installers were recorded at; bump the record with it.
+
+    - name: Assert every program the installers need is pinned to the recorded sha256
+      ansible.builtin.assert:
+        that:
+          - >-
+            backup_restore_verify_worker.backup_worker_release_files | selectattr('path', 'equalto', item.key)
+            | map(attribute='sha256') | list == [item.value]
+        quiet: true
+        fail_msg: "The pin for {{ item.key }} in backup_worker_release_files is missing or is not the sha256 recorded for the installer's copy."
+      loop: '{{ installer_contract_sha256 | dict2items }}'
+      loop_control:
+        label: '{{ item.key }}'
+
+    - name: Assert the role's required file lists are the installers' lists
+      ansible.builtin.assert:
+        that:
+          - backup_restore_verify_role.backup_restore_drill_required_files | sort == installer_contract_restore_drill_required_files | sort
+          - backup_restore_verify_role.backup_restore_state_copy_required_files | sort == installer_contract_state_copy_required_files | sort
+        quiet: true
+        fail_msg: The role's list of required release files differs from the installers' list.
+
+    - name: Assert the role's environment names are the installers' names
+      ansible.builtin.assert:
+        that:
+          - backup_restore_verify_role.backup_restore_state_copy_env_names | sort == installer_contract_state_copy_env_names | sort
+          - backup_restore_verify_role.backup_restore_drill_env_names | sort == installer_contract_restore_drill_env_names | sort
+        quiet: true
+        fail_msg: The role's environment names differ from the names the installers and the drill require.
+
+    - name: Assert the role's environment file paths are the installers' paths
+      ansible.builtin.assert:
+        that:
+          - backup_restore_verify_role.backup_restore_state_copy_env_file == installer_contract_env_files.state_copy
+          - backup_restore_verify_role.backup_restore_drill_env_file == installer_contract_env_files.restore_drill
+        quiet: true
+        fail_msg: The role's environment file paths differ from the paths the installers hard-code.
+
+    - name: Assert every file the role requires is pinned in backup_worker's list
+      ansible.builtin.assert:
+        that:
+          - >-
+            (backup_restore_verify_role.backup_restore_drill_required_files
+            + backup_restore_verify_role.backup_restore_state_copy_required_files
+            + backup_restore_verify_role.backup_restore_staged_files)
+            | difference(backup_restore_verify_worker.backup_worker_release_files | map(attribute='path') | list) | length == 0
+        quiet: true
+        fail_msg: A file the role requires in the release is not in backup_worker_release_files, so nothing would stage it.

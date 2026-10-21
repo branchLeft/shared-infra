@@ -1,0 +1,89 @@
+---
+# Internal: make the changes the readback called for, and only those. Included
+# outside check mode and only when something differs, so a host that is already
+# correct runs none of it (a second run changes nothing).
+#
+# Order matters. The program is staged and its digest checked first, before any
+# statement runs, so a wrong program leaves the host untouched. Each account's
+# statements go in one batch, grants before revokes, so no moment holds an account
+# with neither the old privilege nor the new one. The password is set from the
+# file, then its stamp is written; a crash between the two repeats the set on the
+# next run, which sets the same password.
+- name: Forget any earlier private directory
+  ansible.builtin.set_fact:
+    db1_grants_staging: {}
+
+- name: Apply the changes
+  block:
+    - name: Stage the provisioning program when a tenant needs it
+      ansible.builtin.include_tasks: _stage.yml
+      when: db1_grants_drift.tenants | length > 0
+
+    # The statements for the dump account. Its account exists (the checks
+    # refused otherwise), so only grants and revokes are built.
+    - name: Build the dump account's statements
+      ansible.builtin.set_fact:
+        db1_grants_backup_sql: >-
+          {{ ((['GRANT ' ~ (db1_grants_drift.backup_missing | join(', ')) ~ ' ON *.* TO ' ~ db1_grants_backup_account]
+          if db1_grants_drift.backup_missing | length > 0 else [])
+          + (['REVOKE ' ~ (db1_grants_drift.backup_surplus | join(', ')) ~ ' ON *.* FROM ' ~ db1_grants_backup_account]
+          if db1_grants_drift.backup_surplus | length > 0 else [])) | join('; ') ~ ';' }}
+      when: db1_grants_backup_drift
+
+    - name: Change the dump account's grants
+      ansible.builtin.include_tasks: _write.yml
+      vars:
+        db1_grants_step: changing the grants of the dump account
+        db1_grants_sql: '{{ db1_grants_backup_sql }}'
+      when: db1_grants_backup_drift
+
+    # The statements for the ops1 account. The password is in the create or the
+    # alter statement, so the fact that holds them is hidden.
+    - name: Build the ops1 account's statements
+      ansible.builtin.set_fact:
+        db1_grants_ops1_sql: >-
+          {{ ((["CREATE USER " ~ db1_grants_ops1_account ~ " IDENTIFIED BY '" ~ db1_grants_ops1_password ~ "' REQUIRE SSL"]
+          if db1_grants_drift.ops1_create else [])
+          + (["ALTER USER " ~ db1_grants_ops1_account ~ " IDENTIFIED BY '" ~ db1_grants_ops1_password ~ "'"]
+          if (not db1_grants_drift.ops1_create and db1_grants_drift.ops1_password) else [])
+          + (['ALTER USER ' ~ db1_grants_ops1_account ~ ' REQUIRE SSL']
+          if (not db1_grants_drift.ops1_create and db1_grants_drift.ops1_ssl) else [])
+          + (['GRANT ' ~ (db1_grants_drift.ops1_missing | join(', ')) ~ ' ON *.* TO ' ~ db1_grants_ops1_account]
+          if db1_grants_drift.ops1_missing | length > 0 else [])
+          + (['REVOKE ' ~ (db1_grants_drift.ops1_surplus | join(', ')) ~ ' ON *.* FROM ' ~ db1_grants_ops1_account]
+          if db1_grants_drift.ops1_surplus | length > 0 else [])) | join('; ') ~ ';' }}
+      no_log: true
+      diff: false
+      when: db1_grants_ops1_drift
+
+    - name: Create or change the ops1 account
+      ansible.builtin.include_tasks: _write.yml
+      vars:
+        db1_grants_step: creating or changing the ops1 account
+        db1_grants_sql: '{{ db1_grants_ops1_sql }}'
+      no_log: true
+      when: db1_grants_ops1_drift
+
+    # The stamp is the sha256 of the password file the password was set from. It
+    # holds no password. It is written only after the statements above succeeded.
+    - name: Record which password file the ops1 password was set from
+      ansible.builtin.copy:
+        content: '{{ db1_grants_ops1_checksum }}'
+        dest: '{{ db1_grants_ops1_stamp_path }}'
+        owner: root
+        group: root
+        mode: '0600'
+      when: db1_grants_drift.ops1_create or db1_grants_drift.ops1_password
+
+    - name: Run the provisioning program for each tenant that differs
+      ansible.builtin.include_tasks: _tenant_run.yml
+      loop: '{{ db1_grants_drift.tenants }}'
+      loop_control:
+        loop_var: db1_grants_slug
+
+  always:
+    - name: Remove the private directory
+      ansible.builtin.file:
+        path: '{{ db1_grants_staging.path }}'
+        state: absent
+      when: (db1_grants_staging | default({})).path | default('') | length > 0
