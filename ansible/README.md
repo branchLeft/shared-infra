@@ -7,7 +7,7 @@ page of the standards repository (clauses ANS-1 to ANS-17).
 This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
 the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
-`roles/ansible_runtime` and `roles/pull_trigger`) and `db1` (`playbooks/db1.yml`, which applies
+`roles/ansible_runtime`, `roles/pull_trigger` and `roles/edge_stack`) and `db1` (`playbooks/db1.yml`, which applies
 `roles/db1_stack` and `roles/db1_grants`); the other trees hold only what those hosts need.
 
 ## Layout

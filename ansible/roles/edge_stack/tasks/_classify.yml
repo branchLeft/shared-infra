@@ -1,0 +1,58 @@
+---
+# The stack directory in the repository is the list of files. Nothing is listed
+# twice: the classes in vars/main.yml name the Caddyfile, the Compose file and the
+# CrowdSec files, and the files directly in the acquisition directory are found
+# here. Anything else is refused, so a file added to the directory cannot be
+# silently left off the host (README, "Classes").
+- name: List the entries of the stack directory in the repository
+  ansible.builtin.find:
+    paths: '{{ edge_stack_source_dir }}'
+    recurse: true
+    file_type: any
+    hidden: true
+    follow: false
+  register: edge_stack_found
+  delegate_to: localhost
+  become: false
+
+- name: Name the files and the links relative to the stack directory
+  ansible.builtin.set_fact:
+    edge_stack_entries: >-
+      {{ edge_stack_found.files | rejectattr('isdir') | map(attribute='path')
+      | map('ansible.builtin.relpath', edge_stack_source_dir) | sort | list }}
+    edge_stack_link_entries: >-
+      {{ edge_stack_found.files | selectattr('islnk') | map(attribute='path')
+      | map('ansible.builtin.relpath', edge_stack_source_dir) | sort | list }}
+
+- name: Work out the classes
+  ansible.builtin.set_fact:
+    edge_stack_acquis_files: >-
+      {{ edge_stack_entries | select('match', '^' ~ (edge_stack_acquis_dir | regex_escape) ~ '/[^/]+$') | list }}
+    edge_stack_known: >-
+      {{ [edge_stack_caddy_file, edge_stack_compose_file] + edge_stack_crowdsec_files
+      + (edge_stack_entries | select('match', '^' ~ (edge_stack_acquis_dir | regex_escape) ~ '/[^/]+$') | list) }}
+
+- name: Work out what is in no class
+  ansible.builtin.set_fact:
+    edge_stack_unclassified: '{{ edge_stack_entries | difference(edge_stack_known) | list }}'
+    edge_stack_absent: '{{ edge_stack_known | difference(edge_stack_entries) | list }}'
+
+- name: Refuse a file that is in no class, a link, or a named file that is missing
+  ansible.builtin.assert:
+    that:
+      - edge_stack_unclassified | length == 0
+      - edge_stack_link_entries | length == 0
+      - edge_stack_absent | length == 0
+    quiet: true
+    fail_msg: >-
+      The stack directory {{ edge_stack_source_dir }} holds files in no class ({{ edge_stack_unclassified }}),
+      links ({{ edge_stack_link_entries }}), or lacks a named file ({{ edge_stack_absent }}). Add the file to a class in
+      the role's vars, or remove it, before any file is delivered.
+
+# What is delivered by `copy`, in the order the README gives: the Compose file, then
+# CrowdSec's. The Caddyfile is not in this list: it is written in place under the lock.
+- name: Name the files that are delivered by copy and the files that are hashed
+  ansible.builtin.set_fact:
+    edge_stack_deliver: '{{ [edge_stack_compose_file] + edge_stack_crowdsec_files + edge_stack_acquis_files }}'
+    edge_stack_crowdsec_all: '{{ edge_stack_crowdsec_files + edge_stack_acquis_files }}'
+    edge_stack_hashed: '{{ [edge_stack_caddy_file, edge_stack_compose_file] + edge_stack_crowdsec_files + edge_stack_acquis_files }}'

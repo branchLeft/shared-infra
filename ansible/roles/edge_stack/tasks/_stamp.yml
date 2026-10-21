@@ -1,0 +1,33 @@
+---
+# The one place a stamp is written, included once per class with its name, its
+# fingerprint, whether the class is adopted and the marker the locked script prints
+# when it has read the class back. Both writes hold a hash of files that may hold a
+# key, so they are no_log and show no diff.
+#
+# Adopted: no stamp and nothing differs, so the host already has these files and the
+# stamp is the whole change. It runs in check mode too, which is how a plan shows the
+# adoption.
+- name: Record an adopted class
+  ansible.builtin.copy:
+    content: "{{ edge_stack_stamp_fingerprint }}\n"
+    dest: '{{ edge_stack_stamp_files[edge_stack_stamp_name] }}'
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+  when: edge_stack_stamp_adopt | bool
+
+# Applied: the script printed this class's marker, which it prints only after the
+# read-back. This runs after the script and before the run is failed, so a class that
+# finished before a later one failed is recorded.
+- name: Record an applied class
+  ansible.builtin.copy:
+    content: "{{ edge_stack_stamp_fingerprint }}\n"
+    dest: '{{ edge_stack_stamp_files[edge_stack_stamp_name] }}'
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+  when: edge_stack_apply is not skipped and edge_stack_stamp_marker in edge_stack_apply.stdout

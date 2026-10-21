@@ -1,0 +1,66 @@
+---
+# Applies the role once and records what happened under edge_stack_verify_runs[edge_stack_verify_run_name]:
+# whether it failed and its message, a snapshot before and after, the stand-in's new
+# calls and their kinds in order. The inputs are edge_stack_verify_run_name (required) and, with
+# the defaults below, edge_stack_verify_run_source (a stack directory), edge_stack_verify_run_check,
+# edge_stack_verify_run_timeout, edge_stack_verify_run_tries and edge_stack_verify_run_interval.
+- name: Snapshot before
+  ansible.builtin.include_tasks: snapshot.yml
+
+- name: Keep the snapshot as the before
+  ansible.builtin.set_fact:
+    edge_stack_verify_run_before: '{{ edge_stack_verify_snap }}'
+  no_log: true
+
+- name: Apply the role and note whether it failed
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.edge_stack
+        apply:
+          check_mode: '{{ edge_stack_verify_run_check | default(false) }}'
+      vars:
+        edge_stack_source_dir: '{{ edge_stack_verify_run_source | default(edge_stack_verify_real_stack) }}'
+        edge_stack_lock_timeout: '{{ edge_stack_verify_run_timeout | default(600) }}'
+        edge_stack_crowdsec_wait_tries: '{{ edge_stack_verify_run_tries | default(24) }}'
+        edge_stack_crowdsec_wait_interval: '{{ edge_stack_verify_run_interval | default(5) }}'
+
+    - name: Note that the role did not fail
+      ansible.builtin.set_fact:
+        edge_stack_verify_run_failed: false
+        edge_stack_verify_run_message: ''
+  rescue:
+    - name: Note that the role failed
+      ansible.builtin.set_fact:
+        edge_stack_verify_run_failed: true
+        edge_stack_verify_run_message: '{{ ansible_failed_result.msg | default("") }}'
+
+- name: Snapshot after
+  ansible.builtin.include_tasks: snapshot.yml
+
+# The kinds of the calls the run made, in order. Calls that only look (ps, exec of
+# cscli, the sha reads) are left out; an `up` is kept, because no run may make one.
+- name: Keep the run
+  ansible.builtin.set_fact:
+    edge_stack_verify_runs: >-
+      {{ edge_stack_verify_runs | default({}) | combine({edge_stack_verify_run_name: {'failed': edge_stack_verify_run_failed,
+      'msg': edge_stack_verify_run_message,
+      'before': edge_stack_verify_run_before,
+      'after': edge_stack_verify_snap,
+      'new': edge_stack_verify_snap.lines[edge_stack_verify_run_before.lines | length :],
+      'kinds': edge_stack_verify_kinds}}) }}
+  vars:
+    edge_stack_verify_kinds: >-
+      {%- set ns = namespace(out=[]) -%}
+      {%- for line in edge_stack_verify_snap.lines[edge_stack_verify_run_before.lines | length :] -%}
+      {%- if line.startswith('docker run ') -%}{%- set _ = ns.out.append('validate-caddy') -%}
+      {%- elif line.endswith(' config -q') -%}{%- set _ = ns.out.append('validate-compose') -%}
+      {%- elif line.startswith('UNIT-START ') -%}{%- set _ = ns.out.append('unit-start') -%}
+      {%- elif line.startswith('UNIT-START-FAILED') -%}{%- set _ = ns.out.append('unit-start-failed') -%}
+      {%- elif line.startswith('RESTART-CROWDSEC ') -%}{%- set _ = ns.out.append('crowdsec-restart') -%}
+      {%- elif line.startswith('RELOAD ') -%}{%- set _ = ns.out.append('caddy-reload') -%}
+      {%- elif line.endswith(' up') or ' up ' in line or ' up -' in line -%}{%- set _ = ns.out.append('UP') -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ ns.out }}
+  no_log: true

@@ -1,0 +1,95 @@
+---
+# Run once, before the cases: brings the host to the converged host with the
+# repository's stack, with the real role, whatever state the earlier steps left. The
+# flags that make the stand-ins fail or lie are removed, both services run, the pin
+# and the secrets file are the scenario's, the unit is enabled and running. The
+# containers' view of the single-file mounts is linked to the files on the host before
+# the role runs, so the role's in-place write reaches it, and again after. The host is
+# then snapshotted as edge_stack_verify_base, the host every case starts from (reset.yml puts
+# it back without the role, because a role run at every case is too slow).
+- name: Remove the flags that make the stand-ins fail or lie
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - /run/standin.fail.crowdsec
+    - /run/standin.fail.reload
+    - /run/standin.lapi.down
+    - /run/standin.stale.caddy
+    - /run/edge-unit.fail
+    - /var/lib/branchleft/edge.candidate
+
+- name: Say that both services are running
+  ansible.builtin.copy:
+    content: "caddy\ncrowdsec\n"
+    dest: /run/standin.running
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Put the pin back
+  ansible.builtin.copy:
+    content: "{{ edge_stack_verify_pin_good }}\n"
+    dest: /etc/branchleft/edge.image.env
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Put the secrets file back
+  ansible.builtin.copy:
+    content: |
+      CROWDSEC_BOUNCER_KEY=test-sentinel-edge-key-0001
+      ACME_EMAIL=test-sentinel-0002@test.invalid
+    dest: /etc/branchleft/edge.env
+    owner: root
+    group: root
+    mode: '0600'
+    force: true
+  no_log: true
+
+- name: Enable and start the instance
+  ansible.builtin.systemd_service:
+    name: branchleft-compose@edge.service
+    enabled: true
+    state: started
+
+- name: Give the containers their view of the single-file mounts, where the files are on the host
+  ansible.builtin.file:
+    src: '{{ item.src }}'
+    dest: '/var/lib/standin-mount/{{ item.name }}'
+    state: hard
+    force: true
+    mode: '0644'
+  failed_when: false
+  loop:
+    - { src: /opt/branchleft/edge/Caddyfile, name: Caddyfile }
+    - { src: /opt/branchleft/edge/crowdsec/config.yaml.local, name: config.yaml.local }
+  loop_control:
+    label: '{{ item.name }}'
+
+- name: Apply the role with the real stack
+  ansible.builtin.include_role:
+    name: branchleft.edge_stack
+  vars:
+    edge_stack_source_dir: '{{ edge_stack_verify_real_stack }}'
+
+- name: Give the containers their view of the single-file mounts again
+  ansible.builtin.file:
+    src: '{{ item.src }}'
+    dest: '/var/lib/standin-mount/{{ item.name }}'
+    state: hard
+    force: true
+    mode: '0644'
+  loop:
+    - { src: /opt/branchleft/edge/Caddyfile, name: Caddyfile }
+    - { src: /opt/branchleft/edge/crowdsec/config.yaml.local, name: config.yaml.local }
+  loop_control:
+    label: '{{ item.name }}'
+
+- name: Snapshot the converged host
+  ansible.builtin.include_tasks: snapshot.yml
+
+- name: Keep the snapshot as the base
+  ansible.builtin.set_fact:
+    edge_stack_verify_base: '{{ edge_stack_verify_snap }}'
+  no_log: true
