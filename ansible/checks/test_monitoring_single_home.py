@@ -1,23 +1,9 @@
-"""One home for the monitoring stack's eight files and for the restart of its unit.
+"""One home for the monitoring stack's eight files and for its unit's restart.
 
-The monitoring_stack role is the only role that delivers the eight files in
-/opt/branchleft/monitoring and the only role that restarts
-branchleft-compose@monitoring.service. Two homes for a file, or two roles that
-restart one unit, make the restart depend on which role ran last and when: that was
-the defect of the monitoring_stack role before its restart moved into one fingerprint.
-
-These tests read the roles' code (tasks, handlers, vars and defaults) and fail when
-another role
-
-- names one of the eight files, either by its path under /opt/branchleft/monitoring
-  or as a list entry or ``stack/<file>`` source in a role that delivers from the
-  monitoring stack directory, or
-- names the monitoring unit at all (a restart, a start or a reload of it).
-
-The list of the eight files is read from monitoring_stack's own vars, so there is no
-second list to keep in step. The ninth file in that directory, the Alertmanager
-renderer, is not one of the eight: ntfy_pager delivers it and monitoring_stack only
-hashes it.
+Only monitoring_stack delivers the eight files and restarts the unit. These tests
+read the roles' code and fail when another role names one of the files or the unit.
+The eight are read from monitoring_stack's vars. The reasoning is in
+ansible/roles/monitoring_stack/README.md, "Restart".
 """
 
 from __future__ import annotations

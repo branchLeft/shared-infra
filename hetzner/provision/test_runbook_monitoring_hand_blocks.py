@@ -1,24 +1,10 @@
-"""The monitoring runbook's hand blocks that the Ansible roles also cover are named, and the
-ones that replace a key in the secrets file are run.
+"""The runbook's interim hand blocks for the monitoring roles are named and checked.
 
-The monitoring_stack and ntfy_pager roles are the target for writing the stack's secrets file,
-copying the stack and installing the drop-ins. Until a playbook runs them on a host, the
-runbook keeps a hand path for each. Each such block carries a marker line
-
-    <!-- interim-hand-block: NAME -->
-
-directly above its fence, and NAME is listed in INTERIM below. Two things then hold:
-
-- a bash fence that writes the secrets file, copies the stack or installs the drop-ins, and
-  has no marker, fails here, so a new hand path cannot appear beside the roles unnoticed;
-- a marker with no fence under it, or with a name that is not listed, fails here, and so does
-  a listed name with no marker, so the list cannot go stale when a block is retired.
-
-The two blocks that replace one key in the secrets file (STALWART and SNDS) are also run, as
-bash, against a temporary file: the part that runs on the host is cut out of the fence, the
-host path is pointed at a temporary directory, and the value arrives on stdin as it does over
-ssh. That is how their ordering is held: the new file is checked before it is moved, the
-success line follows the move, and a failed run leaves the old file and no temporary file.
+Each hand block that writes the secrets file, copies the stack or installs a drop-in
+carries `<!-- interim-hand-block: NAME -->` above its fence, and NAME is listed in
+INTERIM below. An unmarked fence, an unlisted or unfenced marker, or a listed name
+without a marker fails. The STALWART and SNDS blocks are also run as bash against a
+temporary file. The roles are the target; see ansible/roles/monitoring_stack/README.md.
 """
 
 from __future__ import annotations
