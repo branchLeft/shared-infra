@@ -652,6 +652,19 @@
               tag: all
               word: MIGRATE-WORD
 
+    - name: Write a configuration that pairs the migrate id with the identity step's tag
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: tag-swap
+        scene_fresh: false
+        scene_overrides:
+          state_dir: '{{ verify_state }}'
+          log_dir: '{{ verify_logs }}'
+          steps:
+            - id: migrate
+              tag: control_plane_db_identity
+              word: MIGRATE-WORD
+
     - name: Remove the marker of the plain play, so that a step which ran an untagged task would show
       ansible.builtin.file:
         path: '{{ verify_marker }}'
@@ -843,6 +856,13 @@
           reason: config-invalid
           shown_mode: '-'
           config: /var/tmp/ptt/cfg/tag-all.json
+        - name: a configuration that pairs one step's id with another step's tag
+          mode: step
+          text: '{{ pull_trigger_commits.tip }} migrate MIGRATE-WORD'
+          rc: 40
+          reason: config-invalid
+          shown_mode: '-'
+          config: /var/tmp/ptt/cfg/tag-swap.json
       loop_control:
         loop_var: case
         label: '{{ case.name }}'

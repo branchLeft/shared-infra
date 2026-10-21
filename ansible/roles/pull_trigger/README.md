@@ -244,15 +244,21 @@ id is any other word is `invalid-config` (exit 40) and stops every request, what
 the word is. This is deliberate. A list of names to refuse could not name a surface
 that does not exist yet, and every name not on it would pass. Break-glass access (the
 four-hour support-access tool) is therefore not a step and cannot become one by editing
-a variable; a new routine step is a change to this root program, reviewed by the owner.
+a variable: not by a new id, and not by pointing a listed id at its tasks, because the
+tag that decides what runs is bound to the id (below). A new routine step is a change to
+this root program, reviewed by the owner.
 Each entry is checked when the configuration loads:
 
 - exactly the three fields, all text; an unknown, missing or empty field is refused;
-- `id` is on the closed list; two entries with the same id, or the same tag, are refused;
-- `tag` is one plain name, `control_plane_db_` and then `[a-z][a-z0-9_]{0,31}`.
+- `id` is on the closed list; two entries with the same id are refused;
+- `tag` is exactly `control_plane_db_` followed by the entry's own id, so the id the
+  owner approves and the tag that selects the tasks cannot differ. An entry that pairs
+  an id with any other tag (another step's tag, a break-glass tag, a mistyped tag) is
+  `invalid-config` (exit 40) and stops every request. The field is kept so that the
+  inventory states plainly what runs; the program checks it and does not trust it.
   `--tags` takes comma lists and the special tags `all`, `always`, `never`, `tagged`
   and `untagged`, and a tag is playbook-wide, so a free-form tag could run the whole
-  playbook or another role's tasks. None of those can match this form;
+  playbook or another role's tasks. None of those equals this form;
 - `word` is `[A-Z0-9-]{4,32}`.
 
 **The word is a typing guard and not a secret.** It sits in the world-readable
@@ -303,10 +309,27 @@ agent. It is listed so that the owner's steps are in one place:
    settings of the environment and cannot be tested from the repository.
 4. Add the step entries to the host's inventory file, in a reviewed pull request.
 
+Wiring a host is not done by this role or by its pull request. Adding the
+`control_plane` and `control_plane_db` roles to `playbooks/ops1.yml`, setting
+`pull_trigger_steps` for ops1, and writing the shared-infra caller of the reusable
+`ansible-gated-apply.yml` with the github-workflows tag it pins, are one ticket,
+[ISSUE branchLeft/workspace#2531](https://github.com/branchLeft/workspace/issues/2531).
+The ops1 enrolment ticket (branchLeft/workspace#2340) does not do them. Until that ticket
+is done the default empty list allows no step on any host.
+
 When a step is run live, the evidence is the workflow run, the host's summary line with
-`mode=step` and `step=ID`, a second run of the same step that reports no change, and
+`mode=step` and `step=ID` that reports `verdict=applied` with a change count above zero on
+the first live run of that step, a second run of the same step that reports no change, and
 the deployment's review record showing that the owner approved that run in that
 environment (the environment is the only control here that is not public).
+
+The change count above zero is part of the evidence on purpose. The program cannot tell
+from a run that reported no change whether the step's tasks were idempotent and already
+done, or were never selected (no task carries the tag, or every task was skipped), and
+a summary of `verdict=unchanged` is the same line in both cases. A first run that
+reports no change is therefore not evidence that the step ran: find out why before
+counting it. Only the first run of a step on a host has to change something; the
+second is meant to report none.
 
 ### Exit codes
 
@@ -501,7 +524,8 @@ which control broke:
   `--mode check`, the step mode with a bare commit, a commit older than the floor, an
   unsigned, unlisted-key, tampered or off-`main` commit, and the hostile shapes) leaves
   the host and the step markers byte for byte as they were; a configuration that names
-  a step the program cannot run, and one whose tag is `all`, stops every request; the
+  a step the program cannot run, one whose tag is `all` and one that pairs a step's id with
+  another step's tag, stops every request; the
   step account may run a step only through its one sudo argument list and the apply
   account may not;
 - check mode reports a change and changes nothing;
@@ -596,8 +620,8 @@ the refusals is a change to a root program, and the owner reviews it.
 | A8 an apply request cannot carry a step                                   | letting `--mode apply` carry one                         | `test_an_apply_request_that_carries_a_step...`, harness refusal case          |
 | A9 the plain account has no step argument list                            | adding `--mode step` to the plain account's sudoers line | harness sudo block                                                            |
 | A10 a step on a commit older than the floor is refused                    | skipping the floor test for a step                       | `test_a_step_on_a_commit_older_than_the_floor...`, harness refusal case       |
-| A11 a tag is one plain name in the role's namespace                       | loosening the tag pattern                                | `test_every_invalid_step_entry_is_refused`, harness `tag-all`                 |
-| A12 two entries cannot share an id or a tag                               | removing the duplicate test                              | `test_every_invalid_step_entry_is_refused`                                    |
+| A11 a step's tag is its own id's tag and no other                         | accepting any tag with the prefix, not the id's own      | `test_an_id_paired_with_any_tag_but_its_own_is_refused`, harness `tag-all`    |
+| A12 two entries cannot share an id                                        | removing the duplicate test                              | `test_every_invalid_step_entry_is_refused`                                    |
 | A13 the line of an apply and a check has no step field                    | always adding the step field                             | `test_the_summary_of_a_step_ends_with_the_step...`, harness refusal check     |
 | A14 what the caller typed in a step request is never logged               | logging the typed id before it is found on the list      | `test_what_the_caller_typed_in_a_step_request...`                             |
 | A15 the step mode with a bare commit is refused, not run as a plain apply | removing the no-step test for `--mode step`              | `test_a_bare_commit_with_the_step_mode...`, harness refusal case              |

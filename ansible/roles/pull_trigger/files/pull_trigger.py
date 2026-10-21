@@ -82,20 +82,23 @@ OPTIONAL_CONFIG_KEYS: Final = frozenset({"steps"})
 
 # The closed list of steps this program will ever run. A step is a routine, named task of a
 # role that its playbook keeps behind the ``never`` tag. This is the only home of the list: the
-# configuration may name a subset of it and can add nothing to it, so a way into a host that
-# is not a routine step (break-glass access above all) cannot be put on the allow-list by
-# editing the configuration, and a new step is a change to this root program, reviewed by
-# the owner. Every name is checked by ``parse_config`` and none is checked by being on a
-# list of names to refuse.
+# configuration may name a subset of it and can add nothing to it, and the tag that decides
+# which tasks a step runs is fixed by the id (``STEP_TAG_PREFIX`` plus the id), so a way into
+# a host that is not a routine step (break-glass access above all) cannot be put on the
+# allow-list by editing the configuration, whether by a new id or by pointing a listed id at
+# another step's tasks. A new step is a change to this root program, reviewed by the owner.
+# Every name is checked by ``parse_config`` and none is checked by being on a list of names
+# to refuse.
 STEP_IDS: Final = frozenset({"migrate", "identity", "provision"})
 STEP_ID_PATTERN: Final = re.compile(r"[a-z][a-z0-9_]{0,31}")
 # A typing guard held in a public file, not a secret. The protection is the protected
 # environment whose only reviewer is the owner.
 WORD_PATTERN: Final = re.compile(r"[A-Z0-9-]{4,32}")
 # Ansible's ``--tags`` takes a comma list and the specials ``all``, ``always``, ``never``,
-# ``tagged`` and ``untagged``. A tag in this form is one plain name in the role's own
-# namespace, so none of those can match and a tag of another role cannot.
-STEP_TAG_PATTERN: Final = re.compile(r"control_plane_db_[a-z][a-z0-9_]{0,31}")
+# ``tagged`` and ``untagged``. The tag of a step is this prefix and the step's id, and
+# nothing else is accepted: an id comes from the closed list above and is one plain name, so
+# none of those specials can match, and one step's id cannot select another step's tasks.
+STEP_TAG_PREFIX: Final = "control_plane_db_"
 # The extra variable the program sets to the validated step id. It is a constant here.
 STEP_VARIABLE: Final = "control_plane_db_step"
 STEP_FIELDS: Final = frozenset({"id", "tag", "word"})
@@ -186,9 +189,9 @@ class Why(enum.Enum):
     CONFIG_STEPS_LIST = "steps must be a list"
     CONFIG_STEP_FIELDS = "a step needs exactly an id, a tag and a word, all text"
     CONFIG_STEP_UNKNOWN = "a step id is not one of the steps this program can run"
-    CONFIG_STEP_TAG = "a step tag must be one plain name in the control_plane_db namespace"
+    CONFIG_STEP_TAG = "a step tag must be control_plane_db_ followed by the step id"
     CONFIG_STEP_WORD = "a step confirmation word must be 4 to 32 of A-Z, 0-9 and hyphen"
-    CONFIG_STEP_DUPLICATE = "two steps share an id or a tag"
+    CONFIG_STEP_DUPLICATE = "two steps share an id"
     CONFIG_NOT_TEXT = "must be text"
     CONFIG_NOT_NUMBER = "must be a whole number in its range"
     CONFIG_NOT_PATH = "must be an absolute normalised path"
@@ -588,11 +591,15 @@ def _step_from(value: object) -> Step:
 
     The id must be one of ``STEP_IDS``, which is closed: an id that is not in it is refused
     whatever it is called, so a surface that was never built cannot be added by a name
-    this program has not heard of. The tag is one plain name in the role's namespace.
+    this program has not heard of. The tag decides which tasks the step runs, so it is not
+    a free choice either: it must be the step's own, ``STEP_TAG_PREFIX`` plus the id, and
+    an entry that pairs an id with any other tag is refused, whether that is another
+    step's tag, a name no task carries or a special such as ``all``.
 
     Raises:
         ConfigError: The entry has other fields than an id, a tag and a word, an id that is
-            not one of the program's steps, or a tag or word of the wrong shape.
+            not one of the program's steps, a tag that is not that id's own, or a word of
+            the wrong shape.
     """
     if not isinstance(value, dict) or set(value) != STEP_FIELDS:
         raise ConfigError(Why.CONFIG_STEP_FIELDS)
@@ -601,7 +608,7 @@ def _step_from(value: object) -> Step:
         raise ConfigError(Why.CONFIG_STEP_FIELDS)
     if step_id not in STEP_IDS:
         raise ConfigError(Why.CONFIG_STEP_UNKNOWN)
-    if STEP_TAG_PATTERN.fullmatch(tag) is None:
+    if tag != STEP_TAG_PREFIX + step_id:
         raise ConfigError(Why.CONFIG_STEP_TAG)
     if WORD_PATTERN.fullmatch(word) is None:
         raise ConfigError(Why.CONFIG_STEP_WORD)
@@ -612,15 +619,14 @@ def _steps_from(data: Mapping[str, object]) -> tuple[Step, ...]:
     """Return the validated step allow-list; an absent ``steps`` key is an empty one.
 
     Raises:
-        ConfigError: ``steps`` is not a list, an entry is invalid, or two share an id or a tag.
+        ConfigError: ``steps`` is not a list, an entry is invalid, or two share an id (and so,
+            as a tag follows its id, a tag).
     """
     value = data.get("steps", [])
     if not isinstance(value, list):
         raise ConfigError(Why.CONFIG_STEPS_LIST)
     steps = tuple(_step_from(entry) for entry in value)
-    if len({step.step_id for step in steps}) != len(steps) or len(
-        {step.tag for step in steps}
-    ) != len(steps):
+    if len({step.step_id for step in steps}) != len(steps):
         raise ConfigError(Why.CONFIG_STEP_DUPLICATE)
     return steps
 

@@ -62,7 +62,7 @@ argument_specs:
           step id, the one tag that selects its tasks in the host playbook and its confirmation
           word. Empty means no step may be requested. The ids are a closed list in the program
           (migrate, identity, provision); the program refuses any other id and any tag that is
-          not one plain name beginning control_plane_db_. The word is a guard against a typing
+          not control_plane_db_ followed by that entry's own id. The word is a guard against a typing
           slip in a public file, not a secret: never put a secret here.
         default: []
         options:
@@ -75,9 +75,10 @@ argument_specs:
             type: str
             required: true
             description: >-
-              The tag that selects the step's tasks, such as control_plane_db_migrate. One name
-              in the control_plane_db namespace and nothing else; the program refuses a comma
-              list and the tags all, always, never, tagged and untagged.
+              The tag that selects the step's tasks. It must be control_plane_db_ followed by the
+              id of this entry (control_plane_db_migrate for migrate) and nothing else; the
+              program refuses any other tag, including another step's, a comma list and the tags
+              all, always, never, tagged and untagged.
           word:
             type: str
             required: true

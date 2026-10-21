@@ -804,18 +804,40 @@ class StepConfigTests(unittest.TestCase):
             "a lowercase word": [step_entry(word="migrate-0001")],
             "a word with a newline": [step_entry(word="MIGRATE\n0001")],
             "a word with an underscore": [step_entry(word="MIGRATE_0001")],
-            "a duplicate id": [
-                step_entry(),
-                step_entry(tag="control_plane_db_other", word="OTHER-0001"),
-            ],
-            "a duplicate tag": [
-                step_entry(),
-                step_entry(id="identity", word="IDENTITY-0002"),
-            ],
+            "a duplicate id": [step_entry(), step_entry(word="OTHER-0001")],
         }
         for name, steps in cases.items():
             with self.subTest(name), self.assertRaises(trigger.ConfigError):
                 trigger.parse_config(json.dumps(valid_config_data(steps=steps)))
+
+    def test_an_id_paired_with_any_tag_but_its_own_is_refused(self) -> None:
+        """The tag decides what runs, so the id the owner approves must be bound to it."""
+        wrong_pairs = {
+            "migrate with the identity tag": ("migrate", "control_plane_db_identity"),
+            "migrate with the provision tag": ("migrate", "control_plane_db_provision"),
+            "identity with the migrate tag": ("identity", "control_plane_db_migrate"),
+            "identity with the provision tag": ("identity", "control_plane_db_provision"),
+            "provision with the migrate tag": ("provision", "control_plane_db_migrate"),
+            "provision with the identity tag": ("provision", "control_plane_db_identity"),
+            "migrate with the break-glass tag": ("migrate", "control_plane_db_breakglass"),
+            "provision with the break-glass tag": ("provision", "control_plane_db_break_glass"),
+            "migrate with a mistyped tag": ("migrate", "control_plane_db_migrat"),
+            "migrate with a longer tag": ("migrate", "control_plane_db_migrate2"),
+            "migrate with no prefix": ("migrate", "migrate"),
+        }
+        for name, (step_id, tag) in wrong_pairs.items():
+            with self.subTest(name):
+                entry = step_entry(id=step_id, tag=tag)
+                with self.assertRaises(trigger.ConfigError) as caught:
+                    trigger.parse_config(json.dumps(valid_config_data(steps=[entry])))
+                self.assertIn("followed by the step id", caught.exception.detail)
+
+    def test_every_listed_id_is_accepted_with_exactly_its_own_tag(self) -> None:
+        for step_id in sorted(trigger.STEP_IDS):
+            with self.subTest(step_id):
+                entry = step_entry(id=step_id, tag=f"control_plane_db_{step_id}")
+                config = trigger.parse_config(json.dumps(valid_config_data(steps=[entry])))
+                self.assertEqual(f"control_plane_db_{step_id}", config.steps[0].tag)
 
     def test_an_unknown_top_level_key_is_still_refused_with_steps_present(self) -> None:
         data = valid_config_data(steps=[step_entry()], unexpected="x")
