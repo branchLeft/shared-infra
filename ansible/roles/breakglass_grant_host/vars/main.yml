@@ -60,6 +60,14 @@ breakglass_grant_host_directories:
   - path: /var/log/branchleft
     mode: '0700'
 
+# The Node image the tool runs in. It is a constant, not an input, because the
+# wrapper and the expire unit installed above carry their own copy of this
+# reference and run it with --pull never: an image pulled under any other digest
+# would make this role report green while the unit failed every minute and no
+# grant ever closed. It is changed in the same pull request as the commit and the
+# hashes above, and the other break-glass role's constant is changed with it.
+breakglass_grant_host_node_image: node:26.5.0-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb
+
 # The part of the image reference that Docker lists back under RepoDigests.
 breakglass_grant_host_image_digest: "{{ breakglass_grant_host_node_image.split('@') | last }}"
 

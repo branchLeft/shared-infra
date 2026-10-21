@@ -12,9 +12,11 @@ the order the standard sets for a role README (ANS-14).
 The role makes the plain, repeatable state of the break-glass grant side on an
 application host (`app1`):
 
-1. Refuses an input that is not a full 40-character commit or an image pinned by
-   digest, before anything is touched.
-2. Refuses a host with no working `docker` or no Docker socket.
+1. Refuses an input that is not a full 40-character commit, or a constant that is
+   not an image pinned by digest, before anything is touched.
+2. Refuses a host with no working `/usr/bin/docker` (the binary the expire unit
+   runs) or no Docker socket. Every Docker command of the role names that path, so
+   a `docker` elsewhere on the PATH, a snap install for example, does not pass.
 3. Makes the directories above the tool, the grant records and the log, each with
    an owner and a mode.
 4. Probes for the Node image under its digest and pulls it only when the host
@@ -35,19 +37,24 @@ run by a person at the host, as root; the timer runs only the expire command.
 
 ## Interface
 
-The variables, their types and defaults are in `meta/argument_specs.yml`; the same
-defaults are in `defaults/main.yml`. Ansible checks them when the role starts.
+The variable, its type and default are in `meta/argument_specs.yml`; the same
+default is in `defaults/main.yml`. Ansible checks it when the role starts.
 
 | Variable                              | Meaning                                                            |
 | ------------------------------------- | ------------------------------------------------------------------ |
 | `breakglass_grant_host_source_commit` | The full commit of `ghost-platform` the files are downloaded from. |
-| `breakglass_grant_host_node_image`    | The Node image, by name, tag and `@sha256:` digest.                |
 
-Both must be the same as the same-named inputs of `breakglass_mint_host`: the
+It must be the same as the same-named input of `breakglass_mint_host`: the
 minter and the grant tool are two halves of one protocol and must come from one
 commit. The test of each role reads the other's defaults and fails if they
-differ. The sha256 of each file, the download base, the paths and the Docker
-socket are constants in `vars/main.yml`, not inputs. No variable is a secret.
+differ. The Node image is not an input. It is a constant in `vars/main.yml`, set
+together with the file hashes, because the wrapper and the expire unit this role
+installs carry their own copy of its digest and run it with `--pull never`: an
+inventory value that named another image would be pulled and read back green while
+the unit failed every minute. The test of each role compares the two roles'
+constants, and runs the shipped wrapper and unit with this role's constant. The
+sha256 of each file, the download base, the paths and the Docker socket are
+constants in `vars/main.yml` too. No variable is a secret.
 
 ## Requirements
 
@@ -84,8 +91,9 @@ Each of these stops the run at the named task, before any later task writes
 anything, and leaves the timer not enabled. The test converge applies the role in
 each state and asserts which task stopped it and that nothing was written.
 
-- An input that is not a full commit or a digest-pinned image.
-- No `docker` on the host.
+- An input that is not a full commit, or a constant that is not a digest-pinned image.
+- No `docker` at `/usr/bin/docker` on the host, including a host whose only
+  `docker` is elsewhere on the PATH.
 - No Docker socket, or a path that is not a socket.
 - A pull that exits 0 and leaves the digest absent (the read-back refuses).
 
@@ -95,17 +103,20 @@ The role is the way this host is set up. The one-off steps and anything that hol
 a secret stay as written in the break-glass runbook, run by the owner at the host.
 Until the first apply of this role on the host is cited, the runbook's hand steps
 for the files, the image and the timer stay as the fallback; after that, use the
-digest in this role's defaults, not a copy of it.
+digest in this role's `vars/main.yml`, not a copy of it.
 
 ## Named limits
 
 - **The test stands in for Docker.** A small program takes the place of the
   `docker` command (`molecule/default/files/docker_standin.sh`, the one home of the
   stand-in; the mint role's test copies it from here). The test proves what the
-  role and the shipped wrapper asked Docker to do: `--pull never`, `--network none`,
-  `--read-only`, `--cap-drop ALL`, the pinned image and exactly the four expected
-  mounts, and that the unit's command matches the wrapper's apart from the one
-  environment pair. It does not prove that the image pulls from a real registry, or
+  role and the shipped wrapper asked Docker to do. The wrapper's whole argument
+  list, and the unit's, is compared with a list written out in the test from the
+  intent: `--pull never`, `--network none`, `--read-only`, `--cap-drop ALL`, the
+  resource limits, the label, the pinned image and exactly the four expected mounts,
+  and nothing else, so an added `--privileged`, `-v`, `--device`, `--add-host` or
+  second `--security-opt` fails. The unit's command also matches the wrapper's apart
+  from the one environment pair. It does not prove that the image pulls from a real registry, or
   that the unit starts a real container. The gated run on the host is that proof.
 - **The test runs the wrapper in `status` mode only.** The grant and close commands
   need a real Ghost and are never run by the test.
@@ -165,8 +176,8 @@ then a merge of this role changes no host.
 ## How to change it safely
 
 1. Change the tasks, the defaults and `meta/argument_specs.yml` together.
-2. Bump the commit and every sha256 in `vars/main.yml` together, and bump the same
-   commit in `breakglass_mint_host` in the same pull request.
+2. Bump the commit, every sha256 and the Node image in `vars/main.yml` together, and
+   bump the same commit and image in `breakglass_mint_host` in the same pull request.
 3. Keep every task able to run under `--check --diff`, and keep the role
    idempotent.
 4. Never make the role run the grant tool or the wrapper's grant commands.

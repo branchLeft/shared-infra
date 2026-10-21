@@ -8,7 +8,7 @@
   hosts: all
   gather_facts: false
   vars:
-    prepare_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') | from_yaml }}"
+    prepare_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') | from_yaml }}"
   tasks:
     - name: Create the directory the stand-in keeps its state in
       ansible.builtin.file:
@@ -39,7 +39,7 @@
     # read-back.
     - name: Tell the stand-in which digest a bare tag resolves to
       ansible.builtin.copy:
-        content: "{{ prepare_defaults.breakglass_grant_host_node_image.split('@') | last }}\n"
+        content: "{{ prepare_role_vars.breakglass_grant_host_node_image.split('@') | last }}\n"
         dest: '{{ scenario_state_dir }}/registry_digest'
         owner: root
         group: root

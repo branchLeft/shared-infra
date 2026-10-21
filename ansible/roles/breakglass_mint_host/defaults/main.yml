@@ -1,6 +1,7 @@
 ---
-# The two inputs, with the values the role ships. The argument spec holds the
-# same defaults (ANS-7). Neither is a secret. The commit is the one place the
-# minter's bytes come from; the image is the Node image the minter runs in.
+# The one input, with the value the role ships. The argument spec holds the same
+# default (ANS-7). It is not a secret. The commit is the one place the minter's
+# bytes come from. The Node image is not an input: it is a constant in
+# vars/main.yml, and it must equal the grant role's, which carries the same
+# digest in its wrapper and expire unit.
 breakglass_mint_host_source_commit: 5e52f78427cab104438057164e4baa16b329875c
-breakglass_mint_host_node_image: node:26.5.0-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb

@@ -4,6 +4,8 @@
   gather_facts: false
   vars:
     converge_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') | from_yaml }}"
+    # The image is a constant of the role, not an input with a default.
+    converge_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') | from_yaml }}"
     # What a role that stopped before its directories must not have left behind.
     converge_untouched_paths:
       - /usr/local/lib/branchleft
@@ -67,6 +69,15 @@
       ansible.builtin.stat:
         path: '{{ scenario_digest_control_path }}'
       register: breakglass_mint_host_c_control
+
+    # slurp prints a file's content in base64 at this verbosity. This is the one
+    # place the test asks for that on purpose, for a file that is not the key,
+    # so the scan in verify can be shown to find the base64 form of a file's
+    # text, which is how a role that slurped the key would print it.
+    - name: Read the digest control file with slurp
+      ansible.builtin.slurp:
+        src: '{{ scenario_digest_control_path }}'
+      register: breakglass_mint_host_c_control_slurp
 
     # Refusals come first, on a host where nothing is installed: a refused
     # input must leave no trace. Check mode writes nothing and a refusal is a

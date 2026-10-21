@@ -30,6 +30,12 @@ breakglass_mint_host_directories:
   - path: /var/log/branchleft
     mode: '0700'
 
+# The Node image the minter runs in. It is a constant, not an input, so that no
+# inventory value can pull a different image than the one the grant role's
+# wrapper and expire unit carry. It is changed in the same pull request as the
+# grant role's constant, and the roles' tests compare the two.
+breakglass_mint_host_node_image: node:26.5.0-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb
+
 # The part of the image reference that Docker lists back under RepoDigests.
 breakglass_mint_host_image_digest: "{{ breakglass_mint_host_node_image.split('@') | last }}"
 
