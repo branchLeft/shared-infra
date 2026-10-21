@@ -7,12 +7,16 @@ nothing cannot pass for a red run.
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
 from check_enrolment import ROOT, check
+
+# A playbook that applies the pull on edge1: it is refused in any name the pull cannot read.
+EVIL_PLAY = "- hosts: all\n  vars:\n    enrolled_host: edge1\n  roles:\n    - pull_trigger\n"
 
 
 class RealTree(unittest.TestCase):
@@ -190,6 +194,62 @@ class Sabotage(unittest.TestCase):
             "- hosts: all\n  vars:\n    enrolled_host: edge1\n  roles:\n    - pull_trigger\n",
         )
         self._assert_rule("R2 evil.YAML")
+
+    # D1, playbooks: a nested playbook whose name is not an exact .yml is refused (verdict repro).
+    def test_nested_uppercase_yaml_playbook_is_refused(self) -> None:
+        self._write("playbooks/sub/evil.YAML", EVIL_PLAY)
+        self._assert_rule("R2 sub/evil.YAML")
+
+    # D1, trust: an uppercase .YAML trust file is refused, not ignored by R4 and R5.
+    def test_trust_uppercase_yaml_is_refused(self) -> None:
+        self._write("trust/x.YAML", "---\npull_trigger_signers: [attacker]\n")
+        self._assert_rule("R5 x.YAML")
+
+    # D1, trust: a lowercase .yaml trust file is refused, not ignored by R4 and R5.
+    def test_trust_lowercase_yaml_is_refused(self) -> None:
+        self._write("trust/x.yaml", "---\npull_trigger_signers: [attacker]\n")
+        self._assert_rule("R5 x.yaml")
+
+    # D1, trust: case alone is enough to refuse, so a lower()-based test would be too weak.
+    def test_trust_uppercase_yml_is_refused(self) -> None:
+        self._write("trust/x.YML", "---\npull_trigger_signers: [attacker]\n")
+        self._assert_rule("R5 x.YML")
+
+    # D1, trust: a template suffix is a different name, so it is refused.
+    def test_trust_yml_j2_is_refused(self) -> None:
+        self._write("trust/x.yml.j2", "---\npull_trigger_signers: [attacker]\n")
+        self._assert_rule("R5 x.yml.j2")
+
+    # D1, playbooks: a .txt file is refused, because ansible-playbook runs any name given.
+    def test_playbooks_txt_is_refused(self) -> None:
+        self._write("playbooks/notes.txt", EVIL_PLAY)
+        self._assert_rule("R2 notes.txt")
+
+    # D1 and the trust depth question: trust/ is flat, so a nested trust .yml is refused, and
+    # its stem never collides with a top-level trust file in R4 or R5.
+    def test_nested_yml_in_trust_is_refused(self) -> None:
+        self._write("trust/sub/edge1.yml", "---\npull_trigger_signers: []\n")
+        self._assert_rule("R5 sub/edge1.yml")
+
+    # D1 and the playbook depth question: a nested playbook .yml is refused, not read by R2.
+    def test_nested_yml_playbook_is_refused(self) -> None:
+        self._write("playbooks/sub/evil.yml", EVIL_PLAY)
+        self._assert_rule("R2 sub/evil.yml")
+
+    # D1: playbooks/includes/ is the one nested place a .yml is read; one level deeper is refused.
+    def test_includes_nested_deeper_is_refused(self) -> None:
+        self._write("playbooks/includes/sub/x.yml", "---\nfoo: bar\n")
+        self._assert_rule("R2 includes/sub/x.yml")
+
+    # D1, exact README paths: a README.md at any other path is not the exception, so refused.
+    def test_nested_readme_is_not_the_exception(self) -> None:
+        self._write("playbooks/sub/README.md", EVIL_PLAY)
+        self._assert_rule("R2 sub/README.md")
+
+    # Link handling: a link is refused whatever its name, so the check never follows it.
+    def test_symlink_named_yml_in_trust_is_refused(self) -> None:
+        os.symlink("ops1.yml", self.ansible / "trust" / "link.yml")
+        self._assert_rule("R5 link.yml")
 
     # R0: the refusal's assert replaced with a value that always passes.
     def test_r0_refusal_assert_replaced_with_true(self) -> None:

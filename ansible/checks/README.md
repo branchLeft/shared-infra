@@ -8,11 +8,17 @@ copy per rule, and asserts that each sabotage hit its text.
 
 ## What the check sees, and what it does not
 
-It sees the literal keys of every YAML or JSON file under `ansible/` that Ansible can
-load as variables (any name, any of `.yml`, `.yaml`, `.json` or no extension), except a
-role's or pattern's `molecule/` directory and a role's `meta/argument_specs.yml`, which are
-fixtures and schema. A file that does not parse is refused. A symlink that leads out of
-`ansible/` under a loaded directory is refused.
+It sees the literal keys of every file under `ansible/` that R6 reads: a file whose name
+ends in `.yml`, `.yaml` or `.json`, or has no extension, in a loaded directory. The
+exception is a role's or pattern's `molecule/` directory and a role's
+`meta/argument_specs.yml`, which are fixtures and schema. A file that does not parse is
+refused. A symlink that leads out of `ansible/` under a loaded directory is refused.
+
+Under `playbooks/` and `trust/` the name rule is stricter, and R6 reads all of it. Every
+entry there that is not a directory must be an exact `.yml` (case-sensitive, no other
+suffix), or one of the two README paths named exactly: `playbooks/README.md` and
+`trust/README.md`. A README anywhere else is refused. A link is refused whatever its name,
+so the check never follows one. The rule is one function, shared by R2, R4 and R5.
 
 It catches a protected key (`pull_trigger_signers`, `pull_trigger_remote_url`,
 `pull_trigger_playbook`, `pull_trigger_playbooks`, `enrolled_host`) set outside the one
@@ -36,21 +42,32 @@ and `ansible.legacy.` spellings, and the `action:` and `local_action:` forms of 
 does not parse the free-form arguments of other modules, other than a protected key
 written as `key=value` in a string. A loader or module outside those sets is not seen.
 
+Out of scope: a case-insensitive filesystem. On macOS Ansible can find
+`group_vars/all.YML` under the name `all.yml`, and R6 reads only the exact suffix. This is
+not closed by the name rule, which covers `playbooks/` and `trust/` only. It does not reach
+CI or the hosts, which are Linux, where both loaders compare case-sensitively, so the file
+is not loaded there.
+
 ## Rules
 
 - **R0** The three shared includes exist under `playbooks/includes/`. Each refusal
   include holds exactly one task: its name and its assert, with exactly its expressions
   and no other key (`when`, `ignore_errors` and `tags` are refused).
 - **R1** At least one top-level playbook is enrolled, so the check cannot pass over nothing.
-- **R2** A top-level file in `playbooks/` whose name is not an exact `.yml` (any other
-  suffix, any case, or none) is refused, because the pull runs only the derived `.yml`
-  path and `ansible-playbook` would run the others anyway. Each enrolled `HOST.yml` has one play on `hosts: all`, `vars.enrolled_host`
-  equal to `HOST`, `vars_files` exactly the shared include and `../trust/HOST.yml`,
-  `roles` exactly the runtime entry then the bare trigger, and `pre_tasks` exactly the
-  refusal include then the signer include, each a task of only its name and include.
+- **R2** The name rule (above) refuses every entry under `playbooks/` that is not an exact
+  `.yml` at the top of `playbooks/` or in `playbooks/includes/`, at any depth. The pull
+  runs only the derived `.yml` path, and `ansible-playbook` would run any other name, so
+  R6 must read every file in the tree. Each enrolled `HOST.yml` has one play on
+  `hosts: all`, `vars.enrolled_host` equal to `HOST`, `vars_files` exactly the shared
+  include and `../trust/HOST.yml`, `roles` exactly the runtime entry then the bare trigger,
+  and `pre_tasks` exactly the refusal include then the signer include, each a task of only
+  its name and include. An enrolled playbook is read only at the top of `playbooks/`; the
+  pull runs only that path.
 - **R3** The shared include holds exactly the remote literal and the playbook derivation
   from `enrolled_host`, and no other key.
-- **R4** The trust files are exactly the enrolled playbooks, one file each.
+- **R4** The trust files are exactly the enrolled playbooks, one file each. `trust/` is
+  flat: a `.yml` in a subdirectory of `trust/` is refused by the name rule, so R4 and R5
+  never see two files with one stem.
 - **R5** Each trust file holds one key, `pull_trigger_signers`, as a list (it may be empty).
 - **R6** A protected key is set only in its owner's file. `enrolled_host` may be set only
   in the play `vars` of an enrolled top-level playbook. `vars_files` is read only in an

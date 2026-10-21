@@ -38,6 +38,8 @@ LOADED_DIRS = frozenset(
     )
 )
 TASK_SUFFIXES = (".yml", ".yaml")
+TREES = ("playbooks", "trust")
+README_EXCEPTIONS = frozenset(("playbooks/README.md", "trust/README.md"))
 INCLUDE_VARS = frozenset(
     ("include_vars", "ansible.builtin.include_vars", "ansible.legacy.include_vars")
 )
@@ -101,14 +103,15 @@ EXPECTED_COMMON = {
 }
 
 
-def _load(path: Path, findings: list[str], rule: str) -> object:
-    """Parse a YAML file. A missing file is reported by its own rule, not here."""
+def _load(path: Path, findings: list[str], label: str) -> object:
+    """The one YAML reader, for every rule and for R6. A missing file is reported by its own
+    rule, not here. An unparseable file is a finding under the caller's label."""
     if not path.is_file():
         return None
     try:
         doc: object = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, yaml.YAMLError) as error:
-        findings.append(f"{rule} {path.name}: cannot be read as YAML: {error}")
+        findings.append(f"{label}: cannot be read as YAML: {error}")
         return None
     return doc
 
@@ -183,7 +186,7 @@ def _check_enrolled(stem: str, plays: list[dict[str, object]], findings: list[st
 def _check_gate(path: Path, that: list[str], findings: list[str]) -> None:
     """R0: an include holds one task, its assert, and that assert's keys and expressions."""
     label = f"R0 playbooks/includes/{path.name}"
-    doc = _load(path, findings, "R0")
+    doc = _load(path, findings, label)
     tasks = doc if isinstance(doc, list) else []
     if len(tasks) != 1 or not isinstance(tasks[0], dict):
         findings.append(f"{label}: must hold exactly one task")
@@ -205,7 +208,9 @@ def _check_gates(includes: Path, findings: list[str]) -> None:
 
 
 def _check_derivation(includes: Path, findings: list[str]) -> None:
-    common = _mapping(_load(includes / "pull_trigger_common.yml", findings, "R3"))
+    common = _mapping(
+        _load(includes / "pull_trigger_common.yml", findings, "R3 pull_trigger_common.yml")
+    )
     if common != EXPECTED_COMMON:
         findings.append(
             f"R3 pull_trigger_common.yml: must hold exactly {REMOTE_KEY} {REMOTE_URL!r}, "
@@ -214,7 +219,7 @@ def _check_derivation(includes: Path, findings: list[str]) -> None:
 
 
 def _check_trust_file(path: Path, findings: list[str]) -> None:
-    doc = _mapping(_load(path, findings, "R5"))
+    doc = _mapping(_load(path, findings, f"R5 trust/{path.name}"))
     if set(doc) != {SIGNER_KEY} or not isinstance(doc.get(SIGNER_KEY), list):
         findings.append(f"R5 trust/{path.name}: must hold exactly {SIGNER_KEY}, as a list")
 
@@ -236,7 +241,7 @@ def _check_writer(ansible: Path, findings: list[str]) -> None:
         if not path.is_file() or path.suffix not in TASK_SUFFIXES:
             continue
         where = f"ansible/{path.relative_to(ansible).as_posix()}"
-        doc = _load(path, findings, "R8")
+        doc = _load(path, findings, f"R8 {where}")
         for task in doc if isinstance(doc, list) else []:
             if _names_config(task):
                 writers.append((where, _mapping(task)))
@@ -419,16 +424,51 @@ def _check_no_other_definition(ansible: Path, findings: list[str]) -> None:
             continue
         if not path.is_file() or path.suffix not in VARS_SUFFIXES:
             continue
-        try:
-            doc: object = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, yaml.YAMLError) as error:
-            findings.append(f"R6 {where}: cannot be read as YAML, so R6 cannot read it: {error}")
-            continue
+        doc = _load(path, findings, f"R6 {where}")
         if relative.parent == Path("playbooks") and path.suffix in TASK_SUFFIXES:
             _scan_playbook(doc, path, resolved, where, findings)
         else:
             allowed = _allowed_in(relative.as_posix())
             _scan(doc, path.parent.resolve(), resolved, where, allowed, findings)
+
+
+def _in_place(tree: str, inside: tuple[str, ...]) -> bool:
+    """A .yml sits where Ansible reads it: at the top of its tree, or in playbooks/includes/."""
+    if len(inside) == 1:
+        return True
+    return tree == "playbooks" and inside[:-1] == ("includes",)
+
+
+def _check_names(ansible: Path, findings: list[str]) -> None:
+    """Shared by R2, R4 and R5: the one name rule for playbooks/ and trust/, at any depth.
+
+    Every entry that is not a directory is refused unless it is a link-free exact .yml placed
+    where Ansible reads it, or one of the two README paths named exactly. A link is refused
+    whatever its name, so the check never follows one. Any other name, case or depth is
+    refused, so R6 reads every file the pull can load from these two trees.
+    """
+    for tree in TREES:
+        rule = "R5" if tree == "trust" else "R2"
+        base = ansible / tree
+        for path in sorted(base.rglob("*")):
+            inside = path.relative_to(base)
+            label = f"{rule} {inside.as_posix()}"
+            if path.is_symlink():
+                findings.append(f"{label}: is a link, which the check does not follow")
+            elif path.is_dir():
+                continue
+            elif f"{tree}/{inside.as_posix()}" in README_EXCEPTIONS:
+                continue
+            elif path.suffix != ".yml":
+                findings.append(f"{label}: must be an exact .yml, as Ansible reads it")
+            elif not _in_place(tree, inside.parts):
+                where = "or in playbooks/includes/" if tree == "playbooks" else ""
+                findings.append(f"{label}: a .yml must sit at the top of {tree}/ {where}".rstrip())
+
+
+def _yml_files(directory: Path) -> list[Path]:
+    """The top-level .yml files of a tree. _check_names has already refused every other name."""
+    return sorted(path for path in directory.iterdir() if path.is_file() and path.suffix == ".yml")
 
 
 def check(root: Path) -> list[str]:
@@ -443,16 +483,11 @@ def check(root: Path) -> list[str]:
         if not (includes / name).is_file():
             findings.append(f"R0 playbooks/includes/{name} is missing")
     _check_gates(includes, findings)
+    _check_names(ansible, findings)
 
     enrolled: dict[str, list[dict[str, object]]] = {}
-    # The host pull runs only the derived .yml path, so a top-level file that is not an
-    # exact .yml name is refused rather than read: any suffix, case or extensionless.
-    for path in sorted(playbooks.iterdir()):
-        if path.is_dir() or path.suffix == ".yml":
-            continue
-        findings.append(f"R2 {path.name}: a top-level playbook must be .yml, as the pull runs")
-    for path in sorted(playbooks.glob("*.yml")):
-        plays = _plays(_load(path, findings, "R2"))
+    for path in _yml_files(playbooks):
+        plays = _plays(_load(path, findings, f"R2 {path.name}"))
         if any(_enrolled(play) for play in plays):
             enrolled[path.stem] = plays
             continue
@@ -467,7 +502,7 @@ def check(root: Path) -> list[str]:
         _check_enrolled(stem, plays, findings)
     _check_derivation(includes, findings)
 
-    trust_files = sorted(trust.glob("*.yml"))
+    trust_files = _yml_files(trust)
     trust_stems = {path.stem for path in trust_files}
     for stem in sorted(set(enrolled) - trust_stems):
         findings.append(f"R4 {stem}.yml is enrolled but has no trust/{stem}.yml")

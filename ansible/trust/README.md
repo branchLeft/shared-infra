@@ -10,6 +10,8 @@ pull: a commit of `main` signed by a key on it is applied to the host as root.
   task (`playbooks/includes/require_signers.yml`), so the host fails closed until
   the owner writes a value.
 - Public keys only. Never a secret.
+- Only exact `.yml` files sit at the top of this directory, plus this README. A file of
+  any other name, case or depth is refused by the check (`checks/README.md`, name rule).
 - `checks/check_enrolment.py` requires that the files here are exactly the enrolled
   playbooks, one file each (R4), and that no other file under `ansible/` that Ansible
   loads as variables sets `pull_trigger_signers` (R6). The config writer must take its
