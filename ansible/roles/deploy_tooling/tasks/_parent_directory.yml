@@ -1,15 +1,17 @@
 ---
-# Included from main.yml once for each directory that holds a target. The path is
-# deploy_tooling_parent. Nothing here changes the host: the role does not repair a
-# directory it does not own, it refuses the run, so an approver reads why.
+# Included from main.yml once for each directory on the path to a target, the root of the
+# filesystem included. The path is deploy_tooling_parent. Nothing here changes the host: the
+# role does not repair a directory it does not own, it refuses the run, so an approver reads why.
 #
 # The wrapper and the policy program run as root, so an account that can write to the
 # directory they sit in can unlink either one and put its own in its place, whatever
-# the file's own owner and mode say. The directory has to be root's to change alone.
-# A group may write to it only when that group is root's or has no member (a stock
-# Debian /usr/local/sbin is root:staff and group-writable, and nobody is in staff).
+# the file's own owner and mode say. The same holds for every directory above that one: an
+# account that can write to /usr/local can rename /usr/local/sbin aside and make its own. So
+# each directory on the path has to be root's to change alone. A group may write to it only
+# when that group is root's or has no member (a stock Debian /usr/local/sbin is root:staff
+# and group-writable, and nobody is in staff).
 
-- name: Look at a directory that holds a target
+- name: Look at a directory on the path to a target
   ansible.builtin.stat:
     path: '{{ deploy_tooling_parent }}'
     follow: true
@@ -26,8 +28,8 @@
       - deploy_tooling_parent_stat.stat.isdir
       - deploy_tooling_parent_stat.stat.pw_name == 'root'
     fail_msg: >-
-      {{ deploy_tooling_parent }} holds a file that is run as root, and it is not a directory
-      owned by root. The role does not repair it.
+      {{ deploy_tooling_parent }} is on the path to a file that is run as root, and it is not a
+      directory owned by root. The role does not repair it.
     quiet: true
 
 - name: Refuse a directory that holds a target and that any account can write to
@@ -35,8 +37,8 @@
     that:
       - not deploy_tooling_parent_stat.stat.woth
     fail_msg: >-
-      {{ deploy_tooling_parent }} holds a file that is run as root, and it can be written to by
-      any account. The role does not repair it.
+      {{ deploy_tooling_parent }} is on the path to a file that is run as root, and it can be
+      written to by any account. The role does not repair it.
     quiet: true
 
 - name: Look up who is in a group other than root's that can write to the directory
@@ -59,7 +61,7 @@
         (deploy_tooling_parent_group.ansible_facts.getent_group[deploy_tooling_parent_stat.stat.gr_name]
         | default(['', '', 'unknown'], true))[2] == ''
     fail_msg: >-
-      {{ deploy_tooling_parent }} holds a file that is run as root, and the group
+      {{ deploy_tooling_parent }} is on the path to a file that is run as root, and the group
       {{ deploy_tooling_parent_stat.stat.gr_name }}, which can write to it, has members or is
       not known to the system. The role does not repair it.
     quiet: true

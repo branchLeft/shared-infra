@@ -1,10 +1,11 @@
 ---
-# Order matters. Every input is checked before anything changes the host; the
-# directories exist before the files go into them; every target is checked
-# (owner, group, mode, kind), and so is the directory each one sits in, before
-# anything is run from it, because the policy program runs as root; and on a
-# host of class app the program is run, by the handler, only after those checks
-# and before the firewall chains are read back.
+# Order matters. The inputs and every directory on the path to a target (up to the
+# root of the filesystem, because an account that can write to any of them can
+# replace what is run as root) are read first, and nothing is written until they
+# pass; the directories exist before the files go into them; every target is then
+# checked (owner, group, mode, kind) before anything is run from it, because the
+# policy program runs as root; and on a host of class app the program is run, by
+# the handler, only after those checks and before the firewall chains are read back.
 #
 # Check mode (ANS-10). The role runs to completion under --check --diff on a
 # host in either state. A task that reads and changes nothing (stat, slurp, the
@@ -37,6 +38,35 @@
     deploy_tooling_file_targets: >-
       {{ deploy_tooling_common_file_targets
          + (deploy_tooling_app_file_targets if deploy_tooling_host_class == 'app' else []) }}
+
+# ----- The directories above the targets -----
+
+# A target that is root's alone is still replaceable by an account that can write to the
+# directory it sits in, or to any directory above that one (it can rename the lower
+# directory aside and put its own in its place), and the wrapper and the policy program are
+# run as root. So every directory on the path to every target, and to the sudoers drop-in,
+# up to the root of the filesystem, is checked. This is first, before the role writes a
+# file, because a run that refuses a directory has to have written nothing into it. Read
+# only, so it runs in check mode: a host whose directory is wrong is drift the plan has to
+# show.
+- name: Work out every directory on the path to a target
+  ansible.builtin.set_fact:
+    deploy_tooling_parent_paths: >-
+      {%- set ns = namespace(found=['/']) -%}
+      {%- for target in deploy_tooling_directory_targets + deploy_tooling_file_targets
+          + [{'path': deploy_tooling_sudoers_path}] -%}
+      {%- set parts = target.path.split('/')[1:-1] -%}
+      {%- for count in range(1, parts | length + 1) -%}
+      {%- set ns.found = ns.found + ['/' ~ parts[:count] | join('/')] -%}
+      {%- endfor -%}
+      {%- endfor -%}
+      {{ ns.found | unique | sort | list }}
+
+- name: Check each directory on the path to a target
+  ansible.builtin.include_tasks: _parent_directory.yml
+  loop: '{{ deploy_tooling_parent_paths }}'
+  loop_control:
+    loop_var: deploy_tooling_parent
 
 # ----- The directories and the files -----
 
@@ -198,25 +228,6 @@
   loop_control:
     label: '{{ item.item.path }}'
   when: not ansible_check_mode
-
-# ----- The directories the targets sit in -----
-
-# A target that is root's alone is still replaceable by an account that can write to the
-# directory it sits in, and the wrapper and the policy program are run as root. So the
-# directory of every target, and of the sudoers drop-in, is checked as well. Read only, so
-# it runs in check mode: a host whose directory is wrong is drift the plan has to show.
-- name: Work out the directories that hold a target
-  ansible.builtin.set_fact:
-    deploy_tooling_parent_paths: >-
-      {{ (deploy_tooling_directory_targets + deploy_tooling_file_targets
-          + [{'path': deploy_tooling_sudoers_path}])
-         | map(attribute='path') | map('dirname') | unique | sort | list }}
-
-- name: Check each directory that holds a target
-  ansible.builtin.include_tasks: _parent_directory.yml
-  loop: '{{ deploy_tooling_parent_paths }}'
-  loop_control:
-    loop_var: deploy_tooling_parent
 
 # ----- The sudoers drop-in: verified, never written -----
 

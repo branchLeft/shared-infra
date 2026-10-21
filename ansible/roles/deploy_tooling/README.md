@@ -88,12 +88,15 @@ After the files are written the role reads every target again and refuses one th
 not owned by `root`, not in group `root`, not the mode it is installed with, or not a
 regular file or directory as it should be.
 
-The role also reads the directory each target sits in (and the one the sudoers drop-in
-sits in), because an account that can write to a directory can replace a file in it that
-runs as root. It refuses a directory that is not owned by `root`, that any account can
-write to, or that a group other than `root`'s can write to when that group has members. It
-does not repair one. A stock Debian `/usr/local/sbin` is `root:staff` and group-writable;
-that passes while nobody is in `staff`.
+The role also reads every directory on the path to each target (and to the sudoers
+drop-in), up to `/`, because an account that can write to a directory can replace a file
+in it that runs as root, and an account that can write to a directory above that one can
+rename it aside and put its own in its place. It refuses a directory that is not owned by
+`root`, that any account can write to, or that a group other than `root`'s can write to when
+that group has members. It does not repair one. A stock Debian `/usr/local/sbin` is
+`root:staff` and group-writable; that passes while nobody is in `staff`. These reads come
+first, before the role writes a file, so a run that is refused has written nothing into
+the directory it refused.
 
 The four files are read from `hetzner/provision/` of the checkout the playbook runs from,
 which stays their single home: the role holds no copy of them and no link to them (a link
@@ -274,7 +277,13 @@ leaves every step green is not claimed.
 | A program has one home and the role holds none             | a byte copy of a program put under the role                   | the repository checks: `test_every_program_is_read_from_the_one_home_and_none_is_held`                                         |
 | One role owns the policy program                           | a second role given a copy                                    | the repository checks: `test_the_real_tree_has_one_owner`                                                                      |
 | No second role reads a program from its home               | a second role's task given `src` under `hetzner/provision`    | the repository checks: `test_a_second_role_reading_a_program_by_path_is_found`                                                 |
-| No second role writes a path this role installs            | a second role's task given the wrapper's path as `dest`       | the repository checks: `test_a_second_role_writing_a_path_from_another_source_is_found`                                        |
+| No second role names a path this role installs, by any key | the match narrowed to a `dest` key again                      | the repository checks: the `path`, `name`, `lineinfile`, free-form, shell and argument-list cases, and the playbook cases      |
+| A role may run the wrapper but not write it                | the run exemption taken out (or made to accept shell syntax)  | the repository checks: `test_a_role_that_only_runs_the_wrapper_or_writes_its_own_paths_is_not_found`, and the `&&` case        |
+| The second role is exempt for the policy files only        | the exemption made to cover the whole role                    | the repository checks: the wrapper's copy, read and path under the allowed role                                                |
+| The programs are those the role's target lists name        | the four names written into the check again                   | the repository checks: `test_a_program_added_to_the_target_lists_is_covered_with_no_edit_here`                                 |
+| The probe check reads every shape the contract scan reads  | the slot shape left out of the contract scan's list           | the repository checks: `test_a_name_the_wrapper_accepts_is_found_in_every_shape`                                               |
+| Nothing is written into a directory the run refuses        | a copy of the wrapper put before the directory checks         | verify, parent directories: `A run that refused the directory had already written`                                             |
+| ... and every directory above it is checked as well        | the path taken to the immediate directory only                | verify, parent directories: `EXPECTED A FAILURE, GOT NONE: directory above the one that holds the wrapper`                     |
 | The compose probe can never be a stack                     | the probe renamed to a name the deploy wrapper accepts        | the repository checks: `test_a_name_the_wrapper_accepts_is_found_in_every_shape`; the compose unit contract test               |
 | A failure prints no text of a foreign rule                 | the rule's text put back into the bypass message              | the module's unit tests and verify, chain: the whole message of the bypass is matched                                          |
 | `FORWARD` reaches `DOCKER-USER` first                      | the `FORWARD` check taken out of the module                   | the module's unit tests; verify, chain: `an accept above the jump to DOCKER-USER`                                              |
@@ -306,16 +315,30 @@ stayed clean; the harness run that follows them is the green.
   chain a listed jump goes to is not read, so a rule inside it that accepts would pass.
   Both are in the acceptance criteria of the ticket that wires the app hosts, with a
   captured real chain as the fixture the fix is tested against.
-- **The single-owner check has limits.** It finds, in another role, a link to or a byte copy
-  of a program, a string in its tasks, handlers, variables or defaults that is a program's file
-  name or a path under `hetzner/provision/`, and a `dest` equal to a path this role installs
-  (a variable is filled in from that role's own variables). A path assembled in a loop from
-  separate parts is not seen by the last two rules; the byte-copy rule still sees a copy.
-  Fixtures under a role's `molecule/` stand in for a host and are not read. The one allowed
-  second role is retired by its own follow-up after this role has run live.
+- **The single-owner check has limits.** It finds, in another role or a playbook, a link to
+  or a byte copy of a program; a string in its tasks, handlers, variables or defaults that
+  is a program's file name or a path under `hetzner/provision/`; and a string, under any
+  key, that is or contains a path this role installs (a `dest`, `path`, `name` or `src`, a
+  free-form `dest=...`, a shell string, an argument). The programs and paths are those the
+  role's own target lists name. A command that only runs the wrapper (an argument list or
+  a plain command string whose program is the wrapper, behind `sudo` and its options) is a
+  use and is not found; a shell string with any shell syntax is not trusted to be one. A
+  task title is a label: only a `name` that is the path alone counts. A variable is filled
+  in from the role's own variables, the inventory's group and host variables and a play's
+  `vars`; a path set only in a role's `vars/` or `defaults/` is read where it is used. A
+  path assembled in a loop from separate parts, a variable set by the host's own facts or
+  by a file outside the tree, and a task file that includes a template which writes it are
+  not seen by the path rules; the byte-copy rule still sees a copy. Fixtures under a role's
+  `molecule/` stand in for a host and are not read. The one allowed second role is exempt
+  for the policy program and its unit only, not for the wrapper or the compose unit, and is
+  retired by its own follow-up after this role has run live.
 - **The directory checks refuse; they do not repair.** A directory that fails them is
   somebody else's to change, and a group with members is read from the system's group
-  database on the host. A directory whose group is not known by name is refused.
+  database on the host. A directory whose group is not known by name is refused. The
+  directories are taken by name, each followed if it is a link: a link in the path is
+  checked as the directory it points to, and that directory's own ancestors are not
+  walked, so a path that crosses a link into another tree is covered only as far as the
+  names go.
 - **The Docker-daemon restart is tested against a stub.** The test restarts a stub
   `docker.service` and shows the policy unit restarted with it and the chain intact,
   which proves the unit follows that service. It does not prove the same for a real Docker
