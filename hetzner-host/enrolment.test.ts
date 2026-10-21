@@ -173,6 +173,18 @@ describe('the root authorized_keys lines (C1, C6)', () => {
       );
     });
 
+    it('refuses the same key under a different comment, which is still one key', () => {
+      expect(() =>
+        assertEnrolment(enrolment({ checkPublicKey: `${APPLY_KEY} another-comment` }))
+      ).toThrow(/must be different keys/);
+    });
+
+    it('refuses the same key with a trailing space, which is still one key', () => {
+      expect(() => assertEnrolment(enrolment({ checkPublicKey: `${APPLY_KEY} ` }))).toThrow(
+        /must be different keys/
+      );
+    });
+
     it('does not echo a rejected value', () => {
       try {
         assertEnrolment(

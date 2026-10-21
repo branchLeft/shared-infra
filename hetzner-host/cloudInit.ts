@@ -603,11 +603,20 @@ function assertEnrolmentKey(name: string, key: unknown): string {
   }
 }
 
+/** The type and base64 blob of a validated OpenSSH public key, without its comment. */
+function keyIdentity(key: string): string {
+  const [type, blob] = key.split(' ');
+  return `${type} ${blob}`;
+}
+
 /** Checks an enrolment before anything is rendered or created. */
 export function assertEnrolment(enrolment: Enrolment): Enrolment {
   const apply = assertEnrolmentKey('enrolment.applyPublicKey', enrolment.applyPublicKey);
   const check = assertEnrolmentKey('enrolment.checkPublicKey', enrolment.checkPublicKey);
-  if (apply === check) {
+  // Compare the key itself (type and base64 blob), never the whole line: the
+  // comment is free text, so one key with two comments, or a trailing space,
+  // is still one key, and sshd would match the first line, which applies.
+  if (keyIdentity(apply) === keyIdentity(check)) {
     throw new Error(
       'enrolment.applyPublicKey and enrolment.checkPublicKey must be different keys: the check key must not be able to apply.'
     );

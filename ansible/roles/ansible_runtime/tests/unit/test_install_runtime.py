@@ -222,6 +222,12 @@ class LockChecksTest(Case):
             "an option in the marker with no space before it": (
                 f"alpha==1.0 ;--extra-index-url=https://index.invalid/ {hashed}\n"
             ),
+            "a short index option directly after the semicolon": (
+                f"alpha==1.0;-i https://index.invalid/simple {hashed}\n"
+            ),
+            "a short find-links option directly after a spaced semicolon": (
+                f"alpha==1.0 ;-f https://index.invalid/ {hashed}\n"
+            ),
             "an option between the hashes": (
                 f"alpha==1.0 ; os_name == 'posix' {hashed} --index-url=https://index.invalid/"
                 f" {hashed}\n"
