@@ -216,24 +216,30 @@
             quiet: true
             fail_msg: The role failed on the wrong pin for a reason other than the checksum.
 
-    # The control for the order. The sudoers grant is what makes the wrapper
-    # reachable as root, so a grant the check refuses must stop the run before
-    # the wrapper is installed anywhere. A role that only fails does not prove
-    # that: it can fail after the install and leave the wrapper live under the
-    # refused grant. So the run is given a slot the installed grant does not
-    # have and a wrapper path of its own, and the host is read after the failure.
-    # The path is a probe, so the real wrapper is never touched and the run needs
-    # no restoring; the assertion names the grant check, so a failure of any
-    # other kind does not pass for this one.
+    # The controls for the sudoers grant. The grant is what makes the wrapper
+    # reachable as root, so a grant or a wrapper path the check refuses must stop
+    # the run before the wrapper is put anywhere. A role that only fails does not
+    # prove that: it can fail after the install and leave the wrapper live under
+    # the refused grant. So each case below reads the host after the failure, and
+    # each assertion names its own refusal (not a shared phrase), so a failure of
+    # any other kind does not pass for it. Nothing here restores by running the
+    # role: what a case moves or edits it puts back as it found it.
+
+    # The order, for the count refusal. The real wrapper is moved aside first, so
+    # an install that came before the check would put a file back at its path.
     - name: Prove a grant the check refuses leaves the wrapper uninstalled
       when: not ansible_check_mode
       vars:
-        converge_probe_wrapper: /usr/local/sbin/branchleft-slot-refused-probe
+        converge_wrapper: /usr/local/sbin/branchleft-slot
+        converge_wrapper_aside: /root/branchleft-slot.wrapper.aside
       block:
-        - name: Make sure nothing is at the probe path before the run
-          ansible.builtin.file:
-            path: '{{ converge_probe_wrapper }}'
-            state: absent
+        - name: Move the installed wrapper aside
+          ansible.builtin.command:
+            argv:
+              - /bin/mv
+              - '{{ converge_wrapper }}'
+              - '{{ converge_wrapper_aside }}'
+            removes: '{{ converge_wrapper }}'
           changed_when: false
 
         - name: Apply the role with a slot the installed grant does not hold
@@ -241,36 +247,76 @@
             name: branchleft.demo1_build
           vars:
             demo1_build_slot_names: ['0', '1', '2', '3', '4', '5', '6', '7']
-            demo1_build_wrapper_path: '{{ converge_probe_wrapper }}'
 
         - name: Fail if the refused grant was accepted
           ansible.builtin.fail:
             msg: The role accepted a sudoers grant that does not match the slot table.
       rescue:
-        - name: Assert the failure was the sudoers grant
+        - name: Assert the failure was the count of rules
           ansible.builtin.assert:
             that:
-              - "'sudoers grant holds' in (ansible_failed_result.msg | default(''))"
+              - "'rules; the slot table of 8 slots expects 57' in (ansible_failed_result.msg | default(''))"
             quiet: true
-            fail_msg: The role failed on the extra slot for a reason other than the sudoers grant.
+            fail_msg: The role failed on the extra slot for a reason other than the count of rules.
 
-        - name: Look at the probe path after the refusal
+        - name: Look at the wrapper's path after the refusal
           ansible.builtin.stat:
-            path: '{{ converge_probe_wrapper }}'
+            path: '{{ converge_wrapper }}'
             follow: false
-          register: demo1_build_converge_probe
+          register: demo1_build_converge_order_wrapper
 
         - name: Assert the refused grant left no wrapper installed
           ansible.builtin.assert:
             that:
-              - not demo1_build_converge_probe.stat.exists
+              - not demo1_build_converge_order_wrapper.stat.exists
             quiet: true
             fail_msg: >-
-              The role installed the wrapper at {{ converge_probe_wrapper }} and then refused the
+              The role installed the wrapper at {{ converge_wrapper }} and then refused the
               sudoers grant. A grant the check refuses must stop the run before any install.
-
-        - name: Leave nothing at the probe path
-          ansible.builtin.file:
-            path: '{{ converge_probe_wrapper }}'
-            state: absent
+      always:
+        - name: Put the installed wrapper back
+          ansible.builtin.command:
+            argv:
+              - /bin/mv
+              - '{{ converge_wrapper_aside }}'
+              - '{{ converge_wrapper }}'
+            removes: '{{ converge_wrapper_aside }}'
           changed_when: false
+
+    # The wrapper path. The grant is valid and whole; only the path the role is
+    # asked to install at differs from the one every rule names. The second case
+    # is a system binary that exists, so a write would overwrite it; the third is
+    # a dotted spelling that reaches the same binary.
+    - name: Prove a wrapper path the grant does not name is refused and nothing is written there
+      ansible.builtin.include_tasks: refused_wrapper_path.yml
+      loop:
+        - path: /usr/local/sbin/branchleft-slot-refused-probe
+          expect: 'does not run /usr/local/sbin/branchleft-slot-refused-probe in every rule'
+        - path: /usr/bin/passwd
+          expect: 'does not run /usr/bin/passwd in every rule'
+        - path: /usr/local/sbin/../../bin/passwd
+          expect: 'The wrapper path must be an absolute path'
+      loop_control:
+        loop_var: converge_case
+        label: '{{ converge_case.path }}'
+      when: not ansible_check_mode
+
+    # The grant's content. One prepared rule is replaced by a line that keeps the
+    # count: three wildcards and a line that is not the broker's. On a host with no
+    # release the generator comparison is skipped, so these assertions are the
+    # only content check on the grant there.
+    - name: Prove a grant with a wildcard or a foreign rule is refused
+      ansible.builtin.include_tasks: refused_grant_line.yml
+      loop:
+        - line: 'broker ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot *'
+          expect: 'holds a line that is not a single literal NOPASSWD rule for the broker, or a wildcard'
+        - line: 'broker ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot ?'
+          expect: 'holds a line that is not a single literal NOPASSWD rule for the broker, or a wildcard'
+        - line: 'broker ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot [0-6] reset'
+          expect: 'holds a line that is not a single literal NOPASSWD rule for the broker, or a wildcard'
+        - line: 'root ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot 0 reset'
+          expect: 'does not run /usr/local/sbin/branchleft-slot in every rule'
+      loop_control:
+        loop_var: converge_case
+        label: '{{ converge_case.line }}'
+      when: not ansible_check_mode

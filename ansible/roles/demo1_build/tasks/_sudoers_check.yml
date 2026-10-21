@@ -47,6 +47,22 @@
       {{ (demo1_build_sudoers_raw.content | b64decode).splitlines()
       | map('trim') | reject('equalto', '') | reject('match', '#') | list }}
 
+# The wrapper is installed as root at demo1_build_wrapper_path, so what was just
+# read must be a grant for that path and no other: every rule runs exactly that
+# path. This is the tie between the verified grant and the install, and it holds
+# on a host with no release too, where the generator comparison below is skipped.
+# Without it a caller's path (a system binary, say) would be written as root
+# under a grant that names another file.
+- name: Refuse a grant that does not run the wrapper path the role installs to
+  ansible.builtin.assert:
+    that:
+      - demo1_build_installed_grants | length > 0
+      - demo1_build_installed_grants | select('search', demo1_build_grant_wrapper_pattern) | list | length == demo1_build_installed_grants | length
+    quiet: true
+    fail_msg: >-
+      The installed sudoers grant does not run {{ demo1_build_wrapper_path }} in every rule. The wrapper is
+      installed only at the path the grant names, so nothing is written there.
+
 # The number comes from the slot table: slots x (one reset + colours x three
 # verbs) + one image load. It is not a literal, so a longer table moves it.
 - name: Refuse a grant with a line that is not one literal NOPASSWD rule, or any wildcard

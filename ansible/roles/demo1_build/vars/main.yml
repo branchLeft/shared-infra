@@ -101,6 +101,13 @@ demo1_build_required_programs:
 # reach the wrapper as root.
 demo1_build_grant_line_pattern: '^broker ALL=\(root\) NOPASSWD: /'
 demo1_build_wildcard_pattern: '[*?\[]'
+
+# The wrapper is installed as root at demo1_build_wrapper_path, so the path the
+# grant was checked for is the path the install uses: every rule must run exactly
+# that path, followed by its arguments. A path with a dot segment, a doubled slash
+# or a trailing slash is not a spelling the grant can name, and is refused.
+demo1_build_grant_wrapper_pattern: '^broker ALL=\(root\) NOPASSWD: {{ demo1_build_wrapper_path | regex_escape }} [^ ]'
+demo1_build_path_dots_pattern: '(^|/)\.{1,2}(/|\Z)|//|/\Z'
 demo1_build_reset_line_pattern: ' [0-9]+ reset$'
 demo1_build_reset_suffix_pattern: ' reset$'
 

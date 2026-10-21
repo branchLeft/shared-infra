@@ -35,5 +35,8 @@
     that:
       - demo1_build_wrapper_path is string
       - demo1_build_wrapper_path is match(demo1_build_path_pattern)
+      - demo1_build_wrapper_path is not search(demo1_build_path_dots_pattern)
     quiet: true
-    fail_msg: The wrapper path must be an absolute path of letters, digits, dot, underscore, hyphen and slash.
+    fail_msg: >-
+      The wrapper path must be an absolute path of letters, digits, dot, underscore, hyphen and slash,
+      with no dot segment, no doubled slash and no trailing slash.

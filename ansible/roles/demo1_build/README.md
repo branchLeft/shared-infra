@@ -21,7 +21,8 @@ What the role does, in the order of `tasks/main.yml`:
 
 1. **Checks its inputs** (`_inputs.yml`): the pinned commit is a full sha, every
    program has a 64-digit sha256, the slot table is digits and not repeated, and
-   the wrapper path is an absolute path.
+   the wrapper path is an absolute path with no dot segment, doubled slash or
+   trailing slash.
 2. **Checks what `broker_deploy` left** (`_preconditions.yml`), read-only: the
    `broker` account exists; `/etc/branchleft`, `/var/lib/branchleft`, `/usr/local`,
    `/usr/local/sbin`, `/usr/local/lib` and `/opt` are root-owned directories that
@@ -37,8 +38,10 @@ What the role does, in the order of `tasks/main.yml`:
 4. **Compares the sudoers grant with the pinned generator** (`_sudoers_check.yml`),
    read-only, and before any program is installed, so a grant it refuses leaves
    the wrapper uninstalled by that run: the file is a regular file, `root:root`,
-   `0440`, and passes `visudo -csf`; every rule is one literal `NOPASSWD` line for
-   the broker with no wildcard; the number of rules is what the slot table implies;
+   `0440`, and passes `visudo -csf`; every rule runs exactly `demo1_build_wrapper_path`,
+   the path step 5 installs the wrapper at, so a path the grant does not name is
+   refused before anything is written there; every rule is one literal `NOPASSWD`
+   line for the broker with no wildcard; the number of rules is what the slot table implies;
    the sorted rules equal the sorted output of the pinned `render_slot_sudoers.py`;
    and the slots in the generator's rules are the slots in the role's table. It
    needs only the staged release, so it follows step 3.
@@ -128,7 +131,8 @@ no secret.
 - `demo1_build_slot_names`: the slot table, taken from `broker_deploy_slot_names`
   when that is set; the count of grant lines is derived from it.
 - `demo1_build_wrapper_path`: taken from `broker_deploy_wrapper_path` when that is
-  set; the grant names this path.
+  set; the role refuses to run unless every rule of the installed grant names exactly
+  this path.
 
 `vars/main.yml` holds the constants (paths, accounts, uids, patterns). A caller
 cannot override them.

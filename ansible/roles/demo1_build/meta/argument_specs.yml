@@ -84,6 +84,9 @@ argument_specs:
         description: >-
           Absolute path the slot wrapper is installed at, which the sudoers
           grant names. Follows broker_deploy_wrapper_path when the host's
-          variables set it. The pinned generator names /usr/local/sbin/branchleft-slot,
-          so any other value fails the grant comparison.
+          variables set it. The role refuses to run, before it installs anything,
+          unless every rule of the installed sudoers grant runs exactly this path,
+          and it refuses a path with a dot segment, a doubled slash or a trailing
+          slash. The pinned generator names /usr/local/sbin/branchleft-slot, so any
+          other value is also refused by the comparison with the generator.
         default: /usr/local/sbin/branchleft-slot
