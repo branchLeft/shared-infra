@@ -154,3 +154,21 @@
         owner: root
         group: root
         mode: '0644'
+
+    # A reload marker left by an earlier run, with the drop-in present. The converge
+    # must forget it (the forget task in tasks/_unit.yml), so verify asserts it is gone.
+    - name: Create the directory the role keeps the reload marker in
+      ansible.builtin.file:
+        path: /var/cache/db1-stack
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Put a reload marker in place from an earlier run
+      ansible.builtin.file:
+        path: /var/cache/db1-stack/legacy-drop-in-reloaded
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'

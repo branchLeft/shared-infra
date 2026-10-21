@@ -55,18 +55,20 @@
     mode: '0755'
   when: db1_stack_db_directory_stat.stat.exists
 
-# The socket directory is 1777: world-writable so the database's uid can create the
-# socket whatever its uid is, with the sticky bit so no other local account can
-# unlink or replace it. Every root-authenticated client (the healthcheck, the grants
-# program and the exporter) opens that socket, so the sticky bit is what stops a
-# local account squatting on it. mysqld creates the socket file itself.
+# The socket directory is owned by the database's uid (999, the mysql image's user)
+# and is 0755. Only that owner and root can add an entry to it, so no other local
+# account can create or replace the socket file. Every root-authenticated client (the
+# healthcheck, the grants program and the exporter) opens the socket in this
+# directory, so a squatter there would receive the root password. Clients need only
+# search the directory, which 0755 allows, and mysqld creates the socket file itself,
+# world-connectable.
 - name: Create the socket directory the database and the exporter share
   ansible.builtin.file:
     path: '{{ db1_stack_socket_directory }}'
     state: directory
-    owner: root
+    owner: '999'
     group: root
-    mode: '1777'
+    mode: '0755'
   when: db1_stack_db_directory_stat.stat.exists
 
 - name: Look at the directories the rendered files are written into

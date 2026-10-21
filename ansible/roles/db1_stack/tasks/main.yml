@@ -1,8 +1,10 @@
 ---
-# Order matters. Every input is checked before anything changes the host; the
-# repository, its key and its pin are in place before the index is refreshed;
-# the local package file is installed before the packages that depend on it; and
-# the exporter file is created closed before it holds the password.
+# Order matters. The password, the downloads and the repository key are checked
+# before anything changes the host. The database image pin is not: it is checked
+# in tasks/_compose.yml, after this file has changed the host (see the README, "The
+# database image pin"). The repository, its key and its pin are in place before the
+# index is refreshed; the local package file is installed before the packages that
+# depend on it; and the exporter file is created closed before it holds the password.
 #
 # The exporter password is the one secret. Each task that reads, templates or
 # passes it sets no_log: true, and diff: false where a diff would show it

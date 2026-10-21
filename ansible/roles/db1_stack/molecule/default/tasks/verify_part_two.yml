@@ -96,15 +96,17 @@
   no_log: true
 
 # The compose file, the configuration and the socket directory have the owners and
-# modes the role states. The socket directory is 1777 (world-writable, sticky; see the role).
+# modes the role states. The socket directory is owned by uid 999, the database's
+# uid, and is 0755; the others are root's. The owner is compared by uid, so a uid
+# with no account name in the container is still checked.
 - name: Stat the files and directories the role creates
   ansible.builtin.stat:
     path: '{{ item.path }}'
   loop:
-    - { path: '{{ db1_stack_compose_path }}', mode: '0644' }
-    - { path: '{{ db1_stack_cnf_directory }}/branchleft.cnf', mode: '0644' }
-    - { path: '{{ db1_stack_db_directory }}', mode: '0755' }
-    - { path: '{{ db1_stack_socket_directory }}', mode: '1777' }
+    - { path: '{{ db1_stack_compose_path }}', mode: '0644', uid: 0 }
+    - { path: '{{ db1_stack_cnf_directory }}/branchleft.cnf', mode: '0644', uid: 0 }
+    - { path: '{{ db1_stack_db_directory }}', mode: '0755', uid: 0 }
+    - { path: '{{ db1_stack_socket_directory }}', mode: '0755', uid: 999 }
   register: db1_stack_verify_modes
 
 - name: Assert the stack's files and directories have the owners and modes the role states
@@ -112,7 +114,7 @@
     that:
       - item.stat.exists
       - item.stat.mode == item.item.mode
-      - item.stat.pw_name == 'root'
+      - item.stat.uid == item.item.uid
     fail_msg: 'A stack path is not as the role states: {{ item.item.path }}'
     quiet: true
   loop: '{{ db1_stack_verify_modes.results }}'
@@ -177,6 +179,40 @@
     quiet: true
   no_log: true
 
+# The compose file is rendered before the database image pin is checked and before
+# the unit is enabled. A rebuilt host needs the compose file on disk for
+# branchleft-deploy to read before it writes the pin, so a pin check moved above the
+# render would stop the first run for good. Each name must appear in the log (the
+# >= 0 guard), so an empty log cannot pass the order.
+- name: Assert the compose file is rendered before the pin is refused and before the unit is enabled
+  ansible.builtin.assert:
+    that:
+      - "db1_stack_verify_order_log.find(' : Render the compose file the deploy program reads') >= 0"
+      - "db1_stack_verify_order_log.find(' : Refuse a database image pin that is absent') >= 0"
+      - "db1_stack_verify_order_log.find(' : Enable the database stack') >= 0"
+      - "db1_stack_verify_order_log.find(' : Render the compose file the deploy program reads')
+        < db1_stack_verify_order_log.find(' : Refuse a database image pin that is absent')"
+      - "db1_stack_verify_order_log.find(' : Refuse a database image pin that is absent')
+        < db1_stack_verify_order_log.find(' : Enable the database stack')"
+    fail_msg: The compose file is not rendered before the database image pin is checked and the unit is enabled.
+    quiet: true
+  no_log: true
+
+# The legacy drop-in's reload marker is removed by the run that finds the drop-in
+# present, so the reload is not skipped on a later run. The marker is set up by the
+# prepare step, so its absence after converge shows the forget task ran.
+- name: Stat the reload marker after the converge removed the legacy drop-in
+  ansible.builtin.stat:
+    path: '{{ db1_stack_reload_marker }}'
+  register: db1_stack_verify_marker
+
+- name: Assert the reload marker was forgotten when the legacy drop-in was found
+  ansible.builtin.assert:
+    that:
+      - not db1_stack_verify_marker.stat.exists
+    fail_msg: The reload marker is still present, so a reinstalled legacy drop-in would not be reloaded.
+    quiet: true
+
 # ----- The source of the included tasks -----
 
 # The role starts, stops, restarts and recreates nothing, and removes no data. The
@@ -187,10 +223,11 @@
     db1_stack_verify_compose_source: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/tasks/_compose.yml') }}"
     db1_stack_verify_unit_source: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/tasks/_unit.yml') }}"
 
-# The scan is over every task file the role runs, not a substring of two of them.
-# It matches the forms a task can take: a compose verb after compose or docker, a
-# docker_ or community.docker module, a command or shell task, and a state or a
-# started/restarted/stopped key in block or flow style and quoted or not. A
+# The text scan is over every task file the role runs. It is a second check beside
+# the module allowlist below, which is the control: the allowlist reads each task's
+# module from the parsed YAML, so a command or shell task, a docker module or a
+# compose verb in any form is refused by the allowlist, and this scan adds the
+# state and started/restarted/stopped keys in block or flow style, quoted or not. A
 # removal (state: absent) is allowed in main.yml, which removes the legacy files
 # and the exporter path before writing, and refused in _compose.yml, which is the
 # included file that handles the stack. _unit.yml removes the legacy drop-in and
@@ -204,9 +241,6 @@
       - db1_stack_verify_main_source is not search('(?i)docker_|community[.]docker|docker\s+(restart|start|stop|rm|kill|run)')
       - db1_stack_verify_compose_source is not search('(?i)docker_|community[.]docker|docker\s+(restart|start|stop|rm|kill|run)')
       - db1_stack_verify_unit_source is not search('(?i)docker_|community[.]docker|docker\s+(restart|start|stop|rm|kill|run)')
-      - db1_stack_verify_main_source is not search('(?im)^\s*-?\s*(command|shell|raw|script)\s*:')
-      - db1_stack_verify_compose_source is not search('(?im)^\s*-?\s*(command|shell|raw|script)\s*:')
-      - db1_stack_verify_unit_source is not search('(?im)^\s*-?\s*(command|shell|raw|script)\s*:')
       - db1_stack_verify_main_source is not search('(?i)(state|restarted|started|stopped)\s*:\s*[\x27"]?\s*(started|restarted|stopped)')
       - db1_stack_verify_compose_source is not search('(?i)(state|restarted|started|stopped)\s*:\s*[\x27"]?\s*(started|restarted|stopped)')
       - db1_stack_verify_unit_source is not search('(?i)(state|restarted|started|stopped)\s*:\s*[\x27"]?\s*(started|restarted|stopped)')
@@ -215,11 +249,91 @@
     fail_msg: The role's task files start, stop, restart, recreate or remove something, which this role must not do.
     quiet: true
 
+# The module of every task is read from the parsed YAML, not matched in text. Each
+# task names exactly one module, which must be on the allowlist below; a module that
+# is not on it (command, shell, raw, script, a docker or compose module, anything new)
+# fails the check, whatever its arguments say. systemd_service may take only name,
+# enabled and daemon_reload, so it can enable or reload and cannot start, stop or
+# restart. The keywords are the task options Ansible reads, not modules.
+- name: Read the task files the role runs as YAML
+  ansible.builtin.set_fact:
+    db1_stack_verify_tasks_parsed: >-
+      {{ (db1_stack_verify_main_source | from_yaml)
+         + (db1_stack_verify_compose_source | from_yaml)
+         + (db1_stack_verify_unit_source | from_yaml) }}
+    db1_stack_verify_task_keywords:
+      - name
+      - when
+      - register
+      - loop
+      - loop_control
+      - no_log
+      - diff
+      - vars
+      - tags
+      - changed_when
+      - failed_when
+      - ignore_errors
+      - check_mode
+      - notify
+      - environment
+      - delegate_to
+      - run_once
+      - args
+      - until
+      - retries
+      - delay
+      - become
+      - become_user
+      - throttle
+      - any_errors_fatal
+    db1_stack_verify_allowed_modules:
+      - ansible.builtin.file
+      - ansible.builtin.stat
+      - ansible.builtin.template
+      - ansible.builtin.copy
+      - ansible.builtin.slurp
+      - ansible.builtin.assert
+      - ansible.builtin.set_fact
+      - ansible.builtin.get_url
+      - ansible.builtin.apt
+      - ansible.builtin.package_facts
+      - ansible.builtin.find
+      - ansible.builtin.include_tasks
+      - ansible.builtin.systemd_service
+  no_log: true
+
+- name: Assert every task the role runs names one module, and that module is on the allowlist
+  ansible.builtin.assert:
+    that:
+      - item.keys() | list | difference(db1_stack_verify_task_keywords) | length == 1
+      - item.keys() | list | difference(db1_stack_verify_task_keywords) | first in db1_stack_verify_allowed_modules
+    fail_msg: 'A task runs a module the role does not allow: {{ item.name | default("(no name)") }}'
+    quiet: true
+  loop: '{{ db1_stack_verify_tasks_parsed }}'
+  loop_control:
+    label: '{{ item.name | default("(no name)") }}'
+  no_log: true
+
+- name: Assert the one systemd task takes only the options that enable or reload
+  ansible.builtin.assert:
+    that:
+      - item['ansible.builtin.systemd_service'].keys() | list | difference(['name', 'enabled', 'daemon_reload']) | length == 0
+    fail_msg: 'A systemd task takes an option other than name, enabled or daemon_reload: {{ item.name | default("(no name)") }}'
+    quiet: true
+  loop: '{{ db1_stack_verify_tasks_parsed }}'
+  when: item['ansible.builtin.systemd_service'] is defined
+  loop_control:
+    label: '{{ item.name | default("(no name)") }}'
+  no_log: true
+
 # ----- The refusals -----
 
-# Each form of the pin file the deploy program never writes is refused before any
-# task changes the host, at the named task. The case file restores a good pin
-# after each case.
+# Each form of the pin file the deploy program never writes is refused at the named
+# task. The pin is checked in tasks/_compose.yml, after the packages, the drop-in
+# removal, the exporter file and the compose file have been written, so a bad-pin run
+# has changed the host before it stops. The case file restores a good pin after each
+# case.
 - name: Make the forms of the database image pin the role must refuse
   ansible.builtin.set_fact:
     db1_stack_verify_pin_cases:

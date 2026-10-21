@@ -133,10 +133,15 @@ Part two:
   again is followed by a reload, not skipped.
 - `/opt/branchleft` (root, `0755`), `/opt/branchleft/db` (root, `0755`),
   `/opt/branchleft/db/conf.d` (root, `0755`), `/opt/branchleft/db/run` (root,
-  `0755`) and `/opt/branchleft/db/run/mysqld` (root, `1777`: world-writable with
-  the sticky bit, so the database's uid can create its socket and no other local
-  account can unlink or replace it. The healthcheck, the grants program and the
-  exporter all open that socket as root).
+  `0755`) and `/opt/branchleft/db/run/mysqld` (uid `999`, the database's uid, mode
+  `0755`). The directory is owned by the database, so mysqld can create its socket
+  in it and no other local account can add an entry to it. A `0755` directory
+  lets clients search it, so the healthcheck, the grants program and the exporter
+  open the socket from it, and mysqld creates the socket world-connectable. The
+  root password is sent over that socket, so a squatter's socket in this directory
+  would receive it; a sticky `1777` directory would not stop one, because the
+  sticky bit only keeps other accounts from removing an entry, not from creating
+  one.
 - `/opt/branchleft/db/compose.yml` (root, `0644`) and
   `/opt/branchleft/db/conf.d/branchleft.cnf` (root, `0644`), rendered from the
   templates in this role.
@@ -312,7 +317,7 @@ after cutover, and it runs the same comparison again before it deletes anything.
 
 ## What the test proves
 
-The test runs in one Debian 13 container with no network. Every control in the
+The test runs in one Debian 13 container with no network. Each control in part one's
 table is removed in turn, by a single edit, and the whole harness is run: each
 removal makes a named step fail with the message shown, and the file is restored
 afterwards. A control that does not make the test fail when it is removed is not
@@ -350,33 +355,41 @@ Part one:
 
 Part two. The checks that assert a file's content read the rendered file on the
 instance, so they hold for the file the role wrote, and the refusals run the role
-with the bad input and require the named task to refuse, as part one does.
+with the bad input and require the named task to refuse, as part one does. Part
+two's controls are not all removed in turn: the rows below say which were, and a
+row that says "not sabotaged in this change" is asserted by verify and not proven
+by a removal.
 
-| Control                                                           | Removed by                                                    | The harness then fails at                                                                                                                                  |
-| ----------------------------------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The database image pin is one line of the writer's form           | the pattern accepts a tag with no digest (`(@sha256:HEX64)?`) | verify, the tag-only case: "Expected the role to stop at ... it stopped at 'NOTHING: the role accepted the input'"                                         |
-| A second compose file beside `compose.yml` is refused             | `compose.yaml` removed from `db1_stack_other_compose_names`   | verify, the second-file case: "Expected the role to stop at 'Refuse a second compose file in the database directory'"                                      |
-| The mysql image is read from `${IMAGE}`                           | (not sabotaged in this change)                                | verify, "Assert the compose file reads the mysql image from the pin file and never a literal"                                                              |
-| The exporter image is the pinned digest                           | (not sabotaged in this change)                                | verify, "Assert the exporter image is the pinned digest from the source line"                                                                              |
-| The exporter's healthcheck is the `mysql_up 1` gate               | (not sabotaged in this change)                                | verify, "Assert the exporter healthcheck is the mysql_up 1 gate"                                                                                           |
-| No service publishes a port, and the exporter reads the socket    | (not sabotaged in this change)                                | verify, "Assert the exporter reads the socket and no service publishes a port"                                                                             |
-| The MySQL configuration keeps its bind address                    | `bind-address = 0.0.0.0` in `branchleft.cnf.j2`               | verify, "Assert the MySQL configuration keeps its boundary and its replay settings" (red recorded, then green)                                             |
-| The MySQL configuration requires TLS                              | `require_secure_transport = OFF` in `branchleft.cnf.j2`       | verify, "Assert the MySQL configuration keeps its boundary and its replay settings" (red recorded, then green)                                             |
-| The MySQL binary log is row-based                                 | `binlog_format = STATEMENT` in `branchleft.cnf.j2`            | not run: the test container lost DNS during the run, so this row has no recorded red                                                                       |
-| The legacy drop-in is removed before the exporter file is written | the include moved after the exporter write in `main.yml`      | verify, "Assert the legacy drop-in is removed and reloaded before the exporter file is written" (red recorded, then green)                                 |
-| The reload is required to be in the log (order guard)             | renaming the reload task in `_unit.yml`                       | verify, the same assertion, failing on its `>= 0` guard (red recorded, then green)                                                                         |
-| The exporter file is written before the compose file is rendered  | (not sabotaged in this change)                                | verify, "Assert the exporter file is written before the compose file is rendered"                                                                          |
-| The role's task files start, stop, restart or remove nothing      | a line `state: restarted` added to `_compose.yml` (a comment) | verify, "Assert the role runs no compose command, no docker module, no command or shell, and starts, stops or restarts nothing" (red recorded, then green) |
-| The role never writes the database image pin                      | (not sabotaged in this change)                                | verify, "Assert the role left the database image pin unchanged"                                                                                            |
+| Control                                                           | Removed by                                                                                                                           | The harness then fails at                                                                                                                                  |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The database image pin is one line of the writer's form           | the pattern accepts a tag with no digest (`(@sha256:HEX64)?`)                                                                        | verify, the tag-only case: "Expected the role to stop at ... it stopped at 'NOTHING: the role accepted the input'"                                         |
+| A second compose file beside `compose.yml` is refused             | `compose.yaml` removed from `db1_stack_other_compose_names`                                                                          | verify, the second-file case: "Expected the role to stop at 'Refuse a second compose file in the database directory'"                                      |
+| The mysql image is read from `${IMAGE}`                           | (not sabotaged in this change)                                                                                                       | verify, "Assert the compose file reads the mysql image from the pin file and never a literal"                                                              |
+| The exporter image is the pinned digest                           | (not sabotaged in this change)                                                                                                       | verify, "Assert the exporter image is the pinned digest from the source line"                                                                              |
+| The exporter's healthcheck is the `mysql_up 1` gate               | (not sabotaged in this change)                                                                                                       | verify, "Assert the exporter healthcheck is the mysql_up 1 gate"                                                                                           |
+| No service publishes a port, and the exporter reads the socket    | (not sabotaged in this change)                                                                                                       | verify, "Assert the exporter reads the socket and no service publishes a port"                                                                             |
+| The MySQL configuration keeps its bind address                    | `bind-address = 0.0.0.0` in `branchleft.cnf.j2`                                                                                      | verify, "Assert the MySQL configuration keeps its boundary and its replay settings" (red recorded, then green)                                             |
+| The MySQL configuration requires TLS                              | `require_secure_transport = OFF` in `branchleft.cnf.j2`                                                                              | verify, "Assert the MySQL configuration keeps its boundary and its replay settings" (red recorded, then green)                                             |
+| The MySQL binary log is row-based                                 | `binlog_format = STATEMENT` in `branchleft.cnf.j2`                                                                                   | verify, "Assert the MySQL configuration keeps its boundary and its replay settings" (red recorded, then green)                                             |
+| The legacy drop-in is removed before the exporter file is written | the include moved after the exporter write in `main.yml`                                                                             | verify, "Assert the legacy drop-in is removed and reloaded before the exporter file is written" (red recorded, then green)                                 |
+| The reload is required to be in the log (order guard)             | renaming the reload task in `_unit.yml`                                                                                              | verify, the same assertion, failing on its `>= 0` guard (red recorded, then green)                                                                         |
+| The exporter file is written before the compose file is rendered  | (not sabotaged in this change)                                                                                                       | verify, "Assert the exporter file is written before the compose file is rendered"                                                                          |
+| The role's task files start, stop, restart or remove nothing      | a line `state: restarted` added to `_compose.yml` (a comment)                                                                        | verify, "Assert the role runs no compose command, no docker module, no command or shell, and starts, stops or restarts nothing" (red recorded, then green) |
+| The socket directory is uid 999 and mode `0755`                   | mode `1777` in the socket task of `_compose.yml`                                                                                     | verify, "Assert the stack's files and directories have the owners and modes the role states" (red recorded, then green)                                    |
+| Every task names a module on the allowlist, read from the YAML    | a task with `ansible.builtin.command` (`docker compose ... up`) added to `_compose.yml`, with `when: false` so the role run skips it | verify, "Assert every task the role runs names one module, and that module is on the allowlist" (red recorded, then green)                                 |
+| The reload marker is forgotten when the drop-in is found          | the forget task deleted from `_unit.yml`, after a fresh prepare that puts the marker in place                                        | verify, "Assert the reload marker was forgotten when the legacy drop-in was found" (red recorded, then green)                                              |
+| The compose file is rendered before the pin is checked            | the render task moved below the enable task in `_compose.yml`                                                                        | verify, "Assert the compose file is rendered before the pin is refused and before the unit is enabled" (red recorded, then green)                          |
+| The role never writes the database image pin                      | (not sabotaged in this change)                                                                                                       | verify, "Assert the role left the database image pin unchanged"                                                                                            |
 
 The rows marked "red recorded, then green" were removed or altered, verify failed
 at the named step, and the restored tree passed verify again. The rows marked
-"not run" or "not sabotaged in this change" are asserted by verify and are not
-proven by a sabotage run. These remain unproven: the STATEMENT binlog format, the
-exporter image, the healthcheck gate, the socket and port rule, the exporter file
-ordering against the compose render, the password pin, the reload marker (no
-systemd in the container, so the daemon-reload branch is skipped there), and the
-socket mode change to `1777`. A reviewer should not count them as proven.
+"not sabotaged in this change" are asserted by verify and are not
+proven by a sabotage run. These remain unproven: the exporter image, the
+healthcheck gate, the socket and port rule, the exporter file ordering against the
+compose render, the role's never writing the pin, and the mysql image read from
+`${IMAGE}`. The daemon-reload branch of the reload is also unproven: there is no
+systemd in the container, so that branch is skipped there; the marker's forget
+branch is proven. A reviewer should not count the unproven rows as proven.
 
 The source of the included tasks is read, not run: `docker compose` is never run
 in the container, so nothing here proves that the stack starts, that its healthcheck

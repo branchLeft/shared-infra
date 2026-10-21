@@ -4,6 +4,15 @@
 # The restore runs whether or not the refusal matched, so the next case and the
 # checks after the loop see the good pin.
 
+# In the absent case the compose file is removed first, so the refused run must
+# render it again before it refuses. That is the bootstrap order the role states:
+# the render is ahead of the pin check, and a rebuilt host needs the file it renders.
+- name: Remove the compose file for the absent case, so the refused run must render it
+  ansible.builtin.file:
+    path: '{{ db1_stack_compose_path }}'
+    state: absent
+  when: db1_stack_verify_case.absent | default(false)
+
 - name: Remove the database image pin for the absent case
   ansible.builtin.file:
     path: '{{ db1_stack_image_env_path }}'
@@ -27,6 +36,20 @@
   ansible.builtin.include_tasks: refused.yml
   vars:
     refused_task: '{{ db1_stack_verify_case.task }}'
+
+- name: Look for the compose file the refused run rendered before it refused
+  ansible.builtin.stat:
+    path: '{{ db1_stack_compose_path }}'
+  register: db1_stack_verify_case_compose
+  when: db1_stack_verify_case.absent | default(false)
+
+- name: Assert the refused run rendered the compose file before it refused the absent pin
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_case_compose.stat.exists
+    fail_msg: The role refused the absent pin before it rendered the compose file.
+    quiet: true
+  when: db1_stack_verify_case.absent | default(false)
 
 - name: Restore the good database image pin
   ansible.builtin.copy:

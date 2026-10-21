@@ -50,6 +50,7 @@
     db1_stack_socket_directory: /opt/branchleft/db/run/mysqld
     db1_stack_image_env_path: /etc/branchleft/db.image.env
     db1_stack_legacy_drop_in: /etc/systemd/system/branchleft-compose@db.service.d/override.conf
+    db1_stack_reload_marker: /var/cache/db1-stack/legacy-drop-in-reloaded
     # The downloads and package files the scenario applies the role with.
     verify_downloads:
       - url: file://{{ scenario_package_dir }}/{{ scenario_libaio_name }}
