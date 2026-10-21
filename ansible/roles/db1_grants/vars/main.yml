@@ -64,6 +64,29 @@ db1_grants_socket: /opt/branchleft/db/run/mysqld/mysqld.sock
 db1_grants_socket_owner_uid: 999
 db1_grants_admin_user: root
 
+# How the admin password reaches a client without being on any command line. Ansible
+# turns a task's `environment` into text in front of the command it runs
+# (`MYSQL_PWD=... python AnsiballZ_command.py`), which every local account can read
+# for as long as that shell lives, and which the controller's log shows at
+# verbosity 3. So the password goes on the command's standard input instead, as
+# its first line, and this fixed wrapper (the same text for every call, with no
+# value in it) reads that one line into MYSQL_PWD and replaces itself with the
+# program. What follows the first line is the rest of the program's standard
+# input: the statements, for the client.
+db1_grants_newline: "\n"
+db1_grants_secret_wrapper:
+  - /bin/sh
+  - -c
+  - 'IFS= read -r MYSQL_PWD && export MYSQL_PWD && exec "$@"'
+  - db1-grants
+db1_grants_mysql_argv:
+  - mysql
+  - --socket={{ db1_grants_socket }}
+  - --user={{ db1_grants_admin_user }}
+  - --batch
+  - --raw
+  - --skip-column-names
+
 # backup@localhost is db1's own dump account. It is never created here: the role
 # fails by name when it is missing and alters it when it is there.
 db1_grants_backup_user: backup

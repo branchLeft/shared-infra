@@ -234,19 +234,34 @@ class SecretHandlingTests(unittest.TestCase):
                     message = json.dumps(task[module].get("fail_msg", task[module].get("msg", "")))
                     self.assertNotRegex(message, r"db1_grants_(admin|ops1)_password\b|_slurp|_matches", f"{file}: {task.get('name')}")
 
-    def test_the_only_client_calls_keep_the_password_off_the_command_line(self) -> None:
+    def test_the_only_client_calls_keep_the_password_off_every_command_line(self) -> None:
+        # Ansible writes a task's environment in front of the command it runs, where
+        # every local account can read it and the controller's log shows it, so no
+        # task of the role has an environment at all. The password is the first line
+        # of the standard input, behind the fixed wrapper.
         calls = 0
         for file, task in all_tasks():
+            self.assertNotIn("environment", task, f"{file}: {task.get('name')} sets an environment")
             command = task.get("ansible.builtin.command")
             if command is None or "argv" not in command:
                 continue
-            argv = [str(item) for item in command["argv"]]
-            if argv[0] in ("mysql", "{{ db1_grants_python }}"):
-                calls += 1
-                self.assertNotIn("-e", argv, f"{file}: a statement on the command line")
-                self.assertFalse([a for a in argv if "password" in a.lower() or "MYSQL_PWD" in a], f"{file}: {task.get('name')}")
-                self.assertEqual(task["environment"], {"MYSQL_PWD": "{{ db1_grants_admin_password }}"}, f"{file}: {task.get('name')}")
+            argv = command["argv"]
+            if argv[0] == "date":  # the clock reads no secret and holds none
+                continue
+            calls += 1
+            self.assertTrue(
+                isinstance(argv, str) and argv.startswith("{{ db1_grants_secret_wrapper + "),
+                f"{file}: {task.get('name')} does not run behind the wrapper",
+            )
+            self.assertTrue(command["stdin"].startswith("{{ db1_grants_admin_password "), f"{file}: {task.get('name')}")
         self.assertEqual(calls, 3, "the role's client calls are the read, the write and the program run")
+
+    def test_the_wrapper_is_one_fixed_text_that_holds_no_value(self) -> None:
+        wrapper = VARS["db1_grants_secret_wrapper"]
+        self.assertEqual(wrapper[:2], ["/bin/sh", "-c"])
+        self.assertEqual(wrapper[2], 'IFS= read -r MYSQL_PWD && export MYSQL_PWD && exec "$@"')
+        self.assertNotIn("{{", json.dumps(wrapper))
+        self.assertNotIn("-e", VARS["db1_grants_mysql_argv"], "a statement on the command line")
 
     def test_no_secret_is_a_default_or_an_input(self) -> None:
         self.assertEqual(

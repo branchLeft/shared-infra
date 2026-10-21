@@ -32,6 +32,8 @@
 - name: Spoil the host's files as the case says
   ansible.builtin.include_tasks: spoil_file.yml
   loop: '{{ case.files | default([]) }}'
+  loop_control:
+    label: '{{ item.path }}'
 
 - name: Set the fake clock when the case says
   ansible.builtin.copy:

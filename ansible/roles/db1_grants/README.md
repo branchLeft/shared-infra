@@ -98,8 +98,13 @@ underscores; the slug rule and the 26-character limit are the pinned program's.
   removed afterwards whether the run succeeded or not.
 
 It changes no other file, starts no service and opens no port. The password is
-never on a command line: every statement goes on the client's standard input and
-the password in its environment.
+never on a command line, and never in a task's `environment` either, which Ansible
+writes in front of the command it runs (readable by every local account while that
+shell lives, and printed by the controller at verbosity 3). The admin password is
+the first line of the client's standard input, the statements follow it, and one
+fixed `/bin/sh -c` wrapper (`db1_grants_secret_wrapper`, the same text on every
+call) reads that line into `MYSQL_PWD` and replaces itself with the client or the
+provisioning program.
 
 **Checks before anything changes.** The role stops, by name, before any statement
 when: an input has the wrong shape (`tenants-shape`, `tenant-slug`, `ops1-host`);

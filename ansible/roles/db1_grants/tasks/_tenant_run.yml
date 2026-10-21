@@ -5,12 +5,16 @@
 # its existing-account path: it adds the escaped grant beside any existing one and
 # sets the connection limit, and it prints neither a database nor a password.
 #
-# The admin password is in the environment of this one task, never on the command
-# line. The program's text is not shown, because on the create path it prints the
-# password it generated.
+# The admin password is the standard input of this one task (vars/main.yml,
+# db1_grants_secret_wrapper puts it in the program's environment), never on a
+# command line. The program's text is not shown, because on the create path it
+# prints the password it generated.
 - name: Run the provisioning program for one tenant
   ansible.builtin.command:
-    argv:
+    argv: '{{ db1_grants_secret_wrapper + db1_grants_program_argv }}'
+    stdin: '{{ db1_grants_admin_password }}'
+  vars:
+    db1_grants_program_argv:
       - '{{ db1_grants_python }}'
       - -B
       - -E
@@ -23,8 +27,6 @@
       - '{{ db1_grants_admin_user }}'
       - --max-user-connections
       - '{{ db1_grants_max_user_connections }}'
-  environment:
-    MYSQL_PWD: '{{ db1_grants_admin_password }}'
   register: db1_grants_program_result
   changed_when: true
   failed_when: false
