@@ -31,5 +31,7 @@ backup_restore_test_secrets:
   drill_primary: EXAMPLEONLYdrillsecret000000000004
 
 # The scratch paths the cases write to instead of the real environment files.
-backup_restore_test_scratch_state_copy_env: /etc/branchleft/scratch-state-copy.env
-backup_restore_test_scratch_drill_env: /etc/branchleft/scratch-restore-drill.env
+# They end in .test-env, not .env, so the repository's Compose-stack scanner
+# (hetzner/provision/test_compose_unit_contract.py) does not read them as stacks.
+backup_restore_test_scratch_state_copy_env: /etc/branchleft/scratch-state-copy.test-env
+backup_restore_test_scratch_drill_env: /etc/branchleft/scratch-restore-drill.test-env

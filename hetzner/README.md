@@ -532,6 +532,8 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | `branchleft-compose@db`                                    | `branchLeft/ghost-platform`, `db/stack/compose.yml`                          | no                |
 | `branchleft-compose@blog`, and one per further tenant slug | nowhere: rendered by `branchLeft/ghost-platform`'s `infra/tenant/compose.ts` | no                |
 | `branchleft-compose@backup-worker`                         | nowhere: a systemd unit, not a Compose stack                                 | no                |
+| `branchleft-compose@state-copy`                            | nowhere: a systemd unit, not a Compose stack                                 | no                |
+| `branchleft-compose@restore-drill`                         | nowhere: a systemd unit, not a Compose stack                                 | no                |
 
 **No means unread, not failed.** Nothing in this repository has an opinion
 about whether those stacks declare a health signal, so a service in one that

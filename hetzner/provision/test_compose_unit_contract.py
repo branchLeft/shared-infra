@@ -114,6 +114,22 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "unit, not an instance of the Compose template, and nothing here sees "
         "whether that repository declares a health signal for it."
     ),
+    "state-copy": (
+        "branchLeft/ghost-platform commits the state copy's installer and its "
+        "systemd units, and no Compose file for it. This repository names it only "
+        "in the /etc/branchleft/state-copy.env path the backup_restore Ansible "
+        "role writes. It is a systemd unit, not an instance of the Compose "
+        "template, and nothing here sees whether that repository declares a "
+        "health signal for it."
+    ),
+    "restore-drill": (
+        "branchLeft/ghost-platform commits the restore drill's installer and its "
+        "systemd units, and no Compose file for it. This repository names it only "
+        "in the /etc/branchleft/restore-drill.env path the backup_restore Ansible "
+        "role writes. It is a systemd unit, not an instance of the Compose "
+        "template, and nothing here sees whether that repository declares a "
+        "health signal for it."
+    ),
 }
 
 # The stack-name rule the deploy wrapper actually applies, reused rather than
