@@ -120,6 +120,7 @@ jobs:
             hetzner/nextcloud1/stack/
             hetzner/nextcloud1/systemd/nextcloud1.override.conf
             hetzner/control-plane/stack/
+            hetzner/provision/test_compose_unit_contract.py
           )
           files=$(git diff --name-only "$base" HEAD -- "${watched[@]}")
           if [ -n "$files" ]; then
@@ -245,7 +246,6 @@ jobs:
               "$bin/mypy" --strict library tests/unit
               "$bin/ruff" check library tests
               "$bin/ruff" format --check library tests
-              PYTHONPATH=library "$bin/python" -m unittest discover -b -s tests/unit -p "test_*.py"
             )
             echo "::endgroup::"
             checked=$((checked + 1))
@@ -255,6 +255,15 @@ jobs:
           else
             echo "Checked the library of $checked role(s)."
           fi
+
+      # Every role's unit tests, through one script: the single home for the glob
+      # and the run. A new role is picked up with no edit here, and the script fails
+      # when no role has tests, when a tests/unit holds no test_*.py, when a suite
+      # runs zero tests, and when any test fails. Its own checks, and the pin that
+      # keeps this the only copy, run in the "Test the checks" step above and in
+      # scripts/test_merge_group_triggers.py.
+      - name: Run every role's unit tests
+        run: 'PYTHON="$RUNNER_TEMP/ansible-venv/bin/python" ansible/checks/run_role_unit_tests.sh ansible'
 
   shard:
     name: 'Harness: ${{ matrix.name }}'

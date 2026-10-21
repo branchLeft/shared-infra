@@ -144,6 +144,20 @@ class MergeGroupTriggerTests(unittest.TestCase):
         self.assertIn('echo "ansible=true" >> "$GITHUB_OUTPUT"', branch)
         self.assertIn("exit 0", branch)
 
+    def test_the_role_unit_step_is_in_the_lint_job_and_has_no_condition_of_its_own(self):
+        # The lint job runs on a merge-queue check only through the discover output, which
+        # the Decide step sets to true on merge_group. The role unit step must ride that
+        # same condition, with no `if:` of its own that could skip it on a queued check,
+        # and it must call the one script that holds the glob and the run.
+        text = read("ansible.yml")
+        lint = job_block(text, "lint")
+        self.assertEqual("needs.discover.outputs.ansible == 'true'", job_if(lint))
+        steps = [part for part in lint.split("\n      - name: ") if part.startswith("Run every role's unit tests")]
+        self.assertEqual(1, len(steps), "the lint job must hold exactly one role unit step")
+        self.assertNotIn("if:", steps[0])
+        self.assertIn("\n        run: 'PYTHON=", steps[0])
+        self.assertIn("ansible/checks/run_role_unit_tests.sh ansible", steps[0])
+
 
 if __name__ == "__main__":
     unittest.main()
