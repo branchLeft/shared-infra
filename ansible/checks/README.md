@@ -49,8 +49,15 @@ Limits of the README exception. A README that the checker's YAML parser cannot r
 accepted as prose, because the play-list check reads nothing from it. Ansible's loader and
 this parser are not the same code, so a README that Ansible could load as a play list and
 this parser cannot read passes. Parser parity is not checked, and no new refusal is added
-for it, because a fail-closed rule would refuse real Markdown READMEs. The control is the
-owner's merge of any change under `ansible/checks/` and `ansible/trust/` (CODEOWNERS).
+for it, because a fail-closed rule would refuse real Markdown READMEs.
+
+What stops such a README from running is not this check. The controls are: the pull runs
+only the derived `HOST.yml` path (R3), so a README under `playbooks/` or `trust/` is never
+the file it runs; the gated workflows; and the owner's deploy approval of the gated apply.
+The last two are not yet wired in this repo, as the roles paragraph above says. Ownership
+differs by file. `trust/README.md` is under the owner's merge (`/ansible/trust/` in
+CODEOWNERS). `playbooks/README.md` has no CODEOWNERS line, so the reviewer App may merge an
+edit to it alone until `pull-roles-owner-only-2340` is decided by the owner.
 
 Out of scope: a case-insensitive filesystem. On macOS Ansible can find
 `group_vars/all.YML` under the name `all.yml`, and R6 reads only the exact suffix. This is
