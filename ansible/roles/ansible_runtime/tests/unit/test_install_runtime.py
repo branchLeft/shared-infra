@@ -171,9 +171,11 @@ class LogicalLinesTest(unittest.TestCase):
         self.assertEqual([1, 3], starts)
 
     def test_no_comment_is_stripped_from_a_joined_line(self) -> None:
-        (number, line), _rest = program.logical_lines("a \\\n # c \\\nb\n")
-        self.assertEqual(1, number)
-        self.assertIn("# c", line)
+        # The comment does not end in a backslash here, so the rule that a comment-only line
+        # ends a continuation plays no part: only the strip after the join could remove it.
+        lines = program.logical_lines("a \\\n# c\nb\n")
+        self.assertEqual([1, 3], [number for number, _line in lines])
+        self.assertIn("# c", lines[0][1])
 
     def test_a_comment_only_line_that_starts_a_line_is_dropped(self) -> None:
         self.assertEqual([(2, "b")], program.logical_lines("# c \\\nb\n"))
