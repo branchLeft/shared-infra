@@ -154,7 +154,9 @@ def group_template(top_group: str, workflow_label: str) -> str:
         pattern += re.escape(top_group[end : match.start()].casefold())
         term = " ".join(match.group(1).split())
         if term == "github.workflow":
-            pattern += re.escape(workflow_label.casefold())
+            # Verdict 6325428922 (Medium 1): the name is stripped as the job literal
+            # is, since GitHub does not keep surrounding whitespace in a group name.
+            pattern += re.escape(workflow_label.strip().casefold())
         elif term in {"github.run_id", PR_NUMBER_TERM}:
             pattern += r"\d+"
         else:
@@ -279,6 +281,10 @@ def violations(name: str, text: str) -> list[str]:
     # rather than replaced by the file path as github.workflow.
     if "name" in data and not isinstance(data["name"], str):
         return [f"{name}: name: is not a string, so github.workflow cannot be read: {data['name']!r}"]
+    # Verdict 6325428922 (Medium 2): an empty or blank name: is refused too, so the
+    # file path is never substituted for it.
+    if "name" in data and not data["name"].strip():
+        return [f"{name}: name: is empty, so github.workflow cannot be read: {data['name']!r}"]
     try:
         names = trigger_names(data)
     except Unclassifiable as error:
@@ -773,6 +779,27 @@ REFUSED = {
     "r4-d2-top-literal-padded": (
         job_group_under("deploy-shared", top_group='" deploy-shared "'),
         "same group as the workflow",
+    ),
+    # Verdict 6325428922 (Medium 1): the strip must reach the workflow label too.
+    # A padded name: is stripped before github.workflow is substituted, so the
+    # job literal CI-369 matches the template ci-<digits>.
+    "verdict-padded-name-leading-space": (
+        job_group_under("CI-369", pull_request=True, name='" CI"'),
+        "same group as the workflow",
+    ),
+    "verdict-padded-name-trailing-space": (
+        job_group_under("CI-369", pull_request=True, name='"CI "'),
+        "same group as the workflow",
+    ),
+    # Verdict 6325428922 (Medium 2): an empty or blank name: is refused like a
+    # non-string one, never replaced by the file path.
+    "verdict-empty-name": (
+        job_group_under("CI-369", pull_request=True, name='""'),
+        "is empty",
+    ),
+    "verdict-blank-name": (
+        job_group_under("CI-369", pull_request=True, name='"  "'),
+        "is empty",
     ),
 }
 

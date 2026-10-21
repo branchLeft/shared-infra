@@ -77,11 +77,13 @@ since a false refusal costs a rename and a miss costs a cancelled deploy.
   `github.workflow` replaced by the workflow's `name:` (or its file path,
   `.github/workflows/<file>`, when there is no `name:`), and each run id or pull
   request number term replaced by a run of digits. A present `name:` that is not
-  a string (an integer, a float or a boolean) is refused as unreadable, so the
-  file path is never substituted for it.
-- Surrounding whitespace is not part of a group name, so the job literal and a
-  literal workflow group are stripped before the comparison. `" CI-369"` and
-  `"CI-369 "` under `name: CI` are refused like `CI-369`.
+  a string (an integer, a float or a boolean), or is empty or blank, is refused
+  as unreadable, so the file path is never substituted for it.
+- Surrounding whitespace is not part of a group name, so the job literal, a
+  literal workflow group and the `name:` substituted for `github.workflow` are
+  stripped before the comparison. `" CI-369"` and `"CI-369 "` under `name: CI`
+  are refused like `CI-369`, and `name: " CI"` makes `CI-369` a refused job
+  literal.
 - A sibling name that is not that template is accepted: `x-mail` under
   `x-${{ github.run_id }}`, `-deploy` under
   `${{ github.workflow }}-${{ github.run_id }}`, and the real `pulumi-*-deploy`
@@ -94,4 +96,4 @@ since a false refusal costs a rename and a miss costs a cancelled deploy.
 Every check fails closed: a file that does not parse, whose top level is not a
 mapping, whose trigger block is missing or unreadable, or whose concurrency
 value is not a mapping with only the keys `group` and `cancel-in-progress`, and
-whose `name:`, when present, is not a string, is a violation.
+whose `name:`, when present, is not a string or is empty, is a violation.
