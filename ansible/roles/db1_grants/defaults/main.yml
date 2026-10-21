@@ -1,0 +1,6 @@
+---
+# The role has no optional input: every value it reads is either one of the two
+# required inputs in meta/argument_specs.yml, which have no default because both
+# are private, or a fixed value in vars/main.yml. No secret is ever a default
+# (ANS-16), and the two passwords it reads are files on the host, not variables
+# anyone sets.

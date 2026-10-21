@@ -1,0 +1,110 @@
+---
+# One refusal case (case, from vars/cases.yml). Start from the configured host,
+# spoil one thing, apply the role, and require that it stopped for the named
+# reason. The role is applied in a block whose rescue reads the message, so a role
+# that accepts the case fails the "accepted" task, whose message names no reason
+# and so fails the check in the rescue. Whatever happens the host is put back.
+- name: Read the configured database
+  ansible.builtin.slurp:
+    src: '{{ db1_grants_scenario_baseline_path }}'
+  register: db1_grants_scenario_baseline_slurp
+
+# The configured database, less the accounts the case drops, with the case's patch
+# laid over the accounts and its other keys laid over the rest.
+- name: Work out the database the case starts from
+  ansible.builtin.set_fact:
+    db1_grants_scenario_case_state: >-
+      {{ (db1_grants_scenario_baseline_slurp.content | b64decode | from_json)
+      | combine({'users': (((db1_grants_scenario_baseline_slurp.content | b64decode | from_json).users | dict2items
+      | rejectattr('key', 'in', case.state.drop_users | default([])) | list | items2dict)
+      | combine(case.state.users | default({}), recursive=True)
+      | combine(case.state.replace | default({})))})
+      | combine(case.state.top | default({})) }}
+
+- name: Put the database in the case's state
+  ansible.builtin.copy:
+    content: '{{ db1_grants_scenario_case_state | to_nice_json }}'
+    dest: '{{ db1_grants_scenario_state_path }}'
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Spoil the host's files as the case says
+  ansible.builtin.include_tasks: spoil_file.yml
+  loop: '{{ case.files | default([]) }}'
+  loop_control:
+    label: '{{ item.path }}'
+
+- name: Set the fake clock when the case says
+  ansible.builtin.copy:
+    content: '{{ case.now }}'
+    dest: /etc/fake-now
+    owner: root
+    group: root
+    mode: '0644'
+  when: case.now is defined
+
+- name: Keep the database as the case put it
+  ansible.builtin.slurp:
+    src: '{{ db1_grants_scenario_state_path }}'
+  register: db1_grants_scenario_before_slurp
+
+- name: Apply the role and require the refusal
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.db1_grants
+      vars:
+        db1_grants_tenants: '{{ case.tenants | default(db1_grants_scenario_tenants) }}'
+        db1_grants_ops1_host: '{{ case.ops1_host | default(db1_grants_scenario_ops1_host) }}'
+
+    - name: Fail because the role accepted the case
+      ansible.builtin.fail:
+        msg: 'The role accepted the case: {{ case.name }}.'
+  rescue:
+    - name: Assert the role stopped for the reason the case names
+      ansible.builtin.assert:
+        that:
+          - ('db1_grants[' ~ case.code ~ ']') in db1_grants_scenario_stopped
+        fail_msg: >-
+          The case "{{ case.name }}" must stop with db1_grants[{{ case.code }}]. It stopped with:
+          {{ db1_grants_scenario_stopped }}
+        quiet: true
+      vars:
+        # A looped assertion fails with a summary message and keeps each item's own
+        # message in results, so both are read.
+        db1_grants_scenario_stopped: >-
+          {{ ansible_failed_result.msg | default('') }}
+          {{ ansible_failed_result.results | default([]) | map(attribute='msg', default='') | join(' ') }}
+  always:
+    - name: Read the database as the role left it
+      ansible.builtin.slurp:
+        src: '{{ db1_grants_scenario_state_path }}'
+      register: db1_grants_scenario_after_slurp
+
+    - name: Look for what a program that must not run would have made
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop: '{{ case.marker_absent | default([]) }}'
+      register: db1_grants_scenario_markers
+
+    - name: Put the host back as it was configured
+      ansible.builtin.include_tasks: restore.yml
+
+- name: Assert a refusal changed nothing in the database
+  ansible.builtin.assert:
+    that:
+      - (db1_grants_scenario_after_slurp.content | b64decode | from_json) == (db1_grants_scenario_before_slurp.content | b64decode | from_json)
+    fail_msg: 'The case "{{ case.name }}" was refused but the database changed.'
+    quiet: true
+  when: not (case.may_change | default(false))
+
+- name: Assert the program that must not run did not run
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists
+    fail_msg: 'The case "{{ case.name }}" ran a program it must not have: {{ item.item }}.'
+    quiet: true
+  loop: '{{ db1_grants_scenario_markers.results }}'
+  loop_control:
+    label: '{{ item.item }}'

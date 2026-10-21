@@ -1,0 +1,35 @@
+---
+argument_specs:
+  main:
+    short_description: Keep the database host's backup accounts and tenant grants at their declared state
+    description: >-
+      Reads the database admin password from the host's own environment file and
+      the ops1 backup account's password from a root-only file, then brings the
+      db1 dump account (backup@localhost), the ops1 backup account
+      (created with REQUIRE SSL and its grants) and each tenant account's escaped
+      grant and connection limit to the declared state, changing only what a
+      readback shows to differ. It never creates the dump account or a tenant
+      account, never prints or stores a password it did not set from the file,
+      and fails by name on a tenant grant that is not yet escaped. Neither
+      password is an input: the first is read from /etc/branchleft/db.env and the
+      second from /etc/branchleft/db1-backup-ops1.pw.
+    author: branchLeft
+    options:
+      db1_grants_tenants:
+        type: list
+        elements: str
+        required: true
+        description: >-
+          The slugs of the tenants whose accounts the role checks, one entry
+          each, at least one. PRIVATE: from the private inventory, never
+          committed to this repository. Each slug must pass the pinned tenant
+          name rule (lowercase letters, digits and hyphens, starting with a
+          letter, ending with a letter or digit, at most 26 characters) and none
+          may appear twice. The tenant account must already exist.
+      db1_grants_ops1_host:
+        type: str
+        required: true
+        description: >-
+          The private IPv4 address of the ops1 host, the host part of the ops1
+          backup account. PRIVATE: per estate, from the private inventory. An
+          IPv4 literal only; a wildcard is refused.

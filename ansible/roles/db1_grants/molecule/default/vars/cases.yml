@@ -1,0 +1,278 @@
+---
+# The refusal cases (tasks/run_case.yml runs each one). A case spoils one thing on
+# a configured host, applies the role and requires it to stop with the named code
+# (every refusal of the role starts db1_grants[CODE]) and, unless may_change is set,
+# to have changed nothing in the database. Then the host is put back.
+#
+# Fields: name; code (the refusal); tenants and ops1_host (the role inputs for this
+# case, the scenario's own when absent); state
+# (drop_users: accounts removed from the fake database; users: a recursive patch
+# of accounts; replace: accounts put in whole; top: other keys of the fake database); files (host files spoiled:
+# path plus mode, owner, content or absent, and directory: true for a directory;
+# a file with content is root's unless owner is set);
+# now (the fake clock, HHMM); marker_absent (files that must not exist afterwards
+# because a program that must not run would have made them); may_change (the
+# database may differ afterwards).
+#
+# The recipe that makes the second tenant need the provisioning program is
+# state.replace['ghost_second_site@10.20.1.%']: the whole account without its
+# database grant (a patch under users merges, so it cannot remove one), which the
+# readback shows as a difference.
+db1_grants_verify_cases:
+  # ----- Inputs -----
+  - name: tenant list empty
+    code: tenants-shape
+    tenants: []
+  - name: tenant listed twice
+    code: tenants-shape
+    tenants: [blog, blog]
+  - name: tenant slug with a quote
+    code: tenant-slug
+    tenants: [blog, "bad'name"]
+  - name: tenant slug in upper case
+    code: tenant-slug
+    tenants: [Blog]
+  - name: tenant slug one character too long
+    code: tenant-slug
+    tenants: [aaaaaaaaaaaaaaaaaaaaaaaaaaa]
+  - name: ops1 host with a wildcard
+    code: ops1-host
+    ops1_host: 192.0.2.%
+  - name: ops1 host that is a name
+    code: ops1-host
+    ops1_host: ops1.example.invalid
+
+  # ----- The ground the role stands on -----
+  - name: secrets directory others can write
+    code: config-dir
+    files:
+      - { path: /etc/branchleft, mode: '0775', directory: true }
+  - name: admin environment file the group can read
+    code: db-env-mode
+    files:
+      - { path: /etc/branchleft/db.env, mode: '0640' }
+  - name: admin environment file with no password line
+    code: db-env-key
+    files:
+      - { path: /etc/branchleft/db.env, mode: '0600', content: "DB_BACKUP_BUCKET=example-bucket\n" }
+  - name: admin environment file with the password line twice
+    code: db-env-key
+    files:
+      - path: /etc/branchleft/db.env
+        mode: '0600'
+        content: "MYSQL_ROOT_PASSWORD=one\nMYSQL_ROOT_PASSWORD=two\n"
+  - name: admin password the database does not accept
+    code: sql-read
+    files:
+      - path: /etc/branchleft/db.env
+        mode: '0600'
+        content: "MYSQL_ROOT_PASSWORD=not-the-admin-password-0000000000\n"
+  - name: ops1 password file the group can read
+    code: ops1-password-file-mode
+    files:
+      - { path: /etc/branchleft/db1-backup-ops1.pw, mode: '0640' }
+  - name: ops1 password file with a trailing line break
+    code: ops1-password-shape
+    files:
+      - path: /etc/branchleft/db1-backup-ops1.pw
+        mode: '0600'
+        content: "{{ db1_grants_scenario_ops1_password }}\n"
+  - name: ops1 password file too short
+    code: ops1-password-shape
+    files:
+      - { path: /etc/branchleft/db1-backup-ops1.pw, mode: '0600', content: short }
+  - name: ops1 password file with a quote in it
+    code: ops1-password-shape
+    files:
+      - path: /etc/branchleft/db1-backup-ops1.pw
+        mode: '0600'
+        content: "{{ db1_grants_scenario_ops1_password[:30] }}'; DROP USER x"
+  - name: database socket owned by another user
+    code: socket-owner
+    files:
+      - { path: '{{ db1_grants_scenario_socket_path }}', owner: 1234 }
+  - name: database socket path that is a regular file
+    code: socket-owner
+    files:
+      - { path: '{{ db1_grants_scenario_socket_path }}', absent: true }
+      - { path: '{{ db1_grants_scenario_socket_path }}', mode: '0777', content: '', owner: 999 }
+  - name: program directory the group can write
+    code: program-dir
+    files:
+      - { path: '{{ db1_grants_scenario_provision_dir }}', mode: '0775', directory: true }
+  - name: parent of the program directory others can write
+    code: program-dir
+    files:
+      - { path: /opt/branchleft/db, mode: '0777', directory: true }
+  - name: program missing
+    code: program-missing
+    files:
+      - { path: '{{ db1_grants_scenario_provision_dir }}/naming.py', absent: true }
+  - name: provisioning program that is not the pinned one
+    code: program-digest
+    state: &second_needs_program
+      replace:
+        'ghost_second_site@10.20.1.%': &second_without_grant
+          auth: marker-second
+          ssl_type: ANY
+          muc: 0
+          static: []
+          dynamic: []
+          db: {}
+    files:
+      - path: '{{ db1_grants_scenario_provision_dir }}/provision_tenant_db.py'
+        mode: '0644'
+        content: '{{ db1_grants_scenario_tampered_provision }}'
+    marker_absent: [/tmp/db1-grants-tampered-ran]
+  - name: naming module that is not the pinned one
+    code: program-digest
+    state: *second_needs_program
+    files:
+      - path: '{{ db1_grants_scenario_provision_dir }}/naming.py'
+        mode: '0644'
+        content: "TENANT_USER_HOST = '10.20.1.%'\n"
+
+  # ----- What the readback finds -----
+  - name: dump account missing
+    code: backup-absent
+    state:
+      drop_users: ['backup@localhost']
+  - name: dump account with an object-level grant
+    code: account-extra-grant
+    state:
+      users:
+        'backup@localhost': { db: { 'other_db': [SELECT] } }
+  - name: ops1 account with an object-level grant
+    code: account-extra-grant
+    state:
+      users:
+        'backup_ops1@192.0.2.50': { db: { 'other_db': [SELECT] } }
+  - name: dump account holding every privilege
+    code: account-all-privileges
+    state:
+      users:
+        'backup@localhost': { static: [ALL PRIVILEGES] }
+  - name: ops1 account holding every privilege
+    code: account-all-privileges
+    state:
+      users:
+        'backup_ops1@192.0.2.50': { static: [ALL PRIVILEGES] }
+  - name: ops1 account also at another host
+    code: ops1-other-host
+    state:
+      users:
+        'backup_ops1@192.0.2.99':
+          { auth: marker-other, ssl_type: ANY, muc: 0, static: [], dynamic: [], db: {} }
+  - name: clone plugin loaded
+    code: clone-plugin
+    state:
+      top: { plugins: [clone] }
+  - name: tenant account missing
+    code: tenant-absent
+    state:
+      drop_users: ['ghost_second_site@10.20.1.%']
+  - name: first tenant account missing
+    code: tenant-absent
+    state:
+      drop_users: ['ghost_blog@10.20.1.%']
+  - name: tenant grant still unescaped
+    code: tenant-unescaped
+    state:
+      users:
+        'ghost_second_site@10.20.1.%':
+          { db: { 'ghost_second_site': [ALL PRIVILEGES], 'ghost\_second\_site': [ALL PRIVILEGES] } }
+  - name: tenant grant unescaped with no escaped one beside it
+    code: tenant-unescaped
+    state:
+      users:
+        'ghost_second_site@10.20.1.%': { db: { 'ghost_second_site': [ALL PRIVILEGES] } }
+  - name: first tenant grant unescaped
+    code: tenant-unescaped
+    state:
+      users:
+        'ghost_blog@10.20.1.%': { db: { 'ghost_blog': [ALL PRIVILEGES] } }
+  - name: tenant holding a smaller escaped grant
+    code: tenant-unexpected-grant
+    state:
+      users:
+        'ghost_second_site@10.20.1.%': { db: { 'ghost\_second\_site': [SELECT] } }
+  - name: tenant holding the grant option
+    code: tenant-unexpected-grant
+    state:
+      users:
+        'ghost_second_site@10.20.1.%': { grant_option: true }
+  - name: tenant holding a global privilege
+    code: tenant-unexpected-grant
+    state:
+      users:
+        'ghost_second_site@10.20.1.%':
+          { static: [SELECT], db: { 'ghost\_second\_site': [ALL PRIVILEGES] } }
+
+  # ----- The dump account is changed whole -----
+  - name: dump account differs and the dump program is not the pinned one
+    code: dump-code-not-delivered
+    state: &backup_old_grants
+      users:
+        'backup@localhost':
+          static:
+            - SELECT
+            - PROCESS
+            - LOCK TABLES
+            - REPLICATION CLIENT
+            - SHOW VIEW
+            - EVENT
+            - TRIGGER
+            - RELOAD
+          dynamic: []
+    files:
+      - path: '{{ db1_grants_scenario_provision_dir }}/dump_nightly.py'
+        mode: '0644'
+        content: "# an older dump program\n"
+  - name: dump account differs at the start of the window
+    code: dump-window
+    now: '0255'
+    state: *backup_old_grants
+  - name: dump account differs while the dump runs
+    code: dump-window
+    now: '0310'
+    state: *backup_old_grants
+  - name: dump account differs at the end of the window
+    code: dump-window
+    now: '0340'
+    state: *backup_old_grants
+
+  # ----- The role's own checks of what it did, and the tenant that vanished -----
+  - name: connection limit the server does not apply
+    code: post-apply-drift
+    may_change: true
+    state:
+      replace: { 'ghost_second_site@10.20.1.%': *second_without_grant }
+      top: { ignore_connection_limit: true }
+  - name: batch of statements the server refuses
+    code: sql-write
+    state:
+      users:
+        'backup@localhost':
+          static:
+            - SELECT
+            - PROCESS
+            - LOCK TABLES
+            - REPLICATION CLIENT
+            - SHOW VIEW
+            - EVENT
+            - TRIGGER
+            - RELOAD
+          dynamic: []
+      top: { refuse_writes: true }
+  - name: provisioning program the server makes fail
+    code: program-failed
+    may_change: true
+    state:
+      replace: { 'ghost_second_site@10.20.1.%': *second_without_grant }
+      top: { refuse_connection_limit: true }
+  - name: tenant account gone between the readback and the program
+    code: mint-detected
+    may_change: true
+    state:
+      replace: { 'ghost_second_site@10.20.1.%': *second_without_grant }
+      top: { race: [ghost_second_site] }

@@ -1,0 +1,64 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+    - vars/cases.yml
+  vars:
+    # A regular expression over the refusal cases' names, empty for all of them.
+    # A maintainer sets it in the environment to run the cases one change touches
+    # (`DB1_GRANTS_VERIFY_ONLY=unescaped molecule verify`); the positive cases are
+    # skipped then unless DB1_GRANTS_VERIFY_POSITIVE is true, and the whole
+    # scenario still runs in the harness, which sets neither.
+    db1_grants_verify_only: "{{ lookup('ansible.builtin.env', 'DB1_GRANTS_VERIFY_ONLY') }}"
+    db1_grants_verify_positive: "{{ lookup('ansible.builtin.env', 'DB1_GRANTS_VERIFY_POSITIVE') | bool }}"
+    # Every text the log and the client's recorded arguments must not hold. The
+    # sentinels are letters and digits, so they need no escaping.
+    db1_grants_verify_sentinels:
+      - '{{ db1_grants_scenario_admin_password }}'
+      - '{{ db1_grants_scenario_ops1_password }}'
+      - '{{ db1_grants_scenario_ops1_password_rotated }}'
+  tasks:
+    # ----- The state the converge left -----
+    - name: Assert the database and the host's files are as the role should leave them
+      ansible.builtin.include_tasks: tasks/assert_baseline.yml
+
+    # The configured state is what every case starts from and is put back to.
+    - name: Keep the configured database as the baseline the cases return to
+      ansible.builtin.copy:
+        src: '{{ db1_grants_scenario_state_path }}'
+        dest: '{{ db1_grants_scenario_baseline_path }}'
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+
+    # ----- The refusals, each one a control with a sabotage (README) -----
+    - name: Run each refusal case
+      ansible.builtin.include_tasks: tasks/run_case.yml
+      loop: "{{ db1_grants_verify_cases | selectattr('name', 'search', db1_grants_verify_only) | list }}"
+      loop_control:
+        loop_var: case
+        label: '{{ case.name }}'
+
+    # ----- The runs that must succeed -----
+    - name: Run the cases that must succeed
+      ansible.builtin.include_tasks: 'tasks/{{ item }}.yml'
+      loop:
+        - case_stray_module
+        - case_repairs
+        - case_rotation
+      loop_control:
+        label: '{{ item }}'
+      when: db1_grants_verify_only | length == 0 or db1_grants_verify_positive | bool
+
+    # ----- What the whole run must not have done -----
+    - name: Assert the client's recorded calls held no password and no statement on a command line
+      ansible.builtin.include_tasks: tasks/assert_calls.yml
+
+    - name: Assert the log holds no password
+      ansible.builtin.include_tasks: tasks/assert_log.yml
+
+    - name: Assert the role left nothing behind
+      ansible.builtin.include_tasks: tasks/assert_left_files.yml

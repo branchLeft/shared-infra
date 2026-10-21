@@ -1,0 +1,47 @@
+---
+# The record of the client's calls, read after every case has run. A password on a
+# command line is visible to every user of the host through ps, so no recorded
+# command line may hold one. The fake client records its arguments whole (and
+# hides a password only in the statements it records), so a role that put a
+# password on the command line shows up here.
+- name: Read the fake database and the client's calls
+  ansible.builtin.include_tasks: read_database.yml
+
+- name: Count the recorded command lines that hold a password
+  ansible.builtin.set_fact:
+    db1_grants_scenario_argv_leaks: >-
+      {{ db1_grants_scenario_calls | map(attribute='argv') | map('join', ' ')
+      | select('search', db1_grants_verify_sentinels | join('|')) | list | length }}
+  no_log: true
+
+- name: Assert no recorded command line holds a password
+  ansible.builtin.assert:
+    that:
+      - db1_grants_scenario_argv_leaks | int == 0
+    fail_msg: A password was on the mysql client's command line.
+    quiet: true
+
+# A control for the scan itself: the record must hold the role's own calls, and
+# those calls must have come in on standard input. Otherwise an empty record would
+# pass the check above.
+- name: Assert the record holds the role's own calls, made with the statements on standard input
+  ansible.builtin.assert:
+    that:
+      - db1_grants_scenario_calls | length > 10
+      - db1_grants_scenario_calls | selectattr('via', 'equalto', 'stdin') | list | length > 5
+      - >-
+        db1_grants_scenario_calls | selectattr('via', 'equalto', 'stdin') | map(attribute='argv')
+        | map('join', ' ') | select('search', ' -e') | list | length == 0
+    fail_msg: The record is empty or short, or the role sent a statement on a command line.
+    quiet: true
+
+# The role never reaches the ops1 account through the program, and a statement on a
+# command line for it would be a password on a command line.
+- name: Assert no statement for the ops1 account was on a command line
+  ansible.builtin.assert:
+    that:
+      - >-
+        db1_grants_scenario_calls | selectattr('via', 'equalto', 'argv') | map(attribute='statements')
+        | flatten | select('search', 'backup_ops1') | list | length == 0
+    fail_msg: A statement for the ops1 account was sent on a command line.
+    quiet: true

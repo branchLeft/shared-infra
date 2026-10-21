@@ -1,0 +1,42 @@
+---
+# Internal: read what db1 holds for every account the role manages, into
+# db1_grants_found, and the two facts about the server that are not an account's.
+# Read-only, so it runs in check mode (ANS-10), and it runs again after the
+# changes to prove them.
+- name: Forget the earlier readback
+  ansible.builtin.set_fact:
+    db1_grants_found: {}
+
+- name: Read each account
+  ansible.builtin.include_tasks: _account.yml
+  loop: '{{ db1_grants_accounts }}'
+  loop_control:
+    loop_var: db1_grants_acct
+    label: '{{ db1_grants_acct.key }}'
+
+# The ops1 account is identified by its name and the one host it is bound to. A
+# row of the same name at any other host is a stale or mistaken account, and the
+# role does not choose between them.
+- name: Read the ops1 account's rows at other hosts
+  ansible.builtin.include_tasks: _read.yml
+  vars:
+    db1_grants_step: the ops1 account at other hosts
+    db1_grants_sql: >-
+      SELECT Host FROM mysql.user WHERE User='{{ db1_grants_ops1_user }}'
+      AND Host<>'{{ db1_grants_ops1_host }}';
+
+- name: Keep the ops1 account's other hosts
+  ansible.builtin.set_fact:
+    db1_grants_other_hosts: '{{ db1_grants_out.splitlines() }}'
+
+# BACKUP_ADMIN also makes an account a clone donor when the clone plugin is
+# loaded, which is a read path to the whole instance.
+- name: Read the clone plugin
+  ansible.builtin.include_tasks: _read.yml
+  vars:
+    db1_grants_step: the clone plugin
+    db1_grants_sql: SELECT PLUGIN_NAME FROM information_schema.PLUGINS WHERE PLUGIN_NAME='clone';
+
+- name: Keep the clone plugin rows
+  ansible.builtin.set_fact:
+    db1_grants_clone_rows: '{{ db1_grants_out.splitlines() }}'

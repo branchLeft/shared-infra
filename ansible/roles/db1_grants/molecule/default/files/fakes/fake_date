@@ -1,0 +1,10 @@
+#!/bin/sh
+# A fake date, for the db1_grants test only, installed as /usr/local/bin/date in
+# the test container. The role refuses to change the dump account between 02:55 and
+# 03:40 UTC, so the test must choose the time: when /etc/fake-now exists, its one
+# line is the answer to the role's `date -u +%H%M`; otherwise the real date runs.
+if [ -f /etc/fake-now ]; then
+  cat /etc/fake-now
+  exit 0
+fi
+exec /usr/bin/date "$@"
