@@ -321,26 +321,31 @@ def snapshot(root: Path) -> dict[str, str]:
     return state
 
 
+def resolve_commit(arguments: trigger.Arguments, environ: Mapping[str, str]) -> str:
+    """Return the commit of the request the caller made, which has no step."""
+    request = trigger.resolve_request(arguments, environ)
+    assert request.step is None  # noqa: S101 - a test helper for the plain requests
+    return request.commit
+
+
 class ArgumentTests(unittest.TestCase):
     """The command line root sets and the one input the caller sends."""
 
     def test_the_commit_of_forty_lowercase_hex_digits_is_accepted_from_the_ssh_text(self) -> None:
         commit = "0123456789abcdef" * 2 + "01234567"
         arguments = trigger.parse_arguments(["--mode", "apply"])
-        self.assertEqual(
-            commit, trigger.resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": commit})
-        )
+        self.assertEqual(commit, resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": commit}))
 
     def test_the_commit_is_accepted_as_the_one_positional_word_when_run_by_hand(self) -> None:
         arguments = trigger.parse_arguments(["--mode", "check", "a" * 40])
-        self.assertEqual("a" * 40, trigger.resolve_commit(arguments, {}))
+        self.assertEqual("a" * 40, resolve_commit(arguments, {}))
 
     def test_every_hostile_commit_is_refused_from_the_ssh_text(self) -> None:
         arguments = trigger.parse_arguments(["--mode", "apply"])
         for name, value in HOSTILE_COMMITS.items():
             with self.subTest(name):
                 with self.assertRaises(trigger.BadRequestError):
-                    trigger.resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": value})
+                    resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": value})
 
     def test_every_hostile_commit_is_refused_as_a_positional_word(self) -> None:
         for name, value in HOSTILE_COMMITS.items():
@@ -351,24 +356,24 @@ class ArgumentTests(unittest.TestCase):
                 else:
                     arguments = trigger.parse_arguments(["--mode", "apply", value])
                     with self.assertRaises(trigger.BadRequestError):
-                        trigger.resolve_commit(arguments, {})
+                        resolve_commit(arguments, {})
 
     def test_a_commit_given_both_ways_is_refused(self) -> None:
         arguments = trigger.parse_arguments(["--mode", "apply", "a" * 40])
         with self.assertRaises(trigger.BadRequestError):
-            trigger.resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": "a" * 40})
+            resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": "a" * 40})
 
     def test_two_positional_words_and_none_are_refused(self) -> None:
         for words in (["a" * 40, "b" * 40], []):
             with self.subTest(words=words):
                 arguments = trigger.parse_arguments(["--mode", "apply", *words])
                 with self.assertRaises(trigger.BadRequestError):
-                    trigger.resolve_commit(arguments, {})
+                    resolve_commit(arguments, {})
 
     def test_an_empty_ssh_text_is_refused_not_treated_as_absent(self) -> None:
         arguments = trigger.parse_arguments(["--mode", "apply", "a" * 40])
         with self.assertRaises(trigger.BadRequestError):
-            trigger.resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": ""})
+            resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": ""})
 
     def test_a_random_string_is_accepted_only_if_it_is_exactly_forty_lowercase_hex_digits(
         self,
@@ -383,7 +388,7 @@ class ArgumentTests(unittest.TestCase):
                 character in "0123456789abcdef" for character in candidate
             )
             try:
-                accepted = trigger.resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": candidate})
+                accepted = resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": candidate})
             except trigger.BadRequestError:
                 self.assertFalse(expected, repr(candidate))
             else:
@@ -397,7 +402,7 @@ class ArgumentTests(unittest.TestCase):
             candidate = "".join(generator.choice("0123456789abcdef") for _ in range(40))
             self.assertEqual(
                 candidate,
-                trigger.resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": candidate}),
+                resolve_commit(arguments, {"SSH_ORIGINAL_COMMAND": candidate}),
             )
 
     def test_the_mode_is_required_and_must_be_apply_or_check(self) -> None:
@@ -431,6 +436,128 @@ class ArgumentTests(unittest.TestCase):
         arguments = trigger.parse_arguments(["--mode", "check"])
         self.assertEqual(Path("/etc/pull-trigger/config.json"), arguments.config_path)
         self.assertIs(trigger.Mode.CHECK, arguments.mode)
+
+
+class StepRequestTests(unittest.TestCase):
+    """The grammar of a step request, and the mode that alone may carry it."""
+
+    commit = "0123456789abcdef" * 2 + "01234567"
+
+    def step_arguments(self, *positional: str) -> trigger.Arguments:
+        """Return the arguments the step key's forced command gives."""
+        return trigger.parse_arguments(["--mode", "step", *positional])
+
+    def test_a_commit_a_step_id_and_a_word_are_accepted_from_the_ssh_text(self) -> None:
+        request = trigger.resolve_request(
+            self.step_arguments(), {"SSH_ORIGINAL_COMMAND": f"{self.commit} migrate MIGRATE-1"}
+        )
+        self.assertEqual(trigger.Request(self.commit, "migrate", "MIGRATE-1"), request)
+
+    def test_the_same_three_words_are_accepted_by_hand_as_three_positional_words(self) -> None:
+        request = trigger.resolve_request(
+            self.step_arguments(self.commit, "identity", "WORD-0001"), {}
+        )
+        self.assertEqual(trigger.Request(self.commit, "identity", "WORD-0001"), request)
+
+    def test_a_step_request_with_any_mode_but_step_is_refused_for_its_mode(self) -> None:
+        text = f"{self.commit} migrate MIGRATE-1"
+        for mode in ("apply", "check"):
+            with self.subTest(mode):
+                arguments = trigger.parse_arguments(["--mode", mode])
+                with self.assertRaises(trigger.StepModeOnlyError) as caught:
+                    trigger.resolve_request(arguments, {"SSH_ORIGINAL_COMMAND": text})
+                self.assertEqual("step-mode-only", caught.exception.reason)
+                self.assertNotIn("MIGRATE-1", caught.exception.detail)
+
+    def test_a_bare_commit_with_the_step_mode_is_refused_not_run_as_a_plain_apply(self) -> None:
+        with self.assertRaises(trigger.BadRequestError):
+            trigger.resolve_request(self.step_arguments(), {"SSH_ORIGINAL_COMMAND": self.commit})
+        with self.assertRaises(trigger.BadRequestError):
+            trigger.resolve_request(self.step_arguments(self.commit), {})
+
+    def test_two_or_four_words_in_step_mode_are_refused_by_hand_and_by_ssh(self) -> None:
+        for words in ([self.commit, "migrate"], [self.commit, "migrate", "WORD-0001", "extra"]):
+            with self.subTest(words):
+                with self.assertRaises(trigger.BadRequestError):
+                    trigger.resolve_request(self.step_arguments(*words), {})
+                with self.assertRaises(trigger.BadRequestError):
+                    trigger.resolve_request(
+                        self.step_arguments(), {"SSH_ORIGINAL_COMMAND": " ".join(words)}
+                    )
+
+    def test_every_hostile_step_request_is_refused_as_malformed_in_every_mode(self) -> None:
+        good = "WORD-0001"
+        hostile = {
+            "trailing token": f"{self.commit} migrate {good} extra",
+            "trailing newline": f"{self.commit} migrate {good}\n",
+            "trailing space": f"{self.commit} migrate {good} ",
+            "leading space": f" {self.commit} migrate {good}",
+            "newline in the word": f"{self.commit} migrate WORD\n0001",
+            "newline instead of a space": f"{self.commit}\nmigrate {good}",
+            "tab between words": f"{self.commit}\tmigrate\t{good}",
+            "double space": f"{self.commit}  migrate {good}",
+            "uppercase step id": f"{self.commit} MIGRATE {good}",
+            "step id starting with a digit": f"{self.commit} 1migrate {good}",
+            "step id with a hyphen": f"{self.commit} mi-grate {good}",
+            "step id too long": f"{self.commit} {'a' * 33} {good}",
+            "lowercase word": f"{self.commit} migrate word-0001",
+            "word too short": f"{self.commit} migrate ABC",
+            "word too long": f"{self.commit} migrate {'A' * 33}",
+            "word with an underscore": f"{self.commit} migrate WORD_0001",
+            "word with a semicolon": f"{self.commit} migrate WORD;0001",
+            "word with a dollar": f"{self.commit} migrate $WORD0001",
+            "word is an option": f"{self.commit} migrate --tags",
+            "step id is an option": f"{self.commit} --tags {good}",
+            "unicode word": f"{self.commit} migrate WORD-{chr(0x661) * 4}",
+            "uppercase commit": f"{self.commit.upper()} migrate {good}",
+            "short commit": f"{self.commit[:39]} migrate {good}",
+            "nul in the word": f"{self.commit} migrate WORD-0001\x00",
+            "empty step id": f"{self.commit}  {good}",
+        }
+        for mode in ("apply", "check", "step"):
+            for name, text in hostile.items():
+                with self.subTest(mode=mode, case=name):
+                    arguments = trigger.parse_arguments(["--mode", mode])
+                    with self.assertRaises(trigger.BadRequestError):
+                        trigger.resolve_request(arguments, {"SSH_ORIGINAL_COMMAND": text})
+
+    def test_a_random_step_request_is_accepted_only_if_every_word_matches_its_pattern(self) -> None:
+        generator = random.Random(20261021)  # noqa: S311 - a fixed seed, not a secret
+        alphabet = string.ascii_letters + string.digits + " \n\t-_;$`'\"\x00" + chr(0x661)
+        arguments = self.step_arguments()
+        step_tail = string.ascii_lowercase + string.digits + "_"
+        word_chars = string.ascii_uppercase + string.digits + "-"
+        accepted = 0
+        for _ in range(3000):
+            step_length = generator.choice([0, 1, 8, 32, 33])
+            word_length = generator.choice([0, 3, 4, 12, 32, 33])
+            step_pool = generator.choice([alphabet, step_tail])
+            word_pool = generator.choice([alphabet, word_chars])
+            step = "".join(generator.choice(step_pool) for _ in range(step_length))
+            word = "".join(generator.choice(word_pool) for _ in range(word_length))
+            expected = (
+                1 <= len(step) <= 32
+                and step[0] in string.ascii_lowercase
+                and all(ch in step_tail for ch in step)
+                and 4 <= len(word) <= 32
+                and all(ch in word_chars for ch in word)
+            )
+            text = f"{self.commit} {step} {word}"
+            try:
+                request = trigger.resolve_request(arguments, {"SSH_ORIGINAL_COMMAND": text})
+            except trigger.BadRequestError:
+                self.assertFalse(expected, repr(text))
+            else:
+                self.assertTrue(expected, repr(text))
+                self.assertEqual(trigger.Request(self.commit, step, word), request)
+                accepted += 1
+        self.assertGreater(accepted, 50, "the generator no longer reaches the accepted case")
+
+    def test_the_mode_step_is_a_mode_and_nothing_else_named_so_is(self) -> None:
+        self.assertIs(trigger.Mode.STEP, self.step_arguments().mode)
+        for value in ("STEP", "steps", "step;", " step"):
+            with self.subTest(value), self.assertRaises(trigger.BadRequestError):
+                trigger.parse_arguments(["--mode", value])
 
 
 class PlaybookPathTests(unittest.TestCase):
@@ -578,6 +705,122 @@ class ConfigTests(unittest.TestCase):
         for text in ("", "not json", "[]", "null", '"text"', "{", "[" * 200_000):
             with self.subTest(text), self.assertRaises(trigger.ConfigError):
                 trigger.parse_config(text)
+
+
+def step_entry(**changes: object) -> dict[str, object]:
+    """Return a valid entry of the step allow-list, with ``changes`` applied."""
+    entry: dict[str, object] = {
+        "id": "migrate",
+        "tag": "control_plane_db_migrate",
+        "word": "MIGRATE-0001",
+    }
+    entry.update(changes)
+    return entry
+
+
+class StepConfigTests(unittest.TestCase):
+    """The step allow-list is root's, checked entry by entry, and closed."""
+
+    def test_the_steps_this_program_can_run_are_these_three_and_a_change_is_deliberate(
+        self,
+    ) -> None:
+        self.assertEqual(frozenset({"migrate", "identity", "provision"}), trigger.STEP_IDS)
+
+    def test_a_configuration_without_steps_allows_none(self) -> None:
+        self.assertEqual((), trigger.parse_config(json.dumps(valid_config_data())).steps)
+
+    def test_a_valid_step_allow_list_is_read(self) -> None:
+        steps = [
+            step_entry(),
+            step_entry(id="identity", tag="control_plane_db_identity", word="IDENTITY-0002"),
+            step_entry(id="provision", tag="control_plane_db_provision", word="PROVISION-3"),
+        ]
+        config = trigger.parse_config(json.dumps(valid_config_data(steps=steps)))
+        self.assertEqual(
+            (
+                trigger.Step("migrate", "control_plane_db_migrate", "MIGRATE-0001"),
+                trigger.Step("identity", "control_plane_db_identity", "IDENTITY-0002"),
+                trigger.Step("provision", "control_plane_db_provision", "PROVISION-3"),
+            ),
+            config.steps,
+        )
+
+    def test_an_empty_step_allow_list_is_valid_and_allows_none(self) -> None:
+        self.assertEqual((), trigger.parse_config(json.dumps(valid_config_data(steps=[]))).steps)
+
+    def test_a_name_that_is_not_one_of_the_programs_steps_is_refused_whatever_it_is_called(
+        self,
+    ) -> None:
+        names = [
+            "break_glass",
+            "breakglass",
+            "break_glass_expire",
+            "support_access",
+            "recover_owner_console",
+            "shell",
+            "restore",
+            "anything",
+            "Migrate",
+            "migrate ",
+            "migrate\n",
+            "migrate2",
+            "",
+        ]
+        for name in names:
+            with self.subTest(name):
+                entry = step_entry(id=name, tag="control_plane_db_other")
+                with self.assertRaises(trigger.ConfigError) as caught:
+                    trigger.parse_config(json.dumps(valid_config_data(steps=[entry])))
+                self.assertIn("not one of the steps", caught.exception.detail)
+
+    def test_every_invalid_step_entry_is_refused(self) -> None:
+        cases: dict[str, object] = {
+            "not a list": "migrate",
+            "a mapping instead of a list": step_entry(),
+            "an entry that is text": ["migrate"],
+            "an entry with an extra field": [step_entry(extra="x")],
+            "an entry with a field missing": [{"id": "migrate", "tag": "control_plane_db_migrate"}],
+            "an id that is not text": [step_entry(id=1)],
+            "a tag that is not text": [step_entry(tag=None)],
+            "a word that is not text": [step_entry(word=5)],
+            "the tag all": [step_entry(tag="all")],
+            "the tag always": [step_entry(tag="always")],
+            "the tag never": [step_entry(tag="never")],
+            "the tag tagged": [step_entry(tag="tagged")],
+            "the tag untagged": [step_entry(tag="untagged")],
+            "a comma list of tags": [step_entry(tag="control_plane_db_a,control_plane_db_b")],
+            "a comma list with a special": [step_entry(tag="control_plane_db_migrate,all")],
+            "a tag in another role's namespace": [step_entry(tag="control_plane_migrate")],
+            "an empty tag": [step_entry(tag="")],
+            "a tag with a trailing newline": [step_entry(tag="control_plane_db_migrate\n")],
+            "a tag with a space": [step_entry(tag="control_plane_db_mig rate")],
+            "a tag that is an option": [step_entry(tag="--tags")],
+            "a tag with an uppercase letter": [step_entry(tag="control_plane_db_Migrate")],
+            "a tag that is only the prefix": [step_entry(tag="control_plane_db_")],
+            "a tag too long": [step_entry(tag="control_plane_db_a" + "b" * 32)],
+            "an empty word": [step_entry(word="")],
+            "a word of three": [step_entry(word="ABC")],
+            "a word of thirty-three": [step_entry(word="A" * 33)],
+            "a lowercase word": [step_entry(word="migrate-0001")],
+            "a word with a newline": [step_entry(word="MIGRATE\n0001")],
+            "a word with an underscore": [step_entry(word="MIGRATE_0001")],
+            "a duplicate id": [
+                step_entry(),
+                step_entry(tag="control_plane_db_other", word="OTHER-0001"),
+            ],
+            "a duplicate tag": [
+                step_entry(),
+                step_entry(id="identity", word="IDENTITY-0002"),
+            ],
+        }
+        for name, steps in cases.items():
+            with self.subTest(name), self.assertRaises(trigger.ConfigError):
+                trigger.parse_config(json.dumps(valid_config_data(steps=steps)))
+
+    def test_an_unknown_top_level_key_is_still_refused_with_steps_present(self) -> None:
+        data = valid_config_data(steps=[step_entry()], unexpected="x")
+        with self.assertRaises(trigger.ConfigError):
+            trigger.parse_config(json.dumps(data))
 
     def test_the_selected_playbook_is_not_checked_against_the_path_rules_by_the_parser(
         self,
@@ -1598,6 +1841,252 @@ class EndToEndTests(unittest.TestCase):
             [GIT, f"--git-dir={scene.state / 'repo.git'}", "for-each-ref", "--format=%(refname)"]
         )
         self.assertEqual("refs/pull-trigger/main", refs)
+
+    # ------------------------------------------------------------------ step requests
+    def step_scene(self, **changes: object) -> Scene:
+        """Make a host whose allow-list holds the migrate step."""
+        return self.make_scene(steps=[step_entry()], **changes)
+
+    def step_request(
+        self, scene: Scene, commit: str, step: str = "migrate", word: str = "MIGRATE-0001"
+    ) -> Run:
+        """Call the program as the step key's forced command would."""
+        return self.request(scene, f"{commit} {step} {word}", mode="step")
+
+    def step_calls(self, scene: Scene) -> list[str]:
+        """Return the argument lines the stand-in recorded, without the working-directory lines."""
+        return [line for line in self.calls(scene) if line.startswith("-i")]
+
+    def test_a_step_request_runs_only_the_named_step_with_the_validated_id(self) -> None:
+        scene = self.step_scene()
+        result = self.step_request(scene, self.commits["c6"])
+        self.assertEqual(10, result.code, result.summary + result.errors)
+        checkout = (scene.state / "current").resolve()
+        self.assertEqual(
+            "-i localhost, --connection local --tags control_plane_db_migrate "
+            f"-e control_plane_db_step=migrate {checkout}/ansible/playbooks/host.yml",
+            self.step_calls(scene)[0],
+        )
+        self.assertTrue(result.has("verdict=applied"))
+        self.assertTrue(result.has("mode=step"))
+        self.assertTrue(result.has("step=migrate"))
+        self.assertTrue(result.has(f"commit={self.commits['c6']}"))
+
+    def test_the_summary_of_a_step_ends_with_the_step_and_the_line_of_an_apply_is_unchanged(
+        self,
+    ) -> None:
+        scene = self.step_scene()
+        step = self.step_request(scene, self.commits["c6"])
+        self.assertTrue(step.summary.endswith("changed=1 step=migrate"), step.summary)
+        plain = self.request(self.make_scene(), self.commits["c6"])
+        self.assertTrue(plain.summary.endswith("changed=1"), plain.summary)
+        self.assertNotIn("step=", plain.summary)
+        check = self.request(self.make_scene(), self.commits["c6"], mode="check")
+        self.assertNotIn("step=", check.summary)
+
+    def test_a_plain_apply_and_a_check_pass_no_tag_and_no_variable(self) -> None:
+        scene = self.step_scene()
+        self.assertEqual(10, self.request(scene, self.commits["c6"]).code)
+        self.assertEqual(11, self.request(scene, self.commits["tip"], mode="check").code)
+        for line in self.step_calls(scene):
+            self.assertNotIn("--tags", line)
+            self.assertNotIn("-e ", line)
+            self.assertNotIn("control_plane_db", line)
+
+    def test_a_step_is_idempotent_and_the_second_request_reports_no_change(self) -> None:
+        scene = self.step_scene()
+        self.assertEqual(10, self.step_request(scene, self.commits["c6"]).code)
+        scene.ansible.write_text(
+            scene.ansible.read_text(encoding="utf-8").replace("changed=1", "changed=0"),
+            encoding="utf-8",
+        )
+        second = self.step_request(scene, self.commits["c6"])
+        self.assertEqual(0, second.code, second.summary + second.errors)
+        self.assertTrue(second.has("verdict=unchanged"))
+        self.assertTrue(second.has("step=migrate"))
+        self.assertEqual(2, len(self.step_calls(scene)))
+
+    def test_a_step_on_the_same_checks_as_an_apply_is_refused_for_the_same_reasons(self) -> None:
+        for name, reason in (
+            ("side", "not-on-main"),
+            ("unsigned", "unsigned"),
+            ("other_key", "signer-not-allowed"),
+            ("tampered", "bad-signature"),
+            ("no_playbook", "playbook-not-allowed"),
+        ):
+            with self.subTest(name):
+                scene = self.step_scene()
+                self.prime(scene)
+                with self.no_change_to_the_host(scene):
+                    result = self.step_request(scene, self.commits[name])
+                self.assert_refused(result, reason)
+                self.assert_no_new_run(scene)
+
+    def test_a_step_that_is_not_on_the_allow_list_is_refused_and_an_empty_list_allows_none(
+        self,
+    ) -> None:
+        cases = {
+            "an empty list": self.make_scene(steps=[]),
+            "no list at all": self.make_scene(),
+            "another step on the list": self.step_scene(),
+        }
+        for name, scene in cases.items():
+            with self.subTest(name):
+                result = self.step_request(scene, self.commits["c6"], step="identity")
+                self.assert_refused(result, "step-not-allowed")
+                self.assertTrue(result.has("step=-"), result.summary)
+                self.assert_no_new_run(scene)
+                self.assertFalse((scene.state / "last-applied").exists())
+
+    def test_a_wrong_confirmation_word_is_refused_and_names_the_step_from_the_list_only(
+        self,
+    ) -> None:
+        scene = self.step_scene()
+        result = self.step_request(scene, self.commits["c6"], word="MIGRATE-0002")
+        self.assert_refused(result, "confirm-mismatch")
+        self.assertTrue(result.has("step=migrate"))
+        self.assertNotIn("MIGRATE-0002", result.summary + result.errors)
+        self.assertNotIn("MIGRATE-0001", result.summary + result.errors)
+        self.assert_no_new_run(scene)
+        self.assertFalse((scene.state / "last-applied").exists())
+
+    def test_the_word_of_one_step_does_not_confirm_another(self) -> None:
+        steps = [
+            step_entry(),
+            step_entry(id="identity", tag="control_plane_db_identity", word="IDENTITY-0002"),
+        ]
+        scene = self.make_scene(steps=steps)
+        wrong = self.step_request(scene, self.commits["c6"], step="identity", word="MIGRATE-0001")
+        self.assert_refused(wrong, "confirm-mismatch")
+        right = self.step_request(scene, self.commits["c6"], step="identity", word="IDENTITY-0002")
+        self.assertEqual(10, right.code, right.summary + right.errors)
+        self.assertIn("--tags control_plane_db_identity", self.step_calls(scene)[0])
+
+    def test_a_step_refusal_comes_before_the_lock_the_fetch_and_the_floor(self) -> None:
+        scene = self.step_scene(remote_url="file:///nonexistent/EXAMPLE.git")
+        for step, word in (("identity", "MIGRATE-0001"), ("migrate", "WRONG-WORD")):
+            with self.subTest(step=step, word=word):
+                result = self.step_request(scene, self.commits["c6"], step, word)
+                self.assertEqual(20, result.code, result.summary + result.errors)
+                self.assertFalse((scene.state / "repo.git" / "HEAD").exists())
+        with trigger.single_flight(scene.state / "lock"):
+            busy = self.step_request(scene, self.commits["c6"], step="identity")
+            self.assert_refused(busy, "step-not-allowed")
+            held = self.step_request(scene, self.commits["c6"])
+            self.assertEqual(21, held.code, held.summary + held.errors)
+
+    def test_a_check_request_that_carries_a_step_is_refused_and_plans_nothing(self) -> None:
+        scene = self.step_scene()
+        self.prime(scene)
+        with self.no_change_to_the_host(scene):
+            result = self.request(scene, f"{self.commits['c6']} migrate MIGRATE-0001", mode="check")
+        self.assert_refused(result, "step-mode-only")
+        self.assertTrue(result.has("mode=check"))
+        self.assertFalse(result.has("step=migrate"))
+        self.assert_no_new_run(scene)
+
+    def test_an_apply_request_that_carries_a_step_is_refused_and_runs_nothing(self) -> None:
+        scene = self.step_scene()
+        self.prime(scene)
+        with self.no_change_to_the_host(scene):
+            result = self.request(scene, f"{self.commits['c6']} migrate MIGRATE-0001", mode="apply")
+        self.assert_refused(result, "step-mode-only")
+        self.assert_no_new_run(scene)
+        self.assertEqual(
+            f"{self.commits['c2']}\n", (scene.state / "last-applied").read_text(encoding="utf-8")
+        )
+
+    def test_a_bare_commit_with_the_step_mode_is_refused_not_run_as_an_apply(self) -> None:
+        scene = self.step_scene()
+        result = self.request(scene, self.commits["c6"], mode="step")
+        self.assert_refused(result, "bad-request")
+        self.assert_no_new_run(scene)
+        self.assertFalse((scene.state / "last-applied").exists())
+
+    def test_a_malformed_step_request_is_refused_before_the_host_is_touched(self) -> None:
+        commit = self.commits["c6"]
+        for name, text in {
+            "a trailing token": f"{commit} migrate MIGRATE-0001 extra",
+            "a newline in the word": f"{commit} migrate MIGRATE\n0001",
+            "an uppercase step id": f"{commit} MIGRATE MIGRATE-0001",
+            "a lowercase word": f"{commit} migrate migrate-0001",
+        }.items():
+            with self.subTest(name):
+                scene = self.step_scene()
+                result = self.request(scene, text, mode="step")
+                self.assert_refused(result, "bad-request")
+                self.assert_no_new_run(scene)
+                self.assertFalse((scene.state / "repo.git" / "HEAD").exists())
+
+    def test_a_step_on_a_commit_older_than_the_floor_is_refused_as_a_rollback(self) -> None:
+        scene = self.step_scene()
+        self.assertEqual(10, self.request(scene, self.commits["c6"]).code)
+        scene.calls_before = len(self.calls(scene))
+        with self.no_change_to_the_host(scene):
+            result = self.step_request(scene, self.commits["c2"])
+        self.assert_refused(result, "rollback")
+        self.assert_no_new_run(scene)
+
+    def test_a_started_step_raises_the_floor_as_an_apply_does_and_a_failed_one_retries(
+        self,
+    ) -> None:
+        scene = self.step_scene()
+        fake_ansible(scene.ansible.parent, code=2)
+        failed = self.step_request(scene, self.commits["c6"])
+        self.assertEqual(30, failed.code, failed.summary + failed.errors)
+        self.assertTrue(failed.has("reason=playbook-failed"))
+        self.assertTrue(failed.has("step=migrate"))
+        self.assertEqual(
+            f"{self.commits['c6']}\n", (scene.state / "last-applied").read_text(encoding="utf-8")
+        )
+        fake_ansible(scene.ansible.parent)
+        retried = self.step_request(scene, self.commits["c6"])
+        self.assertEqual(10, retried.code, retried.summary + retried.errors)
+
+    def test_after_a_step_a_plain_apply_of_an_older_commit_is_refused_as_a_rollback(self) -> None:
+        scene = self.step_scene()
+        self.assertEqual(10, self.step_request(scene, self.commits["tip"]).code)
+        refused = self.request(scene, self.commits["c6"])
+        self.assert_refused(refused, "rollback")
+
+    def test_what_the_caller_typed_in_a_step_request_never_reaches_the_summary_or_the_log(
+        self,
+    ) -> None:
+        scene = self.step_scene()
+        typed = "typedstepname"
+        word = "TYPED-WORD-9"
+        refused = self.step_request(scene, self.commits["c6"], step=typed, word=word)
+        wrong = self.step_request(scene, self.commits["c6"], word=word)
+        malformed = self.request(scene, f"{self.commits['c6']} {typed} {word}\nextra", mode="step")
+        log = (scene.logs / "pull-trigger.log").read_text(encoding="utf-8")
+        for result in (refused, wrong, malformed):
+            self.assertNotIn(typed, result.summary + result.errors)
+            self.assertNotIn(word, result.summary + result.errors)
+        self.assertNotIn(typed, log)
+        self.assertNotIn(word, log)
+        self.assertEqual(3, len(log.splitlines()))
+
+    def test_the_log_line_of_a_step_names_the_step_and_the_run_output_is_kept(self) -> None:
+        scene = self.step_scene()
+        self.step_request(scene, self.commits["c6"])
+        log = (scene.logs / "pull-trigger.log").read_text(encoding="utf-8")
+        self.assertIn("mode=step", log)
+        self.assertIn(" step=migrate started=", log)
+        self.assertEqual(1, len(list((scene.logs / "runs").glob("*-step-*.log"))))
+
+    def test_a_configuration_naming_a_step_the_program_cannot_run_stops_every_request(self) -> None:
+        for name in ("break_glass", "anything"):
+            with self.subTest(name):
+                scene = self.make_scene(steps=[step_entry(id=name, tag="control_plane_db_other")])
+                for text, mode in (
+                    (self.commits["c6"], "apply"),
+                    (self.commits["c6"], "check"),
+                    (f"{self.commits['c6']} migrate MIGRATE-0001", "step"),
+                ):
+                    result = self.request(scene, text, mode=mode)
+                    self.assertEqual(40, result.code, result.summary + result.errors)
+                    self.assertTrue(result.has("reason=config-invalid"))
+                self.assert_no_new_run(scene)
 
 
 @contextlib.contextmanager

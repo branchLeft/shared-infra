@@ -2,3 +2,4 @@
 pull_trigger_ansible_playbook: /usr/local/bin/ansible-playbook
 pull_trigger_timeout_seconds: 3600
 pull_trigger_keep_runs: 50
+pull_trigger_steps: []

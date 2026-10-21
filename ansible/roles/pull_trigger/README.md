@@ -25,11 +25,14 @@ caller uses it"). The caller sends one 40-digit commit id and a mode, `apply` or
 `check`. The program then:
 
 1. Reads its configuration and makes its state and log directories, then
-   validates the request before it touches the repository: the whole text is one
-   commit of exactly 40 lowercase hex digits. A ref name, abbreviation, option,
-   uppercase digit, whitespace, newline, second word or empty text is refused. No
-   shell is used anywhere; every command is an argument list.
-2. Checks that the host's configured playbook is on the playbook allowlist, then
+   validates the request before it touches the repository: with `--mode apply` or
+   `--mode check` the whole text is one commit of exactly 40 lowercase hex digits. A
+   ref name, abbreviation, option, uppercase digit, whitespace, newline, second word
+   or empty text is refused. With `--mode step` it is that commit, one step id and one
+   word (see "Step requests"). No shell is used anywhere; every command is an
+   argument list.
+2. Checks that the host's configured playbook is on the playbook allowlist and, for a
+   step, that the step is on the step allow-list and the word is its word, then
    takes a single-flight lock. A second request while one runs is refused at
    once, not queued.
 3. Fetches `main`, and only `main`, from the configured read-only remote into a
@@ -49,8 +52,10 @@ caller uses it"). The caller sends one 40-digit commit id and a mode, `apply` or
    that no part of the playbook's path is a link and that its real path lies
    inside `ansible/playbooks/` of the checkout.
 8. Runs `ansible-playbook` on that checkout for this host only (`-i localhost,
---connection local`), with `--check --diff` in check mode. It prints one
-   summary line on standard output and sets a distinct exit status.
+--connection local`), with `--check --diff` in check mode and, for a step, with
+   `--tags TAG -e control_plane_db_step=ID` set by the program from its own
+   allow-list. It prints one summary line on standard output and sets a distinct
+   exit status.
 
 It does not run the second pass that proves the apply left nothing to change: the
 apply workflow asks for a second request of the same commit (ANS-17) and reads
@@ -59,25 +64,33 @@ keys or sudoers (the `sudoers_and_keys` pattern does), install `ansible-playbook
 (the host must have one at `pull_trigger_ansible_playbook`), decide which
 playbook a host runs beyond the one configured value, or hold any private key.
 
+**A step request** is a second kind of request, on a key of its own (see "Step
+requests"). It names the same commit and also one routine step of a role that the host
+playbook keeps behind the `never` tag, with a typed confirmation word. It goes through
+every check above and then runs the same playbook with only that step's tag. A
+host with no entry in its step allow-list refuses every step request.
+
 ## Interface
 
 The variables, their types, choices and defaults are in `meta/argument_specs.yml`
 and the same defaults are in `defaults/main.yml`. Ansible checks them when the
 role starts.
 
-| Variable                        | Meaning                                                                                                     |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `pull_trigger_remote_url`       | The read-only remote: an `https://` or `file://` URL, no credential in it.                                  |
-| `pull_trigger_signers`          | Non-empty list of `{format, key}`: `ssh` (one public key line) or `openpgp` (an armoured public key block). |
-| `pull_trigger_playbooks`        | The playbook allowlist: plain relative paths under `ansible/playbooks/`.                                    |
-| `pull_trigger_playbook`         | The one playbook this host runs; must be on the allowlist.                                                  |
-| `pull_trigger_ansible_playbook` | Absolute path of `ansible-playbook` (default `/usr/local/bin/ansible-playbook`).                            |
-| `pull_trigger_timeout_seconds`  | Time after which a playbook run is stopped (default 3600).                                                  |
-| `pull_trigger_keep_runs`        | How many runs' output files to keep (default 50).                                                           |
+| Variable                        | Meaning                                                                                                      |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `pull_trigger_remote_url`       | The read-only remote: an `https://` or `file://` URL, no credential in it.                                   |
+| `pull_trigger_signers`          | Non-empty list of `{format, key}`: `ssh` (one public key line) or `openpgp` (an armoured public key block).  |
+| `pull_trigger_playbooks`        | The playbook allowlist: plain relative paths under `ansible/playbooks/`.                                     |
+| `pull_trigger_playbook`         | The one playbook this host runs; must be on the allowlist.                                                   |
+| `pull_trigger_ansible_playbook` | Absolute path of `ansible-playbook` (default `/usr/local/bin/ansible-playbook`).                             |
+| `pull_trigger_timeout_seconds`  | Time after which a playbook run is stopped (default 3600).                                                   |
+| `pull_trigger_keep_runs`        | How many runs' output files to keep (default 50).                                                            |
+| `pull_trigger_steps`            | The step allow-list: a list of `{id, tag, word}` (default empty, which allows no step). See "Step requests". |
 
 No variable is a secret. The signers are public keys, and the configuration is
 world-readable by design, so the role leaves the diff of the configuration
-visible and sets no `no_log`. The program accepts an SSH signer only as one public
+visible and sets no `no_log`. The step words are in the same public file and are
+typing guards, not secrets (see "Step requests"). The program accepts an SSH signer only as one public
 key line of a known key type, and an OpenPGP signer only as a block that opens
 with the public key header and closes with its footer, so an SSH private key and
 an armoured private key block are refused. It does not read the inside of an
@@ -123,10 +136,12 @@ writes it):
 restrict,from="ALLOWED_CIDR",command="/usr/local/sbin/pull-trigger --mode apply" ssh-ed25519 PUBLIC_KEY_PLACEHOLDER ci-apply
 ```
 
-and a second key with `--mode check` for the plan job. The mode is fixed on the
-`command=` side, so the caller cannot change it. What the caller types is the
-whole content of `SSH_ORIGINAL_COMMAND`, and it must be the commit alone. For
-a person on the host, the commit may instead be one positional word, and not both.
+and a second key with `--mode check` for the plan job. A third key, with `--mode step`,
+exists only for a host that has step entries (see "Step requests"). The mode is fixed
+on the `command=` side, so the caller cannot change it. What the caller types is the
+whole content of `SSH_ORIGINAL_COMMAND`, and under the apply and check keys it must be
+the commit alone. For a person on the host, the commit may instead be one positional
+word, and not both.
 
 ```text
 ssh CI_USER@HOST 0123456789abcdef0123456789abcdef01234567
@@ -147,7 +162,8 @@ routes are supported:
 - **The CI key belongs to a non-root account and the `command=` runs `sudo`.** On
   Debian 13, sudo drops `SSH_ORIGINAL_COMMAND`, so the program would see no
   request and answer exit 20 `bad-request`. Keep the variable for this one
-  program only, and allow exactly the two argument lists:
+  program only, and allow exactly the argument lists (the third, for `--mode step`, is
+  on a separate account and in the step section below; the apply account never has it):
 
   ```text
   Defaults!/usr/local/sbin/pull-trigger env_keep += "SSH_ORIGINAL_COMMAND"
@@ -169,7 +185,128 @@ copied into it or into the log:
 pull-trigger verdict=applied exit=10 reason=ok mode=apply commit=<40 hex> playbook=<path> changed=1
 ```
 
+The line of an apply and of a check is byte for byte what it was before step requests
+existed: the workflow that reads it matches the whole line. A step request adds one
+last field, and only it does:
+
+```text
+pull-trigger verdict=applied exit=10 reason=ok mode=step commit=<40 hex> playbook=<path> changed=1 step=migrate
+```
+
 The playbook's own output is relayed on standard error and kept in `runs/`.
+
+### Step requests
+
+A step request is for a routine, named task that a role keeps behind the `never`
+tag: the first three are the control plane's database steps `migrate`, `identity` and
+`provision`. It is a second request kind and not a second program: it passes every
+check of an apply (the commit is an ancestor of `main`, newer than the floor, signed by
+an allowlisted key, with the playbook a regular file in it) and then runs the same
+playbook with `--tags TAG -e control_plane_db_step=ID`, so the tasks without that tag
+do not run. A plain apply and a check never pass either option, so a `never` step
+cannot run from them (a unit test and the harness both show it).
+
+**The interface, exactly.**
+
+| Part               | Value                                                                                                    |
+| ------------------ | -------------------------------------------------------------------------------------------------------- |
+| Mode               | `--mode step`, a third value of `--mode` beside `apply` and `check`. It is fixed on the `command=` side. |
+| Request text       | `<40 lowercase hex commit> <STEP_ID> <WORD>` in `SSH_ORIGINAL_COMMAND`, separated by single spaces only. |
+| `STEP_ID`          | `[a-z][a-z0-9_]{0,31}`, and it must also be on the host's step allow-list.                               |
+| `WORD`             | `[A-Z0-9-]{4,32}`, compared exactly with the allow-list's word for that step.                            |
+| By hand            | Three positional words after `--mode step`: the commit, the id, the word.                                |
+| Summary and log    | `mode=step` and a last field `step=ID` (or `step=-` when the id was not found on the allow-list).        |
+| Refusals (exit 20) | `bad-request` (the shape), `step-mode-only`, `step-not-allowed`, `confirm-mismatch`.                     |
+
+The step key's two lines (placeholder values; the `sudoers_and_keys` pattern writes
+them), alongside the apply key's and the plan key's:
+
+```text
+restrict,from="ALLOWED_CIDR",command="sudo /usr/local/sbin/pull-trigger --mode step" ssh-ed25519 PUBLIC_KEY_PLACEHOLDER control-plane-step
+Defaults!/usr/local/sbin/pull-trigger env_keep += "SSH_ORIGINAL_COMMAND"
+STEP_USER ALL=(root) NOPASSWD: /usr/local/sbin/pull-trigger --mode step
+```
+
+The step id is not in the `command=` text or in the sudoers line: it travels in the
+request, so the sudoers argument list is one fixed list and does not copy the
+allow-list. The plain apply key's account has no `--mode step` list, and the program
+refuses a step request under `--mode apply` or `--mode check` as `step-mode-only`, so
+a step needs both the step key and the step account. The harness proves the sudo
+half: it writes these lines, checks them with `visudo`, runs a step through the step
+account, and sees sudo refuse the same step for the plain account and refuse `--mode
+apply`, `--mode check` and `--config` for the step account. It does not run an SSH
+server, so the `command=` text and the key restrictions are **reviewed, not tested**.
+
+**The allow-list.** `pull_trigger_steps` is a list of `{id, tag, word}`. The program
+holds a **closed list of step ids** in its own code (`migrate`, `identity`,
+`provision`). The configuration may name some of them and can add none: an entry whose
+id is any other word is `invalid-config` (exit 40) and stops every request, whatever
+the word is. This is deliberate. A list of names to refuse could not name a surface
+that does not exist yet, and every name not on it would pass. Break-glass access (the
+four-hour support-access tool) is therefore not a step and cannot become one by editing
+a variable; a new routine step is a change to this root program, reviewed by the owner.
+Each entry is checked when the configuration loads:
+
+- exactly the three fields, all text; an unknown, missing or empty field is refused;
+- `id` is on the closed list; two entries with the same id, or the same tag, are refused;
+- `tag` is one plain name, `control_plane_db_` and then `[a-z][a-z0-9_]{0,31}`.
+  `--tags` takes comma lists and the special tags `all`, `always`, `never`, `tagged`
+  and `untagged`, and a tag is playbook-wide, so a free-form tag could run the whole
+  playbook or another role's tasks. None of those can match this form;
+- `word` is `[A-Z0-9-]{4,32}`.
+
+**The word is a typing guard and not a secret.** It sits in the world-readable
+configuration of a public repository (the inventory file for the host). The person who
+adds an entry chooses it and the owner reads it in that pull request; at dispatch the
+approver reads it from the same inventory file, and types it into the workflow's
+`confirm` input. What stops a step is the protected environment whose only reviewer is
+the owner, not the word. The word catches a wrong step or a wrong host and nothing more.
+
+**Order of refusal.** After the request is parsed, the program checks the playbook
+allowlist, then the step (on the list, then the word), and only then takes the lock,
+fetches, reads the floor and checks out. A refused step touches none of those.
+
+**The floor is the apply's floor, unchanged.** A step request needs a commit that is
+newer than or equal to the last one applied, as an apply does, and when the playbook
+starts the floor is raised to that commit, as it is for an apply and for a failed
+apply. Two consequences follow, and both are stated here so that nobody finds them
+out later:
+
+- a step that failed can be asked for again on the same commit (the floor accepts
+  the commit that set it), and the role's own markers, not the floor, stop a second
+  success;
+- a step that ran on commit C raises the floor to C, so a plain apply of an older commit
+  that had not been applied yet is then refused `rollback`. The way forward is a newer
+  commit.
+
+**What the approver sees (ANS-17).** A check-mode run cannot show a step: a step is
+never run in check mode, the program refuses it there, and the plan job's check-mode
+play does not see a `never`-tagged task. So the plan for a step is not a diff. It is the
+three things the delivery workflow prints before the protected environment pauses: the
+commit, the step id, and the committed input the step compares (the image digest for
+`migrate`, a hash of the rendered tenant configuration for `identity`). The program's
+summary line then names the step it ran (`step=ID`), so a bare commit sent by mistake
+is not read as a step. The amendment that says this in the standard is open for review
+in the standards repository, and the workflow that prints the three lines is its own
+change in the workflows repository.
+
+**What the owner does on a host, once.** None of this is done by the role or by an
+agent. It is listed so that the owner's steps are in one place:
+
+1. Make the step key pair, and put the private half in the `control-plane-step`
+   environment's secret. The public half goes in the host's `authorized_keys`, on the
+   step account, with the line above.
+2. Add the step account and its sudoers lines (above) through the `sudoers_and_keys`
+   pattern, and add the host's known-hosts entry to the environment.
+3. Create the GitHub environment `control-plane-step` with the owner as its only
+   required reviewer, and with deployment limited to the `main` branch. These are
+   settings of the environment and cannot be tested from the repository.
+4. Add the step entries to the host's inventory file, in a reviewed pull request.
+
+When a step is run live, the evidence is the workflow run, the host's summary line with
+`mode=step` and `step=ID`, a second run of the same step that reports no change, and
+the deployment's review record showing that the owner approved that run in that
+environment (the environment is the only control here that is not public).
 
 ### Exit codes
 
@@ -185,7 +322,10 @@ The playbook's own output is relayed on standard error and kept in `runs/`.
 | 40   | `error`        | Invalid or unsafe configuration or state, a missing tool, a failed git command, or `io-error` or `internal-error` (see below). |
 
 The `reason` field of exit 20 is one of `bad-request`, `not-on-main`, `rollback`,
-`unsigned`, `bad-signature`, `signer-not-allowed`, `playbook-not-allowed`.
+`unsigned`, `bad-signature`, `signer-not-allowed`, `playbook-not-allowed`, and for
+step requests `step-mode-only` (a step with `--mode apply` or `--mode check`),
+`step-not-allowed` (the id is not on the host's allow-list, which may be empty) and
+`confirm-mismatch` (the word is not that step's word).
 
 Exit 40 usually means the playbook was never reached, but `io-error` and
 `internal-error` can also follow a playbook that ran to its end (for example a full
@@ -231,8 +371,8 @@ itself, and a repeated request is never skipped as "already done".
 
 ## Refusals leave the host untouched
 
-All of the refusals above happen before a work directory is promoted or the
-rollback floor changes. The cache may be updated by a fetch (a cache is not what
+All of the refusals above, and the three step refusals, happen before a work directory
+is promoted or the rollback floor changes. The cache may be updated by a fetch (a cache is not what
 the host runs). The scenario takes a description of the marker the playbooks
 write, the floor, the `current` link, every file in the checkout (owner, mode, size,
 modification time, hash) before and after each refusal and asserts the two are
@@ -354,6 +494,16 @@ which control broke:
 
 - the wrapper, its directories, the configuration, the state and log directories are
   root-owned, not writable by others, and have the documented modes;
+- step requests: no plain apply or check ever runs a step; a step request runs only the
+  tagged task with the id the program validated, each of the three steps on its own
+  word, and a second request of a step reports no change; each step refusal (not on the
+  list, an empty list, a wrong word, another step's word, a step under `--mode apply` or
+  `--mode check`, the step mode with a bare commit, a commit older than the floor, an
+  unsigned, unlisted-key, tampered or off-`main` commit, and the hostile shapes) leaves
+  the host and the step markers byte for byte as they were; a configuration that names
+  a step the program cannot run, and one whose tag is `all`, stops every request; the
+  step account may run a step only through its one sudo argument list and the apply
+  account may not;
 - check mode reports a change and changes nothing;
 - a good commit applies exactly once; the checkout is exactly the commit, with no
   `.git`; a second request is a clean second run;
@@ -427,6 +577,34 @@ A role reaches a host only through the gated workflow (ANS-17), never by running
 holds a key that can run only this command, the deployment gate approves a merge
 commit, and the host verifies the commit again by itself. `edge1` is the first host: its
 bootstrap and its playbook are `playbooks/edge1.yml`, and the signer it trusts is the one in `inventories/production/group_vars/edge/pull_trigger.yml`.
+
+### The controls of a step request, and how each is shown to fail
+
+Every control below was broken on purpose in a copy, seen to fail by the named test,
+restored, and seen to pass. A new step id, a change to the closed list or to the order of
+the refusals is a change to a root program, and the owner reviews it.
+
+| Control                                                                   | Broken by                                                | Fails in                                                                      |
+| ------------------------------------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| A1 a step must be on the allow-list                                       | removing the not-listed refusal                          | `test_a_step_that_is_not_on_the_allow_list...`, harness refusal cases         |
+| A2 the word must be that step's word                                      | skipping the word comparison                             | `test_a_wrong_confirmation_word...`, `test_the_word_of_one_step...`           |
+| A3 the request shape is exact                                             | accepting a trailing token                               | `test_every_hostile_step_request...`, the random request test                 |
+| A4 a plain request passes no tag                                          | passing a tag when the request has no step               | `test_a_plain_apply_and_a_check_pass_no_tag...`, harness plain-request check  |
+| A5 a step is refused before the lock and the fetch                        | moving the step check after the fetch                    | `test_a_step_refusal_comes_before_the_lock_the_fetch_and_the_floor`           |
+| A6 the step list is closed in the program                                 | dropping the closed-list test on a configured id         | `test_a_name_that_is_not_one_of_the_programs_steps...`, harness `break-glass` |
+| A7 a check request cannot carry a step                                    | letting `--mode check` carry one                         | `test_a_check_request_that_carries_a_step...`, harness refusal case           |
+| A8 an apply request cannot carry a step                                   | letting `--mode apply` carry one                         | `test_an_apply_request_that_carries_a_step...`, harness refusal case          |
+| A9 the plain account has no step argument list                            | adding `--mode step` to the plain account's sudoers line | harness sudo block                                                            |
+| A10 a step on a commit older than the floor is refused                    | skipping the floor test for a step                       | `test_a_step_on_a_commit_older_than_the_floor...`, harness refusal case       |
+| A11 a tag is one plain name in the role's namespace                       | loosening the tag pattern                                | `test_every_invalid_step_entry_is_refused`, harness `tag-all`                 |
+| A12 two entries cannot share an id or a tag                               | removing the duplicate test                              | `test_every_invalid_step_entry_is_refused`                                    |
+| A13 the line of an apply and a check has no step field                    | always adding the step field                             | `test_the_summary_of_a_step_ends_with_the_step...`, harness refusal check     |
+| A14 what the caller typed in a step request is never logged               | logging the typed id before it is found on the list      | `test_what_the_caller_typed_in_a_step_request...`                             |
+| A15 the step mode with a bare commit is refused, not run as a plain apply | removing the no-step test for `--mode step`              | `test_a_bare_commit_with_the_step_mode...`, harness refusal case              |
+
+The `command=` text and the key restrictions of the step key are reviewed, not tested
+(no SSH server in the harness). A9 proves the sudo lines in this README, not the file
+the `sudoers_and_keys` pattern writes on a host.
 
 ## How to change it safely
 
