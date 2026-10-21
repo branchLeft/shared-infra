@@ -11,62 +11,12 @@
     verify_grant_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_grant_host/defaults/main.yml') | from_yaml }}"
     verify_grant_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_grant_host/vars/main.yml') | from_yaml }}"
     verify_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') | from_yaml }}"
-    # The playbook that applies this role runs its own tasks on the host, so the
-    # module and stat checks read them as well: a task there is a route to the key
-    # the role's checks would not see. Every play of the file is read, and all four
-    # task lists of each play: pre_tasks, tasks, post_tasks and handlers.
-    verify_ops1_plays: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../../playbooks/ops1.yml') | from_yaml }}"
-    verify_ops1_tasks: >-
-      {{ (verify_ops1_plays | map(attribute='pre_tasks', default=[]) | flatten)
-      + (verify_ops1_plays | map(attribute='tasks', default=[]) | flatten)
-      + (verify_ops1_plays | map(attribute='post_tasks', default=[]) | flatten)
-      + (verify_ops1_plays | map(attribute='handlers', default=[]) | flatten) }}
-    verify_all_tasks: '{{ verify_tasks + verify_ops1_tasks }}'
-    # The only keys a play of ops1.yml may carry. Any other key (vars_files makes
-    # the controller read a file, and under ansible-pull the controller is the
-    # host; vars_prompt, vars, module_defaults, collections and the rest change what
-    # a task does or reads) is refused rather than judged.
-    verify_ops1_extra_keys: "{{ verify_ops1_plays | map('list') | flatten | difference(verify_ops1_play_keys) | unique | list }}"
-    verify_ops1_play_keys:
-      - name
-      - hosts
-      - gather_facts
-      - pre_tasks
-      - roles
-      - tasks
-      - post_tasks
-      - handlers
-    # The roles entries of every play of ops1.yml, and the one list they may be. An
-    # entry may carry vars, tasks_from, vars_from, defaults_from or other keys; those
-    # are role parameters that outrank the role's own vars/main.yml, so they change
-    # what ops1 runs (the image, the files, the base URL, the key path) while verify
-    # still asserts the values of the file. So each entry holds the key role and
-    # nothing else, and the list is exactly the mint role: a second role makes its
-    # author extend this test, not slip past it unread.
-    verify_ops1_role_entries: "{{ verify_ops1_plays | map(attribute='roles', default=[]) | flatten }}"
-    verify_ops1_role_entries_expected:
-      - role: ../roles/breakglass_mint_host
-    # The raw text of every file of the role that Ansible evaluates: the tasks and the two
-    # variable files. A lookup or a template runs on the controller, which under
-    # ansible-pull is the host itself, so it can read a file no module key shows.
+    # The raw text of every file of the role that Ansible evaluates, held to the
+    # controller-side scan with ops1.yml's text by the playbook guard below.
     verify_role_texts:
       - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') }}"
       - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') }}"
       - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') }}"
-      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../../playbooks/ops1.yml') }}"
-    # The words that run something on the controller: lookup, query, q and pipe,
-    # in any case and any spacing. The patterns here are data, so the backslashes
-    # reach the regular expression as written.
-    verify_forbidden_pattern: '(?i)\b(lookup|query|pipe)\b|\bq\s*\('
-    # Spellings the pattern must catch, so that a pattern that matched nothing
-    # could not pass the role's own text. None holds a template marker.
-    verify_forbidden_samples:
-      - "lookup('ansible.builtin.file', '/etc/' ~ 'branchleft/x')"
-      - "lookup ('ansible.builtin.pipe', 'cat x')"
-      - "Lookup('file', 'x')"
-      - "query('file', 'x')"
-      - "q('file', 'x')"
-      - 'ansible.builtin.pipe'
     # The names the key path may be reached by. Only the key-path constant, in
     # vars/main.yml, may hold or build it: no other variable of the role may.
     verify_key_path_name: breakglass_mint_host_key_path
@@ -89,25 +39,9 @@
       {{ verify_role_vars.breakglass_mint_host_source_base_url
       | regex_replace('[{][{] *breakglass_mint_host_source_commit *[}][}]', verify_commit) }}
     verify_url_prefix: https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ verify_commit }}/adapters/sso/scripts
-    # Task keywords, which are not module names: what is left on a task after
-    # these are taken away is the module it calls.
-    verify_task_keywords:
-      - name
-      - when
-      - register
-      - loop
-      - loop_control
-      - changed_when
-      - failed_when
-      - check_mode
-      - notify
-      - tags
-      - vars
-      - no_log
-      - diff
-    # The only modules the role's tasks may call. A module not on this list,
-    # whatever its spelling or its siblings (slurp, fetch, copy with remote_src,
-    # lineinfile, assemble, a command that cats), fails the structure check below.
+    # The only modules the role's tasks and ops1.yml's tasks may call. A module not
+    # on this list, whatever its spelling or its siblings (slurp, fetch, copy with
+    # remote_src, lineinfile, assemble, a command that cats), fails the guard below.
     verify_allowed_modules:
       - ansible.builtin.assert
       - ansible.builtin.command
@@ -229,47 +163,30 @@
       loop_control:
         label: '{{ item.path }}'
 
-    # ----- the structure of the tasks: an allow-list, not a deny-list -----
-    - name: List the module each task of the role and of ops1 calls
-      ansible.builtin.set_fact:
-        breakglass_mint_host_v_modules: >-
-          {% set out = [] %}
-          {% for t in verify_all_tasks %}{% for k in t.keys() if k not in verify_task_keywords %}{% set _ = out.append(k) %}{% endfor %}{% endfor %}
-          {{ out | to_json }}
-
-    - name: Assert the role and ops1 call only the modules on the allow-list
-      ansible.builtin.assert:
-        that:
-          - breakglass_mint_host_v_modules | from_json | difference(verify_allowed_modules) | length == 0
-        fail_msg: >-
-          The role or ops1 calls modules that are not on the allow-list:
-          {{ breakglass_mint_host_v_modules | from_json | difference(verify_allowed_modules) }}.
-        quiet: true
-
-    # ----- nothing in the role runs on the controller -----
-    # The module list above sees the module keys of the tasks. It does not see an
-    # expression: a lookup('file', ...) in the `that` of an assert, or in a
-    # variable a task uses, reads a file on the controller and prints nothing. A
-    # quiet assert would hide it from the log scan too. So the text of the tasks
-    # and of both variable files is held free of lookup, query, q and pipe.
-    - name: Assert the pattern for a controller-side read can see each spelling of one
-      ansible.builtin.assert:
-        that:
-          - verify_forbidden_samples | map('regex_search', verify_forbidden_pattern) | select | list | length == verify_forbidden_samples | length
-        fail_msg: The pattern that forbids lookup, query, q and pipe does not match one of its own samples, so a clean result would prove nothing.
-        quiet: true
-
-    - name: Assert the role's tasks and variable files hold no lookup, query or pipe
-      ansible.builtin.assert:
-        that:
-          - verify_role_texts | length == 4
-          - verify_role_texts | map('length') | select('equalto', 0) | list | length == 0
-          - verify_role_texts | map('regex_search', verify_forbidden_pattern) | select | list | length == 0
-        fail_msg: >-
-          The tasks, vars or defaults of the role, or the text of ops1.yml, hold a lookup, query, q or pipe. That runs on the
-          controller, which under ansible-pull is the host, and can read the signing key without
-          a module the checks above would see.
-        quiet: true
+    # ----- the playbook that applies this role: one guard, shared with the grant role -----
+    # The guard reads every play of ops1.yml and every task of its four lists: its
+    # play keys, its roles entry, the modules its tasks and the role's call, and the
+    # controller-side reads in the text of the playbook and of the role's files. It is
+    # one file, ansible/harness/playbook_guard.yml, included by both role tests so
+    # the rule cannot drift (ws#2367).
+    - name: Hold ops1.yml and the role's own tasks to the playbook guard
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../../harness/playbook_guard.yml'
+      vars:
+        guard_playbook: '{{ playbook_dir }}/../../../../playbooks/ops1.yml'
+        guard_expected_roles:
+          - role: ../roles/breakglass_mint_host
+        guard_play_keys:
+          - name
+          - hosts
+          - gather_facts
+          - pre_tasks
+          - roles
+          - tasks
+          - post_tasks
+          - handlers
+        guard_allowed_modules: '{{ verify_allowed_modules }}'
+        guard_tasks: '{{ verify_tasks }}'
+        guard_scan_texts: '{{ verify_role_texts }}'
 
     # The naming check reads the tasks. A variable that holds or builds the key
     # path, and that a task then uses, would not be named in any task. So no
@@ -298,49 +215,6 @@
           - verify_tasks | select('contains', 'ansible.builtin.get_url') | list | length == 1
           - verify_tasks | select('contains', 'ansible.builtin.stat') | list | length == 2
         fail_msg: The tasks file has a different number of command, file, download or stat tasks than the checks below were written for.
-        quiet: true
-
-    # The ops1 checks read every play of ops1.yml and the four task lists of each.
-    # An entry that is not a play (an import_playbook has no hosts key) would bring
-    # in tasks of another file that the lists never show, so it fails here. The
-    # list must be non-empty, or the stat and module checks would have nothing to read.
-    - name: Assert ops1.yml is plays only, and that its tasks were read
-      ansible.builtin.assert:
-        that:
-          - verify_ops1_plays is sequence
-          - verify_ops1_plays | length >= 1
-          - verify_ops1_plays | selectattr('hosts', 'defined') | list | length == verify_ops1_plays | length
-          - verify_ops1_tasks | length >= 1
-          - verify_all_tasks | length == verify_tasks | length + verify_ops1_tasks | length
-        fail_msg: ops1.yml has an entry that is not a play, or the checks read none of its tasks, so a clean result would prove nothing.
-        quiet: true
-
-    # A play key the checks do not read can still make the controller read a file:
-    # vars_files does, and under ansible-pull the controller is the host. No lookup
-    # word is involved, so the text scan above cannot see it. So the keys of every
-    # play are an allow-list, not a deny-list.
-    - name: Assert every play of ops1.yml carries only keys on the allow-list
-      ansible.builtin.assert:
-        that:
-          - verify_ops1_extra_keys | length == 0
-        fail_msg: >-
-          A play of ops1.yml carries a key that is not on the allow-list: {{ verify_ops1_extra_keys }}.
-          A vars_files entry makes the controller read a file, which under ansible-pull is the host.
-        quiet: true
-
-    # The allow-list above admits the key roles but does not look inside its entries.
-    # A role entry with vars, tasks_from or vars_from changes what the role runs for
-    # ops1 alone, and every other check here would still read the role's own files.
-    # So the roles of ops1.yml are exactly the mint role, each entry with the key
-    # role and no other key.
-    - name: Assert the roles of ops1.yml are exactly the mint role, each entry with no key but role
-      ansible.builtin.assert:
-        that:
-          - verify_ops1_role_entries == verify_ops1_role_entries_expected
-        fail_msg: >-
-          The roles entries of ops1.yml are not exactly the mint role with no other key: {{ verify_ops1_role_entries }}.
-          An entry's vars, tasks_from or vars_from change what the role runs for ops1 and outrank the role's own
-          vars/main.yml. A second role needs its own test, and this one extended to list it.
         quiet: true
 
     # The exact argv of each of the three commands, to the last word: the probe's
@@ -437,7 +311,7 @@
           - item['ansible.builtin.stat'].get_attributes | default(true) is false
         fail_msg: 'A stat of the role or of ops1 may read a checksum, a MIME type or attributes of its file: {{ item.name }}.'
         quiet: true
-      loop: "{{ verify_all_tasks | select('contains', 'ansible.builtin.stat') | list }}"
+      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.stat') | list }}"
       loop_control:
         label: '{{ item.name }}'
 

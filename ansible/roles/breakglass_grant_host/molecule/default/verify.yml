@@ -20,23 +20,7 @@
       {{ verify_role_vars.breakglass_grant_host_source_base_url
       | regex_replace('[{][{] *breakglass_grant_host_source_commit *[}][}]', verify_commit) }}
     verify_url_prefix: https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ verify_commit }}/adapters/sso/scripts
-    # Task keywords, which are not module names: what is left on a task after
-    # these are taken away is the module it calls.
-    verify_task_keywords:
-      - name
-      - when
-      - register
-      - loop
-      - loop_control
-      - changed_when
-      - failed_when
-      - check_mode
-      - notify
-      - tags
-      - vars
-      - no_log
-      - diff
-    # The only modules the role's tasks may call. A module not on this list,
+    # The only modules the role's tasks and app1.yml's tasks may call. A module not on this list,
     # whatever its spelling or its siblings, fails the structure check below.
     verify_allowed_modules:
       - ansible.builtin.assert
@@ -173,21 +157,29 @@
         label: '{{ item.path }}'
 
     # ----- the structure of the tasks: an allow-list, not a deny-list -----
-    - name: List the module each task of the role calls
-      ansible.builtin.set_fact:
-        breakglass_grant_host_v_modules: >-
-          {% set out = [] %}
-          {% for t in verify_tasks %}{% for k in t.keys() if k not in verify_task_keywords %}{% set _ = out.append(k) %}{% endfor %}{% endfor %}
-          {{ out | to_json }}
-
-    - name: Assert the role calls only the modules on the allow-list
-      ansible.builtin.assert:
-        that:
-          - breakglass_grant_host_v_modules | from_json | difference(verify_allowed_modules) | length == 0
-        fail_msg: >-
-          The role calls modules that are not on the allow-list:
-          {{ breakglass_grant_host_v_modules | from_json | difference(verify_allowed_modules) }}.
-        quiet: true
+    # ----- the playbook that applies this role: one guard, shared with the mint role -----
+    # app1.yml is held to the same guard as ops1.yml (ansible/harness/playbook_guard.yml,
+    # the one home of the rule, ws#2367): its play keys, its roles entry, the modules
+    # of its tasks and of the role's, and the controller-side reads in its text. A
+    # pre_task that sets an image or includes vars is a module off the list, so it is
+    # refused here, and so is an entry's vars, tasks_from or vars_from.
+    - name: Hold app1.yml and the role's own tasks to the playbook guard
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../../harness/playbook_guard.yml'
+      vars:
+        guard_playbook: '{{ playbook_dir }}/../../../../playbooks/app1.yml'
+        guard_expected_roles:
+          - role: ../roles/breakglass_grant_host
+        guard_play_keys:
+          - name
+          - hosts
+          - gather_facts
+          - pre_tasks
+          - roles
+          - tasks
+          - post_tasks
+          - handlers
+        guard_allowed_modules: '{{ verify_allowed_modules }}'
+        guard_tasks: '{{ verify_tasks }}'
 
     # A loop over an empty list skips quietly, so the checks below would pass
     # against a tasks file they could not read. Require that they have work.

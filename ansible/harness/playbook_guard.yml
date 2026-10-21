@@ -1,0 +1,131 @@
+---
+# The guard on a playbook that applies a break-glass role (ws#2367). It is the one
+# home of that rule: each role's molecule verify includes this file, so the two
+# roles cannot drift apart. The includer passes its inputs as the include's vars.
+#
+# Inputs, set by the includer:
+#   guard_playbook         the playbook the role is applied by, its path
+#   guard_expected_roles   the exact roles list every play of it must hold
+#   guard_play_keys        the only keys a play of it may carry
+#   guard_allowed_modules  the modules a task may call (the includer's own list)
+#   guard_tasks            the includer's own role tasks, held to the same modules
+#   guard_scan_texts       other texts the includer holds to the controller-side scan
+#
+# Every rule is an allow-list. A play key outside guard_play_keys, a roles entry
+# that is not guard_expected_roles exactly (vars, tasks_from and vars_from are
+# refused, because they outrank the role's own vars/main.yml), a task that calls a
+# module off the list, and a lookup, query, q or pipe in the text of the playbook
+# or of a scanned text, all fail the run before any later check.
+#
+# Not read here, and named by the includers: the stat rule and the key-path
+# rules, which belong to the mint role alone. A deliberate edit is for review and
+# the deployment approval of the gated workflow (ws#2483).
+
+- name: Read the playbook the role is applied by
+  ansible.builtin.set_fact:
+    playbook_guard_v_plays: "{{ lookup('ansible.builtin.file', guard_playbook) | from_yaml }}"
+    playbook_guard_v_text: "{{ lookup('ansible.builtin.file', guard_playbook) }}"
+
+# The four task lists of every play: pre_tasks, tasks, post_tasks and handlers.
+# An entry that is not a play is refused below, so no task comes from a file this
+# read does not show.
+- name: Collect every task of every play, from all four lists
+  ansible.builtin.set_fact:
+    playbook_guard_v_tasks: >-
+      {{ (playbook_guard_v_plays | map(attribute='pre_tasks', default=[]) | flatten)
+      + (playbook_guard_v_plays | map(attribute='tasks', default=[]) | flatten)
+      + (playbook_guard_v_plays | map(attribute='post_tasks', default=[]) | flatten)
+      + (playbook_guard_v_plays | map(attribute='handlers', default=[]) | flatten) }}
+    playbook_guard_v_roles: "{{ playbook_guard_v_plays | map(attribute='roles', default=[]) | flatten }}"
+
+- name: Assert the playbook is plays only, and that its tasks were read
+  ansible.builtin.assert:
+    that:
+      - playbook_guard_v_plays is sequence
+      - playbook_guard_v_plays | length >= 1
+      - playbook_guard_v_plays | selectattr('hosts', 'defined') | list | length == playbook_guard_v_plays | length
+      - playbook_guard_v_tasks | length >= 1
+    fail_msg: >-
+      The playbook has an entry that is not a play (an import_playbook has no hosts key), or the
+      checks read none of its tasks, so a clean result would prove nothing.
+    quiet: true
+
+# A play key outside the list can still make the controller read a file (vars_files
+# does, and under ansible-pull the controller is the host), and no lookup word is
+# involved, so the text scan below cannot see it.
+- name: Assert every play carries only keys on the allow-list
+  ansible.builtin.assert:
+    that:
+      - playbook_guard_v_plays | map('list') | flatten | difference(guard_play_keys) | unique | list | length == 0
+    fail_msg: >-
+      A play of the playbook carries a key that is not on the allow-list:
+      {{ playbook_guard_v_plays | map('list') | flatten | difference(guard_play_keys) | unique | list }}.
+      A vars_files entry makes the controller read a file, which under ansible-pull is the host.
+    quiet: true
+
+# The roles entries are compared whole. An entry's vars, tasks_from or vars_from are
+# role parameters that outrank the role's own vars/main.yml, so each entry holds the
+# expected role and no other key, and the list is exactly the expected one.
+- name: Assert the roles of the playbook are exactly the expected ones, each entry with no key but role
+  ansible.builtin.assert:
+    that:
+      - playbook_guard_v_roles == guard_expected_roles
+    fail_msg: >-
+      The roles entries of the playbook are not exactly {{ guard_expected_roles }}: {{ playbook_guard_v_roles }}.
+      An entry's vars, tasks_from or vars_from change what the role runs and outrank the role's
+      vars/main.yml. A second role needs the expected list extended, and no other key is allowed.
+    quiet: true
+
+# The modules of the includer's own tasks and of the playbook's tasks, read from the
+# parsed lists. The keywords are the task keys that are not module names.
+- name: List the module each task the guard reads calls
+  ansible.builtin.set_fact:
+    playbook_guard_v_modules: >-
+      {% set keywords = ['name', 'when', 'register', 'loop', 'loop_control', 'changed_when',
+         'failed_when', 'check_mode', 'notify', 'tags', 'vars', 'no_log', 'diff'] %}
+      {% set out = [] %}
+      {% for t in guard_tasks + playbook_guard_v_tasks %}{% for k in t.keys() if k not in keywords %}{% set _ = out.append(k) %}{% endfor %}{% endfor %}
+      {{ out | to_json }}
+
+- name: Assert the tasks call only the modules on the allow-list
+  ansible.builtin.assert:
+    that:
+      - playbook_guard_v_modules | from_json | difference(guard_allowed_modules) | length == 0
+    fail_msg: >-
+      The role or the playbook calls modules that are not on the allow-list:
+      {{ playbook_guard_v_modules | from_json | difference(guard_allowed_modules) }}.
+    quiet: true
+
+# The words that run something on the controller: lookup, query, q and pipe, in any
+# case and any spacing. The patterns are data, so the backslashes reach the regular
+# expression as written.
+- name: Hold the controller-side pattern and the spellings it must catch
+  ansible.builtin.set_fact:
+    playbook_guard_v_pattern: '(?i)\b(lookup|query|pipe)\b|\bq\s*\('
+    # Spellings the pattern must catch, so that a pattern that matched nothing could
+    # not pass the playbook's own text. None holds a template marker.
+    playbook_guard_v_samples:
+      - "lookup('ansible.builtin.file', '/etc/' ~ 'branchleft/x')"
+      - "lookup ('ansible.builtin.pipe', 'cat x')"
+      - "Lookup('file', 'x')"
+      - "query('file', 'x')"
+      - "q('file', 'x')"
+      - 'ansible.builtin.pipe'
+
+- name: Assert the pattern for a controller-side read can see each spelling of one
+  ansible.builtin.assert:
+    that:
+      - playbook_guard_v_samples | map('regex_search', playbook_guard_v_pattern) | select | list | length == playbook_guard_v_samples | length
+    fail_msg: The pattern that forbids lookup, query, q and pipe does not match one of its own samples, so a clean result would prove nothing.
+    quiet: true
+
+- name: Assert the playbook and the scanned texts hold no lookup, query, q or pipe
+  ansible.builtin.assert:
+    that:
+      - (guard_scan_texts | default([]) + [playbook_guard_v_text]) | map('length') | select('equalto', 0) | list | length == 0
+      - (guard_scan_texts | default([]) + [playbook_guard_v_text]) | map('regex_search', playbook_guard_v_pattern) | select | list | length == 0
+    fail_msg: >-
+      The playbook, or a text the role checks, holds a lookup, query, q or pipe. That runs on the
+      controller, which under ansible-pull is the host, and can read the signing key without a
+      module the checks would see.
+    quiet: true
