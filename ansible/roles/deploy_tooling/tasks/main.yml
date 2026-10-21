@@ -1,8 +1,10 @@
 ---
-# Order matters. The inputs and every directory on the path to a target (up to the
-# root of the filesystem, because an account that can write to any of them can
-# replace what is run as root) are read first, and nothing is written until they
-# pass; the directories exist before the files go into them; every target is then
+# Order matters. The inputs and every directory on the path to a target (named by
+# its path, up to the root of the filesystem; each is read as itself and a link in
+# the path is refused, never followed; the directories are root's, carry no ACL and
+# are not group- or other-writable; each target carries no ACL) are read first, and
+# nothing is written until they pass; the directories exist before the files go into
+# them; every target is then
 # checked (owner, group, mode, kind) before anything is run from it, because the
 # policy program runs as root; and on a host of class app the program is run, by
 # the handler, only after those checks and before the firewall chains are read back.
@@ -45,7 +47,9 @@
 # directory it sits in, or to any directory above that one (it can rename the lower
 # directory aside and put its own in its place), and the wrapper and the policy program are
 # run as root. So every directory on the path to every target, and to the sudoers drop-in,
-# up to the root of the filesystem, is checked. This is first, before the role writes a
+# up to the root of the filesystem, is checked, by the strict shape in _path_checks.yml
+# (root's, no ACL, not writable by any group or other account, not a link), and every target
+# and the drop-in is checked for an ACL there too. This is first, before the role writes a
 # file, because a run that refuses a directory has to have written nothing into it. Read
 # only, so it runs in check mode: a host whose directory is wrong is drift the plan has to
 # show.
@@ -62,11 +66,19 @@
       {%- endfor -%}
       {{ ns.found | unique | sort | list }}
 
-- name: Check each directory on the path to a target
-  ansible.builtin.include_tasks: _parent_directory.yml
-  loop: '{{ deploy_tooling_parent_paths }}'
-  loop_control:
-    loop_var: deploy_tooling_parent
+# The ACL of a target is read here, before any write, because the copy that follows would
+# replace a file and its ACL with it, and the refusal has to come first. A target that does
+# not exist yet has no ACL to read.
+- name: Work out every path whose ACL is read
+  ansible.builtin.set_fact:
+    deploy_tooling_acl_paths: >-
+      {{ (deploy_tooling_parent_paths
+          + (deploy_tooling_directory_targets + deploy_tooling_file_targets
+             + [{'path': deploy_tooling_sudoers_path}]) | map(attribute='path') | list)
+         | unique | sort | list }}
+
+- name: Check each directory on the path to a target, and each target, before anything is written
+  ansible.builtin.include_tasks: _path_checks.yml
 
 # ----- The directories and the files -----
 

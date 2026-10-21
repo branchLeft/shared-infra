@@ -1,0 +1,124 @@
+---
+# Included from main.yml once, before the role writes anything. It reads the host and
+# changes nothing: the role does not repair a directory it does not own, it refuses the
+# run, so an approver reads why. deploy_tooling_parent_paths is every directory on the
+# path to a target, the root of the filesystem included, and deploy_tooling_acl_paths is
+# those directories, the targets and the sudoers drop-in.
+#
+# The wrapper and the policy program run as root, so an account that can write to the
+# directory they sit in can unlink either one and put its own in its place, whatever the
+# file's own owner and mode say. The same holds for every directory above that one: an
+# account that can write to /usr/local can rename /usr/local/sbin aside and make its own.
+# So each directory on the path has to be root's to change alone. The rule is one strict
+# shape, and it asks nothing about who is in which group:
+#
+#   - it is a directory, not a link (a path is read as itself, never as the directory a
+#     link points to, so a link anywhere on the path is refused);
+#   - it is owned by root;
+#   - it carries no extended ACL;
+#   - no group and no other account can write to it, whatever the group is, root's own
+#     included (mode & 0022 is zero).
+#
+# Each target and the sudoers drop-in carries no extended ACL either. The group database
+# is never read. A stock Debian /usr/local/sbin that is root:staff and group-writable is
+# refused: it is made root:root 0755 first, by whoever owns the host.
+#
+# Each check is one task that loops over the paths, so the host is asked once for each
+# directory (one stat) and once for every ACL (one getfacl), and the rest is decided here.
+
+- name: Look at every directory on the path to a target
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ deploy_tooling_parent_paths }}'
+  register: deploy_tooling_parent_stats
+  check_mode: false
+
+- name: Refuse a path that holds a target and is missing, is a link, or is not a directory
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - not item.stat.islnk
+      - item.stat.isdir
+    fail_msg: >-
+      {{ item.item }} is on the path to a file that is run as root, and it is missing, is a
+      link, or is not a directory. A link is refused and never followed. The role does not
+      repair it.
+    quiet: true
+  loop: '{{ deploy_tooling_parent_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Refuse a path that holds a target and is not a directory owned by root
+  ansible.builtin.assert:
+    that:
+      - item.stat.pw_name == 'root'
+    fail_msg: >-
+      {{ item.item }} is on the path to a file that is run as root, and it is not a
+      directory owned by root. The role does not repair it.
+    quiet: true
+  loop: '{{ deploy_tooling_parent_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+# getfacl --skip-base prints only the entries beyond owner, group and other (and any default
+# entries), and only for a path that has some, so an empty output is no extended ACL anywhere.
+# A target not yet written does not exist: getfacl names it on stderr and exits 1, which is
+# fine, and any other complaint is a failure. The tool is required first, so that its absence
+# is a refusal and not a path taken for having no ACL.
+- name: Require the tool that reads an ACL (the acl package)
+  ansible.builtin.command:
+    argv:
+      - getfacl
+      - --version
+  changed_when: false
+  check_mode: false
+
+- name: Read the extended ACL entries of every directory, target and the sudoers drop-in
+  ansible.builtin.command:
+    argv: '{{ ["getfacl", "--absolute-names", "--skip-base", "--"] + deploy_tooling_acl_paths }}'
+  register: deploy_tooling_acl_read
+  changed_when: false
+  failed_when: >-
+    deploy_tooling_acl_read.rc not in [0, 1]
+    or (deploy_tooling_acl_read.stderr_lines | reject('search', ': No such file or directory$')
+    | list | length > 0)
+  check_mode: false
+
+- name: Refuse a directory, target or drop-in that carries an extended ACL
+  ansible.builtin.assert:
+    that:
+      - (deploy_tooling_acl_read.stdout | trim) == ''
+    fail_msg: >-
+      A directory on the path to a file that is run as root, or such a file, or the sudoers
+      drop-in, carries an extended ACL: {{ deploy_tooling_acl_read.stdout_lines
+      | select('match', '^# file: ') | map('regex_replace', '^# file: ', '') | join(', ') }}.
+      The role does not repair it.
+    quiet: true
+
+- name: Refuse a directory that holds a target and that any account can write to
+  ansible.builtin.assert:
+    that:
+      - not item.stat.woth
+    fail_msg: >-
+      {{ item.item }} is on the path to a file that is run as root, and it can be written to
+      by any account. The role does not repair it.
+    quiet: true
+  loop: '{{ deploy_tooling_parent_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Refuse a directory that holds a target and that a group can write to
+  ansible.builtin.assert:
+    that:
+      - not item.stat.wgrp
+    fail_msg: >-
+      {{ item.item }} is on the path to a file that is run as root, and it can be written to
+      by a group (whichever group it is, root's included). The role does not repair it.
+    quiet: true
+  loop: '{{ deploy_tooling_parent_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
