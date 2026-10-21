@@ -11,6 +11,8 @@
     verify_mint_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_mint_host/defaults/main.yml') | from_yaml }}"
     verify_mint_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_mint_host/vars/main.yml') | from_yaml }}"
     verify_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') | from_yaml }}"
+    verify_handlers: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../handlers/main.yml') | from_yaml }}"
+    verify_role_dir: '{{ playbook_dir }}/../..'
     # An inventory value wins over a default, as it does in the role.
     verify_commit: '{{ breakglass_grant_host_source_commit | default(verify_defaults.breakglass_grant_host_source_commit) }}'
     # The image is a constant of the role (vars/main.yml), never an input.
@@ -34,8 +36,21 @@
     # controller-side scan with app1.yml's text by the playbook guard below.
     verify_role_texts:
       - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') }}"
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../handlers/main.yml') }}"
       - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') }}"
       - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') }}"
+    # The role directory may hold these entries and no others. A handlers file is
+    # allowed, and the guard reads it (its notifies run Docker and shell too); a
+    # library, a template, a second tasks file or a plugin would run tasks the
+    # checks never see.
+    verify_allowed_role_entries:
+      - README.md
+      - defaults
+      - handlers
+      - meta
+      - molecule
+      - tasks
+      - vars
     # The exact Docker commands the role may run, one regular expression per word,
     # with the image held by its template's name and not its value. The shared
     # guard holds every command of the role and of app1.yml to these shapes.
@@ -197,9 +212,42 @@
           - post_tasks
           - handlers
         guard_allowed_modules: '{{ verify_allowed_modules }}'
-        guard_tasks: '{{ verify_tasks }}'
+        guard_tasks: '{{ verify_tasks + (verify_handlers | default([])) }}'
         guard_scan_texts: '{{ verify_role_texts }}'
         guard_docker_shapes: '{{ verify_docker_shapes }}'
+
+    # ----- the role holds no second route to the key or to Docker -----
+    # The checks below read tasks/main.yml and the guard reads handlers/main.yml. A
+    # second tasks file, a library, a template, a plugin or a meta dependency would
+    # run tasks none of those reads see, so the role directory is held to the
+    # entries it has, the tasks directory to one file, and the meta file to no
+    # dependencies.
+    - name: List the role directory and its tasks directory
+      ansible.builtin.find:
+        paths: '{{ item }}'
+        hidden: true
+        file_type: any
+        patterns: '*'
+      delegate_to: localhost
+      become: false
+      loop:
+        - '{{ verify_role_dir }}'
+        - '{{ verify_role_dir }}/tasks'
+      register: breakglass_grant_host_v_role_entries
+
+    - name: Assert the role holds only its own entries, one tasks file and no meta dependency
+      ansible.builtin.assert:
+        that:
+          - breakglass_grant_host_v_role_entries.results[0].files | map(attribute='path') | map('basename') | sort | list == verify_allowed_role_entries | sort
+          - breakglass_grant_host_v_role_entries.results[1].files | map(attribute='path') | map('basename') | sort | list == ['main.yml']
+          - (lookup('ansible.builtin.file', verify_role_dir ~ '/meta/main.yml') | from_yaml).dependencies | default([]) | length == 0
+        fail_msg: >-
+          The role has an entry the checks do not read: a second tasks file, a library, a template,
+          a plugin or a dependency. Role entries:
+          {{ breakglass_grant_host_v_role_entries.results[0].files | map(attribute='path') | map('basename') | sort | list }};
+          tasks entries:
+          {{ breakglass_grant_host_v_role_entries.results[1].files | map(attribute='path') | map('basename') | sort | list }}.
+        quiet: true
 
     # A loop over an empty list skips quietly, so the checks below would pass
     # against a tasks file they could not read. Require that they have work.
