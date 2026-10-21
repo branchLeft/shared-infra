@@ -1,49 +1,110 @@
 #!/usr/bin/env python3
 """Pin tests: a pull_request run is grouped per pull request, and only those runs cancel.
 
-Every workflow is parsed with PyYAML's safe_load, the parser ci.yml pins for
-the stack-keys check, and every rule is checked on the parsed data, never on the
-text. So a quoted key, an escaped quote, a multi-line quoted value, a list-form
-or quoted trigger, and a `#` inside a value cannot hide a concurrency key.
+Every workflow is parsed, and every rule is checked on the parsed data, never
+on the text. So a quoted key, an escaped quote, a multi-line quoted value, a
+list-form or quoted trigger, and a `#` inside a value cannot hide a concurrency
+key.
 
-The rules:
-- A workflow with a pull_request trigger has one top-level concurrency block,
-  exactly the run-keyed block below. Its group is keyed on the pull request
-  number and falls back to the run id, and cancel-in-progress is the pull_request
-  expression.
-- A workflow without one has no cancel-in-progress that is true or an
-  expression, at workflow level or job level. Its top-level group, if any, holds
-  the run id, so no run shares a group with another.
-- A job with an `environment:` never has a cancel-in-progress that is true or an
-  expression, whatever its triggers.
-- A job-level cancel-in-progress in a pull_request workflow may be the
-  pull_request expression only when the job has no environment.
-- Every check fails closed: a file that does not parse, whose top level is not a
-  mapping, whose trigger block is missing or doubled, or whose concurrency value
-  is not a mapping, is a violation.
+The parser is PyYAML (pinned in ci.yml) behind a loader that reads a file the
+way GitHub does where PyYAML's YAML 1.1 differs, and refuses what it cannot
+match:
+- a duplicate key is refused (safe_load keeps the last one silently);
+- a merge key (`<<`) is refused;
+- only true and false (any case) are booleans, so `on`, `off`, `yes` and `no`
+  stay strings, as in YAML 1.2. The `on:` trigger key is then the string "on".
+
+The rules, each on the parsed data:
+- A workflow with a pull_request or pull_request_target trigger has one
+  top-level concurrency block, exactly the run-keyed block below: its group is
+  keyed on the pull request number and falls back to the run id, and its
+  cancel-in-progress is the pull_request expression. pull_request_target counts
+  as pull_request: it has a pull request number, and the expression is false
+  for it, so it is grouped and never cancels.
+- A workflow without one has a top-level group, if any, that holds the run id,
+  so no two runs share a group.
+- A merge_group workflow has a top-level group that holds the run id and not
+  the ref, so queued checks never replace one another.
+- cancel-in-progress is a whitelist: absent or the boolean false anywhere. The
+  one other value is the pull_request expression, on a job with no
+  `environment:` in a pull_request workflow, or on the pull_request block.
+  Anything else (true, a string, "false", an expression, null) is refused.
+
+Every check fails closed: a file that does not parse, whose top level is not a
+mapping, whose trigger block is missing or unreadable, or whose concurrency
+value is not a mapping with only the keys group and cancel-in-progress, is a
+violation.
 """
 
 from __future__ import annotations
 
 import pathlib
+import re
 import unittest
 
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
+CI_YML = WORKFLOWS / "ci.yml"
+PRE_COMMIT = ROOT / ".pre-commit-config.yaml"
 
 PR_EXPRESSION = "${{ github.event_name == 'pull_request' }}"
-PR_CONCURRENCY = {
-    "group": "${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}",
-    "cancel-in-progress": PR_EXPRESSION,
-}
+PR_GROUP = "${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}"
+PR_CONCURRENCY = {"group": PR_GROUP, "cancel-in-progress": PR_EXPRESSION}
+PR_BLOCK = f"concurrency:\n  group: {PR_GROUP}\n  cancel-in-progress: {PR_EXPRESSION}\n"
 PR_TRIGGERS = {"pull_request", "pull_request_target"}
+CONCURRENCY_KEYS = {"group", "cancel-in-progress"}
 ABSENT = object()
+
+BOOL_TAG = "tag:yaml.org,2002:bool"
+MERGE_TAG = "tag:yaml.org,2002:merge"
+PYYAML_PIN = "pyyaml==6.0.3"
+
+
+class StrictYamlError(yaml.YAMLError):
+    """A construct PyYAML would resolve but GitHub may not: the file is refused."""
 
 
 class Unclassifiable(Exception):
     """A trigger block the test cannot read; the file fails closed."""
+
+
+class WorkflowLoader(yaml.SafeLoader):
+    """SafeLoader that refuses duplicate and merge keys and reads booleans as YAML 1.2."""
+
+    def construct_mapping(self, node, deep=False):
+        if isinstance(node, yaml.MappingNode):
+            seen = set()
+            for key_node, _ in node.value:
+                if key_node.tag == MERGE_TAG:
+                    raise StrictYamlError("merge key (<<) is refused")
+                key = self.construct_object(key_node, deep=True)
+                try:
+                    repeated = key in seen
+                except TypeError:
+                    raise StrictYamlError("unhashable mapping key") from None
+                if repeated:
+                    raise StrictYamlError(f"duplicate key {key!r}")
+                seen.add(key)
+        return super().construct_mapping(node, deep)
+
+
+WorkflowLoader.yaml_implicit_resolvers = {
+    first: [(tag, regexp) for tag, regexp in resolvers if tag != BOOL_TAG]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+WorkflowLoader.add_implicit_resolver(
+    BOOL_TAG, re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF")
+)
+
+
+def load(text: str) -> object:
+    loader = WorkflowLoader(text)
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
 
 
 def workflow_files() -> list[pathlib.Path]:
@@ -51,67 +112,91 @@ def workflow_files() -> list[pathlib.Path]:
 
 
 def trigger_names(data: dict) -> set[str]:
-    """Trigger names from the on: block, read as a string, a list or a mapping.
-
-    PyYAML reads a bare `on:` key as the boolean True (YAML 1.1), and a quoted
-    "on" as the string. A file with both, or with neither, cannot be classified.
-    """
-    keys = [key for key in data if key is True or key == "on"]
-    if len(keys) != 1:
-        raise Unclassifiable(f"want exactly one trigger block (on: or \"on\":), found {len(keys)}")
-    trigger = data[keys[0]]
+    """Trigger names from the on: block, read as a string, a list or a mapping."""
+    if "on" not in data:
+        raise Unclassifiable('no trigger block (the top-level key "on")')
+    trigger = data["on"]
     if isinstance(trigger, str):
         return {trigger}
-    if isinstance(trigger, list) and all(isinstance(item, str) for item in trigger):
+    if isinstance(trigger, list) and trigger and all(isinstance(item, str) for item in trigger):
         return set(trigger)
-    if isinstance(trigger, dict) and all(isinstance(key, str) for key in trigger):
+    if isinstance(trigger, dict) and trigger and all(isinstance(key, str) for key in trigger):
         return set(trigger)
     raise Unclassifiable(f"trigger block has a form the test cannot read: {trigger!r}")
 
 
-def cancel_problem(where: str, value: object, allow_pr_expression: bool) -> str | None:
-    """None when cancel-in-progress is allowed here, else the reason it is not."""
-    if value is ABSENT or value is False or value == "false":
+def cancel_problem(where: str, config: dict, allow_pr_expression: bool) -> str | None:
+    """None when this concurrency mapping's cancel-in-progress is allowed, else why not."""
+    value = config.get("cancel-in-progress", ABSENT)
+    if value is ABSENT or value is False:
         return None
     if allow_pr_expression and value == PR_EXPRESSION:
         return None
     return f"{where} cancel-in-progress is {value!r}, which may cancel a non-pull_request run"
 
 
-def top_level_problems(name: str, value: object, pull_request: bool) -> list[str]:
-    if not isinstance(value, dict):
-        return [f"{name}: top-level concurrency is not a mapping: {value!r}"]
+def shape_problem(where: str, config: object) -> str | None:
+    if not isinstance(config, dict):
+        return f"{where} concurrency is not a mapping: {config!r}"
+    extra = sorted(str(key) for key in config if key not in CONCURRENCY_KEYS)
+    if extra:
+        return f"{where} concurrency has an unexpected key: {extra}"
+    return None
+
+
+def top_level_problems(name: str, config: object, pull_request: bool) -> list[str]:
+    problem = shape_problem("top-level", config)
+    if problem:
+        return [f"{name}: {problem}"]
     if pull_request:
-        if value != PR_CONCURRENCY:
-            return [f"{name}: top-level concurrency is not the run-keyed block: {value!r}"]
+        if config != PR_CONCURRENCY:
+            return [f"{name}: top-level concurrency is not the run-keyed block: {config!r}"]
         return []
     found = []
-    group = value.get("group")
+    group = config.get("group")
     if not isinstance(group, str) or "github.run_id" not in group:
         found.append(f"{name}: top-level group is shared across runs: {group!r}")
-    problem = cancel_problem("top level", value.get("cancel-in-progress", ABSENT), False)
+    problem = cancel_problem("top-level", config, False)
     if problem:
         found.append(f"{name}: {problem}")
     return found
 
 
+def merge_group_problems(name: str, data: dict) -> list[str]:
+    config = data.get("concurrency")
+    group = config.get("group") if isinstance(config, dict) else None
+    if not isinstance(group, str):
+        return [f"{name}: merge_group workflow has no top-level group"]
+    found = []
+    if "github.run_id" not in group:
+        found.append(f"{name}: merge_group group is not keyed on the run id: {group!r}")
+    if "github.ref" in group:
+        found.append(f"{name}: merge_group group is keyed on the ref: {group!r}")
+    return found
+
+
 def job_problems(name: str, job_name: str, job: dict, pull_request: bool) -> list[str]:
-    config = job["concurrency"]
-    if not isinstance(config, dict):
-        return [f"{name}: job {job_name} concurrency is not a mapping: {config!r}"]
+    where = f"job {job_name}"
+    problem = shape_problem(where, job["concurrency"])
+    if problem:
+        return [f"{name}: {problem}"]
     allow = pull_request and "environment" not in job
-    problem = cancel_problem(f"job {job_name}", config.get("cancel-in-progress", ABSENT), allow)
+    problem = cancel_problem(where, job["concurrency"], allow)
     return [f"{name}: {problem}"] if problem else []
 
 
 def violations(name: str, text: str) -> list[str]:
     """Every rule break in one workflow's text, or [] for a file that passes."""
     try:
-        data = yaml.safe_load(text)
+        data = load(text)
     except yaml.YAMLError as error:
-        return [f"{name}: does not parse as YAML: {type(error).__name__}"]
+        reason = str(error).splitlines()[0] if str(error) else type(error).__name__
+        return [f"{name}: does not parse as strict YAML: {reason}"]
     if not isinstance(data, dict):
         return [f"{name}: top level is not a mapping"]
+    stray = [key for key in data if not isinstance(key, str)]
+    if stray:
+        return [f"{name}: top-level key that is not a string: {stray!r}"]
     try:
         names = trigger_names(data)
     except Unclassifiable as error:
@@ -122,6 +207,8 @@ def violations(name: str, text: str) -> list[str]:
         found += top_level_problems(name, data["concurrency"], pull_request)
     elif pull_request:
         found.append(f"{name}: pull_request workflow has no top-level concurrency block")
+    if "merge_group" in names:
+        found += merge_group_problems(name, data)
     jobs = data.get("jobs")
     if not isinstance(jobs, dict):
         return found + [f"{name}: jobs is not a mapping"]
@@ -133,9 +220,8 @@ def violations(name: str, text: str) -> list[str]:
     return found
 
 
-def parsed(path: pathlib.Path) -> tuple[dict, set[str]]:
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return data, trigger_names(data)
+def triggers_of(path: pathlib.Path) -> set[str]:
+    return trigger_names(load(path.read_text(encoding="utf-8")))
 
 
 class WorkflowConcurrencyTests(unittest.TestCase):
@@ -152,229 +238,327 @@ class WorkflowConcurrencyTests(unittest.TestCase):
                 text = path.read_text(encoding="utf-8")
                 self.assertEqual(violations(path.name, text), [])
 
-    def test_every_pull_request_workflow_carries_the_run_keyed_block(self):
-        pull_request_files = 0
-        for path in workflow_files():
-            with self.subTest(workflow=path.name):
-                data, names = parsed(path)
-                if not names & PR_TRIGGERS:
-                    continue
-                pull_request_files += 1
-                self.assertEqual(data.get("concurrency"), PR_CONCURRENCY)
-        self.assertGreater(pull_request_files, 0)
+    def test_the_rules_are_not_vacuous_on_the_real_tree(self):
+        # A walk that found no pull_request or merge_group workflow would pass
+        # every rule above without testing one.
+        pull_request = [p.name for p in workflow_files() if triggers_of(p) & PR_TRIGGERS]
+        merge_group = [p.name for p in workflow_files() if "merge_group" in triggers_of(p)]
+        self.assertIn("ci.yml", pull_request)
+        self.assertIn("ansible.yml", pull_request)
+        self.assertIn("ci.yml", merge_group)
 
-    def test_merge_group_runs_are_keyed_on_the_run_not_the_ref(self):
-        # A merge_group event carries no pull_request, so its group falls back
-        # to the run id. Keyed on the ref or the workflow name alone, every
-        # queued check run would share one group and replace one another.
-        for path in workflow_files():
-            with self.subTest(workflow=path.name):
-                data, names = parsed(path)
-                if "merge_group" not in names:
-                    continue
-                group = str(data.get("concurrency", {}).get("group", ""))
-                self.assertIn("github.run_id", group)
-                self.assertNotIn("github.ref", group)
+
+PUSH_ON = "on:\n  push:\n    branches: [main]\n"
+PR_ON = "on:\n  pull_request:\n"
+JOBS = "jobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n"
+
+
+def deploy_jobs(job_lines: str = "") -> str:
+    """A jobs block with one environment-gated job; job_lines are indented four spaces."""
+    return (
+        "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n    environment: production\n"
+        + job_lines
+        + "    steps:\n      - run: echo deploy\n"
+    )
+
+
+def job_concurrency(cancel: str, group: str = "deploy") -> str:
+    return f"    concurrency:\n      group: {group}\n      cancel-in-progress: {cancel}\n"
+
+
+PR_WORKFLOW = PR_ON + PR_BLOCK + JOBS
+
+# name -> (workflow text, a fragment that must appear in a violation). The
+# fragment keeps a fixture from being refused for the wrong reason, such as a
+# typo that merely fails to parse.
+REFUSED = {
+    # Cycle 1: a list-form trigger and a quoted trigger key.
+    "zz-c1-seq-trigger": (
+        "on:\n  - push\n  - pull_request\n" + JOBS,
+        "no top-level concurrency block",
+    ),
+    "zz-c1-quoted-trigger": (
+        'on:\n  "pull_request":\n    types: [opened]\n' + JOBS,
+        "no top-level concurrency block",
+    ),
+    # Cycle 2: a quoted cancel key, an escaped cancel key, a '#' inside a quoted
+    # flow value, and a shared top-level group.
+    "zz-c2-quoted-cancel-key": (
+        PUSH_ON + deploy_jobs('    concurrency:\n      group: deploy\n      "cancel-in-progress": true\n'),
+        "cancel-in-progress is True",
+    ),
+    "zz-c2-escaped-cancel-key": (
+        PUSH_ON + deploy_jobs('    concurrency:\n      group: deploy\n      "cancel\\x2din\\x2dprogress": true\n'),
+        "cancel-in-progress is True",
+    ),
+    "zz-c2-flow-hash": (
+        PUSH_ON + deploy_jobs('    concurrency: {group: "deploy#1", cancel-in-progress: true}\n'),
+        "cancel-in-progress is True",
+    ),
+    "zz-c2-shared-group": (
+        PUSH_ON + "concurrency:\n  group: deploy-shared\n" + JOBS,
+        "shared across runs",
+    ),
+    # Cycle 3: an escaped quote that ends a quoted group early, a quoted
+    # top-level key, an escaped sequence trigger, and a multi-line quoted value.
+    "zz-p1-escape-hash": (
+        PUSH_ON + deploy_jobs('    concurrency: {group: "deploy\\" #", cancel-in-progress: true}\n'),
+        "cancel-in-progress is True",
+    ),
+    "zz-p2-quoted-top": (
+        PUSH_ON + '"concurrency":\n  group: deploy-shared\n  cancel-in-progress: true\n' + deploy_jobs(),
+        "shared across runs",
+    ),
+    "zz-p2-quoted-top-cancel-false": (
+        PUSH_ON + '"concurrency":\n  group: deploy-shared\n  cancel-in-progress: false\n' + deploy_jobs(),
+        "shared across runs",
+    ),
+    "zz-p3-escaped-seq-trigger": (
+        'on:\n  - push\n  - "pull\\x5frequest"\n' + JOBS,
+        "no top-level concurrency block",
+    ),
+    "zz-p4-multiline-hash": (
+        PUSH_ON + deploy_jobs('    concurrency: {group: "deploy\n      #x", cancel-in-progress: true}\n'),
+        "cancel-in-progress is True",
+    ),
+    # D2: the trigger block.
+    "d2-on-both-forms": (PUSH_ON + '"on":\n  pull_request:\n' + JOBS, "duplicate key"),
+    "d2-on-neither-form": (JOBS, "no trigger block"),
+    "d2-pull-request-target-has-no-block": ("on:\n  pull_request_target:\n" + JOBS, "no top-level concurrency block"),
+    # D3: fail closed.
+    "d3-unparseable": ("on: [push\n", "does not parse"),
+    "d3-two-documents": (PUSH_ON + JOBS + "---\n" + PUSH_ON + JOBS, "does not parse"),
+    "d3-top-level-list": ("- a\n- b\n", "top level is not a mapping"),
+    "d3-empty-file": ("", "top level is not a mapping"),
+    "d3-non-string-top-key": (PUSH_ON + "true: 1\n" + JOBS, "not a string"),
+    "d3-trigger-is-a-number": ("on: 5\n" + JOBS, "cannot read"),
+    "d3-trigger-is-empty": ("on: {}\n" + JOBS, "cannot read"),
+    "d3-top-concurrency-is-a-string": (PUSH_ON + "concurrency: deploy\n" + JOBS, "concurrency is not a mapping"),
+    "d3-top-concurrency-is-null": (PUSH_ON + "concurrency:\n" + JOBS, "concurrency is not a mapping"),
+    "d3-job-concurrency-is-a-string": (PUSH_ON + deploy_jobs("    concurrency: deploy\n"), "concurrency is not a mapping"),
+    "d3-concurrency-has-an-extra-key": (
+        PUSH_ON + "concurrency:\n  group: x-${{ github.run_id }}\n  queue: max\n" + JOBS,
+        "unexpected key",
+    ),
+    "d3-jobs-is-a-list": (PUSH_ON + "jobs:\n  - a\n", "jobs is not a mapping"),
+    "d3-job-is-not-a-mapping": (PUSH_ON + "jobs:\n  check: 5\n", "is not a mapping"),
+    # D4: the cancel rules.
+    "d4-push-job-cancel-true": (PUSH_ON + deploy_jobs(job_concurrency("true")), "cancel-in-progress is True"),
+    "d4-push-top-cancel-true": (
+        PUSH_ON + "concurrency:\n  group: x-${{ github.run_id }}\n  cancel-in-progress: true\n" + JOBS,
+        "cancel-in-progress is True",
+    ),
+    "d4-push-job-cancel-expression": (
+        PUSH_ON + deploy_jobs(job_concurrency(PR_EXPRESSION)),
+        "cancel-in-progress is",
+    ),
+    "d4-push-top-cancel-expression": (
+        PUSH_ON + f"concurrency:\n  group: x-${{{{ github.run_id }}}}\n  cancel-in-progress: {PR_EXPRESSION}\n" + JOBS,
+        "cancel-in-progress is",
+    ),
+    "d4-pr-environment-job-cancel-expression": (
+        PR_ON + PR_BLOCK + deploy_jobs(job_concurrency(PR_EXPRESSION)),
+        "job deploy cancel-in-progress is",
+    ),
+    "d4-pr-environment-job-cancel-true": (
+        PR_ON + PR_BLOCK + deploy_jobs(job_concurrency("true")),
+        "job deploy cancel-in-progress is True",
+    ),
+    # D4a: the exact block on a pull_request workflow.
+    "d4a-pr-group-keyed-on-the-ref": (
+        PR_ON + "concurrency:\n  group: ${{ github.workflow }}-${{ github.ref }}\n"
+        f"  cancel-in-progress: {PR_EXPRESSION}\n" + JOBS,
+        "not the run-keyed block",
+    ),
+    "d4a-pr-cancel-true": (
+        PR_ON + f"concurrency:\n  group: {PR_GROUP}\n  cancel-in-progress: true\n" + JOBS,
+        "not the run-keyed block",
+    ),
+    "d4a-pr-block-with-an-extra-key": (PR_ON + PR_BLOCK + "  queue: max\n" + JOBS, "unexpected key"),
+    "d4a-pr-no-block": (PR_ON + JOBS, "no top-level concurrency block"),
+    # D4b: a non-pull_request top-level group holds the run id.
+    "d4b-push-top-group-without-the-run-id": (
+        PUSH_ON + "concurrency:\n  group: deploy\n  cancel-in-progress: false\n" + JOBS,
+        "shared across runs",
+    ),
+    "d4b-push-top-group-without-a-group": (
+        PUSH_ON + "concurrency:\n  cancel-in-progress: false\n" + JOBS,
+        "shared across runs",
+    ),
+    # D4c: the merge_group group is run-keyed and not keyed on the ref.
+    "d4c-merge-group-without-a-block": ("on:\n  merge_group:\n" + JOBS, "merge_group workflow has no top-level group"),
+    "d4c-merge-group-keyed-on-the-ref": (
+        "on:\n  merge_group:\nconcurrency:\n  group: ${{ github.workflow }}-${{ github.ref }}\n" + JOBS,
+        "merge_group group is not keyed on the run id",
+    ),
+    "d4c-merge-group-keyed-on-run-and-ref": (
+        "on:\n  merge_group:\nconcurrency:\n  group: ${{ github.run_id }}-${{ github.ref }}\n" + JOBS,
+        "merge_group group is keyed on the ref",
+    ),
+    # Finding 3: where PyYAML and GitHub could read a file differently.
+    "f3-duplicate-cancel-key-top-level": (
+        PR_ON + f"concurrency:\n  group: {PR_GROUP}\n  cancel-in-progress: true\n  cancel-in-progress: false\n" + JOBS,
+        "duplicate key",
+    ),
+    "f3-duplicate-cancel-key-job-level": (
+        PUSH_ON
+        + deploy_jobs(
+            "    concurrency:\n      group: deploy\n      cancel-in-progress: true\n      cancel-in-progress: false\n"
+        ),
+        "duplicate key",
+    ),
+    "f3-duplicate-concurrency-key": (
+        PR_ON + PR_BLOCK + "concurrency:\n  group: x-${{ github.run_id }}\n" + JOBS,
+        "duplicate key",
+    ),
+    "f3-duplicate-job-id": (PUSH_ON + "jobs:\n  a:\n    runs-on: x\n  a:\n    runs-on: y\n", "duplicate key"),
+    "f3-merge-key": (
+        PUSH_ON + deploy_jobs("    concurrency:\n      <<: {cancel-in-progress: true}\n      group: deploy\n"),
+        "merge key",
+    ),
+    "f3-quoted-false": (PUSH_ON + deploy_jobs(job_concurrency('"false"')), "cancel-in-progress is 'false'"),
+    "f3-quoted-zero": (PUSH_ON + deploy_jobs(job_concurrency('"0"')), "cancel-in-progress is '0'"),
+    "f3-yaml11-off": (PUSH_ON + deploy_jobs(job_concurrency("off")), "cancel-in-progress is 'off'"),
+    "f3-yaml11-no": (PUSH_ON + deploy_jobs(job_concurrency("no")), "cancel-in-progress is 'no'"),
+    "f3-yaml11-yes": (PUSH_ON + deploy_jobs(job_concurrency("yes")), "cancel-in-progress is 'yes'"),
+    "f3-null-cancel": (PUSH_ON + deploy_jobs(job_concurrency("")), "cancel-in-progress is None"),
+}
+
+# name -> workflow text the rules must pass: the shapes a refusal must not catch.
+ACCEPTED = {
+    "the run-keyed pull_request workflow": PR_WORKFLOW,
+    "the run-keyed pull_request_target workflow": "on:\n  pull_request_target:\n" + PR_BLOCK + JOBS,
+    "a quoted on key": PR_WORKFLOW.replace("on:", '"on":', 1),
+    "a list trigger with the block": "on:\n  - push\n  - pull_request\n" + PR_BLOCK + JOBS,
+    "a pull_request and merge_group workflow with the block": "on:\n  pull_request:\n  merge_group:\n" + PR_BLOCK + JOBS,
+    "a push-only workflow with no concurrency": PUSH_ON + JOBS,
+    "a deploy job that never cancels": PUSH_ON + deploy_jobs(job_concurrency("false")),
+    "a deploy job with no cancel key": PUSH_ON + deploy_jobs("    concurrency:\n      group: deploy\n"),
+    "a '#' inside a quoted group": PUSH_ON + deploy_jobs('    concurrency: {group: "deploy #1", cancel-in-progress: false}\n'),
+    "a commented-out cancel key": PUSH_ON + deploy_jobs("    concurrency:\n      group: deploy\n      # cancel-in-progress: true\n"),
+    "a run-keyed push group that never cancels": PUSH_ON
+    + "concurrency:\n  group: x-${{ github.run_id }}\n  cancel-in-progress: false\n"
+    + JOBS,
+    "a run-keyed merge_group workflow": "on:\n  merge_group:\nconcurrency:\n  group: ${{ github.workflow }}-${{ github.run_id }}\n" + JOBS,
+    "the pull_request expression on a job with no environment": PR_ON
+    + PR_BLOCK
+    + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
+    + job_concurrency(PR_EXPRESSION, "check"),
+    "a never-cancelling job in a pull_request workflow": PR_ON + PR_BLOCK + deploy_jobs(job_concurrency("false")),
+}
 
 
 class DetectorTests(unittest.TestCase):
     """Each probe and evasion the rules must refuse, and the shapes they must pass."""
 
-    PR_WORKFLOW = (
-        "on:\n"
-        "  pull_request:\n"
-        "concurrency:\n"
-        "  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}\n"
-        "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n"
-        "jobs:\n"
-        "  check:\n"
-        "    runs-on: ubuntu-latest\n"
-        "    steps:\n"
-        "      - run: echo ok\n"
-    )
+    def test_every_refused_fixture_is_refused_for_its_reason(self):
+        for probe, (text, fragment) in REFUSED.items():
+            with self.subTest(probe=probe):
+                found = violations(f"{probe}.yml", text)
+                self.assertTrue(
+                    any(fragment in line for line in found),
+                    f"{probe}: expected a violation containing {fragment!r}, got {found!r}",
+                )
 
-    # Cycle-3 probe zz-p1-escape-hash: an escaped quote ends the quoted group early,
-    # so the ' #' reads as a comment and the real cancel key is skipped.
-    P1_ESCAPE_HASH = (
-        "on:\n"
-        "  push:\n"
-        "    branches: [main]\n"
-        "jobs:\n"
-        "  deploy:\n"
-        "    runs-on: ubuntu-latest\n"
-        "    environment: production\n"
-        '    concurrency: {group: "deploy\\" #", cancel-in-progress: true}\n'
-        "    steps:\n"
-        "      - run: echo deploy\n"
-    )
+    def test_every_accepted_shape_passes(self):
+        for shape, text in ACCEPTED.items():
+            with self.subTest(shape=shape):
+                self.assertEqual(violations("accepted.yml", text), [])
 
-    # Cycle-3 probe zz-p2-quoted-top: a quoted top-level key, shared group, cancel true.
-    P2_QUOTED_TOP = (
-        "on:\n"
-        "  push:\n"
-        "    branches: [main]\n"
-        '"concurrency":\n'
-        "  group: deploy-shared\n"
-        "  cancel-in-progress: true\n"
-        "jobs:\n"
-        "  deploy:\n"
-        "    runs-on: ubuntu-latest\n"
-        "    environment: production\n"
-        "    steps:\n"
-        "      - run: echo deploy\n"
-    )
+    def test_the_fixtures_are_not_workflow_files(self):
+        # They are strings fed to the checker. A copy under .github/workflows
+        # would be loaded by GitHub as a real workflow.
+        self.assertEqual([p for p in WORKFLOWS.glob("zz-*")], [])
 
-    # Cycle-3 probe zz-p3-escaped-seq-trigger: an escaped pull_request in a block sequence.
-    P3_ESCAPED_SEQ_TRIGGER = (
-        "on:\n"
-        "  - push\n"
-        '  - "pull\\x5frequest"\n'
-        "jobs:\n"
-        "  check:\n"
-        "    runs-on: ubuntu-latest\n"
-        "    steps:\n"
-        "      - run: echo ok\n"
-    )
+    def test_a_lowercase_or_capitalised_boolean_is_read_as_one(self):
+        for spelling in ("false", "False", "FALSE"):
+            with self.subTest(spelling=spelling):
+                text = PUSH_ON + deploy_jobs(job_concurrency(spelling))
+                self.assertEqual(violations("bool.yml", text), [])
+        for spelling in ("true", "True", "TRUE"):
+            with self.subTest(spelling=spelling):
+                text = PUSH_ON + deploy_jobs(job_concurrency(spelling))
+                self.assertTrue(violations("bool.yml", text))
 
-    # Cycle-3 probe zz-p4-multiline-hash: a double-quoted value continued onto a line
-    # that starts with '#', so the cancel key sits inside the quoted scalar's line.
-    P4_MULTILINE_HASH = (
-        "on:\n"
-        "  push:\n"
-        "    branches: [main]\n"
-        "jobs:\n"
-        "  deploy:\n"
-        "    runs-on: ubuntu-latest\n"
-        "    environment: production\n"
-        '    concurrency: {group: "deploy\n'
-        '      #x", cancel-in-progress: true}\n'
-        "    steps:\n"
-        "      - run: echo deploy\n"
-    )
 
-    def test_probe_zz_p1_escape_hash_is_refused(self):
-        self.assertNotEqual(violations("zz-p1-escape-hash.yml", self.P1_ESCAPE_HASH), [])
+class RealTreeMutationTests(unittest.TestCase):
+    """The rules refuse the real workflows once a rule is broken in them."""
 
-    def test_probe_zz_p2_quoted_top_is_refused(self):
-        self.assertNotEqual(violations("zz-p2-quoted-top.yml", self.P2_QUOTED_TOP), [])
+    def read(self, name: str) -> str:
+        return (WORKFLOWS / name).read_text(encoding="utf-8")
 
-    def test_probe_zz_p3_escaped_seq_trigger_is_refused(self):
-        self.assertNotEqual(violations("zz-p3-escaped-seq-trigger.yml", self.P3_ESCAPED_SEQ_TRIGGER), [])
+    def assert_refused(self, name: str, text: str, fragment: str) -> None:
+        found = violations(name, text)
+        self.assertTrue(any(fragment in line for line in found), f"{fragment!r} not in {found!r}")
 
-    def test_probe_zz_p4_multiline_hash_is_refused(self):
-        self.assertNotEqual(violations("zz-p4-multiline-hash.yml", self.P4_MULTILINE_HASH), [])
+    def test_ansible_without_its_concurrency_block_is_refused(self):
+        text = self.read("ansible.yml")
+        self.assertIn(PR_BLOCK, text)
+        self.assert_refused("ansible.yml", text.replace(PR_BLOCK, ""), "no top-level concurrency block")
 
-    def test_the_run_keyed_pull_request_workflow_passes(self):
-        self.assertEqual(violations("pr.yml", self.PR_WORKFLOW), [])
+    def test_ci_without_its_concurrency_block_is_refused(self):
+        text = self.read("ci.yml")
+        self.assertIn(PR_BLOCK, text)
+        self.assert_refused("ci.yml", text.replace(PR_BLOCK, ""), "no top-level concurrency block")
 
-    def test_block_sequence_trigger_counts_as_pull_request(self):
-        text = "on:\n  - push\n  - pull_request\njobs:\n  check:\n    runs-on: ubuntu-latest\n"
-        self.assertNotEqual(violations("seq.yml", text), [])
-
-    def test_quoted_trigger_key_counts_as_pull_request(self):
-        text = 'on:\n  "pull_request":\n    types: [opened]\njobs:\n  check:\n    runs-on: ubuntu-latest\n'
-        self.assertNotEqual(violations("quoted.yml", text), [])
-
-    def test_pull_request_target_counts_as_pull_request(self):
-        text = "on:\n  pull_request_target:\njobs:\n  check:\n    runs-on: ubuntu-latest\n"
-        self.assertNotEqual(violations("target.yml", text), [])
-
-    def test_push_only_workflow_without_concurrency_passes(self):
-        text = "on:\n  push:\n    branches: [main]\njobs:\n  check:\n    runs-on: ubuntu-latest\n"
-        self.assertEqual(violations("push.yml", text), [])
-
-    def test_quoted_on_key_is_read_as_the_trigger(self):
-        self.assertEqual(violations("quoted-on.yml", self.PR_WORKFLOW.replace("on:", '"on":', 1)), [])
-
-    def test_both_on_keys_fail_closed(self):
-        text = self.PR_WORKFLOW.replace("on:", 'on:\n  push:\n"on":', 1)
-        self.assertNotEqual(violations("both.yml", text), [])
-
-    def test_missing_trigger_block_fails_closed(self):
-        text = "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
-        self.assertNotEqual(violations("none.yml", text), [])
-
-    def test_unparseable_file_fails_closed(self):
-        self.assertNotEqual(violations("broken.yml", "on: [push\n"), [])
-
-    def test_top_level_that_is_not_a_mapping_fails_closed(self):
-        self.assertNotEqual(violations("list.yml", "- a\n- b\n"), [])
-
-    def test_string_top_level_concurrency_fails_closed(self):
-        text = "on:\n  push:\nconcurrency: deploy\njobs:\n  check:\n    runs-on: ubuntu-latest\n"
-        self.assertNotEqual(violations("string.yml", text), [])
-
-    def test_cancel_true_at_job_level_is_refused(self):
-        text = (
-            "on:\n  push:\n"
-            "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n"
-            "    concurrency:\n      group: deploy\n      cancel-in-progress: true\n"
+    def test_ci_with_a_cancelling_apply_job_is_refused(self):
+        text = self.read("ci.yml")
+        self.assertIn("      cancel-in-progress: false\n", text)
+        self.assert_refused(
+            "ci.yml",
+            text.replace("      cancel-in-progress: false\n", "      cancel-in-progress: true\n", 1),
+            "cancel-in-progress is True",
         )
-        self.assertNotEqual(violations("job.yml", text), [])
 
-    def test_hash_inside_quotes_is_not_a_comment(self):
-        text = (
-            "on:\n  push:\n"
-            "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n"
-            '    concurrency: {group: "deploy #1", cancel-in-progress: true}\n'
+    def test_ci_with_the_pull_request_expression_on_an_apply_job_is_refused(self):
+        text = self.read("ci.yml")
+        self.assert_refused(
+            "ci.yml",
+            text.replace("      cancel-in-progress: false\n", f"      cancel-in-progress: {PR_EXPRESSION}\n", 1),
+            "cancel-in-progress is",
         )
-        self.assertNotEqual(violations("hash.yml", text), [])
 
-    def test_commented_out_cancel_key_is_not_read(self):
-        text = (
-            "on:\n  push:\n"
-            "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n"
-            "    concurrency:\n      group: deploy-${{ github.run_id }}\n"
-            "      # cancel-in-progress: true\n"
-        )
-        self.assertEqual(violations("comment.yml", text), [])
+    def test_ci_with_a_group_keyed_on_the_ref_is_refused(self):
+        text = self.read("ci.yml")
+        broken = text.replace(PR_BLOCK, PR_BLOCK.replace("github.event.pull_request.number || github.run_id", "github.ref"))
+        self.assertNotEqual(broken, text)
+        self.assert_refused("ci.yml", broken, "not the run-keyed block")
 
-    def test_escaped_cancel_key_is_read(self):
-        text = (
-            "on:\n  push:\n"
-            "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n"
-            '    concurrency:\n      group: deploy\n      "cancel\\x2din\\x2dprogress": true\n'
-        )
-        self.assertNotEqual(violations("escaped.yml", text), [])
 
-    def test_pull_request_expression_refused_in_a_push_workflow(self):
-        text = (
-            "on:\n  push:\n"
-            "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n"
-            f"    concurrency:\n      group: deploy\n      cancel-in-progress: {PR_EXPRESSION}\n"
-        )
-        self.assertNotEqual(violations("expr.yml", text), [])
+class ScriptsSuiteDependencyTests(unittest.TestCase):
+    """Every place the scripts suite runs has PyYAML, so this module imports.
 
-    def test_pull_request_expression_refused_on_an_environment_job(self):
-        text = self.PR_WORKFLOW.replace(
-            "  check:\n    runs-on: ubuntu-latest\n",
-            "  check:\n    runs-on: ubuntu-latest\n    environment: production\n"
-            f"    concurrency:\n      group: deploy\n      cancel-in-progress: {PR_EXPRESSION}\n",
-        )
-        self.assertNotEqual(violations("env.yml", text), [])
+    The suite runs in two ci.yml jobs and in the scripts-tests pre-commit hook.
+    A place without PyYAML fails at `import yaml` when the suite is discovered.
+    """
 
-    def test_pull_request_expression_allowed_on_a_job_without_environment(self):
-        text = self.PR_WORKFLOW.replace(
-            "  check:\n    runs-on: ubuntu-latest\n",
-            "  check:\n    runs-on: ubuntu-latest\n"
-            f"    concurrency:\n      group: check\n      cancel-in-progress: {PR_EXPRESSION}\n",
-        )
-        self.assertEqual(violations("job-pr.yml", text), [])
+    def jobs_running_the_scripts_suite(self, workflow: dict) -> dict:
+        return {
+            job_name: job
+            for job_name, job in workflow["jobs"].items()
+            if any("unittest discover -s scripts" in str(step.get("run", "")) for step in job.get("steps", []))
+        }
 
-    def test_deploy_job_with_cancel_false_passes(self):
-        text = (
-            "on:\n  push:\n    branches: [main]\n"
-            "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n    environment: production\n"
-            "    concurrency:\n      group: deploy\n      cancel-in-progress: false\n"
-        )
-        self.assertEqual(violations("deploy.yml", text), [])
+    def test_both_ci_jobs_that_run_the_suite_install_pyyaml_on_a_managed_python(self):
+        workflow = load(CI_YML.read_text(encoding="utf-8"))
+        jobs = self.jobs_running_the_scripts_suite(workflow)
+        self.assertEqual(sorted(jobs), ["pulumi-inventory-audit", "scripts-tests"])
+        for job_name, job in jobs.items():
+            with self.subTest(job=job_name):
+                steps = job["steps"]
+                suite = next(i for i, s in enumerate(steps) if "unittest discover -s scripts" in str(s.get("run", "")))
+                python = [i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("actions/setup-python@")]
+                install = [i for i, s in enumerate(steps) if PYYAML_PIN in str(s.get("run", ""))]
+                self.assertTrue(python and python[0] < suite, "no Set up Python step before the suite")
+                self.assertTrue(install and install[0] < suite, "no PyYAML install before the suite")
+                self.assertLess(python[0], install[0], "PyYAML is installed before the managed Python is set up")
 
-    def test_pull_request_block_with_an_extra_key_is_refused(self):
-        text = self.PR_WORKFLOW.replace(
-            f"  cancel-in-progress: {PR_EXPRESSION}\n",
-            f"  cancel-in-progress: {PR_EXPRESSION}\n  queue: max\n",
-        )
-        self.assertNotEqual(violations("extra.yml", text), [])
+    def test_the_pre_commit_hook_that_runs_the_suite_installs_pyyaml(self):
+        config = load(PRE_COMMIT.read_text(encoding="utf-8"))
+        hooks = [hook for repo in config["repos"] for hook in repo["hooks"] if hook["id"] == "scripts-tests"]
+        self.assertEqual(len(hooks), 1)
+        self.assertEqual(hooks[0]["language"], "python")
+        self.assertIn(PYYAML_PIN, hooks[0].get("additional_dependencies", []))
 
 
 if __name__ == "__main__":
