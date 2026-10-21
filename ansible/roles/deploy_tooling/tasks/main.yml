@@ -1,9 +1,10 @@
 ---
 # Order matters. Every input is checked before anything changes the host; the
 # directories exist before the files go into them; every target is checked
-# (owner, group, mode, kind) before anything is run from it, because the policy
-# program runs as root; and on a host of class app the program is run, by the
-# handler, only after those checks and before the firewall chains are read back.
+# (owner, group, mode, kind), and so is the directory each one sits in, before
+# anything is run from it, because the policy program runs as root; and on a
+# host of class app the program is run, by the handler, only after those checks
+# and before the firewall chains are read back.
 #
 # Check mode (ANS-10). The role runs to completion under --check --diff on a
 # host in either state. A task that reads and changes nothing (stat, slurp, the
@@ -197,6 +198,25 @@
   loop_control:
     label: '{{ item.item.path }}'
   when: not ansible_check_mode
+
+# ----- The directories the targets sit in -----
+
+# A target that is root's alone is still replaceable by an account that can write to the
+# directory it sits in, and the wrapper and the policy program are run as root. So the
+# directory of every target, and of the sudoers drop-in, is checked as well. Read only, so
+# it runs in check mode: a host whose directory is wrong is drift the plan has to show.
+- name: Work out the directories that hold a target
+  ansible.builtin.set_fact:
+    deploy_tooling_parent_paths: >-
+      {{ (deploy_tooling_directory_targets + deploy_tooling_file_targets
+          + [{'path': deploy_tooling_sudoers_path}])
+         | map(attribute='path') | map('dirname') | unique | sort | list }}
+
+- name: Check each directory that holds a target
+  ansible.builtin.include_tasks: _parent_directory.yml
+  loop: '{{ deploy_tooling_parent_paths }}'
+  loop_control:
+    loop_var: deploy_tooling_parent
 
 # ----- The sudoers drop-in: verified, never written -----
 

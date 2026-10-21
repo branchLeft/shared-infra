@@ -88,6 +88,13 @@ After the files are written the role reads every target again and refuses one th
 not owned by `root`, not in group `root`, not the mode it is installed with, or not a
 regular file or directory as it should be.
 
+The role also reads the directory each target sits in (and the one the sudoers drop-in
+sits in), because an account that can write to a directory can replace a file in it that
+runs as root. It refuses a directory that is not owned by `root`, that any account can
+write to, or that a group other than `root`'s can write to when that group has members. It
+does not repair one. A stock Debian `/usr/local/sbin` is `root:staff` and group-writable;
+that passes while nobody is in `staff`.
+
 The four files are read from `hetzner/provision/` of the checkout the playbook runs from,
 which stays their single home: the role holds no copy of them and no link to them (a link
 under the role would be a second path to the same bytes, and a check that reads it would
@@ -161,9 +168,12 @@ it (see "Named limits").
   role's `library/` and is called by its bare name, which begins with the role's name; the
   standard does not yet say this in words (a follow-up amends it), and the lint accepts it.
   It runs `iptables -w -S` and `ip6tables -w -S` as argv with no shell, never changes
-  anything, and on failure prints the first mismatch and never the chain, because the log
-  of a plan is read by more people than a host's firewall should be. On success it reports
-  how many rules it recognised as the policy's and how many it did not.
+  anything, and on failure prints the first mismatch and never the text of a rule the
+  policy did not put there. A failure names the chain and says how many other rules it
+  holds; for a rule above the policy's last drop it names only that rule's place in the
+  chain and its target. The log of a plan is public, and a real chain holds the addresses
+  and ports of the host's administration. On success it reports how many rules it
+  recognised as the policy's and how many it did not.
 - **What the listing looks like.** The program builds four chains: DOCKER-USER and INPUT
   for IPv4, and INPUT and, where Docker made one, DOCKER-USER for IPv6. On Debian 13
   (iptables 1.8.11, nf_tables) `iptables -S` prints an option order the module matches
@@ -184,6 +194,13 @@ it (see "Named limits").
   the forward drop alone. IPv4 and IPv6 `INPUT` each carry the established accept and the
   drop for the mail-spool bridge. A host whose Docker made no IPv6 chain is checked
   without it.
+- **`DOCKER-USER` has to be reached first.** Every drop of the policy sits in `DOCKER-USER`,
+  and a packet only meets them if `FORWARD` sends it there before any other rule can accept
+  it. Docker puts that jump first in `FORWARD`. In each family where `DOCKER-USER` exists the
+  module fails unless the first rule of `FORWARD` is the plain jump to it. The container
+  test has no Docker, so it puts the jump in place the way Docker does. That Docker puts it
+  first on a real app host is read from Docker's behaviour, not from a capture, and a
+  capture is in the acceptance criteria of the ticket that wires the app hosts.
 - **A flushed chain is repaired once.** Docker rebuilds the chain when it restarts and the
   unit follows that restart, but a chain flushed by anything else would stay open until
   the next boot. The read-back sits in a block; if it fails, the unit is restarted and the
@@ -218,45 +235,53 @@ removed in turn, by one edit, and the harness is run: the removal makes the name
 fail with the message shown, and the file is restored afterwards. A control whose removal
 leaves every step green is not claimed.
 
-| Control                                                    | Removed by                                                    | The harness then fails at                                                                                           |
-| ---------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Owner of each target is root                               | the owner left out of the repair tasks                        | verify, targets repaired: `owner is nobody, expected root`, naming the path                                         |
-| Group of each target is root                               | the group left out of the repair tasks                        | verify, targets repaired: `group is nogroup, expected root`, naming the path                                        |
-| Mode of each target is the installed one                   | the mode left out of the repair tasks                         | verify, targets repaired: `mode is 0644, expected 0755`, naming the path                                            |
-| A link at a file target is replaced, never followed        | the copy told to follow links and the link left in place      | verify, target kinds: `is missing, is a link, or is not a file`, naming the path                                    |
-| A directory that holds files is never removed              | the check that it is empty taken out                          | verify, target kinds: `EXPECTED A FAILURE, GOT NONE` for the directory that holds a file                            |
-| The drop-in is owned by root                               | the owner assertion taken out                                 | verify, sudoers: `EXPECTED A FAILURE, GOT NONE: sudoers drop-in owner`                                              |
-| The drop-in is in the root group                           | the group assertion taken out                                 | verify, sudoers: `EXPECTED A FAILURE, GOT NONE: sudoers drop-in group`                                              |
-| The drop-in has the mode sudo requires                     | the mode assertion taken out                                  | verify, sudoers: `EXPECTED A FAILURE, GOT NONE: sudoers drop-in mode`                                               |
-| The drop-in passes `visudo`                                | the `visudo` task made a no-op                                | verify, sudoers: `EXPECTED A FAILURE, GOT NONE: sudoers drop-in with a syntax error`                                |
-| The drop-in is exactly the one grant                       | the whole-file comparison taken out                           | verify, sudoers: `EXPECTED A FAILURE, GOT NONE` for the include directive after the grant                           |
-| The role never writes the drop-in                          | a task that copies the drop-in added                          | verify, sudoers: `EXPECTED A FAILURE, GOT NONE: sudoers drop-in owner`                                              |
-| A gateway gets none of the isolation                       | the class condition taken off the isolation include           | verify, gateway phase: `Could not find the requested service` for the policy unit                                   |
-| A gateway gets no policy program or unit                   | the class condition taken off the policy copy                 | verify, gateway phase: `is present on a gateway host`, naming the path                                              |
-| A refused policy program fails the run                     | `failed_when: false` on the restart handler                   | verify, refusal phase: `WRONG FAILURE`, the run failing at the rescue restart and not at the handler                |
-| The policy unit is restarted only when something changed   | a restart of the unit on every run                            | idempotence: `changed=1` on the second converge                                                                     |
-| A changed program is applied by the handler                | the handler made a `started` instead of a `restarted`         | verify, program changed: `The chain was put right by the read-back's repair`                                        |
-| The role never restarts a compose instance                 | a restart handler notified when the template unit is written  | verify, compose probe: `The role restarted a compose instance`, the invocation id changed                           |
-| The role never enables a compose instance                  | an `enabled: true` task for the probe instance                | verify, compose probe: `A compose unit is enabled`                                                                  |
-| The compose probe is real                                  | the start of the probe instance taken out                     | verify, compose probe: `The probe instance did not start`                                                           |
-| The firewall chains are read back                          | the read-back task replaced by a no-op                        | verify, chain: `The role did not notice that the chains had been flushed`                                           |
-| A flushed chain is repaired once                           | the restart in the rescue taken out                           | verify, chain: the second read-back fails with the module's `established accept is missing`                         |
-| The read-back waits only for a pending apply               | the skip condition taken off the read-back                    | check-fresh: `cannot read the policy program`, because the fresh host has none                                      |
-| The read-back runs in check mode on a configured host      | `not ansible_check_mode` added to the read-back's condition   | check-configured: `EXPECTED A FAILURE, GOT NONE: check mode on a configured host with a rule missing`               |
-| The variant is the role's expectation, read from its input | the variant written into the read-back                        | verify, protected phase: `the database accept is missing`                                                           |
-| An app host must name its variant                          | the variant assertion taken out                               | verify, interface: `WRONG FAILURE for app host with no variant`, failing at the read-back                           |
-| The host class is required, with no default                | `required: true` taken off the class                          | verify, interface: `WRONG FAILURE for no host class`, failing at the role's own assertion and not the argument spec |
-| Docker's return stays last in `DOCKER-USER`                | the return left out of the chain reset                        | verify, chain: `DOCKER-USER does not end in the return`                                                             |
-| The policy unit follows a restart of Docker                | `PartOf=docker.service` taken out of the unit in the one home | verify, Docker restart: `The policy unit did not follow a restart of docker.service`                                |
-| Every rule of the chain table is expected                  | one row (the metadata drop) taken out of the module           | the module's unit tests: every case of the standard and protected chains                                            |
-| A rule of the wrong variant is refused                     | the forbidden-rule loop taken out of the module               | the module's unit tests: the standard host with the protected drops, the protected host with the database accept    |
-| A foreign rule above the last drop is bounded              | the bypass test made to accept every rule                     | the module's unit tests: the foreign accept, the return, the unmatched drop, the goto and the unlisted chain        |
-| The rule named as displaced is the one that moved          | the module made to name the rule after it                     | the module's unit tests: `the_rule_named_is_the_one_that_moved_not_the_one_after_it`                                |
-| The sudoers line agrees with the cloud-init constant       | the wrapper path changed in the cloud-init source             | the repository checks: `test_the_real_files_agree`                                                                  |
-| The role and the hand scripts install the same modes       | the wrapper's mode changed in the role                        | the repository checks: `test_the_role_and_the_hand_scripts_install_the_same_paths_and_modes`                        |
-| A program has one home and the role holds none             | a byte copy of a program put under the role                   | the repository checks: `test_every_program_is_read_from_the_one_home_and_none_is_held`                              |
-| One role owns the policy program                           | a second role given a copy                                    | the repository checks: `test_the_real_tree_has_one_owner`                                                           |
-| The gateway host states its class                          | the gateway playbook's class changed to app                   | the repository checks: `test_the_real_playbook_states_the_gateway_class`                                            |
+| Control                                                    | Removed by                                                    | The harness then fails at                                                                                                      |
+| ---------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Owner of each target is root                               | the owner left out of the repair tasks                        | verify, targets repaired: `owner is nobody, expected root`, naming the path                                                    |
+| Group of each target is root                               | the group left out of the repair tasks                        | verify, targets repaired: `group is nogroup, expected root`, naming the path                                                   |
+| Mode of each target is the installed one                   | the mode left out of the repair tasks                         | verify, targets repaired: `mode is 0644, expected 0755`, naming the path                                                       |
+| A link at a file target is replaced, never followed        | the copy told to follow links and the link left in place      | verify, target kinds: `is missing, is a link, or is not a file`, naming the path                                               |
+| A directory that holds files is never removed              | the check that it is empty taken out                          | verify, target kinds: `EXPECTED A FAILURE, GOT NONE` for the directory that holds a file                                       |
+| The drop-in is owned by root                               | the owner assertion taken out                                 | verify, sudoers: `EXPECTED A FAILURE, GOT NONE: sudoers drop-in owner`                                                         |
+| The drop-in is in the root group                           | the group assertion taken out                                 | verify, sudoers: `EXPECTED A FAILURE, GOT NONE: sudoers drop-in group`                                                         |
+| The drop-in has the mode sudo requires                     | the mode assertion taken out                                  | verify, sudoers: `EXPECTED A FAILURE, GOT NONE: sudoers drop-in mode`                                                          |
+| The drop-in passes `visudo`                                | the `visudo` task made a no-op                                | verify, sudoers: `EXPECTED A FAILURE, GOT NONE: sudoers drop-in with a syntax error`                                           |
+| The drop-in is exactly the one grant                       | the whole-file comparison taken out                           | verify, sudoers: `EXPECTED A FAILURE, GOT NONE` for the include directive after the grant                                      |
+| The role never writes the drop-in                          | a task that copies the drop-in added                          | verify, sudoers: `EXPECTED A FAILURE, GOT NONE: sudoers drop-in owner`                                                         |
+| A gateway gets none of the isolation                       | the class condition taken off the isolation include           | verify, gateway phase: `Could not find the requested service` for the policy unit                                              |
+| A gateway gets no policy program or unit                   | the class condition taken off the policy copy                 | verify, gateway phase: `is present on a gateway host`, naming the path                                                         |
+| A refused policy program fails the run                     | `failed_when: false` on the restart handler                   | verify, refusal phase: `WRONG FAILURE`, the run failing at the rescue restart and not at the handler                           |
+| The policy unit is restarted only when something changed   | a restart of the unit on every run                            | idempotence: `changed=1` on the second converge                                                                                |
+| A changed program is applied by the handler                | the handler made a `started` instead of a `restarted`         | verify, program changed: `The chain was put right by the read-back's repair`                                                   |
+| The role never restarts a compose instance                 | a restart handler notified when the template unit is written  | verify, compose probe: `The role restarted a compose instance`, the invocation id changed                                      |
+| The role never enables a compose instance                  | an `enabled: true` task for the probe instance                | verify, compose probe: `A compose unit is enabled`                                                                             |
+| The compose probe is real                                  | the start of the probe instance taken out                     | verify, compose probe: `The probe instance did not start`                                                                      |
+| The firewall chains are read back                          | the read-back task replaced by a no-op                        | verify, chain: `The role did not notice that the chains had been flushed`                                                      |
+| A flushed chain is repaired once                           | the restart in the rescue taken out                           | verify, chain: the second read-back fails with the module's `established accept is missing`                                    |
+| The read-back waits only for a pending apply               | the skip condition taken off the read-back                    | check-fresh: `cannot read the policy program`, because the fresh host has none                                                 |
+| The read-back runs in check mode on a configured host      | `not ansible_check_mode` added to the read-back's condition   | check-configured: `EXPECTED A FAILURE, GOT NONE: check mode on a configured host with a rule missing`                          |
+| The variant is the role's expectation, read from its input | the variant written into the read-back                        | verify, protected phase: `the database accept is missing`                                                                      |
+| An app host must name its variant                          | the variant assertion taken out                               | verify, interface: `WRONG FAILURE for app host with no variant`, failing at the read-back                                      |
+| The host class is required, with no default                | `required: true` taken off the class                          | verify, interface: `WRONG FAILURE for no host class`, failing at the role's own assertion and not the argument spec            |
+| Docker's return stays last in `DOCKER-USER`                | the return left out of the chain reset                        | verify, chain: `DOCKER-USER does not end in the return`                                                                        |
+| The policy unit follows a restart of Docker                | `PartOf=docker.service` taken out of the unit in the one home | verify, Docker restart: `The policy unit did not follow a restart of docker.service`                                           |
+| Every rule of the chain table is expected                  | one row (the metadata drop) taken out of the module           | the module's unit tests: every case of the standard and protected chains                                                       |
+| A rule of the wrong variant is refused                     | the forbidden-rule loop taken out of the module               | the module's unit tests: the standard host with the protected drops, the protected host with the database accept               |
+| A foreign rule above the last drop is bounded              | the bypass test made to accept every rule                     | the module's unit tests: the foreign accept, the return, the unmatched drop, the goto and the unlisted chain                   |
+| The rule named as displaced is the one that moved          | the module made to name the rule after it                     | the module's unit tests: `the_rule_named_is_the_one_that_moved_not_the_one_after_it`                                           |
+| The sudoers line agrees with the cloud-init constant       | the wrapper path changed in the cloud-init source             | the repository checks: `test_the_real_files_agree`                                                                             |
+| The role and the hand scripts install the same modes       | the wrapper's mode changed in the role                        | the repository checks: `test_the_role_and_the_hand_scripts_install_the_same_paths_and_modes`                                   |
+| A program has one home and the role holds none             | a byte copy of a program put under the role                   | the repository checks: `test_every_program_is_read_from_the_one_home_and_none_is_held`                                         |
+| One role owns the policy program                           | a second role given a copy                                    | the repository checks: `test_the_real_tree_has_one_owner`                                                                      |
+| No second role reads a program from its home               | a second role's task given `src` under `hetzner/provision`    | the repository checks: `test_a_second_role_reading_a_program_by_path_is_found`                                                 |
+| No second role writes a path this role installs            | a second role's task given the wrapper's path as `dest`       | the repository checks: `test_a_second_role_writing_a_path_from_another_source_is_found`                                        |
+| The compose probe can never be a stack                     | the probe renamed to a name the deploy wrapper accepts        | the repository checks: `test_a_name_the_wrapper_accepts_is_found_in_every_shape`; the compose unit contract test               |
+| A failure prints no text of a foreign rule                 | the rule's text put back into the bypass message              | the module's unit tests and verify, chain: the whole message of the bypass is matched                                          |
+| `FORWARD` reaches `DOCKER-USER` first                      | the `FORWARD` check taken out of the module                   | the module's unit tests; verify, chain: `an accept above the jump to DOCKER-USER`                                              |
+| A directory that holds a target is owned by root           | the owner assertion taken out of the directory check          | verify, parent directories: `EXPECTED A FAILURE, GOT NONE: directory that holds the wrapper owned by another account`          |
+| ... and no account can write to it                         | the other-writable assertion taken out                        | verify, parent directories: `EXPECTED A FAILURE, GOT NONE: directory that holds the wrapper writable by any account`           |
+| ... and a group with members cannot write to it            | the group-member assertion taken out                          | verify, parent directories: `EXPECTED A FAILURE, GOT NONE: directory that holds the wrapper writable by a group with a member` |
+| The gateway host states its class                          | the gateway playbook's class changed to app                   | the repository checks: `test_the_real_playbook_states_the_gateway_class`                                                       |
 
 Two limits of this table. The check-mode rows run the role under the real `--check` flag:
 the magic variable `ansible_check_mode` is set by that flag alone, so a case that runs the
@@ -274,6 +299,16 @@ stayed clean; the harness run that follows them is the green.
   Capturing the real `iptables -S INPUT` and `iptables -S DOCKER-USER` (and the IPv6
   pair) from an app host with the policy applied is a precondition of wiring the app
   hosts; until then a jump to any other chain above the policy's drops is refused.
+  Two things about the list are known and are not fixed here, because they need a real
+  chain to be right. A jump is accepted only when it has no match module beyond conntrack,
+  tcp and udp, so a brute-force blocker's `-p tcp -m multiport --dports ... -j <chain>`
+  is refused even when its chain is listed (the role fails closed on such a host). And the
+  chain a listed jump goes to is not read, so a rule inside it that accepts would pass.
+  Both are in the acceptance criteria of the ticket that wires the app hosts, with a
+  captured real chain as the fixture the fix is tested against.
+- **The directory checks refuse; they do not repair.** A directory that fails them is
+  somebody else's to change, and a group with members is read from the system's group
+  database on the host. A directory whose group is not known by name is refused.
 - **The Docker-daemon restart is tested against a stub.** The test restarts a stub
   `docker.service` and shows the policy unit restarted with it and the chain intact,
   which proves the unit follows that service. It does not prove the same for a real Docker
