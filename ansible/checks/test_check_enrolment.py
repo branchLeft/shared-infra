@@ -610,6 +610,24 @@ class Sabotage(unittest.TestCase):
         self._write("inventories/production/group_vars/.all", "---\npull_trigger_signers: []\n")
         self._assert_rule("R6 ansible/inventories/production/group_vars/.all")
 
+    # R6: a plain suffix-less file outside every loaded directory that does not parse is refused.
+    # Without the hidden-part term it would pass as a tool's artefact.
+    def test_r6_unparseable_plain_file_outside_loaded_dirs_is_refused(self) -> None:
+        self._write("NOTES", "pull_trigger_signers: [\n")
+        self._assert_rule("R6 ansible/NOTES")
+
+    # R6: a hidden suffix-less file inside a loaded directory that does not parse is refused.
+    # Without the loaded-directory term it would pass as a tool's artefact.
+    def test_r6_unparseable_hidden_extensionless_group_vars_is_refused(self) -> None:
+        self._write("inventories/production/group_vars/.all", "pull_trigger_signers: [\n")
+        self._assert_rule("R6 ansible/inventories/production/group_vars/.all")
+
+    # R6: a hidden .yml that does not parse is refused. Without the suffix term it would pass as
+    # a tool's artefact.
+    def test_r6_unparseable_hidden_yml_is_refused(self) -> None:
+        self._write(".hidden/broken.yml", "pull_trigger_signers: [\n")
+        self._assert_rule("R6 ansible/.hidden/broken.yml")
+
     # R6: a JSON file that does not parse is refused, not skipped.
     def test_r6_unparseable_json_in_group_vars_is_refused(self) -> None:
         self._write("inventories/production/group_vars/broken.json", '{"pull_trigger_signers": ')
