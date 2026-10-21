@@ -199,7 +199,7 @@
           - item['ansible.builtin.command'].argv[1:2] == ['--version'] or item['ansible.builtin.command'].argv[1:3] in [['pull', '-q'], ['image', 'inspect']]
         fail_msg: 'A command task runs something other than the three Docker commands the role may run: {{ item.name }}.'
         quiet: true
-      loop: "{{ verify_tasks | select('contains', 'ansible.builtin.command') | list }}"
+      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.command') | list }}"
       loop_control:
         label: '{{ item.name }}'
 
@@ -209,7 +209,7 @@
           - item['ansible.builtin.file'].state == 'directory'
         fail_msg: 'A file task does something other than make a directory: {{ item.name }}.'
         quiet: true
-      loop: "{{ verify_tasks | select('contains', 'ansible.builtin.file') | list }}"
+      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.file') | list }}"
       loop_control:
         label: '{{ item.name }}'
 
@@ -219,7 +219,7 @@
           - item['ansible.builtin.get_url'].url is match('^[{][{] breakglass_grant_host_source_base_url [}][}]/')
         fail_msg: 'A download does not start from the pinned base URL: {{ item.name }}.'
         quiet: true
-      loop: "{{ verify_tasks | select('contains', 'ansible.builtin.get_url') | list }}"
+      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.get_url') | list }}"
       loop_control:
         label: '{{ item.name }}'
 
