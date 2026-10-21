@@ -349,6 +349,158 @@
     group: '{{ deploy_tooling_scenario_local.stat.gr_name }}'
     mode: '{{ deploy_tooling_scenario_local.stat.mode }}'
 
+# ----- A directory that holds no target, but a file the role verifies -----
+
+# /etc/sudoers.d holds the drop-in the role checks byte for byte, and sudo reads every file in
+# it as root. An account that can write to that directory can add a grant of its own, so it is
+# on the path of the drop-in and is checked like the directories above. Each case below reads the
+# directory first, and puts it back to what it read.
+- name: Read the sudoers drop-in directory, as it stands
+  ansible.builtin.stat:
+    path: /etc/sudoers.d
+  register: deploy_tooling_scenario_sudoers_dir
+
+- name: Assert the sudoers drop-in directory is root's and closed to every group and account
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_sudoers_dir.stat.isdir
+      - deploy_tooling_scenario_sudoers_dir.stat.pw_name == 'root'
+      - deploy_tooling_scenario_sudoers_dir.stat.gr_name == 'root'
+      - not deploy_tooling_scenario_sudoers_dir.stat.wgrp
+      - not deploy_tooling_scenario_sudoers_dir.stat.woth
+    fail_msg: >-
+      The test image is not the starting state this case needs for /etc/sudoers.d:
+      {{ deploy_tooling_scenario_sudoers_dir.stat.mode }}
+      {{ deploy_tooling_scenario_sudoers_dir.stat.pw_name }}:{{ deploy_tooling_scenario_sudoers_dir.stat.gr_name }}
+    quiet: true
+
+- name: Make the sudoers drop-in directory writable by staff
+  ansible.builtin.file:
+    path: /etc/sudoers.d
+    state: directory
+    owner: root
+    group: staff
+    mode: '2775'
+
+- name: Put a marker in place of the programs, for the sudoers drop-in directory
+  ansible.builtin.include_tasks: put_stale_programs.yml
+
+- name: Apply the role to a sudoers drop-in directory writable by staff
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: sudoers drop-in directory owned by root:staff and writable by the group
+    expect_msg: '/etc/sudoers.d is on the path to a file that is run as root, and it can be written to by a group'
+    expect_task: 'Refuse a directory that holds a target and that a group can write to'
+    run_class: app
+    run_variant: standard
+
+- name: Require that the refused run wrote nothing, sudoers drop-in directory
+  ansible.builtin.include_tasks: assert_programs_unwritten.yml
+
+- name: Put the sudoers drop-in directory back
+  ansible.builtin.file:
+    path: /etc/sudoers.d
+    state: directory
+    owner: '{{ deploy_tooling_scenario_sudoers_dir.stat.pw_name }}'
+    group: '{{ deploy_tooling_scenario_sudoers_dir.stat.gr_name }}'
+    mode: '{{ deploy_tooling_scenario_sudoers_dir.stat.mode }}'
+
+# An ACL on the drop-in file itself: the file's owner and group are right, and the mode bits
+# show the group as the mask, so only the ACL rule can see the write entry for the account.
+- name: Put a marker in place of the programs, for the ACL on the sudoers drop-in
+  ansible.builtin.include_tasks: put_stale_programs.yml
+
+- name: Give an account write access to the sudoers drop-in through an ACL
+  ansible.builtin.command:
+    argv:
+      - setfacl
+      - -m
+      - 'u:deploy:rwx'
+      - /etc/sudoers.d/50-branchleft-deploy
+  changed_when: true
+
+- name: Apply the role to a sudoers drop-in that carries an ACL
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: sudoers drop-in with a write ACL for an account
+    expect_msg: 'carries an extended ACL: /etc/sudoers.d/50-branchleft-deploy[.]'
+    expect_task: 'Refuse a directory, target or drop-in that carries an extended ACL'
+    run_class: app
+    run_variant: standard
+
+- name: Require that the refused run wrote nothing, sudoers drop-in ACL
+  ansible.builtin.include_tasks: assert_programs_unwritten.yml
+
+- name: Take the ACL off the sudoers drop-in
+  ansible.builtin.command:
+    argv:
+      - setfacl
+      - -b
+      - /etc/sudoers.d/50-branchleft-deploy
+  changed_when: true
+
+- name: Put the sudoers drop-in back to the mode sudo requires
+  ansible.builtin.file:
+    path: /etc/sudoers.d/50-branchleft-deploy
+    owner: root
+    group: root
+    mode: '0440'
+
+# ----- A directory that holds a unit the role installs -----
+
+# /etc/systemd/system holds the policy unit, which is run as root through systemd. It is on the
+# path of that target, so it is checked like the directories above, and the same rule refuses
+# it when a group can write to it.
+- name: Read the unit directory, as it stands
+  ansible.builtin.stat:
+    path: /etc/systemd/system
+  register: deploy_tooling_scenario_units_dir
+
+- name: Assert the unit directory is root's and closed to every group and account
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_units_dir.stat.isdir
+      - deploy_tooling_scenario_units_dir.stat.pw_name == 'root'
+      - deploy_tooling_scenario_units_dir.stat.gr_name == 'root'
+      - not deploy_tooling_scenario_units_dir.stat.wgrp
+      - not deploy_tooling_scenario_units_dir.stat.woth
+    fail_msg: >-
+      The test image is not the starting state this case needs for /etc/systemd/system:
+      {{ deploy_tooling_scenario_units_dir.stat.mode }}
+      {{ deploy_tooling_scenario_units_dir.stat.pw_name }}:{{ deploy_tooling_scenario_units_dir.stat.gr_name }}
+    quiet: true
+
+- name: Make the unit directory writable by its own group
+  ansible.builtin.file:
+    path: /etc/systemd/system
+    state: directory
+    owner: root
+    group: root
+    mode: '0775'
+
+- name: Put a marker in place of the programs, for the unit directory
+  ansible.builtin.include_tasks: put_stale_programs.yml
+
+- name: Apply the role to a unit directory a group can write to
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: unit directory writable by its group
+    expect_msg: '/etc/systemd/system is on the path to a file that is run as root, and it can be written to by a group'
+    expect_task: 'Refuse a directory that holds a target and that a group can write to'
+    run_class: app
+    run_variant: standard
+
+- name: Require that the refused run wrote nothing, unit directory
+  ansible.builtin.include_tasks: assert_programs_unwritten.yml
+
+- name: Put the unit directory back
+  ansible.builtin.file:
+    path: /etc/systemd/system
+    state: directory
+    owner: '{{ deploy_tooling_scenario_units_dir.stat.pw_name }}'
+    group: '{{ deploy_tooling_scenario_units_dir.stat.gr_name }}'
+    mode: '{{ deploy_tooling_scenario_units_dir.stat.mode }}'
+
 - name: Apply the role again, which puts the programs back
   ansible.builtin.include_tasks: run_role.yml
   vars:
