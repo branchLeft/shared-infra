@@ -346,11 +346,13 @@ def environment(
     name: str = "ansible-hosts",
     reviewers: list[dict[str, object]] | None = None,
     prevent_self_review: bool = True,
+    can_admins_bypass: bool = False,
     custom_branch_policies: bool = True,
 ) -> dict[str, object]:
     """Return an environment answer set up as the owner step says.
 
-    Prevent self-review is ticked, as owner ruling 6320444361 requires for the gated apply.
+    Prevent self-review is ticked, as owner ruling 6320444361 requires for the gated apply, and
+    administrators may not bypass the rules.
     """
     rules: list[dict[str, object]] = [
         {
@@ -364,7 +366,12 @@ def environment(
     if custom_branch_policies:
         rules.append({"id": 2, "type": "branch_policy"})
         policy = {"custom_branch_policies": True, "protected_branches": False}
-    return {"name": name, "protection_rules": rules, "deployment_branch_policy": policy}
+    return {
+        "name": name,
+        "can_admins_bypass": can_admins_bypass,
+        "protection_rules": rules,
+        "deployment_branch_policy": policy,
+    }
 
 
 MAIN_ONLY: dict[str, object] = {
@@ -395,9 +402,10 @@ class EnvironmentTests(unittest.TestCase):
     def test_a_protected_environment_is_ready(self) -> None:
         self.assertEqual([], self.judge(environment()))
 
-    def test_the_owner_team_may_review_instead_of_the_owner(self) -> None:
+    def test_the_owner_team_may_not_review_instead_of_the_owner(self) -> None:
+        # The approved plan names Rob alone, and the probe does not read a team's members.
         described = environment(reviewers=[reviewer("Team", "branchleft-admin")])
-        self.assertEqual([], self.judge(described))
+        self.assert_names(self.judge(described), "Team branchleft-admin approve")
 
     def test_a_missing_environment_is_not_ready(self) -> None:
         self.assert_names(self.judge(NOT_FOUND, NOT_FOUND, None), "was not returned")
@@ -408,6 +416,7 @@ class EnvironmentTests(unittest.TestCase):
     def test_production_as_it_is_live_is_not_ready(self) -> None:
         live = {
             "name": "production",
+            "can_admins_bypass": True,
             "deployment_branch_policy": None,
             "protection_rules": [
                 {
@@ -421,6 +430,29 @@ class EnvironmentTests(unittest.TestCase):
         findings = check_delivery.environment_findings("production", live, NOT_FOUND, None)
         self.assert_names(findings, "no custom branch policy")
         self.assert_names(findings, "no branch policy list")
+        self.assert_names(findings, "lets administrators bypass")
+
+    def test_administrators_who_may_bypass_are_not_ready(self) -> None:
+        # A new environment answers True, and the admin whose merge started the run could then
+        # release it with no reviewer, which defeats owner ruling 6320444361.
+        self.assert_names(
+            self.judge(environment(can_admins_bypass=True)), "lets administrators bypass"
+        )
+
+    def test_a_missing_bypass_setting_is_not_ready(self) -> None:
+        # A missing key fails closed: the probe must prove the ruled value, not its absence.
+        described = environment()
+        del described["can_admins_bypass"]
+        self.assert_names(self.judge(described), "lets administrators bypass")
+
+    def test_a_bypass_setting_that_is_not_a_boolean_is_not_ready(self) -> None:
+        for value in (None, "false", 0):
+            described = environment()
+            described["can_admins_bypass"] = value
+            self.assert_names(self.judge(described), "lets administrators bypass")
+
+    def test_administrators_who_may_not_bypass_are_ready(self) -> None:
+        self.assertEqual([], self.judge(environment(can_admins_bypass=False)))
 
     def test_prevent_self_review_ticked_is_ready(self) -> None:
         # Owner ruling 6320444361 (answer A): the gated apply keeps Prevent self-review on.

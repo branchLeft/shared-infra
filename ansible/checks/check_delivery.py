@@ -56,9 +56,10 @@ WHY = {
     "permissions": "the token is set once, for the whole workflow",
 }
 
-# Who may approve the apply: the owner, directly or through the owner-only team that
-# CODEOWNERS names. No other user, team or app is an approver of this environment.
-OWNER_REVIEWERS = frozenset({("User", "Rob-branchLeft"), ("Team", "branchleft-admin")})
+# Who may approve the apply: the owner alone, as the approved plan (6324329915) says. No other
+# user, team or app is an approver of this environment, the owner-only team included: the probe
+# does not read a team's members, so a team entry would stay green after anyone joined it.
+OWNER_REVIEWERS = frozenset({("User", "Rob-branchLeft")})
 BRANCH = "main"
 
 
@@ -260,6 +261,15 @@ def environment_findings(
             "run that names a missing environment creates it with no protection"
         ]
     findings: list[str] = []
+    # Administrators may release a blocked run without a reviewer unless this is exactly False,
+    # and a new environment answers True. A missing key is a finding, so the probe proves the
+    # ruled value and not an absence of the field.
+    if described.get("can_admins_bypass") is not False:
+        findings.append(
+            f"environment {name} lets administrators bypass its protection rules: owner ruling "
+            "6320444361 needs the approval path to hold for the admin whose merge started the "
+            "run, so 'Allow administrators to bypass configured protection rules' must be off"
+        )
     rules = described.get("protection_rules")
     reviewer_rules = [
         rule
