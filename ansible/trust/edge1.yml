@@ -1,9 +1,7 @@
 ---
-# Values for the pull_trigger role on the edge hosts. All are public values.
-pull_trigger_remote_url: https://github.com/branchLeft/shared-infra.git
-pull_trigger_playbook: ansible/playbooks/edge1.yml
-pull_trigger_playbooks:
-  - ansible/playbooks/edge1.yml
+# edge1's trust file (ws#2340): the one value a host's pull trusts, loaded only by
+# playbooks/edge1.yml through vars_files. The remote and the playbook derivation are
+# in playbooks/includes/pull_trigger_common.yml, not here.
 # The signer allowlist is the trust anchor of the pull: a commit of main that is
 # signed by a key listed here is applied to the host as root. This is GitHub's own
 # signing key for commits it makes (a web merge or a squash), OpenPGP fingerprint

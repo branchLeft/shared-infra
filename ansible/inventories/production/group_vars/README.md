@@ -14,4 +14,8 @@ overrides `all`.
 - Only values that are safe to publish are committed. A secret is supplied at
   run time (`ANS-16`).
 
-The `edge/` directory holds the values for the edge hosts: `pull_trigger.yml`.
+No trusted-signer list is kept here. Each host's signers are in its own file,
+`ansible/trust/HOST.yml`, and only that host's playbook loads it through
+`vars_files`. `group_vars/all` never holds one, so a value cannot reach a second
+host (ws#2340). `check_enrolment.py` fails when a signer list is defined anywhere
+else.

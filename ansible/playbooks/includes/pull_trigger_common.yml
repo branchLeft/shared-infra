@@ -1,0 +1,10 @@
+---
+# The values every host under the pull shares, and the one place their derivation
+# lives (ws#2340). A host playbook loads this through vars_files. Its only per-host
+# input is enrolled_host, which the playbook sets to its own name stem, so the
+# trigger's playbook allowlist names the file the host itself runs and no other.
+# check_enrolment.py requires this file to hold exactly these three values.
+pull_trigger_remote_url: https://github.com/branchLeft/shared-infra.git
+pull_trigger_playbook: 'ansible/playbooks/{{ enrolled_host }}.yml'
+pull_trigger_playbooks:
+  - '{{ pull_trigger_playbook }}'

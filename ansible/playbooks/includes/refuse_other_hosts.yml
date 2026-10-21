@@ -1,0 +1,13 @@
+---
+# The refusal every host playbook under the pull runs first (ws#2340), single home.
+# A run is refused unless it has exactly one host and that host is the localhost the
+# trigger names or the host this playbook is for. The residual gap is an extra -e,
+# which outranks every variable and which no in-play check can see reliably; the
+# runbook uses --limit and no -e. The host control is the root-owned pull config.
+- name: Refuse a run that is not this host's
+  ansible.builtin.assert:
+    that:
+      - ansible_play_hosts_all | length == 1
+      - inventory_hostname in ['localhost', enrolled_host]
+    fail_msg: This playbook is for one host, enrolled_host. Limit the run to that host.
+    quiet: true

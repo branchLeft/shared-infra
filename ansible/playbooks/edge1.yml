@@ -1,31 +1,27 @@
 ---
-# edge1: the first host under the gated pull. Two roles, in order: the Ansible
-# toolchain the host runs this playbook with, then the trigger that runs it.
+# edge1: the first host under the gated pull (ws#2340). Two roles, in order: the
+# Ansible toolchain the host runs this playbook with, then the trigger that runs it.
 #
 # The host's trigger runs this file on a signed checkout with the inventory
-# `localhost,`, which loads no group variables, and a playbook must target `all`
-# or `localhost` for that (pull_trigger README, limit f). So the values the roles
-# read are loaded here from the production group variables, and the one-time
-# bootstrap, which does use the inventory, loads the same file twice with the
-# same content. Run against more than one host this playbook would apply edge1's
-# values to every one, so the first play refuses any host but edge1 (or the
-# localhost the trigger names).
+# `localhost,`, which loads no group variables, so every value the roles read comes
+# from vars_files: the shared includes and edge1's own trust file. The one-time
+# bootstrap loads the same files the same way. Run against more than one host, the
+# refusal in includes/refuse_other_hosts.yml stops the play.
 - name: Bring edge1 under the pull
   hosts: all
   gather_facts: false
+  vars:
+    enrolled_host: edge1
   vars_files:
-    - '{{ playbook_dir }}/../inventories/production/group_vars/edge/pull_trigger.yml'
+    - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
+    - '{{ playbook_dir }}/../trust/edge1.yml'
   pre_tasks:
-    - name: Refuse any host but edge1
-      ansible.builtin.assert:
-        that:
-          - inventory_hostname in ['edge1', 'localhost']
-        fail_msg: This playbook is edge1's. Limit the run to edge1.
-        quiet: true
-  # The roles live in ansible/roles/ (ANS-13), one level above this directory, and a
-  # playbook finds roles only beside itself unless a path is given. A path works
-  # from any directory, which the host trigger (started in ansible/) and the lint
-  # (started at the repository root) do not share. One suppression per line.
+    - name: Refuse a run that is not edge1's
+      ansible.builtin.include_tasks: includes/refuse_other_hosts.yml
+    - name: Refuse an empty signer list
+      ansible.builtin.include_tasks: includes/require_signers.yml
+  # The roles live in ansible/roles/ (ANS-13), one level above this directory. A
+  # path works from any directory, which the host trigger and the lint do not share.
   roles:
     - role: ../roles/ansible_runtime # noqa: role-name[path]
       vars:

@@ -1,0 +1,28 @@
+---
+# app1: the gated pull (ws#2340). Two roles, in order: the Ansible toolchain this
+# playbook runs with, then the trigger that runs it. Only this host's name is set
+# here; the remote, the playbook allowlist and the signer list come from the shared
+# includes and the one trust file, all loaded through vars_files.
+#
+# The refusal is not a host control: under the trigger inventory_hostname is
+# localhost. The root-owned pull config is the host control.
+- name: Bring app1 under the pull
+  hosts: all
+  gather_facts: false
+  vars:
+    enrolled_host: app1
+  vars_files:
+    - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
+    - '{{ playbook_dir }}/../trust/app1.yml'
+  pre_tasks:
+    - name: Refuse a run that is not app1's
+      ansible.builtin.include_tasks: includes/refuse_other_hosts.yml
+    - name: Refuse an empty signer list
+      ansible.builtin.include_tasks: includes/require_signers.yml
+  # The roles live in ansible/roles/ (ANS-13), one level above this directory. A
+  # path works from any directory, which the host trigger and the lint do not share.
+  roles:
+    - role: ../roles/ansible_runtime # noqa: role-name[path]
+      vars:
+        ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
+    - role: ../roles/pull_trigger # noqa: role-name[path]

@@ -12,21 +12,23 @@ the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
 
 ## Layout
 
-| Path               | What it is                                                             |
-| ------------------ | ---------------------------------------------------------------------- |
-| `role_skeleton/`   | The skeleton `ansible-galaxy role init --role-skeleton` copies.        |
-| `roles/`           | One directory per role. `example_config` is the worked example.        |
-| `patterns/`        | One directory per pattern, each a role the harness runs like `roles/`. |
-| `harness/`         | The test harness, its unit tests and nothing else.                     |
-| `requirements.in`  | The seven tools chosen on purpose, exact pins (ANS-4).                 |
-| `requirements.txt` | The hash-locked toolchain compiled from it, collections included.      |
-| `requirements.yml` | Empty by design: no collection is fetched outside the lock (ANS-4).    |
-| `checks/`          | The pin check and its unit tests (ANS-4).                              |
-| `inventories/`     | The inventory and group-variable trees. `production` holds edge1, db1. |
-| `playbooks/`       | One playbook per host: selects hosts and lists roles (ANS-13).         |
-| `pyproject.toml`   | The Python floor for the harness: version, mypy strict, ruff (ANS-2).  |
-| `../.ansible-lint` | The lint floor, production profile (ANS-5). Not editable by a role PR. |
-| `../.yamllint`     | The YAML floor (ANS-6). Not editable by a role PR.                     |
+| Path                  | What it is                                                             |
+| --------------------- | ---------------------------------------------------------------------- |
+| `role_skeleton/`      | The skeleton `ansible-galaxy role init --role-skeleton` copies.        |
+| `roles/`              | One directory per role. `example_config` is the worked example.        |
+| `patterns/`           | One directory per pattern, each a role the harness runs like `roles/`. |
+| `harness/`            | The test harness, its unit tests and nothing else.                     |
+| `requirements.in`     | The seven tools chosen on purpose, exact pins (ANS-4).                 |
+| `requirements.txt`    | The hash-locked toolchain compiled from it, collections included.      |
+| `requirements.yml`    | Empty by design: no collection is fetched outside the lock (ANS-4).    |
+| `checks/`             | The pin check, the enrolment check (ws#2340) and their unit tests.     |
+| `inventories/`        | The inventory and group-variable trees. `production` holds edge1, db1. |
+| `playbooks/`          | One playbook per host: selects hosts and lists roles (ANS-13).         |
+| `playbooks/includes/` | The shared pull values and refusals, each defined once (ws#2340).      |
+| `trust/`              | One signer file per host under the pull, loaded only by its playbook.  |
+| `pyproject.toml`      | The Python floor for the harness: version, mypy strict, ruff (ANS-2).  |
+| `../.ansible-lint`    | The lint floor, production profile (ANS-5). Not editable by a role PR. |
+| `../.yamllint`        | The YAML floor (ANS-6). Not editable by a role PR.                     |
 
 ## Make a new role
 
