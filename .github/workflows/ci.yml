@@ -44,6 +44,16 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The merge queue tests a queued pull request on a gh-readonly-queue/main/...
+  # ref, and only this event reports checks there, so every required check
+  # below must run on it. It carries no `branches` or `paths` filter: the
+  # queue only ever targets main, and the workflow runs in full. It runs the
+  # same credential-free type-check and test jobs as a pull request and
+  # nothing else: every plan and apply job is gated on
+  # `github.event_name == 'push'`, so none of them can start on this event
+  # (pinned by scripts/test_merge_group_triggers.py).
+  merge_group:
+    types: [checks_requested]
 
 # `packages: read` is what lets `npm ci` fetch @branchleft/* from GitHub
 # Packages. The registry rejects anonymous requests even for a public package,
