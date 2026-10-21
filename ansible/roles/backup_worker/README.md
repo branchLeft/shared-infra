@@ -194,8 +194,8 @@ The retrieval is the run itself.
 
 The order of the environment-file tasks is not in this table, because the harness
 cannot see it. `tests/unit/test_backup_worker.py` fails when the attribute task is
-removed, moved after the write, or given a literal owner, group or mode. Run it by
-hand until ws#2522 wires it into CI, from the repository root:
+removed, moved after the write, or given an owner, group or mode other than the
+lookup's. Run it by hand, from the repository root:
 
 ```text
 python3 -B -m unittest discover -b -s ansible/roles/backup_worker/tests/unit -p "test_*.py"
