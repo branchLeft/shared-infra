@@ -1,0 +1,42 @@
+---
+# The role's writing entry points as the plan job runs them: ansible-playbook --check,
+# started by verify (case r7). It is not one of Molecule's own steps, and it needs a real
+# check-mode run because the check_mode keyword of a task does not set
+# ansible_check_mode, which the role reads. Every class is asked to be written:
+# adopt must report a change (that is how a plan shows an adoption), and mark_pending and
+# record must write nothing.
+- name: Plan
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Adopt a class
+      ansible.builtin.include_role:
+        name: branchleft.restart_stamp
+        tasks_from: adopt
+      vars:
+        restart_stamp_classes:
+          - name: plan_adopt
+            file: /var/lib/branchleft/rs-r7-adopt.applied
+            fingerprint: "{{ '1f' * 32 }}"
+            adopt: true
+
+    - name: Mark a class
+      ansible.builtin.include_role:
+        name: branchleft.restart_stamp
+        tasks_from: mark_pending
+      vars:
+        restart_stamp_classes:
+          - name: plan_mark
+            file: /var/lib/branchleft/rs-r7-mark.applied
+            mark: true
+
+    - name: Record a class
+      ansible.builtin.include_role:
+        name: branchleft.restart_stamp
+        tasks_from: record
+      vars:
+        restart_stamp_classes:
+          - name: plan_record
+            file: /var/lib/branchleft/rs-r7-record.applied
+            fingerprint: "{{ '1f' * 32 }}"
+            read_back: true

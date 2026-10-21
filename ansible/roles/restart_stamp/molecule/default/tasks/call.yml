@@ -1,0 +1,45 @@
+---
+# One call of one entry point of the role under test, recorded under
+# restart_stamp_verify_calls[restart_stamp_verify_name]: whether it failed and its message,
+# and the two facts the role sets (restart_stamp_found, restart_stamp_decisions). Inputs:
+# restart_stamp_verify_name, restart_stamp_verify_entry, restart_stamp_verify_classes (the
+# list the entry point takes) and, optionally, restart_stamp_verify_check (true runs the
+# entry point's tasks in check mode).
+#
+# The facts are emptied first, so a call that sets none cannot be mistaken for one that
+# set them an earlier time.
+- name: Forget what an earlier call set
+  ansible.builtin.set_fact:
+    restart_stamp_found: {}
+    restart_stamp_decisions: {}
+  no_log: true
+
+- name: Call the entry point and note whether it failed
+  block:
+    - name: Call the entry point
+      ansible.builtin.include_role:
+        name: branchleft.restart_stamp
+        tasks_from: '{{ restart_stamp_verify_entry }}'
+        apply:
+          check_mode: '{{ restart_stamp_verify_check | default(false) }}'
+      vars:
+        restart_stamp_classes: '{{ restart_stamp_verify_classes }}'
+      no_log: true
+
+    - name: Note that the call did not fail
+      ansible.builtin.set_fact:
+        restart_stamp_verify_failed: false
+        restart_stamp_verify_message: ''
+  rescue:
+    - name: Note that the call failed
+      ansible.builtin.set_fact:
+        restart_stamp_verify_failed: true
+        restart_stamp_verify_message: '{{ ansible_failed_result.msg | default("") }}'
+
+- name: Keep the call
+  ansible.builtin.set_fact:
+    restart_stamp_verify_calls: >-
+      {{ restart_stamp_verify_calls | default({})
+      | combine({restart_stamp_verify_name: {'failed': restart_stamp_verify_failed, 'msg': restart_stamp_verify_message,
+      'found': restart_stamp_found, 'decisions': restart_stamp_decisions}}) }}
+  no_log: true

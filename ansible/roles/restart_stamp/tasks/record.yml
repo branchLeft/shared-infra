@@ -1,0 +1,22 @@
+---
+# Entry point `record`. The last thing a run does for a class: the stamp says this exact
+# set of inputs was acted on and read back. The caller sets read_back only for a class
+# whose action ran and was read back as done, and calls this after the action and before
+# it fails the run, so a class that finished before a later one failed is recorded and one
+# that did not is not. Nothing is written in check mode: no action ran.
+- name: Check the list of classes before recording anything
+  ansible.builtin.include_tasks: _check.yml
+
+- name: Record each class whose action was read back
+  ansible.builtin.copy:
+    content: "{{ item.fingerprint }}\n"
+    dest: '{{ item.file }}'
+    owner: root
+    group: root
+    mode: '0600'
+  loop: '{{ restart_stamp_classes }}'
+  loop_control:
+    label: '{{ item.name }}'
+  when: item.read_back | bool and not ansible_check_mode
+  no_log: true
+  diff: false

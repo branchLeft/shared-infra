@@ -1,0 +1,32 @@
+---
+# Removes every stamp a case made. The three stamps the converge wrote are named
+# rs-adopted, rs-acted and rs-plain; a case's are named rs-r<number>-<what>, so only the
+# cases' are found here, and the idempotence and check-mode steps that follow verify still
+# find the converged host.
+- name: Find the stamps the cases made
+  ansible.builtin.find:
+    paths: /var/lib/branchleft
+    patterns: 'rs-r*.applied'
+    file_type: any
+    hidden: true
+  register: restart_stamp_verify_made
+
+- name: Remove them
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: absent
+  loop: '{{ restart_stamp_verify_made.files }}'
+  loop_control:
+    label: '{{ item.path }}'
+
+# The refused lists of case r6 name files outside the pattern. A role that wrongly let one
+# through would leave it behind, and the next run of the case would start from that.
+- name: Remove what a refused list would have written outside the stamp pattern
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - /tmp/rs-r6-x.applied
+    - /var/lib/rs-r6-x.applied
+    - /var/lib/branchleft/sub
+    - /var/lib/branchleft/rs-r6-x.conf

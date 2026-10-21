@@ -1,0 +1,15 @@
+---
+# Test scaffolding, not role tasks. The directory a stamp lives in exists on every
+# host that runs a restart-by-fingerprint role, created by that role (root, 0755);
+# this role creates nothing, so the test makes it.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create the directory of the stamps
+      ansible.builtin.file:
+        path: /var/lib/branchleft
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'

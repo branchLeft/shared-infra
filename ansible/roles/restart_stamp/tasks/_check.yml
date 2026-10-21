@@ -1,0 +1,26 @@
+---
+# Included first by every entry point. It refuses a list the role must not act on, before
+# anything is read or written: no class, a class name used twice, a name that is not a
+# lowercase word, a stamp file outside the stamp directory, a stamp file used twice, a
+# fingerprint that is not a sha256. Read-only, so it runs in check mode too.
+#
+# The stamp file is the only path this role ever writes, and this is what keeps it so:
+# a caller that passes a wrong path is refused here and cannot make the role overwrite
+# a file that is not a stamp. A fingerprint that is not a sha256 is refused so that
+# `pending` (and a half-written value) can never be recorded as a finished action.
+- name: Refuse a list of classes that is empty, repeats a name or a file, or names a stamp or a fingerprint wrongly
+  ansible.builtin.assert:
+    that:
+      - restart_stamp_classes | length > 0
+      - restart_stamp_classes | map(attribute='name') | unique | list | length == restart_stamp_classes | length
+      - restart_stamp_classes | map(attribute='name') | reject('match', restart_stamp_name_pattern) | list | length == 0
+      - restart_stamp_classes | selectattr('file', 'defined') | map(attribute='file') | unique | list | length
+        == restart_stamp_classes | selectattr('file', 'defined') | list | length
+      - restart_stamp_classes | selectattr('file', 'defined') | map(attribute='file') | reject('match', restart_stamp_file_pattern) | list | length == 0
+      - restart_stamp_classes | selectattr('fingerprint', 'defined') | map(attribute='fingerprint')
+        | reject('match', restart_stamp_fingerprint_pattern) | list | length == 0
+    quiet: true
+    fail_msg: >-
+      restart_stamp_classes must hold at least one class; each name is a lowercase word used once; each file is
+      /var/lib/branchleft/<name>.applied, used once; each fingerprint is 64 lowercase hex digits. Nothing was read or
+      written.

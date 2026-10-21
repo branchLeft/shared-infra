@@ -1,0 +1,31 @@
+---
+# Entry point `decide`. A computation on the caller's inputs and nothing else: no file is
+# read or written, so it runs in check mode as well.
+- name: Check the list of classes before deciding anything
+  ansible.builtin.include_tasks: _check.yml
+
+# For each class, with the gate open:
+#   adopt  the class is adoptable, has no stamp and nothing differs on the host. The host
+#          already has these files, as a hand-delivered host does, so the stamp is written
+#          and nothing is acted on.
+#   due    not adopted, and a file differs on the host or the stamp is not this
+#          fingerprint. `pending` is never a fingerprint, so a class a run left
+#          half-done is due again.
+# With the gate closed a class is neither adopted nor due: the caller has said to leave it
+# alone (a unit that is not enabled is the owner's first start).
+#   mark   a file of the class is about to be placed: it is due now, or a file drifts. A
+#          closed gate does not stop the mark, because the file is still placed, and a
+#          placed file with no mark would make a host with no stamp look hand-delivered.
+- name: Work out what to adopt, what is due and what to mark pending
+  ansible.builtin.set_fact:
+    restart_stamp_decisions: >-
+      {%- set ns = namespace(out={}) -%}
+      {%- for c in restart_stamp_classes -%}
+      {%- set drift = c.drift | default(false) | bool -%}
+      {%- set gate = c.gate | default(true) | bool -%}
+      {%- set adopt = (c.adoptable | default(false) | bool) and gate and c.stamp == restart_stamp_absent and not drift -%}
+      {%- set due = gate and not adopt and (drift or c.stamp != c.fingerprint) -%}
+      {%- set _ = ns.out.update({c.name: {'adopt': adopt, 'due': due, 'mark': due or drift}}) -%}
+      {%- endfor -%}
+      {{ ns.out }}
+  no_log: true
