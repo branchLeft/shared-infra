@@ -1,6 +1,8 @@
 ---
-# edge1: the first host under the gated pull. Two roles, in order: the Ansible
-# toolchain the host runs this playbook with, then the trigger that runs it.
+# edge1: the first host under the gated pull. Roles, in order: the Ansible
+# toolchain the host runs this playbook with, then the trigger that runs it, then
+# the deploy tooling (the CI deploy wrapper and its template unit) that every
+# host carries.
 #
 # The host's trigger runs this file on a signed checkout with the inventory
 # `localhost,`, which loads no group variables, and a playbook must target `all`
@@ -15,6 +17,11 @@
   gather_facts: false
   vars_files:
     - '{{ playbook_dir }}/../inventories/production/group_vars/edge/pull_trigger.yml'
+  vars:
+    # edge1 is the gateway: it gets the wrapper and the template unit and none of
+    # the app-host isolation, which the policy program refuses to run beside. The
+    # class is stated here because the role has no default for it.
+    deploy_tooling_host_class: gateway
   pre_tasks:
     - name: Refuse any host but edge1
       ansible.builtin.assert:
@@ -31,3 +38,4 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/deploy_tooling # noqa: role-name[path]

@@ -1,0 +1,28 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - ../../vars/main.yml
+  tasks:
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml. The class and the variant are the role's own
+    # inputs, given here the way a playbook would.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.deploy_tooling
+      vars:
+        deploy_tooling_host_class: app
+        deploy_tooling_policy_variant: standard
+
+    # Under --check only, and only on a host the role has already configured: the
+    # rule that the plan fails on a chain that is wrong (see the file).
+    - name: Look for the policy program
+      ansible.builtin.stat:
+        path: '{{ deploy_tooling_reconciler_path }}'
+      register: deploy_tooling_scenario_program
+      when: ansible_check_mode
+
+    - name: Check mode against a configured host with a rule missing
+      ansible.builtin.include_tasks: tasks/check_mode_flushed.yml
+      when: ansible_check_mode and deploy_tooling_scenario_program.stat.exists

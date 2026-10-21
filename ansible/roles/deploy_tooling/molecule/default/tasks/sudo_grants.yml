@@ -1,0 +1,18 @@
+---
+# Reads what sudo says the CI account may run, the way an operator would with
+# sudo -l -U. Sets deploy_tooling_scenario_deploy_grants to the list of grant lines: the lines
+# after "may run the following commands" that begin with a parenthesis. The
+# "Matching Defaults" lines above them are settings, not commands, and are not
+# read. This parse is test code; it is not in the role (ANS-9), which reads only
+# its own drop-in.
+- name: Ask sudo what the CI account may run
+  ansible.builtin.command:
+    argv: [sudo, -l, -U, deploy]
+  register: deploy_tooling_scenario_sudo_list
+  changed_when: false
+
+- name: Keep the grant lines
+  ansible.builtin.set_fact:
+    deploy_tooling_scenario_deploy_grants: >-
+      {{ (deploy_tooling_scenario_sudo_list.stdout.split('may run the following commands')[1:] | join('')).splitlines()
+         | map('trim') | select('match', '^[(]') | list }}

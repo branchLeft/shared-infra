@@ -1,0 +1,49 @@
+---
+# The program refuses to run on the gateway, which holds 10.20.1.10 in the real
+# estate. The role told that a host is of class app, on a host that is the
+# gateway, fails at the handler that runs the program, and the program's own
+# message is in the journal. A run that went on to the read-back would report
+# missing rules instead, so the failed task's name is part of the case.
+- name: Make the host look like the gateway
+  ansible.builtin.copy:
+    content: "10.20.1.10{{ '\n' }}"
+    dest: /etc/molecule-ip-address
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Apply the role to a host that holds the gateway's address
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: class app on the host that holds the gateway address
+    expect_msg: 'Unable to (re)?start service'
+    expect_task: '^Restart the policy unit$'
+    run_class: app
+    run_variant: standard
+
+- name: Read the policy unit's state
+  ansible.builtin.command:
+    argv:
+      [systemctl, show, '{{ deploy_tooling_policy_unit_name }}', '--property=Result,ExecMainStatus']
+  register: deploy_tooling_scenario_refused_unit
+  changed_when: false
+
+- name: Assert the program exited with a failure
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_refused_unit.stdout_lines | sort == ['ExecMainStatus=1', 'Result=exit-code']
+    fail_msg: 'The policy unit did not fail as the program refused: {{ deploy_tooling_scenario_refused_unit.stdout_lines }}'
+    quiet: true
+
+- name: Read the program's own message from the journal
+  ansible.builtin.command:
+    argv: [journalctl, -u, '{{ deploy_tooling_policy_unit_name }}', --no-pager, --output=cat]
+  register: deploy_tooling_scenario_refused_journal
+  changed_when: false
+
+- name: Assert the journal holds the refusal
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_refused_journal.stdout is search("holds the estate's gateway address")
+    fail_msg: 'The journal does not hold the program refusal: {{ deploy_tooling_scenario_refused_journal.stdout }}'
+    quiet: true
