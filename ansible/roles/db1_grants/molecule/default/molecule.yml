@@ -51,6 +51,9 @@ provisioner:
     # it in the log, and verify fails (ANS-16).
     ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
     ANSIBLE_VERBOSITY: '3'
+    # One docker exec for a task, not six: the scenario runs a few thousand tasks
+    # in the container, and CI gives the whole harness 25 minutes.
+    ANSIBLE_PIPELINING: 'true'
   inventory:
     # Every password below is a throwaway SENTINEL made for this run by
     # prepare.yml on the controller, in a file under db1_grants_scenario_sentinel_dir, and
