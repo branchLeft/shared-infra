@@ -20,8 +20,9 @@
 #     included (mode & 0022 is zero).
 #
 # Each target and the sudoers drop-in carries no extended ACL either. The group database
-# is never read. A stock Debian /usr/local/sbin that is root:staff and group-writable is
-# refused: it is made root:root 0755 first, by whoever owns the host.
+# is never read. A /usr/local/sbin that is root:staff and group-writable, as a host that
+# has /etc/staff-group-for-usr-local gets, is refused: it is made root:root 0755 first, by
+# whoever owns the host. Debian 12 and 13 and Ubuntu 24.04 ship it root:root 0755.
 #
 # Each check is one task that loops over the paths, so the host is asked once for each
 # directory (one stat) and once for every ACL (one getfacl), and the rest is decided here.
