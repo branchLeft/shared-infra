@@ -11,11 +11,17 @@
     verify_grant_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_grant_host/defaults/main.yml') | from_yaml }}"
     verify_grant_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_grant_host/vars/main.yml') | from_yaml }}"
     verify_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') | from_yaml }}"
-    # The playbook that applies this role runs its own tasks on the host (its
-    # pre_tasks), so the module, stat and text checks read them as well: a task
-    # there is a route to the key the role's checks would not see.
-    verify_ops1_play: "{{ (lookup('ansible.builtin.file', playbook_dir ~ '/../../../../playbooks/ops1.yml') | from_yaml)[0] }}"
-    verify_all_tasks: '{{ verify_tasks + (verify_ops1_play.pre_tasks | default([])) + (verify_ops1_play.tasks | default([])) }}'
+    # The playbook that applies this role runs its own tasks on the host, so the
+    # module and stat checks read them as well: a task there is a route to the key
+    # the role's checks would not see. Every play of the file is read, and all four
+    # task lists of each play: pre_tasks, tasks, post_tasks and handlers.
+    verify_ops1_plays: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../../playbooks/ops1.yml') | from_yaml }}"
+    verify_ops1_tasks: >-
+      {{ (verify_ops1_plays | map(attribute='pre_tasks', default=[]) | flatten)
+      + (verify_ops1_plays | map(attribute='tasks', default=[]) | flatten)
+      + (verify_ops1_plays | map(attribute='post_tasks', default=[]) | flatten)
+      + (verify_ops1_plays | map(attribute='handlers', default=[]) | flatten) }}
+    verify_all_tasks: '{{ verify_tasks + verify_ops1_tasks }}'
     # The raw text of every file of the role that Ansible evaluates: the tasks and the two
     # variable files. A lookup or a template runs on the controller, which under
     # ansible-pull is the host itself, so it can read a file no module key shows.
@@ -270,6 +276,21 @@
         fail_msg: The tasks file has a different number of command, file, download or stat tasks than the checks below were written for.
         quiet: true
 
+    # The ops1 checks read every play of ops1.yml and the four task lists of each.
+    # An entry that is not a play (an import_playbook has no hosts key) would bring
+    # in tasks of another file that the lists never show, so it fails here. The
+    # list must be non-empty, or the stat and module checks would have nothing to read.
+    - name: Assert ops1.yml is plays only, and that its tasks were read
+      ansible.builtin.assert:
+        that:
+          - verify_ops1_plays is sequence
+          - verify_ops1_plays | length >= 1
+          - verify_ops1_plays | selectattr('hosts', 'defined') | list | length == verify_ops1_plays | length
+          - verify_ops1_tasks | length >= 1
+          - verify_all_tasks | length == verify_tasks | length + verify_ops1_tasks | length
+        fail_msg: ops1.yml has an entry that is not a play, or the checks read none of its tasks, so a clean result would prove nothing.
+        quiet: true
+
     # The exact argv of each of the three commands, to the last word: the probe's
     # version, the pull by digest and the image inspect with its format and its
     # digest reference. The image reference is written as a brace-free pattern so
@@ -348,12 +369,14 @@
       loop_control:
         label: '{{ item.name }}'
 
-    # Every stat of the role and of ops1 asks for metadata only, under whatever name
-    # or path it has. The check reads the parsed tasks, not the names, so a stat
-    # with the default arguments (a checksum, a MIME guess) fails here even when it
-    # is named nothing like the key's. A deliberate edit that reads the key is
-    # the review's and the owner's deploy approval's to catch (ws#2483); this check
-    # catches an accident.
+    # Every stat of the role and of ops1.yml (every play; pre_tasks, tasks,
+    # post_tasks and handlers) asks for metadata only, under whatever name or path
+    # it has. The check reads the parsed tasks, not the names, so a stat with the
+    # default arguments (a checksum, a MIME guess) fails here even when it is named
+    # nothing like the key's. A deliberate edit that reads the key is stopped by
+    # review and by the deployment approval of the gated workflow that applies the
+    # role (ws#2483 is where that approval's trust is examined); this check catches
+    # an accident.
     - name: Assert every stat of the role and of ops1 asks for metadata only, under any name
       ansible.builtin.assert:
         that:
