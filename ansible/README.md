@@ -344,6 +344,12 @@ It fails when:
   `--hash=sha256:` of 64 hex digits (a range, `~=`, a wildcard, a bare name, an
   include, an editable install, a URL, an index option, or a pin with no hash),
   or a named tool is missing, or a package is pinned twice;
+- `requirements.txt` starts with a byte-order mark or carries a `coding:` /
+  `coding=` declaration in a comment on its first two lines (pip would read it
+  in another encoding), or is not UTF-8 text. The check reads the lock with the
+  reader of `roles/ansible_runtime/files/install_runtime.py`, loaded by path
+  and not copied, so the install program and this gate read a lock one way
+  (`checks/test_lock_reader_parity.py` holds that to pip's own code);
 - `requirements.in` is missing, has a line that is not an exact
   `name==version`, does not name one of the seven chosen tools, or disagrees
   with the lock on a version;

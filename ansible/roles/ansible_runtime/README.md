@@ -35,7 +35,8 @@ each against a SHA-256 recorded at a commit of `main`, and runs it. There is no
 second copy of the install logic to drift.
 
 The program, in order: checks the lock against the SHA-256 it was given;
-refuses a lock with a line that carries no hash; computes the fingerprint (the
+refuses a lock with a line that carries no hash, or with any option, or that
+pip could read in another encoding (see "How the lock is read"); computes the fingerprint (the
 SHA-256 of the lock text without trailing whitespace, first sixteen hex digits,
 which is the role's own expression, held equal by a golden value in the unit
 tests and in the Molecule verify); refuses a fingerprint other than the one the
@@ -51,6 +52,33 @@ installs by hand. It never falls back to an engine that is not the locked one.
 
 The role's own link task stays last in `tasks/main.yml`, so the role is the one
 place that decides the link moves.
+
+### How the lock is read
+
+The program refuses a lock that pip would run with an option such as
+`--index-url`, so it has to read the lock as pip does. It follows pip's
+`join_lines` (in pip's `req_file.py`) rule for rule: a line continues the one
+before when its raw text ends in a backslash (a space after the backslash ends
+it), and a comment-only line ends a continuation. One rule is stricter than pip
+on purpose: pip strips a trailing comment from a joined line, and the program
+does not, so a `#` on a requirement line is refused, never skipped. A
+requirement line is a name, an exact version, an optional marker and `--hash`
+options, separated by the space character only (pip splits on nothing wider).
+
+It also refuses a lock that starts with a byte-order mark, or has a `coding:`
+or `coding=` declaration in a comment on its first two lines, because pip
+would read such a lock in another encoding (a utf-7 lock can hide an option in
+what this program reads as a comment). The repository's lock has neither.
+
+`ansible/checks/check_pins.py` loads the reader, the encoding check and the
+allowed marker characters from `files/install_runtime.py` by path and keeps no
+copy of them. The patterns it matches a pin with (`REQUIREMENT`, `VERSION`) are
+its own. `install_runtime.py` is owner-reviewed in `.github/CODEOWNERS`
+because the gate reads it. The parity with pip is tested against pip's own
+code in `ansible/checks/test_lock_reader_parity.py`. It asks the pip of the
+virtual environment that holds the pinned toolchain (the one bundled with that
+Python, since the lock does not pin pip), and every failure message names the
+pip version it asked.
 
 A run that dies part-way recovers by being run again. The environment is made
 when its `bin/pip` is not executable, and pip is the last thing `python -m venv`

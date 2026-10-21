@@ -42,7 +42,12 @@ def load_runtime_program() -> ModuleType:
 
 
 RUNTIME: ModuleType = load_runtime_program()
+# These three come from the program and are not copied: the reader that joins the lock's lines,
+# the encoding check that runs before it, and the set of characters a marker may hold. The
+# patterns below (REQUIREMENT, VERSION, HASH) are this check's own: the program's patterns say
+# what it will install, these say what the lock must also be (a pin of a named tool).
 logical_lines = RUNTIME.logical_lines
+check_lock_encoding = RUNTIME.check_lock_encoding
 MARKER_CHARS: str = RUNTIME.MARKER_CHARS
 
 # The community package carries the collections, so it is pinned like a tool.
@@ -110,9 +115,17 @@ def locked_packages(requirements: Path) -> tuple[dict[str, str], list[str]]:
     findings: list[str] = []
     pins: dict[str, str] = {}
     try:
-        text = requirements.read_text(encoding="utf-8")
+        data = requirements.read_bytes()
     except OSError as error:
         return pins, [f"{requirements.name} cannot be read: {type(error).__name__}"]
+    try:
+        check_lock_encoding(data)
+    except RUNTIME.Refusal as refusal:
+        return pins, [f"{requirements.name} {refusal.reason.value} ({refusal.detail})"]
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return pins, [f"{requirements.name} is not UTF-8 text"]
     for number, line in logical_lines(text):
         match = REQUIREMENT.fullmatch(line)
         if match is None:
@@ -198,7 +211,7 @@ def check_provenance(ansible_dir: Path, pins: dict[str, str]) -> list[str]:
     chosen, findings = read_input(ansible_dir / INPUT_FILE)
     try:
         text = (ansible_dir / "requirements.txt").read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return findings
     findings.extend(check_header(text))
     direct: set[str] = set()

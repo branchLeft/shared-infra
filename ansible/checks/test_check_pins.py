@@ -218,7 +218,15 @@ class LockTests(PinCase):
     def test_the_lock_reader_and_its_markers_are_the_runtime_programs(self) -> None:
         """One home: the reader and the marker set come from install_runtime.py, with no copy."""
         self.assertIs(check_pins.RUNTIME.logical_lines, check_pins.logical_lines)
+        self.assertIs(check_pins.RUNTIME.check_lock_encoding, check_pins.check_lock_encoding)
         self.assertEqual(check_pins.RUNTIME.MARKER_CHARS, check_pins.MARKER_CHARS)
+        source = Path(check_pins.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("def logical_lines", source, "check_pins keeps a copy of the reader")
+        self.assertNotRegex(
+            source,
+            r"(?m)^MARKER_CHARS\b[^=\n]*=\s*r?[\"']",
+            "check_pins keeps a copy of the marker set",
+        )
 
     def test_name_spelling_is_normalised(self) -> None:
         """An underscore or capital in the name still counts as the tool."""

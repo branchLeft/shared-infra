@@ -4,6 +4,7 @@ The runner is injected, so no test builds a real environment or reaches an index
 The role's container test does that with the repository's real lock.
 """
 
+import codecs
 import contextlib
 import hashlib
 import io
@@ -151,6 +152,41 @@ class FingerprintTest(unittest.TestCase):
         self.assertEqual(program.Reason.LOCK_NOT_TEXT, caught.exception.reason)
 
 
+class LogicalLinesTest(unittest.TestCase):
+    """Each rule of the lock reader on its own, against the lines pip's join_lines gives.
+
+    The expected lists are what pip's rule gives for the same text (ansible/checks has the
+    differential test against pip itself). One rule is broken at a time in the sabotage record,
+    and only the test for that rule may go red.
+    """
+
+    def test_a_continuation_is_tested_on_the_raw_line_so_a_space_after_the_backslash_ends_it(
+        self,
+    ) -> None:
+        self.assertEqual([(1, "a \\"), (2, "b")], program.logical_lines("a \\ \nb\n"))
+        self.assertEqual([(1, "a b")], program.logical_lines("a \\\nb\n"))
+
+    def test_a_comment_only_line_ends_a_continuation(self) -> None:
+        starts = [number for number, _line in program.logical_lines("a \\\n # c \\\nb\n")]
+        self.assertEqual([1, 3], starts)
+
+    def test_no_comment_is_stripped_from_a_joined_line(self) -> None:
+        (number, line), _rest = program.logical_lines("a \\\n # c \\\nb\n")
+        self.assertEqual(1, number)
+        self.assertIn("# c", line)
+
+    def test_a_comment_only_line_that_starts_a_line_is_dropped(self) -> None:
+        self.assertEqual([(2, "b")], program.logical_lines("# c \\\nb\n"))
+        self.assertEqual([(3, "b")], program.logical_lines("\n  # c\nb\n"))
+
+    def test_the_lines_are_those_str_splitlines_gives_as_pip_splits_them(self) -> None:
+        self.assertEqual([(1, "a"), (2, "b")], program.logical_lines("a\x0cb"))
+        self.assertEqual([(1, "a b")], program.logical_lines("a \\\r\nb"))
+
+    def test_a_continuation_with_nothing_after_it_still_yields_its_line(self) -> None:
+        self.assertEqual([(1, "a")], program.logical_lines("a \\"))
+
+
 class LockChecksTest(Case):
     def test_a_matching_lock_installs_and_names_the_environment(self) -> None:
         runner = FakeRunner()
@@ -270,7 +306,6 @@ class LockChecksTest(Case):
             "sys_platform == 'linux' or sys_platform == 'linux2'",
             "platform_python_implementation != 'PyPy'",
             "sys_platform == 'linux' and (python_version >= '3.8' or os_name != 'nt')",
-            'sys_platform == "linux"',
         ):
             with self.subTest(marker=marker):
                 program.check_lock_is_hashed(
@@ -295,6 +330,9 @@ class LockChecksTest(Case):
             "a space after the backslash, then a comment": (
                 f"{hashed} # c \\ \n--index-url=https://evil.example/simple\n"
             ),
+            "a space after the backslash, with no comment": (
+                f"{hashed} \\ \n--index-url=https://evil.example/simple\n"
+            ),
         }
         for name, text in shapes.items():
             with self.subTest(shape=name):
@@ -302,6 +340,75 @@ class LockChecksTest(Case):
                     program.check_lock_is_hashed(LOCK_A + text.encode())
                 self.assertEqual(program.Reason.LOCK_UNHASHED, caught.exception.reason)
                 self.assertEqual("alpha==1.0", caught.exception.detail)
+
+    def test_a_separator_other_than_a_space_is_refused_as_pip_does_not_split_on_it(self) -> None:
+        for name, separator in {"a tab": "\t", "a no-break space": "\xa0"}.items():
+            with self.subTest(separator=name):
+                with self.assertRaises(program.Refusal) as caught:
+                    program.check_lock_is_hashed(
+                        f"alpha==1.0{separator}--hash=sha256:{HASH_A}\n".encode()
+                    )
+                self.assertEqual(program.Reason.LOCK_UNHASHED, caught.exception.reason)
+
+    def test_a_marker_may_use_double_quotes(self) -> None:
+        # uv writes single quotes, so a lost double quote would refuse only a lock that no tool
+        # here writes; this is the acceptance case that notices it.
+        lock = f'alpha==1.0 ; sys_platform == "linux" \\\n    --hash=sha256:{HASH_A}\n'.encode()
+        try:
+            program.check_lock_is_hashed(lock)
+        except program.Refusal as refusal:
+            self.fail(f"a double-quoted marker was refused: {refusal.reason.value}")
+
+    def test_a_byte_order_mark_is_refused_before_anything_is_made(self) -> None:
+        # pip takes its encoding from a byte-order mark; a mark is refused whatever follows it.
+        marks = {
+            "UTF-8": codecs.BOM_UTF8,
+            "UTF-16 little-endian": codecs.BOM_UTF16_LE,
+            "UTF-16 big-endian": codecs.BOM_UTF16_BE,
+            "UTF-32 little-endian": codecs.BOM_UTF32_LE,
+            "UTF-32 big-endian": codecs.BOM_UTF32_BE,
+        }
+        for name, mark in marks.items():
+            with self.subTest(mark=name):
+                runner = FakeRunner()
+                self.refused(self.request(mark + LOCK_A), runner, program.Reason.LOCK_ENCODING)
+                self.nothing_made(runner)
+
+    def test_a_coding_declaration_in_the_first_two_lines_is_refused(self) -> None:
+        declarations = {
+            "a utf-7 declaration on the first line": b"# -*- coding: utf-7 -*-\n" + LOCK_A,
+            "an equals sign and no space": b"# coding=latin-1\n" + LOCK_A,
+            "an editor modeline": b"# vim: set fileencoding=utf-8 :\n" + LOCK_A,
+            "the second line": b"# header\n# coding: utf-7\n" + LOCK_A,
+            "a lock that hides an option behind utf-7": (
+                b"# -*- coding: utf-7 -*-\n"
+                + LOCK_A
+                + b"# +AAo---index-url=https://evil.example/simple\n"
+            ),
+        }
+        for name, lock in declarations.items():
+            with self.subTest(declaration=name):
+                runner = FakeRunner()
+                self.refused(self.request(lock), runner, program.Reason.LOCK_ENCODING)
+                self.nothing_made(runner)
+
+    def test_a_coding_line_that_pip_does_not_read_is_not_refused(self) -> None:
+        # pip reads two lines for a declaration and only when the line starts with "#". The
+        # third line and an indented comment are not declarations to pip, and are not refused.
+        for name, lock in {
+            "the third line": b"# one\n# two\n# coding: utf-7\n" + LOCK_A,
+            "an indented comment": b"  # coding: utf-7\n" + LOCK_A,
+        }.items():
+            with self.subTest(line=name):
+                try:
+                    program.check_lock_is_hashed(lock)
+                except program.Refusal as refusal:
+                    self.fail(f"{name} was refused: {refusal.reason.value}")
+
+    def test_a_lock_that_is_not_utf8_is_refused_with_its_own_reason(self) -> None:
+        runner = FakeRunner()
+        self.refused(self.request(LOCK_A + b"\xff\n"), runner, program.Reason.LOCK_NOT_TEXT)
+        self.nothing_made(runner)
 
     def test_a_link_in_place_of_the_lock_is_refused(self) -> None:
         real = self.base / "real.txt"

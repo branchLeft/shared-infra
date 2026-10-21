@@ -9,7 +9,8 @@ same steps, in the same order:
 1. read the lock without following a link, and refuse it unless its SHA-256
    is the one the caller was given;
 2. refuse a lock in which any requirement has no SHA-256 hash, or which carries
-   anything but pinned, hashed requirements;
+   anything but pinned, hashed requirements, or which pip could read in an
+   encoding other than UTF-8;
 3. name the environment by a fingerprint of the lock text;
 4. build ``venv-<fingerprint>`` and install the lock into it with hash checking
    required;
@@ -24,6 +25,7 @@ role's environments do not change.
 """
 
 import argparse
+import codecs
 import dataclasses
 import enum
 import hashlib
@@ -48,7 +50,10 @@ FINGERPRINT_PATTERN: Final = re.compile(r"[0-9a-f]{16}")
 MAX_LOCK_BYTES: Final = 4_000_000
 
 # One pinned requirement: a name, optional extras, an exact version, an optional
-# environment marker, then one or more hashes and nothing else on the line. The marker is
+# environment marker, then one or more hashes and nothing else on the line. The separators are
+# the space character and nothing wider, because pip splits a line into its requirement and its
+# options on " " alone (break_args_options in pip's req_file.py): a tab before "--hash" would
+# leave the hash inside the requirement as pip reads it. The marker is
 # written only from a positive set of characters (letters, digits, "_", ".", quotes, space,
 # "=", "!", "<", ">", "(", ")"), the set MARKER_CHARS names here, and check_pins reads it from
 # this file. That
@@ -66,13 +71,27 @@ MARKER_CHARS: Final = r"[A-Za-z0-9_.'\" =!<>()]"
 REQUIREMENT: Final = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]+\])?"
     r"==[A-Za-z0-9.!+_-]+"
-    rf"(?:\s*;\s*{MARKER_CHARS}+)?"
-    r"(?:\s+--hash=sha256:[0-9a-f]{64})+",
+    rf"(?: *; *{MARKER_CHARS}+)?"
+    r"(?: +--hash=sha256:[0-9a-f]{64})+",
 )
 HASH_OPTION: Final = re.compile(r"--hash=sha256:[0-9a-f]{64}")
 # pip's own comment pattern (COMMENT_RE in pip's req_file.py), used with match: a line that is
 # only a comment, once any white space before the "#" is allowed for.
 COMMENT_LINE: Final = re.compile(r"(^|\s+)#.*$")
+# How pip chooses the text encoding of a requirements file (_decode_req_file in pip's
+# req_file.py): a byte-order mark first, then a "coding:" or "coding=" declaration in a comment on
+# one of the first two lines (the file split on b"\n"), and UTF-8 otherwise. This program reads
+# UTF-8 only, so a lock that a mark or a declaration could make pip read in another encoding is
+# refused, as a lock that pip and this program would read as different text.
+BYTE_ORDER_MARKS: Final = (
+    codecs.BOM_UTF8,
+    codecs.BOM_UTF16_LE,
+    codecs.BOM_UTF16_BE,
+    codecs.BOM_UTF32_LE,
+    codecs.BOM_UTF32_BE,
+)
+CODING_DECLARATION: Final = re.compile(rb"coding[:=]\s*([-\w.]+)")
+CODING_LINES: Final = 2
 
 
 class Reason(enum.StrEnum):
@@ -82,6 +101,7 @@ class Reason(enum.StrEnum):
     LOCK_NOT_REGULAR = "the lock is not a regular file, or is a link"
     LOCK_TOO_BIG = "the lock is larger than the limit"
     LOCK_NOT_TEXT = "the lock is not UTF-8 text"
+    LOCK_ENCODING = "the lock has a byte-order mark or a coding declaration that pip would obey"
     LOCK_HASH = "the lock does not have the SHA-256 it was given"
     LOCK_EMPTY = "the lock names no requirement"
     LOCK_UNHASHED = "the lock has a line that is not a pinned requirement with SHA-256 hashes"
@@ -190,14 +210,22 @@ def fingerprint(lock: bytes) -> str:
 
 
 def logical_lines(text: str) -> list[tuple[int, str]]:
-    """Return the lock's requirement lines as pip reads them, each with the line it starts on.
+    """Return the lock's requirement lines as pip joins them, each with the line it starts on.
 
-    This is pip's rule (join_lines in pip's req_file.py), copied exactly so that the lock is
-    read as pip reads it. A line continues the one before when its raw text ends in a backslash,
-    tested before any strip, so a space after the backslash ends it. A comment-only line ends a
-    continuation. No comment is stripped from a joined line, so a comment that sits on a
-    requirement is not a requirement and is refused, never skipped. The function is the lock
-    reader for both callers: ansible/checks/check_pins.py loads it from this file.
+    The joining follows pip's join_lines (pip's req_file.py) rule for rule, so that a line pip
+    reads as an option is an option here too: a line continues the one before when its raw text
+    ends in a backslash, tested before any strip, so a space after the backslash ends it; and a
+    comment-only line ends a continuation.
+
+    One rule is deliberately stricter than pip. After joining, pip strips a trailing comment
+    from the line (ignore_comments); this does not, so a comment that sits on a requirement
+    leaves a "#" in the line, which is not a requirement and is refused where pip would skip it.
+    That fails closed, and the repository's lock has no such line. A comment-only line that
+    starts a line (not a continuation) is dropped, as pip drops it.
+
+    The function is the lock reader for both callers: ansible/checks/check_pins.py loads it from
+    this file. It reads text, so the caller first refuses an encoding pip could choose
+    differently (check_lock_encoding).
     """
     lines: list[tuple[int, str]] = []
     pending: str | None = None
@@ -221,6 +249,25 @@ def logical_lines(text: str) -> list[tuple[int, str]]:
     return lines
 
 
+def check_lock_encoding(lock: bytes) -> None:
+    """Refuse a lock that pip could read in an encoding other than UTF-8.
+
+    pip chooses the encoding of a requirements file from a byte-order mark, then from a
+    "coding:" declaration in a comment on one of the first two lines (_decode_req_file in pip's
+    req_file.py), and the rest of this program reads UTF-8. A lock with either could show this
+    program a comment and pip an option, as a "# -*- coding: utf-7 -*-" lock does. Both are
+    refused whatever encoding they name; the repository's lock has neither.
+
+    Raises:
+        Refusal: The lock starts with a byte-order mark or declares an encoding.
+    """
+    if lock.startswith(BYTE_ORDER_MARKS):
+        raise Refusal(Reason.LOCK_ENCODING, "byte-order mark")
+    for line in lock.split(b"\n")[:CODING_LINES]:
+        if line[:1] == b"#" and CODING_DECLARATION.search(line) is not None:
+            raise Refusal(Reason.LOCK_ENCODING, "coding declaration")
+
+
 def check_lock_is_hashed(lock: bytes) -> None:
     """Refuse a lock unless every line is a pinned requirement with hashes.
 
@@ -230,9 +277,15 @@ def check_lock_is_hashed(lock: bytes) -> None:
     of this program's own and leaves nothing behind.
 
     Raises:
-        Refusal: The lock names no requirement or has a line that is not hashed and pinned.
+        Refusal: The lock is not plain UTF-8, names no requirement, or has a line that is
+            not hashed and pinned.
     """
-    lines = logical_lines(lock.decode("utf-8"))
+    check_lock_encoding(lock)
+    try:
+        text = lock.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise Refusal(Reason.LOCK_NOT_TEXT) from error
+    lines = logical_lines(text)
     if not lines:
         raise Refusal(Reason.LOCK_EMPTY)
     for _number, line in lines:
