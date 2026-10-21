@@ -343,6 +343,8 @@ What each part of the scenario does:
     role fails on the read-back and does not stamp; repaired, the rerun stamps;
   - the renderer writable by its group: the role refuses before restarting, the
     unit keeps running, nothing is stamped;
+  - a value with a second line: the role refuses before writing it, and the
+    second line is not in the secrets file;
   - check mode with a changed key and a stale stamp: the restart is found due,
     nothing is restarted, nothing is written; the real run then restarts once and
     replaces the stale stamp.
@@ -374,13 +376,23 @@ the retrieval: make the row's edit and run it to see the message.
 | The drop-in directory name changed by one character (`monitorinq`)        | `converge`      | the same assertion as the first row                                                                                                                                    |
 | A new file added to `hetzner/monitoring/stack/` (not touched by the role) | `verify`        | "zz_probe_file.txt is missing on the instance, is not a regular file ..."                                                                                              |
 
-The controls of the restart decision are proven by the same method: the stamp
-written before the read-back, the `enabled` gate removed, the `SNDS_DATA_URL`
-line hashed, the renderer left out of the fingerprint, the `no_log` removed from
-the line task, and a single-line value check removed should each turn a case of
-`verify.yml` red. The red and green runs of these need the Molecule run in CI,
-which is the first run of this scenario; they are recorded in the pull request
-once CI has run them, and until then they are not shown to fail.
+The controls of the restart decision are proven by the same method, each run in a
+fresh container on 2026-10-21 with the whole harness, the edit reverted after
+each (the red assertion is in the pull request body):
+
+| Control removed or changed                     | Step that fails | Assertion that names it                                                                                  |
+| ---------------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------- |
+| Stamp written before the read-back             | `verify`        | "The restart that left the unit not active did not fail the role, or moved the stamp"                    |
+| The `enabled` gate in `restart_due`            | `verify`        | "A unit that is not enabled was started or stamped by the role"                                          |
+| `SNDS_DATA_URL` line hashed                    | `verify`        | task "Assert the rotated SNDS_DATA_URL is in the file and restarted nothing"                             |
+| Renderer left out of the fingerprint           | `verify`        | task "Assert the fingerprint hashes the eight stack files, the monitoring drop-in and the renderer"      |
+| `no_log` removed from the line task            | `verify`        | "A sentinel value is in the Ansible log, so a task that handles it lacks no_log"                         |
+| Single-line check of the secret values removed | `verify`        | "The value check did not refuse a value with a second line, or the second line reached the secrets file" |
+
+Each red was one harness run. One green run of the reverted tree, with every step
+passing, stands for every row, because the tree after each revert is the same. The red assertion of the
+secrets-file hash row is censored by `no_log`, so the failing task is named
+instead.
 
 The first two rows share one message because it covers both causes (no drop-in, or
 no reload). An earlier version of the converge started no unit, and the second row
