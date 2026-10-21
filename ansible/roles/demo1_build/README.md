@@ -289,22 +289,26 @@ wrapper lock directory.
 One row per edit, with the Molecule steps run over the role and a restore afterwards.
 The retrieval is the run itself.
 
-| Edit                                                      | Step that fails    | Assertion that names it                                                                                          |
-| --------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| A task that writes a different valid sudoers file         | `converge`         | "The role wrote the sudoers grant."                                                                              |
-| A line of the host's grant replaced by another valid line | `converge`         | "The installed sudoers grant is not what render_slot_sudoers.py renders."                                        |
-| A line of the host's grant removed                        | `converge`         | "The installed sudoers grant holds N rules; the slot table of 7 slots expects 50."                               |
-| The socket directory mode changed                         | `verify`           | "The router's socket tree is not root's 0755 at the top and the router's 0700 below."                            |
-| The drain-flag directory's owner changed to root          | `verify`           | "The broker's state directory is not broker:broker 0750, or the drain-flag directory is not broker:broker 0755." |
-| The candidate written as a `Caddyfile`                    | `verify`           | "A Caddyfile exists, a slot directory exists, or the wrapper's lock directory exists."                           |
-| The real wrapper's `reset` run by a task                  | `verify`           | the same assertion (the real wrapper leaves its lock directory)                                                  |
-| An eighth slot added to the role's slot table             | `converge`         | "The installed sudoers grant holds 50 rules; the slot table of 8 slots expects 57."                              |
-| The register directory made `0755` on the host            | `converge`         | "is not a directory owned by root with mode 0700."                                                               |
-| The wrapper installed group-writable                      | `converge`         | the integrity assertion on the installed programs                                                                |
-| One digit of a pin flipped                                | `converge`         | "did not match" at the download                                                                                  |
-| The claim program run in check mode                       | `converge` (check) | "The check run changed"                                                                                          |
-| A file added to the broker's slots directory              | `converge`         | "The role changed the broker's slots directory"                                                                  |
-| The pre-seed guard removed                                | `converge`         | "The role put a cleared drain flag back."                                                                        |
+| Edit                                                       | Step that fails    | Assertion that names it                                                                                                                         |
+| ---------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| A task that writes a different valid sudoers file          | `converge`         | "The role wrote the sudoers grant."                                                                                                             |
+| A line of the host's grant replaced by another valid line  | `converge`         | "The installed sudoers grant is not what render_slot_sudoers.py renders."                                                                       |
+| A line of the host's grant removed                         | `converge`         | "The installed sudoers grant holds N rules; the slot table of 7 slots expects 50."                                                              |
+| The wrapper-path assertion of `_sudoers_check.yml` removed | `converge`         | the case for a path the grant does not name: "The role accepted a wrapper path that the sudoers grant does not name."                           |
+| `_programs.yml` run before `_sudoers_check.yml`            | `converge`         | "The role installed the wrapper at /usr/local/sbin/branchleft-slot and then refused the sudoers grant."                                         |
+| The wildcard assertion of `_sudoers_check.yml` removed     | `converge`         | the case for a wildcard rule: "The role failed on the line ... for a reason other than holds a line that is not a single literal NOPASSWD rule" |
+| The dot-segment condition of `_inputs.yml` removed         | `converge`         | the case for a dotted wrapper path: "for a reason other than The wrapper path must be an absolute path"                                         |
+| The socket directory mode changed                          | `verify`           | "The router's socket tree is not root's 0755 at the top and the router's 0700 below."                                                           |
+| The drain-flag directory's owner changed to root           | `verify`           | "The broker's state directory is not broker:broker 0750, or the drain-flag directory is not broker:broker 0755."                                |
+| The candidate written as a `Caddyfile`                     | `verify`           | "A Caddyfile exists, a slot directory exists, or the wrapper's lock directory exists."                                                          |
+| The real wrapper's `reset` run by a task                   | `verify`           | the same assertion (the real wrapper leaves its lock directory)                                                                                 |
+| An eighth slot added to the role's slot table              | `converge`         | "The installed sudoers grant holds 50 rules; the slot table of 8 slots expects 57."                                                             |
+| The register directory made `0755` on the host             | `converge`         | "is not a directory owned by root with mode 0700."                                                                                              |
+| The wrapper installed group-writable                       | `converge`         | the integrity assertion on the installed programs                                                                                               |
+| One digit of a pin flipped                                 | `converge`         | "did not match" at the download                                                                                                                 |
+| The claim program run in check mode                        | `converge` (check) | "The check run changed"                                                                                                                         |
+| A file added to the broker's slots directory               | `converge`         | "The role changed the broker's slots directory"                                                                                                 |
+| The pre-seed guard removed                                 | `converge`         | "The role put a cleared drain flag back."                                                                                                       |
 
 ### Named limits
 

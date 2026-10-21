@@ -1,51 +1,56 @@
 ---
-# One case of the wrapper-path control, included by converge.yml with
+# One case of the wrapper-path control, imported by converge.yml with
 # converge_case.path (the wrapper path the role is asked to install at) and
 # converge_case.expect (the phrase of the refusal that must fire). The grant on
 # the host is valid and untouched. The path is read before and after, and a
 # refusal must leave it exactly as it was: absent if it was absent, the same
-# bytes if it was a file.
-- name: Prove a wrapper path is refused and nothing is written there
-  block:
-    - name: Look at the path before the run
-      ansible.builtin.stat:
-        path: '{{ converge_case.path }}'
-        follow: false
-        checksum_algorithm: sha256
-      register: demo1_build_converge_path_before
+# bytes if it was a file. A plan makes no change, so a check run skips it.
+- name: Refuse a wrapper path the grant does not name
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Prove a wrapper path is refused and nothing is written there
+      when: not ansible_check_mode
+      block:
+        - name: Look at the path before the run
+          ansible.builtin.stat:
+            path: '{{ converge_case.path }}'
+            follow: false
+            checksum_algorithm: sha256
+          register: demo1_build_converge_path_before
 
-    - name: Apply the role with a wrapper path the grant does not name
-      ansible.builtin.include_role:
-        name: branchleft.demo1_build
-      vars:
-        demo1_build_wrapper_path: '{{ converge_case.path }}'
+        - name: Apply the role with a wrapper path the grant does not name
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+          vars:
+            demo1_build_wrapper_path: '{{ converge_case.path }}'
 
-    - name: Fail if the wrapper path was accepted
-      ansible.builtin.fail:
-        msg: The role accepted a wrapper path that the sudoers grant does not name.
-  rescue:
-    - name: Assert the refusal was the one this case is for
-      ansible.builtin.assert:
-        that:
-          - converge_case.expect in (ansible_failed_result.msg | default(''))
-        quiet: true
-        fail_msg: >-
-          The role failed on {{ converge_case.path }} for a reason other than {{ converge_case.expect }}:
-          {{ ansible_failed_result.msg | default('') }}
+        - name: Fail if the wrapper path was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a wrapper path that the sudoers grant does not name.
+      rescue:
+        - name: Assert the refusal was the one this case is for
+          ansible.builtin.assert:
+            that:
+              - converge_case.expect in (ansible_failed_result.msg | default(''))
+            quiet: true
+            fail_msg: >-
+              The role failed on {{ converge_case.path }} for a reason other than {{ converge_case.expect }}:
+              {{ ansible_failed_result.msg | default('') }}
 
-    - name: Look at the path after the refusal
-      ansible.builtin.stat:
-        path: '{{ converge_case.path }}'
-        follow: false
-        checksum_algorithm: sha256
-      register: demo1_build_converge_path_after
+        - name: Look at the path after the refusal
+          ansible.builtin.stat:
+            path: '{{ converge_case.path }}'
+            follow: false
+            checksum_algorithm: sha256
+          register: demo1_build_converge_path_after
 
-    - name: Assert the refusal wrote nothing at the path
-      ansible.builtin.assert:
-        that:
-          - demo1_build_converge_path_after.stat.exists == demo1_build_converge_path_before.stat.exists
-          - (demo1_build_converge_path_after.stat.checksum | default('')) == (demo1_build_converge_path_before.stat.checksum | default(''))
-        quiet: true
-        fail_msg: >-
-          The role wrote {{ converge_case.path }} and then refused it. A wrapper path the grant does not
-          name must stop the run before any install.
+        - name: Assert the refusal wrote nothing at the path
+          ansible.builtin.assert:
+            that:
+              - demo1_build_converge_path_after.stat.exists == demo1_build_converge_path_before.stat.exists
+              - (demo1_build_converge_path_after.stat.checksum | default('')) == (demo1_build_converge_path_before.stat.checksum | default(''))
+            quiet: true
+            fail_msg: >-
+              The role wrote {{ converge_case.path }} and then refused it. A wrapper path the grant does not
+              name must stop the run before any install.

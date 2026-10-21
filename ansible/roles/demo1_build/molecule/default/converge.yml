@@ -283,40 +283,60 @@
             removes: '{{ converge_wrapper_aside }}'
           changed_when: false
 
-    # The wrapper path. The grant is valid and whole; only the path the role is
-    # asked to install at differs from the one every rule names. The second case
-    # is a system binary that exists, so a write would overwrite it; the third is
-    # a dotted spelling that reaches the same binary.
-    - name: Prove a wrapper path the grant does not name is refused and nothing is written there
-      ansible.builtin.include_tasks: refused_wrapper_path.yml
-      loop:
-        - path: /usr/local/sbin/branchleft-slot-refused-probe
-          expect: 'does not run /usr/local/sbin/branchleft-slot-refused-probe in every rule'
-        - path: /usr/bin/passwd
-          expect: 'does not run /usr/bin/passwd in every rule'
-        - path: /usr/local/sbin/../../bin/passwd
-          expect: 'The wrapper path must be an absolute path'
-      loop_control:
-        loop_var: converge_case
-        label: '{{ converge_case.path }}'
-      when: not ansible_check_mode
+# The wrapper path. The grant is valid and whole; only the path the role is
+# asked to install at differs from the one every rule names. The second case is a
+# system binary that exists, so a write would overwrite it; the third is a dotted
+# spelling that reaches the same binary. Each case is its own play, run on the
+# host as it was left by the one before.
+- name: Refuse a wrapper path the grant does not name, a probe path
+  ansible.builtin.import_playbook: refused_wrapper_path.yml
+  vars:
+    converge_case:
+      path: /usr/local/sbin/branchleft-slot-refused-probe
+      expect: 'does not run /usr/local/sbin/branchleft-slot-refused-probe in every rule'
 
-    # The grant's content. One prepared rule is replaced by a line that keeps the
-    # count: three wildcards and a line that is not the broker's. On a host with no
-    # release the generator comparison is skipped, so these assertions are the
-    # only content check on the grant there.
-    - name: Prove a grant with a wildcard or a foreign rule is refused
-      ansible.builtin.include_tasks: refused_grant_line.yml
-      loop:
-        - line: 'broker ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot *'
-          expect: 'holds a line that is not a single literal NOPASSWD rule for the broker, or a wildcard'
-        - line: 'broker ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot ?'
-          expect: 'holds a line that is not a single literal NOPASSWD rule for the broker, or a wildcard'
-        - line: 'broker ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot [0-6] reset'
-          expect: 'holds a line that is not a single literal NOPASSWD rule for the broker, or a wildcard'
-        - line: 'root ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot 0 reset'
-          expect: 'does not run /usr/local/sbin/branchleft-slot in every rule'
-      loop_control:
-        loop_var: converge_case
-        label: '{{ converge_case.line }}'
-      when: not ansible_check_mode
+- name: Refuse a wrapper path the grant does not name, an existing system binary
+  ansible.builtin.import_playbook: refused_wrapper_path.yml
+  vars:
+    converge_case:
+      path: /usr/bin/passwd
+      expect: 'does not run /usr/bin/passwd in every rule'
+
+- name: Refuse a wrapper path the grant does not name, a dotted spelling
+  ansible.builtin.import_playbook: refused_wrapper_path.yml
+  vars:
+    converge_case:
+      path: /usr/local/sbin/../../bin/passwd
+      expect: 'The wrapper path must be an absolute path'
+
+# The grant's content. One prepared rule is replaced by a line that keeps the
+# count: three wildcards and a line that is not the broker's. On a host with no
+# release the generator comparison is skipped, so these assertions are the only
+# content check on the grant there.
+- name: Refuse a grant with a star
+  ansible.builtin.import_playbook: refused_grant_line.yml
+  vars:
+    converge_case:
+      line: 'broker ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot *'
+      expect: 'holds a line that is not a single literal NOPASSWD rule for the broker, or a wildcard'
+
+- name: Refuse a grant with a question mark
+  ansible.builtin.import_playbook: refused_grant_line.yml
+  vars:
+    converge_case:
+      line: 'broker ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot ?'
+      expect: 'holds a line that is not a single literal NOPASSWD rule for the broker, or a wildcard'
+
+- name: Refuse a grant with a bracket
+  ansible.builtin.import_playbook: refused_grant_line.yml
+  vars:
+    converge_case:
+      line: 'broker ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot [0-6] reset'
+      expect: 'holds a line that is not a single literal NOPASSWD rule for the broker, or a wildcard'
+
+- name: Refuse a grant with a rule that is not the broker's
+  ansible.builtin.import_playbook: refused_grant_line.yml
+  vars:
+    converge_case:
+      line: 'root ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot 0 reset'
+      expect: 'does not run /usr/local/sbin/branchleft-slot in every rule'
