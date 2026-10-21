@@ -1,15 +1,6 @@
-"""Unit tests for the order of the backup_worker role's environment-file tasks.
+"""Task-order and one-home unit tests for the backup_worker environment-file tasks.
 
-The role writes the environment file in two steps. An absent file is created empty at
-its final owner and mode. Then the owner, group and mode are set on every run, and only
-then is the content written. The write goes through the existing file, which keeps the
-owner and mode it has, so an attribute task that runs after the write leaves the value
-in a file that is still wide. These tests read tasks/main.yml as text and fail when one
-of the three tasks is missing, when the attribute task is not between the create-empty
-task and the write, or when a secret task carries its own owner, group or mode instead
-of reading them from the one home in vars/main.yml.
-
-These tests run by hand until ws#2522 wires them into CI. The command is in the README.
+The narrative and the hand-run command are in the role README.
 """
 
 import re
