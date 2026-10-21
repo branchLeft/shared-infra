@@ -1,0 +1,55 @@
+---
+# The policy unit is a oneshot that stays active once it has run, so only a restart
+# runs a changed program: a start of an active unit does nothing. The installed
+# program is made to lack one rule, and the same rule is taken out of the chain the
+# unit built, as a changed program that has run would leave it. The role then
+# installs the repository's program, and the handler's restart has to put the rule
+# in before the read-back looks: the read-back's own repair must not be needed.
+- name: Take the established-traffic rule out of the chain
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    ctstate: [ESTABLISHED, RELATED]
+    jump: ACCEPT
+    state: absent
+
+- name: Take the same rule out of the installed program
+  ansible.builtin.lineinfile:
+    path: '{{ deploy_tooling_reconciler_path }}'
+    regexp: '^ensure_rule filter DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT$'
+    state: absent
+  register: deploy_tooling_scenario_program_edit
+
+- name: Assert the edit took
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_program_edit.changed
+    fail_msg: The line to take out of the installed program is not there.
+    quiet: true
+
+- name: Assert the chain lacks the rule now
+  ansible.builtin.include_tasks: expect_chain_failure.yml
+  vars:
+    expect_label: chain after the rule was taken out
+    chain_variant: standard
+    expect_msg: 'established accept is missing'
+
+- name: Apply the role, which installs the repository's program
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+# set_fact in the role's rescue is the only thing that sets this to true.
+- name: Assert the handler applied the program, not the read-back's repair
+  ansible.builtin.assert:
+    that:
+      - not deploy_tooling_read_back_repaired
+    fail_msg: >-
+      The chain was put right by the read-back's repair, so the handler did not apply the changed
+      program.
+    quiet: true
+
+- name: Assert the host is as the role leaves it
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: standard

@@ -1,0 +1,32 @@
+---
+# Runs the role and requires it to fail. expect_label names the case. expect_msg
+# is a regular expression the failure's message must match, and expect_task one
+# the failed task's name must match (".*" when the case does not care). A role
+# that passes, or fails for another reason, fails this case: the Fail task below
+# is the marker, so its own failure cannot be taken for the role's.
+- name: Run the role, expecting it to fail
+  block:
+    - name: Apply the role
+      ansible.builtin.include_tasks: '{{ run_tasks | default("run_role.yml") }}'
+
+    - name: Fail because the role was not refused
+      ansible.builtin.fail:
+        msg: 'EXPECTED A FAILURE, GOT NONE: {{ expect_label }}'
+  rescue:
+    # A failed task in a loop reports "One or more items failed" in its own message
+    # and the item's message in its results, so both are read.
+    - name: Gather what the failed task said
+      ansible.builtin.set_fact:
+        deploy_tooling_scenario_failure_text: >-
+          {{ ansible_failed_result.msg | default('') }}
+          {{ ansible_failed_result.stderr | default('') }}
+          {{ ansible_failed_result.results | default([]) | map(attribute='msg', default='') | join(' ') }}
+
+    - name: Check that the failure is the expected one
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name != 'Fail because the role was not refused'
+          - deploy_tooling_scenario_failure_text is search(expect_msg)
+          - ansible_failed_task.name is search(expect_task | default('.*'))
+        fail_msg: 'WRONG FAILURE for {{ expect_label }}: task {{ ansible_failed_task.name }}, message {{ deploy_tooling_scenario_failure_text }}'
+        success_msg: 'refused as expected: {{ expect_label }}'

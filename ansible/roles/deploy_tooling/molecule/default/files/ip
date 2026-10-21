@@ -1,0 +1,13 @@
+#!/bin/sh
+# Test stand-in for ip, the one stand-in this scenario uses. The policy program
+# decides which host it is on from the global IPv4 addresses `ip -4 -o addr show
+# scope global` prints. With the marker file present this prints one address line
+# in that format, with the address the marker holds; without it, it is the real
+# ip. A test sets the marker to make the program see the control-plane host's
+# address or the gateway's, and removes it for an ordinary host.
+if [ -f /etc/molecule-ip-address ]; then
+    read -r address </etc/molecule-ip-address
+    printf '2: eth0    inet %s/24 brd 10.20.1.255 scope global eth0\\       valid_lft forever preferred_lft forever\n' "$address"
+    exit 0
+fi
+exec /usr/sbin/ip "$@"

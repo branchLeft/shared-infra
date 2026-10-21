@@ -1,0 +1,80 @@
+---
+# What a host of class app looks like once the role has been applied. chain_variant
+# is the variant the host is expected to carry. Everything is read from the
+# instance itself, independently of the role's own checks.
+- name: Look at every target the role installs
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+    follow: false
+  loop: '{{ deploy_tooling_directory_targets + deploy_tooling_common_file_targets + deploy_tooling_app_file_targets }}'
+  loop_control:
+    label: '{{ item.path }}'
+  register: deploy_tooling_scenario_targets
+
+- name: Assert every target is owned by root, in its group and mode, and is not a link
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - not item.stat.islnk
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'root'
+      - item.stat.mode == item.item.mode
+      - (item.item.kind == 'directory' and item.stat.isdir) or (item.item.kind == 'file' and item.stat.isreg)
+    fail_msg: '{{ item.item.path }} is not as installed: {{ item.stat }}'
+    quiet: true
+  loop: '{{ deploy_tooling_scenario_targets.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+
+- name: Read the policy unit's state
+  ansible.builtin.command:
+    argv:
+      [
+        systemctl,
+        show,
+        '{{ deploy_tooling_policy_unit_name }}',
+        '--property=ActiveState,UnitFileState,Result',
+      ]
+  register: deploy_tooling_scenario_policy_unit
+  changed_when: false
+
+- name: Assert the policy unit is enabled and ran without failing
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_policy_unit.stdout_lines | sort == ['ActiveState=active', 'Result=success', 'UnitFileState=enabled']
+    fail_msg: 'The policy unit is not active and enabled: {{ deploy_tooling_scenario_policy_unit.stdout_lines }}'
+    quiet: true
+
+- name: Read the chains back with the module
+  deploy_tooling_chain:
+    reconciler_path: '{{ deploy_tooling_reconciler_path }}'
+    variant: '{{ chain_variant }}'
+
+- name: Read DOCKER-USER as it stands
+  ansible.builtin.command:
+    argv: [iptables, -w, -S, DOCKER-USER]
+  register: deploy_tooling_scenario_docker_user
+  changed_when: false
+
+- name: Assert Docker's own return is still the last rule of DOCKER-USER
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_docker_user.stdout_lines[-1] == '-A DOCKER-USER -j RETURN'
+    fail_msg: 'DOCKER-USER does not end in the return: {{ deploy_tooling_scenario_docker_user.stdout_lines[-1] }}'
+    quiet: true
+
+# Nothing the role does enables, starts or restarts a compose instance: the
+# template is installed and no instance of it is enabled.
+- name: List what is enabled under the multi-user target
+  ansible.builtin.find:
+    paths: /etc/systemd/system/multi-user.target.wants
+    patterns: 'branchleft-compose@*'
+    file_type: any
+  register: deploy_tooling_scenario_compose_enabled
+
+- name: Assert no compose instance or template is enabled
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_compose_enabled.matched == 0
+    fail_msg: 'A compose unit is enabled: {{ deploy_tooling_scenario_compose_enabled.files | map(attribute="path") | list }}'
+    quiet: true

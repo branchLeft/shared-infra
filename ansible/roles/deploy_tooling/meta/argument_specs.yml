@@ -1,0 +1,40 @@
+---
+argument_specs:
+  main:
+    short_description: Install the CI deploy wrapper, and on an app host the container isolation policy
+    description: >-
+      Installs the program the CI deploy account may run under sudo and the
+      template unit it restarts, and verifies (never writes) the sudoers drop-in
+      that grants it. On a host of class app it also installs the DOCKER-USER
+      policy program and its boot unit, applies the policy and reads the firewall
+      chains back. Nothing is a secret.
+    author: branchLeft
+    options:
+      deploy_tooling_host_class:
+        type: str
+        required: true
+        choices:
+          - app
+          - gateway
+        description: >-
+          What the host is. A host of class app runs containers for tenants, so it
+          gets the isolation policy; the gateway holds the estate's shared address
+          and the policy program refuses to run on it, so it gets only the deploy
+          wrapper, the template unit and the sudoers check. The role has no default
+          for this: a host that is not told its class is not guessed.
+      deploy_tooling_policy_variant:
+        type: str
+        default: not_applicable
+        choices:
+          - standard
+          - protected_no_db
+          - not_applicable
+        description: >-
+          For a host of class app, which chain the policy program builds on it, as
+          the role's expectation: standard (a host that may reach the database, with
+          no protected-port drops) or protected_no_db (the control-plane host, with
+          the protected-port drops and no database exception). The policy program
+          decides for itself from the host's own address, so this is never an input
+          to it; the read-back fails when the host's chain is not the one named
+          here. Required for class app (the role refuses not_applicable there) and
+          ignored for class gateway.

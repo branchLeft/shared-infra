@@ -1,0 +1,270 @@
+---
+# The read-back against real chains. Each case damages the chains, shows the
+# read-back red with the message it should give, and puts the chains back by
+# resetting them and restarting the policy unit, which is what applies the
+# program.
+
+# ----- A chain flushed by something else is repaired once -----
+
+- name: Flush the chains the way a Docker restart or an operator would
+  ansible.builtin.include_tasks: reset_chains.yml
+  vars:
+    deploy_tooling_scenario_ipv6_docker_user: true
+
+- name: Apply the role to the flushed host
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+- name: Assert the read-back found the flushed chain and repaired it
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_read_back_repaired
+    fail_msg: The role did not notice that the chains had been flushed.
+    quiet: true
+
+- name: Assert the chains are the policy again
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: standard
+
+# ----- A plan run in check mode on a flushed, otherwise configured host fails -----
+
+- name: Flush the chains again
+  ansible.builtin.include_tasks: reset_chains.yml
+  vars:
+    deploy_tooling_scenario_ipv6_docker_user: true
+
+- name: Apply the role in check mode to the flushed host
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: check mode on a flushed chain
+    expect_msg: 'established accept is missing'
+    expect_task: 'Read the chains back again'
+    run_check: true
+    run_class: app
+    run_variant: standard
+
+- name: Assert check mode repaired nothing
+  ansible.builtin.include_tasks: expect_chain_failure.yml
+  vars:
+    expect_label: chain after a check-mode run
+    chain_variant: standard
+    expect_msg: 'established accept is missing'
+
+- name: Apply the role for real, to repair
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+# ----- The right rules in the wrong order are refused, and not reordered -----
+
+- name: Take the established-traffic rule out of DOCKER-USER
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    ctstate: [ESTABLISHED, RELATED]
+    jump: ACCEPT
+    state: absent
+
+- name: Put it back below the drops
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    ctstate: [ESTABLISHED, RELATED]
+    jump: ACCEPT
+    action: insert
+    rule_num: '5'
+
+- name: Apply the role to the chain in the wrong order
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: established accept below the drops
+    expect_msg: 'established accept is in the wrong place'
+    expect_task: 'Read the chains back again'
+    run_class: app
+    run_variant: standard
+
+- name: Reset the chains and run the program to repair
+  ansible.builtin.include_tasks: reapply_policy.yml
+
+# ----- A foreign accept above the policy is refused -----
+
+- name: Put a matched accept above everything in DOCKER-USER
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    source: 172.17.0.0/16
+    jump: ACCEPT
+    action: insert
+    rule_num: '1'
+
+- name: Apply the role to the chain with the accept above the policy
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: matched accept above the policy
+    expect_msg: 'can let a packet past'
+    expect_task: 'Read the chains back again'
+    run_class: app
+    run_variant: standard
+
+# A chain another tool owns may sit above the policy only when it is named: with
+# the name given, the jump passes; the accept above it is still refused.
+- name: Read the chains back with a jump to a listed chain, which needs the chain
+  ansible.builtin.include_tasks: expect_chain_failure.yml
+  vars:
+    expect_label: accept above the policy, even with a chain listed
+    chain_variant: standard
+    chain_allowlist: [f2b-sshd]
+    # The whole message, anchored: it names the chain, the rule's place and its target
+    # and says how many other rules the chain holds. It prints no part of the rule (its
+    # source address), because the log of a plan is public.
+    expect_msg: >-
+      ^iptables DOCKER-USER: rule 1 of the chain \(target: ACCEPT\) is above the policy's last
+      drop and can let a packet past it; the chain holds 2 other rules$
+
+- name: Take the accept out again
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    source: 172.17.0.0/16
+    jump: ACCEPT
+    state: absent
+
+- name: Make a chain of another tool, jumped to from the top of DOCKER-USER
+  ansible.builtin.iptables:
+    chain: f2b-sshd
+    chain_management: true
+    state: present
+
+- name: Jump to it
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    jump: f2b-sshd
+    action: insert
+    rule_num: '1'
+
+- name: Read the chains back with the chain unlisted
+  ansible.builtin.include_tasks: expect_chain_failure.yml
+  vars:
+    expect_label: jump to a chain nobody listed
+    chain_variant: standard
+    expect_msg: 'can let a packet past'
+
+- name: Read the chains back with the chain listed
+  deploy_tooling_chain:
+    reconciler_path: '{{ deploy_tooling_reconciler_path }}'
+    variant: standard
+    foreign_chain_allowlist:
+      - f2b-sshd
+
+- name: Take the jump out
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    jump: f2b-sshd
+    state: absent
+
+- name: Remove the chain of the other tool
+  ansible.builtin.iptables:
+    chain: f2b-sshd
+    chain_management: true
+    state: absent
+
+# ----- A rule deleted from the real chains is named -----
+
+- name: Delete the spool bridge forward drop from IPv4 DOCKER-USER
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    in_interface: br-mailspool
+    out_interface: '!br-mailspool'
+    jump: DROP
+    state: absent
+
+- name: Read the chains back
+  ansible.builtin.include_tasks: expect_chain_failure.yml
+  vars:
+    expect_label: IPv4 spool bridge forward drop deleted
+    chain_variant: standard
+    expect_msg: 'iptables DOCKER-USER: the spool bridge forward drop is missing'
+
+- name: Reset the chains and run the program to repair
+  ansible.builtin.include_tasks: reapply_policy.yml
+
+- name: Delete the spool bridge input accept from IPv6 INPUT
+  ansible.builtin.iptables:
+    chain: INPUT
+    in_interface: br-mailspool
+    ctstate: [ESTABLISHED, RELATED]
+    jump: ACCEPT
+    ip_version: ipv6
+    state: absent
+
+- name: Read the chains back
+  ansible.builtin.include_tasks: expect_chain_failure.yml
+  vars:
+    expect_label: IPv6 spool bridge input accept deleted
+    chain_variant: standard
+    expect_msg: 'ip6tables INPUT: the spool bridge established accept is missing'
+
+- name: Reset the chains and run the program to repair
+  ansible.builtin.include_tasks: reapply_policy.yml
+
+# ----- A rule above Docker's jump to DOCKER-USER bypasses every drop -----
+
+- name: Put an accept for one address above Docker's jump to DOCKER-USER in FORWARD
+  ansible.builtin.iptables:
+    chain: FORWARD
+    jump: ACCEPT
+    source: 192.0.2.7
+    action: insert
+    rule_num: '1'
+
+- name: Read the chains back, with the rest of the policy intact
+  ansible.builtin.include_tasks: expect_chain_failure.yml
+  vars:
+    expect_label: an accept above the jump to DOCKER-USER
+    chain_variant: standard
+    expect_msg: 'iptables FORWARD: its first rule is not the jump to DOCKER-USER'
+
+# A restart of the policy unit does not move a rule in FORWARD, so the role's repair
+# fails too and the run stops at the second read-back.
+- name: Apply the role to the host with the rule above the jump
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: an accept above the jump to DOCKER-USER
+    expect_msg: 'iptables FORWARD: its first rule is not the jump to DOCKER-USER'
+    expect_task: 'Read the chains back again'
+    run_class: app
+    run_variant: standard
+
+- name: Reset the chains and run the program to repair
+  ansible.builtin.include_tasks: reapply_policy.yml
+
+# ----- No IPv6 DOCKER-USER chain: the host is still the policy -----
+
+- name: Reset the chains with no IPv6 DOCKER-USER chain, as on a host where Docker made none
+  ansible.builtin.include_tasks: reset_chains.yml
+  vars:
+    deploy_tooling_scenario_ipv6_docker_user: false
+
+- name: Run the program
+  ansible.builtin.systemd_service:
+    name: '{{ deploy_tooling_policy_unit_name }}'
+    state: restarted
+
+- name: Read the chains back
+  deploy_tooling_chain:
+    reconciler_path: '{{ deploy_tooling_reconciler_path }}'
+    variant: standard
+
+- name: Apply the role to a host with no IPv6 DOCKER-USER chain
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+- name: Put the IPv6 chain back and run the program
+  ansible.builtin.include_tasks: reapply_policy.yml
+
+- name: Assert the chains are the policy
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: standard

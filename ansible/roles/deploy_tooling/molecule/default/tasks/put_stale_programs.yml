@@ -1,0 +1,13 @@
+---
+# Puts a marker in place of the two programs that are run as root, so that a later run
+# that wrote either one is seen: a run the role refuses has to leave them as they are.
+- name: Put a marker in place of the wrapper and the policy program
+  ansible.builtin.copy:
+    content: "{{ deploy_tooling_scenario_stale_marker }}\n"
+    dest: '{{ item }}'
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - /usr/local/sbin/branchleft-deploy
+    - /usr/local/sbin/branchleft-docker-user-policy

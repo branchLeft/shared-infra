@@ -1,0 +1,513 @@
+---
+# The directory that holds the wrapper (and the policy program) is checked as well as
+# the files: an account that can write to it can replace a file that runs as root. So is
+# every directory above it, up to /: an account that can write to /usr/local can rename
+# /usr/local/sbin aside and put its own in its place. The rule is the strict shape, with no
+# reasoning about who is in which group: every directory on the path is root's, is not a
+# link, carries no extended ACL, and is not writable by any group or any other account;
+# each target carries no extended ACL. /usr/local/sbin is the directory used here. Each case
+# changes it, runs the role, and puts it back to the owner, group and mode it had, which
+# is read first. A refused run must also have written nothing into the directory it refused:
+# the two programs are replaced by a marker beforehand and read after.
+- name: Read the directory that holds the wrapper, as it stands
+  ansible.builtin.stat:
+    path: /usr/local/sbin
+  register: deploy_tooling_scenario_sbin
+
+- name: Read the directory above it, as it stands
+  ansible.builtin.stat:
+    path: /usr/local
+  register: deploy_tooling_scenario_local
+
+- name: Name the marker that stands in for a program
+  ansible.builtin.set_fact:
+    deploy_tooling_scenario_stale_marker: '# stale marker, not a program'
+
+# The cases below depend on the directories being root's and closed to everyone else, as the
+# test image ships them (the role would refuse them otherwise, so the first converge would
+# already have stopped). A test that started from another state would prove something else.
+- name: Assert the directories are root's and closed to every group and account
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_sbin.stat.isdir
+      - deploy_tooling_scenario_sbin.stat.pw_name == 'root'
+      - deploy_tooling_scenario_sbin.stat.gr_name == 'root'
+      - not deploy_tooling_scenario_sbin.stat.wgrp
+      - not deploy_tooling_scenario_sbin.stat.woth
+      - deploy_tooling_scenario_local.stat.isdir
+      - deploy_tooling_scenario_local.stat.pw_name == 'root'
+      - deploy_tooling_scenario_local.stat.gr_name == 'root'
+      - not deploy_tooling_scenario_local.stat.wgrp
+      - not deploy_tooling_scenario_local.stat.woth
+    fail_msg: >-
+      The test image is not the starting state this case needs:
+      {{ deploy_tooling_scenario_sbin.stat.mode }}
+      {{ deploy_tooling_scenario_sbin.stat.pw_name }}:{{ deploy_tooling_scenario_sbin.stat.gr_name }},
+      {{ deploy_tooling_scenario_local.stat.mode }}
+      {{ deploy_tooling_scenario_local.stat.pw_name }}:{{ deploy_tooling_scenario_local.stat.gr_name }}
+    quiet: true
+
+# ----- Written by any account -----
+
+- name: Let every account write to the directory
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    mode: 'o+w'
+
+- name: Put a marker in place of the programs
+  ansible.builtin.include_tasks: put_stale_programs.yml
+
+- name: Apply the role to the directory that anyone can write to
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: directory that holds the wrapper writable by any account
+    expect_msg: 'can be written to by any account'
+    expect_task: 'Refuse a directory that holds a target and that any account can write to'
+    run_class: app
+    run_variant: standard
+
+- name: Require that the refused run wrote nothing into the directory
+  ansible.builtin.include_tasks: assert_programs_unwritten.yml
+
+- name: Put the directory back
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    mode: '{{ deploy_tooling_scenario_sbin.stat.mode }}'
+
+- name: Apply the role again, which puts the programs back
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+# ----- Not owned by root -----
+
+- name: Give the directory to another account
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    owner: nobody
+    mode: '{{ deploy_tooling_scenario_sbin.stat.mode }}'
+
+- name: Apply the role to the directory another account owns
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: directory that holds the wrapper owned by another account
+    expect_msg: 'not a directory owned by root'
+    expect_task: 'Refuse a path that holds a target and is not a directory owned by root'
+    run_class: app
+    run_variant: standard
+
+- name: Put the owner back
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    owner: root
+    mode: '{{ deploy_tooling_scenario_sbin.stat.mode }}'
+
+# ----- Writable by a group: refused whatever the group is -----
+
+# Debian's own shape, root:staff 2775. Nobody is in staff, and the directory is refused all
+# the same: who is in a group is not the question, and an account whose primary group is
+# staff would be in no member list.
+- name: Make the directory writable by staff, as Debian ships it
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    owner: root
+    group: staff
+    mode: '2775'
+
+- name: Put a marker in place of the programs, for the group-writable directory
+  ansible.builtin.include_tasks: put_stale_programs.yml
+
+- name: Apply the role to a directory writable by staff
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: directory that holds the wrapper owned by root:staff and writable by the group
+    expect_msg: '/usr/local/sbin is on the path to a file that is run as root, and it can be written to by a group'
+    expect_task: 'Refuse a directory that holds a target and that a group can write to'
+    run_class: app
+    run_variant: standard
+
+- name: Require that the refused run wrote nothing into the directory, staff
+  ansible.builtin.include_tasks: assert_programs_unwritten.yml
+
+# The same shape with root as the group: the group is root's own, and the directory is
+# still refused, because a group-writable directory is refused whatever its group is.
+- name: Make the directory writable by root's own group
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    owner: root
+    group: root
+    mode: '0775'
+
+- name: Apply the role to a root:root directory that is group-writable
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: directory that holds the wrapper owned by root:root and writable by the group
+    expect_msg: '/usr/local/sbin is on the path to a file that is run as root, and it can be written to by a group'
+    expect_task: 'Refuse a directory that holds a target and that a group can write to'
+    run_class: app
+    run_variant: standard
+
+- name: Require that the refused run wrote nothing into the directory, root:root
+  ansible.builtin.include_tasks: assert_programs_unwritten.yml
+
+- name: Put the directory back after the group-writable cases
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    owner: '{{ deploy_tooling_scenario_sbin.stat.pw_name }}'
+    group: '{{ deploy_tooling_scenario_sbin.stat.gr_name }}'
+    mode: '{{ deploy_tooling_scenario_sbin.stat.mode }}'
+
+# ----- An extended ACL on the directory -----
+
+# The directory reads root:root 0755 in the mode bits, and an ACL then gives deploy more.
+# With a writable entry the mask makes the group bits read 0775, which the group rule would
+# also refuse; the second case below is an entry whose mask stays r-x, so the mode reads
+# 0755 and only the ACL rule can see it.
+- name: Give an account write access to the directory through an ACL
+  ansible.builtin.command:
+    argv:
+      - setfacl
+      - -m
+      - 'u:deploy:rwx'
+      - /usr/local/sbin
+  changed_when: true
+
+- name: Apply the role to a directory with a write ACL
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: directory that holds the wrapper with a write ACL for an account
+    expect_msg: 'carries an extended ACL: /usr/local/sbin[.]'
+    expect_task: 'Refuse a directory, target or drop-in that carries an extended ACL'
+    run_class: app
+    run_variant: standard
+
+- name: Take the ACL off the directory
+  ansible.builtin.command:
+    argv:
+      - setfacl
+      - -b
+      - /usr/local/sbin
+  changed_when: true
+
+- name: Give an account read access to the directory through an ACL, which leaves the mode 0755
+  ansible.builtin.command:
+    argv:
+      - setfacl
+      - -m
+      - 'u:deploy:r-x'
+      - /usr/local/sbin
+  changed_when: true
+
+- name: Read the mode of the directory with the read ACL
+  ansible.builtin.stat:
+    path: /usr/local/sbin
+  register: deploy_tooling_scenario_sbin_acl
+
+- name: Assert the mode bits give no sign of the ACL
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_sbin_acl.stat.mode == deploy_tooling_scenario_sbin.stat.mode
+    fail_msg: 'The test needs the mode to read {{ deploy_tooling_scenario_sbin.stat.mode }}, and it reads {{ deploy_tooling_scenario_sbin_acl.stat.mode }}.'
+    quiet: true
+
+- name: Apply the role to a directory with a read ACL that no mode bit shows
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: directory that holds the wrapper with an ACL its mode bits do not show
+    expect_msg: 'carries an extended ACL: /usr/local/sbin[.]'
+    expect_task: 'Refuse a directory, target or drop-in that carries an extended ACL'
+    run_class: app
+    run_variant: standard
+
+- name: Take the ACL off the directory again
+  ansible.builtin.command:
+    argv:
+      - setfacl
+      - -b
+      - /usr/local/sbin
+  changed_when: true
+
+# ----- An extended ACL on a target file -----
+
+- name: Put a marker in place of the programs, for the ACL on a file
+  ansible.builtin.include_tasks: put_stale_programs.yml
+
+- name: Give an account write access to the wrapper through an ACL
+  ansible.builtin.command:
+    argv:
+      - setfacl
+      - -m
+      - 'u:deploy:rwx'
+      - /usr/local/sbin/branchleft-deploy
+  changed_when: true
+
+- name: Apply the role to a wrapper that carries an ACL
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: wrapper with a write ACL for an account
+    expect_msg: 'carries an extended ACL: /usr/local/sbin/branchleft-deploy[.]'
+    expect_task: 'Refuse a directory, target or drop-in that carries an extended ACL'
+    run_class: app
+    run_variant: standard
+
+- name: Require that the refused run wrote nothing into the directory, ACL on a file
+  ansible.builtin.include_tasks: assert_programs_unwritten.yml
+
+- name: Take the ACL off the wrapper
+  ansible.builtin.command:
+    argv:
+      - setfacl
+      - -b
+      - /usr/local/sbin/branchleft-deploy
+  changed_when: true
+
+# ----- A link in the path -----
+
+# /usr/local/sbin becomes a link to a directory that is root's own and is closed to everyone
+# else. The directory it points to passes every other rule, so only the rule against a link
+# can refuse it: a link is refused and is never checked as the directory it points to.
+- name: Move the directory aside
+  ansible.builtin.command:
+    argv:
+      - mv
+      - /usr/local/sbin
+      - /usr/local/sbin.real
+  changed_when: true
+
+- name: Put a link where the directory was
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    src: /usr/local/sbin.real
+    state: link
+
+- name: Apply the role to a path whose directory is a link
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: directory that holds the wrapper is a link to a directory that is root's own
+    expect_msg: '/usr/local/sbin is on the path to a file that is run as root, and it is missing, is a link, or is not a directory'
+    expect_task: 'Refuse a path that holds a target and is missing, is a link, or is not a directory'
+    run_class: app
+    run_variant: standard
+
+- name: Require that the refused run wrote nothing through the link
+  ansible.builtin.include_tasks: assert_programs_unwritten.yml
+
+- name: Take the link away
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: absent
+
+- name: Put the directory back
+  ansible.builtin.command:
+    argv:
+      - mv
+      - /usr/local/sbin.real
+      - /usr/local/sbin
+  changed_when: true
+
+# ----- A directory above the one that holds the target -----
+
+# The directory that holds the wrapper is root's own, so that the only thing wrong is the
+# directory above it: /usr/local writable by a group. The role must refuse it, name that
+# directory, and have written nothing.
+- name: Make the directory above it writable by staff
+  ansible.builtin.file:
+    path: /usr/local
+    state: directory
+    owner: root
+    group: staff
+    mode: '2775'
+
+- name: Put a marker in place of the programs, for the directory above
+  ansible.builtin.include_tasks: put_stale_programs.yml
+
+- name: Apply the role to a directory whose parent a group can write to
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: directory above the one that holds the wrapper writable by a group
+    expect_msg: '/usr/local is on the path to a file that is run as root, and it can be written to by a group'
+    expect_task: 'Refuse a directory that holds a target and that a group can write to'
+    run_class: app
+    run_variant: standard
+
+- name: Require that the refused run wrote nothing into the directories
+  ansible.builtin.include_tasks: assert_programs_unwritten.yml
+
+- name: Put the directory above back to what it was
+  ansible.builtin.file:
+    path: /usr/local
+    state: directory
+    owner: '{{ deploy_tooling_scenario_local.stat.pw_name }}'
+    group: '{{ deploy_tooling_scenario_local.stat.gr_name }}'
+    mode: '{{ deploy_tooling_scenario_local.stat.mode }}'
+
+# ----- A directory that holds no target, but a file the role verifies -----
+
+# /etc/sudoers.d holds the drop-in the role checks byte for byte, and sudo reads every file in
+# it as root. An account that can write to that directory can add a grant of its own, so it is
+# on the path of the drop-in and is checked like the directories above. Each case below reads the
+# directory first, and puts it back to what it read.
+- name: Read the sudoers drop-in directory, as it stands
+  ansible.builtin.stat:
+    path: /etc/sudoers.d
+  register: deploy_tooling_scenario_sudoers_dir
+
+- name: Assert the sudoers drop-in directory is root's and closed to every group and account
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_sudoers_dir.stat.isdir
+      - deploy_tooling_scenario_sudoers_dir.stat.pw_name == 'root'
+      - deploy_tooling_scenario_sudoers_dir.stat.gr_name == 'root'
+      - not deploy_tooling_scenario_sudoers_dir.stat.wgrp
+      - not deploy_tooling_scenario_sudoers_dir.stat.woth
+    fail_msg: >-
+      The test image is not the starting state this case needs for /etc/sudoers.d:
+      {{ deploy_tooling_scenario_sudoers_dir.stat.mode }}
+      {{ deploy_tooling_scenario_sudoers_dir.stat.pw_name }}:{{ deploy_tooling_scenario_sudoers_dir.stat.gr_name }}
+    quiet: true
+
+- name: Make the sudoers drop-in directory writable by staff
+  ansible.builtin.file:
+    path: /etc/sudoers.d
+    state: directory
+    owner: root
+    group: staff
+    mode: '2775'
+
+- name: Put a marker in place of the programs, for the sudoers drop-in directory
+  ansible.builtin.include_tasks: put_stale_programs.yml
+
+- name: Apply the role to a sudoers drop-in directory writable by staff
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: sudoers drop-in directory owned by root:staff and writable by the group
+    expect_msg: '/etc/sudoers.d is on the path to a file that is run as root, and it can be written to by a group'
+    expect_task: 'Refuse a directory that holds a target and that a group can write to'
+    run_class: app
+    run_variant: standard
+
+- name: Require that the refused run wrote nothing, sudoers drop-in directory
+  ansible.builtin.include_tasks: assert_programs_unwritten.yml
+
+- name: Put the sudoers drop-in directory back
+  ansible.builtin.file:
+    path: /etc/sudoers.d
+    state: directory
+    owner: '{{ deploy_tooling_scenario_sudoers_dir.stat.pw_name }}'
+    group: '{{ deploy_tooling_scenario_sudoers_dir.stat.gr_name }}'
+    mode: '{{ deploy_tooling_scenario_sudoers_dir.stat.mode }}'
+
+# An ACL on the drop-in file itself: the file's owner and group are right, and the mode bits
+# show the group as the mask, so only the ACL rule can see the write entry for the account.
+- name: Put a marker in place of the programs, for the ACL on the sudoers drop-in
+  ansible.builtin.include_tasks: put_stale_programs.yml
+
+- name: Give an account write access to the sudoers drop-in through an ACL
+  ansible.builtin.command:
+    argv:
+      - setfacl
+      - -m
+      - 'u:deploy:rwx'
+      - /etc/sudoers.d/50-branchleft-deploy
+  changed_when: true
+
+- name: Apply the role to a sudoers drop-in that carries an ACL
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: sudoers drop-in with a write ACL for an account
+    expect_msg: 'carries an extended ACL: /etc/sudoers.d/50-branchleft-deploy[.]'
+    expect_task: 'Refuse a directory, target or drop-in that carries an extended ACL'
+    run_class: app
+    run_variant: standard
+
+- name: Require that the refused run wrote nothing, sudoers drop-in ACL
+  ansible.builtin.include_tasks: assert_programs_unwritten.yml
+
+- name: Take the ACL off the sudoers drop-in
+  ansible.builtin.command:
+    argv:
+      - setfacl
+      - -b
+      - /etc/sudoers.d/50-branchleft-deploy
+  changed_when: true
+
+- name: Put the sudoers drop-in back to the mode sudo requires
+  ansible.builtin.file:
+    path: /etc/sudoers.d/50-branchleft-deploy
+    owner: root
+    group: root
+    mode: '0440'
+
+# ----- A directory that holds a unit the role installs -----
+
+# /etc/systemd/system holds the policy unit, which is run as root through systemd. It is on the
+# path of that target, so it is checked like the directories above, and the same rule refuses
+# it when a group can write to it.
+- name: Read the unit directory, as it stands
+  ansible.builtin.stat:
+    path: /etc/systemd/system
+  register: deploy_tooling_scenario_units_dir
+
+- name: Assert the unit directory is root's and closed to every group and account
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_units_dir.stat.isdir
+      - deploy_tooling_scenario_units_dir.stat.pw_name == 'root'
+      - deploy_tooling_scenario_units_dir.stat.gr_name == 'root'
+      - not deploy_tooling_scenario_units_dir.stat.wgrp
+      - not deploy_tooling_scenario_units_dir.stat.woth
+    fail_msg: >-
+      The test image is not the starting state this case needs for /etc/systemd/system:
+      {{ deploy_tooling_scenario_units_dir.stat.mode }}
+      {{ deploy_tooling_scenario_units_dir.stat.pw_name }}:{{ deploy_tooling_scenario_units_dir.stat.gr_name }}
+    quiet: true
+
+- name: Make the unit directory writable by its own group
+  ansible.builtin.file:
+    path: /etc/systemd/system
+    state: directory
+    owner: root
+    group: root
+    mode: '0775'
+
+- name: Put a marker in place of the programs, for the unit directory
+  ansible.builtin.include_tasks: put_stale_programs.yml
+
+- name: Apply the role to a unit directory a group can write to
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: unit directory writable by its group
+    expect_msg: '/etc/systemd/system is on the path to a file that is run as root, and it can be written to by a group'
+    expect_task: 'Refuse a directory that holds a target and that a group can write to'
+    run_class: app
+    run_variant: standard
+
+- name: Require that the refused run wrote nothing, unit directory
+  ansible.builtin.include_tasks: assert_programs_unwritten.yml
+
+- name: Put the unit directory back
+  ansible.builtin.file:
+    path: /etc/systemd/system
+    state: directory
+    owner: '{{ deploy_tooling_scenario_units_dir.stat.pw_name }}'
+    group: '{{ deploy_tooling_scenario_units_dir.stat.gr_name }}'
+    mode: '{{ deploy_tooling_scenario_units_dir.stat.mode }}'
+
+- name: Apply the role again, which puts the programs back
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+- name: Assert the host is as the role leaves it
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: standard

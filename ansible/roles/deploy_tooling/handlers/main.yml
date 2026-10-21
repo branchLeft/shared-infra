@@ -1,0 +1,23 @@
+---
+# Skipped in check mode with a stated reason (ANS-10): check mode wrote none of
+# the unit files that notified this handler, so systemd has nothing new to read
+# and the module would fail on a unit file that is not there yet.
+- name: Reload systemd manager
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: not ansible_check_mode
+
+# restarted, never started: the unit is a oneshot that stays active once it has
+# succeeded, so a start of an active unit does nothing and a changed policy
+# program would sit on disk, unrun, until the next boot. This is the only thing
+# that runs the program. It runs when the program or the unit file changed (the
+# tasks notify it) and at no other time. Nothing in this role restarts a compose
+# instance (branchleft-compose@): a restart redeploys a tenant's stack.
+#
+# Skipped in check mode with a stated reason (ANS-10): a unit file that check mode
+# did not write cannot be restarted, and the plan must not claim it was.
+- name: Restart the policy unit
+  ansible.builtin.systemd_service:
+    name: '{{ deploy_tooling_policy_unit_name }}'
+    state: restarted
+  when: not ansible_check_mode

@@ -1,0 +1,23 @@
+---
+# Requires the two programs to still hold the marker put there by put_stale_programs.yml.
+# The role reads the directories above its targets before it writes a file, so a run it
+# refuses has written nothing into them. A role that wrote first would have replaced the
+# marker with the program, and this fails.
+- name: Read the wrapper and the policy program
+  ansible.builtin.slurp:
+    src: '{{ item }}'
+  loop:
+    - /usr/local/sbin/branchleft-deploy
+    - /usr/local/sbin/branchleft-docker-user-policy
+  register: deploy_tooling_scenario_unwritten
+  check_mode: false
+
+- name: Assert the refused run wrote neither
+  ansible.builtin.assert:
+    that:
+      - (item.content | b64decode) == deploy_tooling_scenario_stale_marker ~ '\n'
+    fail_msg: 'A run that refused the directory had already written {{ item.item }} into it.'
+    quiet: true
+  loop: '{{ deploy_tooling_scenario_unwritten.results }}'
+  loop_control:
+    label: '{{ item.item }}'

@@ -1,0 +1,198 @@
+---
+# The sudoers drop-in belongs to the host's first-boot configuration. The role
+# only reads it: each wrong state below is refused with a message naming what is
+# wrong, and none is repaired. The effective grant is also read the way sudo reads
+# it, so a second file that widens the account's rights is seen here, though the
+# role, which reads only its own drop-in, does not see it.
+- name: Read the grant sudo gives the CI account
+  ansible.builtin.include_tasks: sudo_grants.yml
+
+- name: Assert the CI account may run the wrapper as root and nothing else
+  ansible.builtin.assert:
+    that:
+      - "deploy_tooling_scenario_deploy_grants == ['(root) NOPASSWD: ' ~ deploy_tooling_wrapper_path]"
+    fail_msg: 'The CI account holds other rights than the wrapper: {{ deploy_tooling_scenario_deploy_grants }}'
+    quiet: true
+
+- name: Case, the drop-in is owned by somebody else
+  ansible.builtin.file:
+    path: '{{ deploy_tooling_sudoers_path }}'
+    owner: nobody
+- name: Run the role against the drop-in with the wrong owner
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: sudoers drop-in owner
+    expect_msg: 'owner is nobody, expected root'
+    expect_task: 'Refuse a sudoers drop-in that is not owned by root'
+    run_class: app
+    run_variant: standard
+- name: Restore the owner
+  ansible.builtin.file:
+    path: '{{ deploy_tooling_sudoers_path }}'
+    owner: root
+
+- name: Case, the drop-in is in somebody else's group
+  ansible.builtin.file:
+    path: '{{ deploy_tooling_sudoers_path }}'
+    group: nogroup
+- name: Run the role against the drop-in with the wrong group
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: sudoers drop-in group
+    expect_msg: 'group is nogroup, expected root'
+    expect_task: 'Refuse a sudoers drop-in whose group is not root'
+    run_class: app
+    run_variant: standard
+- name: Restore the group
+  ansible.builtin.file:
+    path: '{{ deploy_tooling_sudoers_path }}'
+    group: root
+
+- name: Case, the drop-in has the wrong mode
+  ansible.builtin.file:
+    path: '{{ deploy_tooling_sudoers_path }}'
+    mode: '0640'
+- name: Run the role against the drop-in with the wrong mode
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: sudoers drop-in mode
+    expect_msg: 'mode is 0640, expected 0440'
+    expect_task: 'Refuse a sudoers drop-in whose mode'
+    run_class: app
+    run_variant: standard
+- name: Restore the mode
+  ansible.builtin.file:
+    path: '{{ deploy_tooling_sudoers_path }}'
+    mode: '0440'
+
+- name: Case, the host has no drop-in
+  ansible.builtin.file:
+    path: '{{ deploy_tooling_sudoers_path }}'
+    state: absent
+- name: Run the role on a host with no drop-in
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: sudoers drop-in missing
+    expect_msg: 'is missing, is a link, or is not a regular file'
+    expect_task: 'Refuse a host with no sudoers drop-in'
+    run_class: app
+    run_variant: standard
+- name: Assert the role did not write a drop-in
+  ansible.builtin.stat:
+    path: '{{ deploy_tooling_sudoers_path }}'
+  register: deploy_tooling_scenario_dropin_after_refusal
+- name: Check there is still no drop-in
+  ansible.builtin.assert:
+    that:
+      - not deploy_tooling_scenario_dropin_after_refusal.stat.exists
+    fail_msg: The role wrote the sudoers drop-in.
+    quiet: true
+
+- name: Case, the drop-in is a link to a correct file
+  ansible.builtin.copy:
+    content: "{{ deploy_tooling_sudoers_line }}\n"
+    dest: /tmp/molecule-sudoers-good
+    owner: root
+    group: root
+    mode: '0440'
+- name: Make the link
+  ansible.builtin.file:
+    src: /tmp/molecule-sudoers-good
+    dest: '{{ deploy_tooling_sudoers_path }}'
+    state: link
+- name: Run the role against the link
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: sudoers drop-in is a link
+    expect_msg: 'is missing, is a link, or is not a regular file'
+    expect_task: 'Refuse a host with no sudoers drop-in'
+    run_class: app
+    run_variant: standard
+- name: Remove the link
+  ansible.builtin.file:
+    path: '{{ deploy_tooling_sudoers_path }}'
+    state: absent
+
+# Each of these is a file visudo accepts, and each grants more than the one line,
+# or could once edited. The whole-file comparison refuses every one.
+- name: Case, a file that is not the one grant
+  ansible.builtin.include_tasks: case_sudoers_content.yml
+  loop:
+    - label: an include directive after the grant
+      content: "{{ deploy_tooling_sudoers_line }}\n#includedir /etc/sudoers.d.extra\n"
+    - label: a continuation line that adds a command
+      content: "{{ deploy_tooling_sudoers_line }}, \\\n    /bin/sh\n"
+    - label: a comment that holds a wider grant
+      content: "{{ deploy_tooling_sudoers_line }} # NOPASSWD: ALL\n"
+    - label: a second grant
+      content: "{{ deploy_tooling_sudoers_line }}\ndeploy ALL=(root) NOPASSWD: /bin/true\n"
+    - label: the grant without its final newline
+      content: '{{ deploy_tooling_sudoers_line }}'
+    - label: the grant with trailing space
+      content: "{{ deploy_tooling_sudoers_line }} \n"
+  loop_control:
+    loop_var: deploy_tooling_scenario_dropin
+    label: '{{ deploy_tooling_scenario_dropin.label }}'
+
+# A drop-in that is exactly the role's expected line, when that line is not valid
+# sudoers syntax. The whole-file comparison passes it, so only visudo refuses it.
+- name: Case, the expected line itself is not valid sudoers syntax
+  ansible.builtin.copy:
+    content: "deploy ALL=(root) NOPASSWD /usr/local/sbin/branchleft-deploy{{ '\n' }}"
+    dest: '{{ deploy_tooling_sudoers_path }}'
+    owner: root
+    group: root
+    mode: '0440'
+- name: Run the role with that line as the expectation
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: sudoers drop-in with a syntax error
+    expect_msg: 'syntax error|non-zero return code'
+    expect_task: '^Check the sudoers drop-in with visudo$'
+    run_tasks: run_role_sudoers_line.yml
+    run_sudoers_line: 'deploy ALL=(root) NOPASSWD /usr/local/sbin/branchleft-deploy'
+
+- name: Put the correct drop-in back
+  ansible.builtin.copy:
+    content: "{{ deploy_tooling_sudoers_line }}\n"
+    dest: '{{ deploy_tooling_sudoers_path }}'
+    owner: root
+    group: root
+    mode: '0440'
+
+# The role reads only its own drop-in, so a second file that grants the account
+# everything passes the role. The effective-grant read above is what sees it.
+- name: Case, a second drop-in grants the CI account everything
+  ansible.builtin.copy:
+    content: "deploy ALL=(ALL) NOPASSWD: ALL{{ '\n' }}"
+    dest: /etc/sudoers.d/60-molecule-extra
+    owner: root
+    group: root
+    mode: '0440'
+- name: Read the grant sudo gives the CI account now
+  ansible.builtin.include_tasks: sudo_grants.yml
+- name: Assert the read of the effective grant sees the wider right
+  ansible.builtin.assert:
+    that:
+      - "deploy_tooling_scenario_deploy_grants != ['(root) NOPASSWD: ' ~ deploy_tooling_wrapper_path]"
+      - "deploy_tooling_scenario_deploy_grants | select('search', 'NOPASSWD: ALL') | list | length == 1"
+    fail_msg: 'The read of the effective grant did not see the second drop-in: {{ deploy_tooling_scenario_deploy_grants }}'
+    quiet: true
+- name: Remove the second drop-in
+  ansible.builtin.file:
+    path: /etc/sudoers.d/60-molecule-extra
+    state: absent
+- name: Read the grant sudo gives the CI account once more
+  ansible.builtin.include_tasks: sudo_grants.yml
+- name: Assert the grant is the wrapper alone again
+  ansible.builtin.assert:
+    that:
+      - "deploy_tooling_scenario_deploy_grants == ['(root) NOPASSWD: ' ~ deploy_tooling_wrapper_path]"
+    fail_msg: 'The CI account holds other rights than the wrapper: {{ deploy_tooling_scenario_deploy_grants }}'
+    quiet: true
+
+- name: Assert the role converges again on the restored drop-in
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
