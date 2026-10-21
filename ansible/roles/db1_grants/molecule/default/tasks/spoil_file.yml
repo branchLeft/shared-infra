@@ -25,8 +25,8 @@
   ansible.builtin.copy:
     content: '{{ item.content }}'
     dest: '{{ item.path }}'
-    owner: root
-    group: root
+    owner: '{{ item.owner | default("root") }}'
+    group: '{{ item.owner | default("root") }}'
     mode: '{{ item.mode }}'
   when:
     - not (item.absent | default(false))

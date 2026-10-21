@@ -8,7 +8,8 @@
 # case, the scenario's own when absent); state
 # (drop_users: accounts removed from the fake database; users: a recursive patch
 # of accounts; replace: accounts put in whole; top: other keys of the fake database); files (host files spoiled:
-# path plus mode, owner, content or absent, and directory: true for a directory);
+# path plus mode, owner, content or absent, and directory: true for a directory;
+# a file with content is root's unless owner is set);
 # now (the fake clock, HHMM); marker_absent (files that must not exist afterwards
 # because a program that must not run would have made them); may_change (the
 # database may differ afterwards).
@@ -94,7 +95,7 @@ db1_grants_verify_cases:
     code: socket-owner
     files:
       - { path: '{{ db1_grants_scenario_socket_path }}', absent: true }
-      - { path: '{{ db1_grants_scenario_socket_path }}', mode: '0777', content: '' }
+      - { path: '{{ db1_grants_scenario_socket_path }}', mode: '0777', content: '', owner: 999 }
   - name: program directory the group can write
     code: program-dir
     files:

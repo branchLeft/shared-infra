@@ -189,6 +189,9 @@ running through it.
   at once and requires one run to bring the database back to the configured state.
 - The rotation case requires the password set exactly once for a replaced file and
   not again for the same file.
+- A batch the server refuses (a read-only server) stops the run by name with the
+  database unchanged, and the program's own failure and a tenant account that
+  vanished between the readback and the program do the same.
 - Across the whole run, no password appears on a command line the fake recorded or
   in the log at the highest verbosity, and the role leaves no directory behind.
 - A stray module in the program directory does not run: the program runs from a
@@ -231,7 +234,18 @@ The first member of this family is `db1_stack`. This role differs in three ways.
 
 ## Clauses this role exercises
 
-ANS-3 (no shell), ANS-10 (check mode and what is skipped in it), ANS-11 (a second
-run changes nothing), ANS-14 (this order), ANS-15 (the test runs in a container
-only), ANS-16 (secrets, `no_log`, no diff of a secret) and ANS-17 (delivery through
-the gated workflow only).
+ANS-3 (no `shell`, `raw` or `script` task; see the note below), ANS-10 (check mode
+and what is skipped in it), ANS-11 (a second run changes nothing), ANS-14 (this
+order), ANS-15 (the test runs in a container only), ANS-16 (secrets, `no_log`, no
+diff of a secret, nothing secret in a task's `environment`) and ANS-17 (delivery
+through the gated workflow only).
+
+**A reading of ANS-3 for the owner.** The three client calls are
+`ansible.builtin.command` tasks whose argument list starts with a fixed
+`/bin/sh -c` text that holds no value (`db1_grants_secret_wrapper` in
+`vars/main.yml`). It is there because the pinned provisioning program reads the
+admin password only from its environment, and Ansible's `environment` puts the
+value on a shell's command line and into the controller's log at verbosity 3, which
+this role's own log scan fails. If ANS-3 is read to cover a fixed wrapper, the
+alternative is a typed launcher module under ANS-2; that is filed as a follow-up,
+and the role does not depend on the answer to be correct.
