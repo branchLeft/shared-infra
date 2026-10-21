@@ -1,0 +1,21 @@
+---
+# What the role carries. These are constants of the two reconcilers, not
+# inputs, so they live here and not in defaults/: a caller cannot override them.
+# Each source is a file in hetzner/provision, read in place by the copy tasks
+# (tasks/_reconciler.yml), so there is one copy of every file.
+egress_nat_host_egress:
+  label: the private-host egress reconciler
+  reconciler_src: branchleft_host_egress.sh
+  reconciler_dest: /usr/local/sbin/branchleft-host-egress
+  unit_src: branchleft-host-egress.service
+  unit_name: branchleft-host-egress.service
+
+egress_nat_nat_gateway:
+  label: the NAT gateway reconciler
+  reconciler_src: branchleft_nat.sh
+  reconciler_dest: /usr/local/sbin/branchleft-nat
+  unit_src: branchleft-nat.service
+  unit_name: branchleft-nat.service
+
+# Where systemd looks for a unit an administrator installs.
+egress_nat_unit_dir: /etc/systemd/system

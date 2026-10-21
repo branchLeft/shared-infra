@@ -1,0 +1,26 @@
+---
+# Test scaffolding. Applies the role once and records how it ended, so that
+# converge.yml can assert on a failure instead of stopping at it. The role's
+# own facts are cleared first, so that a record left by an earlier attempt is
+# never read as this one's.
+- name: Clear what an earlier attempt recorded
+  ansible.builtin.set_fact:
+    egress_nat_failed_task: none
+    egress_nat_failed_unit: none
+    egress_nat_reverted: false
+
+- name: Apply the role and record how it ended
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.egress_nat
+      vars:
+        egress_nat_gateway_enabled: '{{ attempt_gateway | default(true) }}'
+
+    - name: Record that the role did not fail
+      ansible.builtin.set_fact:
+        egress_nat_attempt_failed: false
+  rescue:
+    - name: Record that the role failed
+      ansible.builtin.set_fact:
+        egress_nat_attempt_failed: true

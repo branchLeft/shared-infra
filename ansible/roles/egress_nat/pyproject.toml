@@ -1,0 +1,19 @@
+[project]
+name = "egress-nat-role"
+version = "0.0.0"
+# The oldest interpreter any machine that runs these tests provides: the repository's floor.
+requires-python = ">=3.12"
+
+[tool.mypy]
+strict = true
+disallow_any_explicit = true
+python_version = "3.12"
+
+# PyYAML ships no type information. This names the one module; it is not a blanket ignore.
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true
+
+[tool.ruff]
+# The repository's ruff policy (ansible/pyproject.toml).
+extend = "../../pyproject.toml"
