@@ -1,0 +1,7 @@
+---
+# No private value is a default. The replica host, its host key, the NAT
+# address, the db1 subnet and db1's public key are run-time inputs (see
+# meta/argument_specs.yml). They are never committed.
+
+# Teardown removes db1's private key, so it does nothing unless this is true.
+tunnel_account_teardown_confirm: false

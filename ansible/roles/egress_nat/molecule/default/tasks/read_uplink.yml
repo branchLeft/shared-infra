@@ -1,0 +1,12 @@
+---
+# Test scaffolding. Sets egress_nat_uplink_dev to the interface the default route leaves
+# through, the one the NAT reconciler masquerades out of.
+- name: Read the default route
+  ansible.builtin.command:
+    argv: [ip, -j, -4, route, show, default]
+  register: egress_nat_uplink_route
+  changed_when: false
+
+- name: Work out the uplink interface
+  ansible.builtin.set_fact:
+    egress_nat_uplink_dev: '{{ (egress_nat_uplink_route.stdout | ansible.builtin.from_json)[0].dev }}'

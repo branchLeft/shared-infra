@@ -1,0 +1,12 @@
+[Unit]
+Description=OLD_RELEASE_OF_THE_NAT_UNIT
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/branchleft-nat
+
+[Install]
+WantedBy=multi-user.target

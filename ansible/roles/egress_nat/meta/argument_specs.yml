@@ -1,0 +1,25 @@
+---
+argument_specs:
+  main:
+    short_description: Install the host egress reconciler and, on the gateway host, the NAT gateway reconciler
+    description: >-
+      Installs the private-host egress reconciler to /usr/local/sbin with its
+      boot unit, and, when egress_nat_gateway_enabled is true, the NAT gateway
+      reconciler with its boot unit. Each unit is enabled and restarted when
+      the reconciler or the unit changed, and a restart that fails puts the
+      previous files back and runs the previous reconciler again. The
+      reconcilers are programs that stay as code; the role installs them and
+      rewrites none.
+    author: branchLeft
+    options:
+      egress_nat_gateway_enabled:
+        type: bool
+        description: >-
+          Whether this host is the estate's NAT gateway. Exactly one host in
+          the estate is, the one the network stack's default route names; set
+          it true for that host only, in its inventory, and nowhere else. On
+          any other host the NAT reconciler either fails its own guard or
+          quietly builds a path nothing routes to. The host egress reconciler
+          is installed on every host whatever this is. None of the role's
+          variables is a secret.
+        default: false

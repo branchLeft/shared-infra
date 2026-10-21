@@ -1,0 +1,51 @@
+---
+# Test scaffolding, not role tasks. What the role expects to find on a host
+# before it runs: iptables (it arrives with Docker on a real host, and the NAT
+# reconciler refuses to run without it) and the ip command. The rest makes the
+# container look like the gateway to the two reconcilers.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install iptables and iproute2, which the reconcilers call
+      ansible.builtin.apt:
+        name:
+          - iptables
+          - iproute2
+        state: present
+        update_cache: true
+
+    # The real sysctl fails in a container (/proc/sys is read-only), so a stand-in
+    # that records its arguments goes where the unit's PATH finds it first.
+    - name: Install a stand-in for the sysctl command
+      ansible.builtin.copy:
+        src: sysctl_standin.sh
+        dest: /usr/local/sbin/sysctl
+        owner: root
+        group: root
+        mode: '0755'
+
+    # The host egress reconciler does nothing on a host that holds a public
+    # address, and the NAT reconciler needs its uplink to hold one. The address
+    # on the loopback interface (a documentation address, never routed) makes
+    # the first true everywhere in the scenario, and the one on the uplink,
+    # which converge.yml takes off and puts back, is what the second reads.
+    - name: Give the loopback interface a public documentation address
+      ansible.builtin.command:
+        argv: [ip, addr, replace, 203.0.113.10/32, dev, lo]
+      changed_when: true
+
+    - name: Read the interface the default route leaves through
+      ansible.builtin.include_tasks: tasks/read_uplink.yml
+
+    # The NAT reconciler also refuses a host that holds no address in the
+    # estate's private subnet, because nothing routed there would reach it.
+    - name: Give the uplink an address in the estate's private subnet
+      ansible.builtin.command:
+        argv: [ip, addr, replace, 10.20.1.5/24, dev, '{{ egress_nat_uplink_dev }}']
+      changed_when: true
+
+    - name: Give the uplink a public documentation address
+      ansible.builtin.command:
+        argv: [ip, addr, replace, 203.0.113.11/32, dev, '{{ egress_nat_uplink_dev }}']
+      changed_when: true

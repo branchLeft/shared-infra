@@ -1,0 +1,8 @@
+---
+# No scaffolding. The units name /etc/branchleft/db.env and the compose unit
+# branchleft-compose@db.service; the role does not start a service, and a timer
+# starts its service only on its calendar, so neither needs to exist here.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks: []
