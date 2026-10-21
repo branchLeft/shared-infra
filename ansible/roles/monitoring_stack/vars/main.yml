@@ -90,6 +90,9 @@ monitoring_stack_edge_dropin_dir: /etc/systemd/system/branchleft-compose@edge.se
 # The unit of the monitoring stack, the one the restart step restarts.
 monitoring_stack_unit: branchleft-compose@monitoring.service
 
+# The edge instance: read for NeedDaemonReload only, never restarted here.
+monitoring_stack_edge_unit: branchleft-compose@edge.service
+
 # The unit file states that count as enabled.
 monitoring_stack_enabled_states:
   - enabled

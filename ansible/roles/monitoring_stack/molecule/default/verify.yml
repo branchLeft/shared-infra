@@ -231,6 +231,7 @@
     verify_renderer: /opt/branchleft/monitoring/render_alertmanager_config.py
     verify_dropin_repo: '{{ verify_repo }}/hetzner/monitoring/systemd/monitoring.override.conf'
     verify_ntfy_vars: '{{ verify_repo }}/ansible/roles/ntfy_pager/vars/main.yml'
+    verify_ntfy_defaults: '{{ verify_repo }}/ansible/roles/ntfy_pager/defaults/main.yml'
     verify_role_vars: '{{ verify_repo }}/ansible/roles/monitoring_stack/vars/main.yml'
     verify_env_keys:
       - SMTP_USERNAME
@@ -317,6 +318,27 @@
         quiet: true
         fail_msg: The renderer's path differs between the monitoring drop-in, ntfy_pager's file list and the role's constant.
 
+    # The secrets file's path is also held in three places: this role's constant,
+    # ntfy_pager's default and the monitoring drop-in's EnvironmentFile. ntfy_pager
+    # writes the NTFY_ lines into its copy and this role hashes its own, so a drift
+    # between them would stop a rotated credential restarting the unit while the
+    # rest of the scenario stayed green. The message names all three paths.
+    - name: Read ntfy_pager's default for the secrets file's path
+      ansible.builtin.set_fact:
+        monitoring_stack_verify_ntfy_defaults: "{{ lookup('ansible.builtin.file', verify_ntfy_defaults) | ansible.builtin.from_yaml }}"
+
+    - name: Assert the three places agree on the secrets file's path
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_role.monitoring_stack_env_file == verify_env_file
+          - monitoring_stack_verify_ntfy_defaults.ntfy_pager_env_file == verify_env_file
+          - ('EnvironmentFile=-' ~ verify_env_file) in monitoring_stack_verify_dropin_text
+        quiet: true
+        fail_msg: >-
+          The secrets file's path differs between this role's constant ({{ monitoring_stack_verify_role.monitoring_stack_env_file }}),
+          ntfy_pager's default ({{ monitoring_stack_verify_ntfy_defaults.ntfy_pager_env_file }}) and the monitoring drop-in's
+          EnvironmentFile, which must name {{ verify_env_file }}.
+
 # The restart decision. Everything above looked at the converged host; here each
 # case changes one thing the decision depends on, runs the role again, and reads
 # what happened: how many times the docker stand-in was called (every restart of
@@ -337,8 +359,14 @@
     verify_rot_f: test-sentinel-rotated-smtp-0015
     verify_rot_g: test-sentinel-rotated-smtp-0016
     verify_rot_snds: https://test.invalid/snds/test-sentinel-rotated-0009
-    verify_ntfy_value: test-sentinel-ntfy-0010
+    verify_ntfy_pager_1: test-sentinel-ntfy-pager-0010
+    verify_ntfy_pager_2: test-sentinel-ntfy-pager-0018
+    verify_ntfy_watcher: test-sentinel-ntfy-watcher-0019
+    verify_ntfy_owner: test-sentinel-ntfy-owner-0020
+    verify_ntfy_machine: test-sentinel-ntfy-machine-0021
+    verify_ntfy_role: '{{ playbook_dir }}/../../../ntfy_pager'
     verify_unit: branchleft-compose@monitoring.service
+    verify_edge_unit: branchleft-compose@edge.service
     verify_renderer_path: /opt/branchleft/monitoring/render_alertmanager_config.py
     verify_template_path: /etc/systemd/system/branchleft-compose@.service
     verify_fail_flag: /run/docker-standin.fail
@@ -492,16 +520,50 @@
 
     # ----- A key another role owns is in the fingerprint -----
     # ntfy_pager writes the NTFY_ lines, and this role must restart for them on its
-    # next run. The test writes one the way ntfy_pager does, then runs this role.
-    - name: Rotate an NTFY_ line the way ntfy_pager does
-      ansible.builtin.lineinfile:
-        path: /etc/branchleft/monitoring.env
-        regexp: '^NTFY_PAGER_TOKEN='
-        line: 'NTFY_PAGER_TOKEN={{ verify_ntfy_value }}'
-        create: false
-      no_log: true
+    # next run. The real ntfy_pager role is run here, by its path, so the seam is
+    # the role's own tasks and not a line the test writes. The first values come
+    # with the real renderer, which is a change of its own and restarts once; they
+    # are applied and settled first, so the rotation after them changes one line
+    # and nothing else, and a restart for it can only come from the NTFY_ lines.
+    - name: Apply ntfy_pager with its four values, which writes the four NTFY_ lines and the real renderer
+      ansible.builtin.include_role:
+        name: '{{ verify_ntfy_role }}'
+      vars:
+        ntfy_pager_pager_token: '{{ verify_ntfy_pager_1 }}'
+        ntfy_pager_watcher_token: '{{ verify_ntfy_watcher }}'
+        ntfy_pager_owner_password_hash: '{{ verify_ntfy_owner }}'
+        ntfy_pager_machine_password_hash: '{{ verify_ntfy_machine }}'
 
-    - name: Apply the role after the NTFY_ line was rotated
+    - name: Apply the role after ntfy_pager wrote its first values
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+      vars:
+        monitoring_stack_smtp_password: '{{ verify_rot_a }}'
+        monitoring_stack_snds_data_url: '{{ verify_rot_snds }}'
+
+    - name: Snapshot after ntfy_pager's first values were applied
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: ntfy_first
+
+    - name: Assert ntfy_pager's first values restarted the unit once
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_snaps.ntfy_first.calls == monitoring_stack_verify_snaps.snds_after.calls + 1
+          - monitoring_stack_verify_snaps.ntfy_first.stamp != monitoring_stack_verify_snaps.snds_after.stamp
+        quiet: true
+        fail_msg: The values and renderer that ntfy_pager wrote did not restart the unit exactly once on the next run of this role.
+
+    - name: Apply ntfy_pager with the pager token rotated and nothing else changed
+      ansible.builtin.include_role:
+        name: '{{ verify_ntfy_role }}'
+      vars:
+        ntfy_pager_pager_token: '{{ verify_ntfy_pager_2 }}'
+        ntfy_pager_watcher_token: '{{ verify_ntfy_watcher }}'
+        ntfy_pager_owner_password_hash: '{{ verify_ntfy_owner }}'
+        ntfy_pager_machine_password_hash: '{{ verify_ntfy_machine }}'
+
+    - name: Apply the role after ntfy_pager rotated one line
       ansible.builtin.include_role:
         name: branchleft.monitoring_stack
       vars:
@@ -528,8 +590,8 @@
     - name: Assert the NTFY_ rotation restarted the unit on this role's next run, once
       ansible.builtin.assert:
         that:
-          - monitoring_stack_verify_snaps.ntfy_after.calls == monitoring_stack_verify_snaps.snds_after.calls + 1
-          - monitoring_stack_verify_snaps.ntfy_after.stamp != monitoring_stack_verify_snaps.snds_after.stamp
+          - monitoring_stack_verify_snaps.ntfy_after.calls == monitoring_stack_verify_snaps.ntfy_first.calls + 1
+          - monitoring_stack_verify_snaps.ntfy_after.stamp != monitoring_stack_verify_snaps.ntfy_first.stamp
           - monitoring_stack_verify_snaps.ntfy_rerun.calls == monitoring_stack_verify_snaps.ntfy_after.calls
         quiet: true
         fail_msg: A rotated NTFY_ line did not restart the unit exactly once on the next run of this role.
@@ -601,6 +663,107 @@
         fail_msg: >-
           A change to the edge drop-in was not put back and read by systemd, or it restarted the monitoring unit
           (edge MemoryMax {{ monitoring_stack_verify_edge_unit.status.MemoryMax }}).
+
+    # ----- A reload that a failed run did not make is made by the next run -----
+    # The edge drop-in is outside the fingerprint, so a rerun finds it unchanged
+    # and no restart is due: only systemd saying the file on disk is newer than the
+    # one it holds can bring the reload back. The run is made to fail after the
+    # copy by putting a plain file where the stamp's directory is, which the role
+    # cannot turn into a directory; no hook is in the role.
+    - name: Put an earlier release of the edge drop-in on the instance
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          MemoryMax=1024M
+        dest: /etc/systemd/system/branchleft-compose@edge.service.d/override.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Make systemd read the earlier release, so that it holds 1024M
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Snapshot before the run that fails after the copy
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: reload_before
+
+    - name: Move the stamp's directory aside
+      ansible.builtin.command:
+        argv: [mv, /var/lib/branchleft, /var/lib/branchleft.aside]
+      changed_when: true
+
+    - name: Put a plain file where the stamp's directory was
+      ansible.builtin.copy:
+        content: ''
+        dest: /var/lib/branchleft
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Apply the role, which installs the edge drop-in and then fails
+      block:
+        - name: Apply the role while the stamp's directory cannot be made
+          ansible.builtin.include_role:
+            name: branchleft.monitoring_stack
+          vars:
+            monitoring_stack_smtp_password: '{{ verify_rot_a }}'
+            monitoring_stack_snds_data_url: '{{ verify_rot_snds }}'
+        - name: Note that the role did not fail
+          ansible.builtin.set_fact:
+            monitoring_stack_verify_failed_run: false
+      rescue:
+        - name: Note that the role failed
+          ansible.builtin.set_fact:
+            monitoring_stack_verify_failed_run: true
+
+    - name: Ask systemd for the edge instance after the failed run
+      ansible.builtin.systemd_service:
+        name: '{{ verify_edge_unit }}'
+      register: monitoring_stack_verify_edge_failed
+
+    - name: Take the plain file away and put the stamp's directory back
+      ansible.builtin.file:
+        path: /var/lib/branchleft
+        state: absent
+
+    - name: Move the stamp's directory back
+      ansible.builtin.command:
+        argv: [mv, /var/lib/branchleft.aside, /var/lib/branchleft]
+      changed_when: true
+
+    - name: Apply the role again with the same inputs
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+      vars:
+        monitoring_stack_smtp_password: '{{ verify_rot_a }}'
+        monitoring_stack_snds_data_url: '{{ verify_rot_snds }}'
+
+    - name: Ask systemd for the edge instance after the rerun
+      ansible.builtin.systemd_service:
+        name: '{{ verify_edge_unit }}'
+      register: monitoring_stack_verify_edge_rerun
+
+    - name: Snapshot after the rerun
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: reload_after
+
+    - name: Assert the failed run left the old drop-in loaded, and the rerun made systemd read the new one without a restart
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_failed_run
+          - monitoring_stack_verify_edge_failed.status.MemoryMax == '1073741824'
+          - monitoring_stack_verify_edge_rerun.status.MemoryMax == '1610612736'
+          - monitoring_stack_verify_snaps.reload_after.calls == monitoring_stack_verify_snaps.reload_before.calls
+          - monitoring_stack_verify_snaps.reload_after.stamp == monitoring_stack_verify_snaps.reload_before.stamp
+        quiet: true
+        fail_msg: >-
+          The run that was made to fail did not fail, or did not leave the earlier edge drop-in loaded, or the rerun
+          did not make systemd read the new one without a restart (edge MemoryMax after the failed run
+          {{ monitoring_stack_verify_edge_failed.status.MemoryMax }}, after the rerun
+          {{ monitoring_stack_verify_edge_rerun.status.MemoryMax }}).
 
     # ----- An enabled unit that is inactive is started when a restart is due -----
     - name: Stop the monitoring unit, which stays enabled
@@ -865,85 +1028,44 @@
         quiet: true
         fail_msg: The rerun after a read-back that failed did not restart the unit and stamp the fingerprint.
 
+    # ----- The value check refuses an empty value, spaces and a second line, before anything is written -----
+    # Each value is given to the role in turn, and the secrets file must still
+    # hold the value the last good run wrote (verify_rot_e).
+    - name: Give the role each value that the check must refuse
+      ansible.builtin.include_tasks: tasks/refuse_value.yml
+      loop:
+        - name: an empty value
+          value: ''
+        - name: only spaces
+          value: '   '
+        - name: a second line
+          value: "{{ verify_rot_g }}\nNTFY_PAGER_TOKEN=test-sentinel-newline-0017"
+      loop_control:
+        loop_var: monitoring_stack_verify_try
+        label: '{{ monitoring_stack_verify_try.name }}'
+
     # ----- The renderer check comes before the restart -----
-    - name: Make the renderer writable by its group
-      ansible.builtin.file:
-        path: '{{ verify_renderer_path }}'
-        mode: '0664'
-
-    # ----- The value check refuses a value with a second line, before anything is written -----
-    - name: Apply the role with SMTP_PASSWORD holding a second line
-      no_log: true
-      block:
-        - name: Apply the role with a value that has a second line
-          ansible.builtin.include_role:
-            name: branchleft.monitoring_stack
-          vars:
-            monitoring_stack_smtp_password: "{{ verify_rot_g }}\nNTFY_PAGER_TOKEN=test-sentinel-newline-0017"
-        - name: Note that the role did not refuse the value
-          ansible.builtin.set_fact:
-            monitoring_stack_verify_value_refused: false
-      rescue:
-        - name: Note that the role refused the value
-          ansible.builtin.set_fact:
-            monitoring_stack_verify_value_refused: true
-
-    - name: Read the secrets file after the refused value
-      ansible.builtin.slurp:
-        src: /etc/branchleft/monitoring.env
-      register: monitoring_stack_verify_value_env
-      no_log: true
-
-    - name: Assert the value check refused the second line and wrote none of it
-      ansible.builtin.assert:
-        that:
-          - monitoring_stack_verify_value_refused
-          - "'test-sentinel-newline-0017' not in (monitoring_stack_verify_value_env.content | b64decode)"
-        quiet: true
-        fail_msg: The value check did not refuse a value with a second line, or the second line reached the secrets file.
-      no_log: true
-
-    - name: Snapshot before the restart that the renderer check refuses
-      ansible.builtin.include_tasks: tasks/snapshot.yml
-      vars:
-        monitoring_stack_verify_snap_name: renderer_check_before
-
-    - name: Apply the role with a rotated key, the renderer being writable by others
-      block:
-        - name: Apply the role with a rotated key while the renderer is unsafe
-          ansible.builtin.include_role:
-            name: branchleft.monitoring_stack
-          vars:
-            monitoring_stack_smtp_password: '{{ verify_rot_f }}'
-        - name: Note that the role did not refuse
-          ansible.builtin.set_fact:
-            monitoring_stack_verify_failed_run: false
-      rescue:
-        - name: Note that the role refused
-          ansible.builtin.set_fact:
-            monitoring_stack_verify_failed_run: true
-
-    - name: Snapshot after the refused restart
-      ansible.builtin.include_tasks: tasks/snapshot.yml
-      vars:
-        monitoring_stack_verify_snap_name: renderer_check_after
-
-    - name: Assert the role refused before restarting, left the unit running, and did not stamp
-      ansible.builtin.assert:
-        that:
-          - monitoring_stack_verify_failed_run
-          - monitoring_stack_verify_snaps.renderer_check_after.calls == monitoring_stack_verify_snaps.renderer_check_before.calls
-          - monitoring_stack_verify_snaps.renderer_check_after.active == 'active'
-          - monitoring_stack_verify_snaps.renderer_check_after.stamp == monitoring_stack_verify_snaps.renderer_check_before.stamp
-        quiet: true
-        fail_msg: >-
-          The renderer check did not refuse before the restart: the role did not fail, or the unit was restarted,
-          or the stamp moved.
-
-    - name: Make the renderer safe again
-      ansible.builtin.file:
-        path: '{{ verify_renderer_path }}'
-        mode: '0644'
+    # Three ways the renderer is unsafe or missing, each with a restart due. The
+    # role must refuse each before restarting, leave the unit running and stamp
+    # nothing. The renderer is put back after each.
+    - name: Give the role each renderer that the check must refuse
+      ansible.builtin.include_tasks: tasks/refuse_renderer.yml
+      loop:
+        - name: missing
+          state: absent
+          mode: '0644'
+          owner: root
+        - name: writable by its group
+          state: file
+          mode: '0664'
+          owner: root
+        - name: owned by another user
+          state: file
+          mode: '0644'
+          owner: nobody
+      loop_control:
+        loop_var: monitoring_stack_verify_renderer
+        label: '{{ monitoring_stack_verify_renderer.name }}'
 
     # ----- A plan or drift run sees a pending restart, and changes nothing -----
     - name: Put a stale stamp on the host, as a half-applied run leaves one
@@ -1051,7 +1173,11 @@
       - test-sentinel-grafana-0006
       - test-sentinel-0007
       - test-sentinel-rotated-0009
-      - test-sentinel-ntfy-0010
+      - test-sentinel-ntfy-pager-0010
+      - test-sentinel-ntfy-pager-0018
+      - test-sentinel-ntfy-watcher-0019
+      - test-sentinel-ntfy-owner-0020
+      - test-sentinel-ntfy-machine-0021
       - test-sentinel-rotated-smtp-0008
       - test-sentinel-rotated-smtp-0011
       - test-sentinel-rotated-smtp-0012
@@ -1070,8 +1196,9 @@
         that:
           - "'MONITORING_STACK_LOG_CANARY' in monitoring_stack_verify_log"
           - "'Write the keys into the monitoring secrets file' in monitoring_stack_verify_log"
+          - "'Write the four NTFY_ lines into the monitoring secrets file' in monitoring_stack_verify_log"
         quiet: true
-        fail_msg: The log lacks the canary or the role's task name, so an empty scan would prove nothing.
+        fail_msg: The log lacks the canary or the task name of either role, so an empty scan would prove nothing.
       no_log: true
 
     - name: Assert the log holds none of the sentinel values
