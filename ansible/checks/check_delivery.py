@@ -189,7 +189,12 @@ def caller_findings(workflow: object, other_environments: frozenset[str]) -> lis
 
 
 def environments_used(workflows: Path, skip: str) -> tuple[frozenset[str], list[str]]:
-    """Return the environments every other workflow's jobs run in, and what could not be read."""
+    """Return the environments every other workflow's jobs run in, and what could not be read.
+
+    A job names its environment either as a job key or, when it calls a reusable workflow,
+    as an input in ``with``. A name that is an expression (``${{``) cannot be read, so it is
+    a finding and never a silent pass.
+    """
     names: set[str] = set()
     findings: list[str] = []
     for path in sorted(workflows.glob("*.y*ml")):
@@ -203,12 +208,22 @@ def environments_used(workflows: Path, skip: str) -> tuple[frozenset[str], list[
         jobs = as_mapping(top.get("jobs")) if top is not None else None
         for job in (jobs or {}).values():
             declared = as_mapping(job)
-            environment = declared.get("environment") if declared is not None else None
-            named = as_mapping(environment)
-            if named is not None:
-                environment = named.get("name")
-            if isinstance(environment, str):
-                names.add(environment)
+            if declared is None:
+                continue
+            spelled = [declared.get("environment")]
+            if isinstance(declared.get("uses"), str):
+                spelled.append((as_mapping(declared.get("with")) or {}).get("environment"))
+            for environment in spelled:
+                named = as_mapping(environment)
+                if named is not None:
+                    environment = named.get("name")
+                if isinstance(environment, str) and "${{" in environment:
+                    findings.append(
+                        f"{path.name} names an environment by expression {environment!r}: "
+                        "C4 cannot read which environment it releases, so it is a finding"
+                    )
+                elif isinstance(environment, str):
+                    names.add(environment)
     return frozenset(names), findings
 
 
@@ -249,14 +264,14 @@ def environment_findings(
             f"environment {name} has no required reviewers rule: the apply would not wait"
         )
     for rule in reviewer_rules:
-        # prevent_self_review true is a finding: the owner is the only approver and also
-        # merges every owner-only path, so a run his own merge or re-run started would have
-        # nobody who may approve it. The estate's working environments leave it false.
-        if rule.get("prevent_self_review") is True:
+        # Owner ruling 6320444361 (self-review-deploy-2338, answer A): Prevent self-review stays
+        # on for this environment. Anything but exactly True, a missing key included, is a
+        # finding, so the probe proves the ruled value and not an absence of the field.
+        if rule.get("prevent_self_review") is not True:
             findings.append(
-                f"environment {name} has Prevent self-review ticked: the owner is the only "
-                "approver and also starts the run by merging, so no one could approve an "
-                "apply that his own merge or re-run started (untick it)"
+                f"environment {name} does not have Prevent self-review ticked: owner ruling "
+                "6320444361 requires it on, so the owner's own merge cannot release a run "
+                "it started without the approval path recorded in ws#2338"
             )
         listed = rule.get("reviewers")
         reviewers = [as_mapping(entry) for entry in (listed if isinstance(listed, list) else [])]
