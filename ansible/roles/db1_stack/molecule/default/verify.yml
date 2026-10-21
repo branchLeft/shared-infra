@@ -41,6 +41,15 @@
       {'key': 'cnf_file_rotated', 'value': verify_cnf_text_rotated},
       {'key': 'digest_control', 'value': verify_digest_control}] }}
     verify_role_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY', default='') }}"
+    # The paths part two writes, written out here as the checks expect them. The
+    # role's vars file is not loaded in this play, so these are not read from it;
+    # a path changed in the role fails the checks in tasks/verify_part_two.yml.
+    db1_stack_compose_path: /opt/branchleft/db/compose.yml
+    db1_stack_db_directory: /opt/branchleft/db
+    db1_stack_cnf_directory: /opt/branchleft/db/conf.d
+    db1_stack_socket_directory: /opt/branchleft/db/run/mysqld
+    db1_stack_image_env_path: /etc/branchleft/db.image.env
+    db1_stack_legacy_drop_in: /etc/systemd/system/branchleft-compose@db.service.d/override.conf
     # The downloads and package files the scenario applies the role with.
     verify_downloads:
       - url: file://{{ scenario_package_dir }}/{{ scenario_libaio_name }}
@@ -726,6 +735,12 @@
             < db1_stack_verify_log.find(' : Write the exporter credentials file')
         quiet: true
       no_log: true
+
+    # Part two: the database stack's files, the pin file's refusals, the order of
+    # the legacy drop-in and the exporter file, and the source of the included
+    # tasks. See tasks/verify_part_two.yml.
+    - name: Check the database stack, its image pin and the refusals of part two
+      ansible.builtin.import_tasks: tasks/verify_part_two.yml
 
 # The other files this run leaves on the controller: Molecule's own copy of the
 # configuration, the inventory it built, its state, and the log. The sentinel

@@ -38,10 +38,13 @@
     patterns: '*'
   register: db1_stack_state_listing
 
-- name: Assert the directory holds the exporter file and nothing else
+# The database image pin is written by branchleft-deploy, not by the role; the
+# fixture places it, and the role must leave it alone (verify_part_two.yml checks
+# its content). Nothing else may be here.
+- name: Assert the directory holds the exporter file and the deploy program's pin, and nothing else
   ansible.builtin.assert:
     that:
-      - db1_stack_state_listing.files | map(attribute='path') | list == ['/etc/branchleft/db-exporter.my.cnf']
+      - db1_stack_state_listing.files | map(attribute='path') | list | sort == ['/etc/branchleft/db-exporter.my.cnf', '/etc/branchleft/db.image.env']
     fail_msg: 'The directory holds {{ db1_stack_state_listing.files | map(attribute="path") | list }}.'
     quiet: true
 

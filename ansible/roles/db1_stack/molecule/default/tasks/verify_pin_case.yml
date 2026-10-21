@@ -1,0 +1,39 @@
+---
+# One case of the database image pin, applied to the instance, refused by the role
+# at the task the case names, and then restored to the good pin the role reads.
+# The restore runs whether or not the refusal matched, so the next case and the
+# checks after the loop see the good pin.
+
+- name: Remove the database image pin for the absent case
+  ansible.builtin.file:
+    path: '{{ db1_stack_image_env_path }}'
+    state: absent
+  when: db1_stack_verify_case.absent | default(false)
+
+- name: Write the database image pin the case holds
+  ansible.builtin.copy:
+    content: '{{ db1_stack_verify_case.content }}'
+    dest: '{{ db1_stack_image_env_path }}'
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+  when: not (db1_stack_verify_case.absent | default(false))
+
+# refused.yml applies the role with the scenario's good inputs and requires the
+# named task to refuse; it checks that the refusal holds no sentinel.
+- name: Require the role to refuse the case at the task the case names
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: '{{ db1_stack_verify_case.task }}'
+
+- name: Restore the good database image pin
+  ansible.builtin.copy:
+    content: "IMAGE=mysql:8.0.43@sha256:{{ scenario_image_digest }}\n"
+    dest: '{{ db1_stack_image_env_path }}'
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false

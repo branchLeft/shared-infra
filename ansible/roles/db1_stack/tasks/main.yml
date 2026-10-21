@@ -107,6 +107,76 @@
     fail_msg: The repository key file files/mysql-repo-keys.asc does not match the digest pinned in vars/main.yml.
     quiet: true
 
+# ----- The database stack's inputs (part two) -----
+
+# The database image is not chosen by this role: branchleft-deploy writes its
+# digest to the pin file, and the stack's unit cannot start without it. A
+# missing file is the state after a first deploy that failed, so the role
+# refuses before it changes anything, and it reads the file only to check it.
+# These checks read no secret and print the file's text only in the pattern
+# check's own message, which names the rule and holds no value.
+- name: Look at the database image pin the deploy program writes
+  ansible.builtin.stat:
+    path: '{{ db1_stack_image_env_path }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_stack_image_env_stat
+
+- name: Refuse a database image pin that is absent
+  ansible.builtin.assert:
+    that:
+      - db1_stack_image_env_stat.stat.exists | default(false)
+      - db1_stack_image_env_stat.stat.isreg | default(false)
+    fail_msg: >-
+      {{ db1_stack_image_env_path }} is absent or is not a file. branchleft-deploy
+      writes it on a successful deploy of the database; run that first, then run the
+      role again.
+    quiet: true
+
+- name: Read the database image pin the deploy program wrote
+  ansible.builtin.slurp:
+    src: '{{ db1_stack_image_env_path }}'
+  register: db1_stack_image_env_raw
+
+# The file must be the one line the deploy program writes: IMAGE=<digest of
+# the mysql image>, then a line break. An empty file, a file with no IMAGE key,
+# two lines, a tag without a digest, or upper-case hex all fail here, so the
+# compose file never starts from a pin the deploy program would not write.
+- name: Refuse a database image pin that is not one line of the form the deploy program writes
+  ansible.builtin.assert:
+    that:
+      - (db1_stack_image_env_raw.content | b64decode) is match(db1_stack_image_env_pattern)
+    fail_msg: >-
+      {{ db1_stack_image_env_path }} is not one line of the form IMAGE=mysql:TAG@sha256:HEX64
+      with lower-case hex. The deploy program writes that line; a hand edit or a
+      partial write is the usual cause. Run branchleft-deploy db to write it again.
+    quiet: true
+
+# The compose file is the one the deploy program reads. Compose would read a
+# second file of another name first, so the role refuses to run beside one.
+- name: Look for a second compose file in the database directory
+  ansible.builtin.stat:
+    path: '{{ db1_stack_db_directory }}/{{ item }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ db1_stack_other_compose_names }}'
+  register: db1_stack_other_compose
+
+- name: Refuse a second compose file in the database directory
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists
+    fail_msg: >-
+      {{ item.item }} exists in {{ db1_stack_db_directory }}. Compose would read it
+      in place of compose.yml, which the deploy program checks. Move it aside, then
+      run the role again.
+    quiet: true
+  loop: '{{ db1_stack_other_compose.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
 # ----- The host prerequisites -----
 
 - name: Create the download directory
@@ -234,6 +304,15 @@
   loop: '{{ db1_stack_mysql_checked_packages }}'
   when: not ansible_check_mode
 
+# ----- The legacy drop-in (part two) -----
+
+# The drop-in that wrote the exporter file on every start is removed before this
+# run writes that file. Its daemon-reload is in the same included file. Nothing in
+# this run restarts the unit; the order is the control, because a daemon that
+# still holds the legacy line would run it on any later restart.
+- name: Remove the legacy drop-in that rewrote the exporter file before every start
+  ansible.builtin.include_tasks: _unit.yml
+
 # ----- The exporter credentials file -----
 
 # The host's provisioning creates this directory with this owner and mode. This
@@ -357,3 +436,12 @@
   when:
     - db1_stack_branchleft_directory_stat.stat.exists
     - not (db1_stack_exporter_path_now.stat.isdir | default(false))
+
+# ----- The database stack (part two) -----
+
+# The compose file, the MySQL configuration and the unit's enablement. The
+# exporter file above is written before this include, so the stack is never
+# enabled ahead of the file its exporter mounts. Nothing here starts, restarts or
+# recreates a container; see _compose.yml.
+- name: Deliver the database stack's compose file, configuration and enablement
+  ansible.builtin.include_tasks: _compose.yml

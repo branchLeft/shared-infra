@@ -1,0 +1,268 @@
+---
+# Part two's checks, imported by verify.yml as its last task. They read what the
+# role wrote to the instance, the order of its tasks in the log, and the source of
+# its included tasks, and they apply the refusals of the database image pin and of
+# a second compose file. None of the values here is a secret. The log read is
+# no_log, as the rest of verify.yml does, because the log holds every task's
+# output.
+#
+# The container has no systemd and no Docker. These checks therefore prove the
+# files, the modes, the order and the refusals, and nothing about a running stack:
+# docker compose never runs here. The limit is named in the role's README.
+
+# ----- What the role wrote -----
+
+- name: Read the compose file the role wrote
+  ansible.builtin.slurp:
+    src: '{{ db1_stack_compose_path }}'
+  register: db1_stack_verify_compose_raw
+
+- name: Read the MySQL configuration the role wrote
+  ansible.builtin.slurp:
+    src: '{{ db1_stack_cnf_directory }}/branchleft.cnf'
+  register: db1_stack_verify_cnf_raw
+
+- name: Read the database image pin, which the role reads and never writes
+  ansible.builtin.slurp:
+    src: '{{ db1_stack_image_env_path }}'
+  register: db1_stack_verify_pin_raw
+
+- name: Read the rendered files as text
+  ansible.builtin.set_fact:
+    db1_stack_verify_compose: '{{ db1_stack_verify_compose_raw.content | b64decode }}'
+    db1_stack_verify_cnf: '{{ db1_stack_verify_cnf_raw.content | b64decode }}'
+    db1_stack_verify_pin: '{{ db1_stack_verify_pin_raw.content | b64decode }}'
+  no_log: true
+
+# The mysql image is read from the pin file through ${IMAGE}. A literal digest
+# here would stop the pin file from controlling the image, and the deploy program
+# refuses the file that has one (ghost-platform's own check, and the reason the
+# role uses the stack's ${IMAGE} form).
+- name: Assert the compose file reads the mysql image from the pin file and never a literal
+  ansible.builtin.assert:
+    that:
+      - "db1_stack_verify_compose is search('(?m)^    image: [$][{]IMAGE[}][ ]*$')"
+      - "db1_stack_verify_compose is not search('(?m)^    image: mysql')"
+    fail_msg: The compose file does not read the mysql image from ${IMAGE}.
+    quiet: true
+  no_log: true
+
+# The exporter image is pinned by digest. The expected value is written out here
+# and is the line ghost-platform db/stack/compose.yml carries on origin/main, so a
+# change to the role's vars alone would fail this check.
+- name: Assert the exporter image is the pinned digest from the source line
+  ansible.builtin.assert:
+    that:
+      - "db1_stack_verify_compose is search('(?m)^    image: prom/mysqld-exporter:v0.20.0@sha256:'
+        ~ 'abed8dac117b4ae5b70757f988e44795935b9a72c3b58d720c67ba688f8cb79e[ ]*$')"
+    fail_msg: The exporter image in the compose file is not the pinned digest.
+    quiet: true
+
+# The exporter's healthcheck must be the mysql_up 1 gate; a weaker one reports a
+# running container that exports nothing (the source file's comment says so).
+- name: Assert the exporter healthcheck is the mysql_up 1 gate
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_compose is search('grep -qx "mysql_up 1"')
+      - db1_stack_verify_compose.count('healthcheck:') == 2
+      - "db1_stack_verify_compose is search('condition: service_healthy')"
+    fail_msg: The compose file does not gate the exporter on mysql_up 1 and a healthy database.
+    quiet: true
+
+# Root and the service accounts are socket-only: the exporter reads the socket,
+# and no service publishes a port. Both containers use the host network.
+- name: Assert the exporter reads the socket and no service publishes a port
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_compose is search('--mysqld.address=unix:///var/run/mysqld/mysqld.sock')
+      - db1_stack_verify_compose is not search('(?m)^\s+ports:')
+      - "db1_stack_verify_compose.count('network_mode: host') == 2"
+    fail_msg: The compose file publishes a port or does not read the exporter's socket.
+    quiet: true
+
+# The MySQL configuration carries the real boundary of the database: the bind
+# address, the TLS requirement, row-based binary logging (per-tenant replay needs
+# it) and the durability of the binary log.
+- name: Assert the MySQL configuration keeps its boundary and its replay settings
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_cnf is search('(?m)^bind-address = 10[.]20[.]1[.]20$')
+      - db1_stack_verify_cnf is search('(?m)^require_secure_transport = ON$')
+      - db1_stack_verify_cnf is search('(?m)^binlog_format = ROW$')
+      - db1_stack_verify_cnf is search('(?m)^sync_binlog = 1$')
+      - db1_stack_verify_cnf is search('(?m)^log_bin = mysql-bin$')
+    fail_msg: The MySQL configuration differs from the boundary and replay settings.
+    quiet: true
+  no_log: true
+
+# The compose file, the configuration and the socket directory have the owners and
+# modes the role states. The socket directory is 0777 by design (see the role).
+- name: Stat the files and directories the role creates
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+  loop:
+    - { path: '{{ db1_stack_compose_path }}', mode: '0644' }
+    - { path: '{{ db1_stack_cnf_directory }}/branchleft.cnf', mode: '0644' }
+    - { path: '{{ db1_stack_db_directory }}', mode: '0755' }
+    - { path: '{{ db1_stack_socket_directory }}', mode: '0777' }
+  register: db1_stack_verify_modes
+
+- name: Assert the stack's files and directories have the owners and modes the role states
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.mode == item.item.mode
+      - item.stat.pw_name == 'root'
+    fail_msg: 'A stack path is not as the role states: {{ item.item.path }}'
+    quiet: true
+  loop: '{{ db1_stack_verify_modes.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+
+# The legacy drop-in is the second writer of the exporter file. The role removes
+# it, and the stack's unit is enabled but not started by this run.
+- name: Stat the legacy drop-in the role removes
+  ansible.builtin.stat:
+    path: '{{ db1_stack_legacy_drop_in }}'
+  register: db1_stack_verify_drop_in
+
+- name: Assert the legacy drop-in is gone
+  ansible.builtin.assert:
+    that:
+      - not db1_stack_verify_drop_in.stat.exists
+    fail_msg: The legacy drop-in that rewrites the exporter file is still present.
+    quiet: true
+
+# The role reads the pin file and never writes it: the content is the fixture the
+# prepare step made, unchanged.
+- name: Assert the role left the database image pin unchanged
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_pin == ('IMAGE=mysql:8.0.43@sha256:' ~ scenario_image_digest) ~ ('%c' | format(10))
+    fail_msg: The role changed the database image pin, which branchleft-deploy owns.
+    quiet: true
+  no_log: true
+
+# ----- The order of the tasks, from the log -----
+
+- name: Read the log of this scenario's Ansible runs for the order of tasks
+  ansible.builtin.set_fact:
+    db1_stack_verify_order_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+  no_log: true
+
+# The legacy drop-in is removed and systemd reloaded before the exporter file is
+# written, so a later restart cannot run the legacy writer. A skipped task still
+# prints its name, which the log shows, so these hold in the container too.
+- name: Assert the legacy drop-in is removed and reloaded before the exporter file is written
+  ansible.builtin.assert:
+    that:
+      - "db1_stack_verify_order_log.find(' : Remove the legacy drop-in file') >= 0"
+      - "db1_stack_verify_order_log.find(' : Remove the legacy drop-in file') < db1_stack_verify_order_log.find(' : Write the exporter credentials file')"
+      - "db1_stack_verify_order_log.find(' : Reload systemd after the legacy drop-in was removed')
+        < db1_stack_verify_order_log.find(' : Write the exporter credentials file')"
+    fail_msg: The legacy drop-in is not removed before the exporter file is written, so one restart could run the legacy writer.
+    quiet: true
+  no_log: true
+
+# The exporter file exists before the compose file is rendered, so the stack is
+# never set up ahead of the file its exporter mounts.
+- name: Assert the exporter file is written before the compose file is rendered
+  ansible.builtin.assert:
+    that:
+      - "db1_stack_verify_order_log.find(' : Write the exporter credentials file') >= 0"
+      - "db1_stack_verify_order_log.find(' : Write the exporter credentials file')
+        < db1_stack_verify_order_log.find(' : Render the compose file the deploy program reads')"
+    fail_msg: The compose file is rendered before the exporter file is written.
+    quiet: true
+  no_log: true
+
+# ----- The source of the included tasks -----
+
+# The role starts, stops, restarts and recreates nothing, and removes no data. The
+# source is read, because a test cannot run docker compose here.
+- name: Read the source of the included task files
+  ansible.builtin.set_fact:
+    db1_stack_verify_part_two_source: >-
+      {{ lookup('ansible.builtin.file', verify_role_dir ~ '/tasks/_compose.yml')
+      ~ lookup('ansible.builtin.file', verify_role_dir ~ '/tasks/_unit.yml') }}
+
+- name: Assert the included tasks run no compose command and start, stop or remove nothing
+  ansible.builtin.assert:
+    that:
+      - "'docker_compose' not in db1_stack_verify_part_two_source"
+      - "'community.docker' not in db1_stack_verify_part_two_source"
+      - "'state: started' not in db1_stack_verify_part_two_source"
+      - "'state: restarted' not in db1_stack_verify_part_two_source"
+      - "'state: stopped' not in db1_stack_verify_part_two_source"
+      - "'compose down' not in db1_stack_verify_part_two_source"
+      - "'state: absent' not in lookup('ansible.builtin.file', verify_role_dir ~ '/tasks/_compose.yml')"
+    fail_msg: The included tasks start, stop, restart or remove something, which this role must not do.
+    quiet: true
+
+# ----- The refusals -----
+
+# Each form of the pin file the deploy program never writes is refused before any
+# task changes the host, at the named task. The case file restores a good pin
+# after each case.
+- name: Make the forms of the database image pin the role must refuse
+  ansible.builtin.set_fact:
+    db1_stack_verify_pin_cases:
+      - name: absent
+        absent: true
+        task: Refuse a database image pin that is absent
+      - name: empty
+        content: ''
+        task: Refuse a database image pin that is not one line of the form the deploy program writes
+      - name: no IMAGE key
+        content: "DATABASE=mysql:8.0.43@sha256:{{ scenario_image_digest }}\n"
+        task: Refuse a database image pin that is not one line of the form the deploy program writes
+      - name: two lines
+        content: "IMAGE=mysql:8.0.43@sha256:{{ scenario_image_digest }}\nIMAGE=mysql:8.0.43@sha256:{{ scenario_image_digest }}\n"
+        task: Refuse a database image pin that is not one line of the form the deploy program writes
+      - name: tag only
+        content: "IMAGE=mysql:8.0.43\n"
+        task: Refuse a database image pin that is not one line of the form the deploy program writes
+      - name: upper-case hex
+        content: "IMAGE=mysql:8.0.43@sha256:{{ scenario_image_digest | upper }}\n"
+        task: Refuse a database image pin that is not one line of the form the deploy program writes
+
+- name: Refuse each form of the database image pin the deploy program does not write
+  ansible.builtin.include_tasks: verify_pin_case.yml
+  loop: '{{ db1_stack_verify_pin_cases }}'
+  loop_control:
+    loop_var: db1_stack_verify_case
+    label: '{{ db1_stack_verify_case.name }}'
+
+# A second compose file beside compose.yml is refused before any change. Compose
+# would read compose.yaml first, and the deploy program checks compose.yml.
+- name: Put a second compose file beside the compose file
+  ansible.builtin.copy:
+    content: "name: db\n"
+    dest: '{{ db1_stack_db_directory }}/compose.yaml'
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Refuse the role beside a second compose file at its named task
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse a second compose file in the database directory
+
+- name: Remove the second compose file
+  ansible.builtin.file:
+    path: '{{ db1_stack_db_directory }}/compose.yaml'
+    state: absent
+
+- name: Read the database image pin again after the refusals
+  ansible.builtin.slurp:
+    src: '{{ db1_stack_image_env_path }}'
+  register: db1_stack_verify_pin_after
+  no_log: true
+
+- name: Assert the database image pin is the good one again after the refusals
+  ansible.builtin.assert:
+    that:
+      - (db1_stack_verify_pin_after.content | b64decode) == ('IMAGE=mysql:8.0.43@sha256:' ~ scenario_image_digest) ~ ('%c' | format(10))
+    fail_msg: The restored database image pin is not the good one.
+    quiet: true
+  no_log: true

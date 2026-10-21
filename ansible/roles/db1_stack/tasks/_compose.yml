@@ -1,0 +1,111 @@
+---
+# The database stack's directories, compose file, MySQL configuration and unit
+# enablement. Included by tasks/main.yml after the exporter file is written.
+#
+# Nothing here starts, stops, restarts or recreates a container, runs docker
+# compose, or removes a volume. The unit is enabled, so it starts at boot, and the
+# compose file is read on the next start. A change to the bind-mounted
+# configuration reaches the running database only at a restart, which this role
+# never triggers; the owner's live steps say so. The root password is not in this
+# role: the compose file reads it from the unit's environment, which the host
+# owns in /etc/branchleft/db.env.
+
+# A directory the stack is installed into. In check mode the directories below are
+# not created, so the template tasks that need them are gated on the stat that
+# follows each creation (ANS-10).
+- name: Create the directory the deploy program installs stacks into
+  ansible.builtin.file:
+    path: '{{ db1_stack_stack_directory }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the database stack's project directory
+  ansible.builtin.file:
+    path: '{{ db1_stack_db_directory }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Look at the database stack's project directory
+  ansible.builtin.stat:
+    path: '{{ db1_stack_db_directory }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_stack_db_directory_stat
+
+- name: Create the directory the MySQL configuration is mounted from
+  ansible.builtin.file:
+    path: '{{ db1_stack_cnf_directory }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: db1_stack_db_directory_stat.stat.exists
+
+- name: Create the run directory that holds the socket directory
+  ansible.builtin.file:
+    path: '{{ db1_stack_db_directory }}/run'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: db1_stack_db_directory_stat.stat.exists
+
+# The socket directory is 0777 on purpose, as docs/RUNBOOK-db.md step 1 says: the
+# database's uid and the host-side accounts that open the socket are unrelated, and
+# the directory holds only the socket.
+- name: Create the socket directory the database and the exporter share
+  ansible.builtin.file:
+    path: '{{ db1_stack_socket_directory }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0777'
+  when: db1_stack_db_directory_stat.stat.exists
+
+- name: Look at the directories the rendered files are written into
+  ansible.builtin.stat:
+    path: '{{ db1_stack_cnf_directory }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_stack_cnf_directory_stat
+
+# The compose file is the one the deploy program checks: it must read the image
+# from ${IMAGE}, which the template does. The role does not run docker compose.
+# Skipped in check mode with a stated reason (ANS-10): the directory it is written
+# to is created by the task above, which check mode does not perform.
+- name: Render the compose file the deploy program reads
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: '{{ db1_stack_compose_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: db1_stack_db_directory_stat.stat.exists
+
+- name: Render the MySQL configuration the database mounts
+  ansible.builtin.template:
+    src: branchleft.cnf.j2
+    dest: '{{ db1_stack_cnf_directory }}/branchleft.cnf'
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - db1_stack_db_directory_stat.stat.exists
+    - db1_stack_cnf_directory_stat.stat.exists
+
+# Enabling is not starting: the unit comes up at boot and only then. Skipped in
+# check mode with a stated reason (ANS-10), and where systemd is not running (see
+# tasks/_unit.yml).
+- name: Enable the database stack's unit, without starting it
+  ansible.builtin.systemd_service:
+    name: '{{ db1_stack_unit }}'
+    enabled: true
+  when:
+    - db1_stack_systemd_running.stat.isdir | default(false)
+    - not ansible_check_mode

@@ -1,17 +1,20 @@
 # db1_stack
 
-This role prepares the database host. This first part installs the host's
-prerequisites (`age` and a MySQL 8.0 client toolchain held to that line) and
-renders the credentials file of the database's metrics exporter from a password
-given at run time. It replaces two hand-run scripts, one that installed the
-prerequisites and one that rendered the credentials file.
+This role prepares the database host and delivers its database stack. Part one
+installs the host's prerequisites (`age` and a MySQL 8.0 client toolchain held to
+that line) and renders the credentials file of the database's metrics exporter
+from a password given at run time. Part two writes the database's compose file
+and MySQL configuration, removes the legacy writer of the exporter file, and
+enables the unit that runs the stack, without starting it. Together they replace
+the hand-run steps that did these jobs: two scripts for part one, and the
+database's runbook steps for part two.
 
 This README is written for a maintainer who is new to the repository. It follows
 the order the standard sets for a role README (ANS-14).
 
 ## What the role does, and what it does not
 
-It does two things on a Debian 13 host.
+It does four groups of things on a Debian 13 host.
 
 1. It installs the host prerequisites. It delivers the MySQL repository as a key
    file, a source file and an apt pin that holds the toolchain to the 8.0 line;
@@ -21,31 +24,34 @@ It does two things on a Debian 13 host.
 2. It writes the exporter's credentials file, `/etc/branchleft/db-exporter.my.cnf`,
    from a password the caller supplies, owned by the account the exporter runs
    as, readable by that account only.
+3. It removes the drop-in that wrote that same file before every start of the
+   stack, `/etc/systemd/system/branchleft-compose@db.service.d/override.conf`, and
+   reloads systemd. This is the second writer, and it is removed before the
+   exporter file is written in the same run.
+4. It renders the database's compose file, `/opt/branchleft/db/compose.yml`, and
+   its MySQL configuration, `/opt/branchleft/db/conf.d/branchleft.cnf`, creates
+   the directories they need, and enables `branchleft-compose@db.service`. It
+   does not start it.
 
-This is part one of two. It does not deliver the compose stack, the systemd
-drop-in, the MySQL configuration or the units that run the database, and it does
-not start or restart anything. A second part adds those and retires the
-runbook steps that do these jobs by hand. The role has not been applied to the
-host: the live run waits on the pull trigger and the gated workflow (see "How it
-is delivered"). After it is applied, the hand-run prerequisites script must not
-be run again: it would put back the repository entry the role removes (see
-"What it changes on a host").
+It does not start, stop, restart or recreate any container, does not run
+`docker compose`, removes no volume and no data, and creates no user. A
+restart of the database is an owner's step, not this role's.
 
-**The role must not be applied to the live host before part two.** A second
-writer of the exporter file exists today: the database stack's systemd drop-in
-(`db/systemd/db.override.conf` in the `ghost-platform` repository) runs
-`render_exporter_my_cnf.py` before every start of the database stack, and that
-script rewrites the same `/etc/branchleft/db-exporter.my.cnf` from the password
-in `db.env`. The drop-in is the legacy writer and this role is the target one.
-Until part two removes the drop-in, the two share the file, and if the password
-this role is given differs from the one in `db.env` the file flips to the other
-value on every restart of the stack. This change touches nothing in
-`ghost-platform`.
+It refuses to run, before it changes anything, when the database image pin
+that `branchleft-deploy` writes is absent or is not the one line that program
+writes, and when a second compose file sits beside `compose.yml`.
 
-It does not decide where the password comes from, create the database account the
-password belongs to, or rotate the password in the database. The role makes the
-file match a password it is given; putting the same password in the database is a
-separate step.
+The role has not been applied to the host. The live run waits on the database
+host's enrolment, which the owner has not yet decided, and on the gated workflow (see
+"How it is delivered"). After it is applied, the hand-run prerequisites script
+must not be run again: it would put back the repository entry the role removes
+(see "What it changes on a host").
+
+It does not decide where the exporter password comes from, create the database
+account the password belongs to, or rotate the password in the database. The
+role makes the file match a password it is given; putting the same password in
+the database is a separate step, and the exporter account itself is in runbook
+section 4, outside this role (see "Named limits").
 
 ## Interface
 
@@ -60,17 +66,22 @@ the inputs when the role starts.
 | `db1_stack_downloads`         | the `libaio1` package file | Pinned downloads: `url`, `dest` and a `sha256:` or `sha512:` `checksum`.                  |
 | `db1_stack_debs`              | the same package file      | Local package files installed by path; each must be the `dest` of a download.             |
 
-**The password is the only secret.** It reaches the role as a variable supplied
-at run time, never as a default and never in a file of this repository. Every task
-that reads, templates or passes it sets `no_log: true`, and `diff: false` where a
-diff would show it (ANS-16). Where the value comes from, and how it reaches a host
-that pulls its commit, is the owner's decision (PRIN-6) and not this role's; until
-it is made, nothing can supply the password on a real host.
+Part two adds no input. Its one secret input, the root password, is not an
+input: see "Where the database's secrets are, and what the role does not read".
+
+**The password is the only secret this role takes.** It reaches the role as a
+variable supplied at run time, never as a default and never in a file of this
+repository. Every task that reads, templates or passes it sets `no_log: true`,
+and `diff: false` where a diff would show it (ANS-16). Where the value comes from,
+and how it reaches a host that pulls its commit, is the owner's decision (PRIN-6)
+and not this role's; until it is made, nothing can supply the password on a real
+host.
 
 The pins that are not inputs (the repository, its suite and component, the key
 digest, the version line, the packages the pin file covers, the exporter's uid and
-the file mode, the password rules) are in [`vars/main.yml`](vars/main.yml), each
-with the reason for it. An inventory value does not change them.
+the file mode, the password rules, the stack's paths, the exporter image digest)
+are in [`vars/main.yml`](vars/main.yml), each with the reason for it. An inventory
+value does not change them.
 
 ## Requirements
 
@@ -81,8 +92,14 @@ with the reason for it. An inventory value does not change them.
   every production host runs.
 - A host that can reach `deb.debian.org` (the download runs on the host, not on
   the controller) and `repo.mysql.com` (the index). The test needs neither.
+- For part two: the host's provisioning has installed `branchleft-compose@.service`
+  and the deploy program `/usr/local/sbin/branchleft-deploy` (both from
+  `shared-infra`), and `branchleft-deploy db` has written
+  `/etc/branchleft/db.image.env` at least once. The role does not install either.
 
 ## What it changes on a host
+
+Part one:
 
 - `/var/cache/db1-stack/` (root, `0755`) and the pinned package files in it
   (root, `0644`).
@@ -103,7 +120,26 @@ with the reason for it. An inventory value does not change them.
   user the exporter image runs as), mode `0400`. Content: `[client]`, then the
   `user`, `password` and `socket` lines.
 
-It starts no service, opens no port and creates no user.
+Part two:
+
+- Removes `/etc/systemd/system/branchleft-compose@db.service.d/override.conf`
+  (the legacy drop-in). Then, on a host where systemd runs, it reloads systemd and
+  writes `/var/cache/db1-stack/legacy-drop-in-reloaded` (root, `0644`, no content).
+  It reloads whenever the file is gone and that marker is absent, so a run that
+  stopped between the two steps reloads on the next run.
+- `/opt/branchleft` (root, `0755`), `/opt/branchleft/db` (root, `0755`),
+  `/opt/branchleft/db/conf.d` (root, `0755`), `/opt/branchleft/db/run` (root,
+  `0755`) and `/opt/branchleft/db/run/mysqld` (root, `0777`, on purpose: the
+  database's uid and the host-side accounts that open the socket are unrelated,
+  and the directory holds only the socket).
+- `/opt/branchleft/db/compose.yml` (root, `0644`) and
+  `/opt/branchleft/db/conf.d/branchleft.cnf` (root, `0644`), rendered from the
+  templates in this role.
+- Enables `branchleft-compose@db.service` on a host where systemd runs. It does
+  not start it.
+
+It reads, and never writes, `/etc/branchleft/db.image.env` (the database image
+pin that `branchleft-deploy` writes), and it never reads `/etc/branchleft/db.env`.
 
 ## How to run its test
 
@@ -130,14 +166,22 @@ Delivery to a host is the gated workflow only (ANS-17): a plan job in check mode
 the approval of the protected environment, a pull of that exact commit of `main`
 on the host, and a second run that must report zero changes. Nothing in this
 repository applies the role by hand, and an author's local run is the container
-test. The live run is waiting on the pull trigger and the gated workflow being
-available for this host; until then this role is tested and not delivered.
+test. The live run is waiting on the database host's enrolment and the gated
+workflow being available for this host; until then this role is tested and not
+delivered.
+
+The first live apply on the database host must not recreate or restart the
+running MySQL. The role does not do either, so the check-mode plan of that run is
+the thing to read for it: a plan that shows the compose file or the configuration
+as changed is expected on the first run, and a plan that shows a container
+recreated or started is not.
 
 ## How to change it safely
 
 - A pin changes in one place and in one change: the value in `vars/main.yml` or
   `defaults/main.yml`, the digest or text the test expects in
-  `molecule/default/verify.yml`, and (for the key) the key file.
+  `molecule/default/verify.yml` or `tasks/verify_part_two.yml`, and (for the key)
+  the key file.
 - Run the whole harness, not only the step you touched. Every control below has a
   test that fails when the control is removed; keep it that way.
 - Never turn `no_log` off to see why a task failed on a real host. Reproduce on a
@@ -146,50 +190,110 @@ available for this host; until then this role is tested and not delivered.
   assertions at the top of `tasks/main.yml`, or the password rules to make a run
   pass. A download that cannot satisfy the first, or a password the second
   refuses, is the thing to fix.
+- Never add a literal digest for the database image to the compose file. The
+  deploy program refuses a compose file that does not read its image from
+  `${IMAGE}`, and a literal would stop the pin file controlling the image (see
+  "Part two: the database stack").
 
-## What it replaces, and why each parameter is set
+## Part two: the database stack
 
-The two hand-run scripts did these jobs with shell and Python on the host: they
-fetched the repository key live, wrote a repository entry, installed packages
-and wrote the credentials file. The role does the same jobs with modules, and
-differs in these ways, each on purpose.
+### The compose file
 
-- **The key is a file of the role, not a fetch.** A key fetched at run time is
-  trusted because of where it came from on that day; a vendored file with a pinned
-  digest is trusted because a human compared it with the vendor's published
-  fingerprint once, and a change to it stops the run. The pattern this role
-  follows (`packages_and_downloads`) forbids the live fetch for that reason.
-- **The repository is a deb822 `.sources` file signed by one named key file**
-  (`Signed-By`), not a key added to the system keyring. The key can then sign this
-  repository only.
-- **The pin file has priority 1001 and covers `mysql-common` too.** A priority above
-  1000 makes apt choose the pinned line even over a newer candidate, and
-  `mysql-common` is shared by all the others: leaving it out would let it move to a
-  newer line and pull the rest with it.
-- **The suite is `bookworm` on a Debian 13 host.** The vendor publishes the 8.0
-  component under that release only.
-- **`libaio1` is a downloaded package file with a pinned sha256**, installed by
-  path, so the apt module is never handed a URL or an unchecked file.
-- **The exporter file is closed before it is written.** A missing file is created
-  empty with its final owner and mode; a file that exists, left wide by an
-  earlier release, is closed by a separate task that sets its owner and mode,
-  because the create task changes nothing for a file that exists. See "What the
-  test proves" below.
-- **What is not carried over from the scripts.** The warning about the retired
-  data-source variable is not carried. `mysqldump --version` and
-  `mysqlbinlog --version` are not run; the role checks the installed package
-  versions instead. The run-time refusal of a key file that carries an extra
-  primary key is not carried: the role compares the digest of the whole key file
-  with the pinned one, and a human fixes the pin. The script's explicit handling
-  of a leftover `.tmp` file is not needed, because Ansible writes through a
-  temporary name of its own.
-- **The password rules are the exporter's, not Ansible's.** The exporter expands a
-  dollar sign, unquotes a double quote and treats a number sign, a semicolon and a
-  backslash as syntax, so any of them makes it send a different password from the
-  one the database holds. The role refuses them, and a password shorter than 20
-  characters, before it writes anything. The refusal messages name the rule and
-  never the value. Every pattern ends in `\Z` and not `$`, because `$` also matches
-  before a final line break.
+`templates/compose.yml.j2` is rendered to `/opt/branchleft/db/compose.yml`. That
+is the name the deploy program checks, and the one the systemd template runs with
+`WorkingDirectory=/opt/branchleft/db`. The role refuses to run while
+`compose.yaml`, `docker-compose.yml` or `docker-compose.yaml` sits in the same
+directory: Compose would read it in place of `compose.yml`.
+
+- The database image is `image: ${IMAGE}`. `branchleft-deploy` writes the digest
+  into `/etc/branchleft/db.image.env`, and the stack's unit reads it as its
+  mandatory environment file. The compose file is the one the deploy program
+  checks, and that program refuses any compose file that does not read its image
+  from `${IMAGE}`. So the role does not write the digest into the file. A literal
+  would stop the pin file controlling the image, make a rollback a no-op, and make
+  the nightly drift check report a difference after every deploy.
+- The compose-wide digest assertion of the `compose_stack` pattern is not used
+  here, for the reason above. The pattern's own README says to copy its shape,
+  not to call it, and `website_app1` made the same decision for the same reason.
+  The role checks the one digest that is pinned inline instead: the exporter's.
+- The exporter image is `prom/mysqld-exporter:v0.20.0@sha256:abed8dac117b4ae5b70757f988e44795935b9a72c3b58d720c67ba688f8cb79e`.
+  That is the line `db/stack/compose.yml` in `ghost-platform` carries on
+  `origin/main` at commit `5e52f78`, read on 21 October. Nothing else writes it.
+- The mysql healthcheck and the exporter healthcheck are the ones the source file
+  has. The exporter's gate is `grep -qx "mysql_up 1"`, not a process check and not
+  an HTTP 200: an exporter that cannot authenticate serves `/metrics` and reports
+  nothing.
+- No service publishes a port. Both containers use the host network, and the root
+  and service accounts connect over the socket only.
+
+### The database image pin
+
+`branchleft-deploy` writes the database image pin with `write_image_env` in
+`hetzner/provision/branchleft_deploy.py`: the file `/etc/branchleft/db.image.env`,
+mode `0600`, owned by root, holding one line, `IMAGE=<reference>`, and a line
+break. The reference is a digest of the form `name@sha256:<64 lower-case hex>`.
+A failed first deploy removes the file (runbook section 3), so the role's first
+check is that it is present.
+
+The role reads the file and never writes it. It refuses, before any change, when
+the file is absent, is empty, has no `IMAGE=` key, has two lines, has a tag
+without a digest, or has upper-case hex. The pattern is
+`^IMAGE=mysql:<tag>@sha256:<64 lower-case hex>\n\Z`. The test derives its fixture
+from the writer's format: the same single line, with a made-up digest and no
+image pulled.
+
+### The unit, and the first live apply
+
+The role enables `branchleft-compose@db.service` and does not start it. Enabling
+means the unit starts at the next boot. Nothing else starts the stack, and the role
+triggers no restart.
+
+A change to the MySQL configuration (`/opt/branchleft/db/conf.d/branchleft.cnf`)
+reaches the running database only when its container restarts. A bind-mounted
+file that changes under a running `mysqld` has no effect until then, and this
+role never restarts it. The owner's live steps say when to restart.
+
+The legacy drop-in is removed before the exporter file is written in the same
+run, and the daemon is reloaded straight after its removal. Order is the control
+here: a systemd that still holds the legacy `ExecStartPre` would run the legacy
+writer on any later restart, and rewrite the exporter file from `db.env`.
+
+The first live apply must not recreate or restart the running MySQL. The role
+cannot do either, and the plan's output is the thing to read for it.
+
+### Where the database's secrets are, and what the role does not read
+
+The root password (`MYSQL_ROOT_PASSWORD`) is in the host's own
+`/etc/branchleft/db.env`. The database's unit reads that file, and the compose
+file reads the root password from the unit's environment. The file is
+hand-written and holds the backup and Object Storage credentials too, so this role
+does not read it, and it takes no root-password input. A second input would be
+a second writer of a value the host already owns, and a value that differed from
+the database would make MySQL unhealthy and the deploy roll back.
+
+Two things change because of this, and the database's runbook must say them:
+
+- `EXPORTER_MYSQL_PWD` in `db.env` is dead. The drop-in that read it is removed,
+  so nothing reads that key. Removing it from `db.env` is an owner's step.
+- The runbook's rotation recipe for the exporter (edit `db.env`, restart the
+  stack) no longer rotates the exporter file. The exporter file is written from
+  `db1_stack_exporter_password`, which the caller supplies. Rotating the exporter
+  password is therefore a change to this role's input, not to `db.env`.
+
+### Two homes until cutover
+
+The compose file and the configuration exist in two places until the owner's live
+cutover: here, as templates, and in `ghost-platform` (`db/stack/compose.yml`,
+`db/stack/conf.d/branchleft.cnf`, `db/systemd/db.override.conf`, the two contract
+tests and `db/RUNBOOK-db.md`). The `ghost-platform` copies are not deleted by this
+change. The drop-in there is the live writer until cutover, so that copy wins.
+
+The divergence was checked against `ghost-platform` commit `5e52f78` (its
+`origin/main` on 21 October). In the rendered output, every non-comment line of
+the compose file and of the configuration is the same as the source. The only
+differences are comments. The commit is recorded here, not in the templates. The
+follow-up that removes the `ghost-platform` copies is filed
+after cutover, and it runs the same comparison again before it deletes anything.
 
 ## What the test proves
 
@@ -198,6 +302,8 @@ table is removed in turn, by a single edit, and the whole harness is run: each
 removal makes a named step fail with the message shown, and the file is restored
 afterwards. A control that does not make the test fail when it is removed is not
 claimed.
+
+Part one:
 
 | Control                                                            | Removed by                                  | The harness then fails at                                                                                                      |
 | ------------------------------------------------------------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
@@ -227,18 +333,34 @@ claimed.
 | The password option is secret in the argument spec                 | deleting `no_log` in `argument_specs.yml`   | verify, "The password option is not required and no_log, or has a default, or the spec holds a sentinel"                       |
 | A second run changes nothing                                       | making the empty-file task rewrite each run | idempotence                                                                                                                    |
 
-Two things the sabotage runs found and the role was changed for:
+Part two. The checks that assert a file's content read the rendered file on the
+instance, so they hold for the file the role wrote, and the refusals run the role
+with the bad input and require the named task to refuse, as part one does.
 
-- Disabling the empty-file task first left every step green: the log check saw
-  only the task's name, which a skipped task still prints. The task now registers
-  its result and the empty-directory case asserts that it changed.
-- Removing `no_log` from the empty-file task also left every step green, so the
-  claim that its output carried a digest of the file was false. The task has no
-  `no_log`, and the scan reads its output on a file that holds the password.
+| Control                                                           | Removed by                                                    | The harness then fails at                                                                                                        |
+| ----------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| The database image pin is one line of the writer's form           | the pattern accepts a tag with no digest (`(@sha256:HEX64)?`) | verify, the tag-only case: "Expected the role to stop at ... it stopped at 'NOTHING: the role accepted the input'"               |
+| A second compose file beside `compose.yml` is refused             | `compose.yaml` removed from `db1_stack_other_compose_names`   | verify, the second-file case: "Expected the role to stop at 'Refuse a second compose file in the database directory'"            |
+| The mysql image is read from `${IMAGE}`                           | (not sabotaged in this change)                                | verify, "Assert the compose file reads the mysql image from the pin file and never a literal"                                    |
+| The exporter image is the pinned digest                           | (not sabotaged in this change)                                | verify, "Assert the exporter image is the pinned digest from the source line"                                                    |
+| The exporter's healthcheck is the `mysql_up 1` gate               | (not sabotaged in this change)                                | verify, "Assert the exporter healthcheck is the mysql_up 1 gate"                                                                 |
+| No service publishes a port, and the exporter reads the socket    | (not sabotaged in this change)                                | verify, "Assert the exporter reads the socket and no service publishes a port"                                                   |
+| The MySQL configuration keeps its boundary and replay settings    | (not sabotaged in this change)                                | verify, "Assert the MySQL configuration keeps its boundary and replay settings"                                                  |
+| The legacy drop-in is removed before the exporter file is written | (not sabotaged in this change)                                | verify, "Assert the legacy drop-in is removed and reloaded before the exporter file is written" (the order is read from the log) |
+| The exporter file is written before the compose file is rendered  | (not sabotaged in this change)                                | verify, "Assert the exporter file is written before the compose file is rendered"                                                |
+| The included tasks start, stop, restart or remove nothing         | (not sabotaged in this change)                                | verify, "Assert the included tasks run no compose command and start, stop or remove nothing"                                     |
+| The role never writes the database image pin                      | (not sabotaged in this change)                                | verify, "Assert the role left the database image pin unchanged"                                                                  |
 
-One control is a second layer and is not independently proven: `diff: false` on
-the write. Removing it alone leaves every step green, because `no_log` already
-hides the diff. ANS-16 asks for both, so both stay.
+The controls marked "not sabotaged in this change" are asserted by verify and
+are not proven by a removal run in this change. The first two rows were removed
+and verify failed at the named step, which the PR body records; the other rows are
+asserted and their removal has not been run. A reviewer should not count them as
+proven.
+
+The source of the included tasks is read, not run: `docker compose` is never run
+in the container, so nothing here proves that the stack starts, that its healthcheck
+gates a deploy, or that the cnf change takes effect. Those are the first live
+apply's checks.
 
 The log scan reads the whole log of every run (verbosity 3): the sentinel text,
 its SHA-1, MD5 and SHA-256, and its base64 form (whole, and as the middle of the
@@ -283,12 +405,20 @@ bot sees it.
   packages carry the real package names with versions made for the test. It does
   not prove that the repository serves the 8.0 line, that the key verifies its
   Release file, or that the pinned `libaio1` file installs on a Debian 13 host.
+- The test's apt cache stamp is made by the prepare step and is valid for one hour
+  (`cache_valid_time`). A run on the same instance after the hour, or after a
+  refusal that failed the index refresh, sees the index as stale and fails at the
+  install task, which the test does not intend. Re-create the instance to run the
+  test from the start.
 - The download runs against a `file://` URL in the test. The real URL, and the
   digest in `defaults/main.yml`, are checked by the download module on a real run
   and by nothing before it.
-- Check mode skips three groups of tasks, each with its reason in the task file:
+- Check mode skips the groups of tasks named in the task files, each with its reason:
   the install of the local package files, the version check of the installed
-  toolchain, and the index refresh. A plan does not show them.
+  toolchain, the index refresh, the directories below the stack's project directory
+  (which check mode does not create), the rendering of the compose file and
+  configuration (which need that directory), the enablement of the unit, and the
+  daemon-reload. A plan does not show them.
 - A write that fails half way cannot be provoked in the container, so the claim
   that a failed write leaves the old file whole rests on Ansible's atomic move, not
   on a test. The `no_log` on the step that computes the password's problems is
@@ -300,9 +430,25 @@ bot sees it.
   cannot watch the filesystem between them. The write moves the new file over
   the old one and the move copies the old file's owner and mode, which is why the
   existing file has to be closed first.
-- The role must not be applied to the live host before part two removes the
-  drop-in that also writes the exporter file (see the top of this README). The
-  password the role is given and the one in `db.env` must be the same until then.
+- The test container has no systemd and no Docker. The daemon-reload, the marker that
+  records it and the unit's enablement are skipped there, because `/run/systemd/system`
+  is absent; no test proves the marker, and the crash case it covers is reviewed,
+  not run. The order of the legacy drop-in against the exporter file is read from the log, which
+  order of the legacy drop-in against the exporter file is read from the log, which
+  shows a skipped task's name. Nothing runs `docker compose`, so the healthcheck,
+  the start order and the cnf change are asserted in the rendered text and are not
+  exercised.
+- The compose file and the MySQL configuration are the same as `ghost-platform`'s
+  except for comments, as checked at commit `5e52f78`. A later change to either
+  side is caught only when someone runs the comparison again. The follow-up that
+  removes the `ghost-platform` copies runs it before it deletes anything.
+- The exporter account is in runbook section 4, outside this role, and the exporter's
+  healthcheck needs it. On a rebuilt database host the role still converges, but the
+  exporter cannot report `mysql_up 1` until section 4 is run by hand, so the stack's
+  healthcheck gate fails. Running section 4 is an owner's live step.
+- The role is not applied to db1 until the owner decides enrolment. When it is, the exporter password the role is given must be the
+  password of the exporter account in the database; a mismatch makes the exporter's
+  healthcheck fail, not the role.
 - The plan limit on a host that was never applied: on a host whose apt index has
   never held the MySQL repository, the task that installs the named packages
   from the index fails even under `--check`, because the package is not known to
