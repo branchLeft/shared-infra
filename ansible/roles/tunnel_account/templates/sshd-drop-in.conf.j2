@@ -1,0 +1,18 @@
+# Written by the tunnel_account role. The tunnel account may hold the one forward
+# in each direction the unit asks for, with a key, and run no command.
+Match User {{ tunnel_account_user }}
+    AuthorizedKeysFile {{ tunnel_account_authorized_keys_file }}
+    AuthenticationMethods publickey
+    AllowTcpForwarding yes
+    PermitListen 127.0.0.1:{{ tunnel_account_replica_tunnel_port }}
+    PermitOpen 127.0.0.1:{{ tunnel_account_replica_metrics_port }}
+    GatewayPorts no
+    AllowAgentForwarding no
+    AllowStreamLocalForwarding no
+    X11Forwarding no
+    PermitTTY no
+    PermitTunnel no
+    PermitUserRC no
+    ForceCommand {{ tunnel_account_nologin }}
+# Ends the Match block, so the lines after this drop-in are not read as part of it.
+Match all

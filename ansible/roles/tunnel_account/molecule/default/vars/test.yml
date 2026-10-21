@@ -1,0 +1,19 @@
+---
+# Test-only inputs, written by prepare.yml into the root-only input files the
+# role reads. Documentation addresses (RFC 5737) stand in for the replica host
+# and the NAT address. The two keys are throwaway public keys whose private
+# halves are not in this repository; each carries a comment, as the files the
+# operator copies from do. db1's subnet is the container's own /24, computed in
+# prepare.yml. Verify and the control cases read these same values.
+tunnel_account_test_inputs:
+  replica_host: 203.0.113.10
+  replica_host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO5p4Gay6NB/EltV8FNQEYPHFsvB6KmCjfpDrLluev5k root@replica-host
+  from_address: 198.51.100.7
+  db1_public_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBcoXN2GaNOHJLh9wu2BxisYSAYOrh59cEfBj/B3HZLj db1-replica-tunnel
+
+# A second set of public values, for the case that changes every input and
+# checks each rendered file follows its input (a value fixed in a template or a
+# task would stay at the first set).
+tunnel_account_test_inputs_varied:
+  replica_host: 192.0.2.77
+  from_address: 203.0.113.99

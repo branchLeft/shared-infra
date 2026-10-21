@@ -1,0 +1,48 @@
+# Installed at /etc/systemd/system/branchleft-db-tunnel.service by
+# 45-install-db-tunnel.sh. db1 dials out; the replica never dials in.
+# See 45-install-db-tunnel.md for each option and the ports.
+[Unit]
+Description=Reverse tunnel publishing db1's MySQL on the replica host's loopback
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/branchleft/db-tunnel/target.env
+User=dbtunnel
+Group=dbtunnel
+NoNewPrivileges=yes
+ExecStart=/usr/bin/ssh -F none -N -T \
+    -i /etc/branchleft/db-tunnel/id_ed25519 \
+    -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes \
+    -o StrictHostKeyChecking=yes -o UpdateHostKeys=no \
+    -o UserKnownHostsFile=/etc/branchleft/db-tunnel/known_hosts \
+    -o GlobalKnownHostsFile=/dev/null \
+    -o ExitOnForwardFailure=yes -o ConnectTimeout=15 \
+    -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+    -o ForwardAgent=no -o ForwardX11=no -o PermitLocalCommand=no \
+    -o ControlMaster=no -o ControlPath=none \
+    -R 127.0.0.1:13306:${DB_TUNNEL_SOURCE_ADDRESS}:3306 \
+    -L ${DB_TUNNEL_SOURCE_ADDRESS}:9105:127.0.0.1:9104 \
+    dbtunnel@${DB_TUNNEL_REPLICA_HOST}
+Restart=always
+RestartSec=5
+RestartSteps=6
+RestartMaxDelaySec=120
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

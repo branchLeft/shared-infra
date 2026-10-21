@@ -1,0 +1,42 @@
+---
+# One control case: a bad value is written to one input file, the named entry
+# point runs, and it must be refused with its own message. The input is put back
+# afterwards, whatever happened. The values are written with no_log: they are
+# the private inputs.
+#
+# Variables: case_file, case_content, case_entry, case_message, case_restore.
+- name: Run the entry point with a bad input and see it refused
+  block:
+    - name: Write the bad input
+      ansible.builtin.copy:
+        content: '{{ case_content }}'
+        dest: '{{ tunnel_account_verify_inputs_dir }}/{{ case_file }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+
+    - name: Run the entry point with the bad input
+      ansible.builtin.include_role:
+        name: branchleft.tunnel_account
+        tasks_from: '{{ case_entry }}'
+
+    - name: Fail if the bad input was accepted
+      ansible.builtin.fail:
+        msg: The role went on with an input it should have refused.
+  rescue:
+    - name: Assert the refusal was this input's own check
+      ansible.builtin.assert:
+        that:
+          - case_message in (ansible_failed_result | string)
+        quiet: true
+        fail_msg: 'The role did not refuse {{ case_file }} with its own message: {{ case_message }}.'
+  always:
+    - name: Put the input back
+      ansible.builtin.copy:
+        content: '{{ case_restore }}'
+        dest: '{{ tunnel_account_verify_inputs_dir }}/{{ case_file }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
