@@ -31,27 +31,6 @@
     mode: '{{ control_plane_env_secret.mode }}'
     force: false
 
-- name: Look at the environment file
-  ansible.builtin.stat:
-    path: '{{ control_plane_env_file }}'
-    get_checksum: false
-  register: control_plane_env_stat
-
-# The condition is the write-once rule: the content is written only while the file
-# is empty, so a file that holds a value is never changed. A run that stopped
-# between the two steps left an empty file, and the next run fills it.
-- name: Write the environment file's content while the file is empty
-  ansible.builtin.copy:
-    content: '{{ control_plane_env_content }}'
-    dest: '{{ control_plane_env_file }}'
-    owner: '{{ control_plane_env_secret.owner }}'
-    group: '{{ control_plane_env_secret.group }}'
-    mode: '{{ control_plane_env_secret.mode }}'
-    force: true
-  no_log: true
-  diff: false
-  when: not control_plane_env_stat.stat.exists or control_plane_env_stat.stat.size == 0
-
 # The master key is written the same way, and never overwritten once it holds a value.
 - name: Create the master key empty, if it is absent
   ansible.builtin.copy:
@@ -62,26 +41,11 @@
     mode: '{{ control_plane_masterkey_secret.mode }}'
     force: false
 
-- name: Look at the master key
-  ansible.builtin.stat:
-    path: '{{ control_plane_masterkey_file }}'
-    get_checksum: false
-  register: control_plane_masterkey_stat
-
-- name: Write the master key's content while the file is empty
-  ansible.builtin.copy:
-    content: '{{ control_plane_masterkey }}'
-    dest: '{{ control_plane_masterkey_file }}'
-    owner: '{{ control_plane_masterkey_secret.owner }}'
-    group: '{{ control_plane_masterkey_secret.group }}'
-    mode: '{{ control_plane_masterkey_secret.mode }}'
-    force: true
-  no_log: true
-  diff: false
-  when: not control_plane_masterkey_stat.stat.exists or control_plane_masterkey_stat.stat.size == 0
-
 # Every run sets the owner, group and mode of both secret files, so a file widened
 # by hand is put back at the next run. The task changes attributes only, never content.
+# It runs after BOTH create-empty tasks and before EVERY fill task: a fill writes
+# through the existing file, which keeps its owner and mode while the content moves,
+# so an attribute left wide until after the fill would expose the content.
 # The stat comes first because check mode creates nothing: the create-empty tasks
 # above leave a file absent in check mode, so there a file still absent is skipped.
 # In a real run the create-empty tasks have made both files, and an absent file
@@ -106,6 +70,45 @@
   loop_control:
     label: '{{ item.item.path }}'
   when: not ansible_check_mode or item.stat.exists
+
+- name: Look at the environment file
+  ansible.builtin.stat:
+    path: '{{ control_plane_env_file }}'
+    get_checksum: false
+  register: control_plane_env_stat
+
+# The condition is the write-once rule: the content is written only while the file
+# is empty, so a file that holds a value is never changed. A run that stopped
+# between the two steps left an empty file, and the next run fills it.
+- name: Write the environment file's content while the file is empty
+  ansible.builtin.copy:
+    content: '{{ control_plane_env_content }}'
+    dest: '{{ control_plane_env_file }}'
+    owner: '{{ control_plane_env_secret.owner }}'
+    group: '{{ control_plane_env_secret.group }}'
+    mode: '{{ control_plane_env_secret.mode }}'
+    force: true
+  no_log: true
+  diff: false
+  when: not control_plane_env_stat.stat.exists or control_plane_env_stat.stat.size == 0
+
+- name: Look at the master key
+  ansible.builtin.stat:
+    path: '{{ control_plane_masterkey_file }}'
+    get_checksum: false
+  register: control_plane_masterkey_stat
+
+- name: Write the master key's content while the file is empty
+  ansible.builtin.copy:
+    content: '{{ control_plane_masterkey }}'
+    dest: '{{ control_plane_masterkey_file }}'
+    owner: '{{ control_plane_masterkey_secret.owner }}'
+    group: '{{ control_plane_masterkey_secret.group }}'
+    mode: '{{ control_plane_masterkey_secret.mode }}'
+    force: true
+  no_log: true
+  diff: false
+  when: not control_plane_masterkey_stat.stat.exists or control_plane_masterkey_stat.stat.size == 0
 
 - name: Create the project directory of the control-plane stack
   ansible.builtin.file:

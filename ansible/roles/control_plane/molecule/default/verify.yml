@@ -253,23 +253,22 @@
 
     # A run that stopped between creating a file empty and writing its content
     # leaves an empty file. The next apply must fill it, and only then.
-    - name: Empty both secret files, as a run that stopped between the two steps leaves them
+    # A run that stopped between the two steps leaves an empty file, and an operator may
+    # have widened it. Both files are emptied AND widened here, so the next apply must
+    # restore their owner and mode and fill them with the new values.
+    - name: Empty both secret files and widen them, as a stopped run and an operator leave them
       ansible.builtin.copy:
         content: ''
-        dest: '{{ item.path }}'
-        owner: '{{ item.owner }}'
-        group: '{{ item.owner }}'
-        mode: '{{ item.mode }}'
+        dest: '{{ item }}'
+        owner: nobody
+        group: nogroup
+        mode: '0644'
         force: true
       loop:
-        - path: '{{ verify_env_file }}'
-          owner: root
-          mode: '0600'
-        - path: '{{ verify_masterkey_file }}'
-          owner: '1000'
-          mode: '0400'
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
       loop_control:
-        label: '{{ item.path }}'
+        label: '{{ item }}'
 
     - name: Apply the role again over the empty files, with different secret values
       ansible.builtin.include_role:
@@ -306,6 +305,7 @@
           - (control_plane_verify_filled.results[1].content | ansible.builtin.b64decode) == ('MASTERKEY-SECOND-' ~ scenario_secret)
           - control_plane_verify_filled_stats.results[0].stat.mode == '0600'
           - control_plane_verify_filled_stats.results[0].stat.pw_name == 'root'
+          - control_plane_verify_filled_stats.results[0].stat.gr_name == 'root'
           - control_plane_verify_filled_stats.results[1].stat.mode == '0400'
           - control_plane_verify_filled_stats.results[1].stat.uid == 1000
           - control_plane_verify_filled_stats.results[1].stat.gid == 1000
@@ -364,3 +364,52 @@
         quiet: true
         fail_msg: A secret appears in the run's log.
       no_log: true
+
+# The owner, group and mode a secret file is created and corrected with come from the
+# entry the lookup finds BY PATH, never by position in the list. This play runs on the
+# controller only. It loads the role's own variables, then reverses the list, so a
+# lookup by position (entry 0 or 1) would hand each file the other file's values and
+# fail here. Its set_fact sets facts on localhost alone and never reaches the instance.
+- name: Check the lookups find each secret file's entry by its path
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    verify_repo: '{{ playbook_dir }}/../../../../../'
+  vars_files:
+    - '{{ verify_repo }}ansible/roles/control_plane/vars/main.yml'
+  tasks:
+    - name: Reverse the secret file list, so that position and path give different entries
+      ansible.builtin.set_fact:
+        control_plane_secret_files: '{{ control_plane_secret_files | reverse | list }}'
+
+    - name: Assert the lookups find each file's entry by path in the reversed list
+      ansible.builtin.assert:
+        that:
+          - control_plane_env_secret.path == control_plane_env_file
+          - control_plane_env_secret.owner == 'root'
+          - control_plane_env_secret.group == 'root'
+          - control_plane_env_secret.mode == '0600'
+          - control_plane_masterkey_secret.path == control_plane_masterkey_file
+          - control_plane_masterkey_secret.owner == '1000'
+          - control_plane_masterkey_secret.group == '1000'
+          - control_plane_masterkey_secret.mode == '0400'
+        quiet: true
+        fail_msg: A lookup took the owner, group or mode of the other secret file.
+
+    - name: Leave only the master key's entry in the list
+      ansible.builtin.set_fact:
+        control_plane_secret_files: '{{ control_plane_secret_files | selectattr("path", "equalto", control_plane_masterkey_file) | list }}'
+
+    - name: Look up the environment file's entry in a list that has none
+      ansible.builtin.set_fact:
+        control_plane_verify_probe: '{{ control_plane_env_secret.owner }}'
+      ignore_errors: true
+      register: control_plane_verify_missing
+
+    - name: Assert a list without the environment file's entry fails the lookup
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_missing is failed
+        quiet: true
+        fail_msg: A lookup for a file with no entry in the list did not fail.
