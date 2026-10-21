@@ -1,13 +1,14 @@
 ---
 # The three halves in the order a live run uses: db1's key, db1's install, then
 # the replica. All three run on this one container for the test; the input files
-# prepare.yml placed stand in for the two real hosts. Facts are gathered: the
-# db1 half finds db1's address on the subnet from them. The control cases that
-# feed bad inputs are in verify.yml, because they change files and this play
-# must report zero changes on its second run (the idempotence step).
+# prepare.yml placed stand in for the two real hosts. Facts are not gathered
+# here, as in the pulled playbooks: the db1 half gathers the network addresses it
+# needs. The control cases that feed bad inputs are in verify.yml, because they
+# change files and this play must report zero changes on its second run (the
+# idempotence step).
 - name: Converge
   hosts: all
-  gather_facts: true
+  gather_facts: false
   tasks:
     - name: Run db1's key stage
       ansible.builtin.include_role:

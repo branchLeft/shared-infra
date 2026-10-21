@@ -11,9 +11,9 @@ db1 dials out; the replica never dials in. One role, four entry points:
 | `teardown`  | either       | Removes the tunnel from the host it runs on. Needs `tunnel_account_teardown_confirm: true`.                                   |
 
 The ports (13306, 3306, 9105, 9104) and paths are constants in `vars/main.yml`,
-not inputs. A caller cannot change them. The play that calls the role must gather
-facts: `db1` finds db1's address on the private subnet from the
-`all_ipv4_addresses` fact. The role needs `ssh` and `ssh-keygen` or the Python
+not inputs. A caller cannot change them. The play that calls the role may run with
+`gather_facts` off: `db1` gathers the network addresses itself and finds db1's
+address on the private subnet from the `all_ipv4_addresses` fact. The role needs `ssh` and `ssh-keygen` or the Python
 `cryptography` library on db1, and the OpenSSH server on the replica host (its
 `sshd_config.d` directory; the role stops if it is missing).
 

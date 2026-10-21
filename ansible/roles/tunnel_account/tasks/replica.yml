@@ -112,6 +112,9 @@
     # Control 3: the settings sshd actually applies to the tunnel account, read
     # back from sshd -T. Each is the one value the role wrote, so a second
     # forward, a command or a wider authentication method fails the read-back.
+    # No Ansible module reports sshd's effective settings, so this reads them
+    # with the command module: argv form, read only, never reported as changed.
+    # The assert below is the narrow comparison ANS-9 allows in place of a module.
     - name: Read the effective sshd settings for the tunnel account
       ansible.builtin.command:
         argv: [sshd, -T, -C, 'user={{ tunnel_account_user }},host=localhost,addr=127.0.0.1']

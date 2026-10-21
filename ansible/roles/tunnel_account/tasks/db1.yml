@@ -38,6 +38,17 @@
       The replica host key must be one line, 'ssh-ed25519 <base64>', as the
       replica host printed it. The key is not shown here.
 
+# The caller's play may run with gather_facts off (the pulled playbooks do), so
+# the role asks for the one fact it uses. It reports no change, and runs under
+# --check. The result lists db1's addresses, so no_log (ANS-16).
+- name: Gather db1's network addresses
+  ansible.builtin.setup:
+    gather_subset:
+      - '!all'
+      - '!min'
+      - network
+  no_log: true
+
 - name: Find db1's address on the private subnet
   ansible.builtin.set_fact:
     tunnel_account_db1_candidates: >-

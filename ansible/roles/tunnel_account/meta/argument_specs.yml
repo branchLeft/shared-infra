@@ -23,8 +23,9 @@ argument_specs:
       db1_subnet_prefix (a private three-octet prefix with a trailing dot, the
       subnet of db1's bind address). Pins the host key, writes the target file,
       installs the tunnel unit, held to its ports and its sha256. Starts or
-      restarts the unit. Refuses a bad input before any change. Needs
-      ansible_facts (gather_facts true), to find db1's address on the subnet.
+      restarts the unit. Refuses a bad input before any change. Gathers db1's
+      network addresses itself, to find the one on the subnet, so the play may
+      run with gather_facts off.
     author: branchLeft
     options: {}
   replica:
