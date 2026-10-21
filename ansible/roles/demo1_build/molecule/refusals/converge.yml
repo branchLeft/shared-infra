@@ -116,6 +116,16 @@
       first_replace: 'broker ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-slot *'
       expect: 'is not what render_slot_sudoers.py renders'
 
+# A rule the generator renders and the host lacks. Nothing in the host's file is
+# unexpected, so a comparison that only looks for extra lines would pass this.
+- name: Refuse a grant with a rule missing
+  ansible.builtin.import_playbook: refused_grant.yml
+  vars:
+    converge_case:
+      name: the first rule removed
+      drop_first: true
+      expect: 'is not what render_slot_sudoers.py renders'
+
 # The same rules in another order: the comparison is of ordered lists, and sorting
 # both sides would pass this.
 - name: Refuse the same rules in another order

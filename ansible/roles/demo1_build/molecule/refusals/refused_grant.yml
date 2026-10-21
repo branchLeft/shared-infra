@@ -12,6 +12,7 @@
 #   append: a line placed after the last rule
 #   first_suffix, last_suffix: text added to the end of the first or last rule
 #   first_replace: a line that replaces the first rule
+#   drop_first: true, which removes the first rule
 #   swap: true, which swaps the first two rules
 # Without an edit the grant is the prepared one and the check must accept it
 # (converge_case.accepted: true), which shows the cases are refused for the edit
@@ -28,6 +29,9 @@
       {%- set rules = converge_rule_lines -%}
       {%- if converge_case.first_replace is defined -%}
       {%- set rules = [converge_case.first_replace] + rules[1:] -%}
+      {%- endif -%}
+      {%- if converge_case.drop_first | default(false) -%}
+      {%- set rules = rules[1:] -%}
       {%- endif -%}
       {%- if converge_case.first_suffix is defined -%}
       {%- set rules = [rules[0] ~ converge_case.first_suffix] + rules[1:] -%}
