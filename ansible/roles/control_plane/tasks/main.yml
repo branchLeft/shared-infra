@@ -26,9 +26,9 @@
   ansible.builtin.copy:
     content: ''
     dest: '{{ control_plane_env_file }}'
-    owner: root
-    group: root
-    mode: '0600'
+    owner: '{{ control_plane_secret_files[0].owner }}'
+    group: '{{ control_plane_secret_files[0].group }}'
+    mode: '{{ control_plane_secret_files[0].mode }}'
     force: false
 
 - name: Look at the environment file
@@ -44,9 +44,9 @@
   ansible.builtin.copy:
     content: '{{ control_plane_env_content }}'
     dest: '{{ control_plane_env_file }}'
-    owner: root
-    group: root
-    mode: '0600'
+    owner: '{{ control_plane_secret_files[0].owner }}'
+    group: '{{ control_plane_secret_files[0].group }}'
+    mode: '{{ control_plane_secret_files[0].mode }}'
     force: true
   no_log: true
   diff: false
@@ -57,9 +57,9 @@
   ansible.builtin.copy:
     content: ''
     dest: '{{ control_plane_masterkey_file }}'
-    owner: '1000'
-    group: '1000'
-    mode: '0400'
+    owner: '{{ control_plane_secret_files[1].owner }}'
+    group: '{{ control_plane_secret_files[1].group }}'
+    mode: '{{ control_plane_secret_files[1].mode }}'
     force: false
 
 - name: Look at the master key
@@ -72,13 +72,40 @@
   ansible.builtin.copy:
     content: '{{ control_plane_masterkey }}'
     dest: '{{ control_plane_masterkey_file }}'
-    owner: '1000'
-    group: '1000'
-    mode: '0400'
+    owner: '{{ control_plane_secret_files[1].owner }}'
+    group: '{{ control_plane_secret_files[1].group }}'
+    mode: '{{ control_plane_secret_files[1].mode }}'
     force: true
   no_log: true
   diff: false
   when: not control_plane_masterkey_stat.stat.exists or control_plane_masterkey_stat.stat.size == 0
+
+# Every run sets the owner, group and mode of both secret files, so a file widened
+# by hand is put back at the next run. The task changes attributes only, never content.
+# The stat comes first because check mode creates nothing: the create-empty tasks
+# above leave a file absent in check mode, so there a file still absent is skipped.
+# In a real run the create-empty tasks have made both files, and an absent file
+# fails here. The file diff holds owner, group and mode only, never content (ANS-16).
+- name: Look at each secret file before its owner, group and mode are set
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+    get_checksum: false
+  loop: '{{ control_plane_secret_files }}'
+  register: control_plane_secret_file_stats
+  loop_control:
+    label: '{{ item.path }}'
+
+- name: Set the owner, group and mode of each secret file on every run
+  ansible.builtin.file:
+    path: '{{ item.item.path }}'
+    state: file
+    owner: '{{ item.item.owner }}'
+    group: '{{ item.item.group }}'
+    mode: '{{ item.item.mode }}'
+  loop: '{{ control_plane_secret_file_stats.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+  when: not ansible_check_mode or item.stat.exists
 
 - name: Create the project directory of the control-plane stack
   ansible.builtin.file:

@@ -20,6 +20,20 @@ control_plane_env_file: /etc/branchleft/control-plane.env
 control_plane_masterkey_file: /etc/branchleft/control-plane/zitadel-masterkey
 control_plane_init_stamp: /etc/branchleft/control-plane/zitadel-init.done
 
+# The two secret files and the owner, group and mode each must have. This is the one
+# home for those values. The create-empty and fill tasks read their owner and mode
+# from entries 0 and 1 by index, so the order is load-bearing. Every run sets the
+# owner, group and mode of both files from this list; no task reads content from it.
+control_plane_secret_files:
+  - path: '{{ control_plane_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+  - path: '{{ control_plane_masterkey_file }}'
+    owner: '1000'
+    group: '1000'
+    mode: '0400'
+
 control_plane_project_dir: /opt/branchleft/control-plane
 
 # The files of the stack directory the role carries. compose.init.yml is

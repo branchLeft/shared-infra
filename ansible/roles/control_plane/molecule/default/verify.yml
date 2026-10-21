@@ -157,6 +157,100 @@
         fail_msg: A second apply with different values replaced the environment file or the master key.
       no_log: true
 
+    # A secret file widened by hand is put back to its declared owner, group and mode
+    # by the next run, and its content is not changed. Both files are widened: the
+    # environment file to nobody:nogroup 0644, the master key to nobody:nogroup 0644.
+    - name: Widen both secret files by hand, as an operator might
+      ansible.builtin.file:
+        path: '{{ item.path }}'
+        owner: nobody
+        group: nogroup
+        mode: '0644'
+      loop:
+        - path: '{{ verify_env_file }}'
+        - path: '{{ verify_masterkey_file }}'
+      loop_control:
+        label: '{{ item.path }}'
+
+    - name: Apply the role again over the widened files, with different secret values
+      ansible.builtin.include_role:
+        name: branchleft.control_plane
+      vars:
+        control_plane_env_content: 'CONTROL_PLANE_DB_ADMIN_PASSWORD=SECOND-{{ scenario_secret }}'
+        control_plane_masterkey: 'MASTERKEY-SECOND-{{ scenario_secret }}'
+
+    - name: Read the mode and owner of both secret files after the run that widened them
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_restored_stats
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert the environment file's owner is root again
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_restored_stats.results[0].stat.pw_name == 'root'
+        quiet: true
+        fail_msg: The environment file's owner was not restored to root.
+
+    - name: Assert the environment file's group is root again
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_restored_stats.results[0].stat.gr_name == 'root'
+        quiet: true
+        fail_msg: The environment file's group was not restored to root.
+
+    - name: Assert the environment file's mode is 0600 again
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_restored_stats.results[0].stat.mode == '0600'
+        quiet: true
+        fail_msg: The environment file's mode was not restored to 0600.
+
+    - name: Assert the master key's owner is uid 1000 again
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_restored_stats.results[1].stat.uid == 1000
+        quiet: true
+        fail_msg: The master key's owner was not restored to uid 1000.
+
+    - name: Assert the master key's group is gid 1000 again
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_restored_stats.results[1].stat.gid == 1000
+        quiet: true
+        fail_msg: The master key's group was not restored to gid 1000.
+
+    - name: Assert the master key's mode is 0400 again
+      ansible.builtin.assert:
+        that:
+          - control_plane_verify_restored_stats.results[1].stat.mode == '0400'
+        quiet: true
+        fail_msg: The master key's mode was not restored to 0400.
+
+    - name: Read the secrets after the widened files were restored
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_restored_content
+      loop_control:
+        label: '{{ item }}'
+      no_log: true
+
+    - name: Assert the widened files kept their first values
+      ansible.builtin.assert:
+        that:
+          - (control_plane_verify_restored_content.results[0].content | ansible.builtin.b64decode) == control_plane_env_content
+          - (control_plane_verify_restored_content.results[1].content | ansible.builtin.b64decode) == control_plane_masterkey
+        quiet: true
+        fail_msg: Restoring the owner and mode of a widened secret file changed its content.
+      no_log: true
+
     # A run that stopped between creating a file empty and writing its content
     # leaves an empty file. The next apply must fill it, and only then.
     - name: Empty both secret files, as a run that stopped between the two steps leaves them
