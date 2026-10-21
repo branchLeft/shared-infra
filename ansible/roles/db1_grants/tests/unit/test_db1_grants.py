@@ -156,6 +156,29 @@ class ProgramRuleTests(unittest.TestCase):
             self.assertIsNone(pattern.match(bad), repr(bad))
 
 
+class GrantSetTests(unittest.TestCase):
+    """The two backup accounts hold exactly the approved global privileges."""
+
+    def test_the_dump_account_holds_exactly_the_approved_set(self) -> None:
+        self.assertEqual(
+            sorted(VARS["db1_grants_backup_privileges"]),
+            sorted(["SELECT", "PROCESS", "LOCK TABLES", "REPLICATION CLIENT", "SHOW VIEW", "EVENT", "TRIGGER", "BACKUP_ADMIN"]),
+        )
+
+    def test_the_ops1_account_holds_exactly_the_approved_set(self) -> None:
+        self.assertEqual(
+            sorted(VARS["db1_grants_ops1_privileges"]),
+            sorted(["SELECT", "SHOW VIEW", "TRIGGER", "LOCK TABLES", "BACKUP_ADMIN"]),
+        )
+
+    def test_neither_set_holds_a_privilege_that_would_widen_the_account(self) -> None:
+        for name in ("db1_grants_backup_privileges", "db1_grants_ops1_privileges"):
+            held = VARS[name]
+            self.assertEqual(len(held), len(set(held)), name)
+            for widening in ("ALL PRIVILEGES", "ALL", "GRANT OPTION", "RELOAD", "SUPER", "FILE", "CREATE USER", "SYSTEM_USER"):
+                self.assertNotIn(widening, held, name)
+
+
 class DerivedNameTests(unittest.TestCase):
     """The Jinja that derives an account, a database and an escaped grant target is the program's."""
 
