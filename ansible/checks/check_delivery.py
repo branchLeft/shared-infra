@@ -249,8 +249,9 @@ def environment_findings(
             f"environment {name} has no required reviewers rule: the apply would not wait"
         )
     for rule in reviewer_rules:
-        if rule.get("prevent_self_review") is not True:
-            findings.append(f"environment {name} allows the person who pushed to approve the apply")
+        # prevent_self_review is not judged either way. The owner is the only approver and
+        # also merges every owner-only path, so requiring it would leave a run he started
+        # with nobody who may approve it. The estate's working environments leave it false.
         listed = rule.get("reviewers")
         reviewers = [as_mapping(entry) for entry in (listed if isinstance(listed, list) else [])]
         if not reviewers:

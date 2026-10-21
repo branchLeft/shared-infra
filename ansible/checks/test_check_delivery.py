@@ -341,12 +341,16 @@ class EnvironmentTests(unittest.TestCase):
             ],
         }
         findings = check_delivery.environment_findings("production", live, NOT_FOUND, None)
-        self.assert_names(findings, "allows the person who pushed")
+        self.assertFalse(any("approve the apply" in finding for finding in findings), findings)
         self.assert_names(findings, "no custom branch policy")
         self.assert_names(findings, "no branch policy list")
 
-    def test_self_review_allowed_is_not_ready(self) -> None:
-        self.assert_names(self.judge(environment(prevent_self_review=False)), "person who pushed")
+    def test_self_review_allowed_is_ready(self) -> None:
+        # The owner is the only approver and also the one who merges, so prevent_self_review
+        # true would leave a run he started with nobody who may approve it. The estate's
+        # working environments (production, production-mail) leave it false.
+        for setting in (False, True):
+            self.assertEqual([], self.judge(environment(prevent_self_review=setting)))
 
     def test_no_reviewer_rule_is_not_ready(self) -> None:
         described = environment()

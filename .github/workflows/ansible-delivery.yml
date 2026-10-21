@@ -11,7 +11,7 @@ name: Ansible delivery
 #
 # The environment is its own, not `production` or `production-mail`: those release the
 # Pulumi applies in ci.yml, and one approval must not release both. The owner creates
-# it before the first run (required reviewer, no self-review, main only, secret
+# it before the first run (required reviewer, main only, secret
 # ssh_apply_key). ansible/checks/check_delivery.py fails on every line of this file
 # that would weaken that, and reads the environment's protection when given the
 # answers of three read-only GitHub calls.
