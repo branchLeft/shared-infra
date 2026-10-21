@@ -288,22 +288,45 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 `absent` means there is nothing to lose. Anything else: edit the file in
 place rather than overwriting it.
 
+The values are written by the `monitoring_stack` Ansible role, not by a shell
+command in this runbook. The role creates `/etc/branchleft` and
+`/etc/branchleft/monitoring.env` if they are absent, closes the file to
+`root:root 0600` before any value is written, and writes these keys, each on
+its own line, leaving the other keys in place:
+
+- `SMTP_USERNAME`, `SMTP_PASSWORD`, `HEALTHCHECKS_PING_URL`,
+  `ALERT_RECIPIENT_EMAIL`, `MAILHOST_PING_URL`, `GRAFANA_ADMIN_PASSWORD`
+  (a change to any of these restarts the stack, if it is running)
+- `SNDS_DATA_URL` (read by the SNDS collector only; a change does not restart the stack). Until the owner's gated run replaces it, step 14 still writes this key by hand, and that hand write is the one that remains.
+
+The owner supplies each value from the password manager. Nothing generates
+one. `GRAFANA_ADMIN_PASSWORD` is read by Grafana only when it first creates its
+database, so changing it later rewrites this file and restarts the stack, but
+does not change the live Grafana password. `NTFY_` keys are written by the
+`ntfy_pager` role, and `STALWART_PROMETHEUS_SECRET` is not written by either
+role: it keeps its own hand step below. The gated run that applies the role is
+an owner step, not a command an agent runs.
+
+**The role does not yet run on a fresh host.** `monitoring_stack` checks that
+`ntfy_pager` has already delivered the renderer, and `ntfy_pager` checks that
+the secrets file is non-empty, so the two roles have to be ordered on a fresh
+host. The playbook that would run them in that order is not in this
+repository yet (see the role's README, "Order").
+
+Check the file's shape without printing it:
+
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
-  install -d -m 0755 -o root -g root /etc/branchleft &&
-  umask 077 &&
-  { printf "SMTP_USERNAME=%s\n" "<SUBMISSION_USERNAME>";
-    printf "SMTP_PASSWORD=%s\n" "<SUBMISSION_PASSWORD>";
-    printf "HEALTHCHECKS_PING_URL=%s\n" "<HEALTHCHECKS_PING_URL>";
-    printf "ALERT_RECIPIENT_EMAIL=%s\n" "<ALERT_RECIPIENT_EMAIL>";
-    printf "MAILHOST_PING_URL=%s\n" "<MAILHOST_PING_URL>";
-    printf "GRAFANA_ADMIN_PASSWORD=%s\n" "$(openssl rand -base64 24)"; } \
-    > /etc/branchleft/monitoring.env &&
-  chmod 0600 /etc/branchleft/monitoring.env &&
-  ls -l /etc/branchleft/monitoring.env'
+  ls -l /etc/branchleft/monitoring.env && grep -c . /etc/branchleft/monitoring.env'
 ```
 
 Expect `-rw------- 1 root root`. Do not print the file.
+
+**`STALWART_PROMETHEUS_SECRET` is a hand step and stays one.** Replace only
+that key, and never with a `>` redirect, which would overwrite the file and
+every key the role wrote. Read the value from `/opt/stalwart/.env` on mx1 as
+`mail/RUNBOOK-mx1-prometheus-metrics.md` describes, then replace the one line
+in place, keeping the file's mode.
 
 ## 4. Copy the monitoring stack directory onto the host
 
@@ -357,20 +380,21 @@ is read as the container-side user, so a root-owned file becomes unreadable.
 `$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
 first if you are entering here independently.
 
-```bash
-hetzner/provision/install-systemd-drop-ins.sh root@"$EDGE1_IPV4"
-```
-
-The script walks every committed `*/systemd/*.override.conf` under
-`hetzner/` -- the same search `drop_in_for()` in
-`test_compose_unit_contract.py` uses -- so it installs `edge.override.conf`
-and `monitoring.override.conf` today, and any future drop-in with no script
-change. It creates each unit's `.service.d` directory, copies the drop-in
-in, and reloads systemd once at the end.
+The `monitoring_stack` role installs both drop-ins: `monitoring.override.conf`
+into `branchleft-compose@monitoring.service.d/` and `edge.override.conf` into
+`branchleft-compose@edge.service.d/`, each as `override.conf`, `root:root` mode
+`0644`, and it reloads systemd when either changed. This step is therefore part
+of the gated run that applies the role (see step 3), not a command an agent runs.
+The role does not restart `edge`, and it does not start `monitoring`.
 
 Neither drop-in takes effect until the affected unit next starts or
 restarts -- step 6 does that for `edge`, and step 7's first-ever start does
 it for `monitoring`.
+
+`hetzner/provision/install-systemd-drop-ins.sh` still exists and still installs
+the same two files for the host-provision path (`RUNBOOK-provision-host.md`).
+It is retired in a follow-up PR, after the first gated run of the role has
+converged on a host.
 
 ## 6. Restart the edge stack
 

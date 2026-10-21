@@ -9,19 +9,84 @@ follows the order the standard sets for a role README (ANS-14).
 
 ## What the role does, and what it does not
 
-It does two things, both with `ansible.builtin.copy`:
+It does four things:
 
-1. It copies the committed files of the stack from `hetzner/monitoring/stack/`
+1. It writes seven values into `/etc/branchleft/monitoring.env`, one key each,
+   the other keys left in place: `SMTP_USERNAME`, `SMTP_PASSWORD`,
+   `HEALTHCHECKS_PING_URL`, `ALERT_RECIPIENT_EMAIL`, `MAILHOST_PING_URL`,
+   `GRAFANA_ADMIN_PASSWORD` and `SNDS_DATA_URL`. The values are inputs (see
+   "Secrets" below). It creates the directory and the file when they are absent,
+   and closes the file to `root:root` `0600` before any value is written.
+2. It copies the committed files of the stack from `hetzner/monitoring/stack/`
    into the project directory on the host: the Compose file, the Prometheus
    configuration and alert rules, the Blackbox configuration, the Grafana
    datasource, the Alertmanager and ntfy templates and the Alertmanager email
    template. They are copied as files. Nothing is rendered, because the Compose
    file holds `${...}` and `$$` for Compose to read and the `.tmpl` files hold
    placeholders a later step fills.
-2. It installs `hetzner/monitoring/systemd/monitoring.override.conf` as
+3. It installs `hetzner/monitoring/systemd/monitoring.override.conf` as
    `/etc/systemd/system/branchleft-compose@monitoring.service.d/override.conf`,
    the destination `hetzner/provision/install-systemd-drop-ins.sh` uses for the
-   instance named `monitoring`, and reloads systemd when that file changed.
+   instance named `monitoring`, and installs
+   `hetzner/monitoring/systemd/edge.override.conf` as
+   `/etc/systemd/system/branchleft-compose@edge.service.d/override.conf`. It
+   reloads systemd when either file changed. No edge role exists yet, so the edge
+   drop-in is installed here; moving it to an edge role is discovered work.
+4. It restarts the monitoring unit when a key the stack reads changed, and only
+   when that unit is already active (see "Restart").
+
+It checks, and does not write, the renderer `render_alertmanager_config.py`. The
+`ntfy_pager` role is its single delivery owner (see "Order").
+
+### Secrets
+
+Each input is `no_log: true`, required, and has no default, so the role never
+reads, generates or stores a value. The role checks, before any write, that each
+input is a non-empty single line, and it names the key in the failure, never the
+value. Every value task is `no_log: true` and `diff: false`, so no value reaches
+the output, a `--diff` run, or the Ansible log. The keys are fixed in
+`vars/main.yml`, so no caller can rename a key the stack reads.
+
+Owner-supplied values:
+
+- `GRAFANA_ADMIN_PASSWORD` is read by Grafana only when Grafana first creates its
+  database. A later change to this input rewrites the file and restarts the
+  stack, if it is active, but does not change the live Grafana password.
+- `SNDS_DATA_URL` is read by `snds-collector.service` only. A change to it does not
+  restart the stack. It expires every 30 days.
+
+`STALWART_PROMETHEUS_SECRET` is not one of the seven. Its hand step stays in the
+runbook, and the role does not write it.
+
+### Restart
+
+The handler restarts `branchleft-compose@monitoring.service` only when one of
+these is true: a key with `restarts_stack: true` changed, or its drop-in changed
+(the drop-in change is a `daemon-reload` and nothing else; the restart is not
+triggered by it). `SNDS_DATA_URL` does not restart the stack. The handler reads the
+unit first and restarts it only when it is `active`, so a host where the unit is
+not running is not started here. Runbook step 7a is the first start.
+
+The role does not restart `edge` (runbook step 6 does that), and it does not
+start `monitoring`.
+
+Known gap: if a play also changes `ntfy_pager`, its `flush_handlers` can restart
+the unit once before this role's handler is queued, so one play can restart the
+unit twice. The role cannot prevent that; a single restart needs a change to
+`ntfy_pager` or to the playbook order. Owner decision.
+
+### Order
+
+On a fresh host the two roles depend on each other, so neither can converge
+alone. `monitoring_stack` needs `ntfy_pager` to have delivered the renderer (it
+fails closed without it). `ntfy_pager` needs the monitoring secrets file to be
+present and non-empty, and this role writes that file. The playbook that would
+run them in an order that works is not in this repository: `ansible/playbooks/edge1.yml`
+wires neither role. Until an owner decision names the order, a fresh host does
+not converge. This is open: owner.
+
+Within one play, the monitoring unit's `ExecStartPre` runs the renderer that
+`ntfy_pager` delivers. This is the dependency the README above states.
 
 ### How it relates to the patterns
 
@@ -50,9 +115,10 @@ Parts of the `compose_stack` recipe this role does not carry, and why:
 
 ### What it does not start or delete
 
-It does not start, restart or recreate anything. The stack is brought up by the
-`branchleft-compose@monitoring` unit, whose drop-in runs the Alertmanager
-renderer first; bringing it up from here, before that renderer has written
+It does not start or recreate anything. It restarts the monitoring unit only as
+described under "Restart", and only when that unit is already active. The stack is
+brought up by the `branchleft-compose@monitoring` unit, whose drop-in runs the
+Alertmanager renderer first; bringing it up from here, before that renderer has written
 `alertmanager/alertmanager.yml`, `ntfy/server.yml` and
 `prometheus/mx1-metrics-password`, would make Docker create a directory at each
 of those bind-mount paths. So the role has no `docker compose` task and no
@@ -69,16 +135,16 @@ decides how.
 ### Not in this role (and who owns it)
 
 - Rendering `alertmanager.yml` and the ntfy `server.yml` from their templates,
-  `render_alertmanager_config.py` (the program stays as code and is installed
-  here by the second part of the monitoring work), the five monitoring secrets
-  and the SNDS URL, the retirement of `hetzner/RUNBOOK-monitoring.md`, and the
-  live apply: the second part of the work on the monitoring ticket.
+  and delivering `render_alertmanager_config.py`: `ntfy_pager` owns both. This
+  role checks the renderer is there and does not write a second copy.
+- Runbook section 14's hand write of `SNDS_DATA_URL` is not retired here, and
+  the monthly rotation keeps that hand step until an owner decision gives the
+  rotation a gated path. The runbook's live apply is owner-gated.
 - `snds-collector.service`, `snds-collector.timer` and `snds/collect_snds_metrics.py`,
   and the `/var/lib/branchleft/snds-exporter` directory node-exporter mounts:
   the exporters and collectors ticket (the SNDS collector with its timer).
-- `edge.override.conf` and `nextcloud1.override.conf`, the drop-ins of the other
-  two stacks: the monitoring work's scope lists them, so the second part carries
-  them. They are not in this role.
+- `nextcloud1.override.conf`: `nextcloud_stack` installs it. This role does not
+  copy it.
 - Docker, the shared Compose unit template and the deploy tooling: the host
   baseline and deploy tooling tickets. The test installs a placeholder for the
   unit template; the real one is not tested here.
@@ -89,8 +155,9 @@ decides how.
 [`defaults/main.yml`](defaults/main.yml) holds their defaults. There is one,
 `monitoring_stack_project_dir`, the stack's project directory. It must equal the
 `WorkingDirectory` the shared unit template derives from the instance name
-(`/opt/branchleft/monitoring`), so a caller has no reason to change it. None of
-the role's variables is a secret and the role handles no secret.
+(`/opt/branchleft/monitoring`), so a caller has no reason to change it. The seven
+secret inputs of "Secrets" are required and have no default. The role never
+generates or stores a value.
 
 `vars/main.yml` holds the constants of the stack (the directories, the files and
 the drop-in directory). They are not inputs; a caller cannot override them.
@@ -123,15 +190,23 @@ file or directory tighter than this makes a container fail.
   `prometheus/alerts.yml` and `prometheus/prometheus.yml`.
 - `/etc/systemd/system/branchleft-compose@monitoring.service.d/`, mode `0755`,
   holding `override.conf`, mode `0644`.
-- One `daemon-reload` of the systemd manager, only when `override.conf` changed,
+- `/etc/systemd/system/branchleft-compose@edge.service.d/`, mode `0755`, holding
+  `override.conf`, mode `0644`, from `files/edge.override.conf`.
+- `/etc/branchleft/`, mode `0755`, if absent, and `/etc/branchleft/monitoring.env`,
+  created with `state: touch` if absent, mode `0600`, `root:root`, with the access
+  and modification times preserved so a second run changes nothing.
+- The seven keys of "Secrets", one line each.
+- One `daemon-reload` of the systemd manager, only when a drop-in changed,
   run before the role returns.
+- A restart of the monitoring unit when "Restart" says so.
 - No port, no user, no firewall rule, no container, no unit start or stop.
 
 ### One home for every file
 
 The role holds no copy of the files it delivers. `files/stack` is a link to
 `hetzner/monitoring/stack` and `files/monitoring.override.conf` is a link to
-`hetzner/monitoring/systemd/monitoring.override.conf`, both relative, so a change
+`hetzner/monitoring/systemd/monitoring.override.conf` and `files/edge.override.conf`
+is a link to `hetzner/monitoring/systemd/edge.override.conf`, all relative, so a change
 to the stack in its own directory is what the next apply delivers, and the role
 cannot drift from it. The images stay pinned by tag and digest inside
 `compose.yml`, where the dependency bot reads them.

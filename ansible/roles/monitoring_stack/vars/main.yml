@@ -26,3 +26,48 @@ monitoring_stack_files:
 # The shared Compose unit template names a stack's drop-in directory after the
 # instance, and the instance of this stack is "monitoring".
 monitoring_stack_dropin_dir: /etc/systemd/system/branchleft-compose@monitoring.service.d
+
+# The monitoring secrets file. The role closes it to root 0600 before any value
+# is written, creating it first when it is absent (see the README, "Secrets").
+monitoring_stack_env_dir: /etc/branchleft
+monitoring_stack_env_file: /etc/branchleft/monitoring.env
+
+# The seven keys this role writes, each mapped to the input that carries its
+# value. The key names are fixed here so no caller can rename a key the stack
+# reads. Keys written by ntfy_pager (the NTFY_ lines) and the STALWART line are
+# not in this map: see the README.
+monitoring_stack_env_keys:
+  - key: SMTP_USERNAME
+    value: '{{ monitoring_stack_smtp_username }}'
+    restarts_stack: true
+  - key: SMTP_PASSWORD
+    value: '{{ monitoring_stack_smtp_password }}'
+    restarts_stack: true
+  - key: HEALTHCHECKS_PING_URL
+    value: '{{ monitoring_stack_healthchecks_ping_url }}'
+    restarts_stack: true
+  - key: ALERT_RECIPIENT_EMAIL
+    value: '{{ monitoring_stack_alert_recipient_email }}'
+    restarts_stack: true
+  - key: MAILHOST_PING_URL
+    value: '{{ monitoring_stack_mailhost_ping_url }}'
+    restarts_stack: true
+  - key: GRAFANA_ADMIN_PASSWORD
+    value: '{{ monitoring_stack_grafana_admin_password }}'
+    restarts_stack: true
+  # Read by snds-collector.service only, not by the stack: a rotation of this
+  # URL must not recreate the stack, so this key does not restart it.
+  - key: SNDS_DATA_URL
+    value: '{{ monitoring_stack_snds_data_url }}'
+    restarts_stack: false
+
+# The renderer runs as the unit's ExecStartPre and is delivered by ntfy_pager,
+# its single delivery owner. This role only checks that it is there.
+monitoring_stack_renderer: /opt/branchleft/monitoring/render_alertmanager_config.py
+
+# The edge stack's drop-in directory, named after the edge instance by the shared
+# Compose unit template. The file is files/edge.override.conf.
+monitoring_stack_edge_dropin_dir: /etc/systemd/system/branchleft-compose@edge.service.d
+
+# The unit of the monitoring stack, the one the restart handler restarts.
+monitoring_stack_unit: branchleft-compose@monitoring.service

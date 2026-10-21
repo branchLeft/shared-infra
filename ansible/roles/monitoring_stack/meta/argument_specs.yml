@@ -1,13 +1,16 @@
 ---
 argument_specs:
   main:
-    short_description: Deliver the monitoring Compose stack's files and its systemd drop-in
+    short_description: Write the monitoring secrets, deliver the monitoring stack and its systemd drop-ins
     description: >-
-      Copies the monitoring stack's committed files (the Compose file, the
-      Prometheus, Blackbox and Grafana configuration, and the Alertmanager and
-      ntfy templates) into the stack's project directory, installs the stack's
-      systemd drop-in and reloads systemd when it changed. It renders no
-      template, writes no secret, starts nothing and removes nothing.
+      Writes seven values into the monitoring secrets file, each under its own key
+      and the other keys left in place, closes that file to root before any value is
+      written, copies the monitoring stack's committed files into the project
+      directory, installs the monitoring and edge systemd drop-ins, and restarts the
+      monitoring stack unit when a key the stack reads changed and the unit is
+      already active. The seven values arrive from the caller; the role never reads,
+      generates or stores one. It starts nothing and removes nothing. The renderer is
+      delivered by ntfy_pager and only checked here.
     author: branchLeft
     options:
       monitoring_stack_project_dir:
@@ -18,3 +21,45 @@ argument_specs:
           instance name, which is /opt/branchleft/monitoring for the instance
           named monitoring. None of the role's variables is a secret.
         default: /opt/branchleft/monitoring
+      monitoring_stack_smtp_username:
+        type: str
+        required: true
+        no_log: true
+        description: The submission username, the value of SMTP_USERNAME. Supplied by the caller; no default.
+      monitoring_stack_smtp_password:
+        type: str
+        required: true
+        no_log: true
+        description: The submission password, the value of SMTP_PASSWORD. Supplied by the caller; no default.
+      monitoring_stack_healthchecks_ping_url:
+        type: str
+        required: true
+        no_log: true
+        description: The Healthchecks.io ping URL, the value of HEALTHCHECKS_PING_URL. Supplied by the caller; no default.
+      monitoring_stack_alert_recipient_email:
+        type: str
+        required: true
+        no_log: true
+        description: The mailbox that receives routine alerts, the value of ALERT_RECIPIENT_EMAIL. Supplied by the caller; no default.
+      monitoring_stack_mailhost_ping_url:
+        type: str
+        required: true
+        no_log: true
+        description: The dedicated Healthchecks.io /fail URL, the value of MAILHOST_PING_URL. Supplied by the caller; no default.
+      monitoring_stack_grafana_admin_password:
+        type: str
+        required: true
+        no_log: true
+        description: >-
+          The Grafana admin password, the value of GRAFANA_ADMIN_PASSWORD. Grafana
+          reads it only when it first creates its database, so a later change here
+          rewrites the file and restarts the stack, and does not change the live
+          password. Supplied by the caller; no default.
+      monitoring_stack_snds_data_url:
+        type: str
+        required: true
+        no_log: true
+        description: >-
+          The SNDS Automated Data Access URL, the value of SNDS_DATA_URL. It is read
+          by the SNDS collector only, not by the stack, and it expires every 30 days.
+          Supplied by the caller; no default.

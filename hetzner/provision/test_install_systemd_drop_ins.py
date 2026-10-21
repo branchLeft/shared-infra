@@ -246,9 +246,14 @@ class RunbookInvokesTheScriptTests(unittest.TestCase):
         end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("## 6. "))
         return "\n".join(lines[start:end])
 
-    def test_step_5_invokes_install_systemd_drop_ins(self):
+    def test_step_5_names_the_monitoring_stack_role_and_not_the_script(self):
+        """Since workspace#2343 part 2, step 5 is the monitoring_stack role, which
+        installs both drop-ins. The script is retired in a follow-up, so the
+        monitoring runbook must no longer call it."""
         body = self._step_5_body()
-        self.assertIn("hetzner/provision/install-systemd-drop-ins.sh", body)
+        self.assertIn("monitoring_stack", body)
+        self.assertNotIn("```bash", body, "step 5 must carry no command for an agent to run")
+        self.assertNotIn("install-systemd-drop-ins.sh root@", body)
 
     def test_step_5_no_longer_hardcodes_a_scp_per_drop_in(self):
         """The old step scp'd each of the two files by name in its own

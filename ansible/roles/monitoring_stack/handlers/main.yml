@@ -1,4 +1,19 @@
 ---
-- name: Reload systemd manager
+# Restarts the monitoring stack only when it is already active. A first bring-up
+# is runbook step 7a, so a host where the unit is not running is not started here.
+# The topic is the same as ntfy_pager's, so one play that changes both roles
+# queues it once per flush, not once per role. The restart does not run inside
+# this role's own tasks (no flush here), so a play that changes ntfy_pager
+# first can still restart it once there (see the README, "Restart").
+- name: Read the monitoring stack unit before a restart
   ansible.builtin.systemd_service:
-    daemon_reload: true
+    name: '{{ monitoring_stack_unit }}'
+  register: monitoring_stack_unit_status
+  listen: Restart the monitoring stack unit
+
+- name: Restart the monitoring stack unit when it is active
+  ansible.builtin.systemd_service:
+    name: '{{ monitoring_stack_unit }}'
+    state: restarted
+  when: monitoring_stack_unit_status.status.ActiveState == 'active'
+  listen: Restart the monitoring stack unit

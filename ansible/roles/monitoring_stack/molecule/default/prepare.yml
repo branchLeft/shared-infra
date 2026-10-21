@@ -1,9 +1,10 @@
 ---
-# Test scaffolding, not role tasks: the shared Compose unit template the
-# drop-in belongs to. The real template is part of the host baseline, which is
-# another role, so the test installs a placeholder with the same name and no
-# real content: a oneshot that runs /bin/true. Systemd needs the template to
-# exist to load an instance and apply a drop-in to it. Nothing starts it.
+# Test scaffolding, not role tasks: the shared Compose unit template the drop-ins
+# belong to. The real template is part of the host baseline, which is another
+# role, so the test installs a placeholder with the same name and no real
+# content: a oneshot that runs /bin/true. Systemd needs the template to exist to
+# load an instance (the monitoring one and the edge one) and apply a drop-in to
+# it. Nothing starts it except where converge.yml says so.
 - name: Prepare
   hosts: all
   gather_facts: false
@@ -25,3 +26,25 @@
     - name: Make systemd read the placeholder
       ansible.builtin.systemd_service:
         daemon_reload: true
+
+    # ntfy_pager is the single delivery owner of the renderer, and it is not run
+    # by this scenario. The check in the role needs a root-owned regular file
+    # there, so the test stands one in, at the path the role's constant names.
+    # This is a stand-in for the check, not a copy of the renderer: its content is
+    # a no-op, and the verify play asserts ntfy_pager's file list still names the
+    # renderer, so a rename there fails the test rather than hiding here.
+    - name: Create the project directory the renderer is delivered into
+      ansible.builtin.file:
+        path: /opt/branchleft/monitoring
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Stand in for the renderer that ntfy_pager delivers
+      ansible.builtin.copy:
+        content: "# test stand-in: not the renderer\n"
+        dest: /opt/branchleft/monitoring/render_alertmanager_config.py
+        owner: root
+        group: root
+        mode: '0644'

@@ -194,3 +194,102 @@
           | ansible.builtin.map(attribute='image') | ansible.builtin.list }}
         verify_image_pattern: '^[^\s@]+@sha256:[0-9a-f]{64}\Z'
       delegate_to: localhost
+
+# The secrets file, the edge drop-in and the renderer path. The secrets file is
+# read with no_log, so no value reaches the output: the check counts the keys.
+- name: Verify the monitoring secrets file, the edge drop-in and the renderer path
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_repo: '{{ playbook_dir }}/../../../../..'
+    verify_env_file: /etc/branchleft/monitoring.env
+    verify_edge_source: '{{ verify_repo }}/hetzner/monitoring/systemd/edge.override.conf'
+    verify_edge_dir: /etc/systemd/system/branchleft-compose@edge.service.d
+    verify_renderer: /opt/branchleft/monitoring/render_alertmanager_config.py
+    verify_dropin_repo: '{{ verify_repo }}/hetzner/monitoring/systemd/monitoring.override.conf'
+    verify_ntfy_vars: '{{ verify_repo }}/ansible/roles/ntfy_pager/vars/main.yml'
+    verify_role_vars: '{{ verify_repo }}/ansible/roles/monitoring_stack/vars/main.yml'
+    verify_env_keys:
+      - SMTP_USERNAME
+      - SMTP_PASSWORD
+      - HEALTHCHECKS_PING_URL
+      - ALERT_RECIPIENT_EMAIL
+      - MAILHOST_PING_URL
+      - GRAFANA_ADMIN_PASSWORD
+      - SNDS_DATA_URL
+  tasks:
+    - name: Read the monitoring secrets file's owner and mode
+      ansible.builtin.stat:
+        path: '{{ verify_env_file }}'
+      register: monitoring_stack_verify_env
+
+    - name: Assert the secrets file is a root-owned regular file with mode 0600
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_env.stat.exists
+          - monitoring_stack_verify_env.stat.isreg
+          - monitoring_stack_verify_env.stat.pw_name == 'root'
+          - monitoring_stack_verify_env.stat.gr_name == 'root'
+          - monitoring_stack_verify_env.stat.mode == '0600'
+        quiet: true
+        fail_msg: '{{ verify_env_file }} is missing, or is not a root-owned regular file with mode 0600.'
+
+    # Counted, never shown: no_log hides the file's content from the output.
+    - name: Read the monitoring secrets file to count its keys
+      ansible.builtin.slurp:
+        src: '{{ verify_env_file }}'
+      register: monitoring_stack_verify_env_content
+      no_log: true
+
+    - name: Assert each key the role writes appears exactly once
+      ansible.builtin.assert:
+        that:
+          - (monitoring_stack_verify_env_content.content | b64decode | ansible.builtin.regex_findall('^' ~ item ~ '=', multiline=True) | length) == 1
+        quiet: true
+        fail_msg: '{{ item }} must appear exactly once in {{ verify_env_file }}.'
+      loop: '{{ verify_env_keys }}'
+      loop_control:
+        label: '{{ item }}'
+      no_log: true
+
+    - name: Read the edge drop-in on the instance and its source in the repository
+      ansible.builtin.stat:
+        path: '{{ verify_edge_dir }}/override.conf'
+        checksum_algorithm: sha256
+      register: monitoring_stack_verify_edge
+
+    - name: Read the edge drop-in's source on the machine that runs the test
+      ansible.builtin.stat:
+        path: '{{ verify_edge_source }}'
+        checksum_algorithm: sha256
+      register: monitoring_stack_verify_edge_src
+      delegate_to: localhost
+
+    - name: Assert the edge drop-in is root-owned, mode 0644, byte for byte its source
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_edge.stat.isreg
+          - monitoring_stack_verify_edge.stat.pw_name == 'root'
+          - monitoring_stack_verify_edge.stat.gr_name == 'root'
+          - monitoring_stack_verify_edge.stat.mode == '0644'
+          - monitoring_stack_verify_edge.stat.checksum == monitoring_stack_verify_edge_src.stat.checksum
+        quiet: true
+        fail_msg: '{{ verify_edge_dir }}/override.conf differs from {{ verify_edge_source }}, or is not a root-owned 0644 file.'
+
+    # The renderer's path is held in three places: the monitoring drop-in's
+    # ExecStartPre, ntfy_pager's delivery list, and the role's constant. Each one
+    # is asserted against the others here, so a rename in one fails the test.
+    - name: Read the three places the renderer's path and name are held
+      ansible.builtin.set_fact:
+        monitoring_stack_verify_dropin_text: "{{ lookup('ansible.builtin.file', verify_dropin_repo) }}"
+        monitoring_stack_verify_ntfy: "{{ lookup('ansible.builtin.file', verify_ntfy_vars) | ansible.builtin.from_yaml }}"
+        monitoring_stack_verify_role: "{{ lookup('ansible.builtin.file', verify_role_vars) | ansible.builtin.from_yaml }}"
+
+    - name: Assert the three places agree on the renderer's path
+      ansible.builtin.assert:
+        that:
+          - ('ExecStartPre=/usr/bin/python3 ' ~ verify_renderer) in monitoring_stack_verify_dropin_text
+          - "'render_alertmanager_config.py' in monitoring_stack_verify_ntfy.ntfy_pager_files"
+          - monitoring_stack_verify_role.monitoring_stack_renderer == verify_renderer
+        quiet: true
+        fail_msg: The renderer's path differs between the monitoring drop-in, ntfy_pager's file list and the role's constant.
