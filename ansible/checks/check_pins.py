@@ -99,13 +99,15 @@ HEADER_FACTS = (
     ("--python-version", r"--python-version \d+\.\d+"),
 )
 
+# The pip the lock-reader parity test asks: one hashed line in its own file, outside the lock.
+PIP_PIN_FILE = Path("checks") / "pip-requirements.txt"
+PIP_PIN = re.compile(rf"pip==(?P<version>{VERSION}) +--hash=sha256:[0-9a-f]{{64}}", re.ASCII)
+
 LINT_REPOSITORY = "https://github.com/ansible/ansible-lint"
-# Where Dependabot must watch the lock: it is the only thing that raises a bump
-# of the package that carries the collections. The `uv` ecosystem is the one that
-# recompiles a `uv pip compile` lock from requirements.in; `pip` would run
-# pip-compile, which cannot write a universal lock.
-UPDATE_ECOSYSTEM = "uv"
-UPDATE_DIRECTORY = "/ansible"
+# Where Dependabot must watch: it is the only thing that raises a bump. The `uv` ecosystem
+# recompiles the `uv pip compile` lock from requirements.in (`pip` would run pip-compile, which
+# cannot write a universal lock); the `pip` ecosystem reads the one-line pip pin.
+UPDATE_ROUTES = (("uv", "/ansible"), ("pip", "/ansible/checks"))
 # Anything that makes a copy of a collection live in git hides it from the lock.
 COPY_SUFFIXES = (".tar.gz", ".tgz", ".tar")
 
@@ -266,22 +268,52 @@ def check_no_copies(ansible_dir: Path) -> list[str]:
     return [f"{name} is a copy of third-party code; the lock carries collections" for name in found]
 
 
+def read_pip_pin(path: Path) -> tuple[str | None, list[str]]:
+    """Return the pip version a pin file pins, and a finding for each way it is not that alone.
+
+    The file is exactly one requirement, `pip==X.Y.Z` with one sha256, and comments. The lock
+    reader of the install program reads it, so a continuation or a second hash is read as pip does.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        return None, [f"{path.name} cannot be read: {type(error).__name__}"]
+    try:
+        check_lock_encoding(data)
+    except RUNTIME.Refusal as refusal:
+        return None, [f"{path.name} {refusal.reason.value} ({refusal.detail})"]
+    try:
+        lines = logical_lines(data.decode("utf-8"))
+    except UnicodeDecodeError:
+        return None, [f"{path.name} is not UTF-8 text"]
+    if len(lines) != 1:
+        return None, [f"{path.name} must hold exactly one requirement line, it holds {len(lines)}"]
+    number, line = lines[0]
+    match = PIP_PIN.fullmatch(line)
+    if match is None:
+        return None, [f"{path.name} line {number} is not pip==version with one sha256: {line!r}"]
+    return match["version"], []
+
+
 def check_dependabot(config: Path) -> list[str]:
-    """Check Dependabot is set to watch the lock, so an upstream release raises a pull request."""
+    """Check Dependabot watches the lock and the pip pin, so a new release raises a pull request."""
     document, problem = load_yaml(config)
     if problem is not None:
         return [problem]
     updates = document.get("updates") if isinstance(document, dict) else None
-    entries = updates if isinstance(updates, list) else []
-    for entry in entries:
-        if (
-            isinstance(entry, dict)
-            and entry.get("package-ecosystem") == UPDATE_ECOSYSTEM
-            and entry.get("directory") == UPDATE_DIRECTORY
+    entries = (
+        [entry for entry in updates if isinstance(entry, dict)] if isinstance(updates, list) else []
+    )
+    return [
+        f"{config.name} has no scheduled {ecosystem} update for {directory}"
+        for ecosystem, directory in UPDATE_ROUTES
+        if not any(
+            entry.get("package-ecosystem") == ecosystem
+            and entry.get("directory") == directory
             and isinstance(entry.get("schedule"), dict)
-        ):
-            return []
-    return [f"{config.name} has no scheduled {UPDATE_ECOSYSTEM} update for {UPDATE_DIRECTORY}"]
+            for entry in entries
+        )
+    ]
 
 
 def lint_hook_revs(config: Path) -> tuple[list[str], list[str]]:
@@ -346,6 +378,7 @@ def run_checks(root: Path) -> tuple[list[str], list[str]]:
     findings.extend(check_provenance(ansible_dir, pins))
     findings.extend(check_no_galaxy_collections(ansible_dir / "requirements.yml"))
     findings.extend(check_no_copies(ansible_dir))
+    findings.extend(read_pip_pin(ansible_dir / PIP_PIN_FILE)[1])
     findings.extend(check_dependabot(root / ".github" / "dependabot.yml"))
     scenario_findings, scenarios = check_scenarios(ansible_dir)
     findings.extend(scenario_findings)

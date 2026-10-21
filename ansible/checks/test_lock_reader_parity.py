@@ -5,6 +5,7 @@ this file with a message; it is never skipped. The reasoning: ansible/checks/REA
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import importlib
 import importlib.metadata
@@ -13,8 +14,10 @@ import re
 import shutil
 import tempfile
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
+from unittest import mock
 
 import check_pins
 
@@ -57,25 +60,30 @@ class OracleUnavailable(Exception):  # noqa: N818 - the word for it in this file
     """pip's req_file module is not where, or what, this file expects."""
 
 
-PIP_PIN = Path(__file__).resolve().parent / "pip-requirements.txt"
-PIP_PIN_LINE = re.compile(r"^pip==(?P<version>[0-9][^\s\\]*)", re.MULTILINE)
+PIP_PIN = ROOT / "ansible" / check_pins.PIP_PIN_FILE
 
 
 def pinned_pip() -> str:
     """Return the pip version that pip-requirements.txt pins, the one this oracle was written for.
 
+    The file is read on every call, by check_pins, which also holds its shape: no copy of the
+    version lives in this file.
+
     Raises:
-        OracleUnavailable: The file does not pin pip.
+        OracleUnavailable: The file is not exactly one pip pin.
     """
-    match = PIP_PIN_LINE.search(PIP_PIN.read_text(encoding="utf-8"))
-    if match is None:
-        message = f"{PIP_PIN.name} does not pin pip, so the oracle has no version to check"
+    version, findings = check_pins.read_pip_pin(PIP_PIN)
+    if version is None:
+        message = f"the oracle has no pip version to check: {'; '.join(findings)}"
         raise OracleUnavailable(message)
-    return match.group("version")
+    return version
 
 
 def load_oracle() -> ModuleType:
     """Return pip's req_file module, after checking that it is the pinned pip.
+
+    The version is compared first, before any pip internal is imported or probed, so a wrong pip
+    is reported by its version and not by the function it lacks.
 
     Raises:
         OracleUnavailable: The pip is not the pinned one, or the module, or a function this
@@ -443,6 +451,88 @@ class ParityTests(unittest.TestCase):
                         any("is not name==version" in finding for finding in about_the_lock),
                         about_the_lock,
                     )
+
+
+class OracleVersionTests(unittest.TestCase):
+    """The oracle refuses any pip but the pinned one, by version, before it asks pip anything.
+
+    Each test patches the version the oracle sees, so none needs a second pip installed.
+    """
+
+    @contextlib.contextmanager
+    def seen_as(self, version: str) -> Iterator[None]:
+        """Make the oracle see ``version`` as the running pip's."""
+        pip = importlib.import_module("pip")
+        with mock.patch.object(pip, "__version__", version):
+            yield
+
+    def pin_file(self, text: str) -> Path:
+        """Return a pin file holding ``text``, which load_oracle reads in place of the real one."""
+        directory = Path(tempfile.mkdtemp(prefix="pip-pin-test-"))
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = directory / "pip-requirements.txt"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_a_different_pip_fails_naming_both_versions(self) -> None:
+        pinned = pinned_pip()
+        with self.seen_as("0.0.1"), self.assertRaises(OracleUnavailable) as raised:
+            load_oracle()
+        self.assertIn(pinned, str(raised.exception))
+        self.assertIn("0.0.1", str(raised.exception))
+        # Never a skip: a skipped oracle would read as a pass.
+        self.assertFalse(issubclass(OracleUnavailable, unittest.SkipTest))
+
+    def test_the_pinned_pip_is_accepted(self) -> None:
+        # The control of the test above: the comparison does not refuse every version.
+        with self.seen_as(pinned_pip()):
+            self.assertEqual("pip._internal.req.req_file", load_oracle().__name__)
+
+    def test_the_version_is_compared_before_any_pip_internal_is_imported_or_probed(self) -> None:
+        # A wrong pip that also lacks a function must be reported by its version, not by the
+        # attribute error the CI run showed.
+        req_file = importlib.import_module("pip._internal.req.req_file")
+        imported: list[str] = []
+        real_import = importlib.import_module
+
+        def recording(name: str, package: str | None = None) -> ModuleType:
+            imported.append(name)
+            return real_import(name, package)
+
+        with mock.patch.dict(vars(req_file)), self.seen_as("0.0.1"):
+            vars(req_file).pop("_decode_req_file", None)
+            with (
+                mock.patch.object(importlib, "import_module", recording),
+                self.assertRaises(OracleUnavailable) as raised,
+            ):
+                load_oracle()
+        self.assertEqual([], [name for name in imported if name.startswith("pip._internal")])
+        self.assertIn("0.0.1", str(raised.exception))
+        self.assertNotIn("_decode_req_file", str(raised.exception))
+
+    def test_the_version_is_read_from_the_pin_file_each_time(self) -> None:
+        # A literal in this file would be a second home that drifts from the file CI installs.
+        running = pinned_pip()
+        other = self.pin_file(f"pip==9.9.9 \\\n    --hash=sha256:{HASH}\n")
+        with (
+            mock.patch.dict(globals(), {"PIP_PIN": other}),
+            self.seen_as(running),
+            self.assertRaises(OracleUnavailable) as raised,
+        ):
+            load_oracle()
+        self.assertIn("9.9.9", str(raised.exception))
+        self.assertIn(running, str(raised.exception))
+
+    def test_a_pin_file_that_does_not_pin_pip_fails(self) -> None:
+        running = pinned_pip()
+        empty = self.pin_file("# nothing is pinned here\n")
+        with (
+            mock.patch.dict(globals(), {"PIP_PIN": empty}),
+            self.seen_as(running),
+            self.assertRaises(OracleUnavailable) as raised,
+        ):
+            load_oracle()
+        self.assertIn("no pip version to check", str(raised.exception))
 
 
 if __name__ == "__main__":

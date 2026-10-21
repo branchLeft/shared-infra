@@ -97,7 +97,15 @@ LOCK_INSTALL = re.compile(
     r"(?:\bpip3?\"?|\buv pip)\s+(?:install|download|sync)\b.*requirements\.txt"
 )
 WHEELS_ONLY = "--only-binary=:all:"
+HASHES = "--require-hashes"
 README = ANSIBLE / "README.md"
+# The lock and the pip that the parity oracle asks, as the workflow and the recipe name them. The
+# pin is installed first, in both tool jobs and in the recipe, so no environment runs the pip
+# that the runner image happens to bundle.
+LOCK_PATH = "ansible/requirements.txt"
+PIN_PATH = "ansible/checks/pip-requirements.txt"
+TOOL_JOBS = ("lint", "shard")
+JOB_HEADER = re.compile(r"^  (?P<name>[A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
 
 
 def lock_installs(text: str) -> list[str]:
@@ -118,6 +126,47 @@ def sdist_reachable_lines(text: str) -> list[str]:
     fetched from the index with no hash. --only-binary=:all: removes the build.
     """
     return [line for line in lock_installs(text) if WHEELS_ONLY not in line]
+
+
+def lock_lines_without_their_pin(text: str) -> list[str]:
+    """Return the lock installs and downloads not immediately preceded by the same one for the pin.
+
+    The pinned pip must be installed before the lock, in the same environment and in the same
+    way, so its twin is the lock line with the file swapped: the same pip, the same hash and
+    wheels-only flags, the same offline options. A lock line with another line before it, or
+    none, is returned.
+    """
+    lines = lock_installs(text)
+    return [
+        line
+        for index, line in enumerate(lines)
+        if PIN_PATH not in line
+        and (index == 0 or lines[index - 1] != line.replace(LOCK_PATH, PIN_PATH))
+    ]
+
+
+def workflow_jobs(text: str) -> dict[str, str]:
+    """Return the text of each job of the workflow, by the job's key."""
+    body = text.partition("\njobs:\n")[2]
+    headers = list(JOB_HEADER.finditer(body))
+    ends = [header.start() for header in headers[1:]] + [len(body)]
+    return {
+        header["name"]: body[header.end() : end] for header, end in zip(headers, ends, strict=True)
+    }
+
+
+def tool_job_findings(job: str) -> list[str]:
+    """Return what is wrong with how a job installs its tools: the pinned pip, then the lock."""
+    installs = lock_installs(job)
+    findings = [] if len(installs) == 2 else [f"{len(installs)} installs, not the pin and lock"]
+    for line in installs:
+        findings.extend(
+            f"{flag} is missing from: {line}" for flag in (HASHES, WHEELS_ONLY) if flag not in line
+        )
+    findings.extend(
+        f"no pinned pip install just before: {line}" for line in lock_lines_without_their_pin(job)
+    )
+    return findings
 
 
 def readmes_outside_the_recipe() -> list[Path]:
@@ -192,15 +241,74 @@ class WorkflowPythonStepsTest(unittest.TestCase):
 
     def test_the_install_scan_finds_the_commands_it_is_meant_to_find(self) -> None:
         # A control: a scan that matched nothing would make the next two tests pass. Four: the
-        # lock and the pinned pip, each installed in both tool environments.
+        # pinned pip and the lock, each installed in both tool environments. In the recipe, eight:
+        # the same two lines in each of its four places (install, download, offline install).
         self.assertEqual(4, len(lock_installs(WORKFLOW)))
-        self.assertLessEqual(3, len(lock_installs(README.read_text("utf-8"))))
+        self.assertLessEqual(8, len(lock_installs(README.read_text("utf-8"))))
 
     def test_every_workflow_install_of_the_lock_is_wheels_only(self) -> None:
         self.assertEqual([], sdist_reachable_lines(WORKFLOW))
 
     def test_every_readme_install_of_the_lock_is_wheels_only(self) -> None:
         self.assertEqual([], sdist_reachable_lines(README.read_text(encoding="utf-8")))
+
+    def test_the_scan_finds_the_jobs_that_install_the_tools(self) -> None:
+        # A control: an empty split would make the next test pass, and a third job that
+        # installs the lock would be a tool environment this guard never looked at.
+        jobs = workflow_jobs(WORKFLOW)
+        self.assertLessEqual({"discover", "lint", "shard", "roles"}, jobs.keys())
+        self.assertEqual(set(TOOL_JOBS), {name for name, job in jobs.items() if lock_installs(job)})
+
+    def test_each_tool_job_installs_the_pinned_pip_and_then_the_lock(self) -> None:
+        # The shard job never runs the parity oracle, so only this test notices its pin is gone.
+        jobs = workflow_jobs(WORKFLOW)
+        for name in TOOL_JOBS:
+            with self.subTest(job=name):
+                self.assertEqual([], tool_job_findings(jobs[name]))
+                installs = lock_installs(jobs[name])
+                self.assertEqual([PIN_PATH in line for line in installs], [True, False])
+
+    def test_a_tool_job_that_does_not_pin_pip_first_is_found(self) -> None:
+        # The controls of the test above: the job as it should be, and each way to break it.
+        pip = '"$RUNNER_TEMP/ansible-venv/bin/pip"'
+        flags = f"{HASHES} {WHEELS_ONLY}"
+        pin = f"{pip} install --require-virtualenv {flags} -r {PIN_PATH}"
+        lock = f"{pip} install --require-virtualenv {flags} -r {LOCK_PATH}"
+
+        def job(*commands: str) -> str:
+            return "".join(f"      - run: '{command}'\n" for command in commands)
+
+        self.assertEqual([], tool_job_findings(job(pin, lock)))
+        broken = {
+            "no pin": job(lock),
+            "pin after the lock": job(lock, pin),
+            "pin without the wheels flag": job(pin.replace(WHEELS_ONLY, ""), lock),
+            "pin without the hash flag": job(pin.replace(HASHES, ""), lock),
+            "pin in another environment": job(pin.replace("ansible-venv", "other-venv"), lock),
+            "lock installed twice": job(pin, lock, lock),
+        }
+        for label, text in broken.items():
+            with self.subTest(case=label):
+                self.assertNotEqual([], tool_job_findings(text))
+
+    def test_every_readme_install_of_the_lock_follows_the_pinned_pip(self) -> None:
+        # The recipe a developer follows builds the same venv as CI: without the pin, the
+        # parity test in this directory fails on the pip that ensurepip happens to bundle.
+        text = README.read_text(encoding="utf-8")
+        self.assertEqual([], lock_lines_without_their_pin(text))
+        pins = [line for line in lock_installs(text) if PIN_PATH in line]
+        self.assertLessEqual(4, len(pins))
+
+    def test_a_lock_line_with_no_pin_just_before_it_is_found(self) -> None:
+        # The controls of the test above, on the recipe's own lines.
+        lines = lock_installs(README.read_text(encoding="utf-8"))
+        self.assertEqual([], lock_lines_without_their_pin("\n".join(lines)))
+        for index, line in enumerate(lines):
+            if PIN_PATH not in line:
+                continue
+            without = "\n".join(lines[:index] + lines[index + 1 :])
+            with self.subTest(removed=line):
+                self.assertNotEqual([], lock_lines_without_their_pin(without))
 
     def test_every_other_readme_points_at_the_one_install_recipe(self) -> None:
         # Every README under ansible/ is scanned, with or without the hash flag, so a copy of

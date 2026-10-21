@@ -29,7 +29,10 @@ DEPENDABOT = (
     "    schedule:\n      interval: 'weekly'\n"
     "  - package-ecosystem: 'uv'\n    directory: '/ansible'\n"
     "    schedule:\n      interval: 'weekly'\n"
+    "  - package-ecosystem: 'pip'\n    directory: '/ansible/checks'\n"
+    "    schedule:\n      interval: 'weekly'\n"
 )
+PIP_PIN = f"# the pip the parity test asks\npip==26.1.2 \\\n    {HASH}\n"
 EMPTY_COLLECTIONS = "collections: []\n"
 LINT_HOOK = (
     "repos:\n  - repo: https://github.com/ansible/ansible-lint\n    rev: {rev}\n"
@@ -81,6 +84,8 @@ class PinCase(unittest.TestCase):
         self.put_lock(lock_text())
         self.put_input(input_text())
         (self.ansible / "requirements.yml").write_text(EMPTY_COLLECTIONS, encoding="utf-8")
+        (self.ansible / "checks").mkdir()
+        self.put_pip_pin(PIP_PIN)
         (self.root / ".github" / "dependabot.yml").write_text(DEPENDABOT, encoding="utf-8")
         (self.root / ".pre-commit-config.yaml").write_text(LOCAL_ONLY, encoding="utf-8")
 
@@ -91,6 +96,14 @@ class PinCase(unittest.TestCase):
     def put_input(self, text: str) -> None:
         """Replace requirements.in."""
         (self.ansible / "requirements.in").write_text(text, encoding="utf-8")
+
+    def put_pip_pin(self, text: str | bytes) -> None:
+        """Replace checks/pip-requirements.txt."""
+        path = self.ansible / "checks" / "pip-requirements.txt"
+        if isinstance(text, bytes):
+            path.write_bytes(text)
+        else:
+            path.write_text(text, encoding="utf-8")
 
     def findings(self) -> list[str]:
         """Return every finding for the tree as it now stands."""
@@ -404,6 +417,63 @@ class DependabotTests(PinCase):
         """No configuration means no update route."""
         (self.root / ".github" / "dependabot.yml").unlink()
         self.assert_found("dependabot.yml cannot be read as YAML")
+
+    def test_missing_pip_entry_is_refused(self) -> None:
+        """The pip pin is outside the lock, so only its own entry raises a bump of it."""
+        self.put(DEPENDABOT.split("  - package-ecosystem: 'pip'")[0])
+        self.assert_found("dependabot.yml has no scheduled pip update for /ansible/checks")
+        self.assertFalse(any("uv update" in finding for finding in self.findings()))
+
+    def test_pip_entry_for_another_directory_is_refused(self) -> None:
+        """An entry for ansible/ itself does not read the file under ansible/checks/."""
+        self.put(DEPENDABOT.replace("'/ansible/checks'", "'/ansible'"))
+        self.assert_found("dependabot.yml has no scheduled pip update for /ansible/checks")
+
+    def test_pip_entry_without_a_schedule_is_refused(self) -> None:
+        """An entry with no schedule watches nothing."""
+        self.put(DEPENDABOT.rsplit("    schedule:\n      interval: 'weekly'\n", 1)[0])
+        self.assert_found("dependabot.yml has no scheduled pip update for /ansible/checks")
+
+
+class PipPinTests(PinCase):
+    """The pip pin is one `pip==X.Y.Z` line with one sha256, so Dependabot and the test read it."""
+
+    def test_the_version_is_read_from_the_file(self) -> None:
+        """The control case: the shape the repository writes, with a comment and a continuation."""
+        pin = self.ansible / "checks" / "pip-requirements.txt"
+        self.assertEqual(("26.1.2", []), check_pins.read_pip_pin(pin))
+
+    def test_a_pin_that_is_not_exactly_one_hashed_pip_is_refused(self) -> None:
+        for label, text in {
+            "no hash": "pip==26.1.2\n",
+            "two hashes": f"pip==26.1.2 \\\n    {HASH} \\\n    {OTHER_HASH}\n",
+            "a range": f"pip>=26.1.2 {HASH}\n",
+            "a bare name": f"pip {HASH}\n",
+            "another package": f"setuptools==80.0.0 {HASH}\n",
+            "a second requirement": f"pip==26.1.2 {HASH}\nsetuptools==80.0.0 {HASH}\n",
+            "an option": f"pip==26.1.2 {HASH}\n--index-url=https://evil.example/simple\n",
+            "an option joined on": f"pip==26.1.2 {HASH} \\\n--index-url=https://evil.example/simple\n",
+            "a marker": f"pip==26.1.2 ; python_version >= '3.10' {HASH}\n",
+            "a short hash": "pip==26.1.2 --hash=sha256:" + "a" * 63 + "\n",
+            "only comments": "# nothing\n",
+            "an empty file": "",
+        }.items():
+            with self.subTest(case=label):
+                self.put_pip_pin(text)
+                self.assertTrue(
+                    any("pip-requirements.txt" in finding for finding in self.findings()),
+                    label,
+                )
+
+    def test_an_encoding_the_reader_refuses_is_refused(self) -> None:
+        """A byte-order mark would let pip read the file in another encoding."""
+        self.put_pip_pin(b"\xef\xbb\xbf" + PIP_PIN.encode())
+        self.assert_found("(byte-order mark)")
+
+    def test_a_missing_pin_is_refused(self) -> None:
+        """Without the file the workflow's install step has nothing to install."""
+        (self.ansible / "checks" / "pip-requirements.txt").unlink()
+        self.assert_found("pip-requirements.txt cannot be read")
 
 
 class ScenarioTests(PinCase):

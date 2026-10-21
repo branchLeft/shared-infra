@@ -20,8 +20,20 @@ this file the oracle would run whatever ensurepip bundles with the runner's Pyth
 any pip internal, this file reads the interpreter's `pip.__version__` and fails, naming both
 versions, when it is not the pin. It never skips and never falls back to `auto_decode`.
 
+The version the test compares is read from `pip-requirements.txt` on every run, by `check_pins.py`
+(`read_pip_pin`), so the file the workflow installs is the only home of the version. The comparison
+runs before the test imports or probes any pip internal, so a wrong pip is reported by its version
+and not by a missing function. Tests in the same file patch the version they see and hold that
+down, so no second pip is needed to prove it.
+
 pip's `req_file` module is not a public interface. A pip upgrade is therefore two steps, done
-together: change the pin in `pip-requirements.txt` to the new version with its hash from PyPI's JSON
-API, and re-check the table above against the new pip's `req_file` (the parity). Until both are done
-the test fails, which is the intended result. Dependabot does not watch the pin: `check_pins.py`
-watches only `requirements.in`, and the pin is not an input it lists.
+together: change the pin in `pip-requirements.txt` to the new version with the hash of its wheel
+(the `bdist_wheel` entry of PyPI's JSON API; the install is wheels-only, so the source archive's
+hash is never used), and re-check the table above against the new pip's `req_file` (the parity).
+Until both are done the test fails, which is the intended result.
+
+Dependabot watches the pin: its `pip` entry for `/ansible/checks` opens the bump, and
+`check_pins.py` fails if that entry goes or if the pin file is anything but one `pip==X.Y.Z` line
+with one sha256. `test_ci_python_steps.py` requires both CI tool environments, and the install
+recipe in `ansible/README.md`, to install the pin before the lock, with hashes required and wheels
+only.
