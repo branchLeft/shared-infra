@@ -19,11 +19,16 @@ It catches a protected key (`pull_trigger_signers`, `pull_trigger_remote_url`,
 file that owns it, and a loader it cannot read.
 
 It does not judge what a role does. The roles run as root, so a change to `roles/` can
-change what a host does with its signers, and this check does not see that. The control
-on a role edit is the deploy approval of a gated pull, which is not built on `main` yet
-(ws#2338 and ws#2324 are open, and ws#2483 is an open design issue, not a ruling). Until
-it is, a role edit is not gated by anything in this repo. Which files the reviewer App
+change what a host does with its signers, and this check does not see that. The reusable
+gated apply exists in `branchLeft/github-workflows` (merged 20 Oct), but nothing in this
+repo calls it, so a role edit is not gated by anything here (ws#2338 and ws#2324 are
+open, and ws#2483 is an open design issue, not a ruling). Which files the reviewer App
 may merge alone is an owner decision (Desk `pull-roles-owner-only-2340`).
+
+Limits of R2. It pins the values of `vars.enrolled_host`, `vars_files`, `roles` and
+`pre_tasks`. It does not pin the other keys of that play, so a `post_tasks`,
+`tasks`, `handlers`, `environment` or `module_defaults` copy that writes a literal
+signer config is not seen. A playbook is a place a literal can hide as well as a role.
 
 Limits of the loader rule. It reads literal mapping keys. It names the loaders listed in
 `ROLE_LOADERS`, `TASK_FILE_LOADERS` and `INCLUDE_VARS`, in their bare, `ansible.builtin.`

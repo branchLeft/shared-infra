@@ -17,9 +17,10 @@ pull: a commit of `main` signed by a key on it is applied to the host as root
   signers from the pinned variable (R8).
 - Owner-only in `.github/CODEOWNERS`: a change here is the owner's merge.
 - The check does not stop a role edit. A role runs as root and can set the list
-  in code, and no gate on that is built yet: the deploy approval that would be the
-  control is open work (ws#2338, ws#2324, design ws#2483). Until it is, the owner's
-  merge of a role change is the only review of it.
+  in code. The reusable gated apply exists in `branchLeft/github-workflows`, but
+  nothing in this repo calls it, so no gate on a role edit is wired (ws#2338,
+  ws#2324, design ws#2483). Which files the reviewer App may merge alone is an owner
+  decision (Desk `pull-roles-owner-only-2340`).
 
 The rules, and what each one does not see, are in `checks/README.md` (R0 to R8).
 Which keys a host trusts, and when, is an owner decision, not a code decision.

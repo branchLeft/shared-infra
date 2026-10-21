@@ -20,6 +20,6 @@ No trusted-signer list is kept here. Each host's signers are in its own file,
 host (ws#2340). `check_enrolment.py` (R6) fails when a signer list is set in any file under
 `ansible/` that Ansible loads as variables (YAML or JSON, any name) outside `ansible/trust/`.
 That is a check on where a value is written, not on what code does: a role runs as root,
-and the gate on a role edit is not built yet (ws#2338, ws#2324, design ws#2483). The check
+and nothing here gates a role edit: the reusable gated apply exists in `branchLeft/github-workflows`, but nothing in this repo calls it (ws#2338, ws#2324, design ws#2483). The check
 does not judge what a trust file holds: an edit to a trust file is the owner's merge under
 CODEOWNERS.

@@ -2,7 +2,7 @@
 
 Rules R0 to R8, and what each one does not see, are in ansible/checks/README.md. A
 failure names the rule and the file. This check catches a protected key set outside
-its one file. It does not judge a role edit: that control is not built yet.
+its one file. It does not judge a role edit: nothing here gates one (see checks/README.md).
 """
 
 from __future__ import annotations

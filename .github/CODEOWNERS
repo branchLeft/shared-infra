@@ -48,7 +48,7 @@
 /ansible/requirements.yml                @branchLeft/branchleft-admin
 # The pin check is the gate that vouches for the locked toolchain and for the update route (ANS-4).
 /ansible/checks/                         @branchLeft/branchleft-admin
-# Each host's trusted signer list is the trust anchor of the pull (ws#2340). An edit to a file here is the owner's merge. check_enrolment.py (R2, R3, R6, R8) fails a change that sets a protected key outside its own file. It does not judge a role edit: roles run as root, and the gate on that is not built yet (ws#2338, ws#2324, design ws#2483).
+# Each host's trusted signer list is the trust anchor of the pull (ws#2340). An edit to a file here is the owner's merge. check_enrolment.py (R2, R3, R6, R8) fails a change that sets a protected key outside its own file. It does not judge a role edit: roles run as root. The reusable gated apply exists in branchLeft/github-workflows, but nothing here calls it, so no gate on a role edit is wired (ws#2338, ws#2324, design ws#2483).
 /ansible/trust/                          @branchLeft/branchleft-admin
 
 /.standardsignore        @branchLeft/branchleft-admin

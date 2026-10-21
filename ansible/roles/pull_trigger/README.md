@@ -425,7 +425,7 @@ built here.
 A role is meant to reach a host only through the gated workflow (ANS-17), never by running
 `ansible-playbook` by hand. The program is the host's half of that: the workflow
 holds a key that can run only this command, the deployment gate (ANS-17) is the planned approval of a merge
-commit and is not yet built on `main` (ws#2338, ws#2324), and the host verifies the commit again by itself. `edge1` is the first host: its
+commit: its reusable workflow exists in `branchLeft/github-workflows`, but nothing in this repo calls it yet (ws#2338, ws#2324), and the host verifies the commit again by itself. `edge1` is the first host: its
 bootstrap and its playbook are `playbooks/edge1.yml`, and the signer it trusts is the one in `trust/edge1.yml` (ws#2340), loaded by that playbook through `vars_files`. The remote and the playbook derivation are in `playbooks/includes/pull_trigger_common.yml`.
 
 ## How to change it safely
