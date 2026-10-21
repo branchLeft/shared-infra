@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROLE = Path(__file__).resolve().parents[2]
 TASKS = ROLE / "tasks" / "main.yml"
-sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "testsupport"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tests" / "support"))
 
 from role_tasks import task_lines  # noqa: E402
 
