@@ -1,7 +1,7 @@
 """Build and check the bootstrap record of a new host's first-boot document.
 
 ``generate`` pins each file at its last commit on ``main``; ``verify`` refuses a record
-whose pin is not an ancestor of that tip."""
+whose pin is not an ancestor of that tip. The reasoning: ansible/tools/README.md."""
 
 from __future__ import annotations
 

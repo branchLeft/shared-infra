@@ -6,6 +6,7 @@ import fixed from './pullBootstrapFixed.json';
  * The first-boot user-data every platform host is created with. It runs once, so it only
  * makes the host reachable (`root` owner key, `deploy` CI key); `provision/` is re-runnable.
  * `PRIVATE_ONLY_BOOTCMD` is the one exception: its commands re-run on every boot.
+ * The reasoning behind each block: hetzner-host/README.md, "Notes kept from the source".
  */
 export interface CloudInitArgs {
   /** Becomes both the system hostname and the name used in

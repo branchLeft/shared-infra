@@ -9,6 +9,7 @@ import { EDGE_RULES, INTERNAL_RULES } from './firewalls';
 /**
  * The create pattern for a platform host: server, firewall, private-network attachment
  * at a fixed address. Per-role host stacks consume it; this project creates no host.
+ * The reasoning: hetzner-host/README.md, "Notes kept from the source".
  */
 
 export type HostRole = 'edge' | 'app' | 'db' | 'mon';

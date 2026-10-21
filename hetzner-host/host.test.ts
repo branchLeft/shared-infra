@@ -7,6 +7,7 @@ import { Host } from './host';
 /**
  * `Host` has three branches that fail silently at apply time: the firewall rule set,
  * the primary IPs of `publicNetworking`, and the firewall declared on the server.
+ * The reasoning: hetzner-host/README.md, "Notes kept from the source".
  */
 
 type Created = { type: string; name: string; inputs: Record<string, unknown> };

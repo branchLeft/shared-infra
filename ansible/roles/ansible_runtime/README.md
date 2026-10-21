@@ -217,3 +217,90 @@ or the program refused, and its one-line JSON reason says which.
    pass. The program's unit tests (`tests/unit`) run in CI with mypy strict and
    ruff (`.github/workflows/ansible.yml`, "Check each role's own program").
 5. Run the harness command above before opening a pull request.
+
+## Notes kept from install_runtime.py
+
+These notes were cut from `files/install_runtime.py` when its comment blocks went below the
+CMT-3 limit. The program keeps a one-line pointer where each note was, and the constraints in
+each block are still in the code.
+
+### What the program does, and why it runs alone
+
+Two callers run this one program. The `ansible_runtime` role runs it on a host that is already
+under the pull, and the first-boot document of a new host runs it before any Ansible exists
+there. Both therefore get the same checks and the same steps, in the same order:
+
+1. read the lock without following a link, and refuse it unless its SHA-256 is the one the caller
+   was given;
+2. refuse a lock in which any requirement has no SHA-256 hash, or which carries anything but
+   pinned, hashed requirements, or which pip could read in an encoding other than UTF-8;
+3. name the environment by a fingerprint of the lock text;
+4. build `venv-<fingerprint>` and install the lock into it with hash checking required and wheels
+   only (`--only-binary=:all:`);
+5. write the marker that the install finished, then, only when asked, move the
+   `ansible-playbook` link.
+
+A failure at any step leaves the link where it was. It never installs an engine that the lock
+does not name. Every file pip installs is a wheel whose hash the lock lists: pip is told to build
+nothing, because pip does not hash-check the build dependencies of a source build, so a package
+with no wheel for the host's interpreter fails the install (the host stays un-enrolled) and is
+never built.
+
+The paths and the fingerprint are the ones the role has always used, so the role's environments
+do not change.
+
+### The requirement pattern
+
+One pinned requirement: a name, optional extras, an exact version, an optional environment
+marker, then one or more hashes and nothing else on the line. The separators are the space
+character and nothing wider, because pip splits a line into its requirement and its options on
+`" "` alone (`break_args_options` in pip's `req_file.py`): a tab before `--hash` would leave the
+hash inside the requirement as pip reads it. The marker is written only from a positive set of
+characters (letters, digits, `_`, `.`, quotes, space, `=`, `!`, `<`, `>`, `(`, `)`), the set
+`MARKER_CHARS` names here, and `check_pins` reads it from this file. That set holds no `-` and no
+`;` at all, so no option such as `--index-url` or `-i` can sit in the marker, however it is
+spaced or nested. It is a set to allow, not a list of forms to refuse.
+
+Why a pattern and not a maintained parser: this runs under the host's own interpreter with `-I`
+before any package is installed, so only the standard library exists (the maintained parser,
+`packaging.requirements`, is a package, and pip's vendored copy is not a supported import). It is
+also not the control. The lock's SHA-256 comes from a record built from reviewed main, and pip's
+own `--require-hashes` (always passed) is the maintained refusal of an unpinned or unhashed
+requirement and checks each requirement's downloaded file against its hash. That covers every
+installed file only because `--only-binary=:all:` is passed with it: pip does not hash-check the
+build dependencies of a source build, and with wheels only there is no build. This pattern only
+refuses early, with a reason of this program's own, and leaves nothing behind.
+
+### logical_lines
+
+Returns the lock's requirement lines as pip joins them, each with the line it starts on.
+
+The joining follows pip's `join_lines` (pip's `req_file.py`) rule for rule, so that a line pip
+reads as an option is an option here too: a line continues the one before when its raw text ends
+in a backslash, tested before any strip, so a space after the backslash ends it; and a
+comment-only line ends a continuation.
+
+One rule is deliberately stricter than pip. After joining, pip strips a trailing comment from the
+line (`ignore_comments`); this does not, so a comment that sits on a requirement leaves a `#` in
+the line, which is not a requirement and is refused where pip would skip it. That fails closed,
+and the repository's lock has no such line. A comment-only line that starts a line (not a
+continuation) is dropped, as pip drops it.
+
+The function is the lock reader for both callers: `ansible/checks/check_pins.py` loads it from
+this file. It reads text, so the caller first refuses an encoding pip could choose differently
+(`check_lock_encoding`).
+
+### check_lock_encoding
+
+Refuses a lock that pip could read in an encoding other than UTF-8. pip chooses the encoding of a
+requirements file from a byte-order mark, then from a `coding:` declaration in a comment on one of
+the first two lines (`_decode_req_file` in pip's `req_file.py`), and the rest of this program
+reads UTF-8. A lock with either could show this program a comment and pip an option, as a
+`# -*- coding: utf-7 -*-` lock does. Both are refused whatever encoding they name; the
+repository's lock has neither.
+
+### check_lock_is_hashed
+
+pip's own hash checking is the control that matters, and it stays on. This refuses first, before
+anything is made, so that a lock with no hash at all, or with an option that could point pip
+somewhere else, fails with a reason of this program's own and leaves nothing behind.

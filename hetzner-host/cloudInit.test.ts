@@ -98,6 +98,7 @@ describe('assertDeployPublicKey', () => {
 /**
  * Private-only hosts get no default route or resolver from DHCP, so the bootstrap must
  * sit in `bootcmd` (it runs before `package_update`). Assertions check block membership.
+ * The reasoning: hetzner-host/README.md, "Notes kept from the source".
  */
 describe('renderCloudInit', () => {
   const BASE = {

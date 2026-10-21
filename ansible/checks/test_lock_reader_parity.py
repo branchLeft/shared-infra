@@ -1,7 +1,7 @@
 """Parity of the lock reader with pip, tested against pip's own req_file code.
 
 The install program must read the lock as pip does. A pip that moves req_file fails
-this file with a message; it is never skipped."""
+this file with a message; it is never skipped. The reasoning: ansible/checks/README.md."""
 
 from __future__ import annotations
 

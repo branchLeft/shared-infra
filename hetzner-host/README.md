@@ -232,3 +232,227 @@ nvm use && npm ci
 npm run typecheck
 npm test
 ```
+
+## Notes kept from the source
+
+These notes were cut from `cloudInit.ts`, `cloudInit.test.ts`, `host.ts` and `host.test.ts`
+when their comment blocks went below the CMT-3 limit (11 lines). The code keeps a one-line
+pointer to this section, and the constraints each block states are still in the code.
+
+### cloudInit.ts
+
+The first-boot user-data every platform host is created with.
+
+**Cloud-init runs once, on first boot, and never again.** Nothing that has to stay true over
+the host's life belongs here: it belongs in `provision/`, whose scripts are idempotent and
+re-runnable. This file's only job is to make the host reachable by the two identities that do
+the rest: the platform owner's key on `root`, and the CI deploy key on `deploy`.
+
+One deliberate exception: a private-only host's `bootcmd` entries (see `PRIVATE_ONLY_BOOTCMD`
+below) re-run on every boot, not once. `bootcmd` is the only cloud-init stage early enough to
+matter here, and re-running is also the point of putting them there: it covers the window
+between first boot and `provision/05-configure-host-egress.sh` (and the systemd unit it
+installs) actually taking over the same job permanently. Both commands are idempotent, so the
+repetition costs nothing once that unit exists.
+
+The image is Debian, whose cloud image ships cloud-init with the standard modules; nothing here
+depends on a Hetzner-specific datasource.
+
+`CloudInitArgs.privateOnly`: whether this host has no public interface at all. A plain boolean,
+not an `Input`: it comes from `HostArgs.publicNetworking`, itself a plain boolean because the
+networking shape is a creation-time decision, never a stack output.
+
+A private-only host's only route off the subnet is the network's own gateway, and Hetzner's DHCP
+delivers the subnet route but never a default (`hetzner/egress.ts`). Left false, `package_update`
+below is the first thing on such a host with nowhere to reach, and every apt mirror fails
+"temporary failure resolving" for the rest of first boot.
+
+`Enrolment`, the host-level deploy key: options on the **host-level** deploy key, the one this
+document installs at first boot. `restrict` is the whole-set deny (no agent forwarding, no port
+forwarding, no X11, no pty, no user-rc), with nothing added back.
+
+Deliberately no forced command here, and that is now a scoping decision rather than a deferral.
+This key is the platform's own and names the stack it deploys, so it reaches every stack on the
+host; per-stack keys carry `restrict` **plus** a `command=` naming one stack, and are added after
+first boot by `hetzner/provision/provision_deploy_slot.py`, which is the only writer of
+`authorized_keys` thereafter. Cloud-init cannot install them: it runs once, and slots are granted
+per tenant over the host's life.
+
+`AUTHORIZED_KEY_OPTIONS`: `deploy` gets no shell privileges and no membership of the `docker`
+group. Docker group membership is root-equivalent (the socket will build a container that mounts
+the host filesystem), so a deploy user placed in it is unrestricted however carefully its sudoers
+entry is written.
+
+Instead the one privileged action CI needs runs through a single root-owned wrapper, and the
+sudoers entry names that binary with **no wildcard**. A wildcard in a sudoers command matches
+spaces, which turns any `systemctl restart something@*` style entry into arbitrary argument
+injection. Argument validation is the wrapper's job, where it can be tested, not sudoers'.
+
+`assertDeployPublicKey`: rejects anything that is not a single-line OpenSSH public key.
+
+This is the only validation between stack config and a document that grants `deploy` an
+`authorized_keys` entry and a sudoers rule, and a newline in the value appends arbitrary
+cloud-config to it: a second `users:` entry, a `runcmd`, a `write_files` overwriting the sudoers
+drop-in. Three properties make that worth failing closed over rather than trusting the input:
+cloud-init runs once and cannot be re-run, `userData` is create-time-only at the provider, and it
+is in the component's `ignoreChanges`, so an injected document is permanent and absent from every
+later diff.
+
+`PRIVATE_ONLY_BOOTCMD`: the `bootcmd` entries that give a private-only host a working default
+route and resolver before `package_update`/`packages` below installs anything.
+
+This has to be `bootcmd`, not `runcmd`, and the distinction is not cosmetic. `runcmd`'s own
+module only _writes_ the command list to a script on disk during cloud-init's config stage; that
+script is not actually _executed_ until the `scripts-user` module, which sits near the end of the
+later final stage, and `package-update-upgrade-install` (the module behind
+`package_update`/`packages`) is at the _start_ of that same final stage. A `runcmd` entry here
+would therefore still run after package installation has already failed, which is the exact bug
+this block exists to fix. `bootcmd` is a separate, earlier module in cloud-init's very first
+(init) stage, which precedes the config stage entirely (config, in turn, precedes final), so this
+is the one placement that actually lands ahead of `package_update`.
+
+The trade-off named at the top of this file: `bootcmd` re-runs on every boot, not once, which is
+why both commands are written to be safe to repeat (`ip route replace`, and a plain
+overwrite-and-`resolvconf -u` with no compare-first check, since bootcmd has no equivalent of a
+provisioning log to skip redundant work against).
+
+Exec form is avoided here (unlike the plain commands below) because the gateway has to be derived
+from the routing table, which needs a shell. Every string literal in the embedded awk/shell is
+double-quoted rather than single-quoted so that wrapping the whole command in a YAML double-quoted
+scalar needs no nested-quote gymnastics beyond escaping those doubles for YAML itself.
+
+`BASE_PACKAGES` (the packages block): what an enrolled host needs on it before the pull can run:
+`git`, `gpg` and `gpgconf` and `openssh-client` for the pull program (the
+`pull_trigger_packages` of that role), and `python3` and `python3-venv` for the Ansible install
+(the `ansible_runtime_packages` of that role). `curl` and `ca-certificates` are in the base list.
+`ansible/tools/test_pull_bootstrap.py` holds this list equal to the two roles' lists, so a
+package added to a role fails there until it is added here.
+
+The engine itself is never in this list: it is installed by the pinned, hash-checked program,
+and by nothing that resolves its own version.
+
+The OpenPGP walker (`pgpPacketTags` and its caller): refuses anything but an armoured OpenPGP
+**public** key block.
+
+The signer block ends up in user-data, which is readable by anything on the host and by whoever
+can read the Hetzner project. The checks are an allowlist and not a scan for the word PRIVATE:
+exactly one public header and one public footer, nothing else that looks like an armour line, a
+first packet that is a public key (tag 6), and then every packet of the data, walked header by
+header, of a type that a public key is made of (public key, public subkey, user id, user
+attribute, signature). A secret key (tag 5) or a secret subkey (tag 7) anywhere in the data, after
+a public key or not, does not pass.
+
+Why a walker and not a maintained OpenPGP library: this package's only runtime dependency is
+Pulumi itself, and a library (openpgp.js) would put a large parser and a lock change on the path
+of a production Pulumi program. `gpg --show-keys` is not an option here: this runs inside the
+Pulumi program, where a subprocess and a gpg binary cannot be assumed. The walker reads only
+packet headers and lengths, accepts a short allowlist, and refuses everything it cannot account
+for. It is the only check on the block today. The key comes from the reviewed group variables on
+main, so a publish-time `gpg --show-keys` over those variables, run by the Python tool, would be a
+maintained check ahead of it; it is not built.
+
+The enrolment `runcmd` script (the shell that brings a host under the pull): it is one `sh -c`
+entry of `runcmd`, and it is the last one.
+
+Order matters and is the whole control. All three files are fetched and each is checked against
+its recorded SHA-256 first; only then does the install program run; after it has succeeded the
+state directories and the configuration are put in place; the pull program is placed last of all,
+as the final step before the done marker. A failure anywhere writes the step it failed at to a
+marker file and stops.
+
+What a failure leaves depends on where it happened, and each state is safe: before
+`install-engine` the host has nothing installed; at or after it the host may have the
+`ansible-playbook` link, which is the hash-locked engine and never another, and possibly the
+directories and the configuration, but never the pull program unless every earlier step
+succeeded. The two command-restricted keys name the pull program's path, so while it is absent
+they run nothing, and the owner's keys are the only way in. There is no fallback that installs an
+engine that is not hash-locked.
+
+### cloudInit.test.ts
+
+`renderCloudInit` builds a `#cloud-config` document that creates the `deploy` account, installs
+its `authorized_keys` entry, and writes a sudoers drop-in granting that account a root command.
+The only value flowing into it from stack configuration is the public key, and a newline in it
+appends arbitrary cloud-config to the document.
+
+Three properties make that permanent rather than merely wrong: cloud-init runs once and never
+again, `userData` is create-time-only at the provider, and it sits in the component's
+`ignoreChanges`, so an injected document survives every later apply and appears in no diff. There
+is no second control behind this one.
+
+The `bootcmd` test (a private-only host's DHCP lease carries the private subnet route and the
+metadata route, but never a default one, and no resolver at all, so without this, `package_update`
+below is the first thing on such a host with nowhere to reach, and cloud-init's package
+installation fails for the whole of first boot. `privateOnly` is what threads that host shape
+through from `Host`):
+
+The bootstrap has to land in `bootcmd`, not `runcmd`: `runcmd`'s own module only writes the
+command list to disk during cloud-init's config stage, and that script is not actually executed
+until `scripts-user`, which runs near the end of the _later_ final stage, after
+`package-update-upgrade-install`, which sits at the _start_ of that same final stage. Putting the
+bootstrap in `runcmd` would place it in the document but have it execute too late to help, which
+is exactly what an earlier version of this file got wrong (and asserted incorrectly, via a test
+that only checked string position in the rendered YAML rather than which module the position
+belongs to). `bootcmd` is a distinct, earlier module in cloud-init's _init_ stage, which precedes
+both config and final. The assertions check block membership, not text order, because text order
+is exactly what let the wrong placement pass before.
+
+### host.ts
+
+The create pattern for a platform host: server, firewall, private-network attachment at a fixed
+address.
+
+This is the piece the mx1 stack does not provide. That stack _imports_ a hand-built server and is
+written to never create or replace it, and its `ignoreChanges` on `publicNets` and `firewallIds`
+exists to make a pre-existing machine reconcile cleanly. Neither generalises to a machine this
+program creates, where both are inputs rather than facts to be tolerated. `sshKeys` and `image`
+are different: they are create-time-only at the provider regardless of how the server came to
+exist, and both are ignored here for that reason rather than by inheritance.
+
+Consumed by the per-role host stacks rather than instantiated here: the network must never share a
+stack with anything applied on a delivery cadence, so this project declares the pattern and
+creates no host with it.
+
+`HostArgs.publicNetworking`: whether the host gets public addresses at all. Defaulted on because
+the deploy path is SSH from GitHub-hosted runners, and a host CI must reach needs a public address
+to reach.
+
+A host no deploy path touches should set this to `false` and be reached over the private network
+from a host that does. Only the hosts that terminate public traffic need an address of their own;
+every other public address that exists is a standing exception to that. Doing so means accepting
+that recovery is the Hetzner console.
+
+**Choose this at creation.** Flipping it from `true` to `false` on a live host removes two
+delete-protected primary IPs from the program, and the API refuses to delete them, which wedges
+the stack mid-update. To change it later, apply once with `protection: false` so the protection
+comes off, then apply again with `publicNetworking: false`.
+
+The primary IPs are declared as their own resources rather than left to Hetzner's server-creation
+allocation, which sets `auto_delete` and releases the address back to the pool when the server
+goes.
+
+That is not survivable here. Certificate issuance is HTTP-01, so an address that changes breaks
+every hostname until each record naming it has been repointed and has propagated, and only then
+can any of them reissue. A mail host's sending reputation is attached to its address and does not
+move at all. The rebuild that this component deliberately permits would otherwise take the whole
+estate's public reachability with it.
+
+The private-only network attachment: a private-only host must carry its network interface at
+first boot. With no public interface and no inline network, Hetzner refuses to start the server at
+all ("no public or private network interfaces found"). The separate ServerNetwork attachment is
+created only after the server exists, which is too late for that case, so a private-only host
+attaches inline and skips the separate resource. A public host keeps the separate attachment:
+moving a live host between the two shapes plans a detach/attach, so the shape is fixed at
+creation. `aliasIps: []` is required: left undefined, the provider detaches and reattaches the
+network on every apply (upstream provider issue #650).
+
+### host.test.ts
+
+`Host` has three branches whose failure modes are all silent at apply time: the role picks the
+firewall rule set, `publicNetworking` decides whether two primary IPs exist, and the firewall is
+declared _on the server_ rather than attached afterwards. A wrong branch produces a host that
+boots, answers SSH, and is exposed; nothing errors.
+
+`setMocks` runs in `beforeAll`, which is early enough: `host.ts` constructs nothing at module
+scope, so the mocks only have to be in place before the first `new Host(...)`. `estate.ts` and
+`network.ts` are the modules that do build resources on import, and neither is imported here.

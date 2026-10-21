@@ -91,37 +91,41 @@ def make_role(
         (role / "library").mkdir()
 
 
-HASHED_PIP = re.compile(r"\bpip\"? (?:install|download)\b.*--require-hashes")
+# One matcher for every install or download of the lock, in each form the repository writes:
+# pip, pip3, python -m pip and uv pip, with -r, --requirement or a bare path to requirements.txt.
+LOCK_INSTALL = re.compile(
+    r"(?:\bpip3?\"?|\buv pip)\s+(?:install|download|sync)\b.*requirements\.txt"
+)
 WHEELS_ONLY = "--only-binary=:all:"
 README = ANSIBLE / "README.md"
 
 
+def lock_installs(text: str) -> list[str]:
+    """Return every line that installs or downloads the lock, with or without the hash flag.
+
+    A backslash continuation is joined to the line it continues first, so a command split over
+    two lines is matched whole, as the shell reads it.
+    """
+    joined = text.replace("\\\n", " ")
+    return [line.strip() for line in joined.splitlines() if LOCK_INSTALL.search(line)]
+
+
 def sdist_reachable_lines(text: str) -> list[str]:
-    """Return the lines that install or download the lock without refusing a source build.
+    """Return the lock installs that do not refuse a source build.
 
     --require-hashes alone does not cover everything pip runs: an entry with no wheel for
     the interpreter is built from its source archive, and the build backend it asks for is
-    fetched from the index with no hash. --only-binary=:all: removes the build. The check
-    reads one line at a time, which is how the workflow and the README write each command.
+    fetched from the index with no hash. --only-binary=:all: removes the build.
     """
-    return [
-        line.strip()
-        for line in text.splitlines()
-        if HASHED_PIP.search(line) and WHEELS_ONLY not in line
-    ]
-
-
-LOCK_INSTALL = re.compile(r"\bpip\"? (?:install|download)\b.*requirements\.txt")
-
-
-def lock_installs(text: str) -> list[str]:
-    """Return the lines that install or download requirements.txt, with or without the hash flag."""
-    return [line.strip() for line in text.splitlines() if LOCK_INSTALL.search(line)]
+    return [line for line in lock_installs(text) if WHEELS_ONLY not in line]
 
 
 def readmes_outside_the_recipe() -> list[Path]:
-    """Return every README under ansible/ except the one that holds the install recipe."""
-    return [path for path in ANSIBLE.rglob("README.md") if path != README]
+    """Return every README* file under ansible/ except the one that holds the install recipe.
+
+    The skeleton's README.md.j2 is included: every new role's README is made from it.
+    """
+    return [path for path in ANSIBLE.rglob("README*") if path.is_file() and path != README]
 
 
 def python_directories() -> set[str]:
@@ -188,10 +192,8 @@ class WorkflowPythonStepsTest(unittest.TestCase):
 
     def test_the_install_scan_finds_the_commands_it_is_meant_to_find(self) -> None:
         # A control: a scan that matched nothing would make the next two tests pass.
-        self.assertEqual(2, sum(1 for line in WORKFLOW.splitlines() if HASHED_PIP.search(line)))
-        self.assertLessEqual(
-            3, sum(1 for line in README.read_text("utf-8").splitlines() if HASHED_PIP.search(line))
-        )
+        self.assertEqual(2, len(lock_installs(WORKFLOW)))
+        self.assertLessEqual(3, len(lock_installs(README.read_text("utf-8"))))
 
     def test_every_workflow_install_of_the_lock_is_wheels_only(self) -> None:
         self.assertEqual([], sdist_reachable_lines(WORKFLOW))
@@ -204,7 +206,10 @@ class WorkflowPythonStepsTest(unittest.TestCase):
         # the install cannot sit outside the recipe and skip the wheels-only check above.
         # The control: the scan reaches a role README, not only ansible/README.md.
         scanned = readmes_outside_the_recipe()
-        self.assertIn(ANSIBLE / "roles" / "ansible_runtime" / "README.md", scanned)
+        names = {path.relative_to(ANSIBLE).as_posix() for path in scanned}
+        self.assertIn("roles/ansible_runtime/README.md", names)
+        self.assertTrue(any(name.startswith("patterns/") for name in names), names)
+        self.assertIn("role_skeleton/README.md.j2", names)
         for path in scanned:
             with self.subTest(readme=str(path.relative_to(ROOT))):
                 self.assertEqual([], lock_installs(path.read_text(encoding="utf-8")))
@@ -217,15 +222,38 @@ class WorkflowPythonStepsTest(unittest.TestCase):
         self.assertEqual([bare], lock_installs("\n".join([bare, pointer])))
 
     def test_an_install_that_can_build_from_source_is_found(self) -> None:
-        # The controls of the two tests above: each form of the command, with and without the
-        # flag, and prose that names the flag without running pip.
+        # The controls of the tests above: each form the repository writes, with and without the
+        # flag, a command split over two lines, and prose that names the flag without running pip.
         bare = ".venv/bin/pip install --require-virtualenv --require-hashes -r requirements.txt"
         download = ".venv/bin/pip download --require-hashes -r requirements.txt -d WHEELHOUSE"
-        quoted = "run: '\"$RUNNER_TEMP/ansible-venv/bin/pip\" install --require-hashes -r lock'"
+        quoted = (
+            'run: \'"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-hashes '
+            "-r requirements.txt'"
+        )
+        pip3 = "pip3 install --require-hashes -r requirements.txt"
+        uv_sync = "uv pip sync --require-hashes requirements.txt"
+        python_m = "python3 -m pip install --require-hashes -r requirements.txt"
+        long_flag = "pip install --require-hashes --requirement requirements.txt"
+        split = "pip install --require-hashes \\\n    -r requirements.txt"
         guarded = f"{bare} {WHEELS_ONLY}"
         prose = "# --require-hashes makes pip refuse any package without a recorded hash"
-        text = "\n".join(["  " + bare, download, quoted, guarded, prose])
-        self.assertEqual([bare, download, quoted], sdist_reachable_lines(text))
+        text = "\n".join(
+            [
+                "  " + bare,
+                download,
+                quoted,
+                pip3,
+                uv_sync,
+                python_m,
+                long_flag,
+                split,
+                guarded,
+                prose,
+            ]
+        )
+        self.assertEqual(9, len(lock_installs(text)))
+        self.assertNotIn(prose, lock_installs(text))
+        self.assertEqual(8, len(sdist_reachable_lines(text)))
 
 
 if __name__ == "__main__":

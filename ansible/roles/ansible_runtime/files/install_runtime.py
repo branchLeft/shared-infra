@@ -2,7 +2,8 @@
 """Install the pinned, hash-locked Ansible environment, shared by both callers.
 
 It refuses a lock whose SHA-256 is not the one given, or with any unhashed requirement.
-Wheels only: a requirement with no wheel fails the install and is never built."""
+Wheels only: a requirement with no wheel fails the install and is never built.
+The reasoning: ansible/roles/ansible_runtime/README.md, "Notes kept from install_runtime.py"."""
 
 import argparse
 import codecs
