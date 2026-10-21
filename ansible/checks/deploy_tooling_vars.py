@@ -102,3 +102,12 @@ def targets(variables: dict[str, object]) -> list[Target]:
                 )
             )
     return found
+
+
+def program_names(variables: dict[str, object]) -> tuple[str, ...]:
+    """Return the file name of every program the role installs, from the target lists.
+
+    The `program` field of the file targets is the one home of these names, so a program
+    added there is covered by every check that reads this, and no check restates the list.
+    """
+    return tuple(sorted({target.program for target in targets(variables) if target.program}))

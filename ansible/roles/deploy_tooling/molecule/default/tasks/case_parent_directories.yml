@@ -1,12 +1,20 @@
 ---
 # The directory that holds the wrapper (and the policy program) is checked as well as
-# the files: an account that can write to it can replace a file that runs as root.
-# /usr/local/sbin is the directory used here. Each case changes it, runs the role,
-# and puts it back to the owner, group and mode it had, which is read first.
+# the files: an account that can write to it can replace a file that runs as root. So is
+# every directory above it, up to /: an account that can write to /usr/local can rename
+# /usr/local/sbin aside and put its own in its place. /usr/local/sbin is the directory used
+# here. Each case changes it, runs the role, and puts it back to the owner, group and mode
+# it had, which is read first. A refused run must also have written nothing into the
+# directory it refused: the two programs are replaced by a marker beforehand and read after.
 - name: Read the directory that holds the wrapper, as it stands
   ansible.builtin.stat:
     path: /usr/local/sbin
   register: deploy_tooling_scenario_sbin
+
+- name: Read the directory above it, as it stands
+  ansible.builtin.stat:
+    path: /usr/local
+  register: deploy_tooling_scenario_local
 
 - name: Read who is in the group staff
   ansible.builtin.getent:
@@ -15,18 +23,29 @@
     split: ':'
   register: deploy_tooling_scenario_staff
 
-# The cases below depend on the directory being the one Debian ships and on nobody being in
-# staff. A test that started from another state would prove something else.
-- name: Assert the directory is root's and staff has no members
+- name: Name the marker that stands in for a program
+  ansible.builtin.set_fact:
+    deploy_tooling_scenario_stale_marker: '# stale marker, not a program'
+
+# The cases below depend on the directories being the ones Debian ships and on nobody being
+# in staff. A test that started from another state would prove something else.
+- name: Assert the directories are root's and staff has no members
   ansible.builtin.assert:
     that:
       - deploy_tooling_scenario_sbin.stat.isdir
       - deploy_tooling_scenario_sbin.stat.pw_name == 'root'
+      - deploy_tooling_scenario_local.stat.isdir
+      - deploy_tooling_scenario_local.stat.pw_name == 'root'
+      - deploy_tooling_scenario_local.stat.gr_name == 'root'
+      - not deploy_tooling_scenario_local.stat.wgrp
+      - not deploy_tooling_scenario_local.stat.woth
       - deploy_tooling_scenario_staff.ansible_facts.getent_group.staff[2] == ''
     fail_msg: >-
       The test image is not the starting state this case needs:
       {{ deploy_tooling_scenario_sbin.stat.mode }}
-      {{ deploy_tooling_scenario_sbin.stat.pw_name }}:{{ deploy_tooling_scenario_sbin.stat.gr_name }}
+      {{ deploy_tooling_scenario_sbin.stat.pw_name }}:{{ deploy_tooling_scenario_sbin.stat.gr_name }},
+      {{ deploy_tooling_scenario_local.stat.mode }}
+      {{ deploy_tooling_scenario_local.stat.pw_name }}:{{ deploy_tooling_scenario_local.stat.gr_name }}
     quiet: true
 
 # ----- Written by any account -----
@@ -37,6 +56,9 @@
     state: directory
     mode: 'o+w'
 
+- name: Put a marker in place of the programs
+  ansible.builtin.include_tasks: put_stale_programs.yml
+
 - name: Apply the role to the directory that anyone can write to
   ansible.builtin.include_tasks: expect_role_failure.yml
   vars:
@@ -46,11 +68,20 @@
     run_class: app
     run_variant: standard
 
+- name: Require that the refused run wrote nothing into the directory
+  ansible.builtin.include_tasks: assert_programs_unwritten.yml
+
 - name: Put the directory back
   ansible.builtin.file:
     path: /usr/local/sbin
     state: directory
     mode: '{{ deploy_tooling_scenario_sbin.stat.mode }}'
+
+- name: Apply the role again, which puts the programs back
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
 
 # ----- Not owned by root -----
 
@@ -108,6 +139,50 @@
     run_class: app
     run_variant: standard
 
+# ----- A directory above the one that holds the target -----
+
+# The directory that holds the wrapper is made root's own, so that the only thing wrong is the
+# directory above it: /usr/local writable by staff, which has a member. The role must refuse
+# it, name that directory, and have written nothing.
+- name: Make the directory that holds the wrapper root's own
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Make the directory above it writable by staff
+  ansible.builtin.file:
+    path: /usr/local
+    state: directory
+    owner: root
+    group: staff
+    mode: '2775'
+
+- name: Put a marker in place of the programs, for the directory above
+  ansible.builtin.include_tasks: put_stale_programs.yml
+
+- name: Apply the role to a directory whose parent a group with a member can write to
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: directory above the one that holds the wrapper writable by a group with a member
+    expect_msg: '/usr/local is on the path to a file that is run as root, and the group staff'
+    expect_task: 'Refuse a directory that holds a target and that a group with members can write to'
+    run_class: app
+    run_variant: standard
+
+- name: Require that the refused run wrote nothing into the directories
+  ansible.builtin.include_tasks: assert_programs_unwritten.yml
+
+- name: Put the directory above back to what it was
+  ansible.builtin.file:
+    path: /usr/local
+    state: directory
+    owner: '{{ deploy_tooling_scenario_local.stat.pw_name }}'
+    group: '{{ deploy_tooling_scenario_local.stat.gr_name }}'
+    mode: '{{ deploy_tooling_scenario_local.stat.mode }}'
+
 - name: Take the account out of staff again
   ansible.builtin.user:
     name: deploy
@@ -121,6 +196,12 @@
     owner: '{{ deploy_tooling_scenario_sbin.stat.pw_name }}'
     group: '{{ deploy_tooling_scenario_sbin.stat.gr_name }}'
     mode: '{{ deploy_tooling_scenario_sbin.stat.mode }}'
+
+- name: Apply the role again, which puts the programs back
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
 
 - name: Assert the host is as the role leaves it
   ansible.builtin.include_tasks: assert_applied.yml
