@@ -1,0 +1,60 @@
+---
+# One environment file, held to what the installer requires. Included by
+# verify.yml with backup_restore_check_path, backup_restore_check_expected (the
+# name and value of each line) and backup_restore_check_names (the names the
+# installer requires, from the recorded copy). Values are compared and never
+# printed: the comparison keeps only names, and its tasks say no_log.
+- name: Look at the environment file
+  ansible.builtin.stat:
+    path: '{{ backup_restore_check_path }}'
+  register: backup_restore_check_stat
+
+- name: Assert the environment file is a plain file, root:root, mode 0600
+  ansible.builtin.assert:
+    that:
+      - backup_restore_check_stat.stat.exists
+      - backup_restore_check_stat.stat.isreg
+      - backup_restore_check_stat.stat.pw_name == 'root'
+      - backup_restore_check_stat.stat.gr_name == 'root'
+      - backup_restore_check_stat.stat.mode == '0600'
+    quiet: true
+    fail_msg: '{{ backup_restore_check_path }}: the environment file is missing, not a plain file, not root:root or not mode 0600.'
+
+- name: Read the environment file
+  ansible.builtin.slurp:
+    src: '{{ backup_restore_check_path }}'
+  register: backup_restore_check_raw
+  no_log: true
+
+- name: Compare the file with what it should hold, keeping only names
+  ansible.builtin.set_fact:
+    backup_restore_check_names_found: "{{ lines | map('regex_replace', '=.*$', '') | list }}"
+    backup_restore_check_names_wrong: >-
+      {{ ((expected_lines | difference(lines)) + (lines | difference(expected_lines)))
+      | map('regex_replace', '=.*$', '') | unique | list }}
+  vars:
+    lines: '{{ (backup_restore_check_raw.content | b64decode).splitlines() }}'
+    expected_lines: >-
+      {{ backup_restore_check_expected | dict2items | map(attribute='key')
+      | zip(backup_restore_check_expected | dict2items | map(attribute='value')) | map('join', '=') | list }}
+  no_log: true
+
+- name: Assert the file holds exactly the names the installer requires, each once
+  ansible.builtin.assert:
+    that:
+      - backup_restore_check_names_found | sort == backup_restore_check_names | sort
+      - backup_restore_check_names_found | length == backup_restore_check_names | length
+    quiet: true
+    fail_msg: '{{ backup_restore_check_path }} does not hold exactly the names the installer requires, each once.'
+
+- name: Assert every line has the value it should
+  ansible.builtin.assert:
+    that:
+      - backup_restore_check_names_wrong | length == 0
+    quiet: true
+    fail_msg: "{{ backup_restore_check_path }}: these names have a wrong or an extra value: {{ backup_restore_check_names_wrong | join(', ') }}"
+
+- name: Forget what was read
+  ansible.builtin.set_fact:
+    backup_restore_check_raw: {}
+  no_log: true

@@ -1,0 +1,157 @@
+---
+argument_specs:
+  main:
+    short_description: Install the state-copy and restore-drill units and their environment files, and hold both timers off
+    description: >-
+      Applied after backup_worker in the same play. Installs the four systemd
+      units of the state copy and the restore drill from the release
+      backup_worker staged, writes the two environment files the installers
+      expect (state-copy.env, and restore-drill.env when it is switched on) from
+      named inputs and from root-only secret files the owner places, and keeps
+      the state-copy timer off unless backup_restore_state_copy_timer_enabled is
+      true. The restore-drill timer cannot be enabled: setting it true fails the
+      role. A timer that is on stays on unless the matching may_disable variable
+      is true. A secret file that is not placed yet skips the environment that
+      needs it and does not fail the run. It does not create a secret, an age
+      identity, a bucket or a key, run the installers to install, take the first
+      copy or run a drill. It reads backup_worker's bucket, endpoint, region,
+      release directory, unit directory and patterns, and declares none of them.
+    author: branchLeft
+    options:
+      backup_restore_state_copy_recipient:
+        type: str
+        required: true
+        description: >-
+          The PUBLIC age recipient (age1...) the copied state is encrypted to.
+          PRIVATE input: from the private inventory. The private half never
+          reaches this host.
+      backup_restore_state_copy_dest_access_key_id:
+        type: str
+        required: true
+        description: >-
+          The put-only key id that writes backup copy 1. Its bucket, endpoint and
+          region are backup_worker_bucket, backup_worker_s3_endpoint and
+          backup_worker_s3_region, read from backup_worker and not repeated here.
+          PRIVATE input. Letters, digits and the symbols / + = _ . - only.
+      backup_restore_state_copy_estate_bucket:
+        type: str
+        required: true
+        description: Name of the bucket that holds the estate Pulumi state, read by the copy. PRIVATE input.
+      backup_restore_state_copy_estate_endpoint:
+        type: str
+        required: true
+        description: Host name of the estate state bucket's endpoint, without a scheme. PRIVATE input.
+      backup_restore_state_copy_estate_region:
+        type: str
+        required: true
+        description: Region name of the estate state bucket. PRIVATE input.
+      backup_restore_state_copy_estate_access_key_id:
+        type: str
+        required: true
+        description: The read-only key id for the estate state bucket. PRIVATE input.
+      backup_restore_state_copy_tenant_bucket:
+        type: str
+        required: true
+        description: Name of the bucket that holds the tenant Pulumi state, read by the copy. PRIVATE input.
+      backup_restore_state_copy_tenant_endpoint:
+        type: str
+        required: true
+        description: Host name of the tenant state bucket's endpoint, without a scheme. PRIVATE input.
+      backup_restore_state_copy_tenant_region:
+        type: str
+        required: true
+        description: Region name of the tenant state bucket. PRIVATE input.
+      backup_restore_state_copy_tenant_access_key_id:
+        type: str
+        required: true
+        description: The read-only key id for the tenant state bucket. PRIVATE input.
+      backup_restore_state_copy_dest_secret_file:
+        type: str
+        default: /etc/branchleft/secrets/state-copy-dest-secret-access-key
+        description: >-
+          Path of the root-only file (root:root, mode 0600, a plain file) the owner
+          places once, holding the put-only key's secret access key and nothing
+          else. A file directly in /etc/branchleft/secrets. The role reads it and
+          never writes it. Not set yet means the state-copy environment is not
+          written.
+      backup_restore_state_copy_estate_secret_file:
+        type: str
+        default: /etc/branchleft/secrets/state-copy-estate-secret-access-key
+        description: >-
+          Path of the root-only file holding the estate read-only key's secret
+          access key. The same shape and rules as the destination's.
+      backup_restore_state_copy_tenant_secret_file:
+        type: str
+        default: /etc/branchleft/secrets/state-copy-tenant-secret-access-key
+        description: >-
+          Path of the root-only file holding the tenant read-only key's secret
+          access key. The estate and tenant files may be the same file when one
+          read-only key serves both.
+      backup_restore_state_copy_timer_enabled:
+        type: bool
+        default: false
+        description: >-
+          Enable and start the nightly state-copy timer. False leaves the timer as
+          it is on the host unless backup_restore_state_copy_timer_may_disable is
+          true. True is a production apply and goes through the gated workflow; it
+          first requires every secret file to be placed and the installer's own
+          readiness check to pass.
+      backup_restore_state_copy_timer_may_disable:
+        type: bool
+        default: false
+        description: >-
+          With backup_restore_state_copy_timer_enabled false, stop and disable
+          the state-copy timer when it is on. False never changes a timer the host
+          already has on.
+      backup_restore_drill_timer_enabled:
+        type: bool
+        default: false
+        description: >-
+          Refused when true. The restore-drill timer cannot be enabled on this
+          host yet; the variable exists so that a request to enable it fails with
+          a message, and does not pass silently.
+      backup_restore_drill_timer_may_disable:
+        type: bool
+        default: false
+        description: >-
+          Stop and disable the restore-drill timer when it is on. False never
+          changes a timer the host already has on.
+      backup_restore_drill_env_enabled:
+        type: bool
+        default: false
+        description: >-
+          Write the restore-drill environment file. False writes none and needs
+          none of the drill inputs below. True needs the drill's read key id, its
+          secret file and four image digests.
+      backup_restore_drill_access_key_id:
+        type: str
+        required: false
+        description: >-
+          The drill's read key id (a get-and-list key for the backup bucket).
+          Required only when backup_restore_drill_env_enabled is true. PRIVATE input.
+      backup_restore_drill_secret_file:
+        type: str
+        default: /etc/branchleft/secrets/restore-drill-primary-secret-access-key
+        description: >-
+          Path of the root-only file holding the drill read key's secret access
+          key. Read only when backup_restore_drill_env_enabled is true. The same
+          shape and rules as the state-copy secret files.
+      backup_restore_drill_image_recovery:
+        type: str
+        required: false
+        description: >-
+          The database recovery image, pinned by digest (name@sha256: and 64 hex
+          characters). Required only when backup_restore_drill_env_enabled is true.
+          A release input: it changes when the image is rebuilt.
+      backup_restore_drill_image_mysql:
+        type: str
+        required: false
+        description: The database server image, pinned by digest. Required only when the drill environment is enabled.
+      backup_restore_drill_image_ghost:
+        type: str
+        required: false
+        description: The tenant application image, pinned by digest. Required only when the drill environment is enabled.
+      backup_restore_drill_image_sidecar:
+        type: str
+        required: false
+        description: The drain sidecar image, pinned by digest. Required only when the drill environment is enabled.

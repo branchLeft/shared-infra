@@ -1,0 +1,6 @@
+[Unit]
+Description=TEST PLACEHOLDER restore drill timer
+[Timer]
+OnCalendar=Sun *-*-* 04:20:00
+[Install]
+WantedBy=timers.target

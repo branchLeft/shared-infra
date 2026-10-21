@@ -35,4 +35,32 @@ backup_worker_test_files:
     sha256: 26def775d998652375a3b5b3320970a1e01df5a4b658d0b5e0f4ba680b68b355
   - path: db/provision/install_host_prereqs.py
     sha256: 44c264c8aff843a328be9ee6792e789527d73390fd860c3eedd19f6afbf7590b
+  # The files the backup_restore role needs staged. That role's scenario reads
+  # this list, so the placeholders have one home.
+  - path: control/provision/branchleft-restore-drill.service
+    sha256: 8b6df93f870252602ad33c15c920ca2d5b95ffa41ad7309cfcd1f907f10dc777
+  - path: control/provision/branchleft-restore-drill.timer
+    sha256: d8eb00af08d6d615a87c5f1f4abd62f0ca888fc23d90e227ab5b45735ba13bb7
+  - path: control/provision/branchleft-state-copy.service
+    sha256: e5f1b6c16fa4d634e54c0da4f33348088cbb73127c763da3e0fe8dc498a1e586
+  - path: control/provision/branchleft-state-copy.timer
+    sha256: 6406120362fc3685199b150e24b85cf6c3058751b8343dc52cbd8f59c758e3d9
+  - path: control/provision/install_restore_drill.py
+    sha256: 3554cd9c25dcda55f4abd1b42d0b01dc653e90599b7ac6a565ef1b05d8249e46
+  - path: control/provision/install_state_copy.py
+    sha256: e749c16929fa4cea1e6e825bbf7554c45189e6105b2ea18004f8d9f9f94b22d4
+  - path: control/provision/nextcloud_backup.py
+    sha256: bae6d529129b558e916dc0f35c0eb3929cd73bb0198dd03273e1a5c05a5314ac
+  - path: db/provision/objectstorage.py
+    sha256: 4858912eb96055bd3db2d409e2d183ef65f76fa0282786dd864794e2e33bbcf0
+  - path: db/recovery/restore_drained.py
+    sha256: 5c646381f0c468bc0269bb7fe2f30b37f1e07a2b2cf752861ba782df54e4b98c
+  - path: infra/provisioning/scripts/media_backup_restore.py
+    sha256: 8e14cf3053e5fd116aefd03bfb2494921bd634db22c346e6c7395a55125112c9
+  - path: infra/provisioning/scripts/restore_drill.py
+    sha256: e02750bfb71cba0aa6998ba255f04374dcca1859e5a3737b2a1d58c6691e92cc
+  - path: infra/provisioning/scripts/shared_objectstorage.py
+    sha256: c67c392808d8ffcf5ce3b362dd35fc0ea33601f655a73deb582743956904b7cb
+  - path: infra/provisioning/scripts/state_copy.py
+    sha256: 8e9c0b172c6cc4ddb37fbef2edea34c0ba1afc8d0ae98d05020c8002b09c0ab2
 backup_worker_release_files: '{{ backup_worker_test_files }}'

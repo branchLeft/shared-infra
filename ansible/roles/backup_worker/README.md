@@ -15,6 +15,9 @@ follows the order the standard sets for a role README (ANS-14).
    with `get_url` from `branchLeft/ghost-platform` at a pinned full commit and
    held to a `sha256`. They land in `/opt/branchleft/backup-worker/releases/<commit>/`,
    owned by root and not writable by anyone else, which the installer requires.
+   The release also holds what the `backup_restore` role installs from it (the
+   restore drill, the state copy and `nextcloud_backup.py`, with their installers
+   and units); this role stages them and never runs them.
 2. **Installs the prerequisites** (runbook 2): when `age` or the `mysqldump` 8.0
    client is missing, it runs the pinned `install_host_prereqs.py` from that same
    release. Nothing runs when both are present.
@@ -101,7 +104,7 @@ caller cannot override them.
 
 - The `backup-worker` system account (no home, `/usr/sbin/nologin`).
 - Directories `/opt/branchleft`, `/opt/branchleft/backup-worker`, `releases/`, the
-  release directory and its seven subdirectories, and `/etc/branchleft`, all
+  release directory and its eight subdirectories, and `/etc/branchleft`, all
   `root:root` `0755`.
 - The release files, `root:root` `0644`, and the link `current` to the release.
 - `/etc/systemd/system/branchleft-backup-worker.service` and `.timer`, `0644`,
@@ -188,8 +191,9 @@ service account assertion and the input checks at the top of `tasks/main.yml`.
 
 ### Named limits
 
-- **The real programs are not run.** The test installs four placeholder files in
-  place of the ghost-platform programs and units. It proves the download, the
+- **The real programs are not run.** The test installs placeholder files in
+  place of the ghost-platform programs and units (the `backup_restore` scenario
+  reuses the same placeholders and the same test variables). It proves the download, the
   pin, the owner and the mode, not that the worker works. The first live apply is
   the proof (ANS-17).
 - **The real pins are not downloaded by the test.** The defaults'

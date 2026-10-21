@@ -1,0 +1,6 @@
+---
+# A name no other role in the play uses: handlers are looked up by name across
+# the whole play, so sharing backup_worker's name would make the two ambiguous.
+- name: Reload systemd after the restore units change
+  ansible.builtin.systemd_service:
+    daemon_reload: true

@@ -1,0 +1,82 @@
+---
+# One case that the role must refuse. Included once per case by verify.yml. The
+# include carries, as task variables, the role inputs the case sets (they reach
+# the role through this file) and these four:
+#   backup_restore_case_name     what the case is, for the report
+#   backup_restore_case_message  the text the refusal must carry
+#   backup_restore_case_not_ready  optional, true to make the installer stand-in
+#                                  report a missing input
+#   backup_restore_case_remove_file  optional, a staged file to take out of the
+#                                    release for the case
+# The refusal is asserted by its own text: a case that failed for another
+# reason, or was accepted, fails the assertion and says which.
+- name: Make the installer stand-in report a missing input
+  ansible.builtin.file:
+    path: /run/test-state-copy-not-ready
+    state: touch
+    mode: '0644'
+    access_time: preserve
+    modification_time: preserve
+  changed_when: false
+  when: backup_restore_case_not_ready | default(false)
+
+- name: Take a staged file out of the release
+  ansible.builtin.file:
+    path: '{{ backup_worker_release_dir }}/{{ backup_restore_case_remove_file }}'
+    state: absent
+  changed_when: false
+  when: backup_restore_case_remove_file is defined
+
+- name: Apply the role with the case's inputs, expecting a refusal
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.backup_restore
+
+    - name: Fail if the role accepted the case
+      ansible.builtin.fail:
+        msg: 'ACCEPTED: the role did not refuse the case {{ backup_restore_case_name }}.'
+  rescue:
+    # A refusal inside a loop reports "One or more items failed" as its message
+    # and each item's own message in results, so both are searched.
+    - name: Collect what the refusal said
+      ansible.builtin.set_fact:
+        backup_restore_case_said: >-
+          {{ ansible_failed_result.msg | default('') }}
+          {{ ansible_failed_result.results | default([]) | map(attribute='msg', default='') | join(' ') }}
+
+    - name: Assert the refusal is the one this case is for
+      ansible.builtin.assert:
+        that:
+          - backup_restore_case_message in backup_restore_case_said
+        quiet: true
+        fail_msg: >-
+          Case {{ backup_restore_case_name }}: the role did not refuse with the expected text
+          ({{ backup_restore_case_message }}). It said: {{ backup_restore_case_said }}
+  always:
+    - name: Put the installer stand-in back to ready
+      ansible.builtin.file:
+        path: /run/test-state-copy-not-ready
+        state: absent
+      changed_when: false
+      when: backup_restore_case_not_ready | default(false)
+
+    - name: Put the staged file back in the release
+      ansible.builtin.copy:
+        src: '/opt/test-source/{{ backup_restore_case_remove_file }}'
+        remote_src: true
+        dest: '{{ backup_worker_release_dir }}/{{ backup_restore_case_remove_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      changed_when: false
+      when: backup_restore_case_remove_file is defined
+
+    # A case that was wrongly accepted may have turned a timer on; leave it off
+    # so that the cases after it start from the state they expect.
+    - name: Turn the state-copy timer off again
+      ansible.builtin.systemd_service:
+        name: branchleft-state-copy.timer
+        enabled: false
+        state: stopped
+      changed_when: false
