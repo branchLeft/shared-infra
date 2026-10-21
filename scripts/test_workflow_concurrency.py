@@ -173,6 +173,10 @@ def same_literal_group(job_group: str, top_group: object, workflow_label: str) -
     """
     if not isinstance(top_group, str):
         return False
+    # r4 D2: surrounding whitespace is not part of the group name, so it is
+    # stripped from both sides before the comparison.
+    job_group = job_group.strip()
+    top_group = top_group.strip()
     if "${{" not in top_group:
         return job_group.casefold() == top_group.casefold()
     return re.fullmatch(group_template(top_group, workflow_label), job_group.casefold()) is not None
@@ -271,6 +275,10 @@ def violations(name: str, text: str) -> list[str]:
     stray = [key for key in data if not isinstance(key, str)]
     if stray:
         return [f"{name}: top-level key that is not a string: {stray!r}"]
+    # r4 D1: a present name: that is not a string is unreadable, so it is refused
+    # rather than replaced by the file path as github.workflow.
+    if "name" in data and not isinstance(data["name"], str):
+        return [f"{name}: name: is not a string, so github.workflow cannot be read: {data['name']!r}"]
     try:
         names = trigger_names(data)
     except Unclassifiable as error:
@@ -736,6 +744,34 @@ REFUSED = {
     # beside the top-level violation.
     "c8-unknown-term-in-the-workflow-group": (
         job_group_under("anything-123", top_group="${{ github.sha }}-${{ github.run_id }}"),
+        "same group as the workflow",
+    ),
+    # r4 D1: a present name: that is not a string makes the workflow unreadable,
+    # so the test refuses it rather than guess github.workflow from the file path.
+    "r4-d1-name-is-an-integer": (
+        job_group_under("CI-369", pull_request=True, name="123"),
+        "not a string",
+    ),
+    "r4-d1-name-is-a-float": (
+        job_group_under("CI-369", pull_request=True, name="1.5"),
+        "not a string",
+    ),
+    "r4-d1-name-is-a-boolean": (
+        job_group_under("CI-369", pull_request=True, name="true"),
+        "not a string",
+    ),
+    # r4 D2: surrounding whitespace is stripped from the job literal and from a
+    # literal top-level group before the casefold and template comparison.
+    "r4-d2-job-literal-leading-space": (
+        job_group_under('" CI-369"', pull_request=True, name="CI"),
+        "same group as the workflow",
+    ),
+    "r4-d2-job-literal-trailing-space": (
+        job_group_under('"CI-369 "', pull_request=True, name="CI"),
+        "same group as the workflow",
+    ),
+    "r4-d2-top-literal-padded": (
+        job_group_under("deploy-shared", top_group='" deploy-shared "'),
         "same group as the workflow",
     ),
 }
