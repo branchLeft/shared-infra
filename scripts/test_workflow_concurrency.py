@@ -1,100 +1,141 @@
 #!/usr/bin/env python3
 """Pin tests: a pull_request run is grouped per pull request, and only those runs cancel.
 
-Every workflow that runs on pull_request carries one top-level concurrency
-block. Its group is keyed on the pull request number, and falls back to the
-run id for every other event, so a push to main and a merge_group run each
-form their own group. cancel-in-progress is true only for pull_request, so no
-other run is cancelled, and no run is queued behind an apply paused for
-approval. A workflow without pull_request keys every top-level group on the run
-id, so no run shares a group with another. Job-level apply groups are the one
-listed exemption: they are not top-level, and only their cancel values are read.
-Double-quoted keys with backslash escapes are rejected outright.
+Every workflow is parsed with PyYAML's safe_load, the parser ci.yml pins for
+the stack-keys check, and every rule is checked on the parsed data, never on the
+text. So a quoted key, an escaped quote, a multi-line quoted value, a list-form
+or quoted trigger, and a `#` inside a value cannot hide a concurrency key.
 
-The checks read the workflow text the way test_ci_apply_environments.py does:
-standard library only, no YAML parser. Each check fails closed: a trigger that
-is not in block form raises, and every cancel-in-progress value must be one of
-the two allowed spellings, whatever its form.
+The rules:
+- A workflow with a pull_request trigger has one top-level concurrency block,
+  exactly the run-keyed block below. Its group is keyed on the pull request
+  number and falls back to the run id, and cancel-in-progress is the pull_request
+  expression.
+- A workflow without one has no cancel-in-progress that is true or an
+  expression, at workflow level or job level. Its top-level group, if any, holds
+  the run id, so no run shares a group with another.
+- A job with an `environment:` never has a cancel-in-progress that is true or an
+  expression, whatever its triggers.
+- A job-level cancel-in-progress in a pull_request workflow may be the
+  pull_request expression only when the job has no environment.
+- Every check fails closed: a file that does not parse, whose top level is not a
+  mapping, whose trigger block is missing or doubled, or whose concurrency value
+  is not a mapping, is a violation.
 """
 
 from __future__ import annotations
 
 import pathlib
-import re
 import unittest
 
-from test_merge_group_triggers import on_block
+import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 PR_EXPRESSION = "${{ github.event_name == 'pull_request' }}"
-PR_BLOCK = (
-    "concurrency:\n"
-    "  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}\n"
-    f"  cancel-in-progress: {PR_EXPRESSION}\n"
-)
-ALLOWED_CANCEL = {"false", PR_EXPRESSION}
+PR_CONCURRENCY = {
+    "group": "${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}",
+    "cancel-in-progress": PR_EXPRESSION,
+}
+PR_TRIGGERS = {"pull_request", "pull_request_target"}
+ABSENT = object()
 
-# The trigger name in any spelling inside the on: block: a mapping key, a
-# block-sequence item, quoted or bare. Matching the name, not a key shape,
-# leaves no spelling for a pull_request workflow to skip the check.
-PR_TRIGGER = re.compile(r"\bpull_request(?:_target)?\b")
-# A column-0 concurrency key, in any form, with the indented lines under it.
-TOP_CONCURRENCY = re.compile(r"(?m)^concurrency\b[^\n]*\n(?:[ \t]+[^\n]*\n|[ \t]*\n)*")
-# Every mention of the key, quoted or bare, whatever follows it on the line.
-CANCEL_KEY = re.compile(r"cancel-in-progress([^\n]*)")
-# A double-quoted key that holds a backslash escape. YAML reads "\x5f" as "_",
-# so the plain-text detectors above would miss the key; no workflow may use one.
-ESCAPED_KEY = re.compile(r'"[^"\n]*\\[^"\n]*"\s*:')
+
+class Unclassifiable(Exception):
+    """A trigger block the test cannot read; the file fails closed."""
 
 
 def workflow_files() -> list[pathlib.Path]:
     return sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
 
 
-def triggers_pull_request(text: str) -> bool:
-    return PR_TRIGGER.search(on_block(text)) is not None
+def trigger_names(data: dict) -> set[str]:
+    """Trigger names from the on: block, read as a string, a list or a mapping.
 
-
-def comment_before(prefix: str) -> bool:
-    """True when a YAML comment starts in this line prefix.
-
-    A comment starts at a `#` outside quotes that is at the start of the line or
-    follows whitespace. A `#` inside a quoted value, or one written straight after
-    a value (`deploy#1`), is part of the value and is not a comment.
+    PyYAML reads a bare `on:` key as the boolean True (YAML 1.1), and a quoted
+    "on" as the string. A file with both, or with neither, cannot be classified.
     """
-    quote = None
-    previous = " "
-    for char in prefix:
-        if quote:
-            if char == quote:
-                quote = None
-        elif char in "\"'":
-            quote = char
-        elif char == "#" and previous in " \t":
-            return True
-        previous = char
-    return False
+    keys = [key for key in data if key is True or key == "on"]
+    if len(keys) != 1:
+        raise Unclassifiable(f"want exactly one trigger block (on: or \"on\":), found {len(keys)}")
+    trigger = data[keys[0]]
+    if isinstance(trigger, str):
+        return {trigger}
+    if isinstance(trigger, list) and all(isinstance(item, str) for item in trigger):
+        return set(trigger)
+    if isinstance(trigger, dict) and all(isinstance(key, str) for key in trigger):
+        return set(trigger)
+    raise Unclassifiable(f"trigger block has a form the test cannot read: {trigger!r}")
 
 
-def cancel_values(text: str) -> list[tuple[int, str]]:
-    """(line, value) for each cancel-in-progress. The value is what follows its colon.
+def cancel_problem(where: str, value: object, allow_pr_expression: bool) -> str | None:
+    """None when cancel-in-progress is allowed here, else the reason it is not."""
+    if value is ABSENT or value is False or value == "false":
+        return None
+    if allow_pr_expression and value == PR_EXPRESSION:
+        return None
+    return f"{where} cancel-in-progress is {value!r}, which may cancel a non-pull_request run"
 
-    A key with no colon after it yields the rest of the line, which is never an
-    allowed value, so the check fails closed on it. A key after a YAML comment on
-    its line is not read; see comment_before.
-    """
-    values = []
-    for match in CANCEL_KEY.finditer(text):
-        line_start = text.rfind("\n", 0, match.start()) + 1
-        if comment_before(text[line_start : match.start()]):
-            continue
-        line = text.count("\n", 0, match.start()) + 1
-        rest = match.group(1)
-        value = re.sub(r"""^["']?[ \t]*:""", "", rest, count=1).strip()
-        values.append((line, value))
-    return values
+
+def top_level_problems(name: str, value: object, pull_request: bool) -> list[str]:
+    if not isinstance(value, dict):
+        return [f"{name}: top-level concurrency is not a mapping: {value!r}"]
+    if pull_request:
+        if value != PR_CONCURRENCY:
+            return [f"{name}: top-level concurrency is not the run-keyed block: {value!r}"]
+        return []
+    found = []
+    group = value.get("group")
+    if not isinstance(group, str) or "github.run_id" not in group:
+        found.append(f"{name}: top-level group is shared across runs: {group!r}")
+    problem = cancel_problem("top level", value.get("cancel-in-progress", ABSENT), False)
+    if problem:
+        found.append(f"{name}: {problem}")
+    return found
+
+
+def job_problems(name: str, job_name: str, job: dict, pull_request: bool) -> list[str]:
+    config = job["concurrency"]
+    if not isinstance(config, dict):
+        return [f"{name}: job {job_name} concurrency is not a mapping: {config!r}"]
+    allow = pull_request and "environment" not in job
+    problem = cancel_problem(f"job {job_name}", config.get("cancel-in-progress", ABSENT), allow)
+    return [f"{name}: {problem}"] if problem else []
+
+
+def violations(name: str, text: str) -> list[str]:
+    """Every rule break in one workflow's text, or [] for a file that passes."""
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        return [f"{name}: does not parse as YAML: {type(error).__name__}"]
+    if not isinstance(data, dict):
+        return [f"{name}: top level is not a mapping"]
+    try:
+        names = trigger_names(data)
+    except Unclassifiable as error:
+        return [f"{name}: {error}"]
+    pull_request = bool(names & PR_TRIGGERS)
+    found: list[str] = []
+    if "concurrency" in data:
+        found += top_level_problems(name, data["concurrency"], pull_request)
+    elif pull_request:
+        found.append(f"{name}: pull_request workflow has no top-level concurrency block")
+    jobs = data.get("jobs")
+    if not isinstance(jobs, dict):
+        return found + [f"{name}: jobs is not a mapping"]
+    for job_name, job in jobs.items():
+        if not isinstance(job, dict):
+            found.append(f"{name}: job {job_name} is not a mapping")
+        elif "concurrency" in job:
+            found += job_problems(name, job_name, job, pull_request)
+    return found
+
+
+def parsed(path: pathlib.Path) -> tuple[dict, set[str]]:
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return data, trigger_names(data)
 
 
 class WorkflowConcurrencyTests(unittest.TestCase):
@@ -105,63 +146,22 @@ class WorkflowConcurrencyTests(unittest.TestCase):
         self.assertIn("docs-lint.yml", names)
         self.assertIn("standards.yml", names)
 
-    def test_every_pull_request_workflow_carries_the_run_keyed_block(self):
+    def test_every_workflow_passes_the_concurrency_rules(self):
         for path in workflow_files():
             with self.subTest(workflow=path.name):
                 text = path.read_text(encoding="utf-8")
-                if not triggers_pull_request(text):
-                    continue
-                found = TOP_CONCURRENCY.findall(text)
-                self.assertEqual(
-                    len(found),
-                    1,
-                    f"{path.name}: want one top-level concurrency block, found {len(found)}",
-                )
-                self.assertEqual(
-                    found[0].rstrip("\n") + "\n",
-                    PR_BLOCK,
-                    f"{path.name}: top-level concurrency block is not the run-keyed block",
-                )
+                self.assertEqual(violations(path.name, text), [])
 
-    def test_no_non_pull_request_run_can_be_cancelled(self):
+    def test_every_pull_request_workflow_carries_the_run_keyed_block(self):
+        pull_request_files = 0
         for path in workflow_files():
-            text = path.read_text(encoding="utf-8")
-            for line, value in cancel_values(text):
-                with self.subTest(workflow=path.name, line=line):
-                    self.assertIn(
-                        value,
-                        ALLOWED_CANCEL,
-                        f"{path.name}:{line} cancel-in-progress: {value} may cancel a non-pull_request run",
-                    )
-
-    def test_no_non_pull_request_top_level_group_is_shared(self):
-        # GitHub cancels a pending run that shares a group with a newer run, whatever
-        # cancel-in-progress says. So a push or deploy workflow's top-level group must
-        # hold the run id, which makes every such run its own group. Job-level
-        # concurrency (the apply jobs) is outside this check by design; their
-        # cancel-in-progress values are still read by the test above.
-        for path in workflow_files():
-            text = path.read_text(encoding="utf-8")
-            if triggers_pull_request(text):
-                continue
-            for block in TOP_CONCURRENCY.findall(text):
-                with self.subTest(workflow=path.name):
-                    self.assertIn(
-                        "github.run_id",
-                        block,
-                        f"{path.name}: top-level concurrency is shared across runs: {block.strip()!r}",
-                    )
-
-    def test_no_double_quoted_key_carries_an_escape(self):
-        for path in workflow_files():
-            text = path.read_text(encoding="utf-8")
-            match = ESCAPED_KEY.search(text)
             with self.subTest(workflow=path.name):
-                line = text.count("\n", 0, match.start()) + 1 if match else 0
-                self.assertIsNone(
-                    match,
-                    f"{path.name}:{line} double-quoted key holds a backslash escape",
-                )
+                data, names = parsed(path)
+                if not names & PR_TRIGGERS:
+                    continue
+                pull_request_files += 1
+                self.assertEqual(data.get("concurrency"), PR_CONCURRENCY)
+        self.assertGreater(pull_request_files, 0)
 
     def test_merge_group_runs_are_keyed_on_the_run_not_the_ref(self):
         # A merge_group event carries no pull_request, so its group falls back
@@ -169,68 +169,212 @@ class WorkflowConcurrencyTests(unittest.TestCase):
         # queued check run would share one group and replace one another.
         for path in workflow_files():
             with self.subTest(workflow=path.name):
-                text = path.read_text(encoding="utf-8")
-                if "merge_group" not in on_block(text):
+                data, names = parsed(path)
+                if "merge_group" not in names:
                     continue
-                found = TOP_CONCURRENCY.search(text)
-                self.assertIsNotNone(found, f"{path.name}: no top-level concurrency block")
-                group = re.search(r"^  group: (.*)$", found.group(0), re.M)
-                self.assertIsNotNone(group, f"{path.name}: concurrency block has no group")
-                self.assertIn("github.run_id", group.group(1))
-                self.assertNotIn("github.ref", group.group(1))
+                group = str(data.get("concurrency", {}).get("group", ""))
+                self.assertIn("github.run_id", group)
+                self.assertNotIn("github.ref", group)
 
 
 class DetectorTests(unittest.TestCase):
-    """The detectors catch the evasions the pin tests above must not miss."""
+    """Each probe and evasion the rules must refuse, and the shapes they must pass."""
+
+    PR_WORKFLOW = (
+        "on:\n"
+        "  pull_request:\n"
+        "concurrency:\n"
+        "  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}\n"
+        "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n"
+        "jobs:\n"
+        "  check:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: echo ok\n"
+    )
+
+    # Cycle-3 probe zz-p1-escape-hash: an escaped quote ends the quoted group early,
+    # so the ' #' reads as a comment and the real cancel key is skipped.
+    P1_ESCAPE_HASH = (
+        "on:\n"
+        "  push:\n"
+        "    branches: [main]\n"
+        "jobs:\n"
+        "  deploy:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    environment: production\n"
+        '    concurrency: {group: "deploy\\" #", cancel-in-progress: true}\n'
+        "    steps:\n"
+        "      - run: echo deploy\n"
+    )
+
+    # Cycle-3 probe zz-p2-quoted-top: a quoted top-level key, shared group, cancel true.
+    P2_QUOTED_TOP = (
+        "on:\n"
+        "  push:\n"
+        "    branches: [main]\n"
+        '"concurrency":\n'
+        "  group: deploy-shared\n"
+        "  cancel-in-progress: true\n"
+        "jobs:\n"
+        "  deploy:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    environment: production\n"
+        "    steps:\n"
+        "      - run: echo deploy\n"
+    )
+
+    # Cycle-3 probe zz-p3-escaped-seq-trigger: an escaped pull_request in a block sequence.
+    P3_ESCAPED_SEQ_TRIGGER = (
+        "on:\n"
+        "  - push\n"
+        '  - "pull\\x5frequest"\n'
+        "jobs:\n"
+        "  check:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: echo ok\n"
+    )
+
+    # Cycle-3 probe zz-p4-multiline-hash: a double-quoted value continued onto a line
+    # that starts with '#', so the cancel key sits inside the quoted scalar's line.
+    P4_MULTILINE_HASH = (
+        "on:\n"
+        "  push:\n"
+        "    branches: [main]\n"
+        "jobs:\n"
+        "  deploy:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    environment: production\n"
+        '    concurrency: {group: "deploy\n'
+        '      #x", cancel-in-progress: true}\n'
+        "    steps:\n"
+        "      - run: echo deploy\n"
+    )
+
+    def test_probe_zz_p1_escape_hash_is_refused(self):
+        self.assertNotEqual(violations("zz-p1-escape-hash.yml", self.P1_ESCAPE_HASH), [])
+
+    def test_probe_zz_p2_quoted_top_is_refused(self):
+        self.assertNotEqual(violations("zz-p2-quoted-top.yml", self.P2_QUOTED_TOP), [])
+
+    def test_probe_zz_p3_escaped_seq_trigger_is_refused(self):
+        self.assertNotEqual(violations("zz-p3-escaped-seq-trigger.yml", self.P3_ESCAPED_SEQ_TRIGGER), [])
+
+    def test_probe_zz_p4_multiline_hash_is_refused(self):
+        self.assertNotEqual(violations("zz-p4-multiline-hash.yml", self.P4_MULTILINE_HASH), [])
+
+    def test_the_run_keyed_pull_request_workflow_passes(self):
+        self.assertEqual(violations("pr.yml", self.PR_WORKFLOW), [])
 
     def test_block_sequence_trigger_counts_as_pull_request(self):
-        text = "on:\n  - push\n  - pull_request\njobs: {}\n"
-        self.assertTrue(triggers_pull_request(text))
+        text = "on:\n  - push\n  - pull_request\njobs:\n  check:\n    runs-on: ubuntu-latest\n"
+        self.assertNotEqual(violations("seq.yml", text), [])
 
     def test_quoted_trigger_key_counts_as_pull_request(self):
-        text = 'on:\n  "pull_request":\n    types: [opened]\njobs: {}\n'
-        self.assertTrue(triggers_pull_request(text))
+        text = 'on:\n  "pull_request":\n    types: [opened]\njobs:\n  check:\n    runs-on: ubuntu-latest\n'
+        self.assertNotEqual(violations("quoted.yml", text), [])
 
     def test_pull_request_target_counts_as_pull_request(self):
-        text = "on:\n  pull_request_target:\njobs: {}\n"
-        self.assertTrue(triggers_pull_request(text))
+        text = "on:\n  pull_request_target:\njobs:\n  check:\n    runs-on: ubuntu-latest\n"
+        self.assertNotEqual(violations("target.yml", text), [])
 
-    def test_push_only_workflow_is_not_pull_request(self):
-        text = "on:\n  push:\n    branches: [main]\njobs: {}\n"
-        self.assertFalse(triggers_pull_request(text))
+    def test_push_only_workflow_without_concurrency_passes(self):
+        text = "on:\n  push:\n    branches: [main]\njobs:\n  check:\n    runs-on: ubuntu-latest\n"
+        self.assertEqual(violations("push.yml", text), [])
 
-    def test_quoted_cancel_key_is_seen(self):
-        text = 'on: push\nconcurrency:\n  group: deploy\n  "cancel-in-progress": true\n'
-        self.assertEqual(cancel_values(text), [(4, "true")])
+    def test_quoted_on_key_is_read_as_the_trigger(self):
+        self.assertEqual(violations("quoted-on.yml", self.PR_WORKFLOW.replace("on:", '"on":', 1)), [])
 
-    def test_bare_cancel_key_value_is_read(self):
-        text = "concurrency:\n  cancel-in-progress: false\n"
-        self.assertEqual(cancel_values(text), [(2, "false")])
+    def test_both_on_keys_fail_closed(self):
+        text = self.PR_WORKFLOW.replace("on:", 'on:\n  push:\n"on":', 1)
+        self.assertNotEqual(violations("both.yml", text), [])
 
-    def test_cancel_key_in_a_comment_is_not_read(self):
-        text = "  # its cancel-in-progress is\n  cancel-in-progress: false # note\n"
-        self.assertEqual(cancel_values(text), [(2, "false # note")])
+    def test_missing_trigger_block_fails_closed(self):
+        text = "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
+        self.assertNotEqual(violations("none.yml", text), [])
+
+    def test_unparseable_file_fails_closed(self):
+        self.assertNotEqual(violations("broken.yml", "on: [push\n"), [])
+
+    def test_top_level_that_is_not_a_mapping_fails_closed(self):
+        self.assertNotEqual(violations("list.yml", "- a\n- b\n"), [])
+
+    def test_string_top_level_concurrency_fails_closed(self):
+        text = "on:\n  push:\nconcurrency: deploy\njobs:\n  check:\n    runs-on: ubuntu-latest\n"
+        self.assertNotEqual(violations("string.yml", text), [])
+
+    def test_cancel_true_at_job_level_is_refused(self):
+        text = (
+            "on:\n  push:\n"
+            "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n"
+            "    concurrency:\n      group: deploy\n      cancel-in-progress: true\n"
+        )
+        self.assertNotEqual(violations("job.yml", text), [])
 
     def test_hash_inside_quotes_is_not_a_comment(self):
-        text = 'concurrency: {group: "deploy #1", cancel-in-progress: true}\n'
-        self.assertEqual(cancel_values(text), [(1, "true}")])
+        text = (
+            "on:\n  push:\n"
+            "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n"
+            '    concurrency: {group: "deploy #1", cancel-in-progress: true}\n'
+        )
+        self.assertNotEqual(violations("hash.yml", text), [])
 
-    def test_hash_without_a_space_before_it_is_not_a_comment(self):
-        text = "concurrency: {group: deploy#1, cancel-in-progress: true}\n"
-        self.assertEqual(cancel_values(text), [(1, "true}")])
+    def test_commented_out_cancel_key_is_not_read(self):
+        text = (
+            "on:\n  push:\n"
+            "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n"
+            "    concurrency:\n      group: deploy-${{ github.run_id }}\n"
+            "      # cancel-in-progress: true\n"
+        )
+        self.assertEqual(violations("comment.yml", text), [])
 
-    def test_escaped_double_quoted_key_is_seen(self):
-        text = '  "cancel\\x2din\\x2dprogress": true\n'
-        self.assertIsNotNone(ESCAPED_KEY.search(text))
+    def test_escaped_cancel_key_is_read(self):
+        text = (
+            "on:\n  push:\n"
+            "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n"
+            '    concurrency:\n      group: deploy\n      "cancel\\x2din\\x2dprogress": true\n'
+        )
+        self.assertNotEqual(violations("escaped.yml", text), [])
 
-    def test_plain_double_quoted_key_is_not_an_escape(self):
-        self.assertIsNone(ESCAPED_KEY.search('  "cancel-in-progress": true\n'))
+    def test_pull_request_expression_refused_in_a_push_workflow(self):
+        text = (
+            "on:\n  push:\n"
+            "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n"
+            f"    concurrency:\n      group: deploy\n      cancel-in-progress: {PR_EXPRESSION}\n"
+        )
+        self.assertNotEqual(violations("expr.yml", text), [])
 
-    def test_cancel_key_without_colon_fails_closed(self):
-        text = "concurrency:\n  cancel-in-progress true\n"
-        values = cancel_values(text)
-        self.assertEqual(len(values), 1)
-        self.assertNotIn(values[0][1], ALLOWED_CANCEL)
+    def test_pull_request_expression_refused_on_an_environment_job(self):
+        text = self.PR_WORKFLOW.replace(
+            "  check:\n    runs-on: ubuntu-latest\n",
+            "  check:\n    runs-on: ubuntu-latest\n    environment: production\n"
+            f"    concurrency:\n      group: deploy\n      cancel-in-progress: {PR_EXPRESSION}\n",
+        )
+        self.assertNotEqual(violations("env.yml", text), [])
+
+    def test_pull_request_expression_allowed_on_a_job_without_environment(self):
+        text = self.PR_WORKFLOW.replace(
+            "  check:\n    runs-on: ubuntu-latest\n",
+            "  check:\n    runs-on: ubuntu-latest\n"
+            f"    concurrency:\n      group: check\n      cancel-in-progress: {PR_EXPRESSION}\n",
+        )
+        self.assertEqual(violations("job-pr.yml", text), [])
+
+    def test_deploy_job_with_cancel_false_passes(self):
+        text = (
+            "on:\n  push:\n    branches: [main]\n"
+            "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n    environment: production\n"
+            "    concurrency:\n      group: deploy\n      cancel-in-progress: false\n"
+        )
+        self.assertEqual(violations("deploy.yml", text), [])
+
+    def test_pull_request_block_with_an_extra_key_is_refused(self):
+        text = self.PR_WORKFLOW.replace(
+            f"  cancel-in-progress: {PR_EXPRESSION}\n",
+            f"  cancel-in-progress: {PR_EXPRESSION}\n  queue: max\n",
+        )
+        self.assertNotEqual(violations("extra.yml", text), [])
 
 
 if __name__ == "__main__":
