@@ -40,8 +40,8 @@
 
 - name: Put the table of read statements the fake client answers beside its state
   ansible.builtin.copy:
-    src: files/fakes/fake_mysql_reads.tsv
-    dest: /var/lib/fake-mysql/fake_mysql_reads.tsv
+    src: files/fakes/fake_mysql_reads.txt
+    dest: /var/lib/fake-mysql/fake_mysql_reads.txt
     owner: root
     group: root
     mode: '0600'

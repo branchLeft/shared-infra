@@ -240,7 +240,7 @@ It refuses any statement it does not know, so a changed statement fails the test
 instead of being accepted, and it refuses a call whose password, socket or user is
 not the one the test set, as a server would refuse a wrong login. The statements it
 answers by reading the table are listed in
-`molecule/default/files/fakes/fake_mysql_reads.tsv`, one name and one pattern a
+`molecule/default/files/fakes/fake_mysql_reads.txt`, one name and one pattern a
 line, each answered by the function of the same name in the fake; the fake refuses
 to answer if the two lists differ. A statement it does not list is refused.
 

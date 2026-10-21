@@ -5,7 +5,7 @@ Installed as /usr/local/bin/mysql in the test container and nowhere else. It rec
 each call and keeps a small account table, and it refuses any statement it does not
 know or any login that is not the test's. The README ("The fake client") says what it
 proves and what it does not; the read statements it answers are listed in
-fake_mysql_reads.tsv, installed beside its state.
+fake_mysql_reads.txt, installed beside its state.
 """
 
 import hashlib
@@ -17,7 +17,7 @@ import sys
 STATE = "/var/lib/fake-mysql/state.json"
 CALLS = "/var/lib/fake-mysql/calls.log"
 ADMIN = "/var/lib/fake-mysql/admin.sha256"
-READS = "/var/lib/fake-mysql/fake_mysql_reads.tsv"
+READS = "/var/lib/fake-mysql/fake_mysql_reads.txt"
 SOCKET = "/opt/branchleft/db/run/mysqld/mysqld.sock"
 DYNAMIC = {"BACKUP_ADMIN", "CLONE_ADMIN", "SYSTEM_VARIABLES_ADMIN"}
 STATIC_ORDER = [
@@ -133,7 +133,7 @@ def read_account_count(state, match, out):
 
 
 # The read statements the fake answers are a table beside its state, one name and one
-# pattern per line (fake_mysql_reads.tsv); each name is answered by the function here.
+# pattern per line (fake_mysql_reads.txt); each name is answered by the function here.
 READERS = {
     "connection_limit": read_ssl_and_limit,
     "other_host": read_other_hosts,
