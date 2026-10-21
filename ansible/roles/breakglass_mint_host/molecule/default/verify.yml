@@ -11,6 +11,36 @@
     verify_grant_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_grant_host/defaults/main.yml') | from_yaml }}"
     verify_grant_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_grant_host/vars/main.yml') | from_yaml }}"
     verify_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') | from_yaml }}"
+    # The raw text of every file of the role that Ansible evaluates: the tasks and the two
+    # variable files. A lookup or a template runs on the controller, which under
+    # ansible-pull is the host itself, so it can read a file no module key shows.
+    verify_role_texts:
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') }}"
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') }}"
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') }}"
+    # The words that run something on the controller: lookup, query, q and pipe,
+    # in any case and any spacing. The patterns here are data, so the backslashes
+    # reach the regular expression as written.
+    verify_forbidden_pattern: '(?i)\b(lookup|query|pipe)\b|\bq\s*\('
+    # Spellings the pattern must catch, so that a pattern that matched nothing
+    # could not pass the role's own text. None holds a template marker.
+    verify_forbidden_samples:
+      - "lookup('ansible.builtin.file', '/etc/' ~ 'branchleft/x')"
+      - "lookup ('ansible.builtin.pipe', 'cat x')"
+      - "Lookup('file', 'x')"
+      - "query('file', 'x')"
+      - "q('file', 'x')"
+      - 'ansible.builtin.pipe'
+    # The names the key path may be reached by. Only the key-path constant, in
+    # vars/main.yml, may hold or build it: no other variable of the role may.
+    verify_key_path_name: breakglass_mint_host_key_path
+    verify_key_path_fragments:
+      - key_path
+      - /etc
+      - signing
+    verify_other_variables: >-
+      {{ (verify_role_vars | dict2items | rejectattr('key', 'equalto', verify_key_path_name) | list)
+      + (verify_defaults | dict2items | rejectattr('key', 'equalto', verify_key_path_name) | list) }}
     verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
     # The role directory, from the playbook's directory (two levels below the role).
     verify_role_dir: '{{ playbook_dir }}/../..'
@@ -178,6 +208,48 @@
         fail_msg: >-
           The role calls modules that are not on the allow-list:
           {{ breakglass_mint_host_v_modules | from_json | difference(verify_allowed_modules) }}.
+        quiet: true
+
+    # ----- nothing in the role runs on the controller -----
+    # The module list above sees the module keys of the tasks. It does not see an
+    # expression: a lookup('file', ...) in the `that` of an assert, or in a
+    # variable a task uses, reads a file on the controller and prints nothing. A
+    # quiet assert would hide it from the log scan too. So the text of the tasks
+    # and of both variable files is held free of lookup, query, q and pipe.
+    - name: Assert the pattern for a controller-side read can see each spelling of one
+      ansible.builtin.assert:
+        that:
+          - verify_forbidden_samples | map('regex_search', verify_forbidden_pattern) | select | list | length == verify_forbidden_samples | length
+        fail_msg: The pattern that forbids lookup, query, q and pipe does not match one of its own samples, so a clean result would prove nothing.
+        quiet: true
+
+    - name: Assert the role's tasks and variable files hold no lookup, query or pipe
+      ansible.builtin.assert:
+        that:
+          - verify_role_texts | length == 3
+          - verify_role_texts | map('length') | select('equalto', 0) | list | length == 0
+          - verify_role_texts | map('regex_search', verify_forbidden_pattern) | select | list | length == 0
+        fail_msg: >-
+          The tasks, vars or defaults of the role hold a lookup, query, q or pipe. That runs on the
+          controller, which under ansible-pull is the host, and can read the signing key without
+          a module the checks above would see.
+        quiet: true
+
+    # The naming check reads the tasks. A variable that holds or builds the key
+    # path, and that a task then uses, would not be named in any task. So no
+    # variable of the role other than the key-path constant itself may hold the
+    # name of that constant, a path under /etc or the word signing.
+    - name: Assert no variable other than the key-path constant refers to the key path
+      ansible.builtin.assert:
+        that:
+          - verify_role_vars[verify_key_path_name] is string
+          - verify_defaults[verify_key_path_name] is not defined
+          - >-
+            verify_other_variables | map(attribute='value') | map('to_json') | map('lower')
+            | select('search', verify_key_path_fragments | join('|')) | list | length == 0
+        fail_msg: >-
+          A variable of the role other than breakglass_mint_host_key_path holds or builds the key path
+          (the name key_path, a path under /etc, or the word signing). Only the constant may.
         quiet: true
 
     # A loop over an empty list skips quietly, so the checks below would pass
