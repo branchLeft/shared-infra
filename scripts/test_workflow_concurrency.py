@@ -41,15 +41,20 @@ The rules, each on the parsed data:
   let a pull request run cancel a push run, and the per-pull-request group is
   the workflow's own group. Anything else (true, a string, "false", an
   expression, null) is refused.
-- A job's group is a plain literal: any `${{` in it is refused, whatever it
-  would evaluate to, so no expression can make it equal the workflow's group.
-  This test does not evaluate expressions.
-- A job literal is refused when it is the workflow's group. Both are compared
-  case-folded, because GitHub treats group names as case-insensitive. When the
-  top-level group holds an expression, its literal text outside `${{ }}` is the
-  prefix, and a job literal starting with it (case-folded) is refused, since the
-  job would wait on its own run. A broken `${{` in the top-level group is refused
-  the same way. GitHub keeps one group namespace for a run and its jobs.
+- A job that has a concurrency block has a group that is a non-empty string
+  and a plain literal: any `${{` in it is refused, whatever it would evaluate
+  to, so no expression can make it equal the workflow's group. A group that is
+  missing, empty, null or not a string (`group: 123`, `group: true`) is refused
+  too. This test does not evaluate expressions.
+- A job literal is refused when it is the workflow's literal group. GitHub keeps
+  one group namespace for a run and its jobs, so the job would wait on its own
+  run. Both are compared with str.casefold(), because GitHub treats group names
+  as case-insensitive. casefold() also folds some characters GitHub may not (the
+  sharp s equals "ss"): a deliberate over-refusal, since a false refusal costs
+  a rename and a miss costs a cancelled deploy. When the workflow's group holds
+  an expression nothing is compared: that group is run-keyed (the rules above),
+  so no literal equals it, and a sibling such as `x-mail` under `x-${{ run_id }}`
+  is a legitimate name, so a prefix match is not a refusal.
 
 Every check fails closed: a file that does not parse, whose top level is not a
 mapping, whose trigger block is missing or unreadable, or whose concurrency
@@ -193,22 +198,17 @@ def run_keyed(group: object, pull_request: bool) -> bool:
     return all(term in allowed for term in terms) and any("github.run_id" in term for term in terms)
 
 
-def job_group_matches_top(job_group: str, top_group: object) -> bool:
-    """True when a job literal is, or starts with the prefix of, the workflow's group. Both are case-folded.
+def same_literal_group(job_group: str, top_group: object) -> bool:
+    """True when the job's literal group is the workflow's literal group, compared with casefold().
 
-    A top-level group with no expression must equal the job literal. One with an
-    expression yields its literal text outside ${{ }} as a prefix, and a broken
-    `${{` in it counts as a match, so an unreadable group fails closed.
+    A top-level group holding an expression is never equal to a literal: such a
+    group is run-keyed (checked by top_level_problems and merge_group_problems),
+    so it differs for every run. Nothing is compared then, and no prefix rule
+    applies.
     """
-    if not isinstance(top_group, str):
+    if not isinstance(top_group, str) or "${{" in top_group:
         return False
-    job = job_group.casefold()
-    if "${{" not in top_group:
-        return job == top_group.casefold()
-    prefix = EXPRESSION.sub("", top_group)
-    if "${{" in prefix or "}}" in prefix:
-        return True
-    return job.startswith(prefix.casefold())
+    return job_group.casefold() == top_group.casefold()
 
 
 def cancel_problem(where: str, config: dict) -> str | None:
@@ -276,10 +276,13 @@ def job_problems(name: str, job_name: str, job: dict, top_group: object) -> list
         return [f"{name}: {problem}"]
     config = job["concurrency"]
     found = []
-    group = config.get("group")
-    if isinstance(group, str) and "${{" in group:
+    group = config.get("group", ABSENT)
+    if not isinstance(group, str) or not group.strip():
+        shown = "missing" if group is ABSENT else repr(group)
+        found.append(f"{name}: {where} group must be a non-empty string literal, not {shown}")
+    elif "${{" in group:
         found.append(f"{name}: {where} group must be a plain literal, not an expression: {group!r}")
-    elif isinstance(group, str) and job_group_matches_top(group, top_group):
+    elif same_literal_group(group, top_group):
         found.append(
             f"{name}: {where} has the same group as the workflow, so it would wait on its own run: {group!r}"
         )
@@ -692,19 +695,31 @@ REFUSED = {
     ),
     "r3-d-split-literal": (job_group_under("${{ 'x-' }}${{ github.run_id }}"), "plain literal"),
     "r3-e-case-of-the-workflow-group": (job_group_under("X-${{ github.run_id }}"), "plain literal"),
-    "r3-literal-case-folded-prefix": (job_group_under("X-Deploy"), "same group as the workflow"),
-    "r3-prefix-case-folded": (
-        job_group_under("x-deploy", top_group="X-${{ github.run_id }}"),
+    # Literal against literal. The top-level literal is itself refused as shared
+    # across runs, so the fragment names the job rule.
+    "r3-literal-equal": (job_group_under("deploy-shared", top_group="deploy-shared"), "same group as the workflow"),
+    "r3-literal-case-differs-job-upper": (
+        job_group_under("Deploy-Shared", top_group="deploy-shared"),
         "same group as the workflow",
     ),
-    "r3-literal-case-folded-equal": (
+    "r3-literal-case-differs-top-upper": (
         job_group_under("deploy-shared", top_group="Deploy-Shared"),
         "same group as the workflow",
     ),
-    "r3-broken-top-expression": (
-        job_group_under("deploy", top_group="x-${{ github.run_id"),
+    # casefold(), not lower(): the sharp s folds to "ss". A deliberate over-refusal.
+    "r3-literal-casefold-sharp-s": (
+        job_group_under("straße", top_group="strasse"),
         "same group as the workflow",
     ),
+    # A job group that is missing, empty or not a string is refused, not skipped.
+    "r3-job-group-missing": (
+        PUSH_ON + "jobs:\n  check:\n    runs-on: ubuntu-latest\n    concurrency:\n      cancel-in-progress: false\n",
+        "group must be a non-empty string literal, not missing",
+    ),
+    "r3-job-group-empty": (job_group_under('""'), "group must be a non-empty string literal"),
+    "r3-job-group-null": (job_group_under("null"), "group must be a non-empty string literal, not None"),
+    "r3-job-group-integer": (job_group_under("123"), "group must be a non-empty string literal, not 123"),
+    "r3-job-group-boolean": (job_group_under("true"), "group must be a non-empty string literal, not True"),
 }
 
 # name -> workflow text the rules must pass: the shapes a refusal must not catch.
@@ -731,6 +746,16 @@ ACCEPTED = {
     + "concurrency:\n  group: x-${{ github.run_id }}\n  cancel-in-progress: false\n"
     + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
     + job_concurrency("false", "y-deploy"),
+    # A prefix of the expression group is not a refusal: `x-mail` cannot equal a
+    # group that holds the run id, and it is a legitimate sibling name.
+    "a job literal that starts with the text of the run-keyed workflow group": PUSH_ON
+    + "concurrency:\n  group: x-${{ github.run_id }}\n  cancel-in-progress: false\n"
+    + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
+    + job_concurrency("false", "x-mail"),
+    "a job literal under a workflow group whose text before the expression is empty": PUSH_ON
+    + "concurrency:\n  group: ${{ github.workflow }}-${{ github.run_id }}\n  cancel-in-progress: false\n"
+    + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
+    + job_concurrency("false", "-deploy"),
     "a '!' inside plain text is not a tag": PUSH_ON
     + "jobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo !!bool !important\n",
     "a quoted string that starts with '!!'": PUSH_ON
