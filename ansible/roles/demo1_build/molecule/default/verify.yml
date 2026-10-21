@@ -1,0 +1,400 @@
+---
+# What the role must leave on the host, read back from the instance. The
+# expected owners, modes, numbers and paths are written out here, not read from
+# the role's variables, so a role that produced the wrong value is a failure and
+# not a test that agrees with it. The only value taken from the role is each
+# program's pinned sha256, which is the pin itself.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - '{{ playbook_dir }}/../../defaults/main.yml'
+  vars:
+    verify_slots: ['0', '1', '2', '3', '4', '5', '6']
+    verify_colours: [a, b]
+    verify_release: /opt/branchleft/demo-host/releases/5e52f78427cab104438057164e4baa16b329875c
+    verify_wrapper: /usr/local/sbin/branchleft-slot
+    verify_sidecar: /usr/local/lib/branchleft/demo_sidecar.py
+    verify_router: /usr/local/lib/branchleft/health_router.py
+    verify_socket_root: /var/lib/branchleft/demo-router
+    verify_flag_dir: /var/lib/branchleft-broker/drain-flags
+    verify_candidate_dir: /var/lib/branchleft/demo-candidates
+    verify_pins: "{{ dict(demo1_build_release_files | map(attribute='path') | map('basename') | zip(demo1_build_release_files | map(attribute='sha256'))) }}"
+  tasks:
+    # The programs and the release they were staged in. Root runs them, so each
+    # is the pinned file, root's, and not writable by anyone else.
+    - name: Look at each program of the release
+      ansible.builtin.stat:
+        path: '{{ verify_release }}/{{ item.path }}'
+        follow: false
+        checksum_algorithm: sha256
+      loop: '{{ demo1_build_release_files }}'
+      loop_control:
+        label: '{{ item.path }}'
+      register: demo1_build_verify_release_files
+
+    - name: Assert every program of the release is its pinned file, root:root, mode 0644
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - item.stat.checksum == item.item.sha256
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == '0644'
+        quiet: true
+        fail_msg: A program of the release is missing, is not its pinned file, or is not root:root mode 0644.
+      loop: '{{ demo1_build_verify_release_files.results }}'
+      loop_control:
+        label: '{{ item.item.path }}'
+
+    - name: Assert the release holds exactly the ten pinned programs and no bytecode
+      ansible.builtin.find:
+        paths: /opt/branchleft/demo-host
+        recurse: true
+        file_type: file
+      register: demo1_build_verify_release_tree
+
+    - name: Compare the files found with the pins
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_release_tree.files | length == 10
+          - demo1_build_verify_release_tree.files | map(attribute='path') | select('search', '__pycache__|[.]pyc') | list | length == 0
+        quiet: true
+        fail_msg: The release holds a file that is not one of the ten pinned programs, or Python wrote bytecode into it.
+
+    - name: Look at the directories of the release and the link
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - /opt/branchleft
+        - /opt/branchleft/demo-host
+        - /opt/branchleft/demo-host/releases
+        - '{{ verify_release }}'
+        - '{{ verify_release }}/demo-host'
+        - '{{ verify_release }}/demo-host/provision'
+        - /opt/branchleft/demo-host/current
+      register: demo1_build_verify_release_dirs
+
+    - name: Assert the directories are root:root mode 0755 and current is a link to the release
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - (item.stat.islnk and item.stat.lnk_source == verify_release) or (item.stat.isdir and item.stat.mode == '0755')
+        quiet: true
+        fail_msg: A release directory is not root:root mode 0755, or current is not a link to the release.
+      loop: '{{ demo1_build_verify_release_dirs.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Look at the three installed programs and their directory
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        checksum_algorithm: sha256
+      loop:
+        - '{{ verify_wrapper }}'
+        - '{{ verify_sidecar }}'
+        - '{{ verify_router }}'
+        - /usr/local/lib/branchleft
+      register: demo1_build_verify_installed
+
+    - name: Assert the wrapper, the sidecar and the router are their pinned files, root:root, mode 0755
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_installed.results[0].stat.checksum == verify_pins['branchleft_slot.py']
+          - demo1_build_verify_installed.results[1].stat.checksum == verify_pins['demo_sidecar.py']
+          - demo1_build_verify_installed.results[2].stat.checksum == verify_pins['health_router.py']
+          - demo1_build_verify_installed.results | map(attribute='stat') | map(attribute='pw_name') | unique | list == ['root']
+          - demo1_build_verify_installed.results | map(attribute='stat') | map(attribute='gr_name') | unique | list == ['root']
+          - demo1_build_verify_installed.results[0:3] | map(attribute='stat') | map(attribute='mode') | unique | list == ['0755']
+          - demo1_build_verify_installed.results[3].stat.isdir
+          - demo1_build_verify_installed.results[3].stat.mode == '0755'
+        quiet: true
+        fail_msg: The wrapper, the sidecar or the router is not its pinned file, root:root mode 0755, or their directory is not.
+
+    # The uid register and the router's account.
+    - name: Look at the uid register and its claims
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop: >-
+        {{ ['/etc/branchleft/tenant-uids']
+        + (verify_slots | map('regex_replace', '^', '/etc/branchleft/tenant-uids/demo-') | list)
+        + ['/etc/branchleft/tenant-uids/demo-router'] }}
+      register: demo1_build_verify_register
+
+    - name: Assert the register is root's, mode 0700, and holds eight claims of mode 0600
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_register.results | length == 9
+          - demo1_build_verify_register.results[0].stat.isdir
+          - demo1_build_verify_register.results[0].stat.pw_name == 'root'
+          - demo1_build_verify_register.results[0].stat.mode == '0700'
+          - demo1_build_verify_register.results[1:] | map(attribute='stat') | map(attribute='exists') | unique | list == [true]
+          - demo1_build_verify_register.results[1:] | map(attribute='stat') | map(attribute='mode') | unique | list == ['0600']
+          - demo1_build_verify_register.results[1:] | map(attribute='stat') | map(attribute='pw_name') | unique | list == ['root']
+        quiet: true
+        fail_msg: The uid register is not root's mode 0700 with eight root-owned claims of mode 0600.
+
+    - name: Read the claims of slot 0 and of the router
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /etc/branchleft/tenant-uids/demo-0
+        - /etc/branchleft/tenant-uids/demo-6
+        - /etc/branchleft/tenant-uids/demo-router
+      register: demo1_build_verify_claims
+
+    - name: Assert the claims are the demo's uids
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_claims.results[0].content | b64decode == 'slug=demo-0\nuid=30001\n'
+          - demo1_build_verify_claims.results[1].content | b64decode == 'slug=demo-6\nuid=30007\n'
+          - demo1_build_verify_claims.results[2].content | b64decode == 'slug=demo-router\nuid=30008\n'
+        quiet: true
+        fail_msg: A claim in the register is not the uid the demo's slots and router are built for.
+
+    - name: Look at the router's account and group
+      ansible.builtin.getent:
+        database: '{{ item }}'
+        key: "{{ 'demo-router' if item == 'passwd' else '30008' }}"
+      loop: [passwd, group]
+      register: demo1_build_verify_router_account
+
+    - name: Assert the router is uid 30008 with gid 30008, group demo-router, no login shell
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_router_account.results[0].ansible_facts.getent_passwd['demo-router'][1] == '30008'
+          - demo1_build_verify_router_account.results[0].ansible_facts.getent_passwd['demo-router'][2] == '30008'
+          - demo1_build_verify_router_account.results[0].ansible_facts.getent_passwd['demo-router'][5] == '/usr/sbin/nologin'
+          - demo1_build_verify_router_account.results[1].ansible_facts.getent_group['demo-router'][1] == '30008'
+        quiet: true
+        fail_msg: The demo-router account is not uid 30008, gid 30008 in the group demo-router with /usr/sbin/nologin.
+
+    # The router's socket tree: root's at the top, the router's and private below.
+    - name: Look at the socket tree
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop: >-
+        {{ [verify_socket_root]
+        + (verify_slots | map('regex_replace', '^', verify_socket_root ~ '/') | list)
+        + (verify_slots | product(verify_colours) | map('join', '/') | map('regex_replace', '^', verify_socket_root ~ '/') | list) }}
+      register: demo1_build_verify_sockets
+
+    - name: Assert the socket root is root's mode 0755 and every slot and colour directory is the router's mode 0700
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_sockets.results | length == 22
+          - demo1_build_verify_sockets.results[0].stat.pw_name == 'root'
+          - demo1_build_verify_sockets.results[0].stat.gr_name == 'root'
+          - demo1_build_verify_sockets.results[0].stat.mode == '0755'
+          - demo1_build_verify_sockets.results[1:] | map(attribute='stat') | map(attribute='isdir') | unique | list == [true]
+          - demo1_build_verify_sockets.results[1:] | map(attribute='stat') | map(attribute='uid') | unique | list == [30008]
+          - demo1_build_verify_sockets.results[1:] | map(attribute='stat') | map(attribute='gid') | unique | list == [30008]
+          - demo1_build_verify_sockets.results[1:] | map(attribute='stat') | map(attribute='mode') | unique | list == ['0700']
+        quiet: true
+        fail_msg: The router's socket tree is not root's 0755 at the top and the router's 0700 below.
+
+    # The drain flags. The converge cleared slot 0's colour a, as a running colour
+    # does, and applied the role again: it must still be gone.
+    - name: Look at the broker's state directory and the drain-flag directory
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - /var/lib/branchleft-broker
+        - '{{ verify_flag_dir }}'
+      register: demo1_build_verify_flag_dirs
+
+    - name: Assert the state directory is broker's mode 0750 and the flag directory broker's mode 0755
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_flag_dirs.results[0].stat.pw_name == 'broker'
+          - demo1_build_verify_flag_dirs.results[0].stat.gr_name == 'broker'
+          - demo1_build_verify_flag_dirs.results[0].stat.mode == '0750'
+          - demo1_build_verify_flag_dirs.results[1].stat.pw_name == 'broker'
+          - demo1_build_verify_flag_dirs.results[1].stat.gr_name == 'broker'
+          - demo1_build_verify_flag_dirs.results[1].stat.mode == '0755'
+        quiet: true
+        fail_msg: The broker's state directory is not broker:broker 0750, or the drain-flag directory is not broker:broker 0755.
+
+    - name: Look for the flags
+      ansible.builtin.find:
+        paths: '{{ verify_flag_dir }}'
+        patterns: '*.drain'
+      register: demo1_build_verify_flags
+
+    - name: Assert thirteen flags remain, root's mode 0644, and the cleared one is not among them
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_flags.files | length == 13
+          - demo1_build_verify_flags.files | map(attribute='path') | map('basename') | sort == expected | sort
+          - demo1_build_verify_flags.files | map(attribute='pw_name') | unique | list == ['root']
+          - demo1_build_verify_flags.files | map(attribute='mode') | unique | list == ['0644']
+        quiet: true
+        fail_msg: The drain flags are not the thirteen the broker left, or a cleared flag was put back.
+      vars:
+        expected: >-
+          {{ verify_slots | product(verify_colours) | map('join', '-') | map('regex_replace', '$', '.drain')
+          | reject('equalto', '0-a.drain') | list }}
+
+    # The colour drop-ins and the router unit.
+    - name: Read the fourteen colour drop-ins
+      ansible.builtin.slurp:
+        src: '/etc/systemd/system/branchleft-compose@demo-{{ item.0 }}-{{ item.1 }}.service.d/colour.conf'
+      loop: '{{ verify_slots | product(verify_colours) | list }}'
+      loop_control:
+        label: 'demo-{{ item.0 }}-{{ item.1 }}'
+      register: demo1_build_verify_dropins
+
+    - name: Assert each drop-in runs this slot and colour's sidecar from the installed path
+      ansible.builtin.assert:
+        that:
+          - "('ExecStartPost=/usr/bin/python3 ' ~ verify_sidecar ~ ' start ' ~ item.item.0 ~ ' ' ~ item.item.1) in (item.content | b64decode).splitlines()"
+          - "('ExecStop=/usr/bin/python3 ' ~ verify_sidecar ~ ' stop ' ~ item.item.0 ~ ' ' ~ item.item.1) in (item.content | b64decode).splitlines()"
+          - "('WorkingDirectory=/opt/branchleft/demo-' ~ item.item.0) in (item.content | b64decode).splitlines()"
+        quiet: true
+        fail_msg: A colour drop-in does not run its own sidecar from the installed path.
+      loop: '{{ demo1_build_verify_dropins.results }}'
+      loop_control:
+        label: 'demo-{{ item.item.0 }}-{{ item.item.1 }}'
+
+    - name: Look at the drop-in files and the router unit
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop: >-
+        {{ (verify_slots | product(verify_colours) | map('join', '-')
+        | map('regex_replace', '^', '/etc/systemd/system/branchleft-compose@demo-')
+        | map('regex_replace', '$', '.service.d/colour.conf') | list)
+        + ['/etc/systemd/system/branchleft-health-router@.service'] }}
+      register: demo1_build_verify_unit_files
+
+    - name: Assert the drop-ins and the router unit are root:root mode 0644
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_unit_files.results | length == 15
+          - demo1_build_verify_unit_files.results | map(attribute='stat') | map(attribute='pw_name') | unique | list == ['root']
+          - demo1_build_verify_unit_files.results | map(attribute='stat') | map(attribute='gr_name') | unique | list == ['root']
+          - demo1_build_verify_unit_files.results | map(attribute='stat') | map(attribute='mode') | unique | list == ['0644']
+        quiet: true
+        fail_msg: A drop-in or the router unit is missing or is not root:root mode 0644.
+
+    - name: Read the router unit
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/branchleft-health-router@.service
+      register: demo1_build_verify_router_unit
+
+    - name: Assert the router unit runs the installed router as demo-router
+      ansible.builtin.assert:
+        that:
+          - "('ExecStart=/usr/bin/python3 ' ~ verify_router ~ ' --slot %i') in (demo1_build_verify_router_unit.content | b64decode).splitlines()"
+          - "'User=demo-router' in (demo1_build_verify_router_unit.content | b64decode).splitlines()"
+        quiet: true
+        fail_msg: The router unit does not run the installed router as demo-router.
+
+    # systemd has read the files: a reload ran, and the units load. Nothing is
+    # started or enabled.
+    - name: Ask systemd about a router instance
+      ansible.builtin.systemd_service:
+        name: branchleft-health-router@0.service
+      register: demo1_build_verify_router_systemd
+
+    - name: Assert the router instance is loaded, not enabled and not running
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_router_systemd.status.LoadState == 'loaded'
+          - demo1_build_verify_router_systemd.status.ActiveState == 'inactive'
+          - demo1_build_verify_router_systemd.status.UnitFileState in ['disabled', '']
+        quiet: true
+        fail_msg: The router instance is not loaded, or it was started or enabled.
+
+    # The candidate edge fragment, and no live edge.
+    - name: Look at the candidate directory and file
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - '{{ verify_candidate_dir }}'
+        - '{{ verify_candidate_dir }}/edge-upstreams.caddy'
+      register: demo1_build_verify_candidate
+
+    - name: Assert the candidate directory is root's mode 0700 and the fragment root's mode 0600
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_candidate.results[0].stat.isdir
+          - demo1_build_verify_candidate.results[0].stat.pw_name == 'root'
+          - demo1_build_verify_candidate.results[0].stat.mode == '0700'
+          - demo1_build_verify_candidate.results[1].stat.isreg
+          - demo1_build_verify_candidate.results[1].stat.pw_name == 'root'
+          - demo1_build_verify_candidate.results[1].stat.mode == '0600'
+        quiet: true
+        fail_msg: The candidate directory is not root's mode 0700, or the fragment is not root's mode 0600.
+
+    - name: Read the candidate fragment
+      ansible.builtin.slurp:
+        src: '{{ verify_candidate_dir }}/edge-upstreams.caddy'
+      register: demo1_build_verify_candidate_text
+
+    - name: Assert the fragment holds the global options and seven upstream snippets
+      ansible.builtin.assert:
+        that:
+          - "'admin off' in (demo1_build_verify_candidate_text.content | b64decode)"
+          - (demo1_build_verify_candidate_text.content | b64decode).splitlines() | select('match', '^[(]slot[0-9]+-upstream[)] ') | list | length == 7
+        quiet: true
+        fail_msg: The candidate fragment is not the edge's global options and seven upstream snippets.
+
+    # What the role must never do. A file named for a Caddyfile anywhere on the
+    # host is the live edge or a copy of it, and a numbered slot directory under
+    # /opt/branchleft is what the wrapper's reset makes. Neither is made here.
+    - name: Look for any Caddyfile on the host
+      ansible.builtin.find:
+        paths: [/etc, /opt, /usr/local, /var/lib, /root, /srv]
+        patterns: 'Caddyfile*'
+        recurse: true
+        hidden: true
+      register: demo1_build_verify_caddyfiles
+
+    - name: Look for a slot directory made by a reset
+      ansible.builtin.find:
+        paths: /opt/branchleft
+        patterns: 'demo-[0-9]+'
+        use_regex: true
+        file_type: directory
+        recurse: false
+      register: demo1_build_verify_slot_dirs
+
+    - name: Look for the wrapper's lock directory
+      ansible.builtin.stat:
+        path: /run/branchleft
+      register: demo1_build_verify_wrapper_lock
+
+    - name: Assert no live edge was written, no slot was reset and the wrapper was never run
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_caddyfiles.files | length == 0
+          - demo1_build_verify_slot_dirs.files | length == 0
+          - not demo1_build_verify_wrapper_lock.stat.exists
+        quiet: true
+        fail_msg: A Caddyfile exists, a slot directory exists, or the wrapper's lock directory exists. The role must do none of these.
+
+    # The sudoers grant is broker_deploy's: still root's mode 0440.
+    - name: Look at the sudoers grant
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/branchleft-slot
+        follow: false
+      register: demo1_build_verify_sudoers
+
+    - name: Assert the sudoers grant is root:root mode 0440
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_sudoers.stat.pw_name == 'root'
+          - demo1_build_verify_sudoers.stat.gr_name == 'root'
+          - demo1_build_verify_sudoers.stat.mode == '0440'
+        quiet: true
+        fail_msg: The sudoers grant is not root:root mode 0440.

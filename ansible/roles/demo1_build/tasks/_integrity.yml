@@ -1,0 +1,72 @@
+---
+# Internal to the role. Reads back what root will execute and refuses anything
+# that is not the pinned file, owned by root, writable by root alone, in a
+# directory of the same kind. These files are the sudoers boundary: sudo runs the
+# wrapper as root for the broker, and systemd runs the other two as root, so a
+# file writable by the broker, or by a group, is root for whoever can write it.
+#
+# Skipped in check mode (ANS-10) for a reason of order: in a plan the install
+# tasks above have not yet changed anything, so this would fail on exactly the
+# drift the plan is there to show. The install tasks report that drift, and this
+# runs at the real apply and in every test.
+- name: Look at each program root will run
+  ansible.builtin.stat:
+    path: '{{ item.dest }}'
+    follow: false
+    checksum_algorithm: sha256
+  loop: '{{ demo1_build_installed_pins }}'
+  loop_control:
+    label: '{{ item.dest }}'
+  register: demo1_build_program_stats
+  when: not ansible_check_mode
+
+- name: Refuse a program that is not its pinned file, a plain file of root's, mode 0755
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - not item.stat.islnk
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'root'
+      - item.stat.mode == '0755'
+      - item.stat.checksum == item.item.sha256
+    quiet: true
+    fail_msg: >-
+      {{ item.item.dest }} is missing, is not a plain file, is not root:root mode 0755 or is not the file
+      its pin names. Root runs it, so the role stops here.
+  loop: '{{ demo1_build_program_stats.results }}'
+  loop_control:
+    label: '{{ item.item.dest }}'
+  when: not ansible_check_mode
+
+- name: Look at the directories those programs and the release sit in
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+  loop:
+    - '{{ demo1_build_lib_dir }}'
+    - '{{ demo1_build_base_dir }}'
+    - '{{ demo1_build_releases_dir }}'
+    - '{{ demo1_build_release_dir }}'
+    - '{{ demo1_build_provision_dir }}'
+  register: demo1_build_directory_stats
+  when: not ansible_check_mode
+
+- name: Refuse a directory that is a link, not root's or open to group or others
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+      - not item.stat.islnk
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'root'
+      - not item.stat.wgrp
+      - not item.stat.woth
+    quiet: true
+    fail_msg: >-
+      {{ item.item }} is missing, is a link, is not root:root or is writable by group or others. A program
+      root runs lives under it, so whoever could write it could replace the program.
+  loop: '{{ demo1_build_directory_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+  when: not ansible_check_mode

@@ -1,0 +1,54 @@
+---
+# Internal to the role. Renders the demo edge's upstream fragment into a
+# candidate file for the owner, and nowhere else. The role never writes the file
+# the edge reads, never runs the go-live step, and never runs a slot reset:
+# opening the demo to visitors is the owner's decision, made by the pinned
+# go-live program, which refuses while a test stand-in is loaded.
+#
+# The candidate directory is under the root-owned state root, root's alone, so a
+# root writer cannot be led through a link planted by anyone else. Nothing reads
+# the candidate automatically: it is evidence the owner diffs against the live
+# edge before running the go-live step.
+
+- name: Create the directory of candidates, closed to everyone but root
+  ansible.builtin.file:
+    path: '{{ demo1_build_candidate_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Render the edge upstream fragment with the pinned renderer, printing it and writing nothing
+  ansible.builtin.command:
+    argv: "{{ [demo1_build_python] + demo1_build_python_flags + [demo1_build_provision_dir ~ '/render_demo_edge.py'] }}"
+  register: demo1_build_edge_render
+  changed_when: false
+  check_mode: false
+  when: demo1_build_release_ready | bool
+
+- name: Refuse an edge fragment that does not hold one upstream snippet for every slot
+  ansible.builtin.assert:
+    that:
+      - demo1_build_edge_render.stdout | regex_findall(demo1_build_edge_snippet_pattern) | length == demo1_build_slots | length
+    quiet: true
+    fail_msg: The pinned edge renderer's fragment does not hold exactly one upstream snippet per slot of the slot table.
+  when: demo1_build_release_ready | bool
+
+- name: Look at the directory of candidates
+  ansible.builtin.stat:
+    path: '{{ demo1_build_candidate_dir }}'
+    follow: false
+  register: demo1_build_candidate_dir_stat
+
+# Skipped in check mode while the directory is not there yet, because copy will
+# not write into a directory the plan has not made; the plan shows the directory.
+- name: Stage the candidate edge fragment
+  ansible.builtin.copy:
+    content: "{{ demo1_build_edge_render.stdout }}\n"
+    dest: '{{ demo1_build_candidate_edge }}'
+    owner: root
+    group: root
+    mode: '0600'
+  when:
+    - demo1_build_release_ready | bool
+    - demo1_build_candidate_dir_stat.stat.exists

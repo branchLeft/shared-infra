@@ -1,0 +1,85 @@
+---
+# Internal to the role. The directories the pinned provisioning programs used to
+# create at host build: the router's socket tree and the broker's drain-flag
+# directory. They are declared with modules instead of run as programs, so a plan
+# reports each exactly (ANS-9, ANS-10). The slot table that names them is the
+# role's one table, compared with the generator's before this file runs.
+#
+# The state root (/var/lib/branchleft) and the broker's slots directory belong
+# to broker_deploy and are only read, in the preconditions.
+
+# The root of the router's sockets is root's and closed to everyone else:
+# whoever can write it can rename the router's whole tree. Below it every slot
+# and colour directory is private to the router, by number, because the account
+# may not exist yet in a plan.
+- name: Create the root of the router's socket tree
+  ansible.builtin.file:
+    path: '{{ demo1_build_socket_root }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the socket directory of each slot and colour, private to the router
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: '{{ demo1_build_router_uid }}'
+    group: '{{ demo1_build_router_gid }}'
+    mode: '0700'
+  loop: '{{ demo1_build_socket_dirs }}'
+
+# The broker's own state directory is the one systemd's StateDirectory re-applies
+# at every broker start with this owner and mode; it is declared the same here so
+# the two never disagree.
+- name: Create the broker's state directory
+  ansible.builtin.file:
+    path: '{{ demo1_build_broker_state_dir }}'
+    state: directory
+    owner: '{{ demo1_build_broker_user }}'
+    group: '{{ demo1_build_broker_group }}'
+    mode: '0750'
+
+# Read before the directory is declared: whether this run is the one that makes
+# it. A flag is the sign that a colour is drained, and the broker deletes it when
+# a colour goes live, so a flag that is absent later is a colour that went live.
+# Putting it back would drain a live colour, which is why the flags are
+# preseeded once and never by a later run.
+- name: Look at the drain-flag directory before it is declared
+  ansible.builtin.stat:
+    path: '{{ demo1_build_flag_dir }}'
+    follow: false
+  register: demo1_build_flag_dir_stat
+
+- name: Look for drain flags already in it
+  ansible.builtin.find:
+    paths: '{{ demo1_build_flag_dir }}'
+    patterns: '*.drain'
+    file_type: file
+  register: demo1_build_flags_found
+  when: demo1_build_flag_dir_stat.stat.exists
+
+- name: Create the drain-flag directory, the broker's and readable by the sidecar
+  ansible.builtin.file:
+    path: '{{ demo1_build_flag_dir }}'
+    state: directory
+    owner: '{{ demo1_build_broker_user }}'
+    group: '{{ demo1_build_broker_group }}'
+    mode: '0755'
+
+# A directory that holds no flag at all has never been preseeded (or a run died
+# between creating it and filling it); a directory that holds any is the broker's
+# to manage. Skipped in check mode because copy will not write into a directory
+# the plan has not made, and the plan shows the directory above.
+- name: Preseed one flag per slot and colour, so a new colour boots drained
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ demo1_build_flag_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  loop: '{{ demo1_build_flag_files }}'
+  when:
+    - not ansible_check_mode
+    - (demo1_build_flags_found.matched | default(0)) == 0

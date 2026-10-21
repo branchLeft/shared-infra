@@ -1,0 +1,217 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars:
+    # Everything a plan must leave exactly as it found it. Each is read before
+    # and after the role runs in check mode; a path that did not exist must still
+    # not exist, and one that did must have the same modification time (a
+    # directory's changes when an entry is added or removed). The run is the
+    # control for ANS-10: it holds on a host in either state, fresh or configured.
+    converge_watched_paths:
+      - /etc/passwd
+      - /etc/group
+      - /etc/branchleft
+      - /etc/branchleft/tenant-uids
+      - /etc/branchleft/tenant-uids/demo-0
+      - /etc/branchleft/tenant-uids/demo-router
+      - /opt/branchleft
+      - /opt/branchleft/demo-host
+      - /opt/branchleft/demo-host/current
+      - /var/lib/branchleft/broker-slots
+      - /usr/local/sbin
+      - /usr/local/sbin/branchleft-slot
+      - /usr/local/lib/branchleft
+      - /usr/local/lib/branchleft/demo_sidecar.py
+      - /usr/local/lib/branchleft/health_router.py
+      - /var/lib/branchleft
+      - /var/lib/branchleft/demo-router
+      - /var/lib/branchleft/demo-router/0
+      - /var/lib/branchleft/demo-router/0/a
+      - /var/lib/branchleft/demo-candidates
+      - /var/lib/branchleft/demo-candidates/edge-upstreams.caddy
+      - /var/lib/branchleft-broker
+      - /var/lib/branchleft-broker/drain-flags
+      - /var/lib/branchleft-broker/drain-flags/0-a.drain
+      - /etc/systemd/system
+      - /etc/systemd/system/branchleft-compose@demo-0-a.service.d
+      - /etc/systemd/system/branchleft-compose@demo-0-a.service.d/colour.conf
+      - /etc/systemd/system/branchleft-health-router@.service
+    converge_sudoers_path: /etc/sudoers.d/branchleft-slot
+    converge_slots_dir: /var/lib/branchleft/broker-slots
+    converge_flag: /var/lib/branchleft-broker/drain-flags/0-a.drain
+  tasks:
+    # A plan makes no change. Every program the role runs in check mode only
+    # prints, and every program that writes is skipped there; this reads the
+    # watched paths before and after the role's check run and compares them.
+    - name: Look at the watched paths before a plan
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop: '{{ converge_watched_paths }}'
+      register: demo1_build_converge_before
+      when: ansible_check_mode
+
+    - name: Look at the sudoers grant before the role runs
+      ansible.builtin.stat:
+        path: '{{ converge_sudoers_path }}'
+        follow: false
+        checksum_algorithm: sha256
+      register: demo1_build_converge_sudoers_before
+      when: not ansible_check_mode
+
+    # The broker's slots directory is broker_deploy's, like the grant: the role
+    # only checks its owner and mode. The control reads its entries and its
+    # modification time before and after, so a file the role adds is seen.
+    - name: Look at the broker's slots directory before the role runs
+      ansible.builtin.stat:
+        path: '{{ converge_slots_dir }}'
+        follow: false
+      register: demo1_build_converge_slots_before
+      when: not ansible_check_mode
+
+    - name: List the broker's slots directory before the role runs
+      ansible.builtin.find:
+        paths: '{{ converge_slots_dir }}'
+        hidden: true
+        file_type: any
+      register: demo1_build_converge_slots_list_before
+      when: not ansible_check_mode
+
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml. The include carries no no_log.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.demo1_build
+
+    - name: Look at the watched paths after a plan
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop: '{{ converge_watched_paths }}'
+      register: demo1_build_converge_after
+      when: ansible_check_mode
+
+    - name: Assert the plan changed nothing
+      ansible.builtin.assert:
+        that:
+          - item.1.stat.exists == item.0.stat.exists
+          - (item.1.stat.mtime | default(0)) == (item.0.stat.mtime | default(0))
+        quiet: true
+        fail_msg: The check run changed {{ item.0.item }}. A plan must read and change nothing.
+      loop: '{{ demo1_build_converge_before.results | zip(demo1_build_converge_after.results) | list }}'
+      loop_control:
+        label: '{{ item.0.item }}'
+      when: ansible_check_mode
+
+    # The control for the second writer: the sudoers grant belongs to
+    # broker_deploy, and the role must leave the file exactly as it found it,
+    # whatever it reads from it.
+    - name: Look at the sudoers grant after the role ran
+      ansible.builtin.stat:
+        path: '{{ converge_sudoers_path }}'
+        follow: false
+        checksum_algorithm: sha256
+      register: demo1_build_converge_sudoers_after
+      when: not ansible_check_mode
+
+    - name: Assert the role did not write the sudoers grant
+      ansible.builtin.assert:
+        that:
+          - demo1_build_converge_sudoers_after.stat.checksum == demo1_build_converge_sudoers_before.stat.checksum
+          - demo1_build_converge_sudoers_after.stat.mtime == demo1_build_converge_sudoers_before.stat.mtime
+        quiet: true
+        fail_msg: The role wrote the sudoers grant. broker_deploy is its only writer.
+      when: not ansible_check_mode
+
+    - name: Look at the broker's slots directory after the role ran
+      ansible.builtin.stat:
+        path: '{{ converge_slots_dir }}'
+        follow: false
+      register: demo1_build_converge_slots_after
+      when: not ansible_check_mode
+
+    - name: List the broker's slots directory after the role ran
+      ansible.builtin.find:
+        paths: '{{ converge_slots_dir }}'
+        hidden: true
+        file_type: any
+      register: demo1_build_converge_slots_list_after
+      when: not ansible_check_mode
+
+    - name: Assert the role left the broker's slots directory as it found it
+      ansible.builtin.assert:
+        that:
+          - demo1_build_converge_slots_after.stat.mtime == demo1_build_converge_slots_before.stat.mtime
+          - demo1_build_converge_slots_after.stat.pw_name == demo1_build_converge_slots_before.stat.pw_name
+          - demo1_build_converge_slots_after.stat.mode == demo1_build_converge_slots_before.stat.mode
+          - >-
+            demo1_build_converge_slots_list_after.files | map(attribute='path') | sort
+            == demo1_build_converge_slots_list_before.files | map(attribute='path') | sort
+        quiet: true
+        fail_msg: The role changed the broker's slots directory or an entry in it. broker_deploy is its only writer.
+      when: not ansible_check_mode
+
+    # The control for the drain flags. A running colour clears its flag by
+    # deleting it, and a later run must not put it back, because that would
+    # drain a colour that is serving. The deletion is test scaffolding and reports
+    # no change; the role is then applied again and must leave the flag absent.
+    - name: Clear a drain flag, as the broker does when a colour goes live
+      ansible.builtin.file:
+        path: '{{ converge_flag }}'
+        state: absent
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Apply the role again
+      ansible.builtin.include_role:
+        name: branchleft.demo1_build
+      when: not ansible_check_mode
+
+    - name: Look at the cleared flag
+      ansible.builtin.stat:
+        path: '{{ converge_flag }}'
+        follow: false
+      register: demo1_build_converge_flag_stat
+      when: not ansible_check_mode
+
+    - name: Assert the role did not put a cleared flag back
+      ansible.builtin.assert:
+        that:
+          - not demo1_build_converge_flag_stat.stat.exists
+        quiet: true
+        fail_msg: The role put a cleared drain flag back. That would drain a colour that is serving traffic.
+      when: not ansible_check_mode
+
+    # The control for the pin. A program whose pinned sha256 is wrong must stop
+    # the role at the download, and the file on the host is already right, so a
+    # refusal changes nothing and the later steps still see a configured host.
+    # The assertion names the checksum, so a failure of any other kind does not
+    # pass for this one. Check mode skips it: get_url does not compare a checksum
+    # there.
+    - name: Read the role's own pins
+      ansible.builtin.include_vars:
+        file: '{{ playbook_dir }}/../../defaults/main.yml'
+        name: converge_defaults
+
+    - name: Prove a wrong pin is refused
+      when: not ansible_check_mode
+      block:
+        - name: Apply the role with one digit of one pin changed
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+          vars:
+            demo1_build_release_files: >-
+              {{ [{'path': 'demo-host/provision/branchleft_slot.py',
+              'sha256': '3e2279f0067d91296e1b309f6cbe71a3d276d7ccdbbd58aa4f99f81ce85ba80b'}]
+              + (converge_defaults.demo1_build_release_files | rejectattr('path', 'equalto', 'demo-host/provision/branchleft_slot.py') | list) }}
+        - name: Fail if the wrong pin was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a program whose pinned checksum was wrong.
+      rescue:
+        - name: Assert the failure was the checksum
+          ansible.builtin.assert:
+            that:
+              - "'did not match' in (ansible_failed_result | string | lower)"
+            quiet: true
+            fail_msg: The role failed on the wrong pin for a reason other than the checksum.

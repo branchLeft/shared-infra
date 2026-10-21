@@ -1,0 +1,109 @@
+---
+# Internal to the role. broker_deploy writes /etc/sudoers.d/branchleft-slot and
+# this role never does (ANS-12). It does depend on what the file grants, because
+# the grant names the wrapper this role installs, so it reads the file back and
+# compares it with the pinned generator's own output. Every task here reads and
+# changes nothing, so all of it runs in check mode (ANS-10).
+- name: Look at the sudoers grant broker_deploy installed
+  ansible.builtin.stat:
+    path: '{{ demo1_build_sudoers_path }}'
+    follow: false
+  register: demo1_build_sudoers_stat
+
+- name: Refuse a sudoers grant that is missing, a link, or not root-owned mode 0440
+  ansible.builtin.assert:
+    that:
+      - demo1_build_sudoers_stat.stat.exists
+      - demo1_build_sudoers_stat.stat.isreg
+      - not demo1_build_sudoers_stat.stat.islnk
+      - demo1_build_sudoers_stat.stat.pw_name == 'root'
+      - demo1_build_sudoers_stat.stat.gr_name == 'root'
+      - demo1_build_sudoers_stat.stat.mode == '0440'
+    quiet: true
+    fail_msg: >-
+      {{ demo1_build_sudoers_path }} is missing, is not a plain file, or is not root:root mode 0440.
+      Apply the broker_deploy role first; this role never writes the sudoers file.
+
+# Strict, and a read: visudo -c changes nothing. A grant sudo cannot parse would
+# be silently ignored, and the wrapper would then be reachable by no one.
+- name: Check the installed grant with visudo, strictly, changing nothing
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/visudo
+      - -csf
+      - '{{ demo1_build_sudoers_path }}'
+  register: demo1_build_visudo
+  changed_when: false
+  check_mode: false
+
+- name: Read the installed grant
+  ansible.builtin.slurp:
+    src: '{{ demo1_build_sudoers_path }}'
+  register: demo1_build_sudoers_raw
+
+- name: Take the rule lines of the installed grant
+  ansible.builtin.set_fact:
+    demo1_build_installed_grants: >-
+      {{ (demo1_build_sudoers_raw.content | b64decode).splitlines()
+      | map('trim') | reject('equalto', '') | reject('match', '#') | list }}
+
+# The number comes from the slot table: slots x (one reset + colours x three
+# verbs) + one image load. It is not a literal, so a longer table moves it.
+- name: Refuse a grant with a line that is not one literal NOPASSWD rule, or any wildcard
+  ansible.builtin.assert:
+    that:
+      - demo1_build_installed_grants | select('search', demo1_build_grant_line_pattern) | list | length == demo1_build_installed_grants | length
+      - demo1_build_installed_grants | select('search', demo1_build_wildcard_pattern) | list | length == 0
+    quiet: true
+    fail_msg: The installed sudoers grant holds a line that is not a single literal NOPASSWD rule for the broker, or a wildcard.
+
+- name: Refuse a grant with the wrong number of rules for the slot table
+  ansible.builtin.assert:
+    that:
+      - demo1_build_installed_grants | length == demo1_build_expected_grants | int
+    quiet: true
+    fail_msg: >-
+      The installed sudoers grant holds {{ demo1_build_installed_grants | length }} rules; the slot table of
+      {{ demo1_build_slots | length }} slots expects {{ demo1_build_expected_grants }}
+      ({{ demo1_build_grants_per_slot }} per slot, and one image load).
+
+# The generator prints to standard output when given no output flag, so running
+# it is a read. Its output is the grant the wrapper was written against, and the
+# only thing in this repository that can say broker_deploy's template has drifted
+# from it.
+- name: Render the grant with the pinned generator, printing it and writing nothing
+  ansible.builtin.command:
+    argv: "{{ [demo1_build_python] + demo1_build_python_flags + [demo1_build_provision_dir ~ '/render_slot_sudoers.py'] }}"
+  register: demo1_build_generated_sudoers
+  changed_when: false
+  check_mode: false
+  when: demo1_build_release_ready | bool
+
+- name: Take the rule lines the generator renders
+  ansible.builtin.set_fact:
+    demo1_build_generated_grants: >-
+      {{ demo1_build_generated_sudoers.stdout.splitlines()
+      | map('trim') | reject('equalto', '') | reject('match', '#') | list }}
+  when: demo1_build_release_ready | bool
+
+- name: Refuse an installed grant that differs from what the pinned generator renders
+  ansible.builtin.assert:
+    that:
+      - demo1_build_installed_grants | sort == demo1_build_generated_grants | sort
+    quiet: true
+    fail_msg: >-
+      The installed sudoers grant is not what render_slot_sudoers.py renders. Only in the installed
+      file: {{ demo1_build_installed_grants | difference(demo1_build_generated_grants) }}.
+      Only in the rendered grant: {{ demo1_build_generated_grants | difference(demo1_build_installed_grants) }}.
+  when: demo1_build_release_ready | bool
+
+- name: Refuse a role slot table that differs from the generator's
+  ansible.builtin.assert:
+    that:
+      - >-
+        demo1_build_generated_grants | select('search', demo1_build_reset_line_pattern)
+        | map('regex_replace', demo1_build_reset_suffix_pattern, '') | map('split', ' ') | map('last') | list | sort
+        == demo1_build_slots | sort
+    quiet: true
+    fail_msg: The slots in the pinned generator's grant are not the slots in demo1_build_slot_names.
+  when: demo1_build_release_ready | bool

@@ -1,0 +1,167 @@
+---
+# Constants of the demo host, not inputs: role variables outrank every value a
+# caller passes, so a caller cannot change them. Each is a value the pinned
+# programs hard-code (the programs run alone on the host and cannot read this
+# file), so the role asserts what it can read back from the programs' output.
+
+# The accounts. The router's uid is the one the uid register claims for it and
+# the health router checks the socket directories against.
+demo1_build_broker_user: broker
+demo1_build_broker_group: broker
+demo1_build_router_user: demo-router
+demo1_build_router_uid: 30008
+demo1_build_router_gid: 30008
+demo1_build_slot_uid_base: 30001
+demo1_build_colours: [a, b]
+
+# The uid register, the same directory the tenant volume provisioning reads.
+demo1_build_uid_register_dir: /etc/branchleft/tenant-uids
+demo1_build_config_dir: /etc/branchleft
+
+# State directories. The state root and the broker's own slots directory belong
+# to broker_deploy; this role reads them and never writes either.
+demo1_build_state_dir: /var/lib/branchleft
+demo1_build_broker_slots_dir: /var/lib/branchleft/broker-slots
+demo1_build_socket_root: /var/lib/branchleft/demo-router
+demo1_build_broker_state_dir: /var/lib/branchleft-broker
+demo1_build_flag_dir: /var/lib/branchleft-broker/drain-flags
+demo1_build_broker_env_file: /etc/branchleft/broker.env
+demo1_build_sudoers_path: /etc/sudoers.d/branchleft-slot
+
+# The staged programs. One release directory per pinned commit, root-owned and
+# writable by nobody else; the programs import one another from it.
+demo1_build_base_dir: /opt/branchleft/demo-host
+demo1_build_releases_dir: /opt/branchleft/demo-host/releases
+demo1_build_release_dir: '{{ demo1_build_releases_dir }}/{{ demo1_build_source_sha }}'
+demo1_build_current_link: /opt/branchleft/demo-host/current
+demo1_build_provision_dir: '{{ demo1_build_release_dir }}/demo-host/provision'
+
+# Where systemd runs the sidecar and the health router from. The pinned
+# renderers write these paths into the units, and the role checks that they do.
+demo1_build_lib_dir: /usr/local/lib/branchleft
+demo1_build_sidecar_path: /usr/local/lib/branchleft/demo_sidecar.py
+demo1_build_router_script_path: /usr/local/lib/branchleft/health_router.py
+demo1_build_unit_dir: /etc/systemd/system
+demo1_build_router_unit: branchleft-health-router@.service
+demo1_build_dropin_name: colour.conf
+
+# The candidate edge fragment: staged for the owner, never the live edge.
+demo1_build_candidate_dir: /var/lib/branchleft/demo-candidates
+demo1_build_candidate_edge: /var/lib/branchleft/demo-candidates/edge-upstreams.caddy
+
+# The programs placed outside the release directory. The wrapper is the only
+# one the sudoers grant names, and the only one run directly as a program.
+demo1_build_installed_programs:
+  - name: the slot wrapper
+    src: branchleft_slot.py
+    dest: '{{ demo1_build_wrapper_path }}'
+  - name: the drain sidecar
+    src: demo_sidecar.py
+    dest: '{{ demo1_build_sidecar_path }}'
+  - name: the health router
+    src: health_router.py
+    dest: '{{ demo1_build_router_script_path }}'
+
+# The python the units and the role run the programs with. -E ignores the
+# environment's PYTHON variables, -s ignores the user site, and -B writes no
+# bytecode: a read-only render must not leave a __pycache__ in the release.
+demo1_build_python: /usr/bin/python3
+demo1_build_python_flags: ['-E', '-s', '-B']
+
+# The patterns end in \Z, not $, so a trailing line break does not pass.
+demo1_build_sha_pattern: '^[0-9a-f]{40}\Z'
+demo1_build_checksum_pattern: '^[0-9a-f]{64}\Z'
+demo1_build_slot_pattern: '^[0-9]+\Z'
+demo1_build_path_pattern: '^/[A-Za-z0-9._/-]+\Z'
+demo1_build_release_path_pattern: '^demo-host/provision/[a-z_]+\.py\Z'
+demo1_build_instance_pattern: '^branchleft-compose@demo-[0-9]+-[a-z]\Z'
+
+# The slot table as strings, whatever type the host's variables gave, and the
+# number of grant lines it implies: per slot one reset and, per colour, a start,
+# a stop and an email-batches check; and one image load in all.
+demo1_build_slots: "{{ demo1_build_slot_names | map('string') | list }}"
+demo1_build_grants_per_slot: '{{ 1 + (demo1_build_colours | length) * 3 }}'
+demo1_build_expected_grants: '{{ (demo1_build_slots | length) * (demo1_build_grants_per_slot | int) + 1 }}'
+
+# The programs the role needs from the release, by file name.
+demo1_build_required_programs:
+  - branchleft_slot.py
+  - demo_go_live.py
+  - demo_sidecar.py
+  - demo_uid_claims.py
+  - health_router.py
+  - render_colour_units.py
+  - render_demo_edge.py
+  - render_demo_site.py
+  - render_router_unit.py
+  - render_slot_sudoers.py
+
+# Patterns for reading a sudoers grant back. A rule is one literal line for the
+# broker; a wildcard character anywhere in a rule would let an extra argument
+# reach the wrapper as root.
+demo1_build_grant_line_pattern: '^broker ALL=\(root\) NOPASSWD: /'
+demo1_build_wildcard_pattern: '[*?\[]'
+demo1_build_reset_line_pattern: ' [0-9]+ reset$'
+demo1_build_reset_suffix_pattern: ' reset$'
+
+# What the slot table implies, derived once here so no task spells a slot out.
+# The claims are the slugs and uids the register holds: one per slot and one for
+# the router.
+demo1_build_wanted_claims: |-
+  {%- set out = [] -%}
+  {%- for slot in demo1_build_slots -%}
+  {%- set _ = out.append({'slug': 'demo-' ~ slot, 'uid': (demo1_build_slot_uid_base | int) + (slot | int)}) -%}
+  {%- endfor -%}
+  {%- set _ = out.append({'slug': demo1_build_router_user, 'uid': demo1_build_router_uid | int}) -%}
+  {{ out }}
+
+# The router's socket directories, parents first: one per slot and one per colour
+# under it.
+demo1_build_socket_dirs: |-
+  {%- set out = [] -%}
+  {%- for slot in demo1_build_slots -%}
+  {%- set _ = out.append(demo1_build_socket_root ~ '/' ~ slot) -%}
+  {%- for colour in demo1_build_colours -%}
+  {%- set _ = out.append(demo1_build_socket_root ~ '/' ~ slot ~ '/' ~ colour) -%}
+  {%- endfor -%}
+  {%- endfor -%}
+  {{ out }}
+
+# One drain flag per slot and colour, named as the broker and the sidecar name it.
+demo1_build_flag_files: |-
+  {%- set out = [] -%}
+  {%- for slot in demo1_build_slots -%}
+  {%- for colour in demo1_build_colours -%}
+  {%- set _ = out.append(slot ~ '-' ~ colour ~ '.drain') -%}
+  {%- endfor -%}
+  {%- endfor -%}
+  {{ out }}
+
+# The colour units the renderer must produce, one per slot and colour.
+demo1_build_colour_instances: |-
+  {%- set out = [] -%}
+  {%- for slot in demo1_build_slots -%}
+  {%- for colour in demo1_build_colours -%}
+  {%- set _ = out.append('branchleft-compose@demo-' ~ slot ~ '-' ~ colour) -%}
+  {%- endfor -%}
+  {%- endfor -%}
+  {{ out }}
+
+# How the colour renderer prints its drop-ins: "## <unit instance>", the drop-in
+# text, and a blank line, for each colour. The command module strips the output's
+# trailing newlines, so a unit's text ends before the blank lines that precede
+# the next header or the end of the output; the writing task adds its newline back.
+demo1_build_dropin_pattern: '(?ms)^## (\S+)\n(.*?)\n*(?=^## |\Z)'
+
+# Each installed program with the sha256 its pin names, so the read-back compares
+# the file on the host with the pin and not with anything the role computed.
+demo1_build_installed_pins: |-
+  {%- set out = [] -%}
+  {%- for p in demo1_build_installed_programs -%}
+  {%- set pin = demo1_build_release_files | selectattr('path', 'equalto', 'demo-host/provision/' ~ p.src) | map(attribute='sha256') | first -%}
+  {%- set _ = out.append({'dest': p.dest, 'src': p.src, 'sha256': pin}) -%}
+  {%- endfor -%}
+  {{ out }}
+
+# One upstream snippet per slot in the edge fragment.
+demo1_build_edge_snippet_pattern: '(?m)^\(slot[0-9]+-upstream\) \{$'

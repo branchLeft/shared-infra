@@ -1,0 +1,117 @@
+---
+# Internal to the role. The per-colour systemd drop-ins and the health router's
+# template unit. The pinned renderers print the unit text when given no output
+# flag, so running them is a read and the files are written by copy: a plan shows
+# each file's change, and the renderer never writes to the host (ANS-9, ANS-10).
+# Nothing here enables, starts or restarts a unit; a reload only makes systemd
+# read the files.
+
+- name: Render the colour drop-ins with the pinned renderer, printing them and writing nothing
+  ansible.builtin.command:
+    argv: "{{ [demo1_build_python] + demo1_build_python_flags + [demo1_build_provision_dir ~ '/render_colour_units.py'] }}"
+  register: demo1_build_colour_render
+  changed_when: false
+  check_mode: false
+  when: demo1_build_release_ready | bool
+
+# The renderer prints "## <unit instance>", the drop-in, and a blank line, for
+# each colour. A drop-in has a blank line inside it, so a unit ends where the next
+# header or the end of the output begins.
+- name: Take the printed drop-ins apart into a unit name and its text
+  ansible.builtin.set_fact:
+    demo1_build_dropins: '{{ demo1_build_colour_render.stdout | regex_findall(demo1_build_dropin_pattern) }}'
+  when: demo1_build_release_ready | bool
+
+- name: Refuse drop-ins that are not one for every slot and colour of the role's table
+  ansible.builtin.assert:
+    that:
+      - demo1_build_dropins | map('first') | sort == demo1_build_colour_instances | sort
+      - demo1_build_dropins | map('first') | select('match', demo1_build_instance_pattern) | list | length == demo1_build_dropins | length
+    quiet: true
+    fail_msg: >-
+      The pinned renderer's drop-ins are not exactly {{ demo1_build_colour_instances | length }} units,
+      one per slot and colour of the slot table. Rendered: {{ demo1_build_dropins | map('first') | list }}.
+  when: demo1_build_release_ready | bool
+
+# The renderer writes the sidecar's path into every drop-in and the role installs
+# the sidecar at demo1_build_sidecar_path; if the two differ, systemd would run a
+# file that is not there.
+- name: Refuse a drop-in that runs the sidecar from somewhere the role did not install it
+  ansible.builtin.assert:
+    that:
+      - (demo1_build_python ~ ' ' ~ demo1_build_sidecar_path ~ ' start ') in item.1
+      - (demo1_build_python ~ ' ' ~ demo1_build_sidecar_path ~ ' stop ') in item.1
+    quiet: true
+    fail_msg: The drop-in for {{ item.0 }} does not run the sidecar the role installs at {{ demo1_build_sidecar_path }}.
+  loop: '{{ demo1_build_dropins }}'
+  loop_control:
+    label: '{{ item.0 }}'
+  when: demo1_build_release_ready | bool
+
+- name: Create the drop-in directory of each colour unit
+  ansible.builtin.file:
+    path: '{{ demo1_build_unit_dir }}/{{ item.0 }}.service.d'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: '{{ demo1_build_dropins }}'
+  loop_control:
+    label: '{{ item.0 }}'
+  when: demo1_build_release_ready | bool
+
+- name: Look at which drop-in directories exist
+  ansible.builtin.find:
+    paths: '{{ demo1_build_unit_dir }}'
+    patterns: 'branchleft-compose@demo-*.service.d'
+    file_type: directory
+  register: demo1_build_dropin_dirs
+
+# In check mode copy will not write into a directory the plan has not made, so on
+# a host without the drop-in directories the plan shows the directories above and
+# the files are shown by the first real run. A host that has them is planned in
+# full.
+- name: Write each colour's drop-in
+  ansible.builtin.copy:
+    content: "{{ item.1 }}\n"
+    dest: '{{ demo1_build_unit_dir }}/{{ item.0 }}.service.d/{{ demo1_build_dropin_name }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ demo1_build_dropins }}'
+  loop_control:
+    label: '{{ item.0 }}'
+  notify: Reload systemd manager
+  when:
+    - demo1_build_release_ready | bool
+    - not ansible_check_mode or (demo1_build_dropin_dirs.matched | int) >= (demo1_build_colour_instances | length)
+
+- name: Render the health router's template unit with the pinned renderer, printing it and writing nothing
+  ansible.builtin.command:
+    argv: "{{ [demo1_build_python] + demo1_build_python_flags + [demo1_build_provision_dir ~ '/render_router_unit.py'] }}"
+  register: demo1_build_router_render
+  changed_when: false
+  check_mode: false
+  when: demo1_build_release_ready | bool
+
+- name: Refuse a router unit that runs the router from somewhere the role did not install it
+  ansible.builtin.assert:
+    that:
+      - (demo1_build_python ~ ' ' ~ demo1_build_router_script_path ~ ' --slot %i') in demo1_build_router_render.stdout
+      - ('User=' ~ demo1_build_router_user) in demo1_build_router_render.stdout.splitlines()
+    quiet: true
+    fail_msg: The router unit does not run the router the role installs at {{ demo1_build_router_script_path }} as {{ demo1_build_router_user }}.
+  when: demo1_build_release_ready | bool
+
+- name: Write the health router's template unit
+  ansible.builtin.copy:
+    content: "{{ demo1_build_router_render.stdout }}\n"
+    dest: '{{ demo1_build_unit_dir }}/{{ demo1_build_router_unit }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+  when: demo1_build_release_ready | bool
+
+- name: Load queued unit changes before the role goes on
+  ansible.builtin.meta: flush_handlers
