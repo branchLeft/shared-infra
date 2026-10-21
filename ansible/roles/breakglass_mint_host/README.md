@@ -14,7 +14,7 @@ control host (`ops1`):
 
 1. Refuses an input that is not a full 40-character commit, or a constant that is
    not an image pinned by digest, before anything is touched.
-2. Refuses a host with no working `docker`.
+2. Refuses a host with no working `/usr/bin/docker`.
 3. Makes the directories above the tool and the log, each with an owner and a
    mode.
 4. Probes for the Node image under its digest and pulls it only when the host
@@ -130,6 +130,15 @@ for the tool and the image stay as the fallback.
   holding only `main.yml`, and no meta dependency, so a handlers file, a second
   tasks file or a library cannot add a route to the key that those checks do not
   read.
+- **Every stat asks for metadata only, under any name.** The test reads the parsed
+  tasks of this role and of `playbooks/ops1.yml` (tasks and pre_tasks), and requires
+  `get_checksum`, `get_mime` and `get_attributes` to be false on every `stat`
+  whatever its name or path, and holds every module of both to the allow-list. So no
+  task in this role or in that playbook reads a file's content or checksum through
+  `stat`, and no task calls a module off the list. What it cannot prove is that a
+  deliberate edit does not read the key: every role is root code, so a check on its
+  text cannot stop one. That control is the review, and the owner's deploy approval
+  (ws#2483). The check catches an accident, not an edit made on purpose.
 - **Nothing in the role runs on the controller.** Under `ansible-pull` the
   controller is the host, so a `lookup`, `query`, `q` or `pipe` could read the key
   without a module the checks above see, in a quiet `assert` that prints nothing.

@@ -24,12 +24,14 @@
       The source needs a full 40-character commit, the image needs a name, a tag
       and an @sha256: digest, and every file needs a 64-character sha256.
 
-# The probe changes nothing, so it runs in check mode too (ANS-10). A missing
-# program is a failed probe, not a failed task, so the assertion below can say
-# what is missing.
+# Every Docker command of this role names /usr/bin/docker, the binary the
+# application hosts' grant role also names, so a docker elsewhere on the PATH
+# cannot answer for it. The probe changes nothing, so it runs in check mode too
+# (ANS-10). A missing program is a failed probe, not a failed task, so the
+# assertion below can say what is missing.
 - name: Look for Docker
   ansible.builtin.command:
-    argv: [docker, --version]
+    argv: [/usr/bin/docker, --version]
   register: breakglass_mint_host_docker
   changed_when: false
   failed_when: false
@@ -65,7 +67,7 @@
 - name: Look for the Node image under its digest
   ansible.builtin.command:
     argv:
-      - docker
+      - /usr/bin/docker
       - image
       - inspect
       - --format
@@ -78,7 +80,7 @@
 
 - name: Pull the Node image by digest when the host lacks it
   ansible.builtin.command:
-    argv: [docker, pull, -q, '{{ breakglass_mint_host_node_image }}']
+    argv: [/usr/bin/docker, pull, -q, '{{ breakglass_mint_host_node_image }}']
   changed_when: true
   when: >-
     not (breakglass_mint_host_image_probe.rc == 0
@@ -90,7 +92,7 @@
 - name: Read the Node image back
   ansible.builtin.command:
     argv:
-      - docker
+      - /usr/bin/docker
       - image
       - inspect
       - --format
@@ -115,10 +117,15 @@
 
 # In check mode on a fresh host the directory above is not made, and get_url
 # refuses a destination whose directory is missing, so the download is skipped
-# there and only there (ANS-10). A real run always has the directory.
+# there and only there (ANS-10). A real run always has the directory. Every stat
+# of this role asks for metadata only (the three arguments below), so a stat that
+# hashed or sniffed a file could not reach the log, whatever it is named.
 - name: Look at the directory the minter is installed into
   ansible.builtin.stat:
     path: '{{ breakglass_mint_host_tool_dir }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
   register: breakglass_mint_host_tool_dir_stat
 
 - name: Download the minter and hold it to its checksum

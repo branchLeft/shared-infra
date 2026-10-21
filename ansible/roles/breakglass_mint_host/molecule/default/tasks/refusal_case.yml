@@ -6,7 +6,7 @@
 # role's own defaults.
 - name: Take the docker command away
   ansible.builtin.file:
-    path: /usr/local/bin/docker
+    path: /usr/bin/docker
     state: absent
   when: refused.setup | default('') == 'docker_missing'
 
@@ -31,7 +31,7 @@
 - name: Put the docker stand-in back
   ansible.builtin.copy:
     src: '{{ playbook_dir }}/../../../breakglass_grant_host/molecule/default/files/docker_standin.sh'
-    dest: /usr/local/bin/docker
+    dest: /usr/bin/docker
     owner: root
     group: root
     mode: '0755'
