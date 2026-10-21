@@ -49,13 +49,19 @@ jobs:
       # A base commit the runner cannot resolve (a new branch, a forced push)
       # counts as changed, so the gate runs rather than being skipped.
       #
-      # Some role tests read files outside ansible/: the deploy_tooling role links
+      # Some role tests read files outside ansible/. The deploy_tooling role links
       # four programs in hetzner/provision, its checks read the two hand scripts
       # that install the same files and the cloud-init source that writes its
       # sudoers drop-in, and its program's address literals are checked against
-      # the address plan. A change to one of those files alone must still run the
-      # tests that read it, and a change to any other file under hetzner/ must not
-      # run every shard, so the list names the files and no directory.
+      # the address plan. The other roles' molecule verify files copy the files
+      # they compare against from hetzner/provision, hetzner/monitoring and
+      # hetzner/nextcloud1, and the egress_nat and tunnel_account roles read their
+      # own unit files there. A change to one of those files alone must still run
+      # the tests that read it. A directory is named only where a verify step copies
+      # the whole directory (monitoring_stack, nextcloud_stack); everywhere else the
+      # list names the files, so a change to any other file under hetzner/ does not
+      # run every shard. ansible/checks/test_ci_watched_paths.py fails when a role
+      # reads a path outside ansible/ that this list does not name.
       - name: Decide whether the Ansible inputs changed
         id: changes
         env:
@@ -86,6 +92,18 @@ jobs:
             hetzner/provision/app-host-isolation.sh
             hetzner-host/cloudInit.ts
             hetzner/scripts/check-address-plan-drift.py
+            hetzner/provision/branchleft_host_egress.sh
+            hetzner/provision/branchleft-host-egress.service
+            hetzner/provision/branchleft_nat.sh
+            hetzner/provision/branchleft-nat.service
+            hetzner/provision/branchleft-db-tunnel.service
+            hetzner/provision/node-exporter.service
+            hetzner/monitoring/stack/
+            hetzner/monitoring/systemd/monitoring.override.conf
+            hetzner/monitoring/systemd/snds-collector.service
+            hetzner/monitoring/systemd/snds-collector.timer
+            hetzner/nextcloud1/stack/
+            hetzner/nextcloud1/systemd/nextcloud1.override.conf
           )
           files=$(git diff --name-only "$base" HEAD -- "${watched[@]}")
           if [ -n "$files" ]; then
@@ -208,7 +226,7 @@ jobs:
             fi
             (
               cd "$role"
-              "$bin/mypy" library tests/unit
+              "$bin/mypy" --strict library tests/unit
               "$bin/ruff" check library tests
               "$bin/ruff" format --check library tests
               PYTHONPATH=library "$bin/python" -m unittest discover -b -s tests/unit -p "test_*.py"
