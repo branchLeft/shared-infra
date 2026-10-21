@@ -55,6 +55,24 @@ DEFAULT_SCENARIO = "default"
 SCENARIO_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
+# A scenario may leave out some of the Molecule steps, so that a role whose steps do
+# not fit one shard's time limit can share them out between its scenarios. The file
+# is skip-steps.txt, beside the scenario's molecule.yml: one step name per line, and a
+# line that starts with # is a comment. It is not YAML, because ansible-lint takes any
+# YAML file in a scenario directory for a playbook. A scenario with no such file runs
+# every step. Only these steps may be left out: create, prepare, converge and destroy
+# are what any run needs, and a step that no scenario of the role runs would be a check
+# that never happens, so that is refused.
+SKIP_FILE = "skip-steps.txt"
+SKIPPABLE_STEPS = (
+    "check-fresh",
+    "idempotence",
+    "verify",
+    "check-configured",
+    "molecule-check",
+)
+
+
 @dataclass(frozen=True)
 class Step:
     """One command the harness runs, and whether it runs after a failure."""
@@ -64,6 +82,7 @@ class Step:
     cwd: Path
     always: bool = False
     no_changes: bool = False
+    skipped: bool = False
 
 
 Runner = Callable[[Sequence[str], Path, Mapping[str, str]], "subprocess.CompletedProcess[str]"]
@@ -252,12 +271,54 @@ def scenario_problems(scenario: Path) -> list[str]:
     return sorted(set(problems))
 
 
+def read_skips(directory: Path) -> tuple[list[str], list[str]]:
+    """Return the steps a scenario leaves out, and what is wrong with the file that says so.
+
+    The file is ``skip-steps.txt`` in the scenario's directory. No file leaves nothing
+    out. A file with a problem leaves nothing out either, and the problem is returned
+    for ``scenario-limits`` to fail on.
+    """
+    path = directory / SKIP_FILE
+    if not path.is_file():
+        return [], []
+    label = f"molecule/{directory.name}/{SKIP_FILE}"
+    lines = (line.strip() for line in path.read_text(encoding="utf-8").splitlines())
+    names = list(dict.fromkeys(line for line in lines if line and not line.startswith("#")))
+    refused = [name for name in names if name not in SKIPPABLE_STEPS]
+    if refused:
+        allowed = ", ".join(SKIPPABLE_STEPS)
+        return [], [f"{label}: cannot leave out {', '.join(refused)} (only {allowed} may be)"]
+    return names, []
+
+
+def skip_problems(role: Path) -> list[str]:
+    """Return what is wrong with the scenarios' step lists, read for every scenario of the role.
+
+    Each file must be well formed, and every step that may be left out must run in at
+    least one scenario: a role may share its steps between scenarios but not drop one.
+    """
+    problems: list[str] = []
+    left_out: list[set[str]] = []
+    for path in sorted((role / "molecule").glob("*/molecule.yml")):
+        names, found = read_skips(path.parent)
+        problems.extend(found)
+        left_out.append(set(names))
+    if left_out:
+        problems.extend(
+            f"{step} runs in no scenario: every scenario's {SKIP_FILE} leaves it out"
+            for step in SKIPPABLE_STEPS
+            if all(step in names for names in left_out)
+        )
+    return problems
+
+
 def check_scenarios(role: Path, scenario: str = DEFAULT_SCENARIO) -> list[str]:
     """Return every way the role's Molecule scenarios break the limits of ANS-15.
 
     Every scenario file of the role is read, whichever one this run executes. The
     default scenario and the one being run must exist: a shard for a scenario that
-    is not there fails here and is not skipped.
+    is not there fails here and is not skipped. The step lists are read the same way
+    (``skip_problems``).
     """
     problems = [
         f"molecule/{name}/molecule.yml is missing"
@@ -271,6 +332,7 @@ def check_scenarios(role: Path, scenario: str = DEFAULT_SCENARIO) -> list[str]:
             problems.append(f"{relative}: is not a readable file (a link to nothing?)")
             continue
         problems.extend(f"{relative}: {found}" for found in scenario_problems(path))
+    problems.extend(skip_problems(role))
     return problems
 
 
@@ -310,8 +372,11 @@ def molecule_steps(role: Path, tools: Path, scenario: str = DEFAULT_SCENARIO) ->
     not told, so a second scenario that was not named would never run and its shard
     would pass on the first. ``check-fresh`` precedes any real converge;
     ``molecule-check`` is Molecule's own action; ``destroy`` names the scenario too.
+    A step the scenario's ``harness.yml`` leaves out stays in the list, marked skipped,
+    so the summary shows it as SKIP and not as missing.
     """
     molecule = str(tools / "molecule")
+    left_out = read_skips(role / "molecule" / scenario)[0]
     named = ("-s", scenario)
     in_check_mode = ("converge", *named, "--", "--check", "--diff")
     commands: list[tuple[str, tuple[str, ...]]] = [
@@ -325,7 +390,13 @@ def molecule_steps(role: Path, tools: Path, scenario: str = DEFAULT_SCENARIO) ->
         ("molecule-check", ("check", *named)),
     ]
     steps = [
-        Step(name, (molecule, *args), role, no_changes=name == "check-configured")
+        Step(
+            name,
+            (molecule, *args),
+            role,
+            no_changes=name == "check-configured",
+            skipped=name in left_out,
+        )
         for name, args in commands
     ]
     steps.append(Step("destroy", (molecule, "destroy", *named), role, always=True))
@@ -378,7 +449,7 @@ def run_molecule(
     finished = False
     try:
         for step in steps:
-            if broken and not step.always:
+            if step.skipped or (broken and not step.always):
                 outcomes.append((step.name, SKIP))
                 continue
             status = report(step, run(step.argv, step.cwd, env))

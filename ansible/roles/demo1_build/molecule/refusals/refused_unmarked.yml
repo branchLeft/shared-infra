@@ -1,0 +1,160 @@
+---
+# One case of the drain-flag preseed control, imported by converge.yml. The role seeds
+# the fourteen drain flags only on the run that makes the flag directory. A flag
+# directory that was already there, holds no flag and has no marker is one the role
+# cannot read: it is either a host built by the pinned programs where every colour has
+# gone live (seeding it would drain every colour that is serving traffic) or a host
+# where an earlier run died before filling it. The step must refuse it before it
+# creates anything, naming both remedies, and must seed nothing and write no marker.
+#
+# converge_case.flags is the list of flag files to plant in an existing flag
+# directory (the role is not applied in this scenario, so the case makes the
+# directory), converge_case.marker whether to place the marker, and
+# converge_case.expect the words of the refusal. Without expect the case is a
+# control, converge_case.accepted: true: the same directory in a state the role can
+# read is accepted, and converge_case.expect_flags is how many flags are in it after,
+# which shows the case is refused for the state and not because the step refuses
+# every existing directory, and that an existing directory is never seeded.
+#
+# Everything the case made is removed in every outcome. The case is skipped by
+# Molecule's idempotence step (the tag below), because it plants and removes state each
+# time it runs. A plan makes no change, so a check run skips it.
+- name: Refuse an existing drain-flag directory that is empty and has no marker
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    converge_flag_dir: /var/lib/branchleft-broker/drain-flags
+    converge_marker: /etc/branchleft/demo1-drain-flags-preseeded
+  tasks:
+    - name: Prove the state the case plants is refused or accepted, and nothing is seeded
+      when: not ansible_check_mode
+      block:
+        - name: Make the broker's state directory and the flag directory, as an earlier build left them
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+          loop:
+            - /var/lib/branchleft-broker
+            - '{{ converge_flag_dir }}'
+          changed_when: false
+
+        - name: Plant the flags the case says
+          ansible.builtin.copy:
+            content: ''
+            dest: '{{ converge_flag_dir }}/{{ item }}'
+            owner: root
+            group: root
+            mode: '0644'
+          loop: '{{ converge_case.flags | default([]) }}'
+          changed_when: false
+
+        - name: Place the marker when the case says
+          ansible.builtin.copy:
+            content: ''
+            dest: '{{ converge_marker }}'
+            owner: root
+            group: root
+            mode: '0644'
+          changed_when: false
+          when: converge_case.marker | default(false)
+
+        - name: Run the role's directory step
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+            tasks_from: _dirs.yml
+
+        - name: Fail if a state that must be refused was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a flag directory that is empty and has no marker.
+          when: converge_case.expect is defined
+
+        - name: Look at the flags and the marker after an accepted case
+          ansible.builtin.find:
+            paths: '{{ converge_flag_dir }}'
+            patterns: '*.drain'
+          register: demo1_build_converge_unmarked_flags
+          when: converge_case.accepted | default(false)
+
+        - name: Look at the marker after an accepted case
+          ansible.builtin.stat:
+            path: '{{ converge_marker }}'
+            follow: false
+          register: demo1_build_converge_unmarked_marker
+          when: converge_case.accepted | default(false)
+
+        - name: Assert an existing directory was not seeded, and the marker is in place
+          ansible.builtin.assert:
+            that:
+              - demo1_build_converge_unmarked_flags.files | length == converge_case.expect_flags
+              - demo1_build_converge_unmarked_marker.stat.isreg
+              - demo1_build_converge_unmarked_marker.stat.pw_name == 'root'
+              - demo1_build_converge_unmarked_marker.stat.mode == '0644'
+            quiet: true
+            fail_msg: >-
+              The role seeded a flag directory that was already there, or left no marker. The flags
+              after: {{ demo1_build_converge_unmarked_flags.files | map(attribute='path') | map('basename') | list }}.
+          when: converge_case.accepted | default(false)
+      rescue:
+        - name: Assert a control case was not refused
+          ansible.builtin.assert:
+            that:
+              - converge_case.expect is defined
+            quiet: true
+            fail_msg: >-
+              The role refused a state it must accept: {{ ansible_failed_result.msg | default('') }}
+
+        - name: Assert the refusal was the one this case is for, naming both remedies
+          ansible.builtin.assert:
+            that:
+              - converge_case.expect in (ansible_failed_result.msg | default(''))
+              - "'install -m 0644 -o root -g root /dev/null ' ~ converge_marker in (ansible_failed_result.msg | default(''))"
+              - "'rmdir ' ~ converge_flag_dir in (ansible_failed_result.msg | default(''))"
+            quiet: true
+            fail_msg: >-
+              The role failed on an empty flag directory with no marker for a reason other than the
+              refusal, or without naming both remedies: {{ ansible_failed_result.msg | default('') }}
+
+        - name: Look at what the refused step left
+          ansible.builtin.find:
+            paths:
+              - /var/lib/branchleft-broker
+              - /var/lib/branchleft
+            patterns: '*.drain,demo-router'
+            file_type: any
+            recurse: true
+          register: demo1_build_converge_unmarked_left
+
+        - name: Look at the marker and the flag directory after the refusal
+          ansible.builtin.stat:
+            path: '{{ item }}'
+            follow: false
+          loop:
+            - '{{ converge_marker }}'
+            - '{{ converge_flag_dir }}'
+          register: demo1_build_converge_unmarked_after
+
+        - name: Assert the refusal seeded nothing, wrote no marker and changed nothing it declares
+          ansible.builtin.assert:
+            that:
+              - demo1_build_converge_unmarked_left.files | length == 0
+              - not demo1_build_converge_unmarked_after.results[0].stat.exists
+              - demo1_build_converge_unmarked_after.results[1].stat.pw_name == 'root'
+            quiet: true
+            fail_msg: >-
+              The refused step seeded a flag, wrote the marker, created the socket tree or changed the
+              flag directory's owner. It must stop before it creates anything.
+      always:
+        - name: Remove everything the case made
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /var/lib/branchleft/demo-router
+            - /var/lib/branchleft-broker
+            - '{{ converge_marker }}'
+          changed_when: false
+          when: not ansible_check_mode

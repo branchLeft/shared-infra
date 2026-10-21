@@ -232,6 +232,53 @@
       link_at: /var/lib/branchleft-broker/drain-flags
       parents: [/var/lib/branchleft-broker]
 
+# The same refusal for a regular file, the other thing that is not a directory. The
+# file module would refuse it too, with a message of its own, so only the role's
+# message passes this case.
+- name: Refuse the drain-flag directory as a regular file
+  ansible.builtin.import_playbook: refused_link.yml
+  vars:
+    converge_case:
+      name: the drain-flag directory as a regular file
+      file_at: /var/lib/branchleft-broker/drain-flags
+      parents: [/var/lib/branchleft-broker]
+
+# A flag directory that was already there is never seeded. One that exists, is empty
+# and has no marker cannot be told from a host where every colour has gone live, so it
+# is refused with both remedies named. The two controls are the same directory in a
+# state the role can read: with the marker, and with a flag already in it and no
+# marker (a host built before the marker existed). Both are accepted and neither is
+# seeded; a directory the run makes itself is seeded, and the accepted case above
+# counts the fourteen flags.
+- name: Refuse an existing flag directory that is empty and has no marker
+  ansible.builtin.import_playbook: refused_unmarked.yml
+  vars:
+    converge_case:
+      name: an existing, empty flag directory with no marker
+      flags: []
+      marker: false
+      expect: 'exists, holds no drain flag and there is no marker'
+
+- name: Accept an existing empty flag directory that has the marker, and seed nothing
+  ansible.builtin.import_playbook: refused_unmarked.yml
+  vars:
+    converge_case:
+      name: an existing, empty flag directory with the marker
+      flags: []
+      marker: true
+      accepted: true
+      expect_flags: 0
+
+- name: Accept an existing flag directory that holds a flag but has no marker, and seed nothing
+  ansible.builtin.import_playbook: refused_unmarked.yml
+  vars:
+    converge_case:
+      name: an existing flag directory holding one flag, with no marker
+      flags: ['0-a.drain']
+      marker: false
+      accepted: true
+      expect_flags: 1
+
 # The grant is the generator's and whole; the role's slot table has an eighth
 # slot that the grant does not hold.
 - name: Refuse a slot table that is not the generator's

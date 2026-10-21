@@ -91,6 +91,16 @@ the 50 literal invocation lines of the default slot table, and listed by
 role's sudoers install with a line that is not sudoers syntax and expects the
 install to stop at visudo's refusal and leave the good grant untouched.
 
+The admin keys directory is the broker's to replace, because the broker owns the
+slots directory above it. The role reads it without following a link and refuses a
+link or a non-directory there (`tasks/_admin_keys_dir.yml`), in a plan as well as an
+apply, and the file task does not follow a link either. A file task that followed
+one would change the owner and mode of its target, as root: a link to
+`/etc/sudoers.d` would become the broker's, mode 0700. `verify.yml` runs that step
+alone, first on the real directory, which it must accept, then on a link to a root
+directory of mode 0711, which it must refuse with the role's own message and leave
+as it found it.
+
 The Node unpack is skipped in check mode: `unarchive` needs its destination to
 exist even then, and on a host the role has not touched the directory and the
 download are only reported, not made.

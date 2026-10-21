@@ -1,0 +1,11 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is
+# a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# Nothing in this scenario applies the role, and every play in it is skipped in check
+# mode (a plan makes no change, so there is nothing to refuse), so the three steps
+# that run a check would prove nothing here. They are the plan scenario's. Molecule's
+# own check alone recreates the container and prepares it again, and was the largest
+# part of this shard's time.
+check-fresh
+check-configured
+molecule-check

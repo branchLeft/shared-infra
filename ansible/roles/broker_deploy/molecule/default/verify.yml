@@ -318,3 +318,97 @@
           Expected the role to stop at the sudoers install with visudo's refusal and leave the
           grant as it was. Refused: {{ broker_deploy_verify_refused }}, at
           {{ broker_deploy_verify_refused_at | default('nothing') }}.
+
+    # The link control. The broker owns the slots directory above the admin keys
+    # directory, so it can replace that directory with a link, and a file task that
+    # followed the link would apply the broker's owner and mode 0700 to whatever it
+    # points at, as root. The directory step is run alone. First against the real
+    # directory, which it must accept (so a step that refused everything fails
+    # here), then against a link to a root directory of mode 0711 that no step of
+    # the role creates: it must refuse, and leave the target as it found it. The
+    # directory is put back in every outcome, as the role leaves it.
+    - name: Run the directory step against the real directory, which it must accept
+      ansible.builtin.include_role:
+        name: branchleft.broker_deploy
+        tasks_from: _admin_keys_dir.yml
+
+    - name: Prove a link in place of the admin keys directory is refused and its target left alone
+      block:
+        - name: Make the directory the link will point at, with a mode the role never gives a directory
+          ansible.builtin.file:
+            path: /var/tmp/broker-link-target
+            state: directory
+            owner: root
+            group: root
+            mode: '0711'
+          changed_when: false
+
+        - name: Take the real directory away and plant the link in its place
+          ansible.builtin.file:
+            path: /var/lib/branchleft/broker-slots/admin-keys
+            state: absent
+          changed_when: false
+
+        - name: Plant the link
+          ansible.builtin.file:
+            src: /var/tmp/broker-link-target
+            dest: /var/lib/branchleft/broker-slots/admin-keys
+            state: link
+          changed_when: false
+
+        - name: Run the directory step against the link
+          ansible.builtin.include_role:
+            name: branchleft.broker_deploy
+            tasks_from: _admin_keys_dir.yml
+
+        - name: Note that the link was accepted
+          ansible.builtin.set_fact:
+            broker_deploy_verify_link_refused: false
+      rescue:
+        - name: Note that the link was refused, and by what
+          ansible.builtin.set_fact:
+            broker_deploy_verify_link_refused: true
+            broker_deploy_verify_link_msg: '{{ ansible_failed_result.msg | default("") }}'
+      always:
+        - name: Look at the link's target after the step
+          ansible.builtin.stat:
+            path: /var/tmp/broker-link-target
+            follow: false
+          register: broker_deploy_verify_link_target
+
+        - name: Take the link away
+          ansible.builtin.file:
+            path: /var/lib/branchleft/broker-slots/admin-keys
+            state: absent
+          changed_when: false
+
+        - name: Put the real directory back, as the role leaves it
+          ansible.builtin.file:
+            path: /var/lib/branchleft/broker-slots/admin-keys
+            state: directory
+            owner: broker
+            group: broker
+            mode: '0700'
+          changed_when: false
+
+        - name: Remove the target of the link
+          ansible.builtin.file:
+            path: /var/tmp/broker-link-target
+            state: absent
+          changed_when: false
+
+    - name: Assert the link was refused by the role's own check, and its target is still root's mode 0711
+      ansible.builtin.assert:
+        that:
+          - broker_deploy_verify_link_refused
+          - "'is a link or is not a directory' in broker_deploy_verify_link_msg"
+          - "'/var/lib/branchleft/broker-slots/admin-keys' in broker_deploy_verify_link_msg"
+          - broker_deploy_verify_link_target.stat.pw_name == 'root'
+          - broker_deploy_verify_link_target.stat.gr_name == 'root'
+          - broker_deploy_verify_link_target.stat.mode == '0711'
+        quiet: true
+        fail_msg: >-
+          Expected the directory step to refuse a link in place of the admin keys directory with its
+          own message and to leave the link's target as it found it. Refused:
+          {{ broker_deploy_verify_link_refused | default('not recorded') }}, message
+          {{ broker_deploy_verify_link_msg | default('none') }}.

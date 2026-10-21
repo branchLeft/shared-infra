@@ -10,10 +10,13 @@
 # the real directories to make above it first (the role is not applied in this
 # scenario, so nothing else makes them). The link points at a directory of root's
 # with a mode (0711) that no declared directory has, so a task that followed the
-# link would change it, and the case reads it after. Without link_at the case
-# is the control, converge_case.accepted: true: the same paths as real
-# directories are accepted, and the step creates them, which shows the cases are
-# refused for the link and not because the step refuses everything.
+# link would change it, and the case reads it after. converge_case.file_at plants
+# a regular file at its path instead, the other thing that is not a directory; the
+# step refuses it with the same message, and not with the file module's own.
+# Without link_at or file_at the case is the control, converge_case.accepted: true:
+# the same paths as real directories are accepted, and the step creates them, which
+# shows the cases are refused for the link or the file and not because the step
+# refuses everything.
 #
 # Everything the case made is removed in every outcome, so the scenario's verify
 # can assert it left nothing behind. The case is skipped by Molecule's idempotence
@@ -56,15 +59,28 @@
           changed_when: false
           when: converge_case.link_at is defined
 
+        # The other half of the refusal: a regular file where a directory is declared.
+        # It is the path the file module would refuse with a message of its own
+        # ("already exists as a file"), so only the role's own message passes.
+        - name: Plant a regular file where the case says
+          ansible.builtin.copy:
+            content: ''
+            dest: '{{ converge_case.file_at }}'
+            owner: root
+            group: root
+            mode: '0644'
+          changed_when: false
+          when: converge_case.file_at is defined
+
         - name: Run the role's directory step
           ansible.builtin.include_role:
             name: branchleft.demo1_build
             tasks_from: _dirs.yml
 
-        - name: Fail if the link was accepted
+        - name: Fail if the link or the file was accepted
           ansible.builtin.fail:
-            msg: The role accepted a link in place of a directory it declares.
-          when: converge_case.link_at is defined
+            msg: The role accepted a link or a file in place of a directory it declares.
+          when: converge_case.link_at is defined or converge_case.file_at is defined
 
         # The control must have made the directories and recorded the preseed, and
         # not have been skipped.
@@ -96,11 +112,11 @@
           ansible.builtin.assert:
             that:
               - "'is a link or is not a directory' in (ansible_failed_result.msg | default(''))"
-              - converge_case.link_at in (ansible_failed_result.msg | default(''))
+              - (converge_case.link_at | default(converge_case.file_at)) in (ansible_failed_result.msg | default(''))
             quiet: true
             fail_msg: >-
-              The role failed on the link at {{ converge_case.link_at | default('(none)') }} for a reason other than
-              a link in place of a directory: {{ ansible_failed_result.msg | default('') }}
+              The role failed at {{ converge_case.link_at | default(converge_case.file_at) | default('(none)') }} for a
+              reason other than a link or a file in place of a directory: {{ ansible_failed_result.msg | default('') }}
 
         - name: Look at the link's target after the refusal
           ansible.builtin.stat:

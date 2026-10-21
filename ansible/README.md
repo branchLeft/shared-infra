@@ -119,6 +119,24 @@ The static steps do not depend on each other or on the container steps. A
 failed container step skips the later ones except `destroy`. The exit status is
 non-zero if any step failed.
 
+### Sharing steps between scenarios
+
+Each scenario is its own shard with its own 25-minute limit. A role whose steps do not
+fit one shard shares them out between its scenarios: a scenario's `skip-steps.txt`,
+beside its `molecule.yml`, lists the steps its shard leaves out, one name per line,
+and a line that starts with `#` is a comment. A scenario with no such file runs every
+step. The leaving-out is shown, as `SKIP` in the summary, and not hidden.
+
+Only `check-fresh`, `idempotence`, `verify`, `check-configured` and `molecule-check`
+may be left out. `create`, `prepare`, `converge` and `destroy` are what any run needs.
+A line that is not one of those five names fails `scenario-limits` and leaves nothing
+out. So does a step that every scenario of the role leaves out: a role may share its
+steps but not drop one, and the check reads every scenario's list whichever one the
+run executes. The list is plain text and not YAML because `ansible-lint` takes any
+YAML file in a scenario directory for a playbook.
+
+A scenario that leaves out `verify` needs no `verify.yml`.
+
 The harness's own tests, type check and lint run from `ansible/`, with the
 virtual environment's Python because the harness reads YAML with the library the
 tools bring. The pin check (below) is held to the same standard and run the

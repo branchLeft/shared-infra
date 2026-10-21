@@ -40,6 +40,58 @@
     demo1_build_dirs_not_plain: >-
       {{ demo1_build_dirs_stat.results | selectattr('stat.exists') | rejectattr('stat.isdir') | map(attribute='item') | list }}
 
+# Read before anything is created: whether this run is the one that makes the
+# drain-flag directory. A flag is the sign that a colour is drained, and the broker
+# deletes it when a colour goes live, so a flag that is absent later is a colour
+# that went live. Putting it back would drain a live colour, which is why the flags
+# are seeded once and never by a later run. They are seeded only when this run
+# makes the directory: a directory that was already there was made by the pinned
+# programs or by an earlier run, and what is in it is the broker's to manage. "Once"
+# for a later run is a marker in root's configuration directory, which the broker
+# cannot reach, and not the flags themselves: a host where every colour has gone
+# live holds no flag at all and must not be seeded again.
+- name: Look at the drain-flag directory before it is declared
+  ansible.builtin.stat:
+    path: '{{ demo1_build_flag_dir }}'
+    follow: false
+  register: demo1_build_flag_dir_stat
+
+- name: Look for the marker that says the drain flags were preseeded
+  ansible.builtin.stat:
+    path: '{{ demo1_build_preseed_marker }}'
+    follow: false
+  register: demo1_build_preseed_marker_stat
+
+- name: Look for drain flags already in it
+  ansible.builtin.find:
+    paths: '{{ demo1_build_flag_dir }}'
+    patterns: '*.drain'
+    file_type: file
+  register: demo1_build_flags_found
+  when: demo1_build_flag_dir_stat.stat.exists
+
+# A directory that exists, holds no flag and has no marker is one of two hosts the
+# role cannot tell apart: one built by the pinned programs where every colour has
+# gone live (seeding it would drain every colour that is serving traffic), and one
+# where an earlier run died after making the directory and before filling it
+# (leaving it empty would start every colour live). So it fails closed, in a plan
+# as well as an apply and before anything is created, and the owner chooses.
+- name: Refuse a drain-flag directory that exists, is empty and has no marker
+  ansible.builtin.assert:
+    that:
+      - >-
+        not demo1_build_flag_dir_stat.stat.exists
+        or demo1_build_preseed_marker_stat.stat.exists
+        or (demo1_build_flags_found.matched | default(0)) > 0
+    quiet: true
+    fail_msg: >-
+      {{ demo1_build_flag_dir }} exists, holds no drain flag and there is no marker
+      {{ demo1_build_preseed_marker }}, so the role cannot tell whether every colour has gone live or a
+      run died before filling it. To keep the colours as they are, place the marker (as root:
+      install -m 0644 -o root -g root /dev/null {{ demo1_build_preseed_marker }}). To start every
+      colour drained, seed the directory: remove the empty directory (rmdir {{ demo1_build_flag_dir }})
+      and run the role again, which creates and seeds it.
+
 # The root of the router's sockets is root's and closed to everyone else:
 # whoever can write it can rename the router's whole tree. Below it every slot
 # and colour directory is private to the router, by number, because the account
@@ -75,34 +127,6 @@
     mode: '0750'
     follow: false
 
-# Read before the directory is declared: whether this run is the one that makes
-# it. A flag is the sign that a colour is drained, and the broker deletes it when
-# a colour goes live, so a flag that is absent later is a colour that went live.
-# Putting it back would drain a live colour, which is why the flags are
-# preseeded once and never by a later run. "Once" is a marker in root's
-# configuration directory, which the broker cannot reach, and not the flags
-# themselves: a host where every colour has gone live holds no flag at all and
-# must not be seeded again.
-- name: Look at the drain-flag directory before it is declared
-  ansible.builtin.stat:
-    path: '{{ demo1_build_flag_dir }}'
-    follow: false
-  register: demo1_build_flag_dir_stat
-
-- name: Look for the marker that says the drain flags were preseeded
-  ansible.builtin.stat:
-    path: '{{ demo1_build_preseed_marker }}'
-    follow: false
-  register: demo1_build_preseed_marker_stat
-
-- name: Look for drain flags already in it
-  ansible.builtin.find:
-    paths: '{{ demo1_build_flag_dir }}'
-    patterns: '*.drain'
-    file_type: file
-  register: demo1_build_flags_found
-  when: demo1_build_flag_dir_stat.stat.exists
-
 - name: Create the drain-flag directory, the broker's and readable by the sidecar
   ansible.builtin.file:
     path: '{{ demo1_build_flag_dir }}'
@@ -112,11 +136,11 @@
     mode: '0755'
     follow: false
 
-# A host with no marker and no flag has never been preseeded (or a run died
-# between creating the directory and filling it, before the marker below); a host
-# with the marker, or with any flag, is the broker's to manage. Skipped in check
-# mode because copy will not write into a directory the plan has not made, and the
-# plan shows the directory above.
+# Seeded only by the run that made the directory, and never where the marker is:
+# a directory that was already there is the broker's to manage, whatever it holds
+# (an empty one with no marker was refused above). Skipped in check mode because
+# copy will not write into a directory the plan has not made, and the plan shows
+# the directory above.
 - name: Preseed one flag per slot and colour, so a new colour boots drained
   ansible.builtin.copy:
     content: ''
@@ -128,13 +152,16 @@
   loop: '{{ demo1_build_flag_files }}'
   when:
     - not ansible_check_mode
+    - not demo1_build_flag_dir_stat.stat.exists
     - not demo1_build_preseed_marker_stat.stat.exists
-    - (demo1_build_flags_found.matched | default(0)) == 0
 
-# Written after the flags, so a run that died while seeding them leaves no marker
-# and the next run finishes the job. On a host that already holds flags (built
-# before the marker existed) it is written without seeding anything. A marker
-# stays once written: every colour live, and so no flag, is a state to keep.
+# Written after the flags. A run that dies while seeding them leaves the directory
+# with some flags and no marker: the next run writes the marker without seeding, so
+# the flags that are missing are a step for the owner (README, Drain flags). A run
+# that dies before the first flag leaves it empty, which the refusal above stops.
+# On a host that already holds flags (built before the marker existed) it is
+# written without seeding anything. A marker stays once written: every colour live,
+# and so no flag, is a state to keep.
 - name: Record that the drain flags have been preseeded, in a file the broker cannot remove
   ansible.builtin.copy:
     content: ''

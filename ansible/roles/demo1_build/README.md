@@ -206,9 +206,9 @@ change the commit, compute each checksum with
 - `/var/lib/branchleft/demo-router/` (`root:root` `0755`) and, under it, one
   directory per slot and one per colour (uid and gid 30008, `0700`).
 - `/var/lib/branchleft-broker` (`broker:broker` `0750`) and its `drain-flags`
-  directory (`broker:broker` `0755`). Once, on a host with no marker and whose
-  flag directory holds no `*.drain` file, fourteen empty flags (`root` `0644`),
-  one per slot and colour.
+  directory (`broker:broker` `0755`). Once, on the run that creates the flag
+  directory and only where there is no marker, fourteen empty flags (`root`
+  `0644`), one per slot and colour.
 - `/etc/branchleft/demo1-drain-flags-preseeded` (`root:root` `0644`, empty): the
   marker that says the flags were preseeded.
 - `/etc/systemd/system/branchleft-compose@demo-<n>-<colour>.service.d/colour.conf`
@@ -227,16 +227,22 @@ written after the flags. The broker owns the flag directory and can delete anyth
 in it, but cannot write `/etc/branchleft`, which the preconditions require to be
 root's and closed to group and others. So the marker outlives the flags: a host
 where every colour has gone live holds no flag at all, and a later run does not
-seed them again. The flags are written only when there is no marker and the
-directory holds no `*.drain` file. A directory that already holds a flag but has no
-marker (a host built before the marker existed) gets the marker and no flags.
+seed them again. The flags are written only by the run that creates the flag
+directory, and only where there is no marker. A directory that was already there is
+never seeded, whatever it holds: one that holds a flag but has no marker (a host
+built before the marker existed) gets the marker and no flags.
 
-A host with no marker, whose flag directory exists and is empty, is seeded once.
-That cannot be told from a build that died between creating the directory and
-writing the flags, which is the case the order of the two writes is for. It is also
-what a host built by the pinned programs before this role existed, with every
-colour already live, would look like: such a host is not applied until its marker
-is placed by hand, empty, `root:root` `0644`.
+A directory that exists, is empty and has no marker is refused, in a plan as well as
+an apply and before anything is created. It cannot be told apart from two hosts that
+need opposite things: one built by the pinned programs with every colour already live
+(seeding it would drain every colour that is serving traffic), and one where an
+earlier run died after creating the directory and before writing the first flag
+(leaving it empty would start every colour live). The refusal names both remedies.
+To keep the colours as they are, place the marker as root, empty, `root:root`
+`0644`. To start every colour drained, remove the empty directory and run the role
+again, which creates and seeds it. A run that dies while writing the flags leaves
+some of them and no marker: the next run writes the marker without seeding, so the
+flags that are missing are put in place by the owner.
 
 ### The uid register
 
@@ -266,9 +272,10 @@ the task. In order:
 | `demo_uid_claims.py`                                     | Never run.                                                                                                                                                   |
 | Drain-flag pre-seed and its marker                       | Never run.                                                                                                                                                   |
 | Link check on the declared directories                   | Run: reads and refuses, so a plan on a host with a link in place stops there.                                                                                |
+| Refusal of an empty flag directory with no marker        | Run: reads and refuses, so a plan on such a host stops there with both remedies named.                                                                       |
 | Integrity read-back                                      | Not run: it reads the result of a real run.                                                                                                                  |
 
-The Molecule `converge.yml` runs the role in check mode and compares a list of
+The `plan` scenario's `converge.yml` runs the role in check mode and compares a list of
 watched paths before and after: a path that did not exist must still not exist and
 one that did must have the same modification time. That control holds on a fresh
 host and on a configured one. The same play reads whether the release link
@@ -285,19 +292,31 @@ describes (Docker running locally, Python 3.12 or later):
 .venv/bin/python ansible/harness/run_harness.py ansible/roles/demo1_build
 ```
 
-There are two scenarios, and CI runs each as its own job (a shard, below):
+There are three scenarios, and CI runs each as its own job (a shard, below). Each
+leaves out the harness steps that another scenario runs, listed in its
+`skip-steps.txt` (`ansible/README.md`, "Sharing steps between scenarios"), and the
+three together run every step:
 
-- `molecule/default` applies the role and checks the result. It holds every
-  control that needs the role applied: the plan, the writers' boundaries, the
-  drain flags, the install order, and `verify.yml`.
+- `molecule/default` applies the role and checks the result: `converge`,
+  `idempotence` and `verify`. It holds every control that needs the role applied:
+  the writers' boundaries, the drain flags, the install order, and `verify.yml`.
+- `molecule/plan` is the three steps that plan: `check-fresh` before any apply,
+  `check-configured` after one, and Molecule's own `molecule-check`. Its `converge.yml`
+  applies the role once and makes the plan comparisons (a plan changes nothing, and
+  says whether the sudoers grant was verified). It has no `verify.yml`, because it
+  leaves out `idempotence` and `verify`.
 - `molecule/refusals` does not apply the role. It stages the pinned release with the
   role's own `_release.yml` and runs the grant check alone against edited grants,
-  one case at a time. Its `molecule.yml` is a link to the default scenario's, so
-  the platform pin and settings have one home, and its `prepare.yml` imports the
-  default one's, so the grant it edits is still rendered by `broker_deploy`'s own
-  template.
+  one case at a time, and the directory step alone against links, files and flag
+  directories. It leaves out the three plan steps: every play in it is skipped in
+  check mode, so they would prove nothing there.
 
-To run one scenario, add `--scenario refusals` (the default is `default`):
+Both other scenarios' `molecule.yml` is a link to the default scenario's, so the
+platform pin and settings have one home, and their `prepare.yml` imports the default
+one's, so the grant is still rendered by `broker_deploy`'s own template.
+
+To run one scenario, add `--scenario plan` or `--scenario refusals` (the default is
+`default`):
 
 ```text
 .venv/bin/python ansible/harness/run_harness.py --scenario refusals ansible/roles/demo1_build
@@ -307,55 +326,54 @@ Each runs on one systemd container (the same Debian 13 image and settings as
 `broker_deploy`; the reason for each key is in `molecule.yml`, including the host
 cgroup namespace, which is the stated exception).
 
-Time is the reason there are two. A shard is one job with a 25-minute limit, and
-the first version of this scenario, which applied the role for every refusal case
-(eleven applications), was cancelled at the limit. The numbers below were measured
-on a developer machine while three other Molecule runs were going, by running each
-Molecule step on its own; CI is the record at each head, and the limit has not
-been raised.
+Time is the reason there are three. A shard is one job with a 25-minute limit. The
+first version of the refusal cases, which applied the role for each of eleven
+cases, was cancelled at the limit; they moved to `refusals`. With the three plan
+steps still in `default`, that shard then took 24 minutes 27 seconds of its 25 in
+CI, and `refusals` took 11 minutes for a scenario that applies nothing. The plan
+steps are where the time went: Molecule's own `check` recreates the container and
+applies the role for real before it plans, and `check-fresh` and `check-configured`
+each plan the whole role. So they moved to `plan`, and `refusals` left them out.
 
-| Step                | `default`  | `refusals` |
-| ------------------- | ---------- | ---------- |
-| `create`, `prepare` | 20 s       | 22 s       |
-| `check-fresh`       | 103 s      | 3 s        |
-| `converge`          | 276 s      | 104 s      |
-| `idempotence`       | 260 s      | 96 s       |
-| `verify`            | 70 s       | 8 s        |
-| `check-configured`  | 113 s      | 3 s        |
-| `molecule-check`    | 415 s      | 131 s      |
-| `destroy`           | 8 s        | 9 s        |
-| All container steps | 21 minutes | 6 minutes  |
+These are the steps of the shards before the split, from the CI run of the earlier
+head (the record is the harness log at each head; the limit has not been raised):
 
-The first application of the role in `default` takes 140 s (the downloads, the
-units and the integrity read-back), the second 100 s, and the two refusal plays
-that follow 29 s and 3 s. What left `default/converge.yml` for `refusals` is every
-case that needed no install: the grant edits (ten), the wrong-pin case, the
-eighth-slot case and the `/usr/bin/passwd` wrapper-path case. What stayed is the
-case that proves a refusal comes before the install, which only a whole-role run
-can show. `default/converge.yml` still enters the role four times (two
-applications and two refusal plays), and the `idempotence` step is a third
-application. The grant cases that `refusals` took out each used to apply the role.
+| Step               | `default` | `refusals` |
+| ------------------ | --------- | ---------- |
+| `converge`         | 5 min 11  | 3 min 50   |
+| `idempotence`      | 4 min 49  | 1 min 37   |
+| `verify`           | 1 min     | 12 s       |
+| `check-configured` | 2 min 8   | under 1 s  |
+| `molecule-check`   | 7 min 55  | 4 min 16   |
+
+The first application of the role in `default` takes about 140 s (the downloads,
+the units and the integrity read-back), the second about 100 s, and the two refusal
+plays that follow about 30 s and 3 s. What is in `refusals` is every case that needs
+no install: the grant edits (ten), the wrong-pin case, the eighth-slot case, the
+`/usr/bin/passwd` wrapper-path case, and the directory cases. What stays in
+`default` is the case that proves a refusal comes before the install, which only a
+whole-role run can show.
 
 ### The time bar, and what to do when it is missed
 
-The table is local. The record is CI, read from the harness step of each shard
-(the step named "Run the harness over this role or pattern") at the head under
-review. The bar for that step is:
+The record is CI, read from the harness step of each shard (the step named "Run the
+harness over this role or pattern, for this scenario") at the head under review. The
+bar for that step is:
 
-| Shard      | The step must take at most | Why this number                                                           |
-| ---------- | -------------------------- | ------------------------------------------------------------------------- |
-| `default`  | 20 minutes                 | 80% of the 25-minute cap, so a slow runner does not cancel it             |
-| `refusals` | 10 minutes                 | 40% of the cap; the scenario applies nothing, and takes 6 minutes locally |
+| Shard      | The step must take at most | Why this number                                                             |
+| ---------- | -------------------------- | --------------------------------------------------------------------------- |
+| `default`  | 20 minutes                 | 80% of the 25-minute cap, so a slow runner does not cancel it               |
+| `plan`     | 20 minutes                 | the same; it holds `molecule-check`, the longest step, and is the tight one |
+| `refusals` | 10 minutes                 | 40% of the cap; the scenario applies nothing                                |
 
 Read the step times with `gh run view <run id> --json jobs`, looking at the
 `startedAt` and `completedAt` of that step. A shard over its bar is a failed
 done-when even when it is green, and the 25-minute limit is not raised to make it
-pass. The fallback, which is not built unless the bar is missed: move the three
-plan-only steps (`check-fresh`, `check-configured` and `molecule-check`, about
-9 minutes of the local `default` time) into a third scenario, `plan`, that
-applies the role once and then runs the plans. Its `molecule.yml` is a link to the
-default one's, as `refusals` has, and no workflow edit is needed, because the
-shard list takes every directory under `molecule/` as a scenario.
+pass. The way to meet it is to move steps between scenarios, which is a
+`skip-steps.txt` edit and, for a new scenario, a directory (a link for
+`molecule.yml`, an import for `prepare.yml`); no workflow edit is needed, because the
+shard list takes every directory under `molecule/` as a scenario. If `plan` is the
+one over its bar, `molecule-check` is the step to move, to a scenario of its own.
 
 ### What runs for real
 
@@ -375,10 +393,14 @@ shard list takes every directory under `molecule/` as a scenario.
 - No colour unit and no router is enabled or started.
 - Docker, Caddy and the tenant images are absent.
 
-### What `default/converge.yml` proves
+### What `plan/converge.yml` proves
 
 - A check run changes nothing on the host (above), and says whether the sudoers
-  grant was verified.
+  grant was verified. Both hold on a fresh host and on a configured one, because
+  the scenario runs the converge in check mode before the apply and after it.
+
+### What `default/converge.yml` proves
+
 - The role leaves the sudoers grant and the broker's slots directory exactly as it
   found them: same checksum, same modification time, same entries.
 - A drain flag the broker cleared is not put back by a later run, and neither are
@@ -420,6 +442,14 @@ prepared grant back in every outcome. Each expects the refusal named in its case
   target still `root:root` `0711` afterwards; and the same paths as real
   directories, accepted, which is the control (`refused_link.yml`; Molecule's
   idempotence step skips it, because the control creates the directories each time);
+- the drain-flag directory as a regular file, which the file module would also
+  refuse, with a message of its own, so only the role's message passes the case (the
+  not-a-directory half of the check, which the link cases do not reach);
+- a flag directory that was already there, is empty and has no marker, refused
+  before anything is created with both remedies named, and nothing seeded, no marker
+  written and the directory's owner unchanged (`refused_unmarked.yml`); and the same
+  directory in the two states the role can read, accepted and not seeded: with the
+  marker, and holding one flag with no marker (which gets the marker);
 - an eighth slot in the role's slot table, refused by the slot-table assertion;
 - a pinned checksum with one digit changed, which stops the role at the download,
   naming the checksum.
@@ -461,33 +491,35 @@ assertion fires in its place or a later one is the only one left:
 4. the slots in the generator's grant are the slots of the role;
 5. every rule runs the wrapper path the role installs at.
 
-| Mechanism removed or changed                                      | Scenario, step                             | Owning assertion and message                                                                                              |
-| ----------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| A task that writes a different valid sudoers file                 | default, `converge`                        | "The role wrote the sudoers grant."                                                                                       |
-| The header split of the body reverted to a filter on any `#` line | refusals, `converge`                       | 3: "is not what render_slot_sudoers.py renders" for the `#1000` and `#includedir` cases, in both positions                |
-| The body equality weakened to a prefix match on each rule         | refusals, `converge`                       | 3: the same message, for the `, ALL` and `, /bin/sh` cases                                                                |
-| The comparison made one-directional (extra lines only)            | refusals, `converge`                       | 3: the same message, for the case with a rule removed                                                                     |
-| Both sides sorted before the comparison                           | refusals, `converge`                       | 3: the same message, for the swapped-rules case                                                                           |
-| The slot-table assertion removed                                  | refusals, `converge`                       | 4: "are not the slots in demo1_build_slot_names", for the eighth-slot case                                                |
-| The wrapper tie (assertion 5) removed                             | refusals, `converge`                       | 5: "does not run /usr/bin/passwd in every rule"; and in default, the probe-path play                                      |
-| The wrapper tie weakened to a prefix match (`[^ ]` at its end)    | refusals, `converge`                       | 5: "does not run /usr/local/sbin/branchleft-slot in every rule", for the `, /bin/sh` case with no release staged          |
-| A backslash comment counted as header                             | refusals, `converge`                       | 3: "is not what render_slot_sudoers.py renders", for the comment ending in a backslash                                    |
-| The link check removed and `follow: false` set to true            | refusals, `converge`                       | "is a link or is not a directory"; the case gets "The role accepted a link in place of a directory it declares."          |
-| The link check removed, `follow: false` kept                      | refusals, `converge`                       | the module refuses with its own message, "already exists as a link", which is not the case's phrase, so the case is red   |
-| The preseed marker test removed (the any-flag rule alone)         | default, `converge`                        | "The role seeded the drain flags again on a host where every colour had cleared its flag"                                 |
-| `_programs.yml` run before `_sudoers_check.yml`                   | default, `converge`                        | "The role wrote /usr/local/sbin/branchleft-slot-refused-probe and then refused it." (the probe path exists after the run) |
-| The NOT verified notice removed, or printed on a configured host  | default, `check-fresh`, `check-configured` | "A plan on a host with no staged release did not say the sudoers grant was NOT verified"                                  |
-| The dot-segment condition of `_inputs.yml` removed                | default, `converge`                        | the dotted-path play: "for a reason other than The wrapper path must be an absolute path"                                 |
-| The checksum of the download task removed                         | refusals, `converge`                       | "did not match" at the download, for the case with one digit of a pin changed                                             |
-| The socket directory mode changed                                 | default, `verify`                          | "The router's socket tree is not root's 0755 at the top and the router's 0700 below."                                     |
-| The drain-flag directory's owner changed to root                  | default, `verify`                          | "The broker's state directory is not broker:broker 0750, or the drain-flag directory is not broker:broker 0755."          |
-| The candidate written as a `Caddyfile`                            | default, `verify`                          | "A Caddyfile exists, a slot directory exists, or the wrapper's lock directory exists."                                    |
-| The real wrapper's `reset` run by a task                          | default, `verify`                          | the same assertion (the real wrapper leaves its lock directory)                                                           |
-| The register directory made `0755` on the host                    | default, `converge`                        | "is not a directory owned by root with mode 0700."                                                                        |
-| The wrapper installed group-writable                              | default, `converge`                        | the integrity assertion on the installed programs                                                                         |
-| The claim program run in check mode                               | default, `check-*`                         | "The check run changed"                                                                                                   |
-| A file added to the broker's slots directory                      | default, `converge`                        | "The role changed the broker's slots directory"                                                                           |
-| The pre-seed guard removed                                        | default, `converge`                        | "The role put a cleared drain flag back."                                                                                 |
+| Mechanism removed or changed                                      | Scenario, step                          | Owning assertion and message                                                                                               |
+| ----------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| A task that writes a different valid sudoers file                 | default, `converge`                     | "The role wrote the sudoers grant."                                                                                        |
+| The header split of the body reverted to a filter on any `#` line | refusals, `converge`                    | 3: "is not what render_slot_sudoers.py renders" for the `#1000` and `#includedir` cases, in both positions                 |
+| The body equality weakened to a prefix match on each rule         | refusals, `converge`                    | 3: the same message, for the `, ALL` and `, /bin/sh` cases                                                                 |
+| The comparison made one-directional (extra lines only)            | refusals, `converge`                    | 3: the same message, for the case with a rule removed                                                                      |
+| Both sides sorted before the comparison                           | refusals, `converge`                    | 3: the same message, for the swapped-rules case                                                                            |
+| The slot-table assertion removed                                  | refusals, `converge`                    | 4: "are not the slots in demo1_build_slot_names", for the eighth-slot case                                                 |
+| The wrapper tie (assertion 5) removed                             | refusals, `converge`                    | 5: "does not run /usr/bin/passwd in every rule"; and in default, the probe-path play                                       |
+| The wrapper tie weakened to a prefix match (`[^ ]` at its end)    | refusals, `converge`                    | 5: "does not run /usr/local/sbin/branchleft-slot in every rule", for the `, /bin/sh` case with no release staged           |
+| A backslash comment counted as header                             | refusals, `converge`                    | 3: "is not what render_slot_sudoers.py renders", for the comment ending in a backslash                                     |
+| The link check removed and `follow: false` set to true            | refusals, `converge`                    | "is a link or is not a directory"; the case gets "The role accepted a link or a file in place of a directory it declares." |
+| The link check removed, `follow: false` kept                      | refusals, `converge`                    | the module refuses with its own message, "already exists as a link", which is not the case's phrase, so the case is red    |
+| The not-a-directory half removed (the link test alone)            | refusals, `converge`                    | "is a link or is not a directory", for the regular-file case: without it the flag-directory refusal answers in its place   |
+| The refusal of an empty flag directory with no marker removed     | refusals, `converge`                    | "The role accepted a flag directory that is empty and has no marker."                                                      |
+| One of the two seeding tests removed (the other still holds)      | none                                    | not detected: the directory test and the marker test each hold alone (a named limit below)                                 |
+| `_programs.yml` run before `_sudoers_check.yml`                   | default, `converge`                     | "The role wrote /usr/local/sbin/branchleft-slot-refused-probe and then refused it." (the probe path exists after the run)  |
+| The NOT verified notice removed, or printed on a configured host  | plan, `check-fresh`, `check-configured` | "A plan on a host with no staged release did not say the sudoers grant was NOT verified"                                   |
+| The dot-segment condition of `_inputs.yml` removed                | default, `converge`                     | the dotted-path play: "for a reason other than The wrapper path must be an absolute path"                                  |
+| The checksum of the download task removed                         | refusals, `converge`                    | "did not match" at the download, for the case with one digit of a pin changed                                              |
+| The socket directory mode changed                                 | default, `verify`                       | "The router's socket tree is not root's 0755 at the top and the router's 0700 below."                                      |
+| The drain-flag directory's owner changed to root                  | default, `verify`                       | "The broker's state directory is not broker:broker 0750, or the drain-flag directory is not broker:broker 0755."           |
+| The candidate written as a `Caddyfile`                            | default, `verify`                       | "A Caddyfile exists, a slot directory exists, or the wrapper's lock directory exists."                                     |
+| The real wrapper's `reset` run by a task                          | default, `verify`                       | the same assertion (the real wrapper leaves its lock directory)                                                            |
+| The register directory made `0755` on the host                    | default, `converge`                     | "is not a directory owned by root with mode 0700."                                                                         |
+| The wrapper installed group-writable                              | default, `converge`                     | the integrity assertion on the installed programs                                                                          |
+| The claim program run in check mode                               | plan, `check-*`                         | "The check run changed"                                                                                                    |
+| A file added to the broker's slots directory                      | default, `converge`                     | "The role changed the broker's slots directory"                                                                            |
+| Both seeding tests removed (the pre-seed guard)                   | default, `converge`                     | "The role put a cleared drain flag back."                                                                                  |
 
 The harness's own controls (a failing second scenario fails its shard, a role with
 no `molecule/` still gets a shard and fails at the scenario limits, a privileged
@@ -502,10 +534,20 @@ other unit tests of `ansible/harness`.
 - **The sidecar is not run.** It needs an image environment file that this role
   does not deliver; see the gaps. The test proves the text and the paths, not that
   a colour starts.
+- **Each seeding test holds without the other.** The flags are seeded only where the
+  run creates the directory and there is no marker. On a host with a directory the
+  run did not create, the first test alone stops the seeding; on a host with the
+  marker, the second does. Removing one of them leaves every case green, because the
+  other covers every state the cases reach; removing both is caught. So the pair is
+  checked as a pair.
+- **`follow: false` on a file task is covered by the role's own check.** The check
+  refuses a link before any file task runs, so a test cannot show the module's
+  refusal by itself: the module guards the moment between the read and the write,
+  which a test of this kind cannot hold open.
 - **A silent skip passes, except one.** Tasks skipped in check mode on a host with
   no release are not caught by the harness; this table and the comments at each
   skip are the review of it (ANS-10). The grant comparison is the exception: its
-  skip must print "Sudoers grant NOT verified" and `default/converge.yml` asserts
+  skip must print "Sudoers grant NOT verified" and `plan/converge.yml` asserts
   it.
 - **The wrapper tie checks the shape of a rule, not its arguments.** It matches
   each rule from `broker ALL=(root) NOPASSWD:` and the wrapper path to the end of

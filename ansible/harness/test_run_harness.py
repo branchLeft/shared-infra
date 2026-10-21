@@ -557,5 +557,129 @@ class SecondScenarioTests(RoleCase):
         self.assertIn(("/tools/molecule", "create", "-s", "default"), calls)
 
 
+class LeftOutStepTests(RoleCase):
+    """A scenario can leave steps out, and a role cannot leave one out of every scenario."""
+
+    CHECKS = ("check-fresh", "check-configured", "molecule-check")
+
+    def write_skips(self, role: Path, scenario_name: str, skips: Sequence[str]) -> None:
+        """Write a scenario's step list, with a comment and a blank line before the names."""
+        text = "# the steps this scenario leaves out\n\n" + "".join(f"{name}\n" for name in skips)
+        (role / "molecule" / scenario_name / run_harness.SKIP_FILE).write_text(
+            text, encoding="utf-8"
+        )
+
+    def split_role(self) -> Path:
+        """Return a role whose default leaves out the check steps and whose plan runs only them."""
+        role = self.make_role(also=["plan"])
+        self.write_skips(role, "default", self.CHECKS)
+        self.write_skips(role, "plan", ["idempotence", "verify"])
+        return role
+
+    def run_scenario(
+        self, role: Path, scenario_name: str, failing: Sequence[str] = ()
+    ) -> tuple[dict[str, str], list[tuple[str, ...]]]:
+        """Run one scenario of the role with the fake runner; return outcomes and the calls."""
+        run, calls = fake_runner(failing=failing)
+        outcomes = dict(run_harness.run_role(role, TOOLS, run, ENV, scenario=scenario_name))
+        return outcomes, [call for call in calls if call[0] == "/tools/molecule"]
+
+    def test_the_steps_a_scenario_leaves_out_are_reported_as_skipped_and_not_run(self) -> None:
+        outcomes, calls = self.run_scenario(self.split_role(), "default")
+        for name in self.CHECKS:
+            self.assertEqual(outcomes[name], run_harness.SKIP, name)
+        for name in ("create", "prepare", "converge", "idempotence", "verify", "destroy"):
+            self.assertEqual(outcomes[name], run_harness.OK, name)
+        self.assertFalse([call for call in calls if "--check" in call or call[1] == "check"], calls)
+
+    def test_the_other_scenario_runs_the_steps_the_first_left_out(self) -> None:
+        outcomes, calls = self.run_scenario(self.split_role(), "plan")
+        for name in ("idempotence", "verify"):
+            self.assertEqual(outcomes[name], run_harness.SKIP, name)
+        for name in ("create", "prepare", "check-fresh", "converge", "check-configured"):
+            self.assertEqual(outcomes[name], run_harness.OK, name)
+        self.assertEqual(outcomes["molecule-check"], run_harness.OK)
+        self.assertEqual(outcomes["destroy"], run_harness.OK)
+        self.assertNotIn(("/tools/molecule", "idempotence", "-s", "plan"), calls)
+        self.assertNotIn(("/tools/molecule", "verify", "-s", "plan"), calls)
+
+    def test_the_two_scenarios_together_run_every_step(self) -> None:
+        role = self.split_role()
+        ran: set[str] = set()
+        for name in ("default", "plan"):
+            outcomes, _ = self.run_scenario(role, name)
+            ran |= {step for step, status in outcomes.items() if status == run_harness.OK}
+        self.assertTrue(set(MOLECULE_STEPS) <= ran, set(MOLECULE_STEPS) - ran)
+
+    def test_a_role_with_no_step_list_runs_every_step(self) -> None:
+        outcomes, calls = self.run_scenario(self.make_role(), "default")
+        self.assertEqual([name for name in MOLECULE_STEPS if name not in outcomes], [])
+        self.assertEqual(len(calls), len(MOLECULE_STEPS))
+
+    def test_a_failure_after_a_left_out_step_still_skips_the_rest_and_destroys(self) -> None:
+        outcomes, calls = self.run_scenario(self.split_role(), "default", failing=["verify"])
+        self.assertEqual(outcomes["verify"], run_harness.FAIL)
+        self.assertEqual(outcomes["destroy"], run_harness.OK)
+        self.assertEqual(calls[-1], ("/tools/molecule", "destroy", "-s", "default"))
+
+    def test_a_step_that_no_scenario_runs_is_refused_and_no_container_step_runs(self) -> None:
+        role = self.make_role()
+        self.write_skips(role, "default", ["verify"])
+        found = run_harness.check_scenarios(role)
+        self.assertEqual(
+            found, ["verify runs in no scenario: every scenario's skip-steps.txt leaves it out"]
+        )
+        outcomes, calls = self.run_scenario(role, "default")
+        self.assertEqual(outcomes["scenario-limits"], run_harness.FAIL)
+        for name in MOLECULE_STEPS:
+            self.assertEqual(outcomes[name], run_harness.SKIP, name)
+        self.assertEqual(calls, [])
+
+    def test_a_step_that_another_scenario_runs_is_not_refused(self) -> None:
+        self.assertEqual(run_harness.check_scenarios(self.split_role()), [])
+
+    def test_the_refusal_is_found_from_any_scenarios_run(self) -> None:
+        role = self.split_role()
+        self.write_skips(role, "plan", ["idempotence", "verify", "check-fresh"])
+        for name in ("default", "plan"):
+            found = run_harness.check_scenarios(role, name)
+            self.assertEqual(len(found), 1, found)
+            self.assertIn("check-fresh runs in no scenario", found[0])
+
+    def test_steps_every_run_needs_cannot_be_left_out(self) -> None:
+        for name in ("create", "prepare", "converge", "destroy", "nonsense"):
+            role = self.make_role(also=["plan"])
+            self.write_skips(role, "plan", [name])
+            found = run_harness.check_scenarios(role)
+            self.assertEqual(len(found), 1, (name, found))
+            self.assertTrue(found[0].startswith("molecule/plan/skip-steps.txt: cannot leave out "))
+            self.assertIn(name, found[0])
+
+    def test_a_line_that_is_not_one_step_name_is_refused_and_leaves_nothing_out(self) -> None:
+        bad_texts = (
+            "skip: [verify]\n",
+            "verify please\n",
+            "- verify\n",
+            "verify, idempotence\n",
+            "verify # not at the start of the line\n",
+        )
+        for text in bad_texts:
+            role = self.make_role(also=["plan"])
+            (role / "molecule" / "plan" / run_harness.SKIP_FILE).write_text(text, encoding="utf-8")
+            found = run_harness.check_scenarios(role)
+            self.assertEqual(len(found), 1, (text, found))
+            self.assertTrue(found[0].startswith("molecule/plan/skip-steps.txt: "), found)
+            self.assertEqual(run_harness.read_skips(role / "molecule" / "plan")[0], [], text)
+            outcomes, calls = self.run_scenario(role, "plan")
+            self.assertEqual(outcomes["scenario-limits"], run_harness.FAIL, text)
+            self.assertEqual(calls, [], text)
+
+    def test_the_same_step_listed_twice_is_one_step(self) -> None:
+        role = self.make_role(also=["plan"])
+        self.write_skips(role, "plan", ["verify", "verify"])
+        self.assertEqual(run_harness.read_skips(role / "molecule" / "plan"), (["verify"], []))
+        self.assertEqual(run_harness.check_scenarios(role), [])
+
+
 if __name__ == "__main__":
     unittest.main()
