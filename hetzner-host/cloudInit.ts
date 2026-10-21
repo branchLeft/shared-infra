@@ -29,8 +29,12 @@ export interface CloudInitArgs {
   /** OpenSSH public key of the CI deploy keypair for this host. Public half
    * only — the private half exists solely as a GitHub Actions secret and
    * must never reach this repository. A distinct keypair per host keeps a
-   * compromised runner secret scoped to one machine. */
-  deployPublicKey: pulumi.Input<string>;
+   * compromised runner secret scoped to one machine.
+   *
+   * Required unless `enrolment` is set, and refused when it is: an enrolled
+   * host is deployed by the pull, so it has no `deploy` account (see
+   * `Enrolment`). */
+  deployPublicKey?: pulumi.Input<string>;
   /**
    * Whether this host has no public interface at all. A plain boolean, not
    * an `Input`: it comes from `HostArgs.publicNetworking`, itself a plain
@@ -44,6 +48,57 @@ export interface CloudInitArgs {
    * fails "temporary failure resolving" for the rest of first boot.
    */
   privateOnly: boolean;
+  /**
+   * Bring the host under the gated pull at first boot. Absent, the document is
+   * exactly what it was before this field existed.
+   */
+  enrolment?: Enrolment;
+}
+
+/** One file the host fetches at first boot, pinned to a commit of `main`. */
+export interface PullBootstrapFile {
+  /** The raw address of the file at `pin`. It must name exactly `pin`. */
+  url: string;
+  /** The full commit id: the last commit that changed the file. */
+  pin: string;
+  /** SHA-256 of the file's bytes, 64 lowercase hex digits. */
+  sha256: string;
+}
+
+/**
+ * The record `ansible/tools/pull_bootstrap.py` builds from `main` at publish
+ * time. The package does not carry a copy of it: the stack passes the record
+ * it was given with the package, and `assertPullBootstrap` refuses anything
+ * that is not exactly the shape the tool writes.
+ */
+export interface PullBootstrap {
+  schema: 1;
+  /** The pull program (`pull_trigger.py`). */
+  wrapper: PullBootstrapFile;
+  /** The program that installs the pinned, hash-locked Ansible. */
+  program: PullBootstrapFile;
+  /** `ansible/requirements.txt`. */
+  lock: PullBootstrapFile;
+  /** The exact text of the pull program's `config.json`. */
+  config: string;
+}
+
+/**
+ * What it takes to bring a new edge host under the pull at first boot.
+ *
+ * The host's root account gets two `authorized_keys` lines, each restricted to
+ * one command of the pull program: one applies, one checks. Their private
+ * halves are the owner's to generate and hold; only the public halves are
+ * stack config. The lines do nothing until the pull program exists, because a
+ * `command=` that names a missing path fails closed.
+ */
+export interface Enrolment {
+  /** OpenSSH public key allowed to run `pull-trigger --mode apply`. */
+  applyPublicKey: string;
+  /** OpenSSH public key allowed to run `pull-trigger --mode check`. Must differ from the apply key. */
+  checkPublicKey: string;
+  /** The bootstrap record (see `PullBootstrap`). */
+  bootstrap: PullBootstrap;
 }
 
 /**
@@ -154,7 +209,457 @@ bootcmd:
   - [ sh, -c, "mkdir -p /etc/resolvconf/resolv.conf.d && { echo 'nameserver 185.12.64.1'; echo 'nameserver 185.12.64.2'; } > /etc/resolvconf/resolv.conf.d/head && resolvconf -u || true" ]
 `;
 
+// The pieces below are shared by the deploy-key document and the enrolment
+// document, so that neither can drift from the other. They are the text the
+// deploy-key document has always had, and `cloudInit.test.ts` holds that
+// document byte for byte against what `origin/main` rendered before this
+// change.
+
+/**
+ * The default entry comes first in `users`, always. Both documents carry it,
+ * and the enrolment document's root entry goes beside it, never in its place.
+ */
+const USERS_DEFAULT_ENTRY = `  # The default entry comes first, always. A users block that omits it
+  # replaces the image's default account rather than adding to it, and the
+  # keys Hetzner injects through the datasource follow that default account.
+  # Omitting it produces a host with the deploy key installed and no owner
+  # access at all.
+  - default`;
+
+/**
+ * The hardening drop-in. Every document carries it: it is what closes the
+ * password-auth window during first boot.
+ */
+const HARDENING_ENTRY = `  # Duplicated by provision/00-harden-ssh.sh on purpose, not by oversight.
+  # This copy closes the password-auth window during first boot, before the
+  # host has ever been reachable for a provisioning run; the script is what
+  # keeps the file true afterwards.
+  #
+  # The 01- prefix is load-bearing. OpenSSH keeps the first value it obtains
+  # for a keyword and the Include glob expands in sort order, so the
+  # lowest-sorting drop-in wins -- including over the 50-cloud-init.conf
+  # cloud-init writes for itself whenever ssh_pwauth is set.
+  - path: /etc/ssh/sshd_config.d/01-branchleft-hardening.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin prohibit-password
+      PubkeyAuthentication yes`;
+
+const BASE_PACKAGES = ['ca-certificates', 'curl', 'gnupg'] as const;
+
+/**
+ * What an enrolled host needs on it before the pull can run: `git`, `gpg` and
+ * `gpgconf` and `openssh-client` for the pull program (the `pull_trigger_packages`
+ * of that role), and `python3` and `python3-venv` for the Ansible install (the
+ * `ansible_runtime_packages` of that role). `curl` and `ca-certificates` are in the
+ * base list. `ansible/tools/test_pull_bootstrap.py` holds this list equal to the
+ * two roles' lists, so a package added to a role fails there until it is added
+ * here.
+ *
+ * The engine itself is never in this list: it is installed by the pinned,
+ * hash-checked program, and by nothing that resolves its own version.
+ */
+export const ENROLMENT_PACKAGES = [
+  'git',
+  'gpg',
+  'gpgconf',
+  'openssh-client',
+  'python3',
+  'python3-venv',
+] as const;
+
+const RUNCMD_BASE = `  - [ install, -d, -m, '0755', -o, root, -g, root, /etc/branchleft ]
+  - [ install, -d, -m, '0755', -o, root, -g, root, /opt/branchleft ]
+  # Absolute path: runcmd's exec form does not go through a login shell, and
+  # sbin is not on the PATH cloud-init runs with on Debian.
+  - [ /usr/sbin/sshd, -t ]
+  - [ systemctl, reload, ssh ]`;
+
+function packageLines(packages: readonly string[]): string {
+  return packages.map((name) => `  - ${name}`).join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Enrolment
+// ---------------------------------------------------------------------------
+
+/** Where an enrolled host puts things. Production uses `PRODUCTION_LAYOUT`; the tests use a temporary one. */
+export interface EnrolmentLayout {
+  markerDir: string;
+  workDir: string;
+  failureMarker: string;
+  doneMarker: string;
+  wrapperPath: string;
+  configDir: string;
+  configPath: string;
+  stateDir: string;
+  logDir: string;
+  runtimeRoot: string;
+  runtimeLink: string;
+  python: string;
+  /** `-o root -g root` on a host; empty only where a test cannot be root. */
+  ownerFlags: string;
+}
+
+export const PRODUCTION_LAYOUT: EnrolmentLayout = {
+  markerDir: '/var/lib/branchleft',
+  workDir: '/var/lib/branchleft/pull-enrolment',
+  failureMarker: '/var/lib/branchleft/pull-enrolment.failed',
+  doneMarker: '/var/lib/branchleft/pull-enrolment.done',
+  wrapperPath: '/usr/local/sbin/pull-trigger',
+  configDir: '/etc/pull-trigger',
+  configPath: '/etc/pull-trigger/config.json',
+  stateDir: '/var/lib/pull-trigger',
+  logDir: '/var/log/pull-trigger',
+  runtimeRoot: '/opt/ansible-runtime',
+  runtimeLink: '/usr/local/bin/ansible-playbook',
+  python: '/usr/bin/python3',
+  ownerFlags: '-o root -g root',
+};
+
+const REPOSITORY_RAW = 'https://raw.githubusercontent.com/branchLeft/shared-infra';
+const REMOTE_URL = 'https://github.com/branchLeft/shared-infra.git';
+const EDGE_PLAYBOOK = 'ansible/playbooks/edge1.yml';
+const FETCHED_PATHS = {
+  wrapper: 'ansible/roles/pull_trigger/files/pull_trigger.py',
+  program: 'ansible/roles/ansible_runtime/files/install_runtime.py',
+  lock: 'ansible/requirements.txt',
+} as const;
+const COMMIT_HEX = /^[0-9a-f]{40}$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+const CONFIG_HEREDOC = 'BRANCHLEFT_CONFIG_EOF';
+const MAX_CONFIG_CHARS = 16_384;
+const PGP_BEGIN = '-----BEGIN PGP PUBLIC KEY BLOCK-----';
+const PGP_END = '-----END PGP PUBLIC KEY BLOCK-----';
+const PGP_PUBLIC_KEY_TAG = 6;
+const LAYOUT_VALUE = /^[A-Za-z0-9_./-]+$/;
+const REQUIRED_CONFIG_KEYS = [
+  'remote_url',
+  'signers',
+  'playbooks',
+  'playbook',
+  'ansible_playbook',
+  'state_dir',
+  'log_dir',
+  'timeout_seconds',
+  'keep_runs',
+] as const;
+
+type PlainRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is PlainRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function assertExactKeys(record: PlainRecord, keys: readonly string[], what: string): void {
+  const actual = Object.keys(record).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    throw new Error(`${what} must have exactly the keys ${expected.join(', ')}.`);
+  }
+}
+
+/**
+ * Refuses anything but an armoured OpenPGP **public** key block.
+ *
+ * The signer block ends up in user-data, which is readable by anything on the
+ * host and by whoever can read the Hetzner project. The checks are an allowlist
+ * and not a scan for the word PRIVATE: exactly one public header and one public
+ * footer, nothing else that looks like an armour line, and a first packet that
+ * is a public key (tag 6), so a secret key (tag 5) under a public header does
+ * not pass.
+ */
+export function assertPgpPublicKeyBlock(block: string): string {
+  const lines = block.endsWith('\n') ? block.slice(0, -1).split('\n') : block.split('\n');
+  if (lines[0] !== PGP_BEGIN || lines[lines.length - 1] !== PGP_END) {
+    throw new Error('A signer key must be one armoured OpenPGP public key block and nothing else.');
+  }
+  const inner = lines.slice(1, -1);
+  if (inner.some((line) => line.includes('-----'))) {
+    throw new Error('A signer key block must not contain any other armour line.');
+  }
+  const blank = inner.indexOf('');
+  if (blank < 0) {
+    throw new Error('A signer key block must have a blank line before its data.');
+  }
+  const data = inner.slice(blank + 1).filter((line) => !line.startsWith('='));
+  if (data.length === 0 || !data.every((line) => /^[A-Za-z0-9+/]+={0,2}$/.test(line))) {
+    throw new Error('A signer key block must hold base64 data.');
+  }
+  const first = Buffer.from(data.join(''), 'base64')[0];
+  if (first === undefined || (first & 0x80) === 0) {
+    throw new Error('A signer key block must start with an OpenPGP packet.');
+  }
+  const tag = (first & 0x40) !== 0 ? first & 0x3f : (first >> 2) & 0x0f;
+  if (tag !== PGP_PUBLIC_KEY_TAG) {
+    throw new Error('The first packet of a signer key must be a public key, not a secret key.');
+  }
+  return block;
+}
+
+function assertConfig(config: unknown): string {
+  if (typeof config !== 'string' || config.length === 0 || config.length > MAX_CONFIG_CHARS) {
+    throw new Error('The bootstrap config must be a non-empty string of bounded size.');
+  }
+  if (!/^[\x20-\x7e\n]+$/.test(config) || !config.endsWith('\n')) {
+    throw new Error('The bootstrap config must be printable ASCII and end with a newline.');
+  }
+  if (config.split('\n').includes(CONFIG_HEREDOC)) {
+    throw new Error('The bootstrap config must not contain the line that ends its heredoc.');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(config);
+  } catch {
+    throw new Error('The bootstrap config must be JSON.');
+  }
+  if (!isRecord(parsed)) {
+    throw new Error('The bootstrap config must be a JSON object.');
+  }
+  for (const key of REQUIRED_CONFIG_KEYS) {
+    if (!(key in parsed)) {
+      throw new Error(`The bootstrap config has no ${key}.`);
+    }
+  }
+  const fixed: Record<string, string> = {
+    remote_url: REMOTE_URL,
+    playbook: EDGE_PLAYBOOK,
+    ansible_playbook: PRODUCTION_LAYOUT.runtimeLink,
+    state_dir: PRODUCTION_LAYOUT.stateDir,
+    log_dir: PRODUCTION_LAYOUT.logDir,
+  };
+  for (const [key, expected] of Object.entries(fixed)) {
+    if (parsed[key] !== expected) {
+      throw new Error(`The bootstrap config's ${key} must be ${expected}.`);
+    }
+  }
+  const playbooks = parsed.playbooks;
+  if (!Array.isArray(playbooks) || playbooks.length !== 1 || playbooks[0] !== EDGE_PLAYBOOK) {
+    throw new Error(`The bootstrap config's playbooks must be exactly ${EDGE_PLAYBOOK}.`);
+  }
+  const signers = parsed.signers;
+  if (!Array.isArray(signers) || signers.length === 0) {
+    throw new Error('The bootstrap config must name at least one signer.');
+  }
+  for (const signer of signers) {
+    if (!isRecord(signer)) {
+      throw new Error('Each signer must be an object.');
+    }
+    assertExactKeys(signer, ['format', 'key'], 'A signer');
+    if (signer.format !== 'openpgp' || typeof signer.key !== 'string') {
+      throw new Error('Each signer must be an OpenPGP key; no other format is enrolled yet.');
+    }
+    assertPgpPublicKeyBlock(signer.key);
+  }
+  for (const key of ['timeout_seconds', 'keep_runs'] as const) {
+    const value = parsed[key];
+    if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+      throw new Error(`The bootstrap config's ${key} must be a positive integer.`);
+    }
+  }
+  return config;
+}
+
+/**
+ * Refuses a bootstrap record that is not exactly what `pull_bootstrap.py` writes.
+ *
+ * Each file's address must name the pin recorded beside it and the file's own
+ * path, so a record cannot fetch a different commit's file than the one whose
+ * hash it holds.
+ */
+export function assertPullBootstrap(value: unknown): PullBootstrap {
+  if (!isRecord(value)) {
+    throw new Error('The bootstrap record must be an object.');
+  }
+  assertExactKeys(
+    value,
+    ['schema', 'wrapper', 'program', 'lock', 'config'],
+    'The bootstrap record'
+  );
+  if (value.schema !== 1) {
+    throw new Error('The bootstrap record must be schema 1.');
+  }
+  for (const name of ['wrapper', 'program', 'lock'] as const) {
+    const entry = value[name];
+    if (!isRecord(entry)) {
+      throw new Error(`The bootstrap ${name} must be an object.`);
+    }
+    assertExactKeys(entry, ['pin', 'sha256', 'url'], `The bootstrap ${name}`);
+    if (typeof entry.pin !== 'string' || !COMMIT_HEX.test(entry.pin)) {
+      throw new Error(`The bootstrap ${name} pin must be a full commit id.`);
+    }
+    if (typeof entry.sha256 !== 'string' || !SHA256_HEX.test(entry.sha256)) {
+      throw new Error(`The bootstrap ${name} sha256 must be 64 lowercase hex digits.`);
+    }
+    if (entry.url !== `${REPOSITORY_RAW}/${entry.pin}/${FETCHED_PATHS[name]}`) {
+      throw new Error(
+        `The bootstrap ${name} url must name its own pin and ${FETCHED_PATHS[name]}.`
+      );
+    }
+  }
+  assertConfig(value.config);
+  return value as unknown as PullBootstrap;
+}
+
+function assertEnrolmentKey(name: string, key: unknown): string {
+  if (typeof key !== 'string') {
+    throw new Error(`${name} must be a string.`);
+  }
+  try {
+    return assertDeployPublicKey(key);
+  } catch {
+    throw new Error(
+      `${name} must be a single-line OpenSSH public key. It is substituted into a cloud-config document, so a value spanning more than one line is rejected rather than escaped.`
+    );
+  }
+}
+
+/** Checks an enrolment before anything is rendered or created. */
+export function assertEnrolment(enrolment: Enrolment): Enrolment {
+  const apply = assertEnrolmentKey('enrolment.applyPublicKey', enrolment.applyPublicKey);
+  const check = assertEnrolmentKey('enrolment.checkPublicKey', enrolment.checkPublicKey);
+  if (apply === check) {
+    throw new Error(
+      'enrolment.applyPublicKey and enrolment.checkPublicKey must be different keys: the check key must not be able to apply.'
+    );
+  }
+  assertPullBootstrap(enrolment.bootstrap);
+  return enrolment;
+}
+
+function authorizedLine(key: string, mode: 'apply' | 'check', layout: EnrolmentLayout): string {
+  return `restrict,command="${layout.wrapperPath} --mode ${mode}" ${key}`;
+}
+
+/**
+ * The shell script that brings a host under the pull. It is one `sh -c`
+ * entry of `runcmd`, and it is the last one.
+ *
+ * Order matters and is the whole control. All three files are fetched and each
+ * is checked against its recorded SHA-256 first; only then does the install
+ * program run; only after it has succeeded are the pull program and its
+ * configuration put in place. A failure anywhere writes the step it failed at
+ * to a marker file and stops, so a host that could not be enrolled has no
+ * `ansible-playbook` link and no pull program, and the owner's keys are the
+ * only way in. It never installs an engine that is not hash-locked, and there
+ * is no fallback that does.
+ */
+export function renderEnrolmentScript(
+  bootstrap: PullBootstrap,
+  layout: EnrolmentLayout = PRODUCTION_LAYOUT
+): string {
+  assertPullBootstrap(bootstrap);
+  for (const value of Object.values(layout)) {
+    if (!(value === '' || LAYOUT_VALUE.test(value) || value === '-o root -g root')) {
+      throw new Error(`The enrolment layout holds a value that is not a plain path: ${value}`);
+    }
+  }
+  const owner = layout.ownerFlags === '' ? '' : ` ${layout.ownerFlags}`;
+  const check = (name: keyof typeof FETCHED_PATHS, file: string): string =>
+    `step=check-${name}; check ${file} '${bootstrap[name].sha256}'`;
+  const fetch = (name: keyof typeof FETCHED_PATHS, file: string): string =>
+    `step=fetch-${name}; fetch '${bootstrap[name].url}' "$work/${file}"`;
+  return [
+    'set -eu',
+    `work='${layout.workDir}'`,
+    `failed='${layout.failureMarker}'`,
+    `finished='${layout.doneMarker}'`,
+    'step=start',
+    `install -d -m 0755${owner} '${layout.markerDir}'`,
+    'on_exit() {',
+    '  status=$?',
+    '  if [ "$status" -ne 0 ]; then',
+    '    printf "failed at %s\\n" "$step" > "$failed" || true',
+    '  fi',
+    '}',
+    'trap on_exit EXIT',
+    'rm -f "$failed" "$finished"',
+    `install -d -m 0700${owner} "$work"`,
+    'fetch() {',
+    '  curl --fail --silent --show-error --proto \'=https\' --tlsv1.2 --retry 3 --max-time 120 --output "$2" "$1"',
+    '}',
+    'check() {',
+    '  printf "%s  %s\\n" "$2" "$1" | (cd "$work" && sha256sum -c --strict -)',
+    '}',
+    fetch('wrapper', 'pull_trigger.py'),
+    fetch('program', 'install_runtime.py'),
+    fetch('lock', 'requirements.txt'),
+    check('wrapper', 'pull_trigger.py'),
+    check('program', 'install_runtime.py'),
+    check('lock', 'requirements.txt'),
+    'step=install-engine',
+    `'${layout.python}' -I "$work/install_runtime.py" --lock "$work/requirements.txt" --lock-sha256 '${bootstrap.lock.sha256}' --root '${layout.runtimeRoot}' --link '${layout.runtimeLink}'`,
+    'step=install-trigger',
+    `install -d -m 0755${owner} '${layout.configDir}'`,
+    `install -d -m 0700${owner} '${layout.stateDir}' '${layout.logDir}'`,
+    `install -m 0755${owner} "$work/pull_trigger.py" '${layout.wrapperPath}'`,
+    'step=write-config',
+    `cat > "$work/config.json" <<'${CONFIG_HEREDOC}'`,
+    `${bootstrap.config}${CONFIG_HEREDOC}`,
+    `install -m 0644${owner} "$work/config.json" '${layout.configPath}'`,
+    'step=done',
+    'printf "ok\\n" > "$finished"',
+    '',
+  ].join('\n');
+}
+
+const ENROLMENT_RUNCMD_COMMENT = `  # Last, and on its own: runcmd is one shell script with no errexit, so a
+  # failure here cannot skip the lines above it, and it stops at its own first
+  # failure. It brings the host under the gated pull (see renderEnrolmentScript).`;
+
+function renderEnrolment(args: CloudInitArgs, enrolment: Enrolment): pulumi.Output<string> {
+  const applyLine = authorizedLine(enrolment.applyPublicKey, 'apply', PRODUCTION_LAYOUT);
+  const checkLine = authorizedLine(enrolment.checkPublicKey, 'check', PRODUCTION_LAYOUT);
+  const script = renderEnrolmentScript(enrolment.bootstrap);
+  const packages = [...BASE_PACKAGES, ...ENROLMENT_PACKAGES];
+  return pulumi.interpolate`#cloud-config
+hostname: ${args.hostname}
+preserve_hostname: false
+fqdn: ${args.hostname}
+${args.privateOnly ? PRIVATE_ONLY_BOOTCMD : ''}
+disable_root: false
+
+users:
+${USERS_DEFAULT_ENTRY}
+  # Root's keys are written here and not through write_files, so the key the
+  # datasource injects for the owner stays: write_files would replace the file.
+  - name: root
+    ssh_authorized_keys:
+      - ${JSON.stringify(applyLine)}
+      - ${JSON.stringify(checkLine)}
+
+write_files:
+${HARDENING_ENTRY}
+
+package_update: true
+packages:
+${packageLines(packages)}
+
+runcmd:
+${RUNCMD_BASE}
+${ENROLMENT_RUNCMD_COMMENT}
+  - [ sh, -c, ${JSON.stringify(script)} ]
+`;
+}
+
 export function renderCloudInit(args: CloudInitArgs): pulumi.Output<string> {
+  if (args.enrolment !== undefined) {
+    if (args.deployPublicKey !== undefined) {
+      throw new Error(
+        'A host with an enrolment has no deploy account: remove deployPublicKey or remove the enrolment. ' +
+          'The pull is the deploy path for an enrolled host, and a deploy key beside it would be a second way in with root-equivalent reach.'
+      );
+    }
+    return renderEnrolment(args, assertEnrolment(args.enrolment));
+  }
+  if (args.deployPublicKey === undefined) {
+    throw new Error(
+      'deployPublicKey is required unless the host has an enrolment: without either it has no automated way in.'
+    );
+  }
   // Checked twice, and the eager half is the one that behaves well. In
   // practice this value is a plain string from stack config, and validating it
   // here throws from the constructor — the program stops with the message
@@ -174,12 +679,7 @@ ${args.privateOnly ? PRIVATE_ONLY_BOOTCMD : ''}
 disable_root: false
 
 users:
-  # The default entry comes first, always. A users block that omits it
-  # replaces the image's default account rather than adding to it, and the
-  # keys Hetzner injects through the datasource follow that default account.
-  # Omitting it produces a host with the deploy key installed and no owner
-  # access at all.
-  - default
+${USERS_DEFAULT_ENTRY}
   - name: deploy
     gecos: CI deploy account
     shell: /bin/bash
@@ -194,36 +694,13 @@ write_files:
     permissions: '0440'
     content: |
       ${DEPLOY_SUDOERS}
-  # Duplicated by provision/00-harden-ssh.sh on purpose, not by oversight.
-  # This copy closes the password-auth window during first boot, before the
-  # host has ever been reachable for a provisioning run; the script is what
-  # keeps the file true afterwards.
-  #
-  # The 01- prefix is load-bearing. OpenSSH keeps the first value it obtains
-  # for a keyword and the Include glob expands in sort order, so the
-  # lowest-sorting drop-in wins -- including over the 50-cloud-init.conf
-  # cloud-init writes for itself whenever ssh_pwauth is set.
-  - path: /etc/ssh/sshd_config.d/01-branchleft-hardening.conf
-    owner: root:root
-    permissions: '0644'
-    content: |
-      PasswordAuthentication no
-      KbdInteractiveAuthentication no
-      PermitRootLogin prohibit-password
-      PubkeyAuthentication yes
+${HARDENING_ENTRY}
 
 package_update: true
 packages:
-  - ca-certificates
-  - curl
-  - gnupg
+${packageLines(BASE_PACKAGES)}
 
 runcmd:
-  - [ install, -d, -m, '0755', -o, root, -g, root, /etc/branchleft ]
-  - [ install, -d, -m, '0755', -o, root, -g, root, /opt/branchleft ]
-  # Absolute path: runcmd's exec form does not go through a login shell, and
-  # sbin is not on the PATH cloud-init runs with on Debian.
-  - [ /usr/sbin/sshd, -t ]
-  - [ systemctl, reload, ssh ]
+${RUNCMD_BASE}
 `;
 }

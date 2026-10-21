@@ -3,6 +3,7 @@ import * as pulumi from '@pulumi/pulumi';
 
 import type { EuCentralLocation } from './addressPlan';
 import { renderCloudInit } from './cloudInit';
+import type { Enrolment } from './cloudInit';
 import { EDGE_RULES, INTERNAL_RULES } from './firewalls';
 
 /**
@@ -46,7 +47,18 @@ export interface HostArgs {
    * deploy key is a separate, non-root identity injected through cloud-init
    * and must never appear in this list. */
   ownerSshKeyNames: pulumi.Input<pulumi.Input<string>[]>;
-  deployPublicKey: pulumi.Input<string>;
+  /**
+   * The CI deploy key's public half. Required unless `enrolment` is set, and
+   * refused when it is: an enrolled host is deployed by the pull and has no
+   * `deploy` account, so the two never exist together.
+   */
+  deployPublicKey?: pulumi.Input<string>;
+  /**
+   * Bring the host under the gated pull at first boot (an `edge` host only).
+   * Absent, the first-boot document is exactly what it was before this
+   * field. See `Enrolment`.
+   */
+  enrolment?: Enrolment;
   networkId: pulumi.Input<string>;
   /** Fixed private address from the estate's address plan. */
   privateIp: pulumi.Input<string>;
@@ -120,6 +132,23 @@ export class Host extends pulumi.ComponentResource {
       'managed-by': 'pulumi',
     };
 
+    // Rendered before any resource is declared. A refused key, a refused
+    // enrolment or a role that cannot be enrolled stops the program here, with
+    // nothing created: `userData` is create-time-only, so a document accepted
+    // by mistake is permanent.
+    if (args.enrolment !== undefined && args.role !== 'edge') {
+      throw new Error(
+        `Only an edge host can be enrolled in the pull; ${args.name} is a ${args.role} host. ` +
+          "The pull's playbook is edge1's, and no other role has one."
+      );
+    }
+    const userData = renderCloudInit({
+      hostname: args.name,
+      deployPublicKey: args.deployPublicKey,
+      privateOnly: !wantsPublicNetworking,
+      enrolment: args.enrolment,
+    });
+
     this.firewall = new hcloud.Firewall(
       `${args.name}-firewall`,
       {
@@ -182,11 +211,7 @@ export class Host extends pulumi.ComponentResource {
         image: args.image,
         backups: args.backups ?? false,
         sshKeys: args.ownerSshKeyNames,
-        userData: renderCloudInit({
-          hostname: args.name,
-          deployPublicKey: args.deployPublicKey,
-          privateOnly: !wantsPublicNetworking,
-        }),
+        userData,
         // Declared on the server rather than through a separate attachment
         // resource: this is the only place the provider treats the firewall
         // as being in effect from the moment the server first boots. An

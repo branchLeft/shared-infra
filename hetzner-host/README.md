@@ -17,6 +17,11 @@ each dependent creating its own copy of shared infrastructure.
 - `EDGE_RULES`, `INTERNAL_RULES` — per-role firewall rule sets.
 - `renderCloudInit`, `CloudInitArgs`, `assertDeployPublicKey` — the first-boot
   user-data and the validation that protects it.
+- `Enrolment`, `PullBootstrap`, `PullBootstrapFile`, `assertEnrolment`,
+  `assertPullBootstrap`, `assertPgpPublicKeyBlock`, `renderEnrolmentScript`,
+  `ENROLMENT_PACKAGES`, `PRODUCTION_LAYOUT`, `EnrolmentLayout` — the optional
+  enrolment of an edge host into the gated pull, and its validation
+  ("Enrolment" below).
 - `NETWORK_CIDR`, `SUBNET_CIDR`, `HOST_IPS`, `APP_HOST_IPS`,
   `ESTATE_LOCATION`, `EuCentralLocation`, `EstateLocation` — the shared
   address plan every host and its peers are named from.
@@ -90,6 +95,64 @@ over rather than trusting the input — cloud-init runs once and cannot be
 re-run, `userData` is create-time-only at the provider, and it is in `Host`'s
 `ignoreChanges` — so an injected document is permanent and absent from every
 later diff.
+
+## Enrolment
+
+The one exception to "a beachhead, not configuration management": an edge
+`Host` given an `enrolment` brings itself under the gated pull at first boot,
+so the owner does not install the pull by hand. Without `enrolment` the
+document is byte-for-byte what it was before the option existed (held by golden
+files in `testdata/`, captured from the code before the change and never
+regenerated). With it:
+
+- **No deploy account.** Setting both `enrolment` and `deployPublicKey`, or
+  neither, throws before a resource exists. An enrolled host's deploy path is
+  the pull; a deploy key beside it would be a second way in with root-equivalent
+  reach.
+- **Two restricted keys on root.** `applyPublicKey` and `checkPublicKey` (public
+  halves only, which must differ) become `authorized_keys` lines of root, each
+  restricted to one command of the pull program (`pull-trigger --mode apply` or
+  `--mode check`). They are written as `users` entries and not `write_files`, so
+  the key the datasource injects for the owner stays. The private halves are the
+  owner's to hold and are never stack config.
+- **One script, last, that stops at its first failure.** `runcmd` is a single
+  shell script with no `errexit`, so the enrolment is its own final entry and
+  checks every step itself. It downloads the pull program, the program that
+  installs the pinned Ansible and the hash-locked requirements, each over HTTPS
+  from a commit of `main`, and checks each against the SHA-256 in the record
+  before anything runs. The files are too large for the 32 KiB user-data limit,
+  so they are fetched and not embedded. It then runs the install program (the
+  same one the `ansible_runtime` role runs, with `--link`), places the pull
+  program and writes its configuration. A failure writes a marker
+  (`/var/lib/branchleft/pull-enrolment.failed`, with the step that failed) and
+  stops; success writes `pull-enrolment.done`.
+- **A failed host stays un-enrolled.** There is no fallback to an unpinned
+  engine and no retry loop: the owner reads the marker and installs by hand.
+  The pull program is placed last of all, after the engine is installed and
+  linked, so until the script has succeeded the restricted keys do nothing (a
+  `command=` naming a missing path fails closed).
+- **The record is an input.** `ansible/tools/pull_bootstrap.py` builds it from
+  `main` at publish time (`generate`) and checks one against the repository
+  (`verify`): each file is pinned to the last commit that changed it, so a
+  squash merge cannot remove the pinned commit, and the configuration is
+  rendered from the role's own task and variable files, never written a second
+  time (`ansible/tools/test_pull_bootstrap.py` runs the role's task and compares
+  bytes). `assertPullBootstrap` refuses anything that is not exactly that shape.
+  The package carries no copy of the record; the stack passes the one it was
+  given with the package. The committed record, its drift check and its
+  packaging are a separate change.
+- **Packages.** `ENROLMENT_PACKAGES` is held equal to the two roles' lists
+  (`pull_trigger`, `ansible_runtime`) less the base ones by the tools' tests.
+  The engine itself is never in the list.
+- **Edge only.** Any other role with an `enrolment` throws.
+- **Key rotation is a replacement.** `userData` is create-time-only and in
+  `ignoreChanges`, so changing a key in stack config does not change a running
+  host. Rotating either key means replacing the host.
+- **A private-only host** is accepted by the type but its first-boot route to
+  GitHub is the network's own gateway (`privateOnly`), so enrolment there
+  depends on that route being up at first boot.
+- **Not proven on a live host.** The first real host is the proof: no
+  throwaway server was created and no live apply was run.
 
 ## Firewalls
 

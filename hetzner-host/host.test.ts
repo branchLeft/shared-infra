@@ -1,6 +1,7 @@
 import * as pulumi from '@pulumi/pulumi';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { bootstrap, enrolment } from './enrolment.fixtures';
 import { Host } from './host';
 
 /**
@@ -193,6 +194,95 @@ describe('Host', () => {
     expect(server?.inputs.deleteProtection).toBe(false);
     expect(server?.inputs.rebuildProtection).toBe(false);
     expect(server?.inputs.labels).toMatchObject({ env: 'lab', role: 'app' });
+  });
+
+  describe('enrolment in the pull', () => {
+    const hcloudTypes = (before: number) =>
+      created.slice(before).filter((r) => r.type.startsWith('hcloud:'));
+
+    it('puts the enrolment document on an edge host, and no deploy account', async () => {
+      const { resources } = await build({
+        name: 'enrol1',
+        role: 'edge',
+        deployPublicKey: undefined,
+        enrolment: enrolment(),
+      });
+      const server = resources.find((r) => r.type === 'hcloud:index/server:Server');
+      const userData = server?.inputs.userData as string;
+      expect(userData).toContain('--mode apply');
+      expect(userData).not.toContain('name: deploy');
+    });
+
+    it('leaves the document of a host with no enrolment alone', async () => {
+      const { resources } = await build({ name: 'enrol2', role: 'edge' });
+      const server = resources.find((r) => r.type === 'hcloud:index/server:Server');
+      expect(server?.inputs.userData as string).not.toContain('pull-trigger');
+    });
+
+    it.each(['app', 'db', 'mon'] as const)(
+      'refuses to enrol a %s host, before creating anything',
+      (role) => {
+        const before = created.length;
+        expect(
+          () =>
+            new Host({
+              ...BASE,
+              name: `enrol-${role}`,
+              role,
+              privateIp: '10.20.1.150',
+              deployPublicKey: undefined,
+              enrolment: enrolment(),
+            })
+        ).toThrow(/Only an edge host can be enrolled/);
+        expect(hcloudTypes(before)).toEqual([]);
+      }
+    );
+
+    it('refuses an enrolment and a deploy key together, before creating anything', () => {
+      const before = created.length;
+      expect(
+        () =>
+          new Host({
+            ...BASE,
+            name: 'enrol3',
+            role: 'edge',
+            privateIp: '10.20.1.151',
+            enrolment: enrolment(),
+          })
+      ).toThrow(/no deploy account/);
+      expect(hcloudTypes(before)).toEqual([]);
+    });
+
+    it('refuses neither a deploy key nor an enrolment, before creating anything', () => {
+      const before = created.length;
+      expect(
+        () =>
+          new Host({
+            ...BASE,
+            name: 'enrol4',
+            role: 'edge',
+            privateIp: '10.20.1.152',
+            deployPublicKey: undefined,
+          })
+      ).toThrow(/required unless the host has an enrolment/);
+      expect(hcloudTypes(before)).toEqual([]);
+    });
+
+    it('refuses a bad bootstrap record, before creating anything', () => {
+      const before = created.length;
+      expect(
+        () =>
+          new Host({
+            ...BASE,
+            name: 'enrol5',
+            role: 'edge',
+            privateIp: '10.20.1.153',
+            deployPublicKey: undefined,
+            enrolment: enrolment({ bootstrap: bootstrap({ schema: 2 }) }),
+          })
+      ).toThrow(/schema 1/);
+      expect(hcloudTypes(before)).toEqual([]);
+    });
   });
 
   it('refuses a deploy key that could inject cloud-config, before creating anything', async () => {

@@ -22,6 +22,7 @@ the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
 | `requirements.txt` | The hash-locked toolchain compiled from it, collections included.      |
 | `requirements.yml` | Empty by design: no collection is fetched outside the lock (ANS-4).    |
 | `checks/`          | The pin check and its unit tests (ANS-4).                              |
+| `tools/`           | The record a new host's first boot is built from, and its tests.       |
 | `inventories/`     | The inventory and group-variable trees. `production` holds edge1, db1. |
 | `playbooks/`       | One playbook per host: selects hosts and lists roles (ANS-13).         |
 | `pyproject.toml`   | The Python floor for the harness: version, mypy strict, ruff (ANS-2).  |

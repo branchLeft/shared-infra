@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { assertDeployPublicKey, renderCloudInit } from './cloudInit';
@@ -183,5 +186,40 @@ describe('renderCloudInit', () => {
     const document = await render(true);
     expect(document.split('bootcmd:').length - 1).toBe(1);
     expect(document.split('runcmd:').length - 1).toBe(1);
+  });
+});
+
+/**
+ * With no enrolment the document is what it was before enrolment existed, byte
+ * for byte. The two files in `testdata/` were rendered by `cloudInit.ts` as it
+ * stands on `origin/main`, before any edit of this change, from the arguments
+ * below, and are not regenerated. `userData` is create-time-only and in the
+ * component's `ignoreChanges`, so a flag-off change here would not reach a
+ * running host, but it would reach the next host created, and no diff would show it.
+ */
+describe('a host with no enrolment gets the document it always did', () => {
+  const golden = (name: string): string =>
+    readFileSync(join(__dirname, 'testdata', `cloud-init-${name}.golden`), 'utf8');
+  const args = {
+    hostname: 'db1',
+    deployPublicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLE deploy@db1',
+  };
+
+  for (const [name, privateOnly] of [
+    ['public', false],
+    ['private-only', true],
+  ] as const) {
+    it(`is byte for byte the ${name} document from origin/main`, async () => {
+      const document = await new Promise<string>((resolve) => {
+        renderCloudInit({ ...args, privateOnly }).apply(resolve);
+      });
+      expect(document).toBe(golden(name));
+    });
+  }
+
+  it('keeps the default entry first and the deploy entry beside it', () => {
+    const document = golden('public');
+    expect(document.indexOf('  - default')).toBeGreaterThan(-1);
+    expect(document.indexOf('  - default')).toBeLessThan(document.indexOf('  - name: deploy'));
   });
 });

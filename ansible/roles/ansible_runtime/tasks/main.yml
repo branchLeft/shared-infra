@@ -27,50 +27,57 @@
     mode: '0644'
   diff: false
 
+# The install steps live in one program, which a new host's first-boot document
+# runs too (ansible_runtime README, "One program, two callers"). It is a file of
+# this role, copied from the role's own files/, so the role never reads it from
+# anywhere else.
+- name: Place the install program on the host
+  ansible.builtin.copy:
+    src: install_runtime.py
+    dest: '{{ ansible_runtime_program }}'
+    owner: root
+    group: root
+    mode: '0755'
+
+# The program is given the SHA-256 of the lock as it is on the machine that runs
+# the role, and refuses a copy on the host that differs. Reading is not a change,
+# so this task runs in check mode too.
+- name: Hash the lock where the role runs
+  ansible.builtin.stat:
+    path: '{{ ansible_runtime_requirements_src }}'
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  become: false
+  register: ansible_runtime_source
+
 # A command task is skipped by check mode on its own, with the creates form
-# reporting a change when the file is missing. That is the stated reason for the
-# skip here and in the install task below (ANS-10).
-- name: Create the virtual environment for this lock
+# reporting a change when the marker is missing. That is the stated reason for the
+# skip here (ANS-10). The program makes the environment, installs the lock into it
+# with hash checking required (pip refuses a file whose hash the lock does not list,
+# and a package the lock does not name: the supply-chain control of the role), and
+# writes the marker last. It is given no link: the link task below moves it, on every
+# apply, so that a lock put back to an earlier one points the link at that one's
+# environment too.
+- name: Build the environment for this lock and install the locked packages into it
   ansible.builtin.command:
     argv:
       - /usr/bin/python3
-      - -m
-      - venv
-      - '{{ ansible_runtime_venv }}'
-    creates: '{{ ansible_runtime_venv }}/bin/python'
-
-- name: Look for the marker that the install from this lock finished
-  ansible.builtin.stat:
-    path: '{{ ansible_runtime_done_marker }}'
-  register: ansible_runtime_marker
-
-# Hash checking is required: pip refuses a file whose hash the lock does not list,
-# and a package the lock does not name. That is the supply-chain control of the role.
-- name: Install the locked packages with hash checking required
-  ansible.builtin.command:
-    argv:
-      - '{{ ansible_runtime_venv }}/bin/pip'
-      - install
-      - --require-virtualenv
-      - --require-hashes
-      - --no-input
-      - --disable-pip-version-check
-      - -r
+      - -I
+      - '{{ ansible_runtime_program }}'
+      - --lock
       - '{{ ansible_runtime_lock_copy }}'
-  when: not ansible_runtime_marker.stat.exists
-  changed_when: true
+      - --lock-sha256
+      - "{{ ansible_runtime_source.stat.checksum | default('') }}"
+      - --root
+      - '{{ ansible_runtime_root }}'
+      - --expect-fingerprint
+      - '{{ ansible_runtime_lock_fingerprint }}'
+    creates: '{{ ansible_runtime_done_marker }}'
 
-- name: Record that the install from this lock finished
-  ansible.builtin.copy:
-    content: "{{ ansible_runtime_lock_fingerprint }}\n"
-    dest: '{{ ansible_runtime_done_marker }}'
-    owner: root
-    group: root
-    mode: '0644'
-  when: not ansible_runtime_marker.stat.exists
-
-# The link moves to the new environment only after the install finished, so a
-# failed install leaves the previous environment in service.
+# The link moves to the environment of this lock only after the install finished,
+# so a failed install leaves the previous environment in service. It runs on every
+# apply and does not depend on the marker, so a link left on another lock's
+# environment, or deleted, is put right.
 - name: Point the ansible-playbook link at this environment
   ansible.builtin.file:
     src: '{{ ansible_runtime_venv }}/bin/ansible-playbook'

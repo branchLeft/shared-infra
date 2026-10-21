@@ -11,8 +11,14 @@ export type { HostArgs, HostRole } from './host';
 
 export { EDGE_RULES, INTERNAL_RULES } from './firewalls';
 
-export { assertDeployPublicKey, renderCloudInit } from './cloudInit';
-export type { CloudInitArgs } from './cloudInit';
+export {
+  assertDeployPublicKey,
+  assertEnrolment,
+  assertPgpPublicKeyBlock,
+  assertPullBootstrap,
+  renderCloudInit,
+} from './cloudInit';
+export type { CloudInitArgs, Enrolment, PullBootstrap, PullBootstrapFile } from './cloudInit';
 
 export { APP_HOST_IPS, ESTATE_LOCATION, HOST_IPS, NETWORK_CIDR, SUBNET_CIDR } from './addressPlan';
 export type { EstateLocation, EuCentralLocation } from './addressPlan';

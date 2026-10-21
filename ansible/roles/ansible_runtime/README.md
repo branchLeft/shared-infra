@@ -26,6 +26,32 @@ a new environment; the `ansible-playbook` that is running the bump keeps its own
 packages and is never upgraded under itself. The role never removes an old
 environment.
 
+## One program, two callers
+
+Steps 2 to 5 are done by one typed Python program, `files/install_runtime.py`,
+and by nothing else. The role runs it, and so does the first-boot document of a
+new host (`hetzner-host`, "Enrolment"), which downloads it and the lock, checks
+each against a SHA-256 recorded at a commit of `main`, and runs it. There is no
+second copy of the install logic to drift.
+
+The program, in order: checks the lock against the SHA-256 it was given;
+refuses a lock with a line that carries no hash; computes the fingerprint (the
+SHA-256 of the lock text without trailing whitespace, first sixteen hex digits,
+which is the role's own expression, held equal by a golden value in the unit
+tests and in the Molecule verify); refuses a fingerprint other than the one the
+caller expects; opens the lock without following a link; refuses an
+environments directory that is a link, not the caller's own or writable by
+others; builds the environment with a scrubbed process environment (no pip
+variable of the caller reaches the install); installs with hash checking required; checks that
+`ansible-playbook` is an executable file in the environment; writes the marker
+last; and, only when asked with `--link`, replaces the `ansible-playbook` link
+atomically. Every failure exits 1 with one JSON line on stdout that names the
+reason, so a failed first boot leaves the host un-enrolled and the owner
+installs by hand. It never falls back to an engine that is not the locked one.
+
+The role's own link task stays last in `tasks/main.yml`, so the role is the one
+place that decides the link moves.
+
 It does not install the trigger (`pull_trigger` does), manage users, SSH keys or
 services, or hold any secret. It does not install the collections separately:
 they arrive inside the pinned `ansible` package (`ansible/README.md`).
@@ -121,5 +147,7 @@ role from the signed checkout.
    copy of the lock and the link report the change.
 3. Keep the order: the link moves last.
 4. A control is changed only with its proof: weaken it in a copy, see the named
-   assertion in `verify.yml` fail, restore it, see it pass.
+   assertion in `verify.yml` or the named unit test fail, restore it, see it
+   pass. The program's unit tests (`tests/unit`) run in CI with mypy strict and
+   ruff (`.github/workflows/ansible.yml`, "Check each role's own program").
 5. Run the harness command above before opening a pull request.

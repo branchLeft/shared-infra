@@ -200,23 +200,69 @@ jobs:
       - name: ansible-lint at the production profile
         run: '"$RUNNER_TEMP/ansible-venv/bin/ansible-lint" --strict ansible'
 
-      - name: Type-check the harness and the checks
+      - name: Type-check the harness, the checks and the tools
         working-directory: ansible
-        run: '"$RUNNER_TEMP/ansible-venv/bin/mypy" harness checks'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/mypy" harness checks tools'
 
-      - name: Lint the harness and the checks
+      - name: Lint the harness, the checks and the tools
         working-directory: ansible
-        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" check harness checks'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" check harness checks tools'
 
-      - name: Check the harness and checks formatting
+      - name: Check the harness, checks and tools formatting
         working-directory: ansible
-        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" format --check harness checks'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" format --check harness checks tools'
 
       - name: Test the harness
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/harness -p "test_*.py"'
 
       - name: Test the checks
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/checks -p "test_*.py"'
+
+      # The tools build the record a new host's first-boot document is made from. Their
+      # tests run the role's own configuration task with this job's ansible-playbook and
+      # compare bytes, and read hetzner-host/cloudInit.ts, which the filter above names.
+      # The interpreter is the venv's, so ansible-playbook is found beside it.
+      - name: Test the tools
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/tools -p "test_*.py"'
+
+      # A role that ships a program in files/ names that directory as the mypy_path of its
+      # own pyproject.toml, and keeps tests of the program in tests/unit/. It is checked from
+      # the role's directory, so that pyproject.toml is the one the tools read. The program
+      # is the code a host runs as root, so such a role with no files/ fails here: tests
+      # with nothing under them would pass in silence. The step covers every such role and
+      # has no list to edit. A role with a library/ is checked by the step below; a role
+      # whose pyproject.toml names no files/ path is covered by neither.
+      - name: Check each role's own program in files/
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bin="$RUNNER_TEMP/ansible-venv/bin"
+          checked=0
+          for tests in ansible/roles/*/tests/unit; do
+            role="$(dirname "$(dirname "$tests")")"
+            if [ -d "$role/library" ] || ! grep -qs '^mypy_path = .*/files"' "$role/pyproject.toml"; then
+              continue
+            fi
+            echo "::group::$role"
+            if [ ! -d "$role/files" ]; then
+              echo "$role has a tests/unit/ and no files/, so the tests test nothing."
+              exit 1
+            fi
+            (
+              cd "$role"
+              "$bin/mypy" --strict files tests/unit
+              "$bin/ruff" check files tests
+              "$bin/ruff" format --check files tests
+              PYTHONPATH=files "$bin/python" -m unittest discover -b -s tests/unit -p "test_*.py"
+            )
+            echo "::endgroup::"
+            checked=$((checked + 1))
+          done
+          if [ "$checked" -eq 0 ]; then
+            echo "No role program with tests found, so there is nothing to check."
+            exit 1
+          fi
+          echo "Checked the program of $checked role(s)."
 
       # A role that ships a typed module of its own in library/ (ANS-2) is checked
       # from the role's directory, so the role's pyproject.toml, with its mypy_path

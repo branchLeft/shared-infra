@@ -4,8 +4,13 @@
   gather_facts: false
   vars:
     ansible_runtime_verify_lock: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../../requirements.txt') }}"
+    # The expected name is computed here by the expression the role used before the install
+    # moved into a program (the file lookup, then the SHA-256 of the text), not by the program.
+    # The link below must name this environment, so a program that fingerprinted another way
+    # would fail here instead of building a second environment on a live host.
     ansible_runtime_verify_fingerprint: "{{ ansible_runtime_verify_lock | ansible.builtin.hash('sha256') | truncate(16, True, '') }}"
     ansible_runtime_verify_core: "{{ ansible_runtime_verify_lock | ansible.builtin.regex_search('ansible-core==([0-9.]+)', '\\1') | first }}"
+    ansible_runtime_verify_role_directory: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}"
   tasks:
     - name: Look at the directory that holds the environments
       ansible.builtin.stat:
@@ -31,6 +36,28 @@
           - ansible_runtime_verify_link.stat.islnk
           - ansible_runtime_verify_link.stat.lnk_source == '/opt/ansible-runtime/venv-' ~ ansible_runtime_verify_fingerprint ~ '/bin/ansible-playbook'
         success_msg: The link names the environment of this lock.
+
+    - name: Look at the install program and the marker
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /opt/ansible-runtime/install_runtime.py
+        - /opt/ansible-runtime/venv-{{ ansible_runtime_verify_fingerprint }}/.installed-from-lock
+      register: ansible_runtime_verify_files
+
+    - name: Read the marker
+      ansible.builtin.slurp:
+        src: /opt/ansible-runtime/venv-{{ ansible_runtime_verify_fingerprint }}/.installed-from-lock
+      register: ansible_runtime_verify_marker
+
+    - name: Assert the program is root-owned and not writable by others, and the marker names this lock
+      ansible.builtin.assert:
+        that:
+          - ansible_runtime_verify_files.results[0].stat.pw_name == 'root'
+          - ansible_runtime_verify_files.results[0].stat.mode == '0755'
+          - ansible_runtime_verify_files.results[1].stat.exists
+          - (ansible_runtime_verify_marker.content | ansible.builtin.b64decode) == ansible_runtime_verify_fingerprint ~ '\n'
+        success_msg: The program is root-owned with mode 0755 and the marker holds the fingerprint of this lock.
 
     - name: Run ansible-playbook through the link
       ansible.builtin.command:
@@ -96,4 +123,64 @@
           text: DO NOT MATCH THE HASHES
         - name: no-hash
           file: fixture_no_hash.txt
-          text: Hashes are required in --require-hashes mode
+          text: not a pinned requirement with SHA-256 hashes
+
+    - name: Put the lock back after an earlier one was applied, and after a lock that was never in service
+      ansible.builtin.include_tasks: tasks/rollback.yml
+
+    # ------------------------------------------- the unit tests, on Debian
+    - name: Make a directory for the unit tests
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /var/tmp/art-unit
+        - /var/tmp/art-unit/files
+        - /var/tmp/art-unit/tests
+        - /var/tmp/art-unit/tests/unit
+
+    - name: Copy the program and its unit tests into the container
+      ansible.builtin.copy:
+        src: '{{ item.src }}'
+        dest: '{{ item.dest }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - src: '{{ ansible_runtime_verify_role_directory }}/files/install_runtime.py'
+          dest: /var/tmp/art-unit/files/install_runtime.py
+        - src: '{{ ansible_runtime_verify_role_directory }}/tests/unit/test_install_runtime.py'
+          dest: /var/tmp/art-unit/tests/unit/test_install_runtime.py
+      loop_control:
+        label: '{{ item.dest }}'
+
+    - name: Run the unit tests on the Python of the production release
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -m
+          - unittest
+          - discover
+          - -b
+          - -s
+          - tests/unit
+          - -p
+          - test_*.py
+        chdir: /var/tmp/art-unit
+      environment:
+        PYTHONPATH: files:tests/unit
+        PYTHONDONTWRITEBYTECODE: '1'
+      register: ansible_runtime_verify_unit
+      changed_when: false
+      failed_when: false
+
+    - name: The unit tests pass on the production Debian release
+      ansible.builtin.assert:
+        that:
+          - ansible_runtime_verify_unit.rc == 0
+          - "'OK' in ansible_runtime_verify_unit.stderr"
+        fail_msg: 'unit tests failed: {{ ansible_runtime_verify_unit.stderr }}'
+        success_msg: the unit tests pass
