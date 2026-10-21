@@ -532,6 +532,9 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | `branchleft-compose@db`                                    | `branchLeft/ghost-platform`, `db/stack/compose.yml`                                                      | no                |
 | `branchleft-compose@blog`, and one per further tenant slug | nowhere: rendered by `branchLeft/ghost-platform`'s `infra/tenant/compose.ts`                             | no                |
 | `branchleft-compose@demo-`, the prefix of each demo slot   | nowhere: provisioned by `branchLeft/ghost-platform`'s `demo-host/provision`                              | no                |
+| `branchleft-compose@demo-0-a`, one named demo instance     | nowhere: provisioned by `branchLeft/ghost-platform`'s `demo-host/provision`                              | no                |
+| `branchleft-compose@demo-host`, which is not an instance   | nowhere: the directory the `demo1_build` role stages `branchLeft/ghost-platform`'s demo programs into    | no                |
+| `branchleft-compose@demo-sidecar`, which is no instance    | nowhere: the sidecar's image pin file, read by `branchLeft/ghost-platform`'s `demo-host/provision`       | no                |
 | `branchleft-compose@broker`, which is not an instance      | nowhere: the broker program has its own unit, built from `branchLeft/ghost-platform`'s `services/broker` | no                |
 | `branchleft-compose@backup-worker`                         | nowhere: a systemd unit, not a Compose stack                                                             | no                |
 

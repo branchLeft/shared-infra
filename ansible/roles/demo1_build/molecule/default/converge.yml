@@ -215,3 +215,62 @@
               - "'did not match' in (ansible_failed_result | string | lower)"
             quiet: true
             fail_msg: The role failed on the wrong pin for a reason other than the checksum.
+
+    # The control for the order. The sudoers grant is what makes the wrapper
+    # reachable as root, so a grant the check refuses must stop the run before
+    # the wrapper is installed anywhere. A role that only fails does not prove
+    # that: it can fail after the install and leave the wrapper live under the
+    # refused grant. So the run is given a slot the installed grant does not
+    # have and a wrapper path of its own, and the host is read after the failure.
+    # The path is a probe, so the real wrapper is never touched and the run needs
+    # no restoring; the assertion names the grant check, so a failure of any
+    # other kind does not pass for this one.
+    - name: Prove a grant the check refuses leaves the wrapper uninstalled
+      when: not ansible_check_mode
+      vars:
+        converge_probe_wrapper: /usr/local/sbin/branchleft-slot-refused-probe
+      block:
+        - name: Make sure nothing is at the probe path before the run
+          ansible.builtin.file:
+            path: '{{ converge_probe_wrapper }}'
+            state: absent
+          changed_when: false
+
+        - name: Apply the role with a slot the installed grant does not hold
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+          vars:
+            demo1_build_slot_names: ['0', '1', '2', '3', '4', '5', '6', '7']
+            demo1_build_wrapper_path: '{{ converge_probe_wrapper }}'
+
+        - name: Fail if the refused grant was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a sudoers grant that does not match the slot table.
+      rescue:
+        - name: Assert the failure was the sudoers grant
+          ansible.builtin.assert:
+            that:
+              - "'sudoers grant holds' in (ansible_failed_result.msg | default(''))"
+            quiet: true
+            fail_msg: The role failed on the extra slot for a reason other than the sudoers grant.
+
+        - name: Look at the probe path after the refusal
+          ansible.builtin.stat:
+            path: '{{ converge_probe_wrapper }}'
+            follow: false
+          register: demo1_build_converge_probe
+
+        - name: Assert the refused grant left no wrapper installed
+          ansible.builtin.assert:
+            that:
+              - not demo1_build_converge_probe.stat.exists
+            quiet: true
+            fail_msg: >-
+              The role installed the wrapper at {{ converge_probe_wrapper }} and then refused the
+              sudoers grant. A grant the check refuses must stop the run before any install.
+
+        - name: Leave nothing at the probe path
+          ansible.builtin.file:
+            path: '{{ converge_probe_wrapper }}'
+            state: absent
+          changed_when: false

@@ -1,7 +1,7 @@
 ---
 # The order follows the host build: check the inputs and what broker_deploy left
-# behind, stage the pinned programs, install the three that something else runs,
-# compare the sudoers grant with the generator, claim the uids and make the
+# behind, stage the pinned programs, compare the sudoers grant with the generator,
+# install the three programs that something else runs, claim the uids and make the
 # router's account, declare the directories, write the units, stage the edge
 # candidate, and last read back what root will run.
 #
@@ -18,11 +18,16 @@
 - name: Stage the pinned programs
   ansible.builtin.include_tasks: _release.yml
 
-- name: Install the programs that sudo and systemd run
-  ansible.builtin.include_tasks: _programs.yml
-
+# The comparison comes before the install on purpose. The grant is what makes the
+# wrapper reachable as root, so a grant this refuses (a wildcard, the wrong number
+# of rules, drift from the generator, or an extra slot) must stop the run before
+# the wrapper is put anywhere, wherever the wrapper path points. It needs only the
+# staged release above, never the installed wrapper.
 - name: Compare the sudoers grant with the pinned generator
   ansible.builtin.include_tasks: _sudoers_check.yml
+
+- name: Install the programs that sudo and systemd run
+  ansible.builtin.include_tasks: _programs.yml
 
 - name: Record the uid claims and make the router's account
   ansible.builtin.include_tasks: _accounts.yml

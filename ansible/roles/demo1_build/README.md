@@ -34,17 +34,19 @@ What the role does, in the order of `tasks/main.yml`:
    its pinned sha256, into `/opt/branchleft/demo-host/releases/<commit>/demo-host/provision/`
    (root, `0755` directories, `0644` files). `current` links to the release. The
    role then reads each file back and decides whether the release is whole.
-4. **Installs three programs where something else runs them** (`_programs.yml`):
+4. **Compares the sudoers grant with the pinned generator** (`_sudoers_check.yml`),
+   read-only, and before any program is installed, so a grant it refuses leaves
+   the wrapper uninstalled by that run: the file is a regular file, `root:root`,
+   `0440`, and passes `visudo -csf`; every rule is one literal `NOPASSWD` line for
+   the broker with no wildcard; the number of rules is what the slot table implies;
+   the sorted rules equal the sorted output of the pinned `render_slot_sudoers.py`;
+   and the slots in the generator's rules are the slots in the role's table. It
+   needs only the staged release, so it follows step 3.
+5. **Installs three programs where something else runs them** (`_programs.yml`):
    the slot wrapper at the path of the sudoers grant, and the drain sidecar and the
    health router in `/usr/local/lib/branchleft/` (root, `0755`), the paths the
    rendered units name. Before installing the sidecar it reads it and refuses a
    file that reads another drain-flag directory or names flags another way.
-5. **Compares the sudoers grant with the pinned generator** (`_sudoers_check.yml`),
-   read-only: the file is a regular file, `root:root`, `0440`, and passes
-   `visudo -csf`; every rule is one literal `NOPASSWD` line for the broker with no
-   wildcard; the number of rules is what the slot table implies; the sorted rules
-   equal the sorted output of the pinned `render_slot_sudoers.py`; and the slots
-   in the generator's rules are the slots in the role's table.
 6. **Records the uid claims and makes the router's account** (`_accounts.yml`):
    see the next section.
 7. **Declares the directories** (`_dirs.yml`): the router's socket tree, the
