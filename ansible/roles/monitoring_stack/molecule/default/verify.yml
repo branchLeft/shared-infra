@@ -23,6 +23,29 @@
       - render_alertmanager_config.py
       - snds/collect_snds_metrics.py
   tasks:
+    # The role's defaults hold no secret input (README, "Secrets"). A default for
+    # one would let a run with no caller value write a fixed value, so the test
+    # reads the defaults file and refuses any key that names one of the seven
+    # inputs. The inputs are required with no default in meta/argument_specs.yml.
+    - name: Read the role's defaults from the repository
+      ansible.builtin.set_fact:
+        monitoring_stack_verify_defaults: >-
+          {{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') | from_yaml }}
+
+    - name: Work out which default names a secret input
+      ansible.builtin.set_fact:
+        monitoring_stack_verify_secret_defaults: >-
+          {{ monitoring_stack_verify_defaults | ansible.builtin.list
+          | select('match', 'monitoring_stack_(smtp_|healthchecks_|alert_recipient_|mailhost_|grafana_admin_|snds_)')
+          | ansible.builtin.list }}
+
+    - name: Assert the defaults hold no value for a secret input
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_secret_defaults | length == 0
+        quiet: true
+        fail_msg: The defaults of monitoring_stack name a secret input. Remove the default; the caller supplies it.
+
     - name: List every file in the stack directory of the repository
       ansible.builtin.find:
         paths: '{{ verify_stack_source }}'

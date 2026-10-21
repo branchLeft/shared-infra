@@ -27,6 +27,22 @@
       ansible.builtin.systemd_service:
         daemon_reload: true
 
+    # The monitoring drop-in resets ExecStart to `docker compose up`. A restart
+    # of an active instance, which a changed secret or stack file makes the role
+    # do, runs that command, and the container has no Docker. This stand-in is a
+    # test double that exits 0 so the restart can be seen to happen; it is not a
+    # Docker, and nothing here proves the stack starts (README, "Named limits").
+    - name: Install a stand-in for the docker command the drop-in runs
+      ansible.builtin.copy:
+        content: |
+          #!/bin/sh
+          # test stand-in for docker: exits 0 so a restart can be observed
+          exit 0
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
     # ntfy_pager is the single delivery owner of the renderer, and it is not run
     # by this scenario. The check in the role needs a root-owned regular file
     # there, so the test stands one in, at the path the role's constant names.

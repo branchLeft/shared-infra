@@ -1,12 +1,13 @@
 ---
 # Every input is a secret or a URL carrying one. Each must be a non-empty single
 # line before anything is written. The assert names the key only, never the
-# value, and no_log hides the task. A blank value would make the renderer fail
-# at ExecStartPre, and a value with a newline would write a second line.
+# value, and no_log hides the task. A blank value, or one that is only
+# whitespace, would make the renderer fail at ExecStartPre, and a value with a
+# newline would write a second line.
 - name: Check that each secret input is a non-empty single line
   ansible.builtin.assert:
     that:
-      - item.value | string | length > 0
+      - item.value | string | trim | length > 0
       - item.value | string is not search('[\r\n]')
     quiet: true
     fail_msg: '{{ item.key }} must be a non-empty single line.'
@@ -16,33 +17,15 @@
   no_log: true
 
 # The renderer is delivered by ntfy_pager, not this role, and the unit's
-# ExecStartPre runs it. Without it the monitoring unit fails to start. The check
-# fails closed: the file must be a regular file, owned by root, with no group or
-# other write bit, because it runs as root on every unit start.
-- name: Look at the renderer
-  ansible.builtin.stat:
-    path: '{{ monitoring_stack_renderer }}'
-  register: monitoring_stack_renderer_stat
-
-- name: Refuse to run with a renderer that is missing or writable by others
-  ansible.builtin.assert:
-    that:
-      - monitoring_stack_renderer_stat.stat.exists
-      - monitoring_stack_renderer_stat.stat.isreg
-      - monitoring_stack_renderer_stat.stat.pw_name == 'root'
-      - monitoring_stack_renderer_stat.stat.gr_name == 'root'
-      - monitoring_stack_renderer_stat.stat.mode[-2] not in ['2', '3', '6', '7']
-      - monitoring_stack_renderer_stat.stat.mode[-1] not in ['2', '3', '6', '7']
-    quiet: true
-    fail_msg: >-
-      {{ monitoring_stack_renderer }} must be a root-owned regular file with no
-      group or other write bit. It is delivered by the ntfy_pager role, which
-      must run before this one on a fresh host (see the README, "Order").
-
+# ExecStartPre runs it. This role does not refuse a missing renderer here: a
+# fresh host has none until ntfy_pager runs, and the role must still converge
+# its files and secrets. The check runs in the restart handler instead, and only
+# when that handler would restart an active unit (see the README, "Restart").
+#
 # The directory and the file are created here, because no other role does it.
 # The file is touched with its owner, group and mode in the same task, so it
 # never exists in a wider mode. The times are preserved, so a second run changes
-# nothing. Check mode writes nothing, so the value tasks below skip it.
+# nothing.
 - name: Create the directory of the monitoring secrets file
   ansible.builtin.file:
     path: '{{ monitoring_stack_env_dir }}'
@@ -50,6 +33,11 @@
     owner: root
     group: root
     mode: '0755'
+
+- name: Look at the monitoring secrets file
+  ansible.builtin.stat:
+    path: '{{ monitoring_stack_env_file }}'
+  register: monitoring_stack_env_stat
 
 - name: Create the monitoring secrets file closed to root before any value is written
   ansible.builtin.file:
@@ -65,6 +53,12 @@
 # a second run finds the line and changes nothing, and other keys are left in
 # place. The line is built from the key and a secret value: no_log hides it, and
 # diff is off so no value is shown under --diff.
+#
+# In check mode the file is not created, so these tasks run only when it already
+# exists. Then lineinfile reports what a real run would change, which is what
+# the plan job and the nightly drift check need to see a pending or drifted
+# secret. On a fresh host in check mode they are skipped, because there is no
+# file for lineinfile to edit.
 - name: Write the stack keys into the monitoring secrets file
   ansible.builtin.lineinfile:
     path: '{{ monitoring_stack_env_file }}'
@@ -76,8 +70,8 @@
     label: '{{ item.key }}'
   no_log: true
   diff: false
-  when: not ansible_check_mode
-  notify: Restart the monitoring stack unit
+  when: not ansible_check_mode or monitoring_stack_env_stat.stat.exists
+  notify: Restart the monitoring stack unit when active
 
 - name: Write the SNDS collector key into the monitoring secrets file
   ansible.builtin.lineinfile:
@@ -90,7 +84,7 @@
     label: '{{ item.key }}'
   no_log: true
   diff: false
-  when: not ansible_check_mode
+  when: not ansible_check_mode or monitoring_stack_env_stat.stat.exists
 
 # The stack's files go into the project directory, as before.
 - name: Create the project directory
@@ -122,6 +116,7 @@
     group: root
     mode: '0644'
   loop: '{{ monitoring_stack_files }}'
+  notify: Restart the monitoring stack unit when active
 
 - name: Create the drop-in directory of the monitoring instance
   ansible.builtin.file:
@@ -161,11 +156,17 @@
 
 # Systemd is reloaded here, in the task list and not in a handler, so the role
 # returns with systemd holding the drop-ins it just installed. The converge asks
-# systemd for the loaded value straight after the role. The restart handler is
-# left pending on purpose: it runs once at the end of the play, not here, so a
-# run that also changes ntfy_pager is one restart, not two, as far as this role
-# can prevent it (see the README, "Restart").
+# systemd for the loaded value straight after the role.
 - name: Make systemd read the drop-ins the role installed
   ansible.builtin.systemd_service:
     daemon_reload: true
   when: monitoring_stack_dropin_copy.changed or monitoring_stack_edge_dropin_copy.changed
+
+# The restart handler runs here, at the end of this role, and not at the end of
+# the play. A play that fails after this role's writes would otherwise leave a
+# changed secret in the file with the unit still running its old value, and a
+# rerun would see no change and never restart (the crash window). Flushing here
+# narrows that window to the end of this role. The handler reads the drop-ins'
+# reload first, so the restart uses the drop-ins this role installed.
+- name: Run the restart now, so the role returns with the stack restarted when it changed
+  ansible.builtin.meta: flush_handlers
