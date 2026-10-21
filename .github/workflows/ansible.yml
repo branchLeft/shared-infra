@@ -114,6 +114,7 @@ jobs:
             hetzner/provision/node-exporter.service
             hetzner/provision/test_compose_unit_contract.py
             hetzner/provision/fixtures/docker-apt-key.asc
+            hetzner/provision/test_compose_unit_contract.py
             hetzner/monitoring/stack/
             hetzner/monitoring/systemd/monitoring.override.conf
             hetzner/monitoring/systemd/snds-collector.service
