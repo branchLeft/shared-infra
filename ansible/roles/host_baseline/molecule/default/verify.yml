@@ -1,0 +1,235 @@
+---
+# Everything is asserted from the instance. The expected contents are written
+# out below, not read from the role, so a role whose file was weakened fails.
+# The one thing read from the role is its constants (vars/main.yml): the pinned
+# digest and fingerprint of Docker's key have one home, there.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_files_dir: '{{ playbook_dir }}/../../files'
+    verify_files:
+      - path: /etc/ssh/sshd_config.d/01-branchleft-hardening.conf
+        content: |
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PermitRootLogin prohibit-password
+          PubkeyAuthentication yes
+      - path: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+      - path: /etc/apt/apt.conf.d/51branchleft-unattended-origins
+        content: |
+          Unattended-Upgrade::Origins-Pattern {
+                  "origin=Docker";
+          };
+      - path: /etc/fail2ban/jail.local
+        content: |
+          [sshd]
+          enabled = true
+          port = ssh
+          backend = systemd
+          maxretry = 5
+          findtime = 10m
+          bantime = 1h
+      - path: /etc/apt/sources.list.d/docker.list
+        content: >
+          deb [arch={{ host_baseline_verify_arch.stdout }} signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/debian trixie stable
+  tasks:
+    - name: Read the role's constants
+      ansible.builtin.include_vars:
+        file: '{{ playbook_dir }}/../../vars/main.yml'
+        name: verify_constants
+
+    - name: Ask dpkg for the architecture the Docker source line must name
+      ansible.builtin.command:
+        argv: [dpkg, --print-architecture]
+      register: host_baseline_verify_arch
+      changed_when: false
+
+    - name: Assert the host holds what the baseline requires
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+
+    # sshd and fail2ban are reloaded when their file changed and not otherwise:
+    # the first converge reloaded each once and the second changed nothing.
+    - name: Read the reload counters
+      ansible.builtin.slurp:
+        src: '/var/lib/host_baseline_test/{{ item }}-reloads'
+      loop: [ssh, fail2ban]
+      register: host_baseline_verify_reloads
+
+    - name: Assert each service was reloaded exactly once
+      ansible.builtin.assert:
+        that:
+          - (item.content | ansible.builtin.b64decode).splitlines() | ansible.builtin.length == 1
+        quiet: true
+        fail_msg: >-
+          {{ item.item }} was not reloaded exactly once
+          ({{ (item.content | ansible.builtin.b64decode).splitlines() | ansible.builtin.length }} times).
+      loop: '{{ host_baseline_verify_reloads.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    # The key file is read on the machine that runs the test, with gpg, and must
+    # hold exactly one key whose primary fingerprint is the pinned one. The
+    # digest the role checks stands for this identity: they are changed together.
+    - name: Make a throwaway GnuPG home on the machine that runs the test
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: host_baseline_gnupg
+      register: host_baseline_verify_gnupg
+      delegate_to: localhost
+
+    - name: Check the key file the role ships
+      block:
+        - name: List the keys in the file
+          ansible.builtin.command:
+            argv:
+              - gpg
+              - --homedir
+              - '{{ host_baseline_verify_gnupg.path }}'
+              - --batch
+              - --with-colons
+              - --show-keys
+              - '{{ verify_files_dir }}/docker.asc'
+          register: host_baseline_verify_keys
+          changed_when: false
+          delegate_to: localhost
+
+        - name: Assert exactly one key, with the pinned primary fingerprint
+          ansible.builtin.assert:
+            that:
+              - host_baseline_verify_keys.stdout_lines | ansible.builtin.select('match', '^pub:') | ansible.builtin.list | ansible.builtin.length == 1
+              - >-
+                (host_baseline_verify_keys.stdout_lines | ansible.builtin.select('match', '^fpr:') | ansible.builtin.first).split(':')[9]
+                == verify_constants.host_baseline_docker_key_fingerprint
+            quiet: true
+            fail_msg: >-
+              The key file does not hold exactly one key with the primary fingerprint
+              {{ verify_constants.host_baseline_docker_key_fingerprint }}.
+      always:
+        - name: Remove the throwaway GnuPG home
+          ansible.builtin.file:
+            path: '{{ host_baseline_verify_gnupg.path }}'
+            state: absent
+          delegate_to: localhost
+
+    # A refusal case sets up a fault, applies the role, requires the role to
+    # stop at one named task, and undoes the fault. The role is applied again
+    # at the end of a case that changed a file, so the host ends configured.
+
+    # Another file has already broken the sshd configuration, and the role's
+    # own file is out of date. The role must stop before it rewrites its file
+    # and must not reload sshd: otherwise the file would be correct on the next
+    # run, nothing would queue a reload, and sshd would keep the old settings.
+    - name: Put an out-of-date drop-in and a broken sibling on the host
+      ansible.builtin.copy:
+        content: "{{ item.content }}\n"
+        dest: '{{ item.path }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - path: /etc/ssh/sshd_config.d/01-branchleft-hardening.conf
+          content: PasswordAuthentication yes
+        - path: /etc/ssh/sshd_config.d/00-broken.conf
+          content: NotAnSshdKeyword yes
+      loop_control:
+        label: '{{ item.path }}'
+
+    - name: Refuse an sshd configuration that is already invalid
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse to go on while the sshd configuration is already invalid
+
+    - name: Read the drop-in and the reload counter after the refusal
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /etc/ssh/sshd_config.d/01-branchleft-hardening.conf
+        - /var/lib/host_baseline_test/ssh-reloads
+      register: host_baseline_verify_after_broken
+
+    - name: Assert the drop-in was not rewritten and sshd was not reloaded again
+      ansible.builtin.assert:
+        that:
+          - (host_baseline_verify_after_broken.results[0].content | ansible.builtin.b64decode) == 'PasswordAuthentication yes\n'
+          - (host_baseline_verify_after_broken.results[1].content | ansible.builtin.b64decode).splitlines() | ansible.builtin.length == 1
+        quiet: true
+        fail_msg: The role rewrote its drop-in or reloaded sshd although the sshd configuration was invalid.
+
+    - name: Remove the broken sibling
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d/00-broken.conf
+        state: absent
+
+    - name: Apply the role to put the drop-in right again
+      ansible.builtin.include_role:
+        name: branchleft.host_baseline
+
+    # A sibling that sorts before the role's drop-in wins for the keyword it
+    # sets: the configuration is valid, and password logins would still work.
+    - name: Put a competing drop-in on the host
+      ansible.builtin.copy:
+        content: |
+          PasswordAuthentication yes
+        dest: /etc/ssh/sshd_config.d/00-competing.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Refuse a competing drop-in that outranks the role's
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a resolved sshd setting that is not the hardened one
+        refused_message_part: "effective passwordauthentication is 'yes', expected 'no'"
+
+    - name: Remove the competing drop-in
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d/00-competing.conf
+        state: absent
+
+    # The role must refuse a key file whose digest is not the pinned one before
+    # it writes anything: the file on the host is a stale key, and it must still
+    # be that stale key after the refusal.
+    - name: Put a stale key on the host
+      ansible.builtin.copy:
+        content: |
+          STALE KEY
+        dest: /etc/apt/keyrings/docker.asc
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Refuse a Docker key whose digest is not the pinned one
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a Docker signing key whose digest is not the pinned one
+        refused_key_sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+
+    - name: Read the key after the refusal
+      ansible.builtin.slurp:
+        src: /etc/apt/keyrings/docker.asc
+      register: host_baseline_verify_after_key
+
+    - name: Assert the stale key was not replaced
+      ansible.builtin.assert:
+        that:
+          - (host_baseline_verify_after_key.content | ansible.builtin.b64decode) == 'STALE KEY\n'
+        quiet: true
+        fail_msg: The role replaced the key although it refused the pinned digest.
+
+    - name: Apply the role to put the key right again
+      ansible.builtin.include_role:
+        name: branchleft.host_baseline
+
+    - name: Refuse a machine type with no apt architecture name
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a machine type with no known apt architecture name
+        refused_architectures: {}
+
+    - name: Assert the host holds what the baseline requires, after the refusals
+      ansible.builtin.include_tasks: tasks/assert_state.yml

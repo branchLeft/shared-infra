@@ -1,0 +1,177 @@
+---
+# The sources of the four installed files are read straight from the repository
+# (not through the role's path to them), so a copy in the role that differs from its
+# source fails here. The expected owner, group and mode are written out once,
+# in egress_nat_verify_files, and are the ones the shell scripts used (install -m 0755 for
+# the reconcilers and -m 0644 for the units, both -o root -g root).
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    egress_nat_verify_provision: '{{ playbook_dir }}/../../../../../hetzner/provision'
+    egress_nat_verify_files:
+      - dest: /usr/local/sbin/branchleft-host-egress
+        source: branchleft_host_egress.sh
+        mode: '0755'
+      - dest: /etc/systemd/system/branchleft-host-egress.service
+        source: branchleft-host-egress.service
+        mode: '0644'
+      - dest: /usr/local/sbin/branchleft-nat
+        source: branchleft_nat.sh
+        mode: '0755'
+      - dest: /etc/systemd/system/branchleft-nat.service
+        source: branchleft-nat.service
+        mode: '0644'
+    egress_nat_verify_subnet: 10.20.1.0/24
+  tasks:
+    - name: Read each installed file
+      ansible.builtin.stat:
+        path: '{{ item.dest }}'
+        checksum_algorithm: sha256
+      loop: '{{ egress_nat_verify_files }}'
+      register: egress_nat_verify_installed
+      loop_control:
+        label: '{{ item.dest }}'
+
+    - name: Read each file's source in the repository, on the machine that runs the test
+      ansible.builtin.stat:
+        path: '{{ egress_nat_verify_provision }}/{{ item.source }}'
+        checksum_algorithm: sha256
+      loop: '{{ egress_nat_verify_files }}'
+      register: egress_nat_verify_sources
+      loop_control:
+        label: '{{ item.source }}'
+      delegate_to: localhost
+
+    - name: Assert every file is installed, owned by root, with its mode, byte for byte its source
+      ansible.builtin.assert:
+        that:
+          - item.0.stat.exists
+          - item.1.stat.exists
+          - item.0.stat.isreg
+          - item.0.stat.pw_name == 'root'
+          - item.0.stat.gr_name == 'root'
+          - item.0.stat.mode == item.0.item.mode
+          - item.0.stat.checksum == item.1.stat.checksum
+        quiet: true
+        fail_msg: >-
+          {{ item.0.item.dest }} is missing, is not a regular file owned by root with mode {{ item.0.item.mode }},
+          or differs from {{ egress_nat_verify_provision }}/{{ item.0.item.source }}.
+      loop: '{{ egress_nat_verify_installed.results | ansible.builtin.zip(egress_nat_verify_sources.results) | ansible.builtin.list }}'
+      loop_control:
+        label: '{{ item.0.item.dest }}'
+
+    - name: Find any kept copy of a replaced file
+      ansible.builtin.find:
+        paths:
+          - /usr/local/sbin
+          - /etc/systemd/system
+        patterns: ['branchleft-*~']
+      register: egress_nat_verify_kept
+
+    - name: Assert no kept copy of a replaced file is left on the host
+      ansible.builtin.assert:
+        that:
+          - egress_nat_verify_kept.matched == 0
+        quiet: true
+        fail_msg: 'A kept copy was left behind: {{ egress_nat_verify_kept.files | ansible.builtin.map(attribute="path") | ansible.builtin.list }}'
+
+    - name: Ask systemd for each unit
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
+      loop:
+        - branchleft-host-egress.service
+        - branchleft-nat.service
+      register: egress_nat_verify_units
+
+    - name: Assert each unit is enabled, active and its last run succeeded
+      ansible.builtin.assert:
+        that:
+          - item.status.UnitFileState == 'enabled'
+          - item.status.ActiveState == 'active'
+          - item.status.Result == 'success'
+          - item.status.ExecMainStatus == '0'
+        quiet: true
+        fail_msg: >-
+          {{ item.item }} is not enabled and active with a successful run: {{ item.status.UnitFileState }},
+          {{ item.status.ActiveState }}, {{ item.status.Result }}.
+      loop: '{{ egress_nat_verify_units.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    # The host egress reconciler ran for real, in the branch it takes on a host
+    # that holds a public address. Its private-only branch needs a host with no
+    # public address and is covered by the reconciler's own tests (README).
+    - name: Read what the host egress reconciler said when it ran
+      ansible.builtin.command:
+        argv: [journalctl, -u, branchleft-host-egress.service, --no-pager, -o, cat]
+      register: egress_nat_verify_egress_log
+      changed_when: false
+
+    - name: Assert the host egress reconciler ran and took the branch for a host with a public address
+      ansible.builtin.assert:
+        that:
+          - "'branchleft-host-egress: this host has a public interface, no-op' in egress_nat_verify_egress_log.stdout"
+        quiet: true
+        fail_msg: 'The host egress reconciler did not report its no-op branch: {{ egress_nat_verify_egress_log.stdout }}'
+
+    # The NAT reconciler ran for real and left the rules it leaves. The uplink
+    # is the interface the default route leaves through.
+    - name: Read the default route
+      ansible.builtin.include_tasks: tasks/read_uplink.yml
+
+    - name: Read the NAT and forwarding rules the reconciler inserted
+      ansible.builtin.command:
+        argv: [iptables, -t, '{{ item }}', -S]
+      loop:
+        - nat
+        - filter
+      register: egress_nat_verify_rules
+      changed_when: false
+
+    - name: Read the forwarding drop-in the reconciler wrote
+      ansible.builtin.slurp:
+        src: /etc/sysctl.d/99-branchleft-nat.conf
+      register: egress_nat_verify_dropin
+
+    - name: Read the drop-in's owner and mode
+      ansible.builtin.stat:
+        path: /etc/sysctl.d/99-branchleft-nat.conf
+      register: egress_nat_verify_dropin_stat
+
+    - name: Read the calls the reconciler made to the sysctl command
+      ansible.builtin.slurp:
+        src: /run/egress-nat-sysctl-calls
+      register: egress_nat_verify_sysctl_calls
+
+    - name: Assert the reconciler inserted each rule once, wrote the drop-in and turned forwarding on
+      ansible.builtin.assert:
+        that:
+          - egress_nat_verify_masquerade | ansible.builtin.length == 1
+          - egress_nat_verify_forward_out | ansible.builtin.length == 1
+          - egress_nat_verify_forward_in | ansible.builtin.length == 1
+          - (egress_nat_verify_dropin.content | ansible.builtin.b64decode) == 'net.ipv4.ip_forward = 1\n'
+          - egress_nat_verify_dropin_stat.stat.pw_name == 'root'
+          - egress_nat_verify_dropin_stat.stat.gr_name == 'root'
+          - egress_nat_verify_dropin_stat.stat.mode == '0644'
+          - '"-q -w net.ipv4.ip_forward=1" in (egress_nat_verify_sysctl_calls.content | ansible.builtin.b64decode)'
+        quiet: true
+        fail_msg: >-
+          The NAT reconciler did not leave exactly one masquerade rule and one rule of each forwarding direction
+          for {{ egress_nat_verify_subnet }} out of {{ egress_nat_uplink_dev }}, or did not write its drop-in, or did not turn forwarding on.
+          nat: {{ egress_nat_verify_nat_lines }} filter: {{ egress_nat_verify_filter_lines }}
+      vars:
+        egress_nat_verify_nat_lines: '{{ egress_nat_verify_rules.results[0].stdout_lines }}'
+        egress_nat_verify_filter_lines: '{{ egress_nat_verify_rules.results[1].stdout_lines }}'
+        egress_nat_verify_masquerade_pattern: '^-A POSTROUTING -s {{ egress_nat_verify_subnet }} -o {{ egress_nat_uplink_dev }} -j MASQUERADE$'
+        egress_nat_verify_forward_out_pattern: '^-A FORWARD -s {{ egress_nat_verify_subnet }} -o {{ egress_nat_uplink_dev }} -j ACCEPT$'
+        egress_nat_verify_forward_in_pattern: '^-A FORWARD -d {{ egress_nat_verify_subnet }} -i {{ egress_nat_uplink_dev }} .*ESTABLISHED.* -j ACCEPT$'
+        egress_nat_verify_masquerade: >-
+          {{ egress_nat_verify_nat_lines | ansible.builtin.select('ansible.builtin.search',
+          egress_nat_verify_masquerade_pattern) | ansible.builtin.list }}
+        egress_nat_verify_forward_out: >-
+          {{ egress_nat_verify_filter_lines | ansible.builtin.select('ansible.builtin.search',
+          egress_nat_verify_forward_out_pattern) | ansible.builtin.list }}
+        egress_nat_verify_forward_in: >-
+          {{ egress_nat_verify_filter_lines | ansible.builtin.select('ansible.builtin.search',
+          egress_nat_verify_forward_in_pattern) | ansible.builtin.list }}

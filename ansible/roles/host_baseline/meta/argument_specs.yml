@@ -1,0 +1,13 @@
+---
+argument_specs:
+  main:
+    short_description: Baseline every container host needs - key-only sshd, unattended upgrades, fail2ban and Docker CE
+    description: >-
+      Writes the key-only sshd drop-in, checks the whole sshd configuration and
+      reloads sshd only after that check passes, then reads the resolved
+      settings back. Installs unattended-upgrades, apt-listchanges and
+      fail2ban, writes their configuration and enables both services. Delivers
+      Docker's apt signing key and source and installs Docker CE. The role has
+      no inputs and handles no secret.
+    author: branchLeft
+    options: {}

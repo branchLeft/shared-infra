@@ -1,0 +1,14 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # The instance is a host with every package the role installs already in
+    # place (prepare.yml) and no configuration of the role's: the first run
+    # writes every file, reloads sshd and fail2ban once each, and the second
+    # run, the idempotence step, changes nothing.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        # Molecule links the role under its namespace and name, the namespace
+        # from galaxy_info in meta/main.yml.
+        name: branchleft.host_baseline

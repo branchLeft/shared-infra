@@ -1,0 +1,84 @@
+---
+# Installs Docker CE from Docker's own apt repository (trixie's stable branch
+# ships no docker.io package, and the distro package lags upstream).
+#
+# Versions are deliberately unpinned. That is only defensible because
+# _updates_fail2ban.yml adds Docker's origin to the unattended-upgrades list:
+# without that, this repository is outside Debian's security origins and the
+# container runtime under every tenant would freeze at whatever version first
+# provisioning happened to install. Pin here only alongside a mechanism that
+# surfaces the pin falling behind.
+
+# The key is a file of the role, not fetched at apply time. The role refuses a
+# file whose sha256 is not the pinned one before it writes anything, on the
+# machine that runs the role, so the check also holds in check mode. A rotated
+# Docker key therefore stops the role until the file, the digest and the
+# fingerprint are changed together, deliberately.
+- name: Refuse a Docker signing key whose digest is not the pinned one
+  ansible.builtin.assert:
+    that:
+      - host_baseline_docker_key_sha256 is ansible.builtin.match('^[0-9a-f]{64}\Z')
+      - lookup('ansible.builtin.file', 'docker.asc', rstrip=False) | ansible.builtin.hash('sha256') == host_baseline_docker_key_sha256
+    quiet: true
+    fail_msg: The Docker signing key file does not match the pinned sha256; refusing to install it.
+
+# min is the smallest subset that holds the release codename and the machine
+# name the source line below is made from.
+- name: Gather the facts the Docker source line is made from
+  ansible.builtin.setup:
+    gather_subset: [min]
+
+- name: Refuse a machine type with no known apt architecture name
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['architecture'] in host_baseline_dpkg_architectures
+    quiet: true
+    fail_msg: >-
+      No apt architecture name is known for the machine type {{ ansible_facts['architecture'] }};
+      add it to host_baseline_dpkg_architectures.
+
+- name: Work out the architecture name apt uses
+  ansible.builtin.set_fact:
+    host_baseline_docker_arch: '{{ host_baseline_dpkg_architectures[ansible_facts["architecture"]] }}'
+
+- name: Create the apt keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deliver Docker's apt signing key
+  ansible.builtin.copy:
+    src: docker.asc
+    dest: /etc/apt/keyrings/docker.asc
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Deliver Docker's apt source, signed by that key file
+  ansible.builtin.template:
+    src: docker.list.j2
+    dest: /etc/apt/sources.list.d/docker.list
+    owner: root
+    group: root
+    mode: '0644'
+
+# The index is refreshed and Docker installed only when any of its packages is
+# missing, after the source above is in place.
+- name: Refresh the apt index and install Docker CE when any of it is missing
+  ansible.builtin.apt:
+    name: '{{ host_baseline_docker_packages }}'
+    state: present
+    update_cache: true
+  when: host_baseline_docker_packages | ansible.builtin.difference(ansible_facts['packages'] | ansible.builtin.list) | ansible.builtin.length > 0
+
+# Skipped in check mode when Docker is not installed yet, for the reason given
+# at unattended-upgrades (ANS-10).
+- name: Enable and start Docker
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+  when: not ansible_check_mode or 'docker-ce' in ansible_facts['packages']

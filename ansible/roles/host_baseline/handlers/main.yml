@@ -1,0 +1,12 @@
+---
+# Run when the tasks flush handlers: sshd's after its configuration has been
+# checked, fail2ban's at the end of the role.
+- name: Reload sshd
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: reloaded
+
+- name: Reload fail2ban
+  ansible.builtin.systemd_service:
+    name: fail2ban
+    state: reloaded

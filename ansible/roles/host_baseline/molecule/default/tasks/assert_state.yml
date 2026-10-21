@@ -1,0 +1,103 @@
+---
+# What the instance holds once the role has been applied, asserted from the
+# instance and never from the role's own files: the expected contents are
+# written out here, so a role whose file was weakened fails this play. The
+# caller has loaded verify_constants (the role's vars/main.yml) and read the
+# architecture into host_baseline_verify_arch.
+- name: Read the files the role installs
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+  loop: '{{ verify_files }}'
+  register: host_baseline_assert_state_stats
+  loop_control:
+    label: '{{ item.path }}'
+
+- name: Assert every file is a regular file owned by root with mode 0644
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'root'
+      - item.stat.mode == '0644'
+    quiet: true
+    fail_msg: '{{ item.item.path }} is missing, or is not a regular file owned by root with mode 0644.'
+  loop: '{{ host_baseline_assert_state_stats.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+
+- name: Read the contents of the files the role installs
+  ansible.builtin.slurp:
+    src: '{{ item.path }}'
+  loop: '{{ verify_files }}'
+  register: host_baseline_assert_state_contents
+  loop_control:
+    label: '{{ item.path }}'
+
+- name: Assert every file holds exactly what the baseline requires
+  ansible.builtin.assert:
+    that:
+      - (item.content | ansible.builtin.b64decode) == item.item.content
+    quiet: true
+    fail_msg: '{{ item.item.path }} does not hold the content the baseline requires.'
+  loop: '{{ host_baseline_assert_state_contents.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+
+- name: Read the apt keyrings directory and Docker's key
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop:
+    - /etc/apt/keyrings
+    - /etc/apt/keyrings/docker.asc
+  register: host_baseline_assert_state_keyring
+
+- name: Assert the key is the pinned one, in a directory of mode 0755, and readable by all
+  ansible.builtin.assert:
+    that:
+      - host_baseline_assert_state_keyring.results[0].stat.isdir
+      - host_baseline_assert_state_keyring.results[0].stat.pw_name == 'root'
+      - host_baseline_assert_state_keyring.results[0].stat.mode == '0755'
+      - host_baseline_assert_state_keyring.results[1].stat.isreg
+      - host_baseline_assert_state_keyring.results[1].stat.pw_name == 'root'
+      - host_baseline_assert_state_keyring.results[1].stat.gr_name == 'root'
+      - host_baseline_assert_state_keyring.results[1].stat.mode == '0644'
+      - host_baseline_assert_state_keyring.results[1].stat.checksum == verify_constants.host_baseline_docker_key_sha256
+    quiet: true
+    fail_msg: Docker's key is missing, is not the pinned file, or its directory or modes are wrong.
+
+- name: Ask sshd which settings its configuration resolves to
+  ansible.builtin.command:
+    argv: [/usr/sbin/sshd, -T]
+  register: host_baseline_assert_state_resolved
+  changed_when: false
+
+# The 50-cloud-init.conf the test image carries allows passwords and sorts
+# after the role's 01- drop-in, so only the drop-in being first makes these hold.
+- name: Assert the resolved settings are the hardened ones
+  ansible.builtin.assert:
+    that:
+      - "'passwordauthentication no' in host_baseline_assert_state_resolved.stdout_lines"
+      - "'kbdinteractiveauthentication no' in host_baseline_assert_state_resolved.stdout_lines"
+      - "'pubkeyauthentication yes' in host_baseline_assert_state_resolved.stdout_lines"
+      - "'permitrootlogin without-password' in host_baseline_assert_state_resolved.stdout_lines"
+    quiet: true
+    fail_msg: 'sshd resolves to: {{ host_baseline_assert_state_resolved.stdout_lines }}'
+
+- name: Ask systemd for each service the role manages
+  ansible.builtin.systemd_service:
+    name: '{{ item }}'
+  loop: [unattended-upgrades, fail2ban, docker]
+  register: host_baseline_assert_state_units
+
+- name: Assert each service is enabled and running
+  ansible.builtin.assert:
+    that:
+      - item.status.UnitFileState == 'enabled'
+      - item.status.ActiveState == 'active'
+    quiet: true
+    fail_msg: '{{ item.item }} is not enabled and running.'
+  loop: '{{ host_baseline_assert_state_units.results }}'
+  loop_control:
+    label: '{{ item.item }}'
