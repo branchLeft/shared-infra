@@ -6,9 +6,10 @@
 # time limit); here the role is not applied. The first play stages the pinned
 # programs, which holds the generator the grant is compared with, with the role's
 # own release tasks and the real download. Every other play runs
-# tasks/_sudoers_check.yml alone against an edited grant. That is all these cases
-# can see: with no install in this scenario, whether a refusal comes before the
-# install is proved in the default scenario, which runs the whole role.
+# tasks/_sudoers_check.yml alone against an edited grant, or, for the link cases,
+# tasks/_dirs.yml alone against a link planted in place of a directory. That is all
+# these cases can see: with no install in this scenario, whether a refusal comes
+# before the install is proved in the default scenario, which runs the whole role.
 #
 # The grant on the host is rendered by broker_deploy's own template (prepare.yml,
 # the default scenario's), and the generator is the real pinned one, so the
@@ -91,6 +92,18 @@
       append: '# a comment after the last rule'
       expect: 'is not what render_slot_sudoers.py renders'
 
+# A comment that ends in a backslash is not header: sudoers joins it to the next
+# line, so it can swallow the rule that follows. It counts as body, and the body
+# then differs from the generator's. A split that took it for header would drop it
+# and accept this grant.
+- name: Refuse a header comment ending in a backslash
+  ansible.builtin.import_playbook: refused_grant.yml
+  vars:
+    converge_case:
+      name: a comment ending in a backslash before the first rule
+      insert_before: '# a comment that continues on the next line \'
+      expect: 'is not what render_slot_sudoers.py renders'
+
 # A rule that keeps its prefix and adds a second command.
 - name: Refuse a rule with a command list ending in ALL
   ansible.builtin.import_playbook: refused_grant.yml
@@ -147,6 +160,77 @@
       path: /usr/bin/passwd
       tasks_from: _sudoers_check.yml
       expect: 'does not run /usr/bin/passwd in every rule'
+
+# The wrapper tie on its own, as a plan on a host with no staged release meets it:
+# the comparison with the generator is skipped, and the tie is then the one check
+# of what a rule says. It is matched to the end of the rule, so a second command
+# after a comma is refused, and the grant as prepared passes it and says it was
+# NOT verified.
+- name: Accept the grant as prepared when no release is staged
+  ansible.builtin.import_playbook: refused_grant.yml
+  vars:
+    converge_case:
+      name: the grant as prepared, with no staged release
+      accepted: true
+      unstaged: true
+
+- name: Refuse a rule with a second command when no release is staged
+  ansible.builtin.import_playbook: refused_grant.yml
+  vars:
+    converge_case:
+      name: the last rule with ", /bin/sh" added, with no staged release
+      last_suffix: ', /bin/sh'
+      unstaged: true
+      expect: 'does not run /usr/local/sbin/branchleft-slot in every rule'
+
+# Each directory the role declares as a directory is refused when it is a link,
+# before anything is created, and the link's target is left as it was.
+- name: Accept the directories as real directories
+  ansible.builtin.import_playbook: refused_link.yml
+  vars:
+    converge_case:
+      name: the socket tree and the flag directory as real directories
+      accepted: true
+
+- name: Refuse the socket root as a link
+  ansible.builtin.import_playbook: refused_link.yml
+  vars:
+    converge_case:
+      name: the root of the socket tree
+      link_at: /var/lib/branchleft/demo-router
+      parents: []
+
+- name: Refuse a slot's socket directory as a link
+  ansible.builtin.import_playbook: refused_link.yml
+  vars:
+    converge_case:
+      name: the socket directory of a slot
+      link_at: /var/lib/branchleft/demo-router/0
+      parents: [/var/lib/branchleft/demo-router]
+
+- name: Refuse a colour's socket directory as a link
+  ansible.builtin.import_playbook: refused_link.yml
+  vars:
+    converge_case:
+      name: the socket directory of a colour
+      link_at: /var/lib/branchleft/demo-router/0/a
+      parents: [/var/lib/branchleft/demo-router, /var/lib/branchleft/demo-router/0]
+
+- name: Refuse the broker's state directory as a link
+  ansible.builtin.import_playbook: refused_link.yml
+  vars:
+    converge_case:
+      name: the broker's state directory
+      link_at: /var/lib/branchleft-broker
+      parents: []
+
+- name: Refuse the drain-flag directory as a link
+  ansible.builtin.import_playbook: refused_link.yml
+  vars:
+    converge_case:
+      name: the drain-flag directory
+      link_at: /var/lib/branchleft-broker/drain-flags
+      parents: [/var/lib/branchleft-broker]
 
 # The grant is the generator's and whole; the role's slot table has an eighth
 # slot that the grant does not hold.

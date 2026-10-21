@@ -50,6 +50,9 @@
         - /usr/local/sbin/branchleft-slot-refused-probe
         - /usr/local/lib/branchleft
         - /var/lib/branchleft/demo-router
+        - /var/lib/branchleft-broker
+        - /var/tmp/demo1-link-target
+        - /etc/branchleft/demo1-drain-flags-preseeded
         - /etc/branchleft/tenant-uids
       register: demo1_build_verify_absent
 

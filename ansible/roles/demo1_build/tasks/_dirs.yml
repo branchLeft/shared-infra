@@ -8,6 +8,38 @@
 # The state root (/var/lib/branchleft) and the broker's slots directory belong
 # to broker_deploy and are only read, in the preconditions.
 
+# The broker owns /var/lib/branchleft-broker and the router owns each slot
+# directory, so either can swap a directory below it for a link. A file task
+# that follows a link applies its owner and mode to the target, and root runs
+# this role: a link to /etc/systemd/system would be chowned to the broker or the
+# router and an unprivileged account would own a directory root reads units from.
+# So no path below is followed. Each is read here without following a link and
+# refused when it is a link or anything but a directory, in a plan as well as an
+# apply, before the first of them is created; and each file task below sets
+# follow: false, so the module itself refuses to turn a link into a directory in
+# the moment between this read and the write.
+- name: Look at each directory this file declares, without following a link
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+  loop: '{{ [demo1_build_socket_root] + demo1_build_socket_dirs + [demo1_build_broker_state_dir, demo1_build_flag_dir] }}'
+  register: demo1_build_dirs_stat
+
+# One assertion over the whole list, not one per item: a failed item in a loop
+# reports "One or more items failed", and the refusal must name the path.
+- name: Refuse a declared directory that is a link or is not a directory
+  ansible.builtin.assert:
+    that:
+      - demo1_build_dirs_not_plain | length == 0
+    quiet: true
+    fail_msg: >-
+      {{ demo1_build_dirs_not_plain }} is a link or is not a directory. The role declares these as
+      directories and never follows a link: whoever owns a parent could point it at a directory root
+      relies on, and the role would change that directory's owner and mode.
+  vars:
+    demo1_build_dirs_not_plain: >-
+      {{ demo1_build_dirs_stat.results | selectattr('stat.exists') | rejectattr('stat.isdir') | map(attribute='item') | list }}
+
 # The root of the router's sockets is root's and closed to everyone else:
 # whoever can write it can rename the router's whole tree. Below it every slot
 # and colour directory is private to the router, by number, because the account
@@ -19,6 +51,7 @@
     owner: root
     group: root
     mode: '0755'
+    follow: false
 
 - name: Create the socket directory of each slot and colour, private to the router
   ansible.builtin.file:
@@ -27,6 +60,7 @@
     owner: '{{ demo1_build_router_uid }}'
     group: '{{ demo1_build_router_gid }}'
     mode: '0700'
+    follow: false
   loop: '{{ demo1_build_socket_dirs }}'
 
 # The broker's own state directory is the one systemd's StateDirectory re-applies
@@ -39,17 +73,27 @@
     owner: '{{ demo1_build_broker_user }}'
     group: '{{ demo1_build_broker_group }}'
     mode: '0750'
+    follow: false
 
 # Read before the directory is declared: whether this run is the one that makes
 # it. A flag is the sign that a colour is drained, and the broker deletes it when
 # a colour goes live, so a flag that is absent later is a colour that went live.
 # Putting it back would drain a live colour, which is why the flags are
-# preseeded once and never by a later run.
+# preseeded once and never by a later run. "Once" is a marker in root's
+# configuration directory, which the broker cannot reach, and not the flags
+# themselves: a host where every colour has gone live holds no flag at all and
+# must not be seeded again.
 - name: Look at the drain-flag directory before it is declared
   ansible.builtin.stat:
     path: '{{ demo1_build_flag_dir }}'
     follow: false
   register: demo1_build_flag_dir_stat
+
+- name: Look for the marker that says the drain flags were preseeded
+  ansible.builtin.stat:
+    path: '{{ demo1_build_preseed_marker }}'
+    follow: false
+  register: demo1_build_preseed_marker_stat
 
 - name: Look for drain flags already in it
   ansible.builtin.find:
@@ -66,11 +110,13 @@
     owner: '{{ demo1_build_broker_user }}'
     group: '{{ demo1_build_broker_group }}'
     mode: '0755'
+    follow: false
 
-# A directory that holds no flag at all has never been preseeded (or a run died
-# between creating it and filling it); a directory that holds any is the broker's
-# to manage. Skipped in check mode because copy will not write into a directory
-# the plan has not made, and the plan shows the directory above.
+# A host with no marker and no flag has never been preseeded (or a run died
+# between creating the directory and filling it, before the marker below); a host
+# with the marker, or with any flag, is the broker's to manage. Skipped in check
+# mode because copy will not write into a directory the plan has not made, and the
+# plan shows the directory above.
 - name: Preseed one flag per slot and colour, so a new colour boots drained
   ansible.builtin.copy:
     content: ''
@@ -82,4 +128,19 @@
   loop: '{{ demo1_build_flag_files }}'
   when:
     - not ansible_check_mode
+    - not demo1_build_preseed_marker_stat.stat.exists
     - (demo1_build_flags_found.matched | default(0)) == 0
+
+# Written after the flags, so a run that died while seeding them leaves no marker
+# and the next run finishes the job. On a host that already holds flags (built
+# before the marker existed) it is written without seeding anything. A marker
+# stays once written: every colour live, and so no flag, is a state to keep.
+- name: Record that the drain flags have been preseeded, in a file the broker cannot remove
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ demo1_build_preseed_marker }}'
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  when: not ansible_check_mode

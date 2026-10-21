@@ -26,6 +26,10 @@ demo1_build_socket_root: /var/lib/branchleft/demo-router
 demo1_build_broker_state_dir: /var/lib/branchleft-broker
 demo1_build_flag_dir: /var/lib/branchleft-broker/drain-flags
 demo1_build_broker_env_file: /etc/branchleft/broker.env
+# Says the drain flags were preseeded once. It lives in root's configuration
+# directory, which the preconditions require to be root's and closed to group
+# and others, so the broker, which owns the flags, cannot remove it.
+demo1_build_preseed_marker: /etc/branchleft/demo1-drain-flags-preseeded
 demo1_build_sudoers_path: /etc/sudoers.d/branchleft-slot
 
 # The staged programs. One release directory per pinned commit, root-owned and
@@ -132,9 +136,15 @@ demo1_build_grant_bodies: |-
 
 # The wrapper is installed as root at demo1_build_wrapper_path, so the path the
 # grant was checked for is the path the install uses: every rule must run exactly
-# that path, followed by its arguments. A path with a dot segment, a doubled slash
-# or a trailing slash is not a spelling the grant can name, and is refused.
-demo1_build_grant_wrapper_pattern: '^broker ALL=\(root\) NOPASSWD: {{ demo1_build_wrapper_path | regex_escape }} [^ ]'
+# that path, followed by its arguments, and by nothing else. The whole rule is
+# matched, to its end: one or more arguments, each a run of letters, digits, dot,
+# underscore, slash or hyphen, one single space before each. A comma, so a second
+# command; a wildcard; a colon; a backslash or a trailing space does not match. The
+# arguments are not compared with the generator's here (a host with no staged
+# release has nothing to compare with): that is the body comparison, which an apply
+# always makes. A path with a dot segment, a doubled slash or a trailing slash is
+# not a spelling the grant can name, and is refused.
+demo1_build_grant_wrapper_pattern: '^broker ALL=\(root\) NOPASSWD: {{ demo1_build_wrapper_path | regex_escape }}( [A-Za-z0-9._/-]+)+\Z'
 demo1_build_path_dots_pattern: '(^|/)\.{1,2}(/|\Z)|//|/\Z'
 demo1_build_reset_line_pattern: ' [0-9]+ reset$'
 demo1_build_reset_suffix_pattern: ' reset$'

@@ -1,0 +1,132 @@
+---
+# One case of the link control, imported by converge.yml. The role's directory step
+# (_dirs.yml) declares directories that the broker and the router own parents of,
+# so either can replace one with a link. A file task that follows the link would
+# apply an owner and a mode to whatever it points at, as root. The step must
+# refuse a link at any of its paths, before it creates anything, and leave the
+# link's target exactly as it found it.
+#
+# converge_case.link_at is the path to plant a link at, and converge_case.parents
+# the real directories to make above it first (the role is not applied in this
+# scenario, so nothing else makes them). The link points at a directory of root's
+# with a mode (0711) that no declared directory has, so a task that followed the
+# link would change it, and the case reads it after. Without link_at the case
+# is the control, converge_case.accepted: true: the same paths as real
+# directories are accepted, and the step creates them, which shows the cases are
+# refused for the link and not because the step refuses everything.
+#
+# Everything the case made is removed in every outcome, so the scenario's verify
+# can assert it left nothing behind. The case is skipped by Molecule's idempotence
+# step (the tag below), because the control creates directories each time it runs.
+# A plan makes no change, so a check run skips it.
+- name: Refuse a declared directory that is a link
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    converge_link_target: /var/tmp/demo1-link-target
+  tasks:
+    - name: Prove a link in place of a declared directory is refused and its target left alone
+      when: not ansible_check_mode
+      block:
+        - name: Make the directory the link will point at, with a mode no declared directory has
+          ansible.builtin.file:
+            path: '{{ converge_link_target }}'
+            state: directory
+            owner: root
+            group: root
+            mode: '0711'
+          changed_when: false
+
+        - name: Make the real directories above the link
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+          loop: '{{ converge_case.parents | default([]) }}'
+          changed_when: false
+
+        - name: Plant the link where the case says
+          ansible.builtin.file:
+            src: '{{ converge_link_target }}'
+            dest: '{{ converge_case.link_at }}'
+            state: link
+          changed_when: false
+          when: converge_case.link_at is defined
+
+        - name: Run the role's directory step
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+            tasks_from: _dirs.yml
+
+        - name: Fail if the link was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a link in place of a directory it declares.
+          when: converge_case.link_at is defined
+
+        # The control must have made the directories and recorded the preseed, and
+        # not have been skipped.
+        - name: Look at what the accepted control made
+          ansible.builtin.find:
+            paths: /var/lib/branchleft-broker/drain-flags
+            patterns: '*.drain'
+          register: demo1_build_converge_link_flags
+          when: converge_case.accepted | default(false)
+
+        - name: Assert the control made the tree and the fourteen flags
+          ansible.builtin.assert:
+            that:
+              - demo1_build_converge_link_flags.files | length == 14
+            quiet: true
+            fail_msg: The accepted directories were not made, or the flags were not preseeded.
+          when: converge_case.accepted | default(false)
+      rescue:
+        - name: Assert the control case was not refused
+          ansible.builtin.assert:
+            that:
+              - not (converge_case.accepted | default(false))
+            quiet: true
+            fail_msg: >-
+              The role refused the directories as real directories, which is the case that must be accepted:
+              {{ ansible_failed_result.msg | default('') }}
+
+        - name: Assert the refusal was the one this case is for
+          ansible.builtin.assert:
+            that:
+              - "'is a link or is not a directory' in (ansible_failed_result.msg | default(''))"
+              - converge_case.link_at in (ansible_failed_result.msg | default(''))
+            quiet: true
+            fail_msg: >-
+              The role failed on the link at {{ converge_case.link_at | default('(none)') }} for a reason other than
+              a link in place of a directory: {{ ansible_failed_result.msg | default('') }}
+
+        - name: Look at the link's target after the refusal
+          ansible.builtin.stat:
+            path: '{{ converge_link_target }}'
+            follow: false
+          register: demo1_build_converge_link_target
+
+        - name: Assert the target is still root's mode 0711
+          ansible.builtin.assert:
+            that:
+              - demo1_build_converge_link_target.stat.pw_name == 'root'
+              - demo1_build_converge_link_target.stat.gr_name == 'root'
+              - demo1_build_converge_link_target.stat.mode == '0711'
+            quiet: true
+            fail_msg: >-
+              The role changed the owner or mode of the directory a link pointed at. A link in place of a
+              declared directory must stop the step before any file task follows it.
+      always:
+        - name: Remove everything the case made, the link itself and not what it points at
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /var/lib/branchleft/demo-router
+            - /var/lib/branchleft-broker
+            - /etc/branchleft/demo1-drain-flags-preseeded
+            - '{{ converge_link_target }}'
+          changed_when: false
+          when: not ansible_check_mode

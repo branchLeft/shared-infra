@@ -14,7 +14,9 @@
 #   first_replace: a line that replaces the first rule
 #   drop_first: true, which removes the first rule
 #   swap: true, which swaps the first two rules
-# Without an edit the grant is the prepared one and the check must accept it
+# and converge_case.unstaged: true runs the check without the generator, as a plan
+# on a host with no staged release does. Without an edit the grant is the
+# prepared one and the check must accept it
 # (converge_case.accepted: true), which shows the cases are refused for the edit
 # and not because the check refuses everything.
 - name: Refuse a grant the check must refuse
@@ -67,10 +69,15 @@
             validate: /usr/sbin/visudo -csf %s
           changed_when: false
 
+        # converge_case.unstaged: true runs the check as a plan on a host with no
+        # staged release does, where only the checks that need no generator are made
+        # (the first play of converge.yml has staged it, so the case says so here).
         - name: Run the role's grant check against the edited grant
           ansible.builtin.include_role:
             name: branchleft.demo1_build
             tasks_from: _sudoers_check.yml
+          vars:
+            demo1_build_release_ready: '{{ not (converge_case.unstaged | default(false)) }}'
 
         - name: Fail if the refused grant was accepted
           ansible.builtin.fail:
@@ -89,7 +96,21 @@
               - demo1_build_sudoers_raw.content | b64decode | regex_findall('(?m)^broker ') | length == 50
             quiet: true
             fail_msg: The accepted grant was not compared with 50 rendered rules.
-          when: converge_case.accepted | default(false)
+          when:
+            - converge_case.accepted | default(false)
+            - not (converge_case.unstaged | default(false))
+
+        # The unstaged control is accepted without a comparison, and must say so.
+        - name: Assert the unstaged grant was accepted with the NOT verified notice
+          ansible.builtin.assert:
+            that:
+              - "'NOT verified' in demo1_build_grant_notice.msg"
+              - demo1_build_sudoers_raw.content | b64decode | regex_findall('(?m)^broker ') | length == 50
+            quiet: true
+            fail_msg: The grant was accepted without a staged release and the role did not say it was NOT verified.
+          when:
+            - converge_case.accepted | default(false)
+            - converge_case.unstaged | default(false)
       rescue:
         - name: Assert the control case was not refused
           ansible.builtin.assert:

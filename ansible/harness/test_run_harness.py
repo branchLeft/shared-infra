@@ -370,6 +370,28 @@ class ScenarioLimitTests(RoleCase):
         )
         self.assertEqual(self.problems(reasoned), [])
 
+    def test_a_second_privileged_platform_needs_a_reason_of_its_own(self) -> None:
+        # One platform with two commented keys has two comments in the file. They
+        # explain that platform, and must not stand in for a bare second one.
+        first = (
+            "    # The role under test starts a service manager.\n    privileged: true\n"
+            "    # It also needs a capability.\n    capabilities:\n      - SYS_TIME\n"
+        )
+        second = (
+            f"  - name: second\n    image: python:3.12-slim@{DIGEST}\n"
+            "    pre_build_image: true\n    privileged: true\n"
+        )
+        self.assert_refused(scenario(platform=first + second), "without a comment")
+
+    def test_two_privileged_platforms_each_with_a_reason_pass(self) -> None:
+        first = "    # The first starts a service manager.\n    privileged: true\n"
+        second = (
+            f"  - name: second\n    image: python:3.12-slim@{DIGEST}\n"
+            "    pre_build_image: true\n"
+            "    # The second starts a service manager too.\n    privileged: true\n"
+        )
+        self.assertEqual(self.problems(scenario(platform=first + second)), [])
+
     def test_privileged_false_needs_no_reason(self) -> None:
         self.assertEqual(self.problems(scenario(platform="    privileged: false\n")), [])
 

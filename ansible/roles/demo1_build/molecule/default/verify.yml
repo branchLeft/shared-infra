@@ -243,6 +243,25 @@
           {{ verify_slots | product(verify_colours) | map('join', '-') | map('regex_replace', '$', '.drain')
           | reject('equalto', '0-a.drain') | list }}
 
+    # The marker that says the flags were preseeded once: root's file in root's
+    # configuration directory, where the broker cannot remove it.
+    - name: Look at the preseed marker
+      ansible.builtin.stat:
+        path: /etc/branchleft/demo1-drain-flags-preseeded
+        follow: false
+      register: demo1_build_verify_marker
+
+    - name: Assert the preseed marker is root's regular file, mode 0644, and empty
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_marker.stat.isreg
+          - demo1_build_verify_marker.stat.pw_name == 'root'
+          - demo1_build_verify_marker.stat.gr_name == 'root'
+          - demo1_build_verify_marker.stat.mode == '0644'
+          - demo1_build_verify_marker.stat.size == 0
+        quiet: true
+        fail_msg: The preseed marker is missing, or is not an empty root:root mode 0644 file.
+
     # The colour drop-ins and the router unit.
     - name: Read the fourteen colour drop-ins
       ansible.builtin.slurp:

@@ -69,8 +69,14 @@ What the role does, in the order of `tasks/main.yml`:
 6. **Records the uid claims and makes the router's account** (`_accounts.yml`):
    see the next section.
 7. **Declares the directories** (`_dirs.yml`): the router's socket tree, the
-   broker's state directory, the drain-flag directory and, on a host with no flag
-   at all, the fourteen flags a build starts drained.
+   broker's state directory, the drain-flag directory and, once, the fourteen
+   flags a build starts drained. It first refuses, in a plan as well as an apply
+   and before it creates anything, any of those paths that is a link or is not a
+   directory: the broker owns a parent of two of them and the router a parent of
+   the others, so either could point one at a directory root relies on, and a file
+   task that followed the link would give that directory to the broker or the
+   router. Every file task there also sets `follow: false`, so the module refuses
+   a link that appears after the check.
 8. **Writes the units** (`_units.yml`): the fourteen colour drop-ins and the
    health router's template unit, from the pinned renderers' output; one systemd
    reload when any changed.
@@ -92,7 +98,7 @@ What the role does, in the order of `tasks/main.yml`:
 | A-6 read the boundary back                                | the assertions of the sudoers check                                                                        | `_sudoers_check.yml`                  |
 | A-7 compose template and drop-ins                         | the fourteen drop-ins are written; the compose template unit is not (named gap)                            | `_units.yml`                          |
 | A-8 health routers                                        | the template unit is written and systemd reloaded; no router is enabled or started                         | `_units.yml`                          |
-| A-9, A-9b drain-flag directory                            | declared with modules; flags pre-seeded only on a host with none                                           | `_dirs.yml`                           |
+| A-9, A-9b drain-flag directory                            | declared with modules, links refused; flags pre-seeded once, under a root-owned marker                     | `_dirs.yml`                           |
 | A-10 the seven slot directories, by the wrapper's `reset` | NOT ROLE: `reset` wipes and recreates a tenancy and is the owner's to run                                  | none                                  |
 | A-11 remove the staging directory                         | retired: the release is the staging and is kept                                                            | none                                  |
 | A-12 evidence                                             | the Molecule `verify.yml` and the harness                                                                  | `molecule/default`                    |
@@ -200,8 +206,11 @@ change the commit, compute each checksum with
 - `/var/lib/branchleft/demo-router/` (`root:root` `0755`) and, under it, one
   directory per slot and one per colour (uid and gid 30008, `0700`).
 - `/var/lib/branchleft-broker` (`broker:broker` `0750`) and its `drain-flags`
-  directory (`broker:broker` `0755`). On a host whose flag directory holds no
-  `*.drain` file, fourteen empty flags (`root` `0644`), one per slot and colour.
+  directory (`broker:broker` `0755`). Once, on a host with no marker and whose
+  flag directory holds no `*.drain` file, fourteen empty flags (`root` `0644`),
+  one per slot and colour.
+- `/etc/branchleft/demo1-drain-flags-preseeded` (`root:root` `0644`, empty): the
+  marker that says the flags were preseeded.
 - `/etc/systemd/system/branchleft-compose@demo-<n>-<colour>.service.d/colour.conf`
   (`root:root` `0644`) for each slot and colour, and
   `branchleft-health-router@.service`; one systemd reload when any changed.
@@ -211,10 +220,23 @@ change the commit, compute each checksum with
 ### Drain flags
 
 A flag's presence means the colour is drained, and the broker clears a flag by
-deleting it when a colour goes live. So the role writes flags only into a directory
-that holds none, and never recreates a flag after the broker removed it: putting one
-back would drain a colour that is serving traffic. A directory with at least one
-`*.drain` file is left alone, even if some of the fourteen are absent.
+deleting it when a colour goes live. So the role writes the flags once, and never
+recreates a flag after the broker removed it: putting one back would drain a colour
+that is serving traffic. "Once" is a marker, `/etc/branchleft/demo1-drain-flags-preseeded`,
+written after the flags. The broker owns the flag directory and can delete anything
+in it, but cannot write `/etc/branchleft`, which the preconditions require to be
+root's and closed to group and others. So the marker outlives the flags: a host
+where every colour has gone live holds no flag at all, and a later run does not
+seed them again. The flags are written only when there is no marker and the
+directory holds no `*.drain` file. A directory that already holds a flag but has no
+marker (a host built before the marker existed) gets the marker and no flags.
+
+A host with no marker, whose flag directory exists and is empty, is seeded once.
+That cannot be told from a build that died between creating the directory and
+writing the flags, which is the case the order of the two writes is for. It is also
+what a host built by the pinned programs before this role existed, with every
+colour already live, would look like: such a host is not applied until its marker
+is placed by hand, empty, `root:root` `0644`.
 
 ### The uid register
 
@@ -242,7 +264,8 @@ the task. In order:
 | `get_url` of the programs                                | Run where the release directory exists (nothing to do); skipped where the directory does not exist, because `get_url` cannot write into a missing directory. |
 | Colour drop-ins and edge candidate                       | Skipped where their directories do not exist yet, for the same reason.                                                                                       |
 | `demo_uid_claims.py`                                     | Never run.                                                                                                                                                   |
-| Drain-flag pre-seed                                      | Never run.                                                                                                                                                   |
+| Drain-flag pre-seed and its marker                       | Never run.                                                                                                                                                   |
+| Link check on the declared directories                   | Run: reads and refuses, so a plan on a host with a link in place stops there.                                                                                |
 | Integrity read-back                                      | Not run: it reads the result of a real run.                                                                                                                  |
 
 The Molecule `converge.yml` runs the role in check mode and compares a list of
@@ -358,7 +381,9 @@ shard list takes every directory under `molecule/` as a scenario.
   grant was verified.
 - The role leaves the sudoers grant and the broker's slots directory exactly as it
   found them: same checksum, same modification time, same entries.
-- A drain flag the broker cleared is not put back by a later run.
+- A drain flag the broker cleared is not put back by a later run, and neither are
+  all fourteen: after every flag is cleared the directory step is run again, and
+  no flag returns while the preseed marker stays.
 - A refusal by the grant check stops the run before the install: the probe path
   `/usr/local/sbin/branchleft-slot-refused-probe` is not a file after the refusal.
   This is the one refusal that needs the whole role, so it stays here. A second
@@ -376,12 +401,25 @@ prepared grant back in every outcome. Each expects the refusal named in its case
   refused every grant would pass every case);
 - a `#1000` uid rule and a `#includedir` line, each before the first rule and after
   the last, and a comment after the last rule;
+- a comment ending in a backslash before the first rule, which counts as body
+  because sudoers joins it to the next line (a split that took it for header
+  would drop it and accept the grant);
 - the first rule with `, ALL` added, the last rule with `, /bin/sh` added, and the
   first rule replaced by a wildcard rule;
 - the first rule removed (the comparison looks for a missing rule as well as an
   extra one), and the first two rules swapped (the comparison is ordered);
 - a wrapper path the grant does not name (`/usr/bin/passwd`), refused by the
   last assertion of the grant check;
+- the wrapper tie on its own, with no release staged (the generator comparison is
+  skipped, as in a first plan): the grant as prepared is accepted and the role
+  says it was NOT verified, and the last rule with `, /bin/sh` added is refused,
+  because the tie matches each rule to its end;
+- each path of the directory step as a link, one case each (the socket root, a
+  slot's directory, a colour's directory, the broker's state directory and the
+  drain-flag directory), refused before anything is created, with the link's
+  target still `root:root` `0711` afterwards; and the same paths as real
+  directories, accepted, which is the control (`refused_link.yml`; Molecule's
+  idempotence step skips it, because the control creates the directories each time);
 - an eighth slot in the role's slot table, refused by the slot-table assertion;
 - a pinned checksum with one digit changed, which stops the role at the download,
   naming the checksum.
@@ -432,6 +470,11 @@ assertion fires in its place or a later one is the only one left:
 | Both sides sorted before the comparison                           | refusals, `converge`                       | 3: the same message, for the swapped-rules case                                                                           |
 | The slot-table assertion removed                                  | refusals, `converge`                       | 4: "are not the slots in demo1_build_slot_names", for the eighth-slot case                                                |
 | The wrapper tie (assertion 5) removed                             | refusals, `converge`                       | 5: "does not run /usr/bin/passwd in every rule"; and in default, the probe-path play                                      |
+| The wrapper tie weakened to a prefix match (`[^ ]` at its end)    | refusals, `converge`                       | 5: "does not run /usr/local/sbin/branchleft-slot in every rule", for the `, /bin/sh` case with no release staged          |
+| A backslash comment counted as header                             | refusals, `converge`                       | 3: "is not what render_slot_sudoers.py renders", for the comment ending in a backslash                                    |
+| The link check removed and `follow: false` set to true            | refusals, `converge`                       | "is a link or is not a directory"; the case gets "The role accepted a link in place of a directory it declares."          |
+| The link check removed, `follow: false` kept                      | refusals, `converge`                       | the module refuses with its own message, "already exists as a link", which is not the case's phrase, so the case is red   |
+| The preseed marker test removed (the any-flag rule alone)         | default, `converge`                        | "The role seeded the drain flags again on a host where every colour had cleared its flag"                                 |
 | `_programs.yml` run before `_sudoers_check.yml`                   | default, `converge`                        | "The role wrote /usr/local/sbin/branchleft-slot-refused-probe and then refused it." (the probe path exists after the run) |
 | The NOT verified notice removed, or printed on a configured host  | default, `check-fresh`, `check-configured` | "A plan on a host with no staged release did not say the sudoers grant was NOT verified"                                  |
 | The dot-segment condition of `_inputs.yml` removed                | default, `converge`                        | the dotted-path play: "for a reason other than The wrapper path must be an absolute path"                                 |
@@ -448,7 +491,9 @@ assertion fires in its place or a later one is the only one left:
 
 The harness's own controls (a failing second scenario fails its shard, a role with
 no `molecule/` still gets a shard and fails at the scenario limits, a privileged
-second scenario without a comment is refused, and shard names are unique) are in
+second scenario without a comment is refused, a second privileged platform needs a
+comment of its own and is not covered by another platform's, and shard names are
+unique) are in
 `ansible/harness/test_run_harness.py` and `test_list_shards.py`, and run with the
 other unit tests of `ansible/harness`.
 
@@ -462,6 +507,12 @@ other unit tests of `ansible/harness`.
   skip are the review of it (ANS-10). The grant comparison is the exception: its
   skip must print "Sudoers grant NOT verified" and `default/converge.yml` asserts
   it.
+- **The wrapper tie checks the shape of a rule, not its arguments.** It matches
+  each rule from `broker ALL=(root) NOPASSWD:` and the wrapper path to the end of
+  the line: one or more arguments of letters, digits, dot, underscore, slash and
+  hyphen, one space before each. A rule with a comma, a wildcard, a colon or a
+  trailing space does not match. Which arguments are legal is the body
+  comparison's, and a plan on a host with no release does not make it.
 - **A plan on a fresh host does not compare the grant.** There is no generator to
   compare with until a release is staged, so the first plan reports the grant as
   not verified. The apply compares it, and refuses any difference before anything

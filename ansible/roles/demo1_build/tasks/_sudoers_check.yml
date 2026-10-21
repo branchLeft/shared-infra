@@ -80,9 +80,10 @@
     msg: >-
       Sudoers grant NOT verified: the pinned render_slot_sudoers.py is not staged on this host
       (check mode, first plan), so {{ demo1_build_sudoers_path }} was not compared with it.
-      Only that it is root's regular file, mode 0440, passes visudo and runs the wrapper path
-      was checked. An apply compares the whole body and refuses any difference before
-      anything is installed.
+      Only that it is root's regular file, mode 0440, passes visudo, and that every rule is the
+      wrapper path followed by plain arguments and nothing else was checked. The arguments
+      themselves were not compared. An apply compares the whole body and refuses any
+      difference before anything is installed.
   register: demo1_build_grant_notice
   when: not (demo1_build_release_ready | bool)
 
@@ -114,7 +115,11 @@
 # The wrapper is installed as root at demo1_build_wrapper_path, so the grant just
 # compared must be a grant for that path and no other: every rule runs exactly
 # that path. This is the tie between the verified grant and the install, and it
-# holds on a host with no release too, where the comparison above is skipped.
+# holds on a host with no release too, where the comparison above is skipped. It
+# matches the whole of each rule (the pattern in vars/main.yml ends in \Z): the
+# path, then plain space-separated arguments and nothing else, so a second command
+# after a comma does not pass. It does not say the arguments are the generator's;
+# on a host with no release, this and visudo are the only content checks.
 # The pinned generator names /usr/local/sbin/branchleft-slot only, so no other
 # path can pass the comparison on an apply either.
 - name: Refuse a grant that does not run the wrapper path the role installs to
@@ -124,5 +129,6 @@
       - demo1_build_grant_bodies.installed | select('search', demo1_build_grant_wrapper_pattern) | list | length == demo1_build_grant_bodies.installed | length
     quiet: true
     fail_msg: >-
-      The installed sudoers grant does not run {{ demo1_build_wrapper_path }} in every rule. The wrapper is
-      installed only at the path the grant names, so nothing is written there.
+      The installed sudoers grant does not run {{ demo1_build_wrapper_path }} in every rule, or a rule adds
+      more than plain arguments after it. The wrapper is installed only at the path the grant names, so
+      nothing is written there.

@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.error import YAMLError
 
 ANSIBLE_DIR = Path(__file__).resolve().parent.parent
@@ -44,7 +45,7 @@ CONNECTION_KEYS = frozenset(
 INVENTORY_HOST_KEYS = frozenset({"hosts", "links"})
 IMAGE_DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 ENGINE_SOCKET = re.compile(r"(docker|podman)\.sock")
-PRIVILEGE_LINE = re.compile(r"^(privileged|capabilities):\s*(.*)$")
+PRIVILEGE_KEYS = ("privileged", "capabilities")
 
 # A role has a scenario called default, and may have more (a directory under
 # molecule/). One run of the harness runs one scenario, named by --scenario, so
@@ -157,19 +158,6 @@ def walk_keys(node: object) -> Iterator[tuple[str, object]]:
             yield from walk_keys(item)
 
 
-def explained_privilege_lines(text: str) -> int:
-    """Count privilege keys in ``text`` that have a comment on the line above them."""
-    lines = [line.strip() for line in text.splitlines()]
-    explained = 0
-    for index, line in enumerate(lines):
-        match = PRIVILEGE_LINE.match(line)
-        if match is None or match.group(2) in ("false", "False", "[]"):
-            continue
-        before = next((prior for prior in reversed(lines[:index]) if prior), "")
-        explained += before.startswith("#")
-    return explained
-
-
 def platform_problems(platform: Mapping[str, object]) -> list[str]:
     """Return how one scenario platform breaks the limits on what a test may reach."""
     problems: list[str] = []
@@ -186,14 +174,40 @@ def platform_problems(platform: Mapping[str, object]) -> list[str]:
     return problems
 
 
-def privileged_platforms(platforms: Sequence[object]) -> int:
-    """Count platforms that ask for privilege or added capabilities."""
-    return sum(
-        1
-        for platform in platforms
-        if isinstance(platform, Mapping)
-        and (platform.get("privileged") is True or bool(platform.get("capabilities")))
-    )
+def asks_for_privilege(platform: Mapping[str, object], key: str) -> bool:
+    """Return whether a platform sets ``privileged`` to true or lists any ``capabilities``."""
+    value = platform.get(key)
+    return value is True if key == "privileged" else bool(value)
+
+
+def comment_above(lines: Sequence[str], index: int) -> bool:
+    """Return whether the nearest non-blank line before ``lines[index]`` is a comment."""
+    before = next((prior for prior in reversed(lines[:index]) if prior), "")
+    return before.startswith("#")
+
+
+def unexplained_privileged_platforms(text: str, platforms: Sequence[object]) -> int:
+    """Count platforms that ask for privilege with no comment above any of their own keys.
+
+    Each platform is judged by the lines of its own privilege keys, read from the
+    round-trip parse of ``text``. A comment above one platform's key never explains
+    another platform, so one platform with two commented keys cannot cover a second,
+    bare one. A platform whose key positions cannot be read is counted as unexplained.
+    """
+    lines = [line.strip() for line in text.splitlines()]
+    unexplained = 0
+    for platform in platforms:
+        if not isinstance(platform, Mapping):
+            continue
+        asked = [key for key in PRIVILEGE_KEYS if asks_for_privilege(platform, key)]
+        if not asked:
+            continue
+        if not isinstance(platform, CommentedMap) or not all(key in platform for key in asked):
+            unexplained += 1
+            continue
+        if not any(comment_above(lines, platform.lc.key(key)[0]) for key in asked):
+            unexplained += 1
+    return unexplained
 
 
 def scenario_problems(scenario: Path) -> list[str]:
@@ -230,7 +244,7 @@ def scenario_problems(scenario: Path) -> list[str]:
         if isinstance(platform, Mapping):
             name = platform.get("name", "?")
             problems.extend(f"platform {name}: {found}" for found in platform_problems(platform))
-    if privileged_platforms(platforms) > explained_privilege_lines(text):
+    if unexplained_privileged_platforms(text, YAML().load(text).get("platforms", [])):
         problems.append(
             "a platform asks for privileged or capabilities without a comment above the key "
             "saying why"

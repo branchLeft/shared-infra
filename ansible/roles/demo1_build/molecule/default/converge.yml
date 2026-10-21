@@ -15,6 +15,7 @@
       - /etc/branchleft/tenant-uids
       - /etc/branchleft/tenant-uids/demo-0
       - /etc/branchleft/tenant-uids/demo-router
+      - /etc/branchleft/demo1-drain-flags-preseeded
       - /opt/branchleft
       - /opt/branchleft/demo-host
       - /opt/branchleft/demo-host/current
@@ -40,6 +41,7 @@
     converge_sudoers_path: /etc/sudoers.d/branchleft-slot
     converge_slots_dir: /var/lib/branchleft/broker-slots
     converge_flag: /var/lib/branchleft-broker/drain-flags/0-a.drain
+    converge_flag_dir: /var/lib/branchleft-broker/drain-flags
   tasks:
     # A plan makes no change. Every program the role runs in check mode only
     # prints, and every program that writes is skipped there; this reads the
@@ -209,6 +211,89 @@
           - not demo1_build_converge_flag_stat.stat.exists
         quiet: true
         fail_msg: The role put a cleared drain flag back. That would drain a colour that is serving traffic.
+      when: not ansible_check_mode
+
+    # The same control for a host where every colour has gone live and so no flag
+    # is left. A rule that seeds a directory with no flag in it would drain all
+    # fourteen colours here. The directory step alone is run, which is the only
+    # step that writes flags (the whole role was applied twice above). The flags
+    # the role seeded are read first, so what they are is checked here, and put
+    # back after, so that verify reads the host as the role left it.
+    - name: Look at the flags the role seeded and the broker has not cleared
+      ansible.builtin.find:
+        paths: '{{ converge_flag_dir }}'
+        patterns: '*.drain'
+      register: demo1_build_converge_flags_seeded
+      when: not ansible_check_mode
+
+    - name: Assert they are the thirteen not cleared above, root's mode 0644
+      ansible.builtin.assert:
+        that:
+          - demo1_build_converge_flags_seeded.files | map(attribute='path') | map('basename') | sort == expected | sort
+          - demo1_build_converge_flags_seeded.files | map(attribute='pw_name') | unique | list == ['root']
+          - demo1_build_converge_flags_seeded.files | map(attribute='mode') | unique | list == ['0644']
+        quiet: true
+        fail_msg: The drain flags the role seeded are not the thirteen left, root's mode 0644.
+      vars:
+        expected: >-
+          {{ ['0', '1', '2', '3', '4', '5', '6'] | product(['a', 'b']) | map('join', '-') | map('regex_replace', '$', '.drain')
+          | reject('equalto', '0-a.drain') | list }}
+      when: not ansible_check_mode
+
+    - name: Clear every flag, as the broker does once every colour is live
+      ansible.builtin.file:
+        path: '{{ item.path }}'
+        state: absent
+      loop: '{{ demo1_build_converge_flags_seeded.files }}'
+      loop_control:
+        label: '{{ item.path | basename }}'
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Run the directory step again with no flag in the directory
+      ansible.builtin.include_role:
+        name: branchleft.demo1_build
+        tasks_from: _dirs.yml
+      when: not ansible_check_mode
+
+    - name: Look for flags after the directory step
+      ansible.builtin.find:
+        paths: '{{ converge_flag_dir }}'
+        patterns: '*.drain'
+      register: demo1_build_converge_flags_after
+      when: not ansible_check_mode
+
+    - name: Look at the preseed marker
+      ansible.builtin.stat:
+        path: /etc/branchleft/demo1-drain-flags-preseeded
+        follow: false
+      register: demo1_build_converge_marker
+      when: not ansible_check_mode
+
+    - name: Assert no flag was put back and the marker is root's
+      ansible.builtin.assert:
+        that:
+          - demo1_build_converge_flags_after.files | length == 0
+          - demo1_build_converge_marker.stat.isreg
+          - demo1_build_converge_marker.stat.pw_name == 'root'
+          - demo1_build_converge_marker.stat.mode == '0644'
+        quiet: true
+        fail_msg: >-
+          The role seeded the drain flags again on a host where every colour had cleared its flag, or the
+          preseed marker is missing. That would drain every colour that is serving traffic.
+      when: not ansible_check_mode
+
+    - name: Put back the flags cleared above, as the role seeded them
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ item.path }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop: '{{ demo1_build_converge_flags_seeded.files }}'
+      loop_control:
+        label: '{{ item.path | basename }}'
+      changed_when: false
       when: not ansible_check_mode
 
 # The one control that needs the whole role: a refusal by the grant check must
