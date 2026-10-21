@@ -1,0 +1,7 @@
+---
+# The two inputs, with the values the role ships. The argument spec holds the
+# same defaults (ANS-7). Neither is a secret. The commit is the one place the
+# grant tool, its wrapper and its units come from; the image is the Node image
+# the tool runs in, and the wrapper and the expire unit both carry it.
+breakglass_grant_host_source_commit: 5e52f78427cab104438057164e4baa16b329875c
+breakglass_grant_host_node_image: node:26.5.0-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb

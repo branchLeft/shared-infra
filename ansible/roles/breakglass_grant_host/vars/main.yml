@@ -1,0 +1,68 @@
+---
+# Constants of the role. An inventory value does not change them. The only way to
+# change one is a pull request, which the review reads.
+
+# Where the bytes come from: one commit of the one repository that holds them,
+# read from the raw file service at that commit. No file is copied from a working
+# tree into this repository, so there is one home for the code (the pinned commit)
+# and the sha256 below is the only copy of its hash.
+breakglass_grant_host_source_base_url: >-
+  https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ breakglass_grant_host_source_commit }}/adapters/sso/scripts
+
+breakglass_grant_host_tool_dir: /usr/local/lib/branchleft/break-glass
+breakglass_grant_host_wrapper_path: /usr/local/sbin/branchleft-break-glass
+breakglass_grant_host_unit_dir: /etc/systemd/system
+breakglass_grant_host_timer_unit: branchleft-break-glass-expire.timer
+breakglass_grant_host_docker_socket: /var/run/docker.sock
+
+# The files this role installs, each with the sha256 it must have. The download
+# fails unless it does. Bumping the commit means changing the commit and these
+# hashes together. The wrapper is root-only (0700): an operator runs it as root.
+breakglass_grant_host_files:
+  - path: break-glass-grant.mjs
+    sha256: a24c3d1c0bf78a8483b1600d13c6d0c7e07bf6dfdf4f8211cd73e0f80e4621d2
+    dest: '{{ breakglass_grant_host_tool_dir }}/break-glass-grant.mjs'
+    mode: '0644'
+  - path: docker-engine.mjs
+    sha256: ff3eba099498a7cf46efdb196b654f5268d8a609a18c54197a2d9880a28b5d48
+    dest: '{{ breakglass_grant_host_tool_dir }}/docker-engine.mjs'
+    mode: '0644'
+  - path: provision-support-account.mjs
+    sha256: a5e6661133ae8f8d66546d2de3d0e69eda412bdf5ab389710e315afadc6d3a37
+    dest: '{{ breakglass_grant_host_tool_dir }}/provision-support-account.mjs'
+    mode: '0644'
+  - path: host/branchleft-break-glass.sh
+    sha256: aded5b84bc3923f7804278c2e5af8af54f2063630fad534d2b64e6c373a71598
+    dest: '{{ breakglass_grant_host_wrapper_path }}'
+    mode: '0700'
+  - path: systemd/branchleft-break-glass-expire.service
+    sha256: 0afdd7fbcec25b6b748d1f20b1cd90890252ae904e541ec2d08116db522f5c5f
+    dest: '{{ breakglass_grant_host_unit_dir }}/branchleft-break-glass-expire.service'
+    mode: '0644'
+  - path: systemd/branchleft-break-glass-expire.timer
+    sha256: 0d4c8b928040b2fe780f1f4fd699d6cc16d000b99c37c70deef1caf598667f49
+    dest: '{{ breakglass_grant_host_unit_dir }}/branchleft-break-glass-expire.timer'
+    mode: '0644'
+
+# Directories the role makes, parents first. The parents are shared with other
+# roles (broker_deploy sets /var/lib/branchleft to root 0755), so the owner and
+# mode are stated here, not left to the run's umask, and two roles on one host
+# agree. The grants directory and the log directory hold the grant records.
+breakglass_grant_host_directories:
+  - path: /usr/local/lib/branchleft
+    mode: '0755'
+  - path: '{{ breakglass_grant_host_tool_dir }}'
+    mode: '0755'
+  - path: /var/lib/branchleft
+    mode: '0755'
+  - path: /var/lib/branchleft/break-glass-grants
+    mode: '0700'
+  - path: /var/log/branchleft
+    mode: '0700'
+
+# The part of the image reference that Docker lists back under RepoDigests.
+breakglass_grant_host_image_digest: "{{ breakglass_grant_host_node_image.split('@') | last }}"
+
+breakglass_grant_host_sha_pattern: '^[0-9a-f]{40}\Z'
+breakglass_grant_host_checksum_pattern: '^[0-9a-f]{64}\Z'
+breakglass_grant_host_image_pattern: '^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}\Z'

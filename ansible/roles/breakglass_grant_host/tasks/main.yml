@@ -1,0 +1,173 @@
+---
+# What this role does is plain, repeatable state: directories, six files fetched
+# at a pinned commit and each held to its sha256, one image pulled by digest and
+# read back, and a timer turned on. It never runs the grant tool, never opens or
+# closes a grant, and sets no run-time secret.
+#
+# Order matters. Inputs, Docker and its socket, directories, the image (probe,
+# pull, read back), the files, then the queued unit changes are loaded, and only
+# then the timer is enabled. The unit starts the image with --pull never, so a
+# host without the image would fail the unit every minute and no grant would
+# ever close: the image is therefore confirmed before anything that starts it.
+- name: Refuse an input that is not a full commit or an image pinned by digest
+  ansible.builtin.assert:
+    that:
+      - breakglass_grant_host_source_commit is string
+      - breakglass_grant_host_source_commit is match(breakglass_grant_host_sha_pattern)
+      - breakglass_grant_host_node_image is string
+      - breakglass_grant_host_node_image is match(breakglass_grant_host_image_pattern)
+      - >-
+        breakglass_grant_host_files | map(attribute='sha256') | select('match', breakglass_grant_host_checksum_pattern) | list | length
+        == breakglass_grant_host_files | length
+    quiet: true
+    fail_msg: >-
+      The source needs a full 40-character commit, the image needs a name, a tag
+      and an @sha256: digest, and every file needs a 64-character sha256.
+
+# The probes change nothing, so they run in check mode too (ANS-10). A missing
+# program is a failed probe, not a failed task, so the assertion below can say
+# what is missing.
+- name: Look for Docker
+  ansible.builtin.command:
+    argv: [docker, --version]
+  register: breakglass_grant_host_docker
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse a host with no working Docker
+  ansible.builtin.assert:
+    that:
+      - breakglass_grant_host_docker.rc == 0
+    quiet: true
+    fail_msg: >-
+      Docker is not installed on this host, or `docker --version` fails. The grant
+      tool runs in a Docker image, so this role stops here.
+
+- name: Look at the Docker socket
+  ansible.builtin.stat:
+    path: '{{ breakglass_grant_host_docker_socket }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: breakglass_grant_host_socket
+
+- name: Refuse a host with no Docker socket
+  ansible.builtin.assert:
+    that:
+      - breakglass_grant_host_socket.stat.exists
+      - breakglass_grant_host_socket.stat.issock | default(false)
+    quiet: true
+    fail_msg: >-
+      The Docker socket {{ breakglass_grant_host_docker_socket }} is missing or is not a
+      socket. The grant tool reaches the tenant's Ghost through it, so this role stops here.
+
+# Owner and mode are stated for every directory, parents included, because
+# other roles share them and the run's umask must not decide.
+- name: Create the directories above the tool, the grants and the log
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop: '{{ breakglass_grant_host_directories }}'
+  loop_control:
+    label: '{{ item.path }}'
+
+# Probe, then act. `docker pull` as a command always reports a change and always
+# contacts the registry, so it runs only when the host lacks the digest. The
+# probe is read-only and runs in check mode (ANS-10). A command is used because
+# the Docker modules need the Docker API library on the host, which no host
+# here carries (ANS-9).
+- name: Look for the Node image under its digest
+  ansible.builtin.command:
+    argv:
+      - docker
+      - image
+      - inspect
+      - --format
+      - '{% raw %}{{.RepoDigests}}{% endraw %}'
+      - '{{ breakglass_grant_host_node_image }}'
+  register: breakglass_grant_host_image_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Pull the Node image by digest when the host lacks it
+  ansible.builtin.command:
+    argv: [docker, pull, -q, '{{ breakglass_grant_host_node_image }}']
+  changed_when: true
+  when: >-
+    not (breakglass_grant_host_image_probe.rc == 0
+    and breakglass_grant_host_image_digest in breakglass_grant_host_image_probe.stdout)
+
+# An exit status of 0 from the pull is a claim. The effect is the digest listed
+# on the host, so it is read back. Check mode pulls nothing, so on a fresh host
+# the image is not there to read: skipped there, for that reason (ANS-10).
+- name: Read the Node image back
+  ansible.builtin.command:
+    argv:
+      - docker
+      - image
+      - inspect
+      - --format
+      - '{% raw %}{{.RepoDigests}}{% endraw %}'
+      - '{{ breakglass_grant_host_node_image }}'
+  register: breakglass_grant_host_image_readback
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Refuse a host where the image is not present under the pinned digest
+  ansible.builtin.assert:
+    that:
+      - breakglass_grant_host_image_readback.rc == 0
+      - breakglass_grant_host_image_digest in breakglass_grant_host_image_readback.stdout
+    quiet: true
+    fail_msg: >-
+      The pinned Node image is not on this host under its digest after the pull, and
+      the expire unit runs with --pull never, so it would fail every minute.
+  when: not ansible_check_mode
+
+# In check mode on a fresh host the directory above is not made, and get_url
+# refuses a destination whose directory is missing, so the downloads are
+# skipped there and only there (ANS-10). A real run always has the directory.
+- name: Look at the directory the tool is installed into
+  ansible.builtin.stat:
+    path: '{{ breakglass_grant_host_tool_dir }}'
+  register: breakglass_grant_host_tool_dir_stat
+
+- name: Download the tool, the wrapper and the units and hold each to its checksum
+  ansible.builtin.get_url:
+    url: '{{ breakglass_grant_host_source_base_url }}/{{ item.path }}'
+    dest: '{{ item.dest }}'
+    checksum: 'sha256:{{ item.sha256 }}'
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop: '{{ breakglass_grant_host_files }}'
+  loop_control:
+    label: '{{ item.path }}'
+  when: breakglass_grant_host_tool_dir_stat.stat.exists
+  notify: Reload systemd manager
+
+# Without this the handler runs at the end of the play, and the timer task below
+# would meet a unit systemd has not read.
+- name: Load the units before the timer is handled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no unit file on a fresh host, so there is nothing for
+# systemd to enable there: the timer task is skipped in that case only (ANS-10).
+- name: Look at the timer unit file
+  ansible.builtin.stat:
+    path: '{{ breakglass_grant_host_unit_dir }}/{{ breakglass_grant_host_timer_unit }}'
+  register: breakglass_grant_host_timer_stat
+
+- name: Enable and start the timer that closes grants
+  ansible.builtin.systemd_service:
+    name: '{{ breakglass_grant_host_timer_unit }}'
+    enabled: true
+    state: started
+  when: breakglass_grant_host_timer_stat.stat.exists

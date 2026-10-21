@@ -1,0 +1,28 @@
+---
+argument_specs:
+  main:
+    short_description: Install the break-glass minter on the control host and check its signing key
+    description: >-
+      Fetches the minter program from one pinned commit and holds it to its sha256,
+      pulls the pinned Node image by digest only when the host lacks it, and then
+      looks at the signing key with stat alone (no checksum, no content). It never
+      creates, reads, copies or lists the key, runs the minter, or sets a run-time
+      secret. The key is made by hand (runbook Part A steps 4 and 5) before the
+      first apply. Neither input is a secret.
+    author: branchLeft
+    options:
+      breakglass_mint_host_source_commit:
+        type: str
+        default: 5e52f78427cab104438057164e4baa16b329875c
+        description: >-
+          The full 40-character commit of the ghost-platform repository the minter
+          is fetched at. The download is held to the sha256 in the role, so a
+          commit whose bytes differ stops the run. Must equal the commit in
+          breakglass_grant_host_source_commit; the role's test compares the two.
+      breakglass_mint_host_node_image:
+        type: str
+        default: node:26.5.0-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb
+        description: >-
+          The Node image the minter runs in, a name and tag followed by @sha256:
+          and the 64-character digest. Pulled by digest. Must equal
+          breakglass_grant_host_node_image; the role's test compares the two.

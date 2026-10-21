@@ -1,0 +1,58 @@
+---
+# Applies the role with one input or one host made bad and requires that the
+# role stops at the task named in refused.expect, having written nothing. Naming
+# the task matters: a refusal for some other reason, a mistyped role name
+# included, must not count as the refusal under test. Inputs left out take the
+# role's own defaults.
+- name: Take the docker command away
+  ansible.builtin.file:
+    path: /usr/local/bin/docker
+    state: absent
+  when: refused.setup | default('') == 'docker_missing'
+
+- name: Apply the role with input it must refuse
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.breakglass_mint_host
+      vars:
+        breakglass_mint_host_key_path: '{{ scenario_key_path }}'
+        breakglass_mint_host_source_commit: '{{ refused.commit | default(converge_defaults.breakglass_mint_host_source_commit) }}'
+        breakglass_mint_host_node_image: '{{ refused.image | default(converge_defaults.breakglass_mint_host_node_image) }}'
+
+    - name: Record that the role accepted the input
+      ansible.builtin.set_fact:
+        breakglass_mint_host_c_refused_by: 'NOTHING: the role accepted the input'
+  rescue:
+    - name: Record which task refused the input
+      ansible.builtin.set_fact:
+        breakglass_mint_host_c_refused_by: '{{ ansible_failed_task.name }}'
+
+- name: Put the docker stand-in back
+  ansible.builtin.copy:
+    src: '{{ playbook_dir }}/../../../breakglass_grant_host/molecule/default/files/docker_standin.sh'
+    dest: /usr/local/bin/docker
+    owner: root
+    group: root
+    mode: '0755'
+  when: refused.setup | default('') == 'docker_missing'
+
+- name: Assert the role stopped at the expected task
+  ansible.builtin.assert:
+    that:
+      - breakglass_mint_host_c_refused_by == refused.expect
+    fail_msg: 'Expected the role to stop at "{{ refused.expect }}"; it stopped at "{{ breakglass_mint_host_c_refused_by }}".'
+    quiet: true
+
+- name: Look for anything the refusal left behind
+  ansible.builtin.stat:
+    path: '{{ item }}'
+  loop: '{{ converge_untouched_paths }}'
+  register: breakglass_mint_host_c_leftovers
+
+- name: Assert the refusal wrote nothing
+  ansible.builtin.assert:
+    that:
+      - breakglass_mint_host_c_leftovers.results | map(attribute='stat.exists') | select | list | length == 0
+    fail_msg: A refused case left a directory behind that the role makes after the check it failed.
+    quiet: true
