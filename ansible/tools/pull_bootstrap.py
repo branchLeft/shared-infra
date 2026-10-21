@@ -7,8 +7,12 @@ This tool produces the record that names those files at a commit of ``main``, th
 and the configuration text, and checks a record against the repository.
 
 The pin of each file is the last commit that changed it, read from the history, so the record
-never names a commit that a squash merge could remove: the record is built from ``main``, at
-publish time, and not from a branch.
+never names a commit that a squash merge could remove. That is enforced here, not assumed:
+both commands first fetch ``main`` from ``origin`` afresh and refuse without it. ``generate``
+refuses unless HEAD is the tip of that fetched ``main``, and ``verify`` refuses a record whose
+pin is not an ancestor of it, so a record built on a branch, or one that names a commit that
+only a pull request's ref or a fork holds, is never accepted. ``origin`` is taken to be
+``branchLeft/shared-infra``: the tool runs in a checkout of it.
 
 The configuration is not written a second time here. Its keys are read from the role's own
 task, its values from the role's own variable files, and it is serialised the way Ansible's
@@ -37,6 +41,8 @@ from ruamel.yaml.error import YAMLError
 
 REPOSITORY: Final = "branchLeft/shared-infra"
 RAW_BASE: Final = "https://raw.githubusercontent.com"
+REMOTE: Final = "origin"
+MAIN_BRANCH: Final = "main"
 SCHEMA: Final = 1
 
 # The three files a host fetches, by the name the record gives them.
@@ -287,6 +293,23 @@ def head(repo: Path) -> str:
     return git(repo, "rev-parse", "HEAD").stdout.decode().strip()
 
 
+def main_tip(repo: Path) -> str:
+    """Fetch ``main`` from ``origin`` afresh and return the commit it points at.
+
+    A stale local copy of ``main`` must not stand in for the real one, so this asks the remote
+    each time and never reads a remote-tracking branch that an earlier fetch left behind.
+
+    Raises:
+        BootstrapError: The fetch fails, so there is no main to bind a pin to.
+    """
+    git(repo, "fetch", "--quiet", REMOTE, f"refs/heads/{MAIN_BRANCH}")
+    tip = git(repo, "rev-parse", "FETCH_HEAD").stdout.decode().strip()
+    if COMMIT.fullmatch(tip) is None:
+        message = f"{REMOTE}/{MAIN_BRANCH} did not resolve to a commit"
+        raise BootstrapError(message)
+    return tip
+
+
 def last_commit(repo: Path, path: str) -> str:
     """Return the last commit at HEAD that changed the file.
 
@@ -310,14 +333,35 @@ def raw_url(commit: str, path: str) -> str:
     return f"{RAW_BASE}/{REPOSITORY}/{commit}/{path}"
 
 
-def build_record(repo: Path) -> dict[str, object]:
-    """Return the record for the repository at HEAD.
+def repository_config(repo: Path) -> str:
+    """Return the configuration text the repository's files at HEAD give.
 
     Raises:
         BootstrapError: An input is not committed, malformed or not what the tool allows.
     """
     inputs = read_inputs(repo)
     check_playbook(inputs[PLAYBOOK_PATH])
+    return render_config(
+        inputs[TASKS_PATH], inputs[DEFAULTS_PATH], inputs[VARS_PATH], inputs[GROUP_VARS_PATH]
+    )
+
+
+def build_record(repo: Path) -> dict[str, object]:
+    """Return the record for the repository, which must be at the tip of ``main``.
+
+    Raises:
+        BootstrapError: HEAD is not the tip of a freshly fetched ``main``, or an input is
+            not committed, malformed or not what the tool allows.
+    """
+    tip = main_tip(repo)
+    top = head(repo)
+    if top != tip:
+        message = (
+            f"HEAD {top} is not the tip of {REMOTE}/{MAIN_BRANCH} ({tip}): "
+            "a record is built from main, never from a branch"
+        )
+        raise BootstrapError(message)
+    config = repository_config(repo)
     record: dict[str, object] = {"schema": SCHEMA}
     for name, path in FETCHED.items():
         commit = last_commit(repo, path)
@@ -326,9 +370,7 @@ def build_record(repo: Path) -> dict[str, object]:
             "sha256": blob_sha256(repo, commit, path),
             "url": raw_url(commit, path),
         }
-    record["config"] = render_config(
-        inputs[TASKS_PATH], inputs[DEFAULTS_PATH], inputs[VARS_PATH], inputs[GROUP_VARS_PATH]
-    )
+    record["config"] = config
     return record
 
 
@@ -338,24 +380,28 @@ def verify_record(repo: Path, record: object) -> list[str]:
     if not isinstance(record, dict) or record.get("schema") != SCHEMA:
         return [f"the record is not schema {SCHEMA}"]
     try:
+        tip = main_tip(repo)
         top = head(repo)
     except BootstrapError as error:
         return [str(error)]
     for name, path in FETCHED.items():
         try:
-            problems.extend(verify_entry(repo, top, name, path, record.get(name)))
+            problems.extend(verify_entry(repo, tip, top, name, path, record.get(name)))
         except BootstrapError as error:
             problems.append(f"{name}: {error}")
     try:
-        if record.get("config") != build_record(repo)["config"]:
+        if record.get("config") != repository_config(repo):
             problems.append("config: differs from the one the repository's files give")
     except BootstrapError as error:
         problems.append(f"config: {error}")
     return problems
 
 
-def verify_entry(repo: Path, top: str, name: str, path: str, entry: object) -> list[str]:
-    """Return what is wrong with one file's entry in the record."""
+def verify_entry(repo: Path, tip: str, top: str, name: str, path: str, entry: object) -> list[str]:
+    """Return what is wrong with one file's entry in the record.
+
+    ``tip`` is the freshly fetched tip of ``main`` and ``top`` is HEAD.
+    """
     if not isinstance(entry, dict) or set(entry) != {"pin", "sha256", "url"}:
         return [f"{name}: the entry is not a pin, a sha256 and a url"]
     pin, digest, url = entry["pin"], entry["sha256"], entry["url"]
@@ -366,6 +412,8 @@ def verify_entry(repo: Path, top: str, name: str, path: str, entry: object) -> l
         problems.append(f"{name}: the sha256 is not 64 lowercase hex digits")
     if url != raw_url(pin, path):
         problems.append(f"{name}: the url does not name the recorded pin and the file")
+    if git(repo, "merge-base", "--is-ancestor", pin, tip, check=False).returncode != 0:
+        return [*problems, f"{name}: the pin is not an ancestor of {REMOTE}/{MAIN_BRANCH}"]
     if git(repo, "merge-base", "--is-ancestor", pin, top, check=False).returncode != 0:
         return [*problems, f"{name}: the pin is not an ancestor of HEAD"]
     shown = git(repo, "show", f"{pin}:{path}", check=False)

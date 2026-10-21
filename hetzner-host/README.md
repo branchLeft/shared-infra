@@ -119,25 +119,37 @@ regenerated). With it:
   shell script with no `errexit`, so the enrolment is its own final entry and
   checks every step itself. It downloads the pull program, the program that
   installs the pinned Ansible and the hash-locked requirements, each over HTTPS
-  from a commit of `main`, and checks each against the SHA-256 in the record
+  from a commit that the record names (a commit of `main`, as the record's
+  tool enforces below), and checks each against the SHA-256 in the record
   before anything runs. The files are too large for the 32 KiB user-data limit,
   so they are fetched and not embedded. It then runs the install program (the
-  same one the `ansible_runtime` role runs, with `--link`), places the pull
-  program and writes its configuration. A failure writes a marker
-  (`/var/lib/branchleft/pull-enrolment.failed`, with the step that failed) and
-  stops; success writes `pull-enrolment.done`.
+  same one the `ansible_runtime` role runs, with `--link`), writes the
+  directories and the configuration, and places the pull program last of all.
+  A failure writes a marker (`/var/lib/branchleft/pull-enrolment.failed`, with
+  the step that failed) and stops; success writes `pull-enrolment.done`.
 - **A failed host stays un-enrolled.** There is no fallback to an unpinned
   engine and no retry loop: the owner reads the marker and installs by hand.
-  The pull program is placed last of all, after the engine is installed and
-  linked, so until the script has succeeded the restricted keys do nothing (a
-  `command=` naming a missing path fails closed).
+  What a failed host holds depends on the step. Before `install-engine` it has
+  nothing. At `install-engine` or after it, it may hold the `ansible-playbook`
+  link (the hash-locked engine, never another) and, from `write-config`, the
+  directories and the configuration; it never holds the pull program, which is
+  the last step before the done marker. The two restricted keys name the pull
+  program's path, so while it is absent they run nothing (a `command=` naming a
+  missing path fails closed), and the owner's keys are the only way in.
+  `enrolment.test.ts` runs a failure at `install-engine`, at `write-config` and
+  at `install-trigger` and asserts the pull program is absent in each.
 - **The record is an input.** `ansible/tools/pull_bootstrap.py` builds it from
   `main` at publish time (`generate`) and checks one against the repository
   (`verify`): each file is pinned to the last commit that changed it, so a
   squash merge cannot remove the pinned commit, and the configuration is
   rendered from the role's own task and variable files, never written a second
   time (`ansible/tools/test_pull_bootstrap.py` runs the role's task and compares
-  bytes). `assertPullBootstrap` refuses anything that is not exactly that shape.
+  bytes). Both commands first fetch `main` from `origin` afresh. `generate`
+  refuses unless HEAD is the tip of it, and `verify` refuses a record whose pin
+  is not an ancestor of it, so a record built on a branch, or one naming a
+  commit that only a pull request ref or a fork holds, is never accepted.
+  `assertPullBootstrap` refuses anything that is not exactly that shape; it
+  cannot tell which commits are on `main`, so the binding is the tool's.
   The package carries no copy of the record; the stack passes the one it was
   given with the package. The committed record, its drift check and its
   packaging are a separate change.

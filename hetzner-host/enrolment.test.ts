@@ -491,7 +491,12 @@ ln -s /nowhere/ansible-playbook "$link"
 
 function runScript(
   served: Partial<Record<keyof typeof FILE_NAMES, string>> = {},
-  options: { stubFails?: boolean; bootstrapOverride?: Partial<PullBootstrap> } = {}
+  options: {
+    stubFails?: boolean;
+    bootstrapOverride?: Partial<PullBootstrap>;
+    /** Puts a plain file where the script needs a directory, so that step fails. */
+    obstruct?: 'config' | 'wrapper';
+  } = {}
 ): Run {
   const dir = mkdtempSync(join(tmpdir(), 'enrol'));
   const bin = join(dir, 'bin');
@@ -525,7 +530,14 @@ function runScript(
     python: join(bin, 'python-stub'),
     ownerFlags: '',
   };
-  mkdirSync(join(dir, 'sbin'));
+  if (options.obstruct === 'wrapper') {
+    writeFileSync(join(dir, 'sbin'), 'not a directory');
+  } else {
+    mkdirSync(join(dir, 'sbin'));
+  }
+  if (options.obstruct === 'config') {
+    writeFileSync(layout.configDir, 'not a directory');
+  }
   const record = { ...bootstrap(), ...options.bootstrapOverride };
   const script = renderEnrolmentScript(record, layout);
   const done = spawnSync(shell(), ['-c', script], {
@@ -618,6 +630,37 @@ describe('the script that enrols the host (C2, C13)', () => {
     expect(run.failure).toBe('failed at install-engine\n');
     expect(existsSync(run.layout.runtimeLink)).toBe(false);
     nothingInstalled(run);
+  });
+
+  describe('a failure after the engine is installed never leaves the pull program', () => {
+    it('stops at write-config, with the pinned engine linked and no pull program, config or done marker', () => {
+      const run = runScript({}, { obstruct: 'config' });
+      expect(run.status).not.toBe(0);
+      expect(run.failure).toBe('failed at write-config\n');
+      expect(linkExists(run.layout.runtimeLink), 'the engine installed before it').toBe(true);
+      expect(existsSync(run.layout.wrapperPath)).toBe(false);
+      expect(existsSync(run.layout.configPath)).toBe(false);
+      expect(existsSync(run.layout.doneMarker)).toBe(false);
+    });
+
+    it('stops at install-trigger, with the config in place and no pull program or done marker', () => {
+      const run = runScript({}, { obstruct: 'wrapper' });
+      expect(run.status).not.toBe(0);
+      expect(run.failure).toBe('failed at install-trigger\n');
+      expect(readFileSync(run.layout.configPath, 'utf8')).toBe(bootstrap().config);
+      expect(existsSync(run.layout.wrapperPath)).toBe(false);
+      expect(existsSync(run.layout.doneMarker)).toBe(false);
+    });
+
+    it('places the pull program as the last command before the done marker', () => {
+      const lines = renderEnrolmentScript(bootstrap(), PRODUCTION_LAYOUT).split('\n');
+      const placed = lines.findIndex((line) => line.includes(PRODUCTION_LAYOUT.wrapperPath));
+      const config = lines.findIndex((line) => line.includes(PRODUCTION_LAYOUT.configPath));
+      expect(placed).toBeGreaterThan(config);
+      expect(lines[placed - 1]).toBe('step=install-trigger');
+      expect(lines[placed + 1]).toBe('step=done');
+      expect(lines.filter((line) => line.includes(PRODUCTION_LAYOUT.wrapperPath))).toHaveLength(1);
+    });
   });
 
   it('removes the marker of an earlier failure when it runs again and succeeds', () => {

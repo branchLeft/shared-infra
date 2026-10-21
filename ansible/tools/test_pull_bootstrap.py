@@ -58,12 +58,26 @@ def sha(data: bytes) -> str:
 
 
 class Repo:
-    """A throwaway git repository holding copies of the files the tool reads."""
+    """A throwaway git repository holding copies of the files the tool reads.
+
+    It has an ``origin`` of its own, a bare repository beside it, and a commit made on ``main``
+    is pushed there at once, so ``origin``'s ``main`` is what the tool must bind a pin to. A
+    commit on any other branch is not pushed.
+    """
 
     def __init__(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
-        self.path = Path(self.directory.name).resolve()
+        base = Path(self.directory.name).resolve()
+        self.origin = base / "origin.git"
+        self.path = base / "work"
+        self.path.mkdir()
+        subprocess.run(  # noqa: S603 - fixed argv built from this test's own values
+            ["git", "init", "-q", "--bare", "-b", "main", str(self.origin)],  # noqa: S607
+            check=True,
+            stdin=subprocess.DEVNULL,
+        )
         self.run("init", "-q", "-b", "main")
+        self.run("remote", "add", "origin", str(self.origin))
         for relative in COPIED:
             target = self.path / relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -83,6 +97,8 @@ class Repo:
     def commit(self, message: str) -> str:
         self.run("add", "-A")
         self.run("commit", "-q", "-m", message)
+        if self.run("branch", "--show-current") == "main":
+            self.run("push", "-q", "origin", "main")
         return self.head()
 
     def head(self) -> str:
@@ -212,6 +228,7 @@ class VerifyTest(RepoCase):
 
     def test_a_pin_that_touches_nothing_is_red(self) -> None:
         self.repo.run("commit", "-q", "--allow-empty", "-m", "touches no file")
+        self.repo.run("push", "-q", "origin", "main")
         record = self.record()
         wrapper = entry_of(record, "wrapper")
         empty = self.repo.head()
@@ -220,24 +237,73 @@ class VerifyTest(RepoCase):
         found = self.problems(record)
         self.assertIn("wrapper: a later commit changed the file, so the pin is stale", found)
 
-    def test_a_pin_that_is_not_an_ancestor_of_head_is_red(self) -> None:
+    def pinned_to(self, record: dict[str, object], name: str, pin: str) -> None:
+        """Point one entry of the record at a commit, with the hash and url that commit gives."""
+        path = tool.FETCHED[name]
+        entry = entry_of(record, name)
+        entry["pin"] = pin
+        entry["url"] = tool.raw_url(pin, path)
+        entry["sha256"] = sha(self.repo.run("show", f"{pin}:{path}").encode())
+
+    def test_a_pin_on_a_side_branch_is_red(self) -> None:
         self.repo.run("checkout", "-q", "-b", "side")
         self.repo.edit(tool.FETCHED["wrapper"], lambda text: text + "# on a side branch\n")
         side = self.repo.commit("side")
         self.repo.run("checkout", "-q", "main")
         record = self.record()
-        wrapper = entry_of(record, "wrapper")
-        wrapper["pin"] = side
-        wrapper["url"] = tool.raw_url(side, tool.FETCHED["wrapper"])
-        wrapper["sha256"] = sha(self.repo.run("show", f"{side}:{tool.FETCHED['wrapper']}").encode())
-        self.assertEqual(["wrapper: the pin is not an ancestor of HEAD"], self.problems(record))
+        self.pinned_to(record, "wrapper", side)
+        self.assertEqual(
+            ["wrapper: the pin is not an ancestor of origin/main"], self.problems(record)
+        )
+
+    def test_a_pin_on_a_local_main_that_origin_does_not_have_is_red(self) -> None:
+        # The record's builder committed on a local main and never pushed it: HEAD holds the
+        # pin, so a check against HEAD alone would pass; origin's main does not hold it.
+        self.repo.edit(tool.FETCHED["wrapper"], lambda text: text + "# only on this machine\n")
+        self.repo.run("add", "-A")
+        self.repo.run("commit", "-q", "-m", "local only")
+        local = self.repo.head()
+        record = self.record_from_unpushed_head(local)
+        self.assertEqual(
+            ["wrapper: the pin is not an ancestor of origin/main"], self.problems(record)
+        )
+
+    def record_from_unpushed_head(self, local: str) -> dict[str, object]:
+        """Return the record that HEAD alone gives, as a builder on a local main would make it."""
+        record: dict[str, object] = {"schema": tool.SCHEMA}
+        for name, path in tool.FETCHED.items():
+            commit = tool.last_commit(self.repo.path, path)
+            record[name] = {
+                "pin": commit,
+                "sha256": tool.blob_sha256(self.repo.path, commit, path),
+                "url": tool.raw_url(commit, path),
+            }
+        record["config"] = tool.repository_config(self.repo.path)
+        self.assertEqual(local, entry_of(record, "wrapper")["pin"])
+        return record
+
+    def test_a_pin_that_main_has_but_head_has_not_is_red(self) -> None:
+        self.repo.edit(tool.FETCHED["wrapper"], lambda text: text + "# newer\n")
+        newer = self.repo.commit("newer on main")
+        record = self.record()
+        self.repo.run("checkout", "-q", "--detach", self.first)
+        self.assertEqual(newer, entry_of(record, "wrapper")["pin"])
+        found = self.problems(record)
+        self.assertIn("wrapper: the pin is not an ancestor of HEAD", found)
 
     def test_a_pin_the_repository_does_not_have_is_red(self) -> None:
         record = self.record()
         wrapper = entry_of(record, "wrapper")
         wrapper["pin"] = "f" * 40
         wrapper["url"] = tool.raw_url("f" * 40, tool.FETCHED["wrapper"])
-        self.assertIn("wrapper: the pin is not an ancestor of HEAD", self.problems(record))
+        self.assertIn("wrapper: the pin is not an ancestor of origin/main", self.problems(record))
+
+    def test_no_main_to_fetch_is_red(self) -> None:
+        record = self.record()
+        self.repo.run("remote", "set-url", "origin", str(self.repo.path.parent / "gone.git"))
+        found = self.problems(record)
+        self.assertEqual(1, len(found))
+        self.assertIn("git fetch", found[0])
 
     def test_a_wrong_sha256_is_red(self) -> None:
         for wrong in ("0" * 64, "f" * 64):
@@ -275,6 +341,49 @@ class VerifyTest(RepoCase):
         wrapper = entry_of(record, "wrapper")
         wrapper["pin"] = "main"
         self.assertIn("wrapper: the pin is not a full commit id", self.problems(record))
+
+
+class MainBindingTest(RepoCase):
+    """A record is built only from the tip of a freshly fetched main."""
+
+    def test_a_branch_head_is_refused_and_the_command_writes_nothing(self) -> None:
+        self.repo.run("checkout", "-q", "-b", "feature")
+        self.repo.edit(tool.FETCHED["lock"], lambda text: text + "# on a branch\n")
+        self.repo.commit("a branch commit")
+        with self.assertRaisesRegex(tool.BootstrapError, "is not the tip of origin/main"):
+            self.record()
+        out = self.repo.path.parent / "record.json"
+        self.assertEqual(
+            1, tool.main(["generate", "--repo", str(self.repo.path), "--out", str(out)])
+        )
+        self.assertFalse(out.exists())
+
+    def test_a_main_that_is_behind_origin_is_refused(self) -> None:
+        self.repo.edit(tool.FETCHED["lock"], lambda text: text + "# newer\n")
+        self.repo.commit("newer on main")
+        self.repo.run("reset", "-q", "--hard", self.first)
+        with self.assertRaisesRegex(tool.BootstrapError, "is not the tip of origin/main"):
+            self.record()
+
+    def test_a_local_main_ahead_of_origin_is_refused(self) -> None:
+        self.repo.edit(tool.FETCHED["lock"], lambda text: text + "# not pushed\n")
+        self.repo.run("add", "-A")
+        self.repo.run("commit", "-q", "-m", "not pushed")
+        with self.assertRaisesRegex(tool.BootstrapError, "is not the tip of origin/main"):
+            self.record()
+
+    def test_a_stale_remote_tracking_branch_does_not_stand_in_for_main(self) -> None:
+        # An earlier fetch left origin/main at the first commit; origin has since moved on.
+        self.repo.run("fetch", "-q", "origin", "main:refs/remotes/origin/main")
+        self.repo.edit(tool.FETCHED["lock"], lambda text: text + "# newer\n")
+        newer = self.repo.commit("newer on main")
+        self.repo.run("update-ref", "refs/remotes/origin/main", self.first)
+        self.assertEqual(newer, entry_of(self.record(), "lock")["pin"])
+
+    def test_no_main_to_fetch_is_refused(self) -> None:
+        self.repo.run("remote", "set-url", "origin", str(self.repo.path.parent / "gone.git"))
+        with self.assertRaisesRegex(tool.BootstrapError, "git fetch"):
+            self.record()
 
 
 class ConfigRefusalTest(unittest.TestCase):

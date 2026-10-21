@@ -69,7 +69,11 @@ export interface PullBootstrapFile {
  * The record `ansible/tools/pull_bootstrap.py` builds from `main` at publish
  * time. The package does not carry a copy of it: the stack passes the record
  * it was given with the package, and `assertPullBootstrap` refuses anything
- * that is not exactly the shape the tool writes.
+ * that is not exactly the shape the tool writes. It cannot tell whether a pin
+ * is a commit of `main`: only the tool can, because `generate` refuses unless
+ * HEAD is the tip of a freshly fetched `main` and `verify` refuses a pin that
+ * is not an ancestor of it. A record that did not come from the tool, or that
+ * `verify` has not accepted, is not known to name reviewed code.
  */
 export interface PullBootstrap {
   schema: 1;
@@ -540,12 +544,19 @@ function authorizedLine(key: string, mode: 'apply' | 'check', layout: EnrolmentL
  *
  * Order matters and is the whole control. All three files are fetched and each
  * is checked against its recorded SHA-256 first; only then does the install
- * program run; only after it has succeeded are the pull program and its
- * configuration put in place. A failure anywhere writes the step it failed at
- * to a marker file and stops, so a host that could not be enrolled has no
- * `ansible-playbook` link and no pull program, and the owner's keys are the
- * only way in. It never installs an engine that is not hash-locked, and there
- * is no fallback that does.
+ * program run; after it has succeeded the state directories and the
+ * configuration are put in place; the pull program is placed last of all, as
+ * the final step before the done marker. A failure anywhere writes the step it
+ * failed at to a marker file and stops.
+ *
+ * What a failure leaves depends on where it happened, and each state is safe:
+ * before `install-engine` the host has nothing installed; at or after it the
+ * host may have the `ansible-playbook` link, which is the hash-locked engine
+ * and never another, and possibly the directories and the configuration, but
+ * never the pull program unless every earlier step succeeded. The two
+ * command-restricted keys name the pull program's path, so while it is absent
+ * they run nothing, and the owner's keys are the only way in. There is no
+ * fallback that installs an engine that is not hash-locked.
  */
 export function renderEnrolmentScript(
   bootstrap: PullBootstrap,
@@ -592,14 +603,14 @@ export function renderEnrolmentScript(
     check('lock', 'requirements.txt'),
     'step=install-engine',
     `'${layout.python}' -I "$work/install_runtime.py" --lock "$work/requirements.txt" --lock-sha256 '${bootstrap.lock.sha256}' --root '${layout.runtimeRoot}' --link '${layout.runtimeLink}'`,
-    'step=install-trigger',
+    'step=write-config',
     `install -d -m 0755${owner} '${layout.configDir}'`,
     `install -d -m 0700${owner} '${layout.stateDir}' '${layout.logDir}'`,
-    `install -m 0755${owner} "$work/pull_trigger.py" '${layout.wrapperPath}'`,
-    'step=write-config',
     `cat > "$work/config.json" <<'${CONFIG_HEREDOC}'`,
     `${bootstrap.config}${CONFIG_HEREDOC}`,
     `install -m 0644${owner} "$work/config.json" '${layout.configPath}'`,
+    'step=install-trigger',
+    `install -m 0755${owner} "$work/pull_trigger.py" '${layout.wrapperPath}'`,
     'step=done',
     'printf "ok\\n" > "$finished"',
     '',
