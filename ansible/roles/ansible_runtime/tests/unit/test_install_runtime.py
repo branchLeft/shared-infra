@@ -372,6 +372,7 @@ class LockChecksTest(Case):
         }
         for name, mark in marks.items():
             with self.subTest(mark=name):
+                shutil.rmtree(self.root, ignore_errors=True)
                 runner = FakeRunner()
                 self.refused(self.request(mark + LOCK_A), runner, program.Reason.LOCK_ENCODING)
                 self.nothing_made(runner)
@@ -390,6 +391,8 @@ class LockChecksTest(Case):
         }
         for name, lock in declarations.items():
             with self.subTest(declaration=name):
+                # A shape wrongly let through would leave the directory for the next to trip on.
+                shutil.rmtree(self.root, ignore_errors=True)
                 runner = FakeRunner()
                 self.refused(self.request(lock), runner, program.Reason.LOCK_ENCODING)
                 self.nothing_made(runner)
