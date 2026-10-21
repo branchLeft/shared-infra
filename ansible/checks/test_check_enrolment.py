@@ -258,6 +258,18 @@ class Sabotage(unittest.TestCase):
         self._write("trust/README.md", play)
         self._assert_rule("R5 README.md")
 
+    # Plan-review finding 1 (verdict 6322490514): a play list with an Ansible tag fails under
+    # SafeLoader, so it must still be refused. Ansible's loader runs it as plays.
+    def test_playbooks_readme_tagged_play_list_is_refused(self) -> None:
+        play = "- hosts: all\n  pull_trigger_signers: [attacker]\n  note: !unsafe '{{ x }}'\n"
+        self._write("playbooks/README.md", play)
+        self._assert_rule("R2 README.md")
+
+    def test_trust_readme_tagged_play_list_is_refused(self) -> None:
+        play = "- hosts: all\n  vars:\n    pull_trigger_signers: !vault |\n      $ANSIBLE_VAULT\n"
+        self._write("trust/README.md", play)
+        self._assert_rule("R5 README.md")
+
     # Link handling: a link is refused whatever its name, so the check never follows it.
     def test_symlink_named_yml_in_trust_is_refused(self) -> None:
         os.symlink("ops1.yml", self.ansible / "trust" / "link.yml")

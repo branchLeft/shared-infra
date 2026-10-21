@@ -19,7 +19,8 @@ entry there that is not a directory must be an exact `.yml` (case-sensitive, no 
 suffix), or one of the two README paths named exactly: `playbooks/README.md` and
 `trust/README.md`. A README anywhere else is refused. Each of the two exception READMEs is
 refused if it parses as a YAML list, because `ansible-playbook` would run a list as plays.
-A link is refused whatever its name,
+That parse accepts every tag (`!unsafe`, `!vault`), as Ansible's loader does, so a tagged
+list is refused too. A link is refused whatever its name,
 so the check never follows one. The rule is one function, shared by R2, R4 and R5.
 
 It catches a protected key (`pull_trigger_signers`, `pull_trigger_remote_url`,

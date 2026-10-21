@@ -103,13 +103,34 @@ EXPECTED_COMMON = {
 }
 
 
-def _load(path: Path, findings: list[str], label: str) -> object:
-    """The one YAML reader, for every rule and for R6. A missing file is reported by its own
-    rule, not here. An unparseable file is a finding under the caller's label."""
+class _AnyTagLoader(yaml.SafeLoader):
+    """SafeLoader with every tag accepted. Ansible's loader takes !unsafe and !vault, and a
+    list that carries such a value still runs as plays, so the README play-list parse must
+    not refuse to read one. Only the README play-list check uses it."""
+
+
+def _construct_any_tag(loader: yaml.SafeLoader, suffix: str, node: yaml.Node) -> object:
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node, deep=True)
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node, deep=True)
+    return loader.construct_scalar(node)
+
+
+_AnyTagLoader.add_multi_constructor("", _construct_any_tag)
+
+
+def _load(
+    path: Path, findings: list[str], label: str, loader: type[yaml.SafeLoader] = yaml.SafeLoader
+) -> object:
+    """The one YAML reader, for every rule, for R6 and for the README play-list check. The
+    loader is the only difference: the README check passes _AnyTagLoader, the same reader with
+    every tag accepted. A missing file is reported by its own rule, not here. An unparseable
+    file is a finding under the caller's label."""
     if not path.is_file():
         return None
     try:
-        doc: object = yaml.safe_load(path.read_text(encoding="utf-8"))
+        doc: object = yaml.load(path.read_text(encoding="utf-8"), Loader=loader)
     except (OSError, ValueError, yaml.YAMLError) as error:
         findings.append(f"{label}: cannot be read as YAML: {error}")
         return None
@@ -433,12 +454,11 @@ def _check_no_other_definition(ansible: Path, findings: list[str]) -> None:
 
 
 def _is_play_list(path: Path) -> bool:
-    """True when the file parses as a YAML list, which ansible-playbook would run as plays. A
-    file that does not parse as YAML is not a playbook, so it is not a finding here."""
-    try:
-        return isinstance(yaml.safe_load(path.read_text(encoding="utf-8")), list)
-    except (OSError, ValueError, yaml.YAMLError):
-        return False
+    """True when the file parses as a YAML list, which ansible-playbook would run as plays. It
+    reads through _load with _AnyTagLoader, so a list that holds a tagged value (!unsafe,
+    !vault) still parses as a list. A file that does not parse as YAML is not a playbook, so
+    it is not a finding here; _load's error goes to a list nobody reads."""
+    return isinstance(_load(path, [], "README", _AnyTagLoader), list)
 
 
 def _in_place(tree: str, inside: tuple[str, ...]) -> bool:
