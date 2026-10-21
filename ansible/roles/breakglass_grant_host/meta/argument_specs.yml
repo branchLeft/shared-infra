@@ -1,0 +1,31 @@
+---
+argument_specs:
+  main:
+    short_description: Install the break-glass grant tool, its wrapper and the expire timer on an app host
+    description: >-
+      Refuses a host with no Docker or no Docker socket, pulls the pinned Node
+      image by digest only when the host lacks it and reads it back, fetches the
+      grant tool, the wrapper and the two units from one pinned commit and holds
+      each to its sha256, and then turns the expire timer on. It never runs the
+      tool, opens or closes a grant, or sets a run-time secret. The unit runs
+      with --pull never, so the image is checked before the timer is enabled.
+      Neither input is a secret.
+    author: branchLeft
+    options:
+      breakglass_grant_host_source_commit:
+        type: str
+        default: 5e52f78427cab104438057164e4baa16b329875c
+        description: >-
+          The full 40-character commit of the ghost-platform repository the files
+          are fetched at. Each download is held to the sha256 in the role, so a
+          commit whose bytes differ stops the run. Must equal the commit in
+          breakglass_mint_host_source_commit; the role's test compares the two.
+      breakglass_grant_host_node_image:
+        type: str
+        default: node:26.5.0-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb
+        description: >-
+          The Node image the tool runs in, a name and tag followed by @sha256:
+          and the 64-character digest. Pulled by digest. The wrapper and the
+          expire unit carry the same digest, and the role's test runs both and
+          compares what they start with this value. Must equal
+          breakglass_mint_host_node_image.

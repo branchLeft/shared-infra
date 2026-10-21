@@ -1,0 +1,43 @@
+---
+# Constants of the role. An inventory value does not change them. The only way to
+# change one is a pull request, which the review reads.
+
+# Where the bytes come from: one commit of the one repository that holds them,
+# read from the raw file service at that commit. No file is copied from a working
+# tree into this repository, so there is one home for the code (the pinned commit)
+# and the sha256 below is the only copy of its hash.
+breakglass_mint_host_source_base_url: >-
+  https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ breakglass_mint_host_source_commit }}/adapters/sso/scripts
+
+# The one file this role installs. The download fails unless it has this sha256.
+# Bumping the commit means changing the commit and this hash together.
+breakglass_mint_host_files:
+  - path: break-glass-mint.mjs
+    sha256: 88340dbe719a7cf383477e28fa790eb97e8065a3f47b7f566896a38a3cc0e187
+    dest: '{{ breakglass_mint_host_tool_dir }}/break-glass-mint.mjs'
+    mode: '0644'
+
+# Directories the role makes, parents first. The parents are shared with other
+# roles (broker_deploy sets /var/lib/branchleft to root 0755), so the owner and
+# mode are stated here, not left to the run's umask, and two roles on one host
+# agree. The key directory is NOT here: the owner makes it by hand.
+breakglass_mint_host_tool_dir: /usr/local/lib/branchleft/break-glass
+breakglass_mint_host_directories:
+  - path: /usr/local/lib/branchleft
+    mode: '0755'
+  - path: '{{ breakglass_mint_host_tool_dir }}'
+    mode: '0755'
+  - path: /var/log/branchleft
+    mode: '0700'
+
+# The part of the image reference that Docker lists back under RepoDigests.
+breakglass_mint_host_image_digest: "{{ breakglass_mint_host_node_image.split('@') | last }}"
+
+# The signing key: a path the role only ever looks at with stat, never opens. A
+# constant, so no inventory value can point the check at another file. The
+# role's test passes its own path as a role parameter, which only a play can do.
+breakglass_mint_host_key_path: /etc/branchleft/break-glass/signing-key.pem
+
+breakglass_mint_host_sha_pattern: '^[0-9a-f]{40}\Z'
+breakglass_mint_host_checksum_pattern: '^[0-9a-f]{64}\Z'
+breakglass_mint_host_image_pattern: '^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}\Z'

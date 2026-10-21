@@ -1,0 +1,115 @@
+---
+# Applies the role with one input or one host made bad and requires that the
+# role stops at the task named in refused.expect. Naming the task matters: a
+# refusal for some other reason, a mistyped role name included, must not count
+# as the refusal under test. Inputs left out take the role's own defaults.
+- name: Make the host bad for this case
+  when: refused.setup | default('') != ''
+  block:
+    - name: Take the docker command away
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - /usr/local/bin/docker
+        - /usr/bin/docker
+      when: refused.setup == 'docker_missing'
+
+    - name: Take the Docker socket away
+      ansible.builtin.file:
+        path: /var/run/docker.sock
+        state: absent
+      when: refused.setup == 'socket_missing'
+
+    - name: Make the next pull exit 0 and store nothing
+      ansible.builtin.file:
+        path: '{{ scenario_state_dir }}/pull_stores_nothing'
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'
+      when: refused.setup == 'pull_stores_nothing'
+
+- name: Apply the role with input it must refuse
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.breakglass_grant_host
+      vars:
+        breakglass_grant_host_source_commit: '{{ refused.commit | default(converge_defaults.breakglass_grant_host_source_commit) }}'
+        breakglass_grant_host_node_image: '{{ refused.image | default(converge_defaults.breakglass_grant_host_node_image) }}'
+
+    - name: Record that the role accepted the input
+      ansible.builtin.set_fact:
+        breakglass_grant_host_c_refused_by: 'NOTHING: the role accepted the input'
+  rescue:
+    - name: Record which task refused the input
+      ansible.builtin.set_fact:
+        breakglass_grant_host_c_refused_by: '{{ ansible_failed_task.name }}'
+
+- name: Put the host back after this case
+  when: refused.setup | default('') != ''
+  block:
+    - name: Put the docker stand-in back where the wrapper finds it
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/files/docker_standin.sh'
+        dest: /usr/local/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+      when: refused.setup == 'docker_missing'
+
+    - name: Put the docker stand-in back where the expire unit calls it
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/files/docker_standin.sh'
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+      when: refused.setup == 'docker_missing'
+
+    - name: Make the Docker socket again
+      ansible.builtin.command:
+        argv: [python3, /root/make_socket.py, /var/run/docker.sock]
+        creates: /var/run/docker.sock
+      when: refused.setup == 'socket_missing'
+
+    - name: Let the next pull store the image again
+      ansible.builtin.file:
+        path: '{{ scenario_state_dir }}/pull_stores_nothing'
+        state: absent
+      when: refused.setup == 'pull_stores_nothing'
+
+- name: Assert the role stopped at the expected task
+  ansible.builtin.assert:
+    that:
+      - breakglass_grant_host_c_refused_by == refused.expect
+    fail_msg: 'Expected the role to stop at "{{ refused.expect }}"; it stopped at "{{ breakglass_grant_host_c_refused_by }}".'
+    quiet: true
+
+- name: Look for anything the refusal left behind
+  ansible.builtin.stat:
+    path: '{{ item }}'
+  loop: '{{ converge_installed_paths + (converge_directory_paths if not refused.leaves_directories else []) }}'
+  register: breakglass_grant_host_c_leftovers
+
+- name: Assert the refusal wrote nothing the role installs after that point
+  ansible.builtin.assert:
+    that:
+      - breakglass_grant_host_c_leftovers.results | map(attribute='stat.exists') | select | list | length == 0
+    fail_msg: A refused case left a file, a unit or a directory behind that the role writes only after the check it failed.
+    quiet: true
+
+- name: Ask systemd whether the timer was enabled
+  ansible.builtin.command:
+    argv: [systemctl, is-enabled, branchleft-break-glass-expire.timer]
+  register: breakglass_grant_host_c_timer_enabled
+  changed_when: false
+  failed_when: false
+
+- name: Assert the timer was not enabled by a refused case
+  ansible.builtin.assert:
+    that:
+      - breakglass_grant_host_c_timer_enabled.rc != 0
+    fail_msg: A refused case left the expire timer enabled.
+    quiet: true
