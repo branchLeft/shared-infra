@@ -42,8 +42,9 @@ written as `key=value` in a string. A loader or module outside those sets is not
   include holds exactly one task: its name and its assert, with exactly its expressions
   and no other key (`when`, `ignore_errors` and `tags` are refused).
 - **R1** At least one top-level playbook is enrolled, so the check cannot pass over nothing.
-- **R2** A top-level `.yaml` playbook is refused, because the pull runs only the derived
-  `.yml` path. Each enrolled `HOST.yml` has one play on `hosts: all`, `vars.enrolled_host`
+- **R2** A top-level file in `playbooks/` whose name is not an exact `.yml` (any other
+  suffix, any case, or none) is refused, because the pull runs only the derived `.yml`
+  path and `ansible-playbook` would run the others anyway. Each enrolled `HOST.yml` has one play on `hosts: all`, `vars.enrolled_host`
   equal to `HOST`, `vars_files` exactly the shared include and `../trust/HOST.yml`,
   `roles` exactly the runtime entry then the bare trigger, and `pre_tasks` exactly the
   refusal include then the signer include, each a task of only its name and include.

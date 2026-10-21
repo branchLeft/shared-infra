@@ -183,6 +183,14 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R2 evil.yaml")
 
+    # R2: any other suffix, in any case, is refused too: ansible-playbook runs it anyway.
+    def test_r2_top_level_uppercase_yaml_playbook_is_refused(self) -> None:
+        self._write(
+            "playbooks/evil.YAML",
+            "- hosts: all\n  vars:\n    enrolled_host: edge1\n  roles:\n    - pull_trigger\n",
+        )
+        self._assert_rule("R2 evil.YAML")
+
     # R0: the refusal's assert replaced with a value that always passes.
     def test_r0_refusal_assert_replaced_with_true(self) -> None:
         self._edit(

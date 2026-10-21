@@ -445,9 +445,11 @@ def check(root: Path) -> list[str]:
     _check_gates(includes, findings)
 
     enrolled: dict[str, list[dict[str, object]]] = {}
-    # The host pull runs only the derived .yml path, so a top-level .yaml playbook is
-    # refused rather than read: the rules below would not see what it applies.
-    for path in sorted(playbooks.glob("*.yaml")):
+    # The host pull runs only the derived .yml path, so a top-level file that is not an
+    # exact .yml name is refused rather than read: any suffix, case or extensionless.
+    for path in sorted(playbooks.iterdir()):
+        if path.is_dir() or path.suffix == ".yml":
+            continue
         findings.append(f"R2 {path.name}: a top-level playbook must be .yml, as the pull runs")
     for path in sorted(playbooks.glob("*.yml")):
         plays = _plays(_load(path, findings, "R2"))
