@@ -6,7 +6,10 @@ block. Its group is keyed on the pull request number, and falls back to the
 run id for every other event, so a push to main and a merge_group run each
 form their own group. cancel-in-progress is true only for pull_request, so no
 other run is cancelled, and no run is queued behind an apply paused for
-approval.
+approval. A workflow without pull_request keys every top-level group on the run
+id, so no run shares a group with another. Job-level apply groups are the one
+listed exemption: they are not top-level, and only their cancel values are read.
+Double-quoted keys with backslash escapes are rejected outright.
 
 The checks read the workflow text the way test_ci_apply_environments.py does:
 standard library only, no YAML parser. Each check fails closed: a trigger that
@@ -41,6 +44,9 @@ PR_TRIGGER = re.compile(r"\bpull_request(?:_target)?\b")
 TOP_CONCURRENCY = re.compile(r"(?m)^concurrency\b[^\n]*\n(?:[ \t]+[^\n]*\n|[ \t]*\n)*")
 # Every mention of the key, quoted or bare, whatever follows it on the line.
 CANCEL_KEY = re.compile(r"cancel-in-progress([^\n]*)")
+# A double-quoted key that holds a backslash escape. YAML reads "\x5f" as "_",
+# so the plain-text detectors above would miss the key; no workflow may use one.
+ESCAPED_KEY = re.compile(r'"[^"\n]*\\[^"\n]*"\s*:')
 
 
 def workflow_files() -> list[pathlib.Path]:
@@ -51,17 +57,38 @@ def triggers_pull_request(text: str) -> bool:
     return PR_TRIGGER.search(on_block(text)) is not None
 
 
+def comment_before(prefix: str) -> bool:
+    """True when a YAML comment starts in this line prefix.
+
+    A comment starts at a `#` outside quotes that is at the start of the line or
+    follows whitespace. A `#` inside a quoted value, or one written straight after
+    a value (`deploy#1`), is part of the value and is not a comment.
+    """
+    quote = None
+    previous = " "
+    for char in prefix:
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char == "#" and previous in " \t":
+            return True
+        previous = char
+    return False
+
+
 def cancel_values(text: str) -> list[tuple[int, str]]:
     """(line, value) for each cancel-in-progress. The value is what follows its colon.
 
     A key with no colon after it yields the rest of the line, which is never an
-    allowed value, so the check fails closed on it. A key after a `#` on its
-    line is a YAML comment and is not read.
+    allowed value, so the check fails closed on it. A key after a YAML comment on
+    its line is not read; see comment_before.
     """
     values = []
     for match in CANCEL_KEY.finditer(text):
         line_start = text.rfind("\n", 0, match.start()) + 1
-        if "#" in text[line_start : match.start()]:
+        if comment_before(text[line_start : match.start()]):
             continue
         line = text.count("\n", 0, match.start()) + 1
         rest = match.group(1)
@@ -106,6 +133,35 @@ class WorkflowConcurrencyTests(unittest.TestCase):
                         ALLOWED_CANCEL,
                         f"{path.name}:{line} cancel-in-progress: {value} may cancel a non-pull_request run",
                     )
+
+    def test_no_non_pull_request_top_level_group_is_shared(self):
+        # GitHub cancels a pending run that shares a group with a newer run, whatever
+        # cancel-in-progress says. So a push or deploy workflow's top-level group must
+        # hold the run id, which makes every such run its own group. Job-level
+        # concurrency (the apply jobs) is outside this check by design; their
+        # cancel-in-progress values are still read by the test above.
+        for path in workflow_files():
+            text = path.read_text(encoding="utf-8")
+            if triggers_pull_request(text):
+                continue
+            for block in TOP_CONCURRENCY.findall(text):
+                with self.subTest(workflow=path.name):
+                    self.assertIn(
+                        "github.run_id",
+                        block,
+                        f"{path.name}: top-level concurrency is shared across runs: {block.strip()!r}",
+                    )
+
+    def test_no_double_quoted_key_carries_an_escape(self):
+        for path in workflow_files():
+            text = path.read_text(encoding="utf-8")
+            match = ESCAPED_KEY.search(text)
+            with self.subTest(workflow=path.name):
+                line = text.count("\n", 0, match.start()) + 1 if match else 0
+                self.assertIsNone(
+                    match,
+                    f"{path.name}:{line} double-quoted key holds a backslash escape",
+                )
 
     def test_merge_group_runs_are_keyed_on_the_run_not_the_ref(self):
         # A merge_group event carries no pull_request, so its group falls back
@@ -154,6 +210,21 @@ class DetectorTests(unittest.TestCase):
     def test_cancel_key_in_a_comment_is_not_read(self):
         text = "  # its cancel-in-progress is\n  cancel-in-progress: false # note\n"
         self.assertEqual(cancel_values(text), [(2, "false # note")])
+
+    def test_hash_inside_quotes_is_not_a_comment(self):
+        text = 'concurrency: {group: "deploy #1", cancel-in-progress: true}\n'
+        self.assertEqual(cancel_values(text), [(1, "true}")])
+
+    def test_hash_without_a_space_before_it_is_not_a_comment(self):
+        text = "concurrency: {group: deploy#1, cancel-in-progress: true}\n"
+        self.assertEqual(cancel_values(text), [(1, "true}")])
+
+    def test_escaped_double_quoted_key_is_seen(self):
+        text = '  "cancel\\x2din\\x2dprogress": true\n'
+        self.assertIsNotNone(ESCAPED_KEY.search(text))
+
+    def test_plain_double_quoted_key_is_not_an_escape(self):
+        self.assertIsNone(ESCAPED_KEY.search('  "cancel-in-progress": true\n'))
 
     def test_cancel_key_without_colon_fails_closed(self):
         text = "concurrency:\n  cancel-in-progress true\n"
