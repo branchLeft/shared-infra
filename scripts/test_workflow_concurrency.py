@@ -1,65 +1,8 @@
 #!/usr/bin/env python3
 """Pin tests: a pull_request run is grouped per pull request, and only those runs cancel.
 
-Every workflow is parsed, and every rule is checked on the parsed data, never
-on the text. So a quoted key, an escaped quote, a multi-line quoted value, a
-list-form or quoted trigger, and a `#` inside a value cannot hide a concurrency
-key.
-
-The parser is PyYAML (pinned in ci.yml) behind a loader that reads a file the
-way GitHub does where PyYAML's YAML 1.1 differs, and refuses what it cannot
-match:
-- a duplicate key is refused (safe_load keeps the last one silently);
-- a merge key (`<<`) is refused;
-- only true and false (any case) are booleans, so `on`, `off`, `yes` and `no`
-  stay strings, as in YAML 1.2. The `on:` trigger key is then the string "on";
-- an explicit tag on any node (`!!bool "off"`, `!!str true`, a bare `!`) is
-  refused: it bypasses the resolver above, and how GitHub reads it is unverified.
-
-The rules, each on the parsed data:
-- A workflow with a pull_request or pull_request_target trigger has one
-  top-level concurrency block, exactly the run-keyed block below: its group is
-  keyed on the pull request number and falls back to the run id, and its
-  cancel-in-progress is the pull_request expression. pull_request_target counts
-  as pull_request: it has a pull request number, and the expression is false
-  for it, so it is grouped and never cancels.
-- A workflow without one has a top-level group, if any, that is run-keyed: made
-  only of literal text and the expressions github.workflow and github.run_id,
-  with at least one expression holding github.run_id. So no two runs share a
-  group. The run id counts only as a term inside ${{ }}: the text
-  "github.run_id" in a literal or a quoted string does not. The pull request
-  number with the run id fallback is a term only in a workflow with a
-  pull_request trigger (the exact block above); a workflow that also has a
-  pull_request_review or pull_request_review_comment trigger is refused,
-  because those events carry the number with no fallback and every run for one
-  pull request would share the group.
-- A merge_group workflow has a top-level group that is run-keyed in that sense
-  and does not hold the ref, so queued checks never replace one another.
-- cancel-in-progress is a whitelist: absent or the boolean false on a job. The
-  one other value is the pull_request expression, and only on the top-level
-  pull_request block. On a job it is refused: a job group every run shares would
-  let a pull request run cancel a push run, and the per-pull-request group is
-  the workflow's own group. Anything else (true, a string, "false", an
-  expression, null) is refused.
-- A job that has a concurrency block has a group that is a non-empty string
-  and a plain literal: any `${{` in it is refused, whatever it would evaluate
-  to, so no expression can make it equal the workflow's group. A group that is
-  missing, empty, null or not a string (`group: 123`, `group: true`) is refused
-  too. This test does not evaluate expressions.
-- A job literal is refused when it is the workflow's literal group. GitHub keeps
-  one group namespace for a run and its jobs, so the job would wait on its own
-  run. Both are compared with str.casefold(), because GitHub treats group names
-  as case-insensitive. casefold() also folds some characters GitHub may not (the
-  sharp s equals "ss"): a deliberate over-refusal, since a false refusal costs
-  a rename and a miss costs a cancelled deploy. When the workflow's group holds
-  an expression nothing is compared: that group is run-keyed (the rules above),
-  so no literal equals it, and a sibling such as `x-mail` under `x-${{ run_id }}`
-  is a legitimate name, so a prefix match is not a refusal.
-
-Every check fails closed: a file that does not parse, whose top level is not a
-mapping, whose trigger block is missing or unreadable, or whose concurrency
-value is not a mapping with only the keys group and cancel-in-progress, is a
-violation.
+Every rule is checked on the parsed workflow, never on its text. The rules, the
+parser and the job-group comparison are written up in test_workflow_concurrency.md.
 """
 
 from __future__ import annotations
@@ -198,17 +141,41 @@ def run_keyed(group: object, pull_request: bool) -> bool:
     return all(term in allowed for term in terms) and any("github.run_id" in term for term in terms)
 
 
-def same_literal_group(job_group: str, top_group: object) -> bool:
-    """True when the job's literal group is the workflow's literal group, compared with casefold().
+def group_template(top_group: str, workflow_label: str) -> str:
+    """A regex for every value the workflow's group can evaluate to, built from its parts.
 
-    A top-level group holding an expression is never equal to a literal: such a
-    group is run-keyed (checked by top_level_problems and merge_group_problems),
-    so it differs for every run. Nothing is compared then, and no prefix rule
-    applies.
+    Literal text is escaped. github.workflow is the workflow's name, and a run id
+    or pull request number is a run of digits. A term not known here matches
+    anything, so the comparison refuses more, never less.
     """
-    if not isinstance(top_group, str) or "${{" in top_group:
+    pattern = ""
+    end = 0
+    for match in EXPRESSION.finditer(top_group):
+        pattern += re.escape(top_group[end : match.start()].casefold())
+        term = " ".join(match.group(1).split())
+        if term == "github.workflow":
+            pattern += re.escape(workflow_label.casefold())
+        elif term in {"github.run_id", PR_NUMBER_TERM}:
+            pattern += r"\d+"
+        else:
+            pattern += ".*"
+        end = match.end()
+    return pattern + re.escape(top_group[end:].casefold())
+
+
+def same_literal_group(job_group: str, top_group: object, workflow_label: str) -> bool:
+    """True when the job's literal group is a value the workflow's group can have, ignoring case.
+
+    A literal top group is compared as text with casefold(). A top group that
+    holds expressions is compared with group_template: a job literal that fully
+    matches it names a group that run or pull request has, so the job waits on
+    its own run. A sibling that is not a full match, such as `x-mail`, is fine.
+    """
+    if not isinstance(top_group, str):
         return False
-    return job_group.casefold() == top_group.casefold()
+    if "${{" not in top_group:
+        return job_group.casefold() == top_group.casefold()
+    return re.fullmatch(group_template(top_group, workflow_label), job_group.casefold()) is not None
 
 
 def cancel_problem(where: str, config: dict) -> str | None:
@@ -263,7 +230,7 @@ def merge_group_problems(name: str, data: dict, pull_request: bool) -> list[str]
     return found
 
 
-def job_problems(name: str, job_name: str, job: dict, top_group: object) -> list[str]:
+def job_problems(name: str, job_name: str, job: dict, top_group: object, workflow_label: str) -> list[str]:
     """A job never cancels, and never takes the workflow's own group.
 
     The pull_request expression is refused here: a job group every run shares lets
@@ -282,7 +249,7 @@ def job_problems(name: str, job_name: str, job: dict, top_group: object) -> list
         found.append(f"{name}: {where} group must be a non-empty string literal, not {shown}")
     elif "${{" in group:
         found.append(f"{name}: {where} group must be a plain literal, not an expression: {group!r}")
-    elif same_literal_group(group, top_group):
+    elif same_literal_group(group, top_group, workflow_label):
         found.append(
             f"{name}: {where} has the same group as the workflow, so it would wait on its own run: {group!r}"
         )
@@ -323,6 +290,9 @@ def violations(name: str, text: str) -> list[str]:
         found += merge_group_problems(name, data, pull_request)
     top = data.get("concurrency")
     top_group = top.get("group") if isinstance(top, dict) else None
+    # github.workflow is the name: key, or the file path when there is none.
+    workflow_name = data.get("name")
+    workflow_label = workflow_name if isinstance(workflow_name, str) and workflow_name else f".github/workflows/{name}"
     jobs = data.get("jobs")
     if not isinstance(jobs, dict):
         return found + [f"{name}: jobs is not a mapping"]
@@ -330,7 +300,7 @@ def violations(name: str, text: str) -> list[str]:
         if not isinstance(job, dict):
             found.append(f"{name}: job {job_name} is not a mapping")
         elif "concurrency" in job:
-            found += job_problems(name, job_name, job, top_group)
+            found += job_problems(name, job_name, job, top_group, workflow_label)
     return found
 
 
@@ -387,10 +357,15 @@ JOBS_WITH_CHECK_GROUP = (
     "jobs:\n  check:\n    runs-on: ubuntu-latest\n" + job_concurrency(PR_EXPRESSION, "check")
 )
 
-def job_group_under(job_group: str, top_group: str = "x-${{ github.run_id }}", pull_request: bool = False) -> str:
-    """A workflow with the given top-level group and one check job with the given group, never cancelling."""
+def job_group_under(
+    job_group: str, top_group: str = "x-${{ github.run_id }}", pull_request: bool = False, name: str = ""
+) -> str:
+    """A workflow with the given top-level group and one check job with the given group, never cancelling.
+
+    name is the workflow's name: key, or none when empty.
+    """
     head = PR_ON + PR_BLOCK if pull_request else PUSH_ON + f"concurrency:\n  group: {top_group}\n  cancel-in-progress: false\n"
-    return head + "jobs:\n  check:\n    runs-on: ubuntu-latest\n" + job_concurrency("false", job_group)
+    return (f"name: {name}\n" if name else "") + head + "jobs:\n  check:\n    runs-on: ubuntu-latest\n" + job_concurrency("false", job_group)
 
 
 # name -> (workflow text, a fragment that must appear in a violation). The
@@ -720,6 +695,49 @@ REFUSED = {
     "r3-job-group-null": (job_group_under("null"), "group must be a non-empty string literal, not None"),
     "r3-job-group-integer": (job_group_under("123"), "group must be a non-empty string literal, not 123"),
     "r3-job-group-boolean": (job_group_under("true"), "group must be a non-empty string literal, not True"),
+    # Cycle 8 (finding 1): a job literal equal to what an expression group
+    # evaluates to. The per-pull-request group is the same value for every run of
+    # one pull request, so a literal can name it; a run id that already exists
+    # can be named too. One fixture for each term.
+    "c8-pr-number-term-in-a-pull-request-workflow": (
+        job_group_under("CI-369", pull_request=True, name="CI"),
+        "same group as the workflow",
+    ),
+    "c8-pr-number-term-lowercase-job-literal": (
+        job_group_under("ci-369", pull_request=True, name="CI"),
+        "same group as the workflow",
+    ),
+    "c8-run-id-term-in-a-push-workflow": (
+        job_group_under("x-39646213815"),
+        "same group as the workflow",
+    ),
+    "c8-run-id-term-uppercase-job-literal": (
+        job_group_under("X-39646213815"),
+        "same group as the workflow",
+    ),
+    "c8-workflow-term-and-run-id-term": (
+        job_group_under("CI-123", top_group="${{ github.workflow }}-${{ github.run_id }}", name="CI"),
+        "same group as the workflow",
+    ),
+    "c8-workflow-name-with-regex-characters": (
+        job_group_under("a.b+c-123", top_group="${{ github.workflow }}-${{ github.run_id }}", name="a.b+c"),
+        "same group as the workflow",
+    ),
+    # No name: key, so github.workflow is the file path. The probe's file name is
+    # the fixture name, so the file path is spelled out in the job literal.
+    "c8-workflow-term-is-the-file-path-without-a-name": (
+        job_group_under(
+            ".github/workflows/c8-workflow-term-is-the-file-path-without-a-name.yml-123",
+            top_group="${{ github.workflow }}-${{ github.run_id }}",
+        ),
+        "same group as the workflow",
+    ),
+    # A group term the template does not know matches anything: the job is refused,
+    # beside the top-level violation.
+    "c8-unknown-term-in-the-workflow-group": (
+        job_group_under("anything-123", top_group="${{ github.sha }}-${{ github.run_id }}"),
+        "same group as the workflow",
+    ),
 }
 
 # name -> workflow text the rules must pass: the shapes a refusal must not catch.
@@ -756,6 +774,19 @@ ACCEPTED = {
     + "concurrency:\n  group: ${{ github.workflow }}-${{ github.run_id }}\n  cancel-in-progress: false\n"
     + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
     + job_concurrency("false", "-deploy"),
+    # Cycle 8: the template match is on the whole group, so these siblings pass.
+    "a job literal that is the workflow name plus text under the per-pull-request block": "name: CI\n"
+    + PR_ON
+    + PR_BLOCK
+    + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
+    + job_concurrency("false", "CI-deploy"),
+    "a pulumi-style job literal under the per-pull-request block": "name: CI\n"
+    + PR_ON
+    + PR_BLOCK
+    + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
+    + job_concurrency("false", "pulumi-production-deploy"),
+    "a job literal with a digit run but another prefix": job_group_under("y-39646213815"),
+    "a job literal that is the run-keyed text plus a suffix": job_group_under("x-39646213815-mail"),
     "a '!' inside plain text is not a tag": PUSH_ON
     + "jobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo !!bool !important\n",
     "a quoted string that starts with '!!'": PUSH_ON
