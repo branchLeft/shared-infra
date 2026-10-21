@@ -14,4 +14,7 @@ overrides `all`.
 - Only values that are safe to publish are committed. A secret is supplied at
   run time (`ANS-16`).
 
-The `edge/` directory holds the values for the edge hosts: `pull_trigger.yml`.
+The `all/` directory holds the values every pulled host shares: `pull_trigger.yml`
+has the remote and the signer allowlist, the one copy of the trust anchor. The
+`edge/` and `mx/` directories hold each group's playbook and playbook allowlist,
+in `pull_trigger.yml`.

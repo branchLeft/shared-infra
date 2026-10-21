@@ -5,15 +5,17 @@
 # The host's trigger runs this file on a signed checkout with the inventory
 # `localhost,`, which loads no group variables, and a playbook must target `all`
 # or `localhost` for that (pull_trigger README, limit f). So the values the roles
-# read are loaded here from the production group variables, and the one-time
-# bootstrap, which does use the inventory, loads the same file twice with the
-# same content. Run against more than one host this playbook would apply edge1's
+# read are loaded here from the production group variables (the shared trust
+# values in all/, then edge1's own playbook values in edge/), and the one-time
+# bootstrap, which does use the inventory, loads the same files, with the same
+# content. Run against more than one host this playbook would apply edge1's
 # values to every one, so the first play refuses any host but edge1 (or the
 # localhost the trigger names).
 - name: Bring edge1 under the pull
   hosts: all
   gather_facts: false
   vars_files:
+    - '{{ playbook_dir }}/../inventories/production/group_vars/all/pull_trigger.yml'
     - '{{ playbook_dir }}/../inventories/production/group_vars/edge/pull_trigger.yml'
   pre_tasks:
     - name: Refuse any host but edge1
