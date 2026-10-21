@@ -291,7 +291,8 @@ The retrieval is the run itself.
 | The socket directory mode changed                         | `verify`           | "The router's socket tree is not root's 0755 at the top and the router's 0700 below."                            |
 | The drain-flag directory's owner changed to root          | `verify`           | "The broker's state directory is not broker:broker 0750, or the drain-flag directory is not broker:broker 0755." |
 | The candidate written as a `Caddyfile`                    | `verify`           | "A Caddyfile exists, a slot directory exists, or the wrapper's lock directory exists."                           |
-| A slot directory made, as `reset` would                   | `verify`           | the same assertion                                                                                               |
+| The real wrapper's `reset` run by a task                  | `verify`           | the same assertion (the real wrapper leaves its lock directory)                                                  |
+| An eighth slot added to the role's slot table             | `converge`         | "The installed sudoers grant holds 50 rules; the slot table of 8 slots expects 57."                              |
 | The register directory made `0755` on the host            | `converge`         | "is not a directory owned by root with mode 0700."                                                               |
 | The wrapper installed group-writable                      | `converge`         | the integrity assertion on the installed programs                                                                |
 | One digit of a pin flipped                                | `converge`         | "did not match" at the download                                                                                  |
@@ -310,6 +311,10 @@ The retrieval is the run itself.
 - **The mode at the instant of writing** of a file is a property of Ansible's
   temporary file and atomic move, not of anything the test observes.
 - **A release directory is never removed.** Old releases stay.
+- **A run killed after a unit file is written and before the systemd reload** leaves
+  the new file unread by systemd. The next run finds nothing changed and does not
+  reload, so the file is read at the next reload from any source (another role, a
+  boot). Every file is written atomically, so none is ever half-written.
 - Python unit tests, if any are added under `roles/*/tests`, are not run by CI.
   The Molecule scenario carries the controls.
 - CI runs this scenario: the Ansible workflow runs the harness over every
