@@ -1,0 +1,1 @@
+restrict,port-forwarding,permitlisten="127.0.0.1:13306",permitopen="127.0.0.1:9104",from="198.51.100.7" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBcoXN2GaNOHJLh9wu2BxisYSAYOrh59cEfBj/B3HZLj db1-replica-tunnel

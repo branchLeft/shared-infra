@@ -1,0 +1,109 @@
+---
+# Reads the run-time inputs one half needs, from their root-only files. Each
+# caller names the files it wants in tunnel_account_wanted. Nothing here writes
+# a file, and no message or diff shows a value (ANS-16). A missing or unsafe
+# file fails the run and names its path; the path is a constant, not a value.
+#
+# Every stat of an input file asks for no checksum, no mime type and no
+# attributes. A result that fails an assert is printed whole by Ansible, so a
+# checksum of an address would be published with it, and a checksum of a
+# 32-bit address space is its value.
+
+# The inputs directory is only as safe as every directory above it: an owner of
+# a parent can rename the inputs directory and put its own in the place. Each
+# ancestor is looked at without following a link, on both halves, because both
+# read their inputs through this file.
+- name: Look at each directory above the inputs directory
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ tunnel_account_inputs_ancestors }}'
+  register: tunnel_account_ancestor_stats
+  check_mode: false
+
+- name: Refuse a directory above the inputs that is a link, not root's, or writable by others
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+      - item.stat.pw_name == 'root'
+      - not item.stat.wgrp
+      - not item.stat.woth
+    quiet: true
+    fail_msg: >-
+      A directory above the inputs directory must be a real directory owned by
+      root and not writable by its group or by others. The directory is
+      {{ item.item }}.
+  loop: '{{ tunnel_account_ancestor_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Look at the inputs directory
+  ansible.builtin.stat:
+    path: '{{ tunnel_account_inputs_dir }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: tunnel_account_inputs_dir_stat
+  check_mode: false
+
+- name: Refuse an inputs directory that is not a root-only directory
+  ansible.builtin.assert:
+    that:
+      - tunnel_account_inputs_dir_stat.stat.exists
+      - tunnel_account_inputs_dir_stat.stat.isdir
+      - tunnel_account_inputs_dir_stat.stat.pw_name == 'root'
+      - tunnel_account_inputs_dir_stat.stat.gr_name == 'root'
+      - tunnel_account_inputs_dir_stat.stat.mode == '0700'
+    quiet: true
+    fail_msg: >-
+      The inputs directory {{ tunnel_account_inputs_dir }} must exist, be owned
+      by root and group root, and have mode 0700. The operator places the run-time
+      inputs there once.
+
+- name: Look at each run-time input file
+  ansible.builtin.stat:
+    path: '{{ tunnel_account_inputs_dir }}/{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ tunnel_account_wanted }}'
+  register: tunnel_account_input_stats
+  check_mode: false
+
+- name: Refuse an input file that is missing, a link, or not root-only
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'root'
+      - item.stat.mode == '0600'
+    quiet: true
+    fail_msg: >-
+      A run-time input file is missing, is not a regular file, or is not owned by
+      root with mode 0600. Its path is {{ tunnel_account_inputs_dir }}/{{ item.item }}.
+  loop: '{{ tunnel_account_input_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Read the run-time inputs into memory for this run (no value is shown)
+  ansible.builtin.slurp:
+    src: '{{ tunnel_account_inputs_dir }}/{{ item }}'
+  loop: '{{ tunnel_account_wanted }}'
+  register: tunnel_account_input_raw
+  no_log: true
+  check_mode: false
+
+- name: Hold the inputs by name for this run
+  ansible.builtin.set_fact:
+    tunnel_account_in: >-
+      {{ dict(tunnel_account_wanted
+              | zip(tunnel_account_input_raw.results
+                    | map(attribute='content') | map('b64decode') | map('trim') | list)) }}
+  no_log: true

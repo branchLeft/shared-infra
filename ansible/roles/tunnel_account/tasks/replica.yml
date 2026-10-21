@@ -1,0 +1,219 @@
+---
+# The replica half. The sshd configuration is checked as a whole before it is
+# reloaded, and a failed check, or a failed read-back, puts the previous files
+# back and fails the run (control 7). Runs under --check: nothing changes there.
+# No message names a value (ANS-16).
+- name: Read the replica's run-time inputs
+  ansible.builtin.include_tasks: _inputs.yml
+  vars:
+    tunnel_account_wanted:
+      - from_address
+      - db1_public_key
+
+- name: Refuse a from address that is not a public IPv4 address (control 5)
+  ansible.builtin.assert:
+    that:
+      - tunnel_account_in.from_address is match(tunnel_account_ipv4_pattern)
+      - not (tunnel_account_in.from_address is match(tunnel_account_non_public_pattern))
+    quiet: true
+    fail_msg: The from address must be db1's public egress address, one public IPv4 address. It is not shown here.
+
+- name: Refuse a db1 public key that is not one ed25519 line
+  ansible.builtin.assert:
+    that:
+      - tunnel_account_in.db1_public_key is match(tunnel_account_ed25519_pattern)
+    quiet: true
+    fail_msg: The db1 public key must be one line, 'ssh-ed25519 <base64>' with an optional comment. It is not shown here.
+
+- name: Create the tunnel account on the replica host
+  ansible.builtin.include_tasks: _account.yml
+
+- name: Create the directory of the authorized keys
+  ansible.builtin.file:
+    path: '{{ tunnel_account_authorized_keys_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# The role writes one drop-in into the directory the OpenSSH package ships. A
+# host without it has no sshd to configure, and the role stops rather than make
+# a directory sshd does not read.
+- name: Look at the directory of the sshd drop-ins
+  ansible.builtin.stat:
+    path: '{{ tunnel_account_sshd_config_dir }}'
+  register: tunnel_account_dropin_dir_stat
+  check_mode: false
+
+- name: Refuse a host without the sshd drop-in directory
+  ansible.builtin.assert:
+    that:
+      - tunnel_account_dropin_dir_stat.stat.exists
+      - tunnel_account_dropin_dir_stat.stat.isdir
+    quiet: true
+    fail_msg: The sshd drop-in directory is missing. Is OpenSSH installed on this host?
+
+# No checksum: the authorized keys file holds the NAT address, and the checksum
+# of a file with one unknown address in it is that address (ANS-16).
+- name: Look for the current sshd drop-in and authorized keys
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop:
+    - '{{ tunnel_account_sshd_dropin }}'
+    - '{{ tunnel_account_authorized_keys_file }}'
+  register: tunnel_account_before
+  check_mode: false
+
+# Kept in memory, not on disk: a rollback writes these back byte for byte.
+- name: Keep the current sshd drop-in and authorized keys for a rollback
+  ansible.builtin.slurp:
+    src: '{{ item.item }}'
+  loop: '{{ tunnel_account_before.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+  when: item.stat.exists
+  register: tunnel_account_prev
+  no_log: true
+
+- name: Write the sshd drop-in and the authorized key, then check and reload sshd
+  block:
+    - name: Write the authorized key for db1 with from= and the restrictions
+      ansible.builtin.template:
+        src: authorized_keys.j2
+        dest: '{{ tunnel_account_authorized_keys_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      no_log: true
+      diff: false
+      register: tunnel_account_keys
+
+    - name: Write the sshd drop-in for the tunnel account
+      ansible.builtin.template:
+        src: sshd-drop-in.conf.j2
+        dest: '{{ tunnel_account_sshd_dropin }}'
+        owner: root
+        group: root
+        mode: '0644'
+      register: tunnel_account_dropin
+
+    # Checked as a whole, because sshd -t on a single drop-in cannot see the
+    # main configuration. Not run in check mode: nothing was written there.
+    - name: Check the whole sshd configuration before it is reloaded (control 7)
+      ansible.builtin.command:
+        argv: [sshd, -t]
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Reload sshd when the tunnel's files changed
+      ansible.builtin.systemd_service:
+        name: '{{ tunnel_account_sshd_service }}'
+        state: reloaded
+      when: not ansible_check_mode and (tunnel_account_keys.changed or tunnel_account_dropin.changed)
+
+    # Control 3: the settings sshd actually applies to the tunnel account, read
+    # back from sshd -T. Each is the one value the role wrote, so a second
+    # forward, a command or a wider authentication method fails the read-back.
+    # No Ansible module reports sshd's effective settings, so this reads them
+    # with the command module: argv form, read only, never reported as changed.
+    # The assert below is the narrow comparison ANS-9 allows in place of a module.
+    # The connection is the one db1 makes: its NAT address, which the key is
+    # accepted from. sshd keeps the first value it obtains, so a Match Address
+    # block above the drop-in that loosens a setting for that address is seen
+    # only when the address is given. The address is a private input, hence no_log.
+    - name: Read the effective sshd settings for the tunnel account
+      ansible.builtin.command:
+        argv:
+          [
+            sshd,
+            -T,
+            -C,
+            'user={{ tunnel_account_user }},host=localhost,addr={{ tunnel_account_in.from_address }}',
+          ]
+      register: tunnel_account_effective
+      changed_when: false
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Assert sshd applies the settings the role wrote (control 3)
+      ansible.builtin.assert:
+        that:
+          - >-
+            (tunnel_account_effective.stdout_lines | select('match', '^' ~ item.key ~ ' ') | list | first | default(''))
+            == (item.key ~ ' ' ~ item.value)
+        quiet: true
+        fail_msg: 'The effective sshd setting {{ item.key }} for the tunnel account is not the one the role wrote.'
+      loop: '{{ tunnel_account_expected_effective | dict2items }}'
+      loop_control:
+        label: '{{ item.key }}'
+      when: not ansible_check_mode
+
+    # Control 1: the key is accepted only from db1's NAT address. Read back from
+    # the file on disk, not from the template's input.
+    - name: Read the authorized key back
+      ansible.builtin.slurp:
+        src: '{{ tunnel_account_authorized_keys_file }}'
+      register: tunnel_account_keys_on_disk
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Assert the authorized key carries from= for the NAT address (control 1)
+      ansible.builtin.assert:
+        that:
+          - '((''from="'' ~ tunnel_account_in.from_address ~ ''"'') in (tunnel_account_keys_on_disk.content | b64decode))'
+        quiet: true
+        fail_msg: The authorized key on disk does not carry from= for the NAT address.
+      when: not ansible_check_mode
+
+  rescue:
+    - name: Put back the sshd drop-in that was there before
+      ansible.builtin.copy:
+        content: '{{ tunnel_account_prev.results[0].content | b64decode }}'
+        dest: '{{ tunnel_account_sshd_dropin }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when: tunnel_account_before.results[0].stat.exists
+      no_log: true
+      diff: false
+
+    - name: Remove the sshd drop-in when there was none before
+      ansible.builtin.file:
+        path: '{{ tunnel_account_sshd_dropin }}'
+        state: absent
+      when: not tunnel_account_before.results[0].stat.exists
+
+    - name: Put back the authorized key that was there before
+      ansible.builtin.copy:
+        content: '{{ tunnel_account_prev.results[1].content | b64decode }}'
+        dest: '{{ tunnel_account_authorized_keys_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when: tunnel_account_before.results[1].stat.exists
+      no_log: true
+      diff: false
+
+    - name: Remove the authorized key when there was none before
+      ansible.builtin.file:
+        path: '{{ tunnel_account_authorized_keys_file }}'
+        state: absent
+      when: not tunnel_account_before.results[1].stat.exists
+
+    # A reload that fails here (another file makes the whole configuration bad)
+    # must not hide the cause below: the running sshd keeps its old settings.
+    - name: Reload sshd with the previous files back
+      ansible.builtin.systemd_service:
+        name: '{{ tunnel_account_sshd_service }}'
+        state: reloaded
+      when: not ansible_check_mode
+      failed_when: false
+
+    - name: Fail with the cause, after the previous files are back
+      ansible.builtin.fail:
+        msg: >-
+          The tunnel's sshd configuration did not pass its check or read-back.
+          The previous sshd drop-in and authorized key are back in place.

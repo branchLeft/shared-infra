@@ -1,0 +1,16 @@
+# Installed by the broker_deploy role from broker_deploy_slot_names: edit the
+# variable, not this file.
+#
+# Every command below is a literal invocation, enumerated rather than matched:
+# a wildcard in a sudoers command matches spaces, so a pattern here would let an
+# extra argument reach the wrapper as root.
+
+{% for slot in broker_deploy_slot_names %}
+{{ broker_deploy_user }} ALL=(root) NOPASSWD: {{ broker_deploy_wrapper_path }} {{ slot }} reset
+{% for colour in ['a', 'b'] %}
+{% for verb in ['start', 'stop', 'email-batches'] %}
+{{ broker_deploy_user }} ALL=(root) NOPASSWD: {{ broker_deploy_wrapper_path }} {{ slot }} {{ colour }} {{ verb }}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{{ broker_deploy_user }} ALL=(root) NOPASSWD: {{ broker_deploy_wrapper_path }} load {{ broker_deploy_image_stage_dir }}/image.tar

@@ -1,0 +1,46 @@
+---
+# The tunnel account, shared by db1_key and replica: one home for the account
+# and its no-shell check (control 2). It reads no input.
+- name: Look up the tunnel account
+  ansible.builtin.command:
+    argv: [getent, passwd, '{{ tunnel_account_user }}']
+  register: tunnel_account_passwd
+  changed_when: false
+  failed_when: tunnel_account_passwd.rc not in [0, 2]
+  check_mode: false
+
+# A shell the role did not give is never changed silently: the role refuses,
+# and an operator fixes the account by hand.
+- name: Refuse an existing tunnel account that has a login shell
+  ansible.builtin.assert:
+    that:
+      - tunnel_account_passwd.rc == 2 or (tunnel_account_passwd.stdout.split(':') | last) == tunnel_account_nologin
+    quiet: true
+    fail_msg: >-
+      The tunnel account already exists with a login shell. The role does not
+      change an existing account's shell; fix the account by hand first.
+
+- name: Create the tunnel account with no login shell
+  ansible.builtin.user:
+    name: '{{ tunnel_account_user }}'
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: '{{ tunnel_account_nologin }}'
+
+# Read back from the passwd database, not from the module's own result.
+- name: Read the tunnel account's shell back
+  ansible.builtin.command:
+    argv: [getent, passwd, '{{ tunnel_account_user }}']
+  register: tunnel_account_passwd_after
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Assert the tunnel account has no login shell (control 2)
+  ansible.builtin.assert:
+    that:
+      - (tunnel_account_passwd_after.stdout.split(':') | last) == tunnel_account_nologin
+    quiet: true
+    fail_msg: The tunnel account does not have the no-login shell.
+  when: not ansible_check_mode

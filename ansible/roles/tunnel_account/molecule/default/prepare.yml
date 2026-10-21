@@ -1,0 +1,72 @@
+---
+# Test scaffolding, not role tasks. The pinned test image has no OpenSSH server,
+# so this installs a stand-in sshd and a stand-in ssh.service (see
+# files/sshd-stub.sh). Then it places the run-time inputs the way the operator
+# does: one root-only file each, in the root-only inputs directory.
+- name: Prepare
+  hosts: all
+  gather_facts: true
+  vars_files:
+    - vars/test.yml
+  tasks:
+    - name: Install the stand-in sshd the role checks and reads back
+      ansible.builtin.copy:
+        src: sshd-stub.sh
+        dest: /usr/local/sbin/sshd
+        owner: root
+        group: root
+        mode: '0755'
+
+    # The OpenSSH package ships this directory; the role refuses a host without it.
+    - name: Create the sshd drop-in directory the OpenSSH package would ship
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install the stand-in ssh.service the role reloads
+      ansible.builtin.copy:
+        src: ssh.service
+        dest: /etc/systemd/system/ssh.service
+        owner: root
+        group: root
+        mode: '0644'
+      register: tunnel_account_prepare_ssh_unit
+
+    - name: Reload systemd so the stand-in unit is known
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Start the stand-in ssh.service
+      ansible.builtin.systemd_service:
+        name: ssh
+        state: started
+        enabled: true
+
+    - name: Create the root-only inputs directory
+      ansible.builtin.file:
+        path: /etc/branchleft/db-tunnel/inputs
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    # db1's subnet is the container's own /24: the prefix of its first address.
+    - name: Compute the subnet prefix of this container's address
+      ansible.builtin.set_fact:
+        tunnel_account_test_subnet_prefix: "{{ (ansible_facts['default_ipv4']['address'].split('.')[0:3] | join('.')) ~ '.' }}"
+      no_log: true
+
+    - name: Place the run-time inputs as the operator does (root-only, mode 0600)
+      ansible.builtin.copy:
+        content: "{{ item.value }}\n"
+        dest: '/etc/branchleft/db-tunnel/inputs/{{ item.key }}'
+        owner: root
+        group: root
+        mode: '0600'
+      loop: '{{ tunnel_account_test_inputs | combine({"db1_subnet_prefix": tunnel_account_test_subnet_prefix}) | dict2items }}'
+      loop_control:
+        label: '{{ item.key }}'
+      no_log: true
