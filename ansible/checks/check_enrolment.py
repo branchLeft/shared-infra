@@ -103,7 +103,8 @@ EXPECTED_COMMON = {
 }
 
 
-class _AnyTagLoader(yaml.SafeLoader):
+# PyYAML ships no type stubs and the lock has no types-PyYAML, so mypy sees SafeLoader as Any.
+class _AnyTagLoader(yaml.SafeLoader):  # type: ignore[misc]
     """SafeLoader with every tag accepted. Ansible's loader takes !unsafe and !vault, and a
     list that carries such a value still runs as plays, so the README play-list parse must
     not refuse to read one. Only the README play-list check uses it."""
@@ -130,7 +131,9 @@ def _load(
     if not path.is_file():
         return None
     try:
-        doc: object = yaml.load(path.read_text(encoding="utf-8"), Loader=loader)
+        # The loader is always a SafeLoader subclass whose only addition turns any tag into a
+        # plain list, dict or string, so no Python object is built here.
+        doc: object = yaml.load(path.read_text(encoding="utf-8"), Loader=loader)  # noqa: S506
     except (OSError, ValueError, yaml.YAMLError) as error:
         findings.append(f"{label}: cannot be read as YAML: {error}")
         return None
