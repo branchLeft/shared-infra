@@ -200,6 +200,56 @@ class CallerTests(unittest.TestCase):
             _, findings = check_delivery.environments_used(workflows, "caller.yml")
         self.assertTrue(any("by expression" in finding for finding in findings), findings)
 
+    def test_a_job_level_environment_expression_is_a_finding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workflows = Path(directory)
+            (workflows / "other.yml").write_text(
+                "jobs:\n  apply:\n    runs-on: ubuntu-latest\n"
+                "    environment: ${{ matrix.target }}\n",
+                encoding="utf-8",
+            )
+            _, findings = check_delivery.environments_used(workflows, "caller.yml")
+        self.assertTrue(any("by expression" in finding for finding in findings), findings)
+
+    def test_a_mapping_environment_expression_is_a_finding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workflows = Path(directory)
+            (workflows / "other.yml").write_text(
+                "jobs:\n  apply:\n    runs-on: ubuntu-latest\n    environment:\n"
+                "      name: ${{ matrix.target }}\n      url: https://example.org\n",
+                encoding="utf-8",
+            )
+            _, findings = check_delivery.environments_used(workflows, "caller.yml")
+        self.assertTrue(any("by expression" in finding for finding in findings), findings)
+
+    def test_a_mapping_environment_name_is_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workflows = Path(directory)
+            (workflows / "other.yml").write_text(
+                "jobs:\n  apply:\n    runs-on: ubuntu-latest\n    environment:\n"
+                "      name: staging\n      url: https://example.org\n",
+                encoding="utf-8",
+            )
+            names, findings = check_delivery.environments_used(workflows, "caller.yml")
+        self.assertEqual([], findings)
+        self.assertIn("staging", names)
+
+    def test_environment_names_are_compared_without_regard_to_case(self) -> None:
+        # GitHub answers /environments/Production with the environment named production, so a
+        # workflow that spells the apply environment another way still shares its approval.
+        with tempfile.TemporaryDirectory() as directory:
+            workflows = Path(directory)
+            (workflows / "other.yml").write_text(
+                "jobs:\n  apply:\n    runs-on: ubuntu-latest\n    environment: Ansible-Hosts\n",
+                encoding="utf-8",
+            )
+            names, findings = check_delivery.environments_used(workflows, "caller.yml")
+        self.assertEqual([], findings)
+        document = committed()
+        self.assert_names(
+            check_delivery.caller_findings(document, names), "so one approval could release both"
+        )
+
     def test_a_write_permission_is_named(self) -> None:
         for key, value in (("contents", "write"), ("actions", "write"), ("id-token", "write")):
 

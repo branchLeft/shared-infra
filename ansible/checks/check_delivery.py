@@ -106,7 +106,10 @@ def input_findings(inputs: object, other_environments: frozenset[str]) -> list[s
     environment = given.get("environment")
     if environment != ENVIRONMENT:
         findings.append(f"with.environment must be {ENVIRONMENT}, got {environment!r}")
-    if isinstance(environment, str) and environment in other_environments:
+    # GitHub reads an environment name without regard to case, so Ansible-Hosts and
+    # ansible-hosts are one environment and one approval.
+    folded = {name.casefold() for name in other_environments}
+    if isinstance(environment, str) and environment.casefold() in folded:
         findings.append(
             f"with.environment {environment} is also an environment of another workflow here, "
             "so one approval could release both an Ansible apply and a Pulumi apply"
@@ -192,8 +195,12 @@ def environments_used(workflows: Path, skip: str) -> tuple[frozenset[str], list[
     """Return the environments every other workflow's jobs run in, and what could not be read.
 
     A job names its environment either as a job key or, when it calls a reusable workflow,
-    as an input in ``with``. A name that is an expression (``${{``) cannot be read, so it is
-    a finding and never a silent pass.
+    as an input in ``with``, and either may be a string or a mapping with a ``name``. A name
+    that is an expression (``${{``) cannot be read, so it is a finding and never a silent pass.
+
+    Named limit: only the workflows in this directory are read. A job that calls a remote
+    reusable workflow (``uses: org/repo/...@tag``) may run in an environment named inside
+    that workflow, and nothing here can see it.
     """
     names: set[str] = set()
     findings: list[str] = []
