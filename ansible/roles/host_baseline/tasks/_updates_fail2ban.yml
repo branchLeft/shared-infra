@@ -1,0 +1,78 @@
+---
+# Ensures unattended-upgrades and fail2ban are installed, enabled and
+# configured from files this repository owns rather than the distro default.
+
+# The index is refreshed and the packages installed only when one of them is
+# missing, as the script did. A host that has them makes no apt call.
+- name: Refresh the apt index and install the update and ban-list packages that are missing
+  ansible.builtin.apt:
+    name: '{{ host_baseline_update_packages }}'
+    state: present
+    update_cache: true
+  when: host_baseline_update_packages | ansible.builtin.difference(ansible_facts['packages'] | ansible.builtin.list) | ansible.builtin.length > 0
+
+- name: Turn on the daily package index refresh and unattended upgrade
+  ansible.builtin.copy:
+    src: 20auto-upgrades
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: '0644'
+
+# Skipped in check mode when the package is not installed yet (ANS-10): check
+# mode installs nothing, so the unit does not exist and the module would fail.
+- name: Enable and start unattended-upgrades
+  ansible.builtin.systemd_service:
+    name: unattended-upgrades
+    enabled: true
+    state: started
+  when: not ansible_check_mode or 'unattended-upgrades' in ansible_facts['packages']
+
+# Debian's stock origins list covers the Debian security suites and nothing
+# else, so the container runtime, installed from Docker's own apt repository,
+# would receive no unattended security updates at all. Every tenant's isolation
+# rests on that runtime, so a container-escape fix in runc or containerd
+# reaching the host is not optional.
+#
+# An APT configuration block appends to the list it names rather than replacing
+# it, which is what is wanted here: Debian's own entries stay, and Docker's
+# origin is added alongside them. The file sorts after 50unattended-upgrades so
+# the default list exists by the time this is read.
+#
+# Consequence worth knowing: an unattended docker-ce upgrade restarts the
+# daemon. Containers carry restart: unless-stopped and come back, but a stack
+# mid-request loses it.
+#
+# A malformed drop-in makes every apt invocation fail, including the ones that
+# would fix it, so validate parses the new file before it replaces anything.
+# The script wrote the file first and removed it when apt rejected it; the end
+# state is the same, and a rejected file never exists on the host.
+- name: Add Docker's origin to the unattended-upgrades origins
+  ansible.builtin.copy:
+    src: 51branchleft-unattended-origins
+    dest: /etc/apt/apt.conf.d/51branchleft-unattended-origins
+    owner: root
+    group: root
+    mode: '0644'
+    validate: /usr/bin/apt-config -c %s dump
+
+# SSH is the only service reachable on the public interface of a non-edge host,
+# and on the edge the HTTP-facing protection is CrowdSec's rather than
+# fail2ban's. So this jail is deliberately the only one.
+- name: Configure the sshd jail
+  ansible.builtin.copy:
+    src: jail.local
+    dest: /etc/fail2ban/jail.local
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload fail2ban
+
+# Skipped in check mode when the package is not installed yet, for the reason
+# given at unattended-upgrades above (ANS-10).
+- name: Enable and start fail2ban
+  ansible.builtin.systemd_service:
+    name: fail2ban
+    enabled: true
+    state: started
+  when: not ansible_check_mode or 'fail2ban' in ansible_facts['packages']

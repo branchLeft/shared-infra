@@ -1,0 +1,22 @@
+---
+# Test scaffolding. Puts the public documentation address on the uplink, or
+# takes it off, according to uplink_public. Without it the NAT reconciler
+# refuses to run (its default route would leave through an interface that holds
+# no public address), which is how the scenario makes a restart fail.
+- name: Read the default route
+  ansible.builtin.include_tasks: read_uplink.yml
+
+- name: Put the public address on the uplink
+  ansible.builtin.command:
+    argv: [ip, addr, replace, 203.0.113.11/32, dev, '{{ egress_nat_uplink_dev }}']
+  changed_when: true
+  when: uplink_public | bool
+
+# Exit status 2 is "no such address", which is the state wanted.
+- name: Take the public address off the uplink
+  ansible.builtin.command:
+    argv: [ip, addr, del, 203.0.113.11/32, dev, '{{ egress_nat_uplink_dev }}']
+  register: egress_nat_uplink_del
+  changed_when: egress_nat_uplink_del.rc == 0
+  failed_when: egress_nat_uplink_del.rc not in [0, 2]
+  when: not (uplink_public | bool)

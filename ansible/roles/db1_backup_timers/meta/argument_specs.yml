@@ -1,0 +1,13 @@
+---
+argument_specs:
+  main:
+    short_description: Deliver the db1 backup programs and enable their three timers
+    description: >-
+      Copies the backup programs and their modules into the provision and recovery
+      directories under /opt/branchleft/db, owned by root with mode 0644, copies the six
+      unit files of the dump, prune and binlog-ship services and timers into
+      /etc/systemd/system, reloads systemd when a unit changed, and enables and starts
+      the three timers. It writes no secret, renders no template and reads no
+      environment file: /etc/branchleft/db.env is the host's own and is not managed here.
+    author: branchLeft
+    options: {}
