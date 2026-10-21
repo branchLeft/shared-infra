@@ -4,6 +4,13 @@
 # that directory. The role runs it from a private copy, so the stray module is
 # never imported: the program does its work and the marker the stray module would
 # make does not exist. (A tenant needs the program here, so it does run.)
+#
+# The case starts from the configured host and removes what an earlier failed run
+# of it left (the stray module and its marker), so one failure does not hide the
+# result of the next run.
+- name: Start from the configured host
+  ansible.builtin.include_tasks: restore.yml
+
 - name: Read the configured database
   ansible.builtin.slurp:
     src: '{{ db1_grants_scenario_baseline_path }}'
