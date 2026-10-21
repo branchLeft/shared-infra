@@ -267,7 +267,7 @@ also needs `ssh-keygen`, which the test uses to make its throwaway keys.
 
 ```text
 python3 -m venv .venv
-.venv/bin/pip install -r ansible/requirements.txt
+# Install the lock with the one recipe: ansible/README.md, "Install, and install with no network".
 .venv/bin/python ansible/harness/run_harness.py ansible/patterns/sudoers_and_keys
 ```
 

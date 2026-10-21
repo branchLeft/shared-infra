@@ -1,31 +1,8 @@
 #!/usr/bin/python3 -I
-"""Install the pinned, hash-locked Ansible environment, in one place.
+"""Install the pinned, hash-locked Ansible environment, shared by both callers.
 
-Two callers run this one program. The ``ansible_runtime`` role runs it on a host
-that is already under the pull, and the first-boot document of a new host runs
-it before any Ansible exists there. Both therefore get the same checks and the
-same steps, in the same order:
-
-1. read the lock without following a link, and refuse it unless its SHA-256
-   is the one the caller was given;
-2. refuse a lock in which any requirement has no SHA-256 hash, or which carries
-   anything but pinned, hashed requirements, or which pip could read in an
-   encoding other than UTF-8;
-3. name the environment by a fingerprint of the lock text;
-4. build ``venv-<fingerprint>`` and install the lock into it with hash checking
-   required and wheels only (``--only-binary=:all:``);
-5. write the marker that the install finished, then, only when asked, move the
-   ``ansible-playbook`` link.
-
-A failure at any step leaves the link where it was. It never installs an engine
-that the lock does not name. Every file pip installs is a wheel whose hash the lock lists:
-pip is told to build nothing, because pip does not hash-check the build dependencies of a
-source build, so a package with no wheel for the host's interpreter fails the install
-(the host stays un-enrolled) and is never built.
-
-The paths and the fingerprint are the ones the role has always used, so the
-role's environments do not change.
-"""
+It refuses a lock whose SHA-256 is not the one given, or with any unhashed requirement.
+Wheels only: a requirement with no wheel fails the install and is never built."""
 
 import argparse
 import codecs
@@ -52,26 +29,10 @@ SHA256_HEX: Final = re.compile(r"[0-9a-f]{64}")
 FINGERPRINT_PATTERN: Final = re.compile(r"[0-9a-f]{16}")
 MAX_LOCK_BYTES: Final = 4_000_000
 
-# One pinned requirement: a name, optional extras, an exact version, an optional
-# environment marker, then one or more hashes and nothing else on the line. The separators are
-# the space character and nothing wider, because pip splits a line into its requirement and its
-# options on " " alone (break_args_options in pip's req_file.py): a tab before "--hash" would
-# leave the hash inside the requirement as pip reads it. The marker is
-# written only from a positive set of characters (letters, digits, "_", ".", quotes, space,
-# "=", "!", "<", ">", "(", ")"), the set MARKER_CHARS names here, and check_pins reads it from
-# this file. That
-# set holds no "-" and no ";" at all, so no option such as --index-url or -i can sit in the
-# marker, however it is spaced or nested. It is a set to allow, not a list of forms to refuse.
-#
-# Why a pattern and not a maintained parser: this runs under the host's own interpreter with -I
-# before any package is installed, so only the standard library exists (the maintained parser,
-# packaging.requirements, is a package, and pip's vendored copy is not a supported import).
-# It is also not the control. The lock's SHA-256 comes from a record built from reviewed main,
-# and pip's own --require-hashes (always passed, below) is the maintained refusal of an unpinned
-# or unhashed requirement and checks each requirement's downloaded file against its hash. That
-# covers every installed file only because --only-binary=:all: is passed with it: pip does not
-# hash-check the build dependencies of a source build, and with wheels only there is no build.
-# This pattern only refuses early, with a reason of this program's own, and leaves nothing behind.
+# One pinned requirement: name, extras, exact version, optional marker, then hashes. Separators
+# are the space alone, as pip splits options on " ". The marker is a positive character set
+# (MARKER_CHARS, with no "-" or ";"), so no option such as --index-url can sit in it.
+# The pattern only refuses early; pip's --require-hashes with --only-binary is the real control.
 MARKER_CHARS: Final = r"[A-Za-z0-9_.'\" =!<>()]"
 REQUIREMENT: Final = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]+\])?"
@@ -215,23 +176,10 @@ def fingerprint(lock: bytes) -> str:
 
 
 def logical_lines(text: str) -> list[tuple[int, str]]:
-    """Return the lock's requirement lines as pip joins them, each with the line it starts on.
+    """Return the lock's requirement lines as pip joins them, each with its start line.
 
-    The joining follows pip's join_lines (pip's req_file.py) rule for rule, so that a line pip
-    reads as an option is an option here too: a line continues the one before when its raw text
-    ends in a backslash, tested before any strip, so a space after the backslash ends it; and a
-    comment-only line ends a continuation.
-
-    One rule is deliberately stricter than pip. After joining, pip strips a trailing comment
-    from the line (ignore_comments); this does not, so a comment that sits on a requirement
-    leaves a "#" in the line, which is not a requirement and is refused where pip would skip it.
-    That fails closed, and the repository's lock has no such line. A comment-only line that
-    starts a line (not a continuation) is dropped, as pip drops it.
-
-    The function is the lock reader for both callers: ansible/checks/check_pins.py loads it from
-    this file. It reads text, so the caller first refuses an encoding pip could choose
-    differently (check_lock_encoding).
-    """
+    Joins follow pip's join_lines rule. One rule is stricter: a "#" left by a trailing comment
+    is refused, not stripped, so the lock reader fails closed."""
     lines: list[tuple[int, str]] = []
     pending: str | None = None
     start = 0
@@ -255,13 +203,9 @@ def logical_lines(text: str) -> list[tuple[int, str]]:
 
 
 def check_lock_encoding(lock: bytes) -> None:
-    """Refuse a lock that pip could read in an encoding other than UTF-8.
+    """Refuse a lock pip could read in an encoding other than UTF-8.
 
-    pip chooses the encoding of a requirements file from a byte-order mark, then from a
-    "coding:" declaration in a comment on one of the first two lines (_decode_req_file in pip's
-    req_file.py), and the rest of this program reads UTF-8. A lock with either could show this
-    program a comment and pip an option, as a "# -*- coding: utf-7 -*-" lock does. Both are
-    refused whatever encoding they name; the repository's lock has neither.
+    A byte-order mark or a "coding:" declaration would change how pip reads the lock.
 
     Raises:
         Refusal: The lock starts with a byte-order mark or declares an encoding.
@@ -276,14 +220,10 @@ def check_lock_encoding(lock: bytes) -> None:
 def check_lock_is_hashed(lock: bytes) -> None:
     """Refuse a lock unless every line is a pinned requirement with hashes.
 
-    pip's own hash checking is the control that matters, and it stays on. This
-    refuses first, before anything is made, so that a lock with no hash at all,
-    or with an option that could point pip somewhere else, fails with a reason
-    of this program's own and leaves nothing behind.
+    pip's own hash checking stays the control; this refuses first, leaving nothing behind.
 
     Raises:
-        Refusal: The lock is not plain UTF-8, names no requirement, or has a line that is
-            not hashed and pinned.
+        Refusal: The lock is not UTF-8 text, names no requirement, or has an unhashed line.
     """
     check_lock_encoding(lock)
     try:

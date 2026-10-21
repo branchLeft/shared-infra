@@ -5,16 +5,8 @@ import { bootstrap, enrolment } from './enrolment.fixtures';
 import { Host } from './host';
 
 /**
- * `Host` has three branches whose failure modes are all silent at apply time:
- * the role picks the firewall rule set, `publicNetworking` decides whether two
- * primary IPs exist, and the firewall is declared *on the server* rather than
- * attached afterwards. A wrong branch produces a host that boots, answers SSH,
- * and is exposed — nothing errors.
- *
- * `setMocks` runs in `beforeAll`, which is early enough: `host.ts` constructs
- * nothing at module scope, so the mocks only have to be in place before the
- * first `new Host(...)`. `estate.ts` and `network.ts` are the modules that do
- * build resources on import, and neither is imported here.
+ * `Host` has three branches that fail silently at apply time: the firewall rule set,
+ * the primary IPs of `publicNetworking`, and the firewall declared on the server.
  */
 
 type Created = { type: string; name: string; inputs: Record<string, unknown> };

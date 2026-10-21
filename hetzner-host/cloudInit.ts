@@ -3,26 +3,9 @@ import * as pulumi from '@pulumi/pulumi';
 import fixed from './pullBootstrapFixed.json';
 
 /**
- * The first-boot user-data every platform host is created with.
- *
- * **Cloud-init runs once, on first boot, and never again.** Nothing that has
- * to stay true over the host's life belongs here — it belongs in
- * `provision/`, whose scripts are idempotent and re-runnable. This file's
- * only job is to make the host reachable by the two identities that do the
- * rest: the platform owner's key on `root`, and the CI deploy key on
- * `deploy`.
- *
- * One deliberate exception: a private-only host's `bootcmd` entries (see
- * `PRIVATE_ONLY_BOOTCMD` below) re-run on every boot, not once. `bootcmd`
- * is the only cloud-init stage early enough to matter here, and re-running
- * is also the point of putting them there — it covers the window between
- * first boot and `provision/05-configure-host-egress.sh` (and the systemd
- * unit it installs) actually taking over the same job permanently. Both
- * commands are idempotent, so the repetition costs nothing once that unit
- * exists.
- *
- * The image is Debian, whose cloud image ships cloud-init with the standard
- * modules; nothing here depends on a Hetzner-specific datasource.
+ * The first-boot user-data every platform host is created with. It runs once, so it only
+ * makes the host reachable (`root` owner key, `deploy` CI key); `provision/` is re-runnable.
+ * `PRIVATE_ONLY_BOOTCMD` is the one exception: its commands re-run on every boot.
  */
 export interface CloudInitArgs {
   /** Becomes both the system hostname and the name used in
@@ -38,16 +21,8 @@ export interface CloudInitArgs {
    * `Enrolment`). */
   deployPublicKey?: pulumi.Input<string>;
   /**
-   * Whether this host has no public interface at all. A plain boolean, not
-   * an `Input`: it comes from `HostArgs.publicNetworking`, itself a plain
-   * boolean because the networking shape is a creation-time decision, never
-   * a stack output.
-   *
-   * A private-only host's only route off the subnet is the network's own
-   * gateway, and Hetzner's DHCP delivers the subnet route but never a
-   * default (`hetzner/egress.ts`). Left false, `package_update` below is the
-   * first thing on such a host with nowhere to reach, and every apt mirror
-   * fails "temporary failure resolving" for the rest of first boot.
+   * Whether this host has no public interface. A plain boolean: the networking shape is
+   * fixed at creation. Such a host gets no default route from DHCP (see `hetzner/egress.ts`).
    */
   privateOnly: boolean;
   /**
@@ -108,32 +83,16 @@ export interface Enrolment {
 }
 
 /**
- * Options on the **host-level** deploy key — the one this document installs at
- * first boot. `restrict` is the whole-set deny (no agent forwarding, no port
- * forwarding, no X11, no pty, no user-rc), with nothing added back.
- *
- * Deliberately no forced command here, and that is now a scoping decision
- * rather than a deferral. This key is the platform's own and names the stack it
- * deploys, so it reaches every stack on the host; per-stack keys carry
- * `restrict` **plus** a `command=` naming one stack, and are added after first
- * boot by `hetzner/provision/provision_deploy_slot.py`, which is the only
- * writer of `authorized_keys` thereafter. Cloud-init cannot install them: it
- * runs once, and slots are granted per tenant over the host's life.
+ * Options on the host-level deploy key: `restrict`, the whole-set deny, with nothing added
+ * back. No forced command here, by design: this key reaches every stack on the host, and
+ * per-stack keys (with a `command=`) are added after first boot by provision_deploy_slot.py.
  */
 const AUTHORIZED_KEY_OPTIONS = 'restrict';
 
 /**
- * `deploy` gets no shell privileges and no membership of the `docker` group.
- * Docker group membership is root-equivalent — the socket will build a
- * container that mounts the host filesystem — so a deploy user placed in it
- * is unrestricted however carefully its sudoers entry is written.
- *
- * Instead the one privileged action CI needs runs through a single root-owned
- * wrapper, and the sudoers entry names that binary with **no wildcard**. A
- * wildcard in a sudoers command matches spaces, which turns any
- * `systemctl restart something@*` style entry into arbitrary argument
- * injection. Argument validation is the wrapper's job, where it can be
- * tested, not sudoers'.
+ * `deploy` gets no shell and no `docker` group (root-equivalent). Its one privileged action
+ * is a root-owned wrapper named with **no wildcard**, since sudoers wildcards match spaces.
+ * Argument validation is the wrapper's job.
  */
 const DEPLOY_SUDOERS = 'deploy ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-deploy';
 
@@ -151,17 +110,8 @@ const OPENSSH_PUBLIC_KEY =
   /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/]+={0,3}( [^\n\r]*)?$/;
 
 /**
- * Rejects anything that is not a single-line OpenSSH public key.
- *
- * This is the only validation between stack config and a document that grants
- * `deploy` an `authorized_keys` entry and a sudoers rule, and a newline in the
- * value appends arbitrary cloud-config to it — a second `users:` entry, a
- * `runcmd`, a `write_files` overwriting the sudoers drop-in. Three properties
- * make that worth failing closed over rather than trusting the input:
- * cloud-init runs once and cannot be re-run, `userData` is create-time-only at
- * the provider, and it is in the component's `ignoreChanges`, so an injected
- * document is permanent and absent from every later diff.
- *
+ * Rejects anything that is not a single-line OpenSSH public key. A newline would append
+ * arbitrary cloud-config to user-data, which is never re-applied, so this fails closed.
  * Throwing here fails the preview, before anything is created.
  */
 export function assertDeployPublicKey(key: string): string {
@@ -175,34 +125,8 @@ export function assertDeployPublicKey(key: string): string {
 }
 
 /**
- * `bootcmd` entries that give a private-only host a working default route
- * and resolver before `package_update`/`packages` below installs anything.
- *
- * This has to be `bootcmd`, not `runcmd`, and the distinction is not
- * cosmetic. `runcmd`'s own module only *writes* the command list to a script
- * on disk during cloud-init's config stage; that script is not actually
- * *executed* until the `scripts-user` module, which sits near the end of the
- * later final stage -- and `package-update-upgrade-install` (the module
- * behind `package_update`/`packages`) is at the *start* of that same final
- * stage. A `runcmd` entry here would therefore still run after package
- * installation has already failed, which is the exact bug this block exists
- * to fix. `bootcmd` is a separate, earlier module in cloud-init's very first
- * (init) stage, which precedes the config stage entirely -- config, in turn,
- * precedes final -- so this is the one placement that actually lands ahead
- * of `package_update`.
- *
- * The trade-off named at the top of this file: `bootcmd` re-runs on every
- * boot, not once, which is why both commands below are written to be safe
- * to repeat (`ip route replace`, and a plain overwrite-and-`resolvconf -u`
- * with no compare-first check, since bootcmd has no equivalent of a
- * provisioning log to skip redundant work against).
- *
- * Exec form is avoided here (unlike the plain commands below) because the
- * gateway has to be derived from the routing table, which needs a shell.
- * Every string literal in the embedded awk/shell is double-quoted rather
- * than single-quoted so that wrapping the whole command in a YAML
- * double-quoted scalar needs no nested-quote gymnastics beyond escaping
- * those doubles for YAML itself.
+ * Must be `bootcmd`, not `runcmd` (which runs after `package_update`). It re-runs each
+ * boot, so both commands are repeat-safe. Strings are double-quoted for YAML nesting.
  */
 const PRIVATE_ONLY_BOOTCMD = `
 bootcmd:
@@ -257,16 +181,9 @@ const HARDENING_ENTRY = `  # Duplicated by provision/00-harden-ssh.sh on purpose
 const BASE_PACKAGES = ['ca-certificates', 'curl', 'gnupg'] as const;
 
 /**
- * What an enrolled host needs on it before the pull can run: `git`, `gpg` and
- * `gpgconf` and `openssh-client` for the pull program (the `pull_trigger_packages`
- * of that role), and `python3` and `python3-venv` for the Ansible install (the
- * `ansible_runtime_packages` of that role). `curl` and `ca-certificates` are in the
- * base list. `ansible/tools/test_pull_bootstrap.py` holds this list equal to the
- * two roles' lists, so a package added to a role fails there until it is added
- * here.
- *
- * The engine itself is never in this list: it is installed by the pinned,
- * hash-checked program, and by nothing that resolves its own version.
+ * Packages an enrolled host needs before the pull runs. `ansible/tools/test_pull_bootstrap.py`
+ * holds this list equal to the two roles' lists. The engine is never here: the pinned,
+ * hash-checked program installs it.
  */
 export const ENROLMENT_PACKAGES = [
   'git',
@@ -432,26 +349,9 @@ function pgpPacketTags(bytes: Buffer): number[] {
 }
 
 /**
- * Refuses anything but an armoured OpenPGP **public** key block.
- *
- * The signer block ends up in user-data, which is readable by anything on the
- * host and by whoever can read the Hetzner project. The checks are an allowlist
- * and not a scan for the word PRIVATE: exactly one public header and one public
- * footer, nothing else that looks like an armour line, a first packet that is a
- * public key (tag 6), and then every packet of the data, walked header by header,
- * of a type that a public key is made of (public key, public subkey, user id,
- * user attribute, signature). A secret key (tag 5) or a secret subkey (tag 7)
- * anywhere in the data, after a public key or not, does not pass.
- *
- * Why a walker and not a maintained OpenPGP library: this package's only runtime
- * dependency is Pulumi itself, and a library (openpgp.js) would put a large parser and a
- * lock change on the path of a production Pulumi program. `gpg --show-keys` is not an option here: this
- * runs inside the Pulumi program, where a subprocess and a gpg binary cannot be assumed.
- * The walker reads only packet headers and lengths, accepts a short allowlist, and
- * refuses everything it cannot account for. It is the only check on the block today. The
- * key comes from the reviewed group variables on main, so a publish-time `gpg --show-keys`
- * over those variables, run by the Python tool, would be a maintained check ahead of it;
- * it is not built.
+ * Refuses anything but an armoured OpenPGP **public** key block. The block lands in user-data,
+ * so an allowlist of packets is checked: a secret key (tag 5 or 7) anywhere fails.
+ * The walker is the only check; a maintained OpenPGP library is not a dependency.
  */
 export function assertPgpPublicKeyBlock(block: string): string {
   const lines = block.endsWith('\n') ? block.slice(0, -1).split('\n') : block.split('\n');
@@ -630,24 +530,9 @@ function authorizedLine(key: string, mode: 'apply' | 'check', layout: EnrolmentL
 }
 
 /**
- * The shell script that brings a host under the pull. It is one `sh -c`
- * entry of `runcmd`, and it is the last one.
- *
- * Order matters and is the whole control. All three files are fetched and each
- * is checked against its recorded SHA-256 first; only then does the install
- * program run; after it has succeeded the state directories and the
- * configuration are put in place; the pull program is placed last of all, as
- * the final step before the done marker. A failure anywhere writes the step it
- * failed at to a marker file and stops.
- *
- * What a failure leaves depends on where it happened, and each state is safe:
- * before `install-engine` the host has nothing installed; at or after it the
- * host may have the `ansible-playbook` link, which is the hash-locked engine
- * and never another, and possibly the directories and the configuration, but
- * never the pull program unless every earlier step succeeded. The two
- * command-restricted keys name the pull program's path, so while it is absent
- * they run nothing, and the owner's keys are the only way in. There is no
- * fallback that installs an engine that is not hash-locked.
+ * The shell script that brings a host under the pull, and the last `runcmd` entry.
+ * Each file is checked against its SHA-256 first; the pull program is placed last, so
+ * until then the command-restricted keys run nothing. No step installs an unlocked engine.
  */
 export function renderEnrolmentScript(
   bootstrap: PullBootstrap,

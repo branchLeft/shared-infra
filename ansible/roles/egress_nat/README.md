@@ -145,7 +145,7 @@ From the repository root, with the tools installed as `ansible/README.md` descri
 
 ```text
 python3 -m venv .venv
-.venv/bin/pip install --require-virtualenv --require-hashes -r ansible/requirements.txt
+# Install the lock with the one recipe: ansible/README.md, "Install, and install with no network".
 .venv/bin/python ansible/harness/run_harness.py ansible/roles/egress_nat
 ```
 

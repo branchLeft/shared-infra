@@ -111,6 +111,19 @@ def sdist_reachable_lines(text: str) -> list[str]:
     ]
 
 
+LOCK_INSTALL = re.compile(r"\bpip\"? (?:install|download)\b.*requirements\.txt")
+
+
+def lock_installs(text: str) -> list[str]:
+    """Return the lines that install or download requirements.txt, with or without the hash flag."""
+    return [line.strip() for line in text.splitlines() if LOCK_INSTALL.search(line)]
+
+
+def readmes_outside_the_recipe() -> list[Path]:
+    """Return every README under ansible/ except the one that holds the install recipe."""
+    return [path for path in ANSIBLE.rglob("README.md") if path != README]
+
+
 def python_directories() -> set[str]:
     """Return the directories directly under ansible/ with a test_*.py file in them."""
     return {path.parent.name for path in ANSIBLE.glob("*/test_*.py")}
@@ -185,6 +198,23 @@ class WorkflowPythonStepsTest(unittest.TestCase):
 
     def test_every_readme_install_of_the_lock_is_wheels_only(self) -> None:
         self.assertEqual([], sdist_reachable_lines(README.read_text(encoding="utf-8")))
+
+    def test_every_other_readme_points_at_the_one_install_recipe(self) -> None:
+        # Every README under ansible/ is scanned, with or without the hash flag, so a copy of
+        # the install cannot sit outside the recipe and skip the wheels-only check above.
+        # The control: the scan reaches a role README, not only ansible/README.md.
+        scanned = readmes_outside_the_recipe()
+        self.assertIn(ANSIBLE / "roles" / "ansible_runtime" / "README.md", scanned)
+        for path in scanned:
+            with self.subTest(readme=str(path.relative_to(ROOT))):
+                self.assertEqual([], lock_installs(path.read_text(encoding="utf-8")))
+
+    def test_a_readme_install_of_the_lock_outside_the_recipe_is_found(self) -> None:
+        # The control of the test above: a bare install is found, and a comment that names the
+        # recipe is not, so the pointer each copy now carries passes.
+        bare = ".venv/bin/pip install -r ansible/requirements.txt"
+        pointer = "# Install the lock with the one recipe: ansible/README.md"
+        self.assertEqual([bare], lock_installs("\n".join([bare, pointer])))
 
     def test_an_install_that_can_build_from_source_is_found(self) -> None:
         # The controls of the two tests above: each form of the command, with and without the
