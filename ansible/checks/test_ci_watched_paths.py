@@ -45,6 +45,26 @@ def outside_reads(text: str) -> set[str]:
     return found
 
 
+def outside_links(role: Path) -> set[str]:
+    """Return the paths outside ansible/ that a role's symlinks point at.
+
+    A role ships a file or directory by linking to it, so the link's target is read
+    whenever the role is applied.
+    """
+    found: set[str] = set()
+    for path in role.rglob("*"):
+        if not path.is_symlink():
+            continue
+        target = (path.parent / path.readlink()).resolve()
+        try:
+            relative = target.relative_to(ROOT)
+        except ValueError:
+            continue
+        if relative.parts and relative.parts[0] != "ansible":
+            found.add(relative.as_posix())
+    return found
+
+
 def role_text(role: Path, areas: tuple[str, ...]) -> str:
     """Return the text of every file in the named areas of a role."""
     chunks = []
@@ -70,6 +90,7 @@ def role_reads(roles: Path) -> dict[str, set[str]]:
         if not role.is_dir():
             continue
         tokens = outside_reads(role_text(role, ("molecule", "tests")))
+        tokens |= outside_links(role)
         everything = role_text(role, ("molecule", "tests", "vars", "defaults"))
         for token in list(tokens):
             directory = ROOT / token
@@ -119,6 +140,8 @@ class WatchedPathsTest(unittest.TestCase):
         self.assertIn("hetzner/monitoring/stack", self.reads)
         self.assertIn("hetzner/provision/branchleft-nat.service", self.reads)
         self.assertIn("hetzner/provision/branchleft-db-tunnel.service", self.reads)
+        # Read through a symlink in files/, not through a path in molecule/ or tests/.
+        self.assertIn("hetzner/control-plane/stack", self.reads)
 
     def test_a_read_with_no_entry_is_reported(self) -> None:
         watched = ["ansible", "hetzner/provision/branchleft_deploy.py"]

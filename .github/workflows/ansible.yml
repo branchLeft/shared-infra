@@ -98,12 +98,14 @@ jobs:
             hetzner/provision/branchleft-nat.service
             hetzner/provision/branchleft-db-tunnel.service
             hetzner/provision/node-exporter.service
+            hetzner/provision/fixtures/docker-apt-key.asc
             hetzner/monitoring/stack/
             hetzner/monitoring/systemd/monitoring.override.conf
             hetzner/monitoring/systemd/snds-collector.service
             hetzner/monitoring/systemd/snds-collector.timer
             hetzner/nextcloud1/stack/
             hetzner/nextcloud1/systemd/nextcloud1.override.conf
+            hetzner/control-plane/stack/
           )
           files=$(git diff --name-only "$base" HEAD -- "${watched[@]}")
           if [ -n "$files" ]; then
