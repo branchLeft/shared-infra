@@ -11,6 +11,11 @@
     verify_grant_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_grant_host/defaults/main.yml') | from_yaml }}"
     verify_grant_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_grant_host/vars/main.yml') | from_yaml }}"
     verify_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') | from_yaml }}"
+    # The playbook that applies this role runs its own tasks on the host (its
+    # pre_tasks), so the module, stat and text checks read them as well: a task
+    # there is a route to the key the role's checks would not see.
+    verify_ops1_play: "{{ (lookup('ansible.builtin.file', playbook_dir ~ '/../../../../playbooks/ops1.yml') | from_yaml)[0] }}"
+    verify_all_tasks: '{{ verify_tasks + (verify_ops1_play.pre_tasks | default([])) + (verify_ops1_play.tasks | default([])) }}'
     # The raw text of every file of the role that Ansible evaluates: the tasks and the two
     # variable files. A lookup or a template runs on the controller, which under
     # ansible-pull is the host itself, so it can read a file no module key shows.
@@ -18,6 +23,7 @@
       - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') }}"
       - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') }}"
       - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') }}"
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../../playbooks/ops1.yml') }}"
     # The words that run something on the controller: lookup, query, q and pipe,
     # in any case and any spacing. The patterns here are data, so the backslashes
     # reach the regular expression as written.
@@ -194,19 +200,19 @@
         label: '{{ item.path }}'
 
     # ----- the structure of the tasks: an allow-list, not a deny-list -----
-    - name: List the module each task of the role calls
+    - name: List the module each task of the role and of ops1 calls
       ansible.builtin.set_fact:
         breakglass_mint_host_v_modules: >-
           {% set out = [] %}
-          {% for t in verify_tasks %}{% for k in t.keys() if k not in verify_task_keywords %}{% set _ = out.append(k) %}{% endfor %}{% endfor %}
+          {% for t in verify_all_tasks %}{% for k in t.keys() if k not in verify_task_keywords %}{% set _ = out.append(k) %}{% endfor %}{% endfor %}
           {{ out | to_json }}
 
-    - name: Assert the role calls only the modules on the allow-list
+    - name: Assert the role and ops1 call only the modules on the allow-list
       ansible.builtin.assert:
         that:
           - breakglass_mint_host_v_modules | from_json | difference(verify_allowed_modules) | length == 0
         fail_msg: >-
-          The role calls modules that are not on the allow-list:
+          The role or ops1 calls modules that are not on the allow-list:
           {{ breakglass_mint_host_v_modules | from_json | difference(verify_allowed_modules) }}.
         quiet: true
 
@@ -226,11 +232,11 @@
     - name: Assert the role's tasks and variable files hold no lookup, query or pipe
       ansible.builtin.assert:
         that:
-          - verify_role_texts | length == 3
+          - verify_role_texts | length == 4
           - verify_role_texts | map('length') | select('equalto', 0) | list | length == 0
           - verify_role_texts | map('regex_search', verify_forbidden_pattern) | select | list | length == 0
         fail_msg: >-
-          The tasks, vars or defaults of the role hold a lookup, query, q or pipe. That runs on the
+          The tasks, vars or defaults of the role, or the text of ops1.yml, hold a lookup, query, q or pipe. That runs on the
           controller, which under ansible-pull is the host, and can read the signing key without
           a module the checks above would see.
         quiet: true
@@ -264,12 +270,24 @@
         fail_msg: The tasks file has a different number of command, file, download or stat tasks than the checks below were written for.
         quiet: true
 
-    - name: Assert every command is docker --version, docker pull -q or docker image inspect
+    # The exact argv of each of the three commands, to the last word: the probe's
+    # version, the pull by digest and the image inspect with its format and its
+    # digest reference. The image reference is written as a brace-free pattern so
+    # no template marker is needed in this file.
+    - name: Assert every command is one of the three Docker commands the role may run, in its exact shape
       ansible.builtin.assert:
         that:
-          - item['ansible.builtin.command'].argv[0] == 'docker'
-          - item['ansible.builtin.command'].argv[1:2] == ['--version'] or item['ansible.builtin.command'].argv[1:3] in [['pull', '-q'], ['image', 'inspect']]
-        fail_msg: 'A command task runs something other than the three Docker commands the role may run: {{ item.name }}.'
+          - item['ansible.builtin.command'].argv[0] == '/usr/bin/docker'
+          - >-
+            item['ansible.builtin.command'].argv == ['/usr/bin/docker', '--version']
+            or (item['ansible.builtin.command'].argv[:3] == ['/usr/bin/docker', 'pull', '-q']
+            and item['ansible.builtin.command'].argv | length == 4
+            and item['ansible.builtin.command'].argv[3] is match('^[{][{] breakglass_mint_host_node_image [}][}]$'))
+            or (item['ansible.builtin.command'].argv[:4] == ['/usr/bin/docker', 'image', 'inspect', '--format']
+            and item['ansible.builtin.command'].argv | length == 6
+            and item['ansible.builtin.command'].argv[4] is search('RepoDigests')
+            and item['ansible.builtin.command'].argv[5] is match('^[{][{] breakglass_mint_host_node_image [}][}]$'))
+        fail_msg: 'A command task runs something other than the three Docker commands the role may run, in their exact shapes: {{ item.name }}.'
         quiet: true
       loop: "{{ verify_tasks | select('contains', 'ansible.builtin.command') | list }}"
       loop_control:
@@ -327,6 +345,24 @@
         fail_msg: 'The key stat does not turn off the checksum, the MIME guess and the attribute read, or follows links: {{ item.name }}.'
         quiet: true
       loop: "{{ verify_tasks | select('contains', 'ansible.builtin.stat') | selectattr('name', 'match', '^Look at the signing key') | list }}"
+      loop_control:
+        label: '{{ item.name }}'
+
+    # Every stat of the role and of ops1 asks for metadata only, under whatever name
+    # or path it has. The check reads the parsed tasks, not the names, so a stat
+    # with the default arguments (a checksum, a MIME guess) fails here even when it
+    # is named nothing like the key's. A deliberate edit that reads the key is
+    # the review's and the owner's deploy approval's to catch (ws#2483); this check
+    # catches an accident.
+    - name: Assert every stat of the role and of ops1 asks for metadata only, under any name
+      ansible.builtin.assert:
+        that:
+          - item['ansible.builtin.stat'].get_checksum | default(true) is false
+          - item['ansible.builtin.stat'].get_mime | default(true) is false
+          - item['ansible.builtin.stat'].get_attributes | default(true) is false
+        fail_msg: 'A stat of the role or of ops1 may read a checksum, a MIME type or attributes of its file: {{ item.name }}.'
+        quiet: true
+      loop: "{{ verify_all_tasks | select('contains', 'ansible.builtin.stat') | list }}"
       loop_control:
         label: '{{ item.name }}'
 
