@@ -303,6 +303,19 @@ class SecretHandlingTests(unittest.TestCase):
                 self.assertNotIn(forbidden, task, f"{file}: {task.get('name')}")
 
 
+class ControlCoverageTests(unittest.TestCase):
+    """Every refusal the role can make has a case that requires it."""
+
+    def test_every_refusal_code_has_a_case_and_every_case_names_a_refusal(self) -> None:
+        in_tasks = set()
+        for path in TASKS.glob("*.yml"):
+            in_tasks |= set(re.findall(r"db1_grants\[([a-z0-9]+(?:-[a-z0-9]+)+)\]", path.read_text(encoding="utf-8")))
+        cases = yaml.safe_load((ROLE / "molecule" / "default" / "vars" / "cases.yml").read_text(encoding="utf-8"))
+        in_cases = {case["code"] for case in cases["db1_grants_verify_cases"]}
+        self.assertEqual(sorted(in_tasks - in_cases), [], "a refusal no case requires")
+        self.assertEqual(sorted(in_cases - in_tasks), [], "a case that names a refusal the role does not make")
+
+
 class HygieneTests(unittest.TestCase):
     """What must not be in a shipped file."""
 
