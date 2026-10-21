@@ -4,8 +4,7 @@
 Installed as /usr/local/bin/mysql in the test container and nowhere else. It records
 each call and keeps a small account table, and it refuses any statement it does not
 know or any login that is not the test's. The README ("The fake client") says what it
-proves and what it does not; the read statements it answers are listed in
-fake_mysql_reads.txt, installed beside its state.
+proves and what it does not.
 """
 
 import hashlib
@@ -17,7 +16,6 @@ import sys
 STATE = "/var/lib/fake-mysql/state.json"
 CALLS = "/var/lib/fake-mysql/calls.log"
 ADMIN = "/var/lib/fake-mysql/admin.sha256"
-READS = "/var/lib/fake-mysql/fake_mysql_reads.txt"
 SOCKET = "/opt/branchleft/db/run/mysqld/mysqld.sock"
 DYNAMIC = {"BACKUP_ADMIN", "CLONE_ADMIN", "SYSTEM_VARIABLES_ADMIN"}
 STATIC_ORDER = [
@@ -108,48 +106,6 @@ def remove_privileges(entry, privileges, target):
             entry["static"] = [p for p in entry.get("static", []) if p != name]
 
 
-def read_ssl_and_limit(state, match, out):
-    entry = state["users"].get(account(match.group(1), match.group(2)))
-    if entry is not None:
-        out.append(f"{entry.get('ssl_type', '')}\t{entry.get('muc', 0)}")
-
-
-def read_other_hosts(state, match, out):
-    for key in sorted(state["users"]):
-        user, host = key.split("@", 1)
-        if user == match.group(1) and host != match.group(2):
-            out.append(host)
-
-
-def read_clone_plugin(state, match, out):
-    out.extend(state.get("plugins", []))
-
-
-def read_account_count(state, match, out):
-    present = account(match.group(1), match.group(2)) in state["users"]
-    if match.group(1) in state.get("race", []):
-        present = False
-    out.append("1" if present else "0")
-
-
-# The read statements the fake answers are a table beside its state, one name and one
-# pattern per line (fake_mysql_reads.txt); each name is answered by the function here.
-READERS = {
-    "connection_limit": read_ssl_and_limit,
-    "other_host": read_other_hosts,
-    "clone_plugin": read_clone_plugin,
-    "account_count": read_account_count,
-}
-
-
-def read_patterns():
-    with open(READS, encoding="utf-8") as handle:
-        rows = [line.rstrip("\n").split("\t", 1) for line in handle if line.strip()]
-    if sorted(name for name, _ in rows) != sorted(READERS):
-        raise Refused("ERROR 1064 (42000): the fake's table of read statements does not match its readers")
-    return [(name, re.compile(pattern)) for name, pattern in rows]
-
-
 def run_statement(state, statement, out):
     text = re.sub(r"\s+", " ", statement).strip()
     if not text:
@@ -158,11 +114,32 @@ def run_statement(state, statement, out):
     # server in read-only mode would refuse it, and nothing is changed.
     if state.get("refuse_writes") and re.match(r"(GRANT|REVOKE|CREATE USER|ALTER USER) ", text):
         raise Refused("ERROR 1290 (HY000): The MySQL server is running with the --read-only option")
-    for name, pattern in read_patterns():
-        match = pattern.fullmatch(text)
-        if match:
-            READERS[name](state, match, out)
-            return
+    match = re.fullmatch(
+        r"SELECT ssl_type, max_user_connections FROM mysql\.user WHERE User='([^']*)' AND Host='([^']*)'", text
+    )
+    if match:
+        entry = state["users"].get(account(match.group(1), match.group(2)))
+        if entry is not None:
+            out.append(f"{entry.get('ssl_type', '')}\t{entry.get('muc', 0)}")
+        return
+    match = re.fullmatch(r"SELECT Host FROM mysql\.user WHERE User='([^']*)' AND Host<>'([^']*)'", text)
+    if match:
+        for key in sorted(state["users"]):
+            user, host = key.split("@", 1)
+            if user == match.group(1) and host != match.group(2):
+                out.append(host)
+        return
+    match = re.fullmatch(r"SELECT PLUGIN_NAME FROM information_schema\.PLUGINS WHERE PLUGIN_NAME='clone'", text)
+    if match:
+        out.extend(state.get("plugins", []))
+        return
+    match = re.fullmatch(r"SELECT COUNT\(\*\) FROM mysql\.user WHERE User='([^']*)' AND Host='([^']*)'", text)
+    if match:
+        present = account(match.group(1), match.group(2)) in state["users"]
+        if match.group(1) in state.get("race", []):
+            present = False
+        out.append("1" if present else "0")
+        return
     match = re.fullmatch(r"SHOW GRANTS FOR '([^']*)'@'([^']*)'", text)
     if match:
         entry = state["users"].get(account(match.group(1), match.group(2)))

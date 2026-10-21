@@ -38,14 +38,6 @@
   loop_control:
     label: '{{ item.dest }}'
 
-- name: Put the table of read statements the fake client answers beside its state
-  ansible.builtin.copy:
-    src: files/fakes/fake_mysql_reads.txt
-    dest: /var/lib/fake-mysql/fake_mysql_reads.txt
-    owner: root
-    group: root
-    mode: '0600'
-
 # A time well outside the dump's window, so a run is never refused for the clock
 # unless a case sets one.
 - name: Set the fake clock outside the dump window

@@ -238,11 +238,11 @@ held is not proven here.
 
 It refuses any statement it does not know, so a changed statement fails the test
 instead of being accepted, and it refuses a call whose password, socket or user is
-not the one the test set, as a server would refuse a wrong login. The statements it
-answers by reading the table are listed in
-`molecule/default/files/fakes/fake_mysql_reads.txt`, one name and one pattern a
-line, each answered by the function of the same name in the fake; the fake refuses
-to answer if the two lists differ. A statement it does not list is refused.
+not the one the test set, as a server would refuse a wrong login. The four read
+statements it answers (the connection limit and SSL type, the other hosts of an
+account, the clone plugin, and the account count) are written out inline in
+`molecule/default/files/fakes/fake_mysql.py`, where each is matched by its own
+pattern. A statement it does not list is refused.
 
 ## Live blockers
 
