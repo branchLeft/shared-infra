@@ -175,6 +175,122 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R7 db1.yml")
 
+    # R0: the refusal's assert replaced with a value that always passes.
+    def test_r0_refusal_assert_replaced_with_true(self) -> None:
+        self._edit(
+            "playbooks/includes/refuse_other_hosts.yml",
+            "ansible_play_hosts_all | length == 1",
+            "true",
+        )
+        self._assert_rule("R0 playbooks/includes/refuse_other_hosts.yml")
+
+    # R0: the signer assert replaced with a value that always passes.
+    def test_r0_signer_assert_replaced_with_true(self) -> None:
+        self._edit(
+            "playbooks/includes/require_signers.yml",
+            "pull_trigger_signers | length > 0",
+            "true",
+        )
+        self._assert_rule("R0 playbooks/includes/require_signers.yml")
+
+    # R0: the signer assert loses its length check.
+    def test_r0_signer_assert_loses_length_check(self) -> None:
+        self._edit(
+            "playbooks/includes/require_signers.yml",
+            "      - pull_trigger_signers | length > 0\n",
+            "      - pull_trigger_signers is defined\n",
+        )
+        self._assert_rule("R0 playbooks/includes/require_signers.yml")
+
+    # R2: the roles entry of the pull_trigger role carries a signer list (the reproduction).
+    def test_r2_role_entry_carries_a_signer_list(self) -> None:
+        self._edit(
+            "playbooks/edge1.yml",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
+            "      vars:\n"
+            "        pull_trigger_signers: [ATTACKERFPR]\n",
+        )
+        findings = check(self.root)
+        self.assertTrue(any(finding.startswith("R2 edge1.yml") for finding in findings), findings)
+        self.assertTrue(any(finding.startswith("R6 ") for finding in findings), findings)
+
+    # R2: a third roles entry is added after the trigger.
+    def test_r2_roles_has_a_third_entry(self) -> None:
+        self._edit(
+            "playbooks/app1.yml",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
+            "    - role: ../roles/ansible_runtime\n",
+        )
+        self._assert_rule("R2 app1.yml")
+
+    # R2: the runtime entry carries a second variable beside its requirements path.
+    def test_r2_runtime_entry_carries_a_second_variable(self) -> None:
+        self._edit(
+            "playbooks/ops1.yml",
+            "        ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'\n",
+            "        ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'\n"
+            "        pull_trigger_remote_url: https://example.invalid/x.git\n",
+        )
+        self._assert_rule("R2 ops1.yml")
+
+    # R2: a refusal include is switched off by a when key (the reproduction).
+    def test_r2_refusal_include_switched_off_by_when(self) -> None:
+        self._edit(
+            "playbooks/edge1.yml",
+            "      ansible.builtin.include_tasks: includes/refuse_other_hosts.yml\n",
+            "      ansible.builtin.include_tasks: includes/refuse_other_hosts.yml\n"
+            "      when: false\n",
+        )
+        self._assert_rule("R2 edge1.yml")
+
+    # R2: a signer include is switched off by a tags key.
+    def test_r2_signer_include_carries_a_tags_key(self) -> None:
+        self._edit(
+            "playbooks/app1.yml",
+            "      ansible.builtin.include_tasks: includes/require_signers.yml\n",
+            "      ansible.builtin.include_tasks: includes/require_signers.yml\n"
+            "      tags: [never]\n",
+        )
+        self._assert_rule("R2 app1.yml")
+
+    # R3: the shared remote is a fork's, which all three hosts would pull from.
+    def test_r3_remote_url_points_at_a_fork(self) -> None:
+        self._edit(
+            "playbooks/includes/pull_trigger_common.yml",
+            "https://github.com/branchLeft/shared-infra.git",
+            "https://github.com/attacker/shared-infra.git",
+        )
+        self._assert_rule("R3 pull_trigger_common.yml")
+
+    # R3: the shared include carries a key beyond the three the derivation sets.
+    def test_r3_shared_include_carries_an_extra_key(self) -> None:
+        self._edit(
+            "playbooks/includes/pull_trigger_common.yml",
+            "pull_trigger_playbooks:\n",
+            "pull_trigger_extra: x\npull_trigger_playbooks:\n",
+        )
+        self._assert_rule("R3 pull_trigger_common.yml")
+
+    # R6: a role's task sets a signer list with set_fact.
+    def test_r6_role_task_sets_a_signer_list(self) -> None:
+        self._write(
+            "roles/pull_trigger/tasks/extra.yml",
+            "---\n- name: Trust a key\n  ansible.builtin.set_fact:\n"
+            "    pull_trigger_signers: [ATTACKERFPR]\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/extra.yml")
+
+    # R6: a playbook sets the remote the shared include owns.
+    def test_r6_playbook_defines_the_remote(self) -> None:
+        self._edit(
+            "playbooks/edge1.yml",
+            "enrolled_host: edge1",
+            "enrolled_host: edge1\n    pull_trigger_remote_url: https://example.invalid/x.git",
+        )
+        self._assert_rule("R6 ansible/playbooks/edge1.yml")
+
 
 if __name__ == "__main__":
     unittest.main()

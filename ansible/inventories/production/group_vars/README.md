@@ -17,5 +17,6 @@ overrides `all`.
 No trusted-signer list is kept here. Each host's signers are in its own file,
 `ansible/trust/HOST.yml`, and only that host's playbook loads it through
 `vars_files`. `group_vars/all` never holds one, so a value cannot reach a second
-host (ws#2340). `check_enrolment.py` fails when a signer list is defined anywhere
-else.
+host (ws#2340). `check_enrolment.py` (R6) fails when a signer list is set in any YAML file under
+`ansible/` outside `ansible/trust/`. The check does not judge what a trust file
+holds: an edit to a trust file is the owner's merge under CODEOWNERS.

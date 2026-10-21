@@ -48,7 +48,7 @@
 /ansible/requirements.yml                @branchLeft/branchleft-admin
 # The pin check is the gate that vouches for the locked toolchain and for the update route (ANS-4).
 /ansible/checks/                         @branchLeft/branchleft-admin
-# Each host's trusted signer list is the trust anchor of the pull (ws#2340). Owner-only, so a change to who a host trusts is the owner's merge.
+# Each host's trusted signer list is the trust anchor of the pull (ws#2340). An edit to a file here is the owner's merge. Other files cannot set the list, the remote or the playbook derivation: check_enrolment.py (R2, R3, R6) fails a change that tries, so a playbook or role edit cannot widen trust on its own.
 /ansible/trust/                          @branchLeft/branchleft-admin
 
 /.standardsignore        @branchLeft/branchleft-admin

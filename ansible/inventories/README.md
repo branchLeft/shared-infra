@@ -8,7 +8,9 @@ which has no group variables because its inputs are private and reach the host
 through its delivery channel (`roles/db1_grants`). A role applied to a new host
 adds its host and variables in the same pull request. `ops1` and `app1` have
 playbooks under the pull but no inventory entry: no host is enrolled by this
-layout, and their bootstrap is a runbook decision.
+layout, and against this inventory `--limit ops1` and `--limit app1` match nothing.
+Their bootstrap route is the one the refusal include describes: on an inline
+one-host inventory (`-i 'HOST,'`) the one-host test is true by construction.
 `ANS-13` leaves the placement of inventories undecided; this layout is a
 proposal that the repository owner confirms or changes.
 
