@@ -1,22 +1,10 @@
 #!/bin/sh
-# Test stand-in for sshd. The pinned test image has no OpenSSH server, so this
-# answers the two calls the role makes. It is not a control, and it is not
-# OpenSSH: real sshd enforcement is proven by the lab run or the live run.
-#
-#   sshd -t                   Reads every drop-in. Refuses a keyword it does not
-#                             know and a keyword placed outside a Match block.
-#   sshd -T -C user=U,addr=A  Prints, lowercased, each keyword of the Match
-#                             blocks that apply to user U connecting from
-#                             address A, in file order, as written. Like sshd it
-#                             prints every value it finds, so the first one
-#                             wins when the caller reads it. A Match block
-#                             applies when every criterion it names holds:
-#                             "all", "User U", "Address A" or a pair of them.
-#                             Requires user= and requires addr= to be the
-#                             from_address input the role was given, which is
-#                             the address db1 connects from: the role has to
-#                             ask about that connection and not another.
-#                             Prints no address in any message.
+# Test stand-in for sshd, not OpenSSH: the pinned test image has none. It
+# answers the two calls the role makes; the README (Limits) says what it checks.
+# sshd -t: refuse an unknown keyword, or one outside a Match block.
+# sshd -T -C user=U,addr=A: print the keywords of the Match blocks that apply,
+# in file order, so the first value wins as in sshd. A is required to be the
+# from_address input, so the role has to ask about db1's own connection.
 DIR=/etc/ssh/sshd_config.d
 FROM_ADDRESS_FILE=/etc/branchleft/db-tunnel/inputs/from_address
 KNOWN=" match authorizedkeysfile authenticationmethods allowtcpforwarding permitlisten permitopen gatewayports allowagentforwarding allowstreamlocalforwarding x11forwarding permittty permittunnel permituserrc forcecommand "
