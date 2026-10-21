@@ -16,14 +16,14 @@ The source of truth is the directory `hetzner/edge/stack` (the link `files/stack
 
 **Restart shape.** This is the shape of the monitoring_stack role, as that role's restart-by-fingerprint amendment states it. A run works out what is due, validates every candidate, places every file, acts, reads the result back and writes the stamp last. There are no handlers. A class is due when its stamp is not the fingerprint of what the repository holds now, or when a file of the class on the host differs from the repository's (a hand edit, or a file torn by a power cut). Only the second of these is visible to a stamp that merely equals the fingerprint, which is why both are read.
 
-**Stamps.** One per class, in `/var/lib/branchleft`, root, mode 0600: `edge.caddy.applied`, `edge.compose.applied`, `edge.crowdsec.applied`. A stamp holds a sha256 and a newline, or `pending` while an action is under way. `pending` is never a fingerprint, so a run that dies in an action acts again, and a class with no stamp is never taken for a hand-delivered host. A stamp is written only for a class whose marker the locked script printed after the read-back; a class that finished before a later one failed is stamped, one that did not is not.
+**Stamps.** One per class, in `/var/lib/branchleft`, root, mode 0600: `edge.caddy.applied`, `edge.compose.applied`, `edge.crowdsec.applied`. A stamp holds a sha256 and a newline, or `pending` from before the first file of a run is placed until the class has been read back. `pending` is never a fingerprint, so a run that dies after that point, in a placement or in an action, acts again, and a class whose file was placed is never taken for a hand-delivered host. A stamp that is there and cannot be read (a directory, a link to nothing, an I/O error) stops the run before anything is placed; only a stamp that is not there counts as none. A stamp is written only for a class whose marker the locked script printed after the read-back; a class that finished before a later one failed is stamped, one that did not is not.
 
 **Order, in one run.**
 
 1. Read and refuse, changing nothing: the pin, the secrets file, the Caddyfile on the host, and every file of the stack in the repository.
 2. Work out what is due, from the host (a `stat` with a checksum runs in check mode too).
 3. Put the candidate Caddyfile and Compose file in a directory closed to root, and validate both under the deploy lock. A refused candidate stops the run with the host as it was.
-4. Place every file: the Compose file and CrowdSec's files by `copy`, the acquisition directory pruned, the Caddyfile's owner and mode set.
+4. Mark every class that is due `pending`, then place every file: the Compose file and CrowdSec's files by `copy`, the acquisition directory pruned, the Caddyfile's owner and mode set. The mark comes first, so a run that dies while placing leaves the class due, not a class that looks hand-delivered.
 5. Act, under the deploy lock, in this order: write the Caddyfile in place, restart the unit, restart CrowdSec, reload Caddy. The unit comes before Caddy's reload so a `compose.yml` change that the Caddyfile relies on (a port, a mount) exists first, and every file is on the host before any container action, which also means a bind source that is a file is never missing when Docker looks for it.
 6. Write the stamps for what was read back, then fail the run if the locked step failed.
 
@@ -32,7 +32,7 @@ The source of truth is the directory `hetzner/edge/stack` (the link `files/stack
 **What it does not do.**
 
 - It never runs `docker compose up`. The unit `branchleft-compose@edge.service` is the only path that does (`up -d --remove-orphans --wait`, no force-recreate), and the role only restarts it. `branchleft-deploy` restarts the same unit when the image digest changes, so `edge.image.env` is in no fingerprint.
-- It never writes `/etc/branchleft/edge.image.env` (`branchleft-deploy` does) and never writes or reads the content of `/etc/branchleft/edge.env` (the owner places it). It hashes `edge.env` on the host and only the hash comes back, for the Compose fingerprint, so a rotated key reaches the containers by restarting the unit, which recreates them. Every task that handles that hash has `no_log: true`.
+- It never writes `/etc/branchleft/edge.image.env` (`branchleft-deploy` does) and never writes `/etc/branchleft/edge.env` (the owner places it). No value of `edge.env` comes into the Ansible run or its log; "Environment semantics" below says which processes read the file on the host. Only its sha256 comes back, for the Compose fingerprint, so a rotated key reaches the containers by restarting the unit, which recreates them. Every task that handles that hash has `no_log: true`.
 - It never restarts Caddy for a config change, and it does not apply a posture flip. A posture flip (`docker restart` of Caddy, RUNBOOK-edge 10a) stays an owner step, verified by step 8a.
 - It starts no unit that is not enabled, installs no package, and removes nothing outside `crowdsec/acquis.d`.
 - It has no saved-file or rollback path (see "Rollback").
@@ -95,7 +95,16 @@ There is no saved-file path (the shell runbooks had one, edge-ghost-setup-refusa
 
 ### Environment semantics
 
-The three consumers of `edge.env` read quotes differently: `docker run --env-file` keeps them literally, the unit's `EnvironmentFile=` and Compose strip them. The validation therefore does not read `edge.env` at all: it passes placeholder values (`validation-only`, `validation@example.invalid`) for the two keys, which parses and adapts the Caddyfile without contacting anyone. A quoted `ACME_EMAIL` is therefore not caught here; it is the owner's to place unquoted. The role does not read `edge.env` to check for quotes: reading a secrets file into the run is a decision for the owner, not the role.
+**Who reads `edge.env`, and what comes back.** On the host, as root, four things read the file, and none returns its content to Ansible:
+
+- the Ansible `stat` task in `_assert.yml` (with a checksum) reads the whole file to hash it; the sha256 is the only thing that comes back, and it goes into the Compose fingerprint and the Compose stamp;
+- Docker Compose reads and parses it, because the locked script passes `--env-file /etc/branchleft/edge.env` to every Compose call: `config -q` on the candidate Compose file in the validation, and `ps`, `exec` and `restart` in the apply. The values stay inside the Compose process. `config -q` prints nothing when it succeeds, and the script prints no value. If Compose fails, its error text is shown in the failure message as Compose wrote it; the role does not filter it;
+- systemd reads it as the unit's `EnvironmentFile=` when the unit is restarted (the unit's own behaviour, not this role's);
+- the containers receive the values Compose interpolates, which is what the file is for.
+
+The script itself never opens the file (no redirect, `cat` or `source`), and the Caddy validation does not use it.
+
+The consumers read quotes differently: `docker run --env-file` keeps them literally, the unit's `EnvironmentFile=` and Compose strip them. The Caddy validation therefore passes placeholder values (`validation-only`, `validation@example.invalid`) for the two keys instead of `--env-file`, which parses and adapts the Caddyfile without contacting anyone. A quoted `ACME_EMAIL` is therefore not caught by the Caddy validation; it is the owner's to place unquoted. The role does not read `edge.env` to check for quotes: bringing a secrets file's content into the run is a decision for the owner, not the role.
 
 ## How to test it
 
@@ -110,7 +119,7 @@ The container is a systemd platform. The test installs stand-ins and proves wiri
 - a stand-in `docker` that logs every call, checks the arguments Compose needs, answers `run ... caddy validate` and `compose config`, models the container's single-file mount as a hard link (so a rename leaves the view on the old bytes and an in-place write does not), and fails or lies where a flag file in `/run` asks;
 - a placeholder `branchleft-compose@.service` whose start logs the hash of the Caddyfile and the Compose file on the host at that moment, so the test can see both were placed first.
 
-`verify.yml` has one block per behaviour, tagged `p0` to `p25`, each starting from the converged host and asserting on the stand-in's calls, the stamps and the files. A block can be run alone with `ANSIBLE_RUN_TAGS=p7 molecule verify`. The Ansible log of every run of the scenario is scanned at the end for the sentinel values of the test's `edge.env`.
+`verify.yml` has one block per behaviour, tagged `p0` to `p25` (and `p9b`, `p11c` and `p11d`), each starting from the converged host and asserting on the stand-in's calls, the stamps and the files. A block can be run alone with `ANSIBLE_RUN_TAGS=p7 molecule verify`. The Ansible log of every run of the scenario is scanned at the end for the sentinel values of the test's `edge.env`.
 
 `ansible/checks/test_edge_single_home.py` fails when another role names `/opt/branchleft/edge`, delivers from the stack directory, or names `branchleft-compose@edge` (the drop-in directory `branchleft-compose@edge.service.d` is allowed, for the edge override).
 

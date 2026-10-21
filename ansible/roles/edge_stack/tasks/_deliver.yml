@@ -102,6 +102,28 @@
           else ('A candidate was refused (exit code ' ~ edge_stack_validate.rc ~ '). Nothing was placed. ' ~ edge_stack_validate.stderr) }}
       when: edge_stack_validate is not skipped
 
+    # `pending` goes in after every candidate is accepted and before the first file
+    # is placed or acted on. A run that dies anywhere after this point leaves a stamp
+    # that is no fingerprint, so the next run acts on the class again. Placed later,
+    # a run that died after a file was placed and before this mark would leave a
+    # class with no stamp and no difference, which the next run takes for a host
+    # that was delivered by hand: it would stamp the class and never act on it. A
+    # refused candidate stops the run above, with the host and its stamps as they were.
+    - name: Mark each class that is due as pending
+      ansible.builtin.copy:
+        content: "pending\n"
+        dest: '{{ edge_stack_stamp_files[item.name] }}'
+        owner: root
+        group: root
+        mode: '0600'
+      loop:
+        - { name: caddy, due: '{{ edge_stack_caddy_due }}' }
+        - { name: compose, due: '{{ edge_stack_compose_due }}' }
+        - { name: crowdsec, due: '{{ edge_stack_crowdsec_due }}' }
+      loop_control:
+        label: '{{ item.name }}'
+      when: item.due | bool and not ansible_check_mode
+
     # copy puts a file in place by rename, which is right for these: the Compose file
     # is not bind-mounted, the CrowdSec files are read again at the restart below, and
     # the acquisition directory is a directory mount, which sees renamed entries.
@@ -164,24 +186,6 @@
       changed_when: true
       check_mode: false
       when: ansible_check_mode and edge_stack_crowdsec_due | bool
-
-    # `pending` goes in before the action, so a run that dies in it leaves a stamp
-    # that is no fingerprint: the next run acts again, and a class with no stamp
-    # cannot be taken for a host that was hand-delivered.
-    - name: Mark each class that is due as pending
-      ansible.builtin.copy:
-        content: "pending\n"
-        dest: '{{ edge_stack_stamp_files[item.name] }}'
-        owner: root
-        group: root
-        mode: '0600'
-      loop:
-        - { name: caddy, due: '{{ edge_stack_caddy_due }}' }
-        - { name: compose, due: '{{ edge_stack_compose_due }}' }
-        - { name: crowdsec, due: '{{ edge_stack_crowdsec_due }}' }
-      loop_control:
-        label: '{{ item.name }}'
-      when: item.due | bool and not ansible_check_mode
 
     - name: Apply the due classes under the deploy lock
       ansible.builtin.command:

@@ -536,6 +536,53 @@
               Adopting a host whose files already equal the repository's acted on it, or did not write the stamps.
               The calls were {{ edge_stack_verify_runs.p9.new }}.
 
+    # A stamp that is there and cannot be read is not "no stamp". Here the Caddy stamp is
+    # a link to nothing: the other two stamps are the base's, the files equal the
+    # repository's, so a run that took the unreadable stamp for none would adopt the
+    # class, replace the link with a stamp and succeed.
+    - name: Case p9b, a stamp that is there and cannot be read
+      tags: [p9b]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Replace the Caddy stamp with a link to nothing
+          ansible.builtin.file:
+            src: /var/lib/branchleft/no-such-stamp-target
+            dest: /var/lib/branchleft/edge.caddy.applied
+            state: link
+            force: true
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p9b
+
+        - name: Look at the Caddy stamp after the run
+          ansible.builtin.stat:
+            path: /var/lib/branchleft/edge.caddy.applied
+            follow: false
+            get_checksum: false
+          register: edge_stack_verify_p9b_stamp
+
+        - name: Assert the run failed before it placed or called anything, and left the stamp as it was
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs.p9b.failed
+              - edge_stack_verify_runs.p9b.new == []
+              - edge_stack_verify_runs.p9b.after.caddy_sha == edge_stack_verify_runs.p9b.before.caddy_sha
+              - edge_stack_verify_p9b_stamp.stat.islnk
+            quiet: true
+            fail_msg: >-
+              A stamp that exists and cannot be read was taken for no stamp: the run failed
+              {{ edge_stack_verify_runs.p9b.failed }}, called {{ edge_stack_verify_runs.p9b.new }}, and the stamp is a link
+              {{ edge_stack_verify_p9b_stamp.stat.islnk }}.
+      always:
+        - name: Remove the link
+          ansible.builtin.file:
+            path: /var/lib/branchleft/edge.caddy.applied
+            state: absent
+
     - name: Case p10, no stamps and one class differs
       tags: [p10]
       block:
@@ -638,6 +685,114 @@
               After a failed reload on a host with no stamp, the rerun did not reload. The first run said
               '{{ edge_stack_verify_runs.p11a.msg }}' and left the stamp
               '{{ edge_stack_verify_runs.p11a.after.stamps.caddy }}'; the rerun called {{ edge_stack_verify_runs.p11b.kinds }}.
+
+    # ----- p11c, p11d: a run that dies after a file is placed and before any action -----
+    # p11 dies in the Caddy reload, which is inside the locked script, after the pending
+    # mark. The Compose and CrowdSec files are placed by tasks of the role, so a run can
+    # die after they are placed and before the first action; tasks/crash_run.yml makes
+    # the prune fail for that. On a host with no stamp, a placed file equals the
+    # repository's, which is what a hand-delivered host looks like: unless the class
+    # was marked pending before the file was placed, the next run would adopt it and
+    # never restart the unit or CrowdSec.
+    - name: Case p11c, a run that dies after the Compose file is placed
+      tags: [p11c]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Remove the three stamps
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /var/lib/branchleft/edge.caddy.applied
+            - /var/lib/branchleft/edge.compose.applied
+            - /var/lib/branchleft/edge.crowdsec.applied
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p11c
+            edge_stack_verify_variant_edits:
+              - { path: compose.yml, append: "\n# case p11c\n" }
+
+        - name: Apply the role in a run that dies after the files are placed
+          ansible.builtin.include_tasks: tasks/crash_run.yml
+          vars:
+            edge_stack_verify_crash_source: '{{ edge_stack_verify_variants.p11c.path }}'
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p11c2
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p11c.path }}'
+
+        - name: Assert the Compose file was placed, its class was pending and not adopted, and the rerun restarted the unit
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_crash.rc != 0
+              - edge_stack_verify_crash.after.compose_sha == edge_stack_verify_variants.p11c.compose
+              - edge_stack_verify_crash.actions == []
+              - edge_stack_verify_crash.after.stamps.compose == 'pending'
+              - not edge_stack_verify_runs.p11c2.failed
+              - edge_stack_verify_runs.p11c2.kinds == ['unit-start', 'crowdsec-restart']
+              - edge_stack_verify_runs.p11c2.after.stamps.compose is match(edge_stack_verify_hex64)
+            quiet: true
+            fail_msg: >-
+              A run that died after the Compose file was placed left the Compose stamp
+              '{{ edge_stack_verify_crash.after.stamps.compose }}' (exit {{ edge_stack_verify_crash.rc }}, Compose file placed
+              {{ edge_stack_verify_crash.after.compose_sha == edge_stack_verify_variants.p11c.compose }}), and the rerun
+              called {{ edge_stack_verify_runs.p11c2.kinds }}.
+
+    - name: Case p11d, a run that dies after a CrowdSec file is placed
+      tags: [p11d]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Remove the three stamps
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /var/lib/branchleft/edge.caddy.applied
+            - /var/lib/branchleft/edge.compose.applied
+            - /var/lib/branchleft/edge.crowdsec.applied
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p11d
+            edge_stack_verify_variant_edits:
+              - { path: crowdsec/config.yaml.local, append: "\n# case p11d\n" }
+
+        - name: Apply the role in a run that dies after the files are placed
+          ansible.builtin.include_tasks: tasks/crash_run.yml
+          vars:
+            edge_stack_verify_crash_source: '{{ edge_stack_verify_variants.p11d.path }}'
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p11d2
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p11d.path }}'
+
+        - name: Assert the CrowdSec file was placed, its class was pending and not adopted, and the rerun restarted CrowdSec
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_crash.rc != 0
+              - edge_stack_verify_crash.after.config_sha == edge_stack_verify_variants.p11d.config
+              - edge_stack_verify_crash.actions == []
+              - edge_stack_verify_crash.after.stamps.crowdsec == 'pending'
+              - not edge_stack_verify_runs.p11d2.failed
+              - edge_stack_verify_runs.p11d2.kinds == ['crowdsec-restart']
+              - edge_stack_verify_runs.p11d2.after.stamps.crowdsec is match(edge_stack_verify_hex64)
+            quiet: true
+            fail_msg: >-
+              A run that died after a CrowdSec file was placed left the CrowdSec stamp
+              '{{ edge_stack_verify_crash.after.stamps.crowdsec }}' (exit {{ edge_stack_verify_crash.rc }}, file placed
+              {{ edge_stack_verify_crash.after.config_sha == edge_stack_verify_variants.p11d.config }}), and the rerun
+              called {{ edge_stack_verify_runs.p11d2.kinds }}.
 
     # ----- p12: the read-back is what lets a stamp be written -----
     - name: Case p12, the container still shows the old Caddyfile after a reload

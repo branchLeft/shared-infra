@@ -12,7 +12,8 @@ argument_specs:
       reading them back inside it. Every action runs under the deploy lock of the
       stack. The role reads /etc/branchleft/edge.image.env and never writes it, and
       asserts that /etc/branchleft/edge.env exists, is owned by root and is mode 0600,
-      without reading it into the run. It starts no unit that is not enabled, removes
+      without bringing its content into the run (only its sha256 comes back). It
+      starts no unit that is not enabled, removes
       nothing outside the CrowdSec acquisition directory and applies no live change in
       check mode.
     author: branchLeft

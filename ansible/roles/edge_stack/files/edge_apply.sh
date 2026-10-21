@@ -6,8 +6,12 @@
 # so the lock is held from the read of edge.image.env to the last action, and the
 # same kernel lock branchleft-deploy takes (flock(1) and flock(2) are one lock).
 # This file is read by the role and handed to sh as text; it is never installed on
-# the host. It holds no value of a secret: it never opens edge.env, and the only
-# thing it hands to Docker from that file is its path, through Compose.
+# the host. It holds no value of a secret and does not open edge.env itself: no
+# redirect, cat or source of it appears here. It hands the path to Docker Compose
+# (--env-file, in dcf below) in every Compose call, in both modes, and Compose, run
+# as root, opens and parses the file. The values stay inside that Compose process
+# and this script prints none. The Caddy validation does not use the file at all.
+# Compose's own error text, if it fails, is passed on as Compose wrote it.
 #
 # Two modes, run in this order by the role:
 #   validate  the candidates, before any file is placed: the candidate Caddyfile in
@@ -85,8 +89,9 @@ image=$(sed -e 's/^IMAGE=//' "$EDGE_IMAGE_ENV")
 
 if [ "$mode" = validate ]; then
   # The placeholders are the ones CI and the runbook use. The check parses and
-  # adapts the file; it contacts nothing and issues no certificate. The real
-  # values are not needed, so edge.env is not opened here.
+  # adapts the file; it contacts nothing and issues no certificate. The Caddy
+  # check needs no real value, so edge.env is not given to it. The Compose check
+  # below is different: dcf passes edge.env to Compose, which reads it.
   if [ -n "${EDGE_CADDY_CANDIDATE:-}" ]; then
     out=$(docker run --rm \
       --env CROWDSEC_BOUNCER_KEY=validation-only \

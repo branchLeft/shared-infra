@@ -34,15 +34,29 @@
     hidden: true
   register: edge_stack_host_acquis
 
-- name: Read the three stamps
-  ansible.builtin.slurp:
-    src: '{{ item.value }}'
+- name: Look for the three stamps
+  ansible.builtin.stat:
+    path: '{{ item.value }}'
+    follow: false
+    get_checksum: false
   loop: '{{ edge_stack_stamp_files | dict2items }}'
-  register: edge_stack_stamp_reads
-  failed_when: false
-  no_log: true
+  register: edge_stack_stamp_stats
   loop_control:
     label: '{{ item.key }}'
+
+# Only a stamp that is not there is `absent`, and only `absent` can be adopted. A
+# stamp that is there and cannot be read (a directory, a link to nothing, an I/O
+# error) fails this task and so the run, before anything is placed: it is not a
+# host nobody has applied the role to.
+- name: Read the stamps that are there
+  ansible.builtin.slurp:
+    src: '{{ item.item.value }}'
+  loop: '{{ edge_stack_stamp_stats.results }}'
+  register: edge_stack_stamp_reads
+  when: item.stat.exists
+  no_log: true
+  loop_control:
+    label: '{{ item.item.key }}'
 
 # Read-only; a unit that is not enabled is a host awaiting the owner's first start.
 - name: Read the edge unit
@@ -59,7 +73,7 @@
     edge_stack_stamp: >-
       {%- set ns = namespace(out={}) -%}
       {%- for read in edge_stack_stamp_reads.results -%}
-      {%- set _ = ns.out.update({read.item.key: (read.content | b64decode | trim) if read.content is defined else 'absent'}) -%}
+      {%- set _ = ns.out.update({read.item.item.key: (read.content | b64decode | trim) if read.content is defined else 'absent'}) -%}
       {%- endfor -%}
       {{ ns.out }}
     edge_stack_stale_acquis: >-

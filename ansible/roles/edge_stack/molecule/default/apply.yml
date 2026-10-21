@@ -1,0 +1,9 @@
+---
+# The role as a run that applies for real, started by verify as its own
+# ansible-playbook (cases p11c and p11d, tasks/crash_run.yml) so that a failure in the
+# middle ends that run and not verify. It is not one of Molecule's own steps.
+- name: Apply
+  hosts: all
+  gather_facts: false
+  roles:
+    - role: branchleft.edge_stack

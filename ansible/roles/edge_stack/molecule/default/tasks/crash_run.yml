@@ -1,0 +1,48 @@
+---
+# Applies the role once in a separate ansible-playbook, with a task that cannot succeed
+# placed after the files are delivered and before any action: the acquisition prune.
+# That is a run that dies in the middle, which a run inside this play cannot be
+# (verify catches a failure and goes on). The prune is given one path it cannot
+# remove, a file in /proc, through the extra variable edge_stack_stale_acquis, which
+# beats the fact the role works out for itself. Because that list is not empty, the
+# CrowdSec class sees drift as well, so a case that asserts on one class says which.
+# Inputs: edge_stack_verify_crash_source (a stack directory). Result: the fact
+# edge_stack_verify_crash with the exit status, the snapshots before and after, and the
+# stand-in's new calls that are an action (an unit start, a CrowdSec restart, a reload).
+- name: Snapshot before the run that dies
+  ansible.builtin.include_tasks: snapshot.yml
+
+- name: Keep that snapshot
+  ansible.builtin.set_fact:
+    edge_stack_verify_crash_before: '{{ edge_stack_verify_snap }}'
+  no_log: true
+
+- name: Apply the role in a separate run whose prune fails
+  ansible.builtin.command:
+    argv:
+      - ansible-playbook
+      - --tags
+      - all
+      - --inventory
+      - '{{ inventory_dir }}'
+      - --extra-vars
+      - '{{ {"edge_stack_source_dir": edge_stack_verify_crash_source, "edge_stack_stale_acquis": ["/proc/1/environ"]} | to_json }}'
+      - '{{ playbook_dir }}/apply.yml'
+  delegate_to: localhost
+  register: edge_stack_verify_crash_result
+  changed_when: false
+  failed_when: false
+
+- name: Snapshot after the run that dies
+  ansible.builtin.include_tasks: snapshot.yml
+
+- name: Keep the run that died
+  ansible.builtin.set_fact:
+    edge_stack_verify_crash:
+      rc: '{{ edge_stack_verify_crash_result.rc }}'
+      before: '{{ edge_stack_verify_crash_before }}'
+      after: '{{ edge_stack_verify_snap }}'
+      actions: >-
+        {{ edge_stack_verify_snap.lines[edge_stack_verify_crash_before.lines | length :]
+        | select('match', '^(UNIT-START|RESTART-CROWDSEC|RELOAD) ') | list }}
+  no_log: true
