@@ -1,5 +1,5 @@
 ---
-# edge1: the first host under the gated pull (ws#2340). Two roles, in order: the
+# edge1: the first host under the gated pull. Two roles, in order: the
 # Ansible toolchain the host runs this playbook with, then the trigger that runs it.
 #
 # The host's trigger runs this file on a signed checkout with the inventory

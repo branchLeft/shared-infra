@@ -1,4 +1,4 @@
-"""Check the host playbooks under the gated pull (ws#2340).
+"""Check the host playbooks under the gated pull.
 
 Rules R0 to R8, and what each one does not see, are in ansible/checks/README.md. A
 failure names the rule and the file. This check catches a protected key set outside
@@ -249,11 +249,7 @@ def _check_writer(ansible: Path, findings: list[str]) -> None:
     module = next((key for key in ("ansible.builtin.copy", "copy") if key in task), None)
     args = _mapping(task.get(module)) if module else {}
     config = _mapping(_mapping(task.get("vars")).get(CONFIG_VAR))
-    if (
-        module is None
-        or args.get("dest") != CONFIG_DEST
-        or args.get("content") != CONFIG_CONTENT
-    ):
+    if module is None or args.get("dest") != CONFIG_DEST or args.get("content") != CONFIG_CONTENT:
         findings.append(
             f"R8 {where}: the config writer must copy {CONFIG_CONTENT!r} to {CONFIG_DEST}"
         )
@@ -449,6 +445,10 @@ def check(root: Path) -> list[str]:
     _check_gates(includes, findings)
 
     enrolled: dict[str, list[dict[str, object]]] = {}
+    # The host pull runs only the derived .yml path, so a top-level .yaml playbook is
+    # refused rather than read: the rules below would not see what it applies.
+    for path in sorted(playbooks.glob("*.yaml")):
+        findings.append(f"R2 {path.name}: a top-level playbook must be .yml, as the pull runs")
     for path in sorted(playbooks.glob("*.yml")):
         plays = _plays(_load(path, findings, "R2"))
         if any(_enrolled(play) for play in plays):

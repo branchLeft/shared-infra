@@ -1,5 +1,5 @@
 ---
-# Refuses an empty signer list before any role runs (ws#2340). pull_trigger's own
+# Refuses an empty signer list before any role runs. pull_trigger's own
 # assert runs only after ansible_runtime has installed packages, so the playbook
 # refuses here first: a host with no trusted signer changes nothing on the host.
 - name: Refuse an empty signer list before any task runs

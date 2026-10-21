@@ -1,6 +1,6 @@
 # check_enrolment
 
-`check_enrolment.py` checks the host playbooks that run under the gated pull (ws#2340).
+`check_enrolment.py` checks the host playbooks that run under the gated pull.
 A top-level playbook is under the pull when one of its plays applies the `pull_trigger`
 role. Its trust anchor is `ansible/trust/HOST.yml`. A failure names the rule and the
 file. `test_check_enrolment.py` runs the check over the real tree and over one sabotaged
@@ -20,10 +20,10 @@ file that owns it, and a loader it cannot read.
 
 It does not judge what a role does. The roles run as root, so a change to `roles/` can
 change what a host does with its signers, and this check does not see that. The reusable
-gated apply exists in `branchLeft/github-workflows` (merged 20 Oct), but nothing in this
-repo calls it, so a role edit is not gated by anything here (ws#2338 and ws#2324 are
-open, and ws#2483 is an open design issue, not a ruling). Which files the reviewer App
-may merge alone is an owner decision (Desk `pull-roles-owner-only-2340`).
+gated apply exists in `branchLeft/github-workflows`, but nothing in this repo calls it, so
+a role edit is not gated by anything here. The control on a role edit is the owner's
+deploy approval of the gated apply, which is not yet wired. Which files the reviewer App
+may merge alone is not yet decided by the owner.
 
 Limits of R2. It pins the values of `vars.enrolled_host`, `vars_files`, `roles` and
 `pre_tasks`. It does not pin the other keys of that play, so a `post_tasks`,
@@ -42,7 +42,8 @@ written as `key=value` in a string. A loader or module outside those sets is not
   include holds exactly one task: its name and its assert, with exactly its expressions
   and no other key (`when`, `ignore_errors` and `tags` are refused).
 - **R1** At least one top-level playbook is enrolled, so the check cannot pass over nothing.
-- **R2** Each enrolled `HOST.yml` has one play on `hosts: all`, `vars.enrolled_host`
+- **R2** A top-level `.yaml` playbook is refused, because the pull runs only the derived
+  `.yml` path. Each enrolled `HOST.yml` has one play on `hosts: all`, `vars.enrolled_host`
   equal to `HOST`, `vars_files` exactly the shared include and `../trust/HOST.yml`,
   `roles` exactly the runtime entry then the bare trigger, and `pre_tasks` exactly the
   refusal include then the signer include, each a task of only its name and include.

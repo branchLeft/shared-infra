@@ -1,5 +1,5 @@
 ---
-# The refusal every host playbook under the pull runs first (ws#2340), single home.
+# The refusal every host playbook under the pull runs first. Its single home.
 # A run is refused unless it has exactly one host and that host is the localhost the
 # trigger names or the host this playbook is for. On an inline one-host inventory
 # (-i 'HOST,') the one-host test is true by construction, so only the name test does

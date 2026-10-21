@@ -1,4 +1,4 @@
-"""Tests for check_enrolment (ws#2340): the real tree, and one sabotage per rule.
+"""Tests for check_enrolment: the real tree, and one sabotage per rule.
 
 Each sabotage edits a copy of the real ansible/ tree and asserts that the named rule
 fails. A sabotage that does not hit its text fails the test, so an edit that matched
@@ -174,6 +174,14 @@ class Sabotage(unittest.TestCase):
             "---\n# A partial enrolment would name trust/db1.yml here.\n",
         )
         self._assert_rule("R7 db1.yml")
+
+    # R2: a top-level .yaml playbook that applies pull_trigger is refused, not skipped.
+    def test_r2_top_level_yaml_playbook_is_refused(self) -> None:
+        self._write(
+            "playbooks/evil.yaml",
+            "- hosts: all\n  vars:\n    enrolled_host: edge1\n  roles:\n    - pull_trigger\n",
+        )
+        self._assert_rule("R2 evil.yaml")
 
     # R0: the refusal's assert replaced with a value that always passes.
     def test_r0_refusal_assert_replaced_with_true(self) -> None:
@@ -374,7 +382,8 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "roles/pull_trigger/tasks/main.yml",
             "- name: Create the state directory\n",
-            "- name: Load by name\n  ansible.builtin.include_tasks: '{{ pull_trigger_extra }}.yml'\n\n"
+            "- name: Load by name\n"
+            "  ansible.builtin.include_tasks: '{{ pull_trigger_extra }}.yml'\n\n"
             "- name: Create the state directory\n",
         )
         self._assert_rule("R6 ansible/roles/pull_trigger/tasks/main.yml")
@@ -600,7 +609,7 @@ class Sabotage(unittest.TestCase):
     def test_r8_writer_content_is_a_literal(self) -> None:
         self._edit(
             "roles/pull_trigger/tasks/main.yml",
-            "    content: \"{{ pull_trigger_config | ansible.builtin.to_nice_json }}\\n\"",
+            '    content: "{{ pull_trigger_config | ansible.builtin.to_nice_json }}\\n"',
             "    content: 'x'",
         )
         self._assert_rule("R8 ansible/roles/pull_trigger/tasks/main.yml")

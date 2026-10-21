@@ -1,5 +1,5 @@
 ---
-# edge1's trust file (ws#2340): the one value a host's pull trusts, loaded only by
+# edge1's trust file: the one value a host's pull trusts, loaded only by
 # playbooks/edge1.yml through vars_files. The remote and the playbook derivation are
 # in playbooks/includes/pull_trigger_common.yml, not here.
 # The signer allowlist is the trust anchor of the pull: a commit of main that is

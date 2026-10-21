@@ -1,5 +1,5 @@
 ---
-# ops1: the gated pull (ws#2340). Two roles, in order: the Ansible toolchain this
+# ops1: the gated pull. Two roles, in order: the Ansible toolchain this
 # playbook runs with, then the trigger that runs it. Only this host's name is set
 # here; the remote, the playbook allowlist and the signer list come from the shared
 # includes and the one trust file, all loaded through vars_files.
