@@ -46,9 +46,9 @@ provisioner:
   name: ansible
   env:
     # Every Ansible run of this scenario appends its output to one log on the
-    # controller, and verify reads it. Verbosity 3 prints each task's result
-    # with the arguments it was given, so a task that handles a password and
-    # lacks no_log shows it in the log, and verify fails (ANS-16).
+    # controller, and verify reads it. Verbosity 3 prints each task's result and
+    # the facts it set, so a task that handles a password and lacks no_log shows
+    # it in the log, and verify fails (ANS-16).
     ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
     ANSIBLE_VERBOSITY: '3'
   inventory:

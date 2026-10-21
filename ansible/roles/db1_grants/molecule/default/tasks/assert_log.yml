@@ -1,7 +1,7 @@
 ---
 # The log of every Ansible run of this scenario, at verbosity 3, which prints each
-# task's result with its arguments. A task that handled a password and lacks
-# no_log would have printed it, so no sentinel may be in the log. The log is read
+# task's result, the facts it set included. A task that handled a password and
+# lacks no_log would have printed it, so no sentinel may be in the log. The log is read
 # on the controller. The sentinels are letters and digits, so they need no
 # escaping, and the count is made by a task that hides it, so a failure cannot
 # print what it found.
@@ -14,18 +14,19 @@
   ansible.builtin.set_fact:
     db1_grants_verify_log_leaks: "{{ db1_grants_verify_log_text | regex_findall(db1_grants_verify_sentinels | join('|')) | length }}"
     db1_grants_verify_log_saw_role: "{{ 'Run one batch of changing statements through the mysql client' in db1_grants_verify_log_text }}"
-    db1_grants_verify_log_saw_arguments: "{{ 'invocation' in db1_grants_verify_log_text }}"
+    db1_grants_verify_log_saw_facts: >-
+      {{ '"ansible_facts"' in db1_grants_verify_log_text }}
     db1_grants_verify_log_saw_report: "{{ 'db1_grants would change the database: dump account True' in db1_grants_verify_log_text }}"
   no_log: true
 
 # A control for the scan itself: the log must show the role ran and that the
-# verbosity printed arguments, or an empty log would pass.
-- name: Assert the log held the role's tasks and their arguments
+# verbosity printed results with their facts, or an empty log would pass.
+- name: Assert the log held the role's tasks and their results
   ansible.builtin.assert:
     that:
       - db1_grants_verify_log_saw_role
-      - db1_grants_verify_log_saw_arguments
-    fail_msg: The log does not show the role's tasks with their arguments, so the scan proves nothing.
+      - db1_grants_verify_log_saw_facts
+    fail_msg: The log does not show the role's tasks with their results, so the scan proves nothing.
     quiet: true
 
 # The run in check mode on the fresh host (its dump account holds the old set) must
