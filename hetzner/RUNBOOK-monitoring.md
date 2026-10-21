@@ -307,11 +307,40 @@ does not change the live Grafana password. `NTFY_` keys are written by the
 role: it keeps its own hand step below. The gated run that applies the role is
 an owner step, not a command an agent runs.
 
-**The role does not yet run on a fresh host.** `monitoring_stack` checks that
-`ntfy_pager` has already delivered the renderer, and `ntfy_pager` checks that
-the secrets file is non-empty, so the two roles have to be ordered on a fresh
-host. The playbook that would run them in that order is not in this
-repository yet (see the role's README, "Order").
+**The role does not yet run on a fresh host, so this hand path stays the
+runnable one until the first gated converge.** `monitoring_stack` writes its
+keys first and `ntfy_pager` runs second (the role's README, "Order"), but no
+playbook in this repository runs either role yet. On a host where the file is
+absent, the block below writes the six keys in one go, with a guard that refuses
+to overwrite a file that exists. Read each value from the password manager into
+the shell; it reaches the host on stdin, not on a command line. Run it only when
+the file is absent (the check above printed `absent`).
+
+```bash
+read -rs SMTP_USERNAME && export SMTP_USERNAME
+read -rs SMTP_PASSWORD && export SMTP_PASSWORD
+read -rs HEALTHCHECKS_PING_URL && export HEALTHCHECKS_PING_URL
+read -rs ALERT_RECIPIENT_EMAIL && export ALERT_RECIPIENT_EMAIL
+read -rs MAILHOST_PING_URL && export MAILHOST_PING_URL
+read -rs GRAFANA_ADMIN_PASSWORD && export GRAFANA_ADMIN_PASSWORD
+{ printf 'SMTP_USERNAME=%s\n' "$SMTP_USERNAME";
+  printf 'SMTP_PASSWORD=%s\n' "$SMTP_PASSWORD";
+  printf 'HEALTHCHECKS_PING_URL=%s\n' "$HEALTHCHECKS_PING_URL";
+  printf 'ALERT_RECIPIENT_EMAIL=%s\n' "$ALERT_RECIPIENT_EMAIL";
+  printf 'MAILHOST_PING_URL=%s\n' "$MAILHOST_PING_URL";
+  printf 'GRAFANA_ADMIN_PASSWORD=%s\n' "$GRAFANA_ADMIN_PASSWORD"; } |
+  ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
+    test ! -e /etc/branchleft/monitoring.env || { echo "FAILED: monitoring.env exists; not overwriting it" >&2; exit 1; }
+    install -d -m 0755 -o root -g root /etc/branchleft &&
+    umask 077 &&
+    cat > /etc/branchleft/monitoring.env &&
+    chmod 0600 /etc/branchleft/monitoring.env &&
+    ls -l /etc/branchleft/monitoring.env && grep -c . /etc/branchleft/monitoring.env'
+unset SMTP_USERNAME SMTP_PASSWORD HEALTHCHECKS_PING_URL ALERT_RECIPIENT_EMAIL MAILHOST_PING_URL GRAFANA_ADMIN_PASSWORD
+```
+
+Expect `-rw------- 1 root root` and `6`. Anything else: stop and read the error.
+Do not print the file.
 
 Check the file's shape without printing it:
 
@@ -325,8 +354,29 @@ Expect `-rw------- 1 root root`. Do not print the file.
 **`STALWART_PROMETHEUS_SECRET` is a hand step and stays one.** Replace only
 that key, and never with a `>` redirect, which would overwrite the file and
 every key the role wrote. Read the value from `/opt/stalwart/.env` on mx1 as
-`mail/RUNBOOK-mx1-prometheus-metrics.md` describes, then replace the one line
-in place, keeping the file's mode.
+`mail/RUNBOOK-mx1-prometheus-metrics.md` describes. The `>>` append in that
+runbook adds a second line when the key already exists, so use this block for a
+rotation. It replaces the one line, reads it back, and keeps the file's mode:
+
+```bash
+read -rs STALWART_SECRET
+printf '%s' "$STALWART_SECRET" | ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
+  umask 077
+  f=/etc/branchleft/monitoring.env
+  val=$(cat)
+  if [ -z "$val" ]; then echo "FAILED: refusing to write an empty STALWART_PROMETHEUS_SECRET" >&2; exit 1; fi
+  { grep -v "^STALWART_PROMETHEUS_SECRET=" "$f" > "$f.tmp" 2>/dev/null || [ ! -s "$f.tmp" ]; } &&
+    printf "STALWART_PROMETHEUS_SECRET=%s\n" "$val" >> "$f.tmp" &&
+    mv "$f.tmp" "$f" &&
+    [ "$(grep -c "^STALWART_PROMETHEUS_SECRET=" "$f")" = 1 ] &&
+    [ "$(sed -n "s/^STALWART_PROMETHEUS_SECRET=//p" "$f" | wc -c | tr -d " ")" = "$(( ${#val} + 1 ))" ] &&
+    echo "OK: STALWART_PROMETHEUS_SECRET replaced, ${#val} characters, exactly one line" ||
+    { echo "FAILED: monitoring.env was NOT updated -- see the error above" >&2; exit 1; }'
+unset STALWART_SECRET
+```
+
+Expect `OK: STALWART_PROMETHEUS_SECRET replaced, N characters, exactly one line`
+**and exit 0**. Then the stack reads the new value on its next restart (step 7b).
 
 ## 4. Copy the monitoring stack directory onto the host
 
@@ -383,8 +433,14 @@ first if you are entering here independently.
 The `monitoring_stack` role installs both drop-ins: `monitoring.override.conf`
 into `branchleft-compose@monitoring.service.d/` and `edge.override.conf` into
 `branchleft-compose@edge.service.d/`, each as `override.conf`, `root:root` mode
-`0644`, and it reloads systemd when either changed. This step is therefore part
-of the gated run that applies the role (see step 3), not a command an agent runs.
+`0644`, and it reloads systemd when either changed. The role is not yet wired
+to a host (step 3), so until the first gated converge this script is the
+runnable path, and it installs the same two files:
+
+```bash
+hetzner/provision/install-systemd-drop-ins.sh root@"$EDGE1_IPV4"
+```
+
 The role does not restart `edge`, and it does not start `monitoring`.
 
 Neither drop-in takes effect until the affected unit next starts or

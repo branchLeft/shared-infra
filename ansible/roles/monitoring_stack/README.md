@@ -53,7 +53,11 @@ Owner-supplied values:
   database. A later change to this input rewrites the file and restarts the
   stack, if it is active, but does not change the live Grafana password.
 - `SNDS_DATA_URL` is read by `snds-collector.service` only. A change to it does not
-  restart the stack. It expires every 30 days.
+  restart the stack. It expires every 30 days. Until runbook section 14 is retired,
+  section 14 also writes this key by hand. There are then two writers of one key:
+  the input given to this role must equal the value section 14 last wrote, or the
+  next run of this role puts back the older URL. A rotation changes both, in that
+  order, before this role runs again.
 
 `STALWART_PROMETHEUS_SECRET` is not one of the seven. Its hand step stays in the
 runbook, and the role does not write it.
@@ -70,23 +74,45 @@ not running is not started here. Runbook step 7a is the first start.
 The role does not restart `edge` (runbook step 6 does that), and it does not
 start `monitoring`.
 
-Known gap: if a play also changes `ntfy_pager`, its `flush_handlers` can restart
-the unit once before this role's handler is queued, so one play can restart the
-unit twice. The role cannot prevent that; a single restart needs a change to
-`ntfy_pager` or to the playbook order. Owner decision.
+The handler's tasks listen on the topic "Restart the monitoring stack unit when
+active", which is not `ntfy_pager`'s handler name ("Restart the monitoring stack
+unit"). So a play that changes only `ntfy_pager` does not run this handler, and a
+play that changes only this role does not run `ntfy_pager`'s.
+
+The handler runs at the end of this role (a `flush_handlers`), not at the end of
+the play. A play that fails after this role's writes therefore cannot leave a
+changed secret on disk with the unit still on its old value: the restart has
+already run, or the failure came before it. A play that changes both roles still
+restarts the unit twice, once per role, because each role flushes its own
+handler. Removing that second restart needs one handler for both roles, which is
+a change to `ntfy_pager` and is not made here.
+
+The renderer check runs in the handler, and only when the unit is `active`. On a
+host where the stack is running, a missing or writable renderer fails the restart
+before it is made. On a fresh host, where the unit is not running, nothing here
+needs the renderer.
 
 ### Order
 
-On a fresh host the two roles depend on each other, so neither can converge
-alone. `monitoring_stack` needs `ntfy_pager` to have delivered the renderer (it
-fails closed without it). `ntfy_pager` needs the monitoring secrets file to be
-present and non-empty, and this role writes that file. The playbook that would
-run them in an order that works is not in this repository: `ansible/playbooks/edge1.yml`
-wires neither role. Until an owner decision names the order, a fresh host does
-not converge. This is open: owner.
+On a fresh host `monitoring_stack` runs first, and `ntfy_pager` second.
 
-Within one play, the monitoring unit's `ExecStartPre` runs the renderer that
-`ntfy_pager` delivers. This is the dependency the README above states.
+- `monitoring_stack` converges without the renderer: its tasks write the secrets
+  file and the files, and the restart that would run the renderer is skipped
+  while the unit is not active.
+- `ntfy_pager` needs the monitoring secrets file to be present and non-empty
+  before it writes its four `NTFY_` lines. The file exists, with the seven keys
+  of this role, once this role has run. In the reverse order `ntfy_pager` fails
+  its assert on a fresh host.
+- The renderer that `ntfy_pager` delivers is what the unit's `ExecStartPre` runs,
+  so the unit can start only after `ntfy_pager` has run. That is why the restart
+  is gated on the unit being active.
+
+No playbook in this repository runs either role. `ansible/playbooks/edge1.yml`
+wires neither, and this change does not add them: a playbook that runs
+`monitoring_stack` must supply its seven secret inputs, and how those inputs
+reach a run (the secrets pattern, not a file in the repository) is a decision
+that belongs to the owner. So the order is written here and not yet tested
+across the two roles. The fresh-host run is open until that wiring exists.
 
 ### How it relates to the patterns
 
