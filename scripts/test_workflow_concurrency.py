@@ -33,14 +33,41 @@ PR_BLOCK = (
 )
 ALLOWED_CANCEL = {"false", PR_EXPRESSION}
 
-PR_TRIGGER = re.compile(r"(?m)^[ \t]+pull_request(_target)?:")
+# The trigger name in any spelling inside the on: block: a mapping key, a
+# block-sequence item, quoted or bare. Matching the name, not a key shape,
+# leaves no spelling for a pull_request workflow to skip the check.
+PR_TRIGGER = re.compile(r"\bpull_request(?:_target)?\b")
 # A column-0 concurrency key, in any form, with the indented lines under it.
 TOP_CONCURRENCY = re.compile(r"(?m)^concurrency\b[^\n]*\n(?:[ \t]+[^\n]*\n|[ \t]*\n)*")
-CANCEL = re.compile(r"cancel-in-progress:[ \t]*([^\n]*)")
+# Every mention of the key, quoted or bare, whatever follows it on the line.
+CANCEL_KEY = re.compile(r"cancel-in-progress([^\n]*)")
 
 
 def workflow_files() -> list[pathlib.Path]:
     return sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
+
+
+def triggers_pull_request(text: str) -> bool:
+    return PR_TRIGGER.search(on_block(text)) is not None
+
+
+def cancel_values(text: str) -> list[tuple[int, str]]:
+    """(line, value) for each cancel-in-progress. The value is what follows its colon.
+
+    A key with no colon after it yields the rest of the line, which is never an
+    allowed value, so the check fails closed on it. A key after a `#` on its
+    line is a YAML comment and is not read.
+    """
+    values = []
+    for match in CANCEL_KEY.finditer(text):
+        line_start = text.rfind("\n", 0, match.start()) + 1
+        if "#" in text[line_start : match.start()]:
+            continue
+        line = text.count("\n", 0, match.start()) + 1
+        rest = match.group(1)
+        value = re.sub(r"""^["']?[ \t]*:""", "", rest, count=1).strip()
+        values.append((line, value))
+    return values
 
 
 class WorkflowConcurrencyTests(unittest.TestCase):
@@ -55,7 +82,7 @@ class WorkflowConcurrencyTests(unittest.TestCase):
         for path in workflow_files():
             with self.subTest(workflow=path.name):
                 text = path.read_text(encoding="utf-8")
-                if not PR_TRIGGER.search(on_block(text)):
+                if not triggers_pull_request(text):
                     continue
                 found = TOP_CONCURRENCY.findall(text)
                 self.assertEqual(
@@ -72,9 +99,7 @@ class WorkflowConcurrencyTests(unittest.TestCase):
     def test_no_non_pull_request_run_can_be_cancelled(self):
         for path in workflow_files():
             text = path.read_text(encoding="utf-8")
-            for match in CANCEL.finditer(text):
-                line = text.count("\n", 0, match.start()) + 1
-                value = match.group(1).strip()
+            for line, value in cancel_values(text):
                 with self.subTest(workflow=path.name, line=line):
                     self.assertIn(
                         value,
@@ -97,6 +122,44 @@ class WorkflowConcurrencyTests(unittest.TestCase):
                 self.assertIsNotNone(group, f"{path.name}: concurrency block has no group")
                 self.assertIn("github.run_id", group.group(1))
                 self.assertNotIn("github.ref", group.group(1))
+
+
+class DetectorTests(unittest.TestCase):
+    """The detectors catch the evasions the pin tests above must not miss."""
+
+    def test_block_sequence_trigger_counts_as_pull_request(self):
+        text = "on:\n  - push\n  - pull_request\njobs: {}\n"
+        self.assertTrue(triggers_pull_request(text))
+
+    def test_quoted_trigger_key_counts_as_pull_request(self):
+        text = 'on:\n  "pull_request":\n    types: [opened]\njobs: {}\n'
+        self.assertTrue(triggers_pull_request(text))
+
+    def test_pull_request_target_counts_as_pull_request(self):
+        text = "on:\n  pull_request_target:\njobs: {}\n"
+        self.assertTrue(triggers_pull_request(text))
+
+    def test_push_only_workflow_is_not_pull_request(self):
+        text = "on:\n  push:\n    branches: [main]\njobs: {}\n"
+        self.assertFalse(triggers_pull_request(text))
+
+    def test_quoted_cancel_key_is_seen(self):
+        text = 'on: push\nconcurrency:\n  group: deploy\n  "cancel-in-progress": true\n'
+        self.assertEqual(cancel_values(text), [(4, "true")])
+
+    def test_bare_cancel_key_value_is_read(self):
+        text = "concurrency:\n  cancel-in-progress: false\n"
+        self.assertEqual(cancel_values(text), [(2, "false")])
+
+    def test_cancel_key_in_a_comment_is_not_read(self):
+        text = "  # its cancel-in-progress is\n  cancel-in-progress: false # note\n"
+        self.assertEqual(cancel_values(text), [(2, "false # note")])
+
+    def test_cancel_key_without_colon_fails_closed(self):
+        text = "concurrency:\n  cancel-in-progress true\n"
+        values = cancel_values(text)
+        self.assertEqual(len(values), 1)
+        self.assertNotIn(values[0][1], ALLOWED_CANCEL)
 
 
 if __name__ == "__main__":
