@@ -122,6 +122,10 @@ def run_statement(state, statement, out):
     text = re.sub(r"\s+", " ", statement).strip()
     if not text:
         return
+    # A test switch: with it on, every statement that changes an account fails, as a
+    # server in read-only mode would refuse it, and nothing is changed.
+    if state.get("refuse_writes") and re.match(r"(GRANT|REVOKE|CREATE USER|ALTER USER) ", text):
+        raise Refused("ERROR 1290 (HY000): The MySQL server is running with the --read-only option")
     match = re.fullmatch(
         r"SELECT ssl_type, max_user_connections FROM mysql\.user WHERE User='([^']*)' AND Host='([^']*)'", text
     )

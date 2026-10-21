@@ -237,6 +237,22 @@ db1_grants_verify_cases:
     state:
       replace: { 'ghost_second_site@10.20.1.%': *second_without_grant }
       top: { ignore_connection_limit: true }
+  - name: batch of statements the server refuses
+    code: sql-write
+    state:
+      users:
+        'backup@localhost':
+          static:
+            - SELECT
+            - PROCESS
+            - LOCK TABLES
+            - REPLICATION CLIENT
+            - SHOW VIEW
+            - EVENT
+            - TRIGGER
+            - RELOAD
+          dynamic: []
+      top: { refuse_writes: true }
   - name: provisioning program the server makes fail
     code: program-failed
     may_change: true
