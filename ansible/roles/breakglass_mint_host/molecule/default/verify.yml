@@ -22,6 +22,20 @@
       + (verify_ops1_plays | map(attribute='post_tasks', default=[]) | flatten)
       + (verify_ops1_plays | map(attribute='handlers', default=[]) | flatten) }}
     verify_all_tasks: '{{ verify_tasks + verify_ops1_tasks }}'
+    # The only keys a play of ops1.yml may carry. Any other key (vars_files makes
+    # the controller read a file, and under ansible-pull the controller is the
+    # host; vars_prompt, vars, module_defaults, collections and the rest change what
+    # a task does or reads) is refused rather than judged.
+    verify_ops1_extra_keys: "{{ verify_ops1_plays | map('list') | flatten | difference(verify_ops1_play_keys) | unique | list }}"
+    verify_ops1_play_keys:
+      - name
+      - hosts
+      - gather_facts
+      - pre_tasks
+      - roles
+      - tasks
+      - post_tasks
+      - handlers
     # The raw text of every file of the role that Ansible evaluates: the tasks and the two
     # variable files. A lookup or a template runs on the controller, which under
     # ansible-pull is the host itself, so it can read a file no module key shows.
@@ -289,6 +303,19 @@
           - verify_ops1_tasks | length >= 1
           - verify_all_tasks | length == verify_tasks | length + verify_ops1_tasks | length
         fail_msg: ops1.yml has an entry that is not a play, or the checks read none of its tasks, so a clean result would prove nothing.
+        quiet: true
+
+    # A play key the checks do not read can still make the controller read a file:
+    # vars_files does, and under ansible-pull the controller is the host. No lookup
+    # word is involved, so the text scan above cannot see it. So the keys of every
+    # play are an allow-list, not a deny-list.
+    - name: Assert every play of ops1.yml carries only keys on the allow-list
+      ansible.builtin.assert:
+        that:
+          - verify_ops1_extra_keys | length == 0
+        fail_msg: >-
+          A play of ops1.yml carries a key that is not on the allow-list: {{ verify_ops1_extra_keys }}.
+          A vars_files entry makes the controller read a file, which under ansible-pull is the host.
         quiet: true
 
     # The exact argv of each of the three commands, to the last word: the probe's

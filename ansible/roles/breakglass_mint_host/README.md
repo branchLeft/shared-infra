@@ -137,7 +137,11 @@ for the tool and the image stay as the fallback.
   `stat` whatever its name or path, and holds every module of both to the
   allow-list. It also requires every entry of that file to be a play (an
   `import_playbook` entry has no `hosts` and fails), so no task is brought in from
-  a file the test does not read. So no task in this role or in that playbook reads a
+  a file the test does not read. The keys of every play are held to an allow-list
+  (`name`, `hosts`, `gather_facts`, `pre_tasks`, `roles`, `tasks`, `post_tasks`,
+  `handlers`), so a `vars_files` entry, which makes the controller (the host itself
+  under `ansible-pull`) read a file with no lookup word for the text scan to see,
+  fails, as does any other key the test does not read. So no task in this role or in that playbook reads a
   file's content or checksum through `stat`, and no task calls a module off the
   list. The roles that `ops1.yml` lists are not read by this test: this role's own
   tasks are, and any other role has its own test. What the test cannot prove is that
