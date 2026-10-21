@@ -63,6 +63,13 @@ permissions:
   contents: read
   packages: read
 
+# One run per pull request. A push or merge_group run is its own group and is
+# never cancelled, so no run queues behind an apply paused for approval
+# (pinned by scripts/test_workflow_concurrency.py).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   typecheck:
     name: Type check
@@ -872,10 +879,10 @@ jobs:
   #     id 5090756).
   #   - A newer push run cancels older runs of this workflow still `waiting`
   #     for approval, from each plan job (the step after its checkout, which
-  #     the script it runs needs on disk). No `concurrency`
-  #     group does this job: a run paused for approval counts as in progress,
-  #     so a workflow-level group would queue the newer run behind it (and
-  #     cancel-in-progress would also cancel an apply that had started).
+  #     the script it runs needs on disk). The workflow-level group does not do
+  #     this job. It is keyed on the run id for every push, so no push run
+  #     queues behind a run paused for approval, and its cancel-in-progress is
+  #     false for every such run (pinned by scripts/test_workflow_concurrency.py).
   # ---------------------------------------------------------------------------
 
   changes:

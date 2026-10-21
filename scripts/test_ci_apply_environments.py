@@ -385,13 +385,20 @@ class CancelStepStructureTests(unittest.TestCase):
                 r"    permissions:\n      contents: read\n      packages: read\n      actions: write\n",
             )
 
-    def test_no_workflow_concurrency_group(self):
-        # A run paused for approval counts as in progress, so a workflow-level
-        # group would queue newer runs behind it (and cancel-in-progress
-        # would cancel an apply that had started). Job-level groups on the
-        # applies are a different thing and stay.
+    def test_workflow_concurrency_is_keyed_per_run_and_cancels_only_pull_requests(self):
+        # A run paused for approval counts as in progress. A workflow-level
+        # group that push runs share would queue a newer apply behind it, and
+        # a cancel on a non-PR run would cancel an apply that had started. So
+        # the key carries the run id (every push is its own group) and the
+        # cancel is true only on pull_request. The whole block is pinned in
+        # test_workflow_concurrency.py; this keeps the hazard pinned here too.
         header = self.text.split("\njobs:\n", 1)[0]
-        self.assertNotRegex(header, r"(?m)^concurrency:")
+        block = re.search(r"(?m)^concurrency:\n((?:[ \t]+.*\n)+)", header)
+        self.assertIsNotNone(block, "ci.yml has no top-level concurrency block")
+        body = block.group(1)
+        self.assertRegex(body, r"(?m)^  group: .*github\.run_id")
+        self.assertNotRegex(body, r"(?m)^  group: \$\{\{ github\.(ref|workflow) \}\}\s*$")
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", body)
 
 
 class CancelStepOrderTests(unittest.TestCase):
