@@ -53,9 +53,14 @@
     quiet: true
     fail_msg: The sshd drop-in directory is missing. Is OpenSSH installed on this host?
 
+# No checksum: the authorized keys file holds the NAT address, and the checksum
+# of a file with one unknown address in it is that address (ANS-16).
 - name: Look for the current sshd drop-in and authorized keys
   ansible.builtin.stat:
     path: '{{ item }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
   loop:
     - '{{ tunnel_account_sshd_dropin }}'
     - '{{ tunnel_account_authorized_keys_file }}'
@@ -115,9 +120,19 @@
     # No Ansible module reports sshd's effective settings, so this reads them
     # with the command module: argv form, read only, never reported as changed.
     # The assert below is the narrow comparison ANS-9 allows in place of a module.
+    # The connection is the one db1 makes: its NAT address, which the key is
+    # accepted from. sshd keeps the first value it obtains, so a Match Address
+    # block above the drop-in that loosens a setting for that address is seen
+    # only when the address is given. The address is a private input, hence no_log.
     - name: Read the effective sshd settings for the tunnel account
       ansible.builtin.command:
-        argv: [sshd, -T, -C, 'user={{ tunnel_account_user }},host=localhost,addr=127.0.0.1']
+        argv:
+          [
+            sshd,
+            -T,
+            -C,
+            'user={{ tunnel_account_user }},host=localhost,addr={{ tunnel_account_in.from_address }}',
+          ]
       register: tunnel_account_effective
       changed_when: false
       when: not ansible_check_mode

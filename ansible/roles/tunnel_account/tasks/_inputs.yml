@@ -3,11 +3,51 @@
 # caller names the files it wants in tunnel_account_wanted. Nothing here writes
 # a file, and no message or diff shows a value (ANS-16). A missing or unsafe
 # file fails the run and names its path; the path is a constant, not a value.
+#
+# Every stat of an input file asks for no checksum, no mime type and no
+# attributes. A result that fails an assert is printed whole by Ansible, so a
+# checksum of an address would be published with it, and a checksum of a
+# 32-bit address space is its value.
+
+# The inputs directory is only as safe as every directory above it: an owner of
+# a parent can rename the inputs directory and put its own in the place. Each
+# ancestor is looked at without following a link, on both halves, because both
+# read their inputs through this file.
+- name: Look at each directory above the inputs directory
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ tunnel_account_inputs_ancestors }}'
+  register: tunnel_account_ancestor_stats
+  check_mode: false
+
+- name: Refuse a directory above the inputs that is a link, not root's, or writable by others
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+      - item.stat.pw_name == 'root'
+      - not item.stat.wgrp
+      - not item.stat.woth
+    quiet: true
+    fail_msg: >-
+      A directory above the inputs directory must be a real directory owned by
+      root and not writable by its group or by others. The directory is
+      {{ item.item }}.
+  loop: '{{ tunnel_account_ancestor_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
 
 - name: Look at the inputs directory
   ansible.builtin.stat:
     path: '{{ tunnel_account_inputs_dir }}'
     follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
   register: tunnel_account_inputs_dir_stat
   check_mode: false
 
@@ -29,6 +69,9 @@
   ansible.builtin.stat:
     path: '{{ tunnel_account_inputs_dir }}/{{ item }}'
     follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
   loop: '{{ tunnel_account_wanted }}'
   register: tunnel_account_input_stats
   check_mode: false

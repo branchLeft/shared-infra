@@ -23,6 +23,15 @@ tunnel_account_authorized_keys_file: '{{ tunnel_account_authorized_keys_dir }}/a
 # and never writes them. The directory is root-only too (mode 0700). A pulled
 # host has no -e and no readable run output, so a file is the only channel.
 tunnel_account_inputs_dir: '{{ tunnel_account_key_dir }}/inputs'
+# Every directory above the inputs directory, root first. Each must be a real
+# directory owned by root and not writable by its group or by others, or the
+# path to the inputs could be swapped by whoever owns a parent. Keep this list
+# the path of the inputs directory, one entry per parent.
+tunnel_account_inputs_ancestors:
+  - /
+  - /etc
+  - /etc/branchleft
+  - '{{ tunnel_account_key_dir }}'
 
 # The unit file ships in this role's files/ directory. The pin is a tripwire
 # against an accidental edit of that file, not a control on a deliberate change:
@@ -50,6 +59,7 @@ tunnel_account_expected_effective:
   x11forwarding: 'no'
   permittty: 'no'
   permittunnel: 'no'
+  permituserrc: 'no'
   forcecommand: '{{ tunnel_account_nologin }}'
 
 # Shapes, matched with \Z so a trailing line break does not pass. An octet is

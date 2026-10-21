@@ -149,9 +149,13 @@
         label: '{{ item.v | to_json }}'
 
     # ---- Read-backs of the configuration -------------------------------------
+    # Every stat below that reads a private key or a file with an input in it
+    # asks for no checksum: a checksum of such a file is printed in the log, and
+    # the scan at the end looks for it (ANS-16).
     - name: Read db1's key and its owner and mode back
       ansible.builtin.stat:
         path: /etc/branchleft/db-tunnel/id_ed25519
+        get_checksum: false
       register: tunnel_account_verify_key
 
     - name: Assert the key is owned by the tunnel account and mode 0600 (control 8)
@@ -227,11 +231,20 @@
           - (tunnel_account_verify_dropin.content | b64decode).splitlines() | last == 'Match all'
         quiet: true
 
+    # The connection asked about is db1's: the NAT address, as the role asks.
+    # The address is a private input, so the command's arguments are not logged.
     - name: Read the effective sshd settings for the tunnel account back (control 3)
       ansible.builtin.command:
-        argv: [sshd, -T, -C, 'user=dbtunnel,host=localhost,addr=127.0.0.1']
+        argv:
+          [
+            sshd,
+            -T,
+            -C,
+            'user=dbtunnel,host=localhost,addr={{ tunnel_account_test_inputs.from_address }}',
+          ]
       register: tunnel_account_verify_sshd
       changed_when: false
+      no_log: true
 
     - name: Assert sshd applies one forward each way and no command
       ansible.builtin.assert:
@@ -240,6 +253,7 @@
           - tunnel_account_verify_sshd.stdout_lines | select('match', '^permitopen ') | list == ['permitopen 127.0.0.1:9104']
           - "'forcecommand /usr/sbin/nologin' in tunnel_account_verify_sshd.stdout_lines"
           - "'allowtcpforwarding yes' in tunnel_account_verify_sshd.stdout_lines"
+          - "'permituserrc no' in tunnel_account_verify_sshd.stdout_lines"
         quiet: true
 
     - name: Read the pinned known_hosts file and the target file back
@@ -273,6 +287,7 @@
     - name: Read the owner and mode of the files db1 wrote
       ansible.builtin.stat:
         path: '{{ item }}'
+        get_checksum: false
       loop:
         - /etc/branchleft/db-tunnel/known_hosts
         - /etc/branchleft/db-tunnel/target.env
@@ -614,6 +629,102 @@
             path: '{{ tunnel_account_verify_inputs_dir }}'
             mode: '0700'
 
+    # The inputs directory is only as safe as the directories above it. Both
+    # halves read their inputs through the same file, so one case each.
+    - name: Case, a directory above the inputs that its group can write is refused by the replica half (control 11)
+      block:
+        - name: Make the key directory group-writable
+          ansible.builtin.file:
+            path: /etc/branchleft/db-tunnel
+            mode: '0775'
+        - name: Run the replica half with the writable key directory
+          ansible.builtin.include_role:
+            name: branchleft.tunnel_account
+            tasks_from: replica
+        - name: Fail if the writable directory was accepted
+          ansible.builtin.fail:
+            msg: The role went on with a directory above the inputs that its group can write.
+      rescue:
+        - name: Assert the refusal was the ancestor check, and named the directory
+          ansible.builtin.assert:
+            that:
+              - "'A directory above the inputs directory must be a real directory' in (ansible_failed_result | string)"
+              - "'/etc/branchleft/db-tunnel' in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: The role did not refuse the writable directory with its own message.
+      always:
+        - name: Put the key directory back to mode 0755
+          ansible.builtin.file:
+            path: /etc/branchleft/db-tunnel
+            mode: '0755'
+
+    - name: Case, a directory above the inputs that is not root's is refused by db1 (control 11)
+      block:
+        - name: Give the parent of the key directory to another user
+          ansible.builtin.file:
+            path: /etc/branchleft
+            owner: nobody
+        - name: Run db1 with the parent owned by another user
+          ansible.builtin.include_role:
+            name: branchleft.tunnel_account
+            tasks_from: db1
+        - name: Fail if the other user's directory was accepted
+          ansible.builtin.fail:
+            msg: The role went on with a directory above the inputs owned by another user.
+      rescue:
+        - name: Assert the refusal was the ancestor check, and named the directory
+          ansible.builtin.assert:
+            that:
+              - "'A directory above the inputs directory must be a real directory' in (ansible_failed_result | string)"
+              - "'/etc/branchleft.' in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: The role did not refuse the other user's directory with its own message.
+      always:
+        - name: Give the parent of the key directory back to root
+          ansible.builtin.file:
+            path: /etc/branchleft
+            owner: root
+            group: root
+
+    # Control 3: the settings are read for db1's own connection. A Match Address
+    # block ahead of the drop-in that loosens a setting for the NAT address is
+    # the first value sshd obtains, so a read-back that asks about another
+    # address does not see it. The role must fail on it and put its files back.
+    - name: Case, a looser setting for the NAT address ahead of the drop-in is refused (control 3)
+      block:
+        - name: Place an earlier drop-in that loosens the forward for the NAT address
+          ansible.builtin.copy:
+            content: "Match Address {{ tunnel_account_test_inputs.from_address }}\n    PermitOpen any\n"
+            dest: /etc/ssh/sshd_config.d/00-test-loose.conf
+            owner: root
+            group: root
+            mode: '0644'
+          no_log: true
+          diff: false
+        - name: Run the replica half with the looser setting ahead of its drop-in
+          ansible.builtin.include_role:
+            name: branchleft.tunnel_account
+            tasks_from: replica
+        - name: Fail if the looser setting was accepted
+          ansible.builtin.fail:
+            msg: The role went on with a looser sshd setting for the NAT address.
+      rescue:
+        - name: Assert the failure was the role's own read-back message
+          ansible.builtin.assert:
+            that:
+              - "'did not pass its check or read-back' in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: The role did not refuse the looser sshd setting with its own message.
+      always:
+        - name: Remove the earlier drop-in
+          ansible.builtin.file:
+            path: /etc/ssh/sshd_config.d/00-test-loose.conf
+            state: absent
+        - name: Run the replica half again to put its files back
+          ansible.builtin.include_role:
+            name: branchleft.tunnel_account
+            tasks_from: replica
+
     # Control 7: an sshd configuration the check refuses is rolled back. A known
     # previous drop-in is put in place first, so the rollback has something to
     # restore that the role's own output does not equal. The stand-in sshd refuses
@@ -689,6 +800,7 @@
     - name: Read the key back after the refused teardown
       ansible.builtin.stat:
         path: /etc/branchleft/db-tunnel/id_ed25519
+        get_checksum: false
       register: tunnel_account_verify_kept
 
     - name: Assert the refused teardown left the key in place
@@ -709,6 +821,7 @@
     - name: Read the teardown back (control 9)
       ansible.builtin.stat:
         path: '{{ item }}'
+        get_checksum: false
       loop:
         - /etc/branchleft/db-tunnel/id_ed25519
         - /etc/branchleft/db-tunnel/id_ed25519.pub
@@ -823,6 +936,8 @@
           needle: ' : Pin the replica host key'
         - what: the name of a task that writes the authorized key
           needle: ' : Write the authorized key for db1 with from= and the restrictions'
+        - what: the stat result of an input file, the kind that carries a checksum unless told not to
+          needle: '"isreg": true'
         - what: a result censored by no_log
           needle: '(censored due to no_log)'
         - what: a diff header from the check run
@@ -856,6 +971,24 @@
           from_address_b64: '{{ (tunnel_account_test_inputs.from_address ~ tunnel_account_verify_nl) | b64encode }}'
           second_replica_host_b64: '{{ ("172.32.5.5" ~ tunnel_account_verify_nl) | b64encode }}'
           second_from_address_b64: '{{ ("100.128.0.9" ~ tunnel_account_verify_nl) | b64encode }}'
+          # A stat reports the sha1 of a file unless it is told not to, and an
+          # address file has one of 2**32 contents: the checksum is the value.
+          # These are the checksums of the input files as the operator placed
+          # them, of the second set, and of the files the role renders from them.
+          replica_host_sha1: '{{ (tunnel_account_test_inputs.replica_host ~ tunnel_account_verify_nl) | hash("sha1") }}'
+          replica_host_key_sha1: '{{ (tunnel_account_test_inputs.replica_host_key ~ tunnel_account_verify_nl) | hash("sha1") }}'
+          from_address_sha1: '{{ (tunnel_account_test_inputs.from_address ~ tunnel_account_verify_nl) | hash("sha1") }}'
+          db1_subnet_prefix_sha1: '{{ (tunnel_account_verify_db1_subnet_input ~ tunnel_account_verify_nl) | hash("sha1") }}'
+          second_replica_host_sha1: '{{ ("172.32.5.5" ~ tunnel_account_verify_nl) | hash("sha1") }}'
+          second_from_address_sha1: '{{ ("100.128.0.9" ~ tunnel_account_verify_nl) | hash("sha1") }}'
+          authorized_keys_sha1: >-
+            {{ lookup('ansible.builtin.file', tunnel_account_verify_scenario_dir ~ '/files/golden/authorized_keys', rstrip=false)
+               | hash('sha1') }}
+          known_hosts_sha1: >-
+            {{ (tunnel_account_test_inputs.replica_host ~ ' ' ~ tunnel_account_test_inputs.replica_host_key ~ tunnel_account_verify_nl) | hash('sha1') }}
+          target_env_sha1: >-
+            {{ ('DB_TUNNEL_REPLICA_HOST=' ~ tunnel_account_test_inputs.replica_host ~ tunnel_account_verify_nl
+                ~ 'DB_TUNNEL_SOURCE_ADDRESS=' ~ tunnel_account_verify_db1_address ~ tunnel_account_verify_nl) | hash('sha1') }}
       no_log: true
 
     - name: Assert no private input reached the log

@@ -21,9 +21,12 @@ address on the private subnet from the `all_ipv4_addresses` fact. The role needs
 
 The run-time inputs are not role arguments. Each is one file in
 `/etc/branchleft/db-tunnel/inputs/`, owned by root and group root, mode `0600`, a
-regular file (not a link). The directory is owned by root, mode `0700`. The
-operator places each file once. The role reads them, asserts their owner, group,
-mode and type, and never writes them. A missing or unsafe file fails the run and
+regular file (not a link). The directory is owned by root, mode `0700`. Every
+directory above it (`/`, `/etc`, `/etc/branchleft`, `/etc/branchleft/db-tunnel`)
+must be a real directory owned by root and not writable by its group or by
+others, on both halves, because an owner of a parent could swap the inputs
+directory for its own. The operator places each file once. The role reads them,
+asserts their owner, group, mode and type, and never writes them. A missing or unsafe file fails the run and
 names its path. The same files serve a check run and the nightly run alike.
 
 | File                | Read by   | What it is                                                                                                       |
@@ -47,12 +50,15 @@ No private input reaches a log. Every task that reads or renders an input has
 `no_log: true`, and the tasks that render one into a file also have
 `diff: false`, because a `--diff` run (the plan job, and the harness's check
 runs) prints the file's content. The asserts name no value: a failure says which
-input is wrong and not what it held. The Molecule scenario writes its whole log
-at verbosity 3, and `verify` scans it for each input. See "Tests".
+input is wrong and not what it held. Every `stat` of an input, or of a file
+rendered from one, sets `get_checksum: false`: a failed assert prints the whole
+stat result, and the sha1 of a file that holds one address is that address. The
+Molecule scenario writes its whole log at verbosity 3, and `verify` scans it for
+each input, as text, as base64 and as sha1. See "Tests".
 
 ## Run order (the gated live run)
 
-The live run is Rob's, through the gated apply. The agent does not apply.
+The live run is the owner's, through the gated apply. No agent applies it.
 
 1. db1: `tasks_from: db1_key`. Copy the printed public key.
 2. Operator places the five input files (above) on db1 and on the replica host,
@@ -69,9 +75,12 @@ first; `regenerate: never` keeps the existing key.
 The role writes `/etc/ssh/sshd_config.d/50-branchleft-db-tunnel.conf` and
 `/etc/ssh/branchleft-db-tunnel/authorized_keys`. It checks the whole sshd
 configuration with `sshd -t`, reloads sshd, then reads `sshd -T` back for the
-tunnel account and compares each setting in `tunnel_account_expected_effective`
-(`vars/main.yml`) with the one it wrote: one `permitlisten`, one `permitopen`, no
-command, public key only, and the forwardings and tty it does not allow. The drop-in ends with `Match all`, so no
+tunnel account, connecting from the `from_address` input (db1's NAT address, so a
+`Match Address` block ahead of the drop-in is seen), and compares each setting in
+`tunnel_account_expected_effective` (`vars/main.yml`, one entry for each of the
+13 settings the drop-in writes) with the one it wrote: one `permitlisten`, one
+`permitopen`, no command, public key only, and the forwardings, tty and user rc
+file it does not allow. The drop-in ends with `Match all`, so no
 later line of the main configuration is read as part of the tunnel account's
 block. If a check fails, the previous drop-in and authorized key are put back,
 and the run fails naming the cause. Under `--check` the role changes nothing.
@@ -131,23 +140,28 @@ converge, idempotence, verify. Verify does these things, in order:
   private address and a non-address for each address input, a second line, a bad
   key, a key with options, a public subnet prefix, a subnet with no address of the
   host, a missing file, a file that is not mode 0600, a symbolic link, an inputs
-  directory that is not root-only, a sshd configuration that fails its check (the
+  directory that is not root-only, a directory above it that its group can write
+  or that another user owns, a looser setting for the NAT address in an earlier
+  drop-in, a sshd configuration that fails its check (the
   marked previous drop-in must be back, byte for byte), an unconfirmed teardown,
   and an existing account with a login shell.
 - Runs teardown with confirmation, reads it back, and runs the three halves again
   so the configured check meets a configured host.
 - Last, scans the log of every Ansible run of the scenario, check runs with
-  `--diff` included, for each private input, as text and as the base64 that
-  `slurp` returns. It first requires the log to hold
-  the names of tasks that handle inputs, a diff header, a censored result and the
-  public key the role prints on purpose, so an empty log cannot pass.
+  `--diff` included, for each private input, as text, as the base64 that
+  `slurp` returns and as the sha1 that `stat` returns unless told not to. It
+  first requires the log to hold the names of tasks that handle inputs, a diff
+  header, a stat result, a censored result and the public key the role prints on
+  purpose, so an empty log cannot pass.
 
 ## Limits
 
 - The sshd in the container is a stand-in (`molecule/default/files/sshd-stub.sh`):
   the pinned test image has no OpenSSH server. It answers `sshd -t` and `sshd -T`
   from the drop-ins on disk, refuses keywords it does not know and keywords
-  outside a Match block, and ignores `-C` except for `user=`. It is not OpenSSH.
+  outside a Match block, evaluates only the `all`, `User` and `Address` criteria
+  of a Match line, and requires `-C` to name the user and the `from_address`
+  input as the address. It is not OpenSSH.
   Real sshd enforcement is unproven until the lab proof or the live run.
 - The container has no `ssh` binary and is not privileged. The unit is installed,
   enabled and loaded by systemd, and systemd accepts its start. That the process
