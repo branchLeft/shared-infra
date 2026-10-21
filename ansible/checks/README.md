@@ -57,7 +57,7 @@ the file it runs; the gated workflows; and the owner's deploy approval of the ga
 The last two are not yet wired in this repo, as the roles paragraph above says. Ownership
 differs by file. `trust/README.md` is under the owner's merge (`/ansible/trust/` in
 CODEOWNERS). `playbooks/README.md` has no CODEOWNERS line, so the reviewer App may merge an
-edit to it alone until `pull-roles-owner-only-2340` is decided by the owner.
+edit to it alone until the owner decides which files the reviewer App may merge alone.
 
 Out of scope: a case-insensitive filesystem. On macOS Ansible can find
 `group_vars/all.YML` under the name `all.yml`, and R6 reads only the exact suffix. This is
