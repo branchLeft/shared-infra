@@ -1289,13 +1289,13 @@
             edge_stack_verify_run_name: p20b
             edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p20.path }}'
 
-        - name: Assert the disabled unit was left alone and not recorded, and the next run restarted it
+        - name: Assert the disabled unit was left alone and its class left pending, and the next run restarted it
           ansible.builtin.assert:
             that:
               - not edge_stack_verify_runs.p20a.failed
               - "'unit-start' not in edge_stack_verify_runs.p20a.kinds"
               - edge_stack_verify_runs.p20a.after.compose_sha == edge_stack_verify_variants.p20.compose
-              - edge_stack_verify_runs.p20a.after.stamps.compose == edge_stack_verify_runs.p20a.before.stamps.compose
+              - edge_stack_verify_runs.p20a.after.stamps.compose == 'pending'
               - edge_stack_verify_runs.p20a.after.unit_enabled == 'disabled'
               - not edge_stack_verify_runs.p20b.failed
               - edge_stack_verify_runs.p20b.kinds == ['unit-start']
@@ -1304,6 +1304,74 @@
             fail_msg: >-
               A unit that is not enabled was restarted or recorded, or was not restarted once it was enabled. The first
               run called {{ edge_stack_verify_runs.p20a.kinds }}, the second {{ edge_stack_verify_runs.p20b.kinds }}.
+
+    # p20 starts with stamps present. Here there are none: a host where the owner has
+    # not yet started the unit, or where containers were left running from an earlier
+    # hand `up`. The Compose file is placed while the unit is not enabled, then the
+    # owner enables the unit WITHOUT starting it. A class that was not marked pending
+    # when its file was placed would now have no stamp and no difference, would be
+    # adopted, and would stamp a fingerprint the running containers never got.
+    - name: Case p20c, no stamps, the unit is not enabled, and the unit is enabled without being started
+      tags: [p20c]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Remove the three stamps
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /var/lib/branchleft/edge.caddy.applied
+            - /var/lib/branchleft/edge.compose.applied
+            - /var/lib/branchleft/edge.crowdsec.applied
+
+        - name: Stop and disable the unit
+          ansible.builtin.systemd_service:
+            name: branchleft-compose@edge.service
+            enabled: false
+            state: stopped
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p20c
+            edge_stack_verify_variant_edits:
+              - { path: compose.yml, append: "\n# case p20c\n" }
+
+        - name: Apply the role while the unit is not enabled
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p20c1
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p20c.path }}'
+
+        - name: Enable the unit without starting it
+          ansible.builtin.systemd_service:
+            name: branchleft-compose@edge.service
+            enabled: true
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p20c2
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p20c.path }}'
+
+        - name: Assert the class was left pending, not adopted, and the unit was restarted once enabled
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p20c1.failed
+              - "'unit-start' not in edge_stack_verify_runs.p20c1.kinds"
+              - edge_stack_verify_runs.p20c1.after.compose_sha == edge_stack_verify_variants.p20c.compose
+              - edge_stack_verify_runs.p20c1.after.stamps.compose == 'pending'
+              - not edge_stack_verify_runs.p20c2.failed
+              - edge_stack_verify_runs.p20c2.kinds == ['unit-start']
+              - edge_stack_verify_runs.p20c2.after.stamps.compose is match(edge_stack_verify_hex64)
+            quiet: true
+            fail_msg: >-
+              A Compose file placed while the unit was not enabled, on a host with no stamp, was adopted once the
+              unit was enabled instead of acted on. The first run left the Compose stamp
+              '{{ edge_stack_verify_runs.p20c1.after.stamps.compose }}' and called {{ edge_stack_verify_runs.p20c1.kinds }};
+              the second called {{ edge_stack_verify_runs.p20c2.kinds }}.
 
     - name: Case p21, the unit is failed and its restart fails again, then works on a corrected file
       tags: [p21]

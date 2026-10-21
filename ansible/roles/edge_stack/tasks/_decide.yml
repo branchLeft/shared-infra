@@ -135,9 +135,18 @@
       {{ not edge_stack_crowdsec_adopt | bool and (edge_stack_crowdsec_drift | bool or edge_stack_stamp.crowdsec != edge_stack_fp_crowdsec) }}
   no_log: true
 
+# The Compose class is marked `pending` before its file is placed whenever the file
+# drifts, whether or not the unit is enabled (and so whether or not the class is due
+# now). A file placed with no mark would make a host with no stamp look hand-delivered:
+# once the unit was enabled, the class would be adopted and the unit never restarted.
+- name: Work out which classes are marked pending before a file is placed
+  ansible.builtin.set_fact:
+    edge_stack_compose_mark: '{{ edge_stack_compose_due | bool or edge_stack_compose_drift | bool }}'
+
 - name: Say that the unit is not enabled and is left alone
   ansible.builtin.debug:
     msg: >-
       {{ edge_stack_unit }} is not enabled, so it is not started or restarted here and its Compose class is not
-      recorded: the owner's first start is RUNBOOK-edge step 5. The files are still placed.
+      recorded (a Compose file that differs leaves the class pending, so it is acted on once the unit is enabled):
+      the owner's first start is RUNBOOK-edge step 5. The files are still placed.
   when: not edge_stack_unit_enabled | bool

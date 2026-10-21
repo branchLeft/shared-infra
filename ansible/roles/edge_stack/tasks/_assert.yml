@@ -22,11 +22,14 @@
       written by branchleft-deploy. A tag, a second line or anything after the digest is refused.
 
 # The owner places this file (RUNBOOK-edge step 3). The role asserts what it must be
-# and no value of it comes into the run. Two processes on the host read the file, and
-# neither returns its content. This stat hashes it (the module reads the whole file,
-# as root, on the host) and only the sha256 comes back, for the fingerprint of the
-# Compose class; no_log keeps even that out of the log. Docker Compose reads it when
-# the locked script runs (README, "Environment semantics").
+# and no value of it comes into the run. Four things on the host read the file, and
+# none returns its content: this stat, Docker Compose, systemd and the containers
+# (README, "Environment semantics"). This stat hashes it (the module reads the whole
+# file, as root, on the host) and only the sha256 comes back, for the fingerprint of
+# the Compose class; no_log keeps even that out of the log. Docker Compose opens it
+# through --env-file in every Compose call of the locked script; systemd opens it as
+# the unit's EnvironmentFile= when the unit is restarted; the containers receive the
+# values it holds.
 - name: Look at the secrets file
   ansible.builtin.stat:
     path: '{{ edge_stack_env_file }}'

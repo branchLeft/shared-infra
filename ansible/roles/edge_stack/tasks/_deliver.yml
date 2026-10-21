@@ -109,6 +109,14 @@
     # class with no stamp and no difference, which the next run takes for a host
     # that was delivered by hand: it would stamp the class and never act on it. A
     # refused candidate stops the run above, with the host and its stamps as they were.
+    #
+    # The Compose class is marked whenever its file drifts, and not only when it is
+    # due. It is not due while its unit is not enabled (the owner's first start), but
+    # the file is still placed below. Left unmarked, the placed file would equal the
+    # repository's and a host with no stamp would look hand-delivered: once the owner
+    # enabled the unit without starting it, the next run would adopt the class and stamp
+    # a fingerprint the running containers never got. Marked `pending`, the class is
+    # never adopted and is due as soon as the unit is enabled.
     - name: Mark each class that is due as pending
       ansible.builtin.copy:
         content: "pending\n"
@@ -118,7 +126,7 @@
         mode: '0600'
       loop:
         - { name: caddy, due: '{{ edge_stack_caddy_due }}' }
-        - { name: compose, due: '{{ edge_stack_compose_due }}' }
+        - { name: compose, due: '{{ edge_stack_compose_mark }}' }
         - { name: crowdsec, due: '{{ edge_stack_crowdsec_due }}' }
       loop_control:
         label: '{{ item.name }}'
