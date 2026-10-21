@@ -18,6 +18,7 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
+from typing import Final
 
 import pull_bootstrap as tool
 from ruamel.yaml import YAML
@@ -258,15 +259,16 @@ class VerifyTest(RepoCase):
 
     def test_a_pin_on_a_local_main_that_origin_does_not_have_is_red(self) -> None:
         # The record's builder committed on a local main and never pushed it: HEAD holds the
-        # pin, so a check against HEAD alone would pass; origin's main does not hold it.
+        # pin, so a check against HEAD alone would pass; origin's main does not hold it. The
+        # check refuses at HEAD, which is not the tip of origin's main.
         self.repo.edit(tool.FETCHED["wrapper"], lambda text: text + "# only on this machine\n")
         self.repo.run("add", "-A")
         self.repo.run("commit", "-q", "-m", "local only")
         local = self.repo.head()
         record = self.record_from_unpushed_head(local)
-        self.assertEqual(
-            ["wrapper: the pin is not an ancestor of origin/main"], self.problems(record)
-        )
+        found = self.problems(record)
+        self.assertEqual(1, len(found))
+        self.assertIn("is not the tip of origin/main", found[0])
 
     def record_from_unpushed_head(self, local: str) -> dict[str, object]:
         """Return the record that HEAD alone gives, as a builder on a local main would make it."""
@@ -289,7 +291,46 @@ class VerifyTest(RepoCase):
         self.repo.run("checkout", "-q", "--detach", self.first)
         self.assertEqual(newer, entry_of(record, "wrapper")["pin"])
         found = self.problems(record)
-        self.assertIn("wrapper: the pin is not an ancestor of HEAD", found)
+        self.assertEqual(1, len(found))
+        self.assertIn("is not the tip of origin/main", found[0])
+
+    def test_a_checkout_behind_main_does_not_verify_a_pin_that_main_has_superseded(self) -> None:
+        # The record was built from the first commit, then main changed the program. A checkout
+        # still at the first commit sees the pin as the last change to the file, so a check that
+        # read HEAD's history would call the record current. It must read main's.
+        record = self.record()
+        self.repo.edit(tool.FETCHED["program"], lambda text: text + "# changed on main\n")
+        self.repo.commit("main changes the program")
+        self.repo.run("checkout", "-q", "--detach", self.first)
+        found = self.problems(record)
+        self.assertEqual(1, len(found))
+        self.assertIn("is not the tip of origin/main", found[0])
+        self.assertEqual(1, self.verify_status(record))
+
+    def test_a_checkout_behind_main_does_not_verify_a_configuration_main_has_changed(self) -> None:
+        record = self.record()
+        self.repo.edit(
+            tool.DEFAULTS_PATH, lambda text: text.replace("keep_runs: 50", "keep_runs: 60")
+        )
+        self.repo.commit("main changes the configuration")
+        self.repo.run("checkout", "-q", "--detach", self.first)
+        found = self.problems(record)
+        self.assertEqual(1, len(found))
+        self.assertIn("is not the tip of origin/main", found[0])
+
+    def test_a_checkout_at_the_tip_of_main_still_verifies_a_current_record(self) -> None:
+        # A control for the two above: they are red because HEAD is behind, not because
+        # verify refuses everything.
+        record = self.record()
+        self.repo.run("checkout", "-q", "--detach", "origin/main")
+        self.assertEqual([], self.problems(record))
+
+    def verify_status(self, record: dict[str, object]) -> int:
+        """Return the exit status of the command line's verify for a record."""
+        path = self.repo.path.parent / "record-to-verify.json"
+        self.addCleanup(path.unlink, missing_ok=True)
+        path.write_text(json.dumps(record), encoding="utf-8")
+        return tool.main(["verify", "--repo", str(self.repo.path), "--record", str(path)])
 
     def test_a_pin_the_repository_does_not_have_is_red(self) -> None:
         record = self.record()
@@ -480,6 +521,32 @@ class ConfigRefusalTest(unittest.TestCase):
             tool.check_playbook("- hosts: all\n  roles: []\n")
         tool.check_playbook(read(tool.PLAYBOOK_PATH))
 
+    def test_a_playbook_that_loads_another_file_of_the_same_name_is_refused(self) -> None:
+        # The tail of the path matches, so a check on the tail alone passes it; the playbook
+        # would then load a file the record's configuration was not read from.
+        entry = "{{ playbook_dir }}/../inventories/production/group_vars/edge/pull_trigger.yml"
+        playbook = read(tool.PLAYBOOK_PATH)
+        self.assertIn(entry, playbook)
+        tail = "inventories/production/group_vars/edge/pull_trigger.yml"
+        for other in (
+            "{{ playbook_dir }}/../../other/" + tail,
+            "/srv/x/" + tail,
+            "{{ playbook_dir }}/../inventories/staging/../production/group_vars/edge/"
+            "pull_trigger.yml",
+            "{{ playbook_dir }}/../" + tail + " ",
+        ):
+            with self.subTest(other=other):
+                changed = playbook.replace(entry, other)
+                self.assertNotEqual(playbook, changed)
+                with self.assertRaisesRegex(tool.BootstrapError, "does not load"):
+                    tool.check_playbook(changed)
+
+    def test_the_entry_the_playbook_is_checked_for_is_the_one_it_uses_today(self) -> None:
+        self.assertEqual(
+            "{{ playbook_dir }}/../inventories/production/group_vars/edge/pull_trigger.yml",
+            tool.PLAYBOOK_VARS_ENTRY,
+        )
+
 
 class ParityTest(unittest.TestCase):
     """C11: the tool writes the bytes that Ansible writes when it runs the role's own task."""
@@ -584,6 +651,56 @@ class PackagesTest(unittest.TestCase):
         # A control: an empty result on both sides would also be equal.
         self.assertIn("python3-venv", self.ts_list("ENROLMENT_PACKAGES"))
         self.assertIn("git", self.ts_list("ENROLMENT_PACKAGES"))
+
+
+class LayoutTest(unittest.TestCase):
+    """The first boot's paths are the two roles' paths, not a second spelling that can drift.
+
+    The first boot writes the two command-restricted root keys with the pull program's path and
+    puts the program, the configuration and the Ansible environment where the roles keep them. If
+    a role moved one, a host enrolled by an older document would name a program the pull no longer
+    maintains. Each path is held equal to the role variable that owns it, as the package list is.
+    """
+
+    # A key of cloudInit.ts's PRODUCTION_LAYOUT, then the role file and variable it must equal.
+    PARITY: Final = (
+        ("wrapperPath", "ansible/roles/pull_trigger/vars/main.yml", "pull_trigger_program_path"),
+        ("configDir", "ansible/roles/pull_trigger/vars/main.yml", "pull_trigger_config_dir"),
+        ("configPath", "ansible/roles/pull_trigger/vars/main.yml", "pull_trigger_config_path"),
+        ("stateDir", "ansible/roles/pull_trigger/vars/main.yml", "pull_trigger_state_dir"),
+        ("logDir", "ansible/roles/pull_trigger/vars/main.yml", "pull_trigger_log_dir"),
+        ("runtimeRoot", "ansible/roles/ansible_runtime/defaults/main.yml", "ansible_runtime_root"),
+        ("runtimeLink", "ansible/roles/ansible_runtime/defaults/main.yml", "ansible_runtime_link"),
+    )
+
+    @staticmethod
+    def production_layout(source: str) -> dict[str, str]:
+        """Return the string values of PRODUCTION_LAYOUT in the TypeScript text.
+
+        Raises:
+            AssertionError: The object is not in the text.
+        """
+        match = re.search(
+            r"export const PRODUCTION_LAYOUT: EnrolmentLayout = \{(.*?)\n\};", source, re.DOTALL
+        )
+        if match is None:
+            message = "PRODUCTION_LAYOUT is not in cloudInit.ts"
+            raise AssertionError(message)
+        return dict(re.findall(r"^\s+(\w+): '([^']*)',$", match.group(1), re.MULTILINE))
+
+    def test_each_path_is_the_one_the_role_that_owns_it_sets(self) -> None:
+        layout = self.production_layout(CLOUD_INIT.read_text(encoding="utf-8"))
+        for key, path, variable in self.PARITY:
+            with self.subTest(key=key):
+                document = YAML(typ="safe").load(read(path))
+                self.assertEqual(document[variable], layout.get(key))
+
+    def test_the_scan_finds_what_it_is_meant_to_find(self) -> None:
+        # A control: an empty layout on one side and a missing variable on the other would be equal.
+        layout = self.production_layout(CLOUD_INIT.read_text(encoding="utf-8"))
+        for key, _, _ in self.PARITY:
+            with self.subTest(key=key):
+                self.assertTrue(layout.get(key, "").startswith("/"))
 
 
 class FixedValuesTest(unittest.TestCase):

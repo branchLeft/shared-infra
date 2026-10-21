@@ -144,10 +144,13 @@ regenerated). With it:
   squash merge cannot remove the pinned commit, and the configuration is
   rendered from the role's own task and variable files, never written a second
   time (`ansible/tools/test_pull_bootstrap.py` runs the role's task and compares
-  bytes). Both commands first fetch `main` from `origin` afresh. `generate`
-  refuses unless HEAD is the tip of it, and `verify` refuses a record whose pin
-  is not an ancestor of it, so a record built on a branch, or one naming a
-  commit that only a pull request ref or a fork holds, is never accepted.
+  bytes). Both commands first fetch `main` from `origin` afresh and both refuse
+  unless HEAD is the tip of it, because the history a pin is read from and the
+  files the configuration is rendered from are HEAD's: a checkout behind `main`
+  would otherwise call current a record that `main` has since superseded.
+  `verify` also refuses a record whose pin is not an ancestor of the tip, so a
+  record built on a branch, or one naming a commit that only a pull request ref
+  or a fork holds, is never accepted.
   `assertPullBootstrap` refuses anything that is not exactly that shape; it
   cannot tell which commits are on `main`, so the binding is the tool's.
   The package carries no copy of the record; the stack passes the one it was
@@ -158,7 +161,11 @@ regenerated). With it:
   `pullBootstrapFixed.json`. `cloudInit.ts` imports it (the build copies it into
   `dist`) and `pull_bootstrap.py` reads it, so a path that moves is changed in one
   file and neither side holds a copy; the tools' tests fail when either source
-  writes one of the values again.
+  writes one of the values again. The paths the two roles keep (the pull program,
+  its configuration, the state and log directories, the Ansible environment) are
+  written in `PRODUCTION_LAYOUT` too, since a first boot has no Ansible to read
+  them from; `ansible/tools/test_pull_bootstrap.py` holds each equal to the role
+  variable that owns it.
 - **Root keeps its console login.** The `root` entry sets `lock_passwd: false`.
   cloud-init defaults it to true and applies it to an account that already
   exists, which would lock the password. Key access is unaffected either way; the

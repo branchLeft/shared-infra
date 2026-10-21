@@ -8,10 +8,12 @@ and the configuration text, and checks a record against the repository.
 
 The pin of each file is the last commit that changed it, read from the history, so the record
 never names a commit that a squash merge could remove. That is enforced here, not assumed:
-both commands first fetch ``main`` from ``origin`` afresh and refuse without it. ``generate``
-refuses unless HEAD is the tip of that fetched ``main``, and ``verify`` refuses a record whose
-pin is not an ancestor of it, so a record built on a branch, or one that names a commit that
-only a pull request's ref or a fork holds, is never accepted. ``origin`` is taken to be
+both commands first fetch ``main`` from ``origin`` afresh and refuse without it. Both then
+refuse unless HEAD is the tip of that fetched ``main``: the history a pin is read from and the
+files the configuration is rendered from are HEAD's, so a checkout behind ``main`` would call a
+record current that ``main`` has since superseded. ``verify`` also refuses a record whose pin is
+not an ancestor of the tip, so a record built on a branch, or one that names a commit that only
+a pull request's ref or a fork holds, is never accepted. ``origin`` is taken to be
 ``branchLeft/shared-infra``: the tool runs in a checkout of it.
 
 The configuration is not written a second time here. Its keys are read from the role's own
@@ -125,6 +127,8 @@ VARS_PATH: Final = "ansible/roles/pull_trigger/vars/main.yml"
 TASKS_PATH: Final = "ansible/roles/pull_trigger/tasks/main.yml"
 GROUP_VARS_PATH: Final = "ansible/inventories/production/group_vars/edge/pull_trigger.yml"
 INPUTS: Final = (DEFAULTS_PATH, VARS_PATH, TASKS_PATH, GROUP_VARS_PATH, PLAYBOOK_PATH)
+# How the playbook, which lives in ansible/playbooks/, names the group variables above.
+PLAYBOOK_VARS_ENTRY: Final = "{{ playbook_dir }}/../" + GROUP_VARS_PATH.removeprefix("ansible/")
 
 CONFIG_TASK_NAME: Final = "Write the configuration"
 CONFIG_CONTENT: Final = "{{ pull_trigger_config | ansible.builtin.to_nice_json }}\n"
@@ -312,16 +316,16 @@ def check_config(config: Mapping[str, object]) -> None:
 def check_playbook(playbook_text: str) -> None:
     """Refuse an edge1 playbook that does not load the group variables this tool reads.
 
+    The playbook must name that file by exactly the entry it uses today, not by any path that
+    ends the same way, so the file it loads is the one the record's configuration came from.
+
     Raises:
         BootstrapError: The playbook has no play that loads them.
     """
     plays = sequence(parse_yaml(playbook_text, PLAYBOOK_PATH), PLAYBOOK_PATH)
     for play in plays:
         files = mapping(play, "a play").get("vars_files")
-        if isinstance(files, list) and any(
-            isinstance(entry, str) and entry.endswith(GROUP_VARS_PATH.split("ansible/", 1)[1])
-            for entry in files
-        ):
+        if isinstance(files, list) and PLAYBOOK_VARS_ENTRY in files:
             return
     message = f"{PLAYBOOK_PATH} does not load {GROUP_VARS_PATH}"
     raise BootstrapError(message)
@@ -359,6 +363,25 @@ def main_tip(repo: Path) -> str:
     tip = git(repo, "rev-parse", "FETCH_HEAD").stdout.decode().strip()
     if COMMIT.fullmatch(tip) is None:
         message = f"{REMOTE}/{MAIN_BRANCH} did not resolve to a commit"
+        raise BootstrapError(message)
+    return tip
+
+
+def checked_out_tip(repo: Path, rule: str) -> str:
+    """Return the freshly fetched tip of ``main``, which the repository must have checked out.
+
+    The history a pin is read from and the files a configuration is rendered from are HEAD's,
+    so they are main's only when HEAD is main's tip. A checkout that is behind main would
+    otherwise call a pin current that main has since superseded, and a configuration current
+    that main has since changed.
+
+    Raises:
+        BootstrapError: The fetch fails, or HEAD is not that tip.
+    """
+    tip = main_tip(repo)
+    top = head(repo)
+    if top != tip:
+        message = f"HEAD {top} is not the tip of {REMOTE}/{MAIN_BRANCH} ({tip}): {rule}"
         raise BootstrapError(message)
     return tip
 
@@ -406,14 +429,7 @@ def build_record(repo: Path) -> dict[str, object]:
         BootstrapError: HEAD is not the tip of a freshly fetched ``main``, or an input is
             not committed, malformed or not what the tool allows.
     """
-    tip = main_tip(repo)
-    top = head(repo)
-    if top != tip:
-        message = (
-            f"HEAD {top} is not the tip of {REMOTE}/{MAIN_BRANCH} ({tip}): "
-            "a record is built from main, never from a branch"
-        )
-        raise BootstrapError(message)
+    checked_out_tip(repo, "a record is built from main, never from a branch")
     config = repository_config(repo)
     record: dict[str, object] = {"schema": SCHEMA}
     for name, path in FETCHED.items():
@@ -433,13 +449,12 @@ def verify_record(repo: Path, record: object) -> list[str]:
     if not isinstance(record, dict) or record.get("schema") != SCHEMA:
         return [f"the record is not schema {SCHEMA}"]
     try:
-        tip = main_tip(repo)
-        top = head(repo)
+        tip = checked_out_tip(repo, "a record is checked against main, never against a branch")
     except BootstrapError as error:
         return [str(error)]
     for name, path in FETCHED.items():
         try:
-            problems.extend(verify_entry(repo, tip, top, name, path, record.get(name)))
+            problems.extend(verify_entry(repo, tip, name, path, record.get(name)))
         except BootstrapError as error:
             problems.append(f"{name}: {error}")
     try:
@@ -450,10 +465,10 @@ def verify_record(repo: Path, record: object) -> list[str]:
     return problems
 
 
-def verify_entry(repo: Path, tip: str, top: str, name: str, path: str, entry: object) -> list[str]:
+def verify_entry(repo: Path, tip: str, name: str, path: str, entry: object) -> list[str]:
     """Return what is wrong with one file's entry in the record.
 
-    ``tip`` is the freshly fetched tip of ``main`` and ``top`` is HEAD.
+    ``tip`` is the freshly fetched tip of ``main``, which is also HEAD.
     """
     if not isinstance(entry, dict) or set(entry) != {"pin", "sha256", "url"}:
         return [f"{name}: the entry is not a pin, a sha256 and a url"]
@@ -467,8 +482,6 @@ def verify_entry(repo: Path, tip: str, top: str, name: str, path: str, entry: ob
         problems.append(f"{name}: the url does not name the recorded pin and the file")
     if git(repo, "merge-base", "--is-ancestor", pin, tip, check=False).returncode != 0:
         return [*problems, f"{name}: the pin is not an ancestor of {REMOTE}/{MAIN_BRANCH}"]
-    if git(repo, "merge-base", "--is-ancestor", pin, top, check=False).returncode != 0:
-        return [*problems, f"{name}: the pin is not an ancestor of HEAD"]
     shown = git(repo, "show", f"{pin}:{path}", check=False)
     if shown.returncode != 0 or hashlib.sha256(shown.stdout).hexdigest() != digest:
         problems.append(f"{name}: the sha256 is not that of the file at the pin")

@@ -48,11 +48,13 @@ FINGERPRINT_PATTERN: Final = re.compile(r"[0-9a-f]{16}")
 MAX_LOCK_BYTES: Final = 4_000_000
 
 # One pinned requirement: a name, optional extras, an exact version, an optional
-# environment marker, then one or more hashes and nothing else on the line.
+# environment marker, then one or more hashes and nothing else on the line. The marker
+# holds no option: no "--" anywhere in it, and no word that starts with "-", so an option
+# such as --index-url cannot hide in it. A hyphen inside a word (linux-gnu) is fine.
 REQUIREMENT: Final = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]+\])?"
     r"==[A-Za-z0-9.!+_-]+"
-    r"(?:\s*;.*?)?"
+    r"(?:\s*;(?:(?!--|\s-).)*?)?"
     r"(?:\s+--hash=sha256:[0-9a-f]{64})+",
 )
 HASH_OPTION: Final = re.compile(r"--hash=sha256:[0-9a-f]{64}")

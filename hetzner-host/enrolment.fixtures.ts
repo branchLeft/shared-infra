@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import type { Enrolment, PullBootstrap } from './cloudInit';
 import fixed from './pullBootstrapFixed.json';
@@ -14,15 +16,41 @@ export const APPLY_KEY = `${SSH_ED25519} apply@edge2`;
 export const CHECK_KEY =
   'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICHECKCHECKCHECKCHECKCHECKCHECKCHEC check@edge2';
 
-// GitHub's public signing key for commits it makes, as the production group variables hold it.
-export const PGP_PUBLIC_KEY = `-----BEGIN PGP PUBLIC KEY BLOCK-----
+/**
+ * GitHub's public signing key for commits it makes, read from the production group variables
+ * that hold it, so the tests check the key the first boot will really be given and not a copy.
+ */
+function productionSignerKey(): string {
+  const variables = readFileSync(
+    join(
+      __dirname,
+      '..',
+      'ansible',
+      'inventories',
+      'production',
+      'group_vars',
+      'edge',
+      'pull_trigger.yml'
+    ),
+    'utf8'
+  );
+  const found =
+    /^( +)-----BEGIN PGP PUBLIC KEY BLOCK-----$[\s\S]*?^ +-----END PGP PUBLIC KEY BLOCK-----$/m.exec(
+      variables
+    );
+  if (found === null) {
+    throw new Error('The production group variables hold no signer key block.');
+  }
+  const indent = found[1]!;
+  return (
+    found[0]
+      .split('\n')
+      .map((line) => line.slice(indent.length))
+      .join('\n') + '\n'
+  );
+}
 
-mQINBGWmxXYBEACyN+4viFQM6QQoKr0A2W0rGdMobTJwOZso2QPpewbyBsuL3rNW
-5OmHrWwXAhPKNqUIyOzdq8MoSxoTTuqLksoahixEL/X2nyhOBxR9GkYz/oI9R3nY
-cLRaFQoSJoVfOt61opkLUzbWAehpbgT8EKln8JsENq0+0nDlWQi0h2Q9oGmqlgVz
-=NRlX
------END PGP PUBLIC KEY BLOCK-----
-`;
+export const PGP_PUBLIC_KEY = productionSignerKey();
 
 // The record's fixed values are read from their one home, as the code and the tool read them.
 export const REPOSITORY_RAW = fixed.rawBase;

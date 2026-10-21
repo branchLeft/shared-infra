@@ -284,6 +284,46 @@ describe('no private key material reaches the document (C5)', () => {
     const body = 'mQINBGWmxXYBEACyN+4viFQM6QQoKr0A2W0rGdMobTJwOZso2QPpewbyBsuL3rNW';
     const wrap = (data: string, header = 'PUBLIC', footer = 'PUBLIC') =>
       `-----BEGIN PGP ${header} KEY BLOCK-----\n\n${data}\n-----END PGP ${footer} KEY BLOCK-----\n`;
+    // OpenPGP packet types (RFC 4880, section 4.3) and the packets that carry them.
+    const SIGNATURE = 2;
+    const SECRET_KEY = 5;
+    const PUBLIC_KEY = 6;
+    const SECRET_SUBKEY = 7;
+    const USER_ID = 13;
+    const PUBLIC_SUBKEY = 14;
+    const USER_ATTRIBUTE = 17;
+    const filler = (size: number) => Buffer.alloc(size, 0x41);
+    const newPacket = (tag: number, data: Buffer): Buffer => {
+      const size = data.length;
+      let length: number[];
+      if (size < 192) {
+        length = [size];
+      } else if (size < 8384) {
+        length = [((size - 192) >> 8) + 192, (size - 192) & 0xff];
+      } else {
+        length = [
+          255,
+          (size >>> 24) & 0xff,
+          (size >>> 16) & 0xff,
+          (size >>> 8) & 0xff,
+          size & 0xff,
+        ];
+      }
+      return Buffer.concat([Buffer.from([0xc0 | tag, ...length]), data]);
+    };
+    const oldPacket = (tag: number, data: Buffer, lengthType: 0 | 1 | 2): Buffer => {
+      const width = 1 << lengthType;
+      const length = Buffer.alloc(width);
+      length.writeUIntBE(data.length, 0, width);
+      return Buffer.concat([Buffer.from([0x80 | (tag << 2) | lengthType]), length, data]);
+    };
+    const armoured = (...packets: Buffer[]): string => {
+      const lines =
+        Buffer.concat(packets)
+          .toString('base64')
+          .match(/.{1,64}/g) ?? [];
+      return wrap(`${lines.join('\n')}\n=AAAA`);
+    };
     const rejected: Record<string, string> = {
       'a private header': wrap(body, 'PRIVATE', 'PRIVATE'),
       'a private header under a public footer': wrap(body, 'PRIVATE', 'PUBLIC'),
@@ -306,8 +346,105 @@ describe('no private key material reaches the document (C5)', () => {
 
     it('accepts a public key block (new-format and old-format public key packets)', () => {
       expect(assertPgpPublicKeyBlock(PGP_PUBLIC_KEY)).toBe(PGP_PUBLIC_KEY);
-      expect(() => assertPgpPublicKeyBlock(wrap('xgECAw=='))).not.toThrow();
-      expect(() => assertPgpPublicKeyBlock(wrap('mQECAw=='))).not.toThrow();
+      for (const lengthType of [0, 1, 2] as const) {
+        expect(() =>
+          assertPgpPublicKeyBlock(armoured(oldPacket(PUBLIC_KEY, filler(40), lengthType)))
+        ).not.toThrow();
+      }
+      expect(() =>
+        assertPgpPublicKeyBlock(armoured(newPacket(PUBLIC_KEY, filler(40))))
+      ).not.toThrow();
+    });
+
+    it('accepts every packet a public key block is made of, however long each is', () => {
+      for (const size of [0, 100, 191, 192, 300, 8383, 8384, 70_000]) {
+        const block = armoured(
+          newPacket(PUBLIC_KEY, filler(size)),
+          newPacket(USER_ID, filler(20)),
+          newPacket(SIGNATURE, filler(size)),
+          newPacket(PUBLIC_SUBKEY, filler(size)),
+          newPacket(SIGNATURE, filler(size)),
+          newPacket(USER_ATTRIBUTE, filler(size)),
+          oldPacket(SIGNATURE, filler(size % 250), 0)
+        );
+        expect(() => assertPgpPublicKeyBlock(block), `size ${size}`).not.toThrow();
+      }
+    });
+
+    it('accepts the signer key that production holds, which is a whole key', () => {
+      expect(() => assertPgpPublicKeyBlock(PGP_PUBLIC_KEY)).not.toThrow();
+      expect(PGP_PUBLIC_KEY.split('\n').length).toBeGreaterThan(25);
+    });
+
+    // Every packet is read, not only the first: a public primary key does not make what
+    // follows it public. These are the blocks that carry secret material under a public header.
+    const mixed: Record<string, string> = {
+      'a secret subkey after the public key (tag 7)': armoured(
+        newPacket(PUBLIC_KEY, filler(40)),
+        newPacket(SECRET_SUBKEY, filler(40))
+      ),
+      'a secret key after the public key (tag 5)': armoured(
+        newPacket(PUBLIC_KEY, filler(40)),
+        newPacket(SECRET_KEY, filler(40))
+      ),
+      'a secret subkey after a user id and a signature': armoured(
+        newPacket(PUBLIC_KEY, filler(40)),
+        newPacket(USER_ID, filler(20)),
+        newPacket(SIGNATURE, filler(60)),
+        newPacket(SECRET_SUBKEY, filler(40))
+      ),
+      'a secret subkey in the old format': armoured(
+        newPacket(PUBLIC_KEY, filler(40)),
+        oldPacket(SECRET_SUBKEY, filler(40), 0)
+      ),
+      'a secret subkey behind a packet with a long length': armoured(
+        newPacket(PUBLIC_KEY, filler(9000)),
+        newPacket(SIGNATURE, filler(300)),
+        oldPacket(SECRET_SUBKEY, filler(40), 1)
+      ),
+      'a secret subkey behind an old-format four-octet length': armoured(
+        oldPacket(PUBLIC_KEY, filler(70_000), 2),
+        newPacket(SECRET_SUBKEY, filler(40))
+      ),
+      'a packet type that is not part of a key (a literal-data packet, tag 11)': armoured(
+        newPacket(PUBLIC_KEY, filler(40)),
+        newPacket(11, filler(40))
+      ),
+      'a trust packet (tag 12)': armoured(
+        newPacket(PUBLIC_KEY, filler(40)),
+        newPacket(12, filler(2))
+      ),
+      'a packet whose length runs past the data': armoured(
+        newPacket(PUBLIC_KEY, filler(40)),
+        Buffer.concat([Buffer.from([0xc0 | SIGNATURE, 100]), filler(10)])
+      ),
+      'bytes after the last packet that are not a packet': armoured(
+        newPacket(PUBLIC_KEY, filler(40)),
+        Buffer.from([0x00, 0x01])
+      ),
+      'a header with no length': armoured(newPacket(PUBLIC_KEY, filler(40)), Buffer.from([0xc2])),
+      'a partial length': armoured(
+        newPacket(PUBLIC_KEY, filler(40)),
+        Buffer.concat([Buffer.from([0xc0 | SIGNATURE, 224]), filler(1 << 0)])
+      ),
+      'an indeterminate length': armoured(
+        newPacket(PUBLIC_KEY, filler(40)),
+        Buffer.concat([Buffer.from([0x80 | (SIGNATURE << 2) | 3]), filler(10)])
+      ),
+    };
+    for (const [name, block] of Object.entries(mixed)) {
+      it(`refuses ${name}`, () => {
+        expect(() => assertPgpPublicKeyBlock(block)).toThrow(/signer key|OpenPGP|packet/i);
+      });
+    }
+
+    it('refuses a secret subkey inside a bootstrap config, wherever it is in the key', () => {
+      const key = mixed['a secret subkey after a user id and a signature']!;
+      expect(() =>
+        assertPullBootstrap(
+          bootstrap({ config: configText({ signers: [{ format: 'openpgp', key }] }) })
+        )
+      ).toThrow(/not part of a public key/);
     });
   });
 

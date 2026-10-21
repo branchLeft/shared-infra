@@ -310,6 +310,10 @@ export interface EnrolmentLayout {
   ownerFlags: string;
 }
 
+// The paths the two roles keep (pull_trigger's vars, ansible_runtime's defaults) are written
+// here as well, because a first boot has no Ansible to read them from.
+// `ansible/tools/test_pull_bootstrap.py` holds each equal to the role variable that owns it, so
+// a role path that moves fails there until it is changed here.
 export const PRODUCTION_LAYOUT: EnrolmentLayout = {
   markerDir: '/var/lib/branchleft',
   workDir: '/var/lib/branchleft/pull-enrolment',
@@ -340,6 +344,10 @@ const MAX_CONFIG_CHARS = 16_384;
 const PGP_BEGIN = '-----BEGIN PGP PUBLIC KEY BLOCK-----';
 const PGP_END = '-----END PGP PUBLIC KEY BLOCK-----';
 const PGP_PUBLIC_KEY_TAG = 6;
+// The packets a public key block is made of (RFC 4880, section 4.3): signature (2),
+// public key (6), user id (13), public subkey (14) and user attribute (17). The secret
+// key (5) and secret subkey (7) packets are not among them, nor is anything else.
+const PGP_PUBLIC_PACKET_TAGS: ReadonlySet<number> = new Set([2, PGP_PUBLIC_KEY_TAG, 13, 14, 17]);
 const LAYOUT_VALUE = /^[A-Za-z0-9_./-]+$/;
 const REQUIRED_CONFIG_KEYS: readonly string[] = fixed.requiredConfigKeys;
 
@@ -357,15 +365,83 @@ function assertExactKeys(record: PlainRecord, keys: readonly string[], what: str
   }
 }
 
+function packetByte(bytes: Buffer, at: number): number {
+  const byte = bytes[at];
+  if (byte === undefined) {
+    throw new Error('A signer key block ends in the middle of an OpenPGP packet.');
+  }
+  return byte;
+}
+
+/**
+ * The type of every packet in a block's data, read by walking each packet's own
+ * header and length to the next, so that the whole of the data is accounted for
+ * and a packet is never skipped over.
+ *
+ * Partial and indeterminate lengths belong to streamed data and not to a key, so
+ * both are refused: with either, where the next packet starts could not be known
+ * without trusting the data.
+ */
+function pgpPacketTags(bytes: Buffer): number[] {
+  const tags: number[] = [];
+  let at = 0;
+  while (at < bytes.length) {
+    const header = packetByte(bytes, at);
+    at += 1;
+    if ((header & 0x80) === 0) {
+      throw new Error('A signer key block must start with an OpenPGP packet.');
+    }
+    let tag: number;
+    let length = 0;
+    if ((header & 0x40) !== 0) {
+      tag = header & 0x3f;
+      const first = packetByte(bytes, at);
+      at += 1;
+      if (first < 192) {
+        length = first;
+      } else if (first < 224) {
+        length = ((first - 192) << 8) + packetByte(bytes, at) + 192;
+        at += 1;
+      } else if (first === 255) {
+        for (let index = 0; index < 4; index += 1) {
+          length = length * 256 + packetByte(bytes, at + index);
+        }
+        at += 4;
+      } else {
+        throw new Error('A signer key block must not use a partial packet length.');
+      }
+    } else {
+      tag = (header >> 2) & 0x0f;
+      const lengthType = header & 0x03;
+      if (lengthType === 3) {
+        throw new Error('A signer key block must not use an indeterminate packet length.');
+      }
+      const width = 1 << lengthType;
+      for (let index = 0; index < width; index += 1) {
+        length = length * 256 + packetByte(bytes, at + index);
+      }
+      at += width;
+    }
+    if (at + length > bytes.length) {
+      throw new Error('A signer key block ends in the middle of an OpenPGP packet.');
+    }
+    at += length;
+    tags.push(tag);
+  }
+  return tags;
+}
+
 /**
  * Refuses anything but an armoured OpenPGP **public** key block.
  *
  * The signer block ends up in user-data, which is readable by anything on the
  * host and by whoever can read the Hetzner project. The checks are an allowlist
  * and not a scan for the word PRIVATE: exactly one public header and one public
- * footer, nothing else that looks like an armour line, and a first packet that
- * is a public key (tag 6), so a secret key (tag 5) under a public header does
- * not pass.
+ * footer, nothing else that looks like an armour line, a first packet that is a
+ * public key (tag 6), and then every packet of the data, walked header by header,
+ * of a type that a public key is made of (public key, public subkey, user id,
+ * user attribute, signature). A secret key (tag 5) or a secret subkey (tag 7)
+ * anywhere in the data, after a public key or not, does not pass.
  */
 export function assertPgpPublicKeyBlock(block: string): string {
   const lines = block.endsWith('\n') ? block.slice(0, -1).split('\n') : block.split('\n');
@@ -384,13 +460,18 @@ export function assertPgpPublicKeyBlock(block: string): string {
   if (data.length === 0 || !data.every((line) => /^[A-Za-z0-9+/]+={0,2}$/.test(line))) {
     throw new Error('A signer key block must hold base64 data.');
   }
-  const first = Buffer.from(data.join(''), 'base64')[0];
-  if (first === undefined || (first & 0x80) === 0) {
+  const tags = pgpPacketTags(Buffer.from(data.join(''), 'base64'));
+  if (tags[0] === undefined) {
     throw new Error('A signer key block must start with an OpenPGP packet.');
   }
-  const tag = (first & 0x40) !== 0 ? first & 0x3f : (first >> 2) & 0x0f;
-  if (tag !== PGP_PUBLIC_KEY_TAG) {
+  if (tags[0] !== PGP_PUBLIC_KEY_TAG) {
     throw new Error('The first packet of a signer key must be a public key, not a secret key.');
+  }
+  const stray = tags.find((tag) => !PGP_PUBLIC_PACKET_TAGS.has(tag));
+  if (stray !== undefined) {
+    throw new Error(
+      `A signer key block holds an OpenPGP packet of type ${stray}, which is not part of a public key.`
+    );
   }
   return block;
 }

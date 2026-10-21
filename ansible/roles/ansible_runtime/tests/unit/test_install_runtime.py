@@ -208,6 +208,24 @@ class LockChecksTest(Case):
             "a direct url": f"alpha @ https://example.invalid/alpha.whl {hashed}\n",
             "a path": f"./alpha.whl {hashed}\n",
             "a second option on the line": f"alpha==1.0 --no-binary :all: {hashed}\n",
+            "an index option after a marker": (
+                "alpha==1.0 ; python_version >= '3.13' "
+                f"--index-url=https://index.invalid/simple {hashed}\n"
+            ),
+            "an index option with its value after a marker": (
+                "alpha==1.0 ; python_version >= '3.13' "
+                f"--index-url https://index.invalid/simple {hashed}\n"
+            ),
+            "a find-links option after a marker": (
+                f"alpha==1.0 ; os_name == 'posix' -f https://index.invalid/ {hashed}\n"
+            ),
+            "an option in the marker with no space before it": (
+                f"alpha==1.0 ;--extra-index-url=https://index.invalid/ {hashed}\n"
+            ),
+            "an option between the hashes": (
+                f"alpha==1.0 ; os_name == 'posix' {hashed} --index-url=https://index.invalid/"
+                f" {hashed}\n"
+            ),
             "a short hash": "alpha==1.0 --hash=sha256:abc\n",
             "another hash algorithm": f"alpha==1.0 --hash=md5:{'a' * 32}\n",
         }
@@ -217,6 +235,21 @@ class LockChecksTest(Case):
                 lock = LOCK_A + line.encode()
                 self.refused(self.request(lock), runner, program.Reason.LOCK_UNHASHED)
                 self.nothing_made(runner)
+
+    def test_the_repositorys_own_lock_and_its_markers_are_accepted(self) -> None:
+        # A control for the refusals above: a pattern that refused every marker would pass them.
+        lock = (Path(__file__).resolve().parents[5] / "ansible" / "requirements.txt").read_bytes()
+        self.assertIn(b" ; ", lock)
+        program.check_lock_is_hashed(lock)
+        for marker in (
+            "sys_platform == 'linux' or sys_platform == 'linux2'",
+            "platform_python_implementation != 'PyPy'",
+            "sys_platform == 'linux-gnu' and python_version >= '3.8'",
+        ):
+            with self.subTest(marker=marker):
+                program.check_lock_is_hashed(
+                    f"alpha==1.0 ; {marker} \\\n    --hash=sha256:{HASH_A}\n".encode()
+                )
 
     def test_a_lock_that_ends_in_a_continued_line_is_refused(self) -> None:
         runner = FakeRunner()
