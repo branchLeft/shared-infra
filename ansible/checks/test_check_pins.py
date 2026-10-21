@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import re
 import shutil
 import tempfile
 import unittest
@@ -215,18 +216,22 @@ class LockTests(PinCase):
                 self.put_lock(lock_text() + text)
                 self.assert_found("is not name==version: 'alpha==1.0 ")
 
-    def test_the_lock_reader_and_its_markers_are_the_runtime_programs(self) -> None:
-        """One home: the reader and the marker set come from install_runtime.py, with no copy."""
+    def test_the_lock_reader_is_the_runtime_programs_own(self) -> None:
+        """One home: the reader is install_runtime.py's function, not a copy or a wrapper."""
         self.assertIs(check_pins.RUNTIME.logical_lines, check_pins.logical_lines)
-        self.assertIs(check_pins.RUNTIME.check_lock_encoding, check_pins.check_lock_encoding)
-        self.assertEqual(check_pins.RUNTIME.MARKER_CHARS, check_pins.MARKER_CHARS)
         source = Path(check_pins.__file__).read_text(encoding="utf-8")
         self.assertNotIn("def logical_lines", source, "check_pins keeps a copy of the reader")
-        self.assertNotRegex(
-            source,
-            r"(?m)^MARKER_CHARS\b[^=\n]*=\s*r?[\"']",
-            "check_pins keeps a copy of the marker set",
-        )
+
+    def test_the_encoding_check_is_the_runtime_programs_own(self) -> None:
+        """One home: the encoding check is install_runtime.py's function."""
+        self.assertIs(check_pins.RUNTIME.check_lock_encoding, check_pins.check_lock_encoding)
+
+    def test_the_marker_set_is_the_runtime_programs_own(self) -> None:
+        """One home: the marker characters are read from install_runtime.py, not written here."""
+        self.assertEqual(check_pins.RUNTIME.MARKER_CHARS, check_pins.MARKER_CHARS)
+        source = Path(check_pins.__file__).read_text(encoding="utf-8")
+        copy = re.search(r"(?m)^MARKER_CHARS\b[^=\n]*=\s*r?[\"']", source)
+        self.assertIsNone(copy, "check_pins keeps a copy of the marker set")
 
     def test_name_spelling_is_normalised(self) -> None:
         """An underscore or capital in the name still counts as the tool."""
