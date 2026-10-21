@@ -1,18 +1,9 @@
 """Check that the deploy_tooling role is the single owner of the programs it installs.
 
-The CI deploy wrapper, the compose template unit, the Docker user policy program and its unit
-each have one home in `hetzner/provision/` and one role that installs them. A second role is a
-second writer of the same host files, and the two would flap or one would silently stop
-converging, if it does any of these:
-
-- links to a program, or holds a byte copy of one;
-- reads a program from the one home, by a path or by its file name, in its tasks, handlers,
-  variables or defaults (it holds neither a link nor a copy, and is a second writer all the same);
-- writes to one of the paths this role installs a file at, from any source.
-
-A file name that a role assembles in a loop from separate parts is not seen by the last two; the
-digest check still sees a copy of the bytes. Fixtures under a role's `molecule/` stand in for a
-host and are not roles' tasks, so they are not read. One role is allowed for now, because it is
+The four programs each have one home in `hetzner/provision/` and one installing role. A second
+role is a second writer of the same host files if it links to or copies a program, reads one from
+its home (by path, file name or variable), or has a `dest` that is a path this role installs.
+The README's named limits say what these checks cannot see. One role is allowed for now: it is
 retired by its own follow-up after this role has run on the host that has it.
 """
 

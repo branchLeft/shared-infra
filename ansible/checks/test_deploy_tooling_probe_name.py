@@ -1,14 +1,10 @@
 """Check that this role's Molecule fixtures name no instance the deploy wrapper would accept.
 
-The role's container test starts a probe instance of the compose template unit. The compose
-unit contract test (`hetzner/provision/test_compose_unit_contract.py`) reads the whole
-repository for instance names and requires each to be a stack it covers or one that another
-repository owns. The probe is neither, and an entry for it in the register that names an
-owning repository would be an exemption. The probe is not a stack: its name is one the wrapper
-refuses, which the contract scan applies too, so it is not read. This check keeps the probe
-that way: it fails when a fixture under the role's `molecule/` names an instance that the
-wrapper's own rule accepts. Other roles' fixtures name real stacks other repositories own, and
-the register classifies those; they are not this role's probe and are not read here.
+The compose unit contract test reads the repository for instance names and requires each to
+be a registered stack. The role's probe instance is not one, and a register entry for it would
+be an exemption. Its name is one the wrapper refuses, which that scan applies too, so it is not
+read. This check fails when a fixture under this role's `molecule/` names an instance that the
+wrapper's own rule accepts. Other roles' fixtures name real stacks, which the register covers.
 """
 
 from __future__ import annotations
