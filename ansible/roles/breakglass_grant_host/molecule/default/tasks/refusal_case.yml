@@ -15,6 +15,14 @@
         - /usr/bin/docker
       when: refused.setup == 'docker_missing'
 
+    # Leaves the docker on the PATH where it is: only the binary the expire unit
+    # runs is taken away.
+    - name: Take away the docker the expire unit calls
+      ansible.builtin.file:
+        path: /usr/bin/docker
+        state: absent
+      when: refused.setup == 'usr_bin_docker_missing'
+
     - name: Take the Docker socket away
       ansible.builtin.file:
         path: /var/run/docker.sock
@@ -37,7 +45,7 @@
         name: branchleft.breakglass_grant_host
       vars:
         breakglass_grant_host_source_commit: '{{ refused.commit | default(converge_defaults.breakglass_grant_host_source_commit) }}'
-        breakglass_grant_host_node_image: '{{ refused.image | default(converge_defaults.breakglass_grant_host_node_image) }}'
+        breakglass_grant_host_node_image: '{{ refused.image | default(converge_role_vars.breakglass_grant_host_node_image) }}'
 
     - name: Record that the role accepted the input
       ansible.builtin.set_fact:
@@ -66,7 +74,7 @@
         owner: root
         group: root
         mode: '0755'
-      when: refused.setup == 'docker_missing'
+      when: refused.setup in ['docker_missing', 'usr_bin_docker_missing']
 
     - name: Make the Docker socket again
       ansible.builtin.command:

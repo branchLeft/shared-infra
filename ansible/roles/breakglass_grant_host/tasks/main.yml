@@ -26,10 +26,14 @@
 
 # The probes change nothing, so they run in check mode too (ANS-10). A missing
 # program is a failed probe, not a failed task, so the assertion below can say
-# what is missing.
+# what is missing. Every Docker command of this role names /usr/bin/docker, the
+# binary the installed expire unit runs: a docker elsewhere on the PATH (a snap
+# install under /snap/bin, say) must not satisfy the check while the unit fails
+# every minute, and the image must be pulled and read back through the same
+# client the unit uses.
 - name: Look for Docker
   ansible.builtin.command:
-    argv: [docker, --version]
+    argv: [/usr/bin/docker, --version]
   register: breakglass_grant_host_docker
   changed_when: false
   failed_when: false
@@ -41,8 +45,9 @@
       - breakglass_grant_host_docker.rc == 0
     quiet: true
     fail_msg: >-
-      Docker is not installed on this host, or `docker --version` fails. The grant
-      tool runs in a Docker image, so this role stops here.
+      Docker is not installed at /usr/bin/docker on this host, or `/usr/bin/docker
+      --version` fails. The grant tool and the expire unit run /usr/bin/docker, so
+      this role stops here.
 
 - name: Look at the Docker socket
   ansible.builtin.stat:
@@ -83,7 +88,7 @@
 - name: Look for the Node image under its digest
   ansible.builtin.command:
     argv:
-      - docker
+      - /usr/bin/docker
       - image
       - inspect
       - --format
@@ -96,7 +101,7 @@
 
 - name: Pull the Node image by digest when the host lacks it
   ansible.builtin.command:
-    argv: [docker, pull, -q, '{{ breakglass_grant_host_node_image }}']
+    argv: [/usr/bin/docker, pull, -q, '{{ breakglass_grant_host_node_image }}']
   changed_when: true
   when: >-
     not (breakglass_grant_host_image_probe.rc == 0
@@ -108,7 +113,7 @@
 - name: Read the Node image back
   ansible.builtin.command:
     argv:
-      - docker
+      - /usr/bin/docker
       - image
       - inspect
       - --format

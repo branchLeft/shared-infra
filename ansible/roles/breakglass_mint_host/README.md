@@ -12,8 +12,8 @@ the order the standard sets for a role README (ANS-14).
 The role makes the plain, repeatable part of the break-glass minter's setup on the
 control host (`ops1`):
 
-1. Refuses an input that is not a full 40-character commit or an image pinned by
-   digest, before anything is touched.
+1. Refuses an input that is not a full 40-character commit, or a constant that is
+   not an image pinned by digest, before anything is touched.
 2. Refuses a host with no working `docker`.
 3. Makes the directories above the tool and the log, each with an owner and a
    mode.
@@ -39,20 +39,22 @@ placeholder, not the real key (see "Named limits").
 
 ## Interface
 
-The variables, their types and defaults are in `meta/argument_specs.yml`; the same
-defaults are in `defaults/main.yml`. Ansible checks them when the role starts.
+The variable, its type and default are in `meta/argument_specs.yml`; the same
+default is in `defaults/main.yml`. Ansible checks it when the role starts.
 
 | Variable                             | Meaning                                                             |
 | ------------------------------------ | ------------------------------------------------------------------- |
 | `breakglass_mint_host_source_commit` | The full commit of `ghost-platform` the program is downloaded from. |
-| `breakglass_mint_host_node_image`    | The Node image, by name, tag and `@sha256:` digest.                 |
 
-Both must be the same as the same-named inputs of `breakglass_grant_host`, the
+It must be the same as the same-named input of `breakglass_grant_host`, the
 role for the application hosts: the minter and the grant tool are two halves of
 one protocol and must come from one commit. The test of each role reads the
-other's defaults and fails if they differ. The sha256 of the downloaded file, the
-download base, the directories and the key path are constants in `vars/main.yml`,
-not inputs: an inventory value cannot change them. No variable is a secret.
+other's defaults and fails if they differ. The Node image is not an input: it is a
+constant in `vars/main.yml`, and it must equal the grant role's constant, which the
+shipped wrapper and expire unit also carry. The test of each role compares the two
+constants. The sha256 of the downloaded file, the download base, the directories
+and the key path are constants in `vars/main.yml` too, not inputs: an inventory
+value cannot change them. No variable is a secret.
 
 ## Requirements
 
@@ -83,7 +85,7 @@ Each of these stops the run at the named task, before any later task writes
 anything. The test converge applies the role in each state and asserts which task
 stopped it.
 
-- An input that is not a full commit or a digest-pinned image.
+- An input that is not a full commit, or a constant that is not a digest-pinned image.
 - No `docker` on the host.
 - A key that is missing, is a link, is a directory, is not owned by root, is not
   mode 0600, or sits in a directory that is not root-owned and mode 0700.
@@ -117,10 +119,17 @@ for the tool and the image stay as the fallback.
 - **The test key is a placeholder.** It has a made-up text at a path of the test's
   own, never the real key path. The test proves the role looked at the key's
   metadata and never at its content, and that the Ansible log (at verbosity 3)
-  holds neither the placeholder's text nor its SHA-1 nor its MD5. A control file
-  whose SHA-1 the test asks `stat` for, with the default arguments, must appear in
-  that log, which shows the scan can see a digest at all. The real key's content
-  is never read by the role, by the test or by an agent.
+  holds neither the placeholder's text nor its SHA-1, MD5 or base64 (the form
+  `slurp` prints a file in). A control file whose SHA-1 the test asks `stat` for,
+  with the default arguments, and whose base64 the test asks `slurp` for, must
+  appear in that log, which shows the scan can see a digest and a base64 content at
+  all. The real key's content is never read by the role, by the test or by an agent.
+- **The role has one tasks file and nothing else that runs tasks.** The key checks
+  read `tasks/main.yml`. The test lists the role directory and requires exactly
+  `README.md`, `defaults`, `meta`, `molecule`, `tasks` and `vars`, a tasks directory
+  holding only `main.yml`, and no meta dependency, so a handlers file, a second
+  tasks file or a library cannot add a route to the key that those checks do not
+  read.
 - **`command` is used for `docker`.** The Docker modules need the Docker API
   library on the host, which these hosts do not carry (ANS-9). The probes are
   read-only, so they run in check mode; the pull runs only after a probe finds the
@@ -158,6 +167,7 @@ checks:
   table;
 - no grant-side file was installed;
 - one pull over two applies, by digest, never by tag;
+- the role directory holds no handlers file and no second tasks file;
 - the placeholder key is unchanged and the log scan above.
 
 The playbook `ansible/playbooks/ops1.yml` is a host-guarded playbook that lists
@@ -174,8 +184,9 @@ merge of this role changes no host.
 ## How to change it safely
 
 1. Change the tasks, the defaults and `meta/argument_specs.yml` together.
-2. Bump the commit and the sha256 in `vars/main.yml` together, and bump the same
-   commit in `breakglass_grant_host` in the same pull request.
+2. Bump the commit, the sha256 and the Node image in `vars/main.yml` together, and
+   bump the same commit and image in `breakglass_grant_host` in the same pull
+   request.
 3. Keep every task able to run under `--check --diff`, and keep the role
    idempotent.
 4. Never add a task that opens, copies, reads or hashes the key.

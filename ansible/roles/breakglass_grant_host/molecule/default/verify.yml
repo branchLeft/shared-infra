@@ -9,10 +9,12 @@
     verify_spec: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../meta/argument_specs.yml') | from_yaml }}"
     verify_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') | from_yaml }}"
     verify_mint_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_mint_host/defaults/main.yml') | from_yaml }}"
+    verify_mint_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_mint_host/vars/main.yml') | from_yaml }}"
     verify_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') | from_yaml }}"
     # An inventory value wins over a default, as it does in the role.
     verify_commit: '{{ breakglass_grant_host_source_commit | default(verify_defaults.breakglass_grant_host_source_commit) }}'
-    verify_image: '{{ breakglass_grant_host_node_image | default(verify_defaults.breakglass_grant_host_node_image) }}'
+    # The image is a constant of the role (vars/main.yml), never an input.
+    verify_image: '{{ verify_role_vars.breakglass_grant_host_node_image }}'
     # The role's base URL with its own placeholder filled by the commit it ran with.
     verify_base_url: >-
       {{ verify_role_vars.breakglass_grant_host_source_base_url
@@ -81,12 +83,40 @@
       - path: /etc/systemd/system/branchleft-break-glass-expire.timer
         kind: file
         mode: '0644'
-    # The four mounts the tool is started with: its own code read-only, its
-    # state, its log, and the Docker socket. Written here from the intent.
-    verify_expected_mounts:
+    # Every argument the tool is started with, from `run` up to the image, in
+    # order, written out here from the intent and not read from the role or the
+    # shipped files. It is compared whole, so an argument added to the wrapper
+    # or the unit (--privileged, -v, --device, --add-host, a second
+    # --security-opt, a fifth mount) fails the comparison, and so does a flag
+    # removed or changed. The four mounts are the tool's own code read-only,
+    # its state, its log, and the Docker socket.
+    verify_expected_run_options:
+      - run
+      - --rm
+      - --pull
+      - never
+      - --network
+      - none
+      - --read-only
+      - --cap-drop
+      - ALL
+      - --security-opt
+      - no-new-privileges
+      - --pids-limit
+      - '64'
+      - --memory
+      - 256m
+      - --user
+      - '0:0'
+      - --label
+      - branchleft.component=break-glass-tool
+      - --mount
       - type=bind,source=/usr/local/lib/branchleft/break-glass,target=/usr/local/lib/branchleft/break-glass,readonly
+      - --mount
       - type=bind,source=/var/lib/branchleft/break-glass-grants,target=/var/lib/branchleft/break-glass-grants
+      - --mount
       - type=bind,source=/var/log/branchleft,target=/var/log/branchleft
+      - --mount
       - type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock
     verify_tool: /usr/local/lib/branchleft/break-glass/break-glass-grant.mjs
     verify_timer: branchleft-break-glass-expire.timer
@@ -102,27 +132,32 @@
         file: '{{ playbook_dir }}/../../vars/main.yml'
 
     # ----- the two roles agree on the pin and on the image -----
-    # The pin and the image are held in both roles' defaults. Nothing else makes
-    # them agree, and a role that lags runs different code on its host.
+    # The pin is held as an input in both roles' defaults and the image as a
+    # constant in both roles' vars. Nothing else makes them agree, and a role
+    # that lags runs different code on its host. The image is read from vars,
+    # where it lives: it is not an input, so no inventory value can differ from
+    # the digest the shipped wrapper and unit carry (they are run below with
+    # this value and must start exactly it).
     - name: Assert the mint role's pin and image equal this role's
       ansible.builtin.assert:
         that:
           - verify_mint_defaults.breakglass_mint_host_source_commit == verify_defaults.breakglass_grant_host_source_commit
-          - verify_mint_defaults.breakglass_mint_host_node_image == verify_defaults.breakglass_grant_host_node_image
+          - verify_mint_role_vars.breakglass_mint_host_node_image == verify_role_vars.breakglass_grant_host_node_image
         fail_msg: >-
           The two roles hold different pins or different images. breakglass_mint_host has
           commit {{ verify_mint_defaults.breakglass_mint_host_source_commit }} and image
-          {{ verify_mint_defaults.breakglass_mint_host_node_image }}; breakglass_grant_host has commit
+          {{ verify_mint_role_vars.breakglass_mint_host_node_image }}; breakglass_grant_host has commit
           {{ verify_defaults.breakglass_grant_host_source_commit }} and image
-          {{ verify_defaults.breakglass_grant_host_node_image }}. Change both together.
+          {{ verify_role_vars.breakglass_grant_host_node_image }}. Change both together.
         quiet: true
 
-    - name: Assert the spec and the defaults agree and hold exactly the two inputs
+    - name: Assert the spec and the defaults agree and hold exactly the one input, with the image a constant
       ansible.builtin.assert:
         that:
-          - verify_defaults.keys() | sort | list == ['breakglass_grant_host_node_image', 'breakglass_grant_host_source_commit']
+          - verify_defaults.keys() | sort | list == ['breakglass_grant_host_source_commit']
+          - verify_spec.argument_specs.main.options.keys() | sort | list == ['breakglass_grant_host_source_commit']
           - verify_spec.argument_specs.main.options.breakglass_grant_host_source_commit.default == verify_defaults.breakglass_grant_host_source_commit
-          - verify_spec.argument_specs.main.options.breakglass_grant_host_node_image.default == verify_defaults.breakglass_grant_host_node_image
+          - verify_role_vars.breakglass_grant_host_node_image is match('^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$')
         quiet: true
 
     # ----- the pin is in every URL: the commit, never a branch -----
@@ -165,10 +200,10 @@
         fail_msg: The tasks file has a different number of command, file or download tasks than the checks below were written for.
         quiet: true
 
-    - name: Assert every command is docker --version, docker pull -q or docker image inspect
+    - name: Assert every command is /usr/bin/docker --version, pull -q or image inspect
       ansible.builtin.assert:
         that:
-          - item['ansible.builtin.command'].argv[0] == 'docker'
+          - item['ansible.builtin.command'].argv[0] == '/usr/bin/docker'
           - item['ansible.builtin.command'].argv[1:2] == ['--version'] or item['ansible.builtin.command'].argv[1:3] in [['pull', '-q'], ['image', 'inspect']]
         fail_msg: 'A command task runs something other than the three Docker commands the role may run: {{ item.name }}.'
         quiet: true
@@ -366,24 +401,24 @@
       ansible.builtin.set_fact:
         breakglass_grant_host_v_wrapper_call: '{{ breakglass_grant_host_v_lines[breakglass_grant_host_v_before | int :] | map("split", "|||") | list }}'
 
-    - name: Assert the wrapper made one docker call, found through its path, with the pinned image and the safe options
+    # The whole argument list is compared, not a list of flags that must be
+    # present. The timer is stopped above, so the one value that varies with the
+    # host, the timer state, is 'inactive' here.
+    - name: Assert the wrapper made one docker call, found through its path, with exactly the expected arguments
       ansible.builtin.assert:
         that:
           - breakglass_grant_host_v_wrapper_run.stdout == '[]'
           - breakglass_grant_host_v_wrapper_call | length == 1
           - breakglass_grant_host_v_wrapper_call[0][0] == '/usr/local/bin/docker'
-          - breakglass_grant_host_v_wrapper_call[0][1:4] == ['run', '--rm', '--pull']
-          - breakglass_grant_host_v_wrapper_call[0][4] == 'never'
-          - breakglass_grant_host_v_wrapper_call[0][5:7] == ['--network', 'none']
-          - '"--read-only" in breakglass_grant_host_v_wrapper_call[0]'
-          - breakglass_grant_host_v_wrapper_call[0][breakglass_grant_host_v_wrapper_call[0].index("--cap-drop") + 1] == 'ALL'
-          - breakglass_grant_host_v_wrapper_call[0][breakglass_grant_host_v_wrapper_call[0].index("-e") + 1] == 'BL_EXPIRE_TIMER_STATE=inactive'
-          - breakglass_grant_host_v_wrapper_call[0][-4] == verify_image
-          - breakglass_grant_host_v_wrapper_call[0][-3:] == ['node', verify_tool, 'status']
-          - breakglass_grant_host_v_wrapper_call[0] | select('match', '^type=bind,') | list | sort == verify_expected_mounts | sort
+          - >-
+            breakglass_grant_host_v_wrapper_call[0][1:] ==
+            verify_expected_run_options
+            + ['-e', 'BL_EXPIRE_TIMER_STATE=inactive', verify_image, 'node', verify_tool, 'status']
         fail_msg: >-
-          The wrapper did not start the pinned image with --pull never, --network none, a read-only root, the
-          four mounts and the timer state it read from systemd. It called: {{ breakglass_grant_host_v_wrapper_call }}.
+          The wrapper's docker arguments are not exactly the expected list (the pinned image with --pull never,
+          --network none, a read-only root, all capabilities dropped, no-new-privileges, the resource limits, the
+          label, the four mounts and the timer state it read from systemd, and nothing else).
+          It called: {{ breakglass_grant_host_v_wrapper_call }}.
         quiet: true
 
     - name: Start the expire unit once, as the timer would
@@ -417,8 +452,10 @@
           - breakglass_grant_host_v_unit_result.stdout == 'success'
           - breakglass_grant_host_v_unit_call | length == 1
           - breakglass_grant_host_v_unit_call[0][0] == '/usr/bin/docker'
-          - breakglass_grant_host_v_unit_call[0][-4] == verify_image
-          - breakglass_grant_host_v_unit_call[0][-3:] == ['node', verify_tool, 'expire']
+          - >-
+            breakglass_grant_host_v_unit_call[0][1:] ==
+            verify_expected_run_options
+            + [verify_image, 'node', verify_tool, 'expire']
           - >-
             breakglass_grant_host_v_unit_call[0][1:-1]
             == breakglass_grant_host_v_wrapper_call[0][1:-1] | reject('match', '^(-e|BL_EXPIRE_TIMER_STATE=.*)$') | list

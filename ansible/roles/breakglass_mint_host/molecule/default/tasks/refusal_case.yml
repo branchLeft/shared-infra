@@ -18,7 +18,7 @@
       vars:
         breakglass_mint_host_key_path: '{{ scenario_key_path }}'
         breakglass_mint_host_source_commit: '{{ refused.commit | default(converge_defaults.breakglass_mint_host_source_commit) }}'
-        breakglass_mint_host_node_image: '{{ refused.image | default(converge_defaults.breakglass_mint_host_node_image) }}'
+        breakglass_mint_host_node_image: '{{ refused.image | default(converge_role_vars.breakglass_mint_host_node_image) }}'
 
     - name: Record that the role accepted the input
       ansible.builtin.set_fact:

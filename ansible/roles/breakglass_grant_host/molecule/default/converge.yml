@@ -4,6 +4,8 @@
   gather_facts: false
   vars:
     converge_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') | from_yaml }}"
+    # The image is a constant of the role, not an input with a default.
+    converge_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') | from_yaml }}"
     # What a role that stopped at a refusal must not have left behind. The files
     # and units come last in the role, after the image is confirmed, so they are
     # absent for every refusal below.
@@ -33,6 +35,12 @@
         leaves_directories: false
       - case: no docker command
         setup: docker_missing
+        expect: Refuse a host with no working Docker
+        leaves_directories: false
+      # A docker that answers from elsewhere on the PATH (a snap install, say)
+      # while /usr/bin/docker, the binary the expire unit runs, is absent.
+      - case: docker on the PATH but not at /usr/bin/docker
+        setup: usr_bin_docker_missing
         expect: Refuse a host with no working Docker
         leaves_directories: false
       - case: no Docker socket
