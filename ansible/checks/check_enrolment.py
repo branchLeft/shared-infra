@@ -1,12 +1,13 @@
 """Check the host playbooks under the gated pull (ws#2340).
 
-Rules R0 to R8 and their reasons are in ansible/checks/README.md. A failure names the
-rule and the file. This check catches a protected key set outside its one file. It
-does not make a role edit safe: the deploy approval is the control on root code.
+Rules R0 to R8, and what each one does not see, are in ansible/checks/README.md. A
+failure names the rule and the file. This check catches a protected key set outside
+its one file. It does not judge a role edit: that control is not built yet.
 """
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -18,22 +19,56 @@ REMOTE_KEY = "pull_trigger_remote_url"
 PLAYBOOK_KEY = "pull_trigger_playbook"
 PLAYBOOKS_KEY = "pull_trigger_playbooks"
 HOST_KEY = "enrolled_host"
+CONFIG_VAR = "pull_trigger_config"
 DERIVATION_KEYS = (REMOTE_KEY, PLAYBOOK_KEY, PLAYBOOKS_KEY)
 PROTECTED_KEYS = frozenset((SIGNER_KEY, HOST_KEY, *DERIVATION_KEYS))
-INCLUDE_VARS = frozenset(("include_vars", "ansible.builtin.include_vars"))
+VARS_SUFFIXES = frozenset((".yml", ".yaml", ".json", ""))
+LOADED_DIRS = frozenset(
+    (
+        "vars",
+        "defaults",
+        "group_vars",
+        "host_vars",
+        "tasks",
+        "meta",
+        "handlers",
+        "playbooks",
+        "trust",
+        "inventories",
+    )
+)
+TASK_SUFFIXES = (".yml", ".yaml")
+INCLUDE_VARS = frozenset(
+    ("include_vars", "ansible.builtin.include_vars", "ansible.legacy.include_vars")
+)
 TASK_FILE_LOADERS = frozenset(
     (
+        "include",
         "include_tasks",
-        "ansible.builtin.include_tasks",
         "import_tasks",
-        "ansible.builtin.import_tasks",
         "import_playbook",
+        "ansible.builtin.include",
+        "ansible.builtin.include_tasks",
+        "ansible.builtin.import_tasks",
         "ansible.builtin.import_playbook",
+        "ansible.legacy.include_tasks",
+        "ansible.legacy.import_tasks",
+        "ansible.legacy.import_playbook",
     )
 )
 ROLE_LOADERS = frozenset(
-    ("include_role", "ansible.builtin.include_role", "import_role", "ansible.builtin.import_role")
+    (
+        "include_role",
+        "import_role",
+        "ansible.builtin.include_role",
+        "ansible.builtin.import_role",
+        "ansible.legacy.include_role",
+        "ansible.legacy.import_role",
+    )
 )
+LOADER_MODULES = INCLUDE_VARS | TASK_FILE_LOADERS | ROLE_LOADERS
+ROLE_SUBFILE_KEYS = ("tasks_from", "vars_from", "defaults_from", "handlers_from")
+ACTION_KEYS = ("action", "local_action")
 ROLE_LISTS = frozenset(("roles", "dependencies"))
 ENROLLED_ROLE = "pull_trigger"
 SHARED_INCLUDES = ("pull_trigger_common.yml", "refuse_other_hosts.yml", "require_signers.yml")
@@ -44,7 +79,9 @@ DERIVED_PLAYBOOK = "ansible/playbooks/{{ enrolled_host }}.yml"
 REMOTE_URL = "https://github.com/branchLeft/shared-infra.git"
 SIGNERS_EXPR = "{{ pull_trigger_signers }}"
 REMOTE_EXPR = "{{ pull_trigger_remote_url }}"
-WRITER = "roles/pull_trigger/tasks/main.yml"
+CONFIG_DEST = "{{ pull_trigger_config_path }}"
+CONFIG_CONTENT = "{{ pull_trigger_config | ansible.builtin.to_nice_json }}\n"
+CONFIG_MENTION = re.compile(r"pull_trigger_config(\b|_path\b)")
 REFUSE_ASSERT = [
     "ansible_play_hosts_all | length == 1",
     "inventory_hostname in ['localhost', enrolled_host]",
@@ -182,18 +219,47 @@ def _check_trust_file(path: Path, findings: list[str]) -> None:
         findings.append(f"R5 trust/{path.name}: must hold exactly {SIGNER_KEY}, as a list")
 
 
+def _names_config(node: object) -> bool:
+    """True when a task mentions the config var or the config path anywhere in its text."""
+    if isinstance(node, dict):
+        return any(_names_config(key) or _names_config(value) for key, value in node.items())
+    if isinstance(node, list):
+        return any(_names_config(item) for item in node)
+    return isinstance(node, str) and CONFIG_MENTION.search(node) is not None
+
+
 def _check_writer(ansible: Path, findings: list[str]) -> None:
-    """R8: the config the trigger reads takes its signers and remote from the pinned values."""
-    path = ansible / WRITER
-    tasks = _load(path, findings, "R8") if path.is_file() else None
-    config: dict[str, object] = {}
-    for task in tasks if isinstance(tasks, list) else []:
-        variables = _mapping(_mapping(task).get("vars"))
-        if "pull_trigger_config" in variables:
-            config = _mapping(variables["pull_trigger_config"])
+    """R8: exactly one task in the role writes the config, pinned to the shared values."""
+    tasks_dir = ansible / "roles" / ENROLLED_ROLE / "tasks"
+    writers: list[tuple[str, dict[str, object]]] = []
+    for path in sorted(tasks_dir.rglob("*")):
+        if not path.is_file() or path.suffix not in TASK_SUFFIXES:
+            continue
+        where = f"ansible/{path.relative_to(ansible).as_posix()}"
+        doc = _load(path, findings, "R8")
+        for task in doc if isinstance(doc, list) else []:
+            if _names_config(task):
+                writers.append((where, _mapping(task)))
+    if len(writers) != 1:
+        findings.append(
+            f"R8 roles/{ENROLLED_ROLE}/tasks: found {len(writers)} config writers, want 1"
+        )
+        return
+    where, task = writers[0]
+    module = next((key for key in ("ansible.builtin.copy", "copy") if key in task), None)
+    args = _mapping(task.get(module)) if module else {}
+    config = _mapping(_mapping(task.get("vars")).get(CONFIG_VAR))
+    if (
+        module is None
+        or args.get("dest") != CONFIG_DEST
+        or args.get("content") != CONFIG_CONTENT
+    ):
+        findings.append(
+            f"R8 {where}: the config writer must copy {CONFIG_CONTENT!r} to {CONFIG_DEST}"
+        )
     if config.get("signers") != SIGNERS_EXPR or config.get("remote_url") != REMOTE_EXPR:
         findings.append(
-            f"R8 ansible/{WRITER}: the config writer's signers and remote_url must be "
+            f"R8 {where}: the config writer's signers and remote_url must be "
             f"{SIGNERS_EXPR} and {REMOTE_EXPR}, not a literal"
         )
 
@@ -204,19 +270,20 @@ def _allowed_in(relative: str) -> frozenset[str]:
         return frozenset((SIGNER_KEY,))
     if relative == "playbooks/includes/pull_trigger_common.yml":
         return frozenset(DERIVATION_KEYS)
-    if relative.startswith("playbooks/") and relative.count("/") == 1:
-        return frozenset((HOST_KEY,))
     return frozenset()
 
 
+ROLE_ROOTS = ("roles", "patterns")
+
+
 def _is_scanned(relative: Path) -> bool:
-    """Molecule scenarios and role argument specs are fixtures and schema, not config."""
+    """A role's or pattern's molecule scenarios and argument specs are fixtures, not config."""
     parts = relative.parts
-    if "molecule" in parts:
+    if len(parts) < 3 or parts[0] not in ROLE_ROOTS:
+        return True
+    if parts[2] == "molecule":
         return False
-    if len(parts) == 4 and parts[0] == "roles" and parts[2:] == ("meta", "argument_specs.yml"):
-        return False
-    return True
+    return parts[2:] != ("meta", "argument_specs.yml") or len(parts) != 4
 
 
 def _inside(path: Path, ansible: Path) -> Path | None:
@@ -238,7 +305,7 @@ def _task_target_ok(value: object, base: Path, ansible: Path) -> bool:
     relative = _inside(candidate, ansible)
     return (
         relative is not None
-        and candidate.suffix in (".yml", ".yaml")
+        and candidate.suffix in TASK_SUFFIXES
         and candidate.is_file()
         and _is_scanned(relative)
     )
@@ -253,65 +320,119 @@ def _role_ok(value: object, base: Path, ansible: Path) -> bool:
     return relative is not None and "molecule" not in relative.parts
 
 
+def _action_module(value: object) -> str:
+    """The module an action or local_action names, in its string or mapping form."""
+    if isinstance(value, str):
+        words = value.split()
+        return words[0] if words else ""
+    if isinstance(value, dict):
+        return str(value.get("module", ""))
+    return ""
+
+
+def _assigns_protected(text: str) -> str | None:
+    """A protected key assigned inside a string argument, as in set_fact 'key=value'."""
+    for key in sorted(PROTECTED_KEYS):
+        if re.search(rf"(?<![\w.]){re.escape(key)}\s*=", text):
+            return key
+    return None
+
+
 def _scan(
     node: object,
     base: Path,
     ansible: Path,
     where: str,
     allowed: frozenset[str],
-    top_playbook: bool,
     out: list[str],
 ) -> None:
     """Record each protected key and each loader R6 cannot read, anywhere in the document."""
     if isinstance(node, list):
         for item in node:
-            _scan(item, base, ansible, where, allowed, top_playbook, out)
+            _scan(item, base, ansible, where, allowed, out)
+        return
+    if isinstance(node, str):
+        key = _assigns_protected(node)
+        if key is not None and key not in allowed:
+            out.append(f"R6 {where}: sets {key} in a string argument, which R6 cannot read")
         return
     if not isinstance(node, dict):
         return
     for key, value in node.items():
         name = str(key)
-        if name in PROTECTED_KEYS and name not in allowed:
+        if "{{" in name or "{%" in name:
+            out.append(f"R6 {where}: has a templated key, which R6 cannot read")
+        elif name in PROTECTED_KEYS and name not in allowed:
             out.append(f"R6 {where}: sets {name}, which only its owner's file may set")
         elif name in INCLUDE_VARS:
             out.append(f"R6 {where}: loads variables with {name}, which R6 cannot read")
+        elif name == "vars_files":
+            out.append(f"R6 {where}: loads variables with vars_files outside an enrolled play")
         elif name in TASK_FILE_LOADERS and not _task_target_ok(value, base, ansible):
             out.append(f"R6 {where}: {name} loads {value!r}, which R6 cannot read")
-        elif name in ROLE_LOADERS and not _role_ok(_mapping(value).get("name"), base, ansible):
-            out.append(f"R6 {where}: {name} names a role R6 cannot read")
+        elif name in ROLE_LOADERS:
+            args = _mapping(value)
+            if not _role_ok(args.get("name"), base, ansible) or any(
+                sub in args for sub in ROLE_SUBFILE_KEYS
+            ):
+                out.append(f"R6 {where}: {name} names a role or a file R6 cannot read")
+        elif name in ACTION_KEYS and _action_module(value) in LOADER_MODULES:
+            out.append(f"R6 {where}: {name} runs {_action_module(value)}, which R6 cannot read")
         elif name in ROLE_LISTS and isinstance(value, list):
             for entry in value:
                 target = _mapping(entry).get("role") if isinstance(entry, dict) else entry
                 if not _role_ok(target, base, ansible):
                     out.append(f"R6 {where}: {name} names {target!r}, which R6 cannot read")
-        elif name == "vars_files" and not top_playbook:
-            out.append(f"R6 {where}: loads variables with vars_files outside a top-level playbook")
-        _scan(value, base, ansible, where, allowed, top_playbook, out)
+        _scan(value, base, ansible, where, allowed, out)
+
+
+def _scan_playbook(doc: object, path: Path, ansible: Path, where: str, out: list[str]) -> None:
+    """A top-level playbook may set enrolled_host in a play's vars, and only an enrolled
+    play may load vars_files, and that is pinned by R2 rather than read here."""
+    if doc is None:
+        return
+    if not isinstance(doc, list):
+        out.append(f"R6 {where}: is not a list of plays, so R6 cannot read it")
+        return
+    for play in doc:
+        if not isinstance(play, dict):
+            out.append(f"R6 {where}: holds an entry that is not a play, so R6 cannot read it")
+            continue
+        body = _mapping(play)
+        enrolled = _enrolled(body)
+        if enrolled:
+            body.pop("vars_files", None)
+        play_vars = body.pop("vars", None)
+        if isinstance(play_vars, dict) and HOST_KEY in play_vars:
+            if not enrolled:
+                out.append(f"R6 {where}: sets {HOST_KEY} outside an enrolled playbook's vars")
+            play_vars = {key: item for key, item in play_vars.items() if key != HOST_KEY}
+        _scan({"vars": play_vars, **body}, path.parent, ansible, where, frozenset(), out)
 
 
 def _check_no_other_definition(ansible: Path, findings: list[str]) -> None:
     resolved = ansible.resolve()
     for path in sorted(ansible.rglob("*")):
-        if not path.is_file() or path.suffix not in (".yml", ".yaml"):
-            continue
         relative = path.relative_to(ansible)
+        where = f"ansible/{relative.as_posix()}"
         if not _is_scanned(relative):
             continue
-        where = f"ansible/{relative.as_posix()}"
+        loaded = LOADED_DIRS.intersection(relative.parts)
+        if path.is_symlink() and loaded and _inside(path.resolve(), resolved) is None:
+            findings.append(f"R6 {where}: links out of ansible/ where Ansible loads files")
+            continue
+        if not path.is_file() or path.suffix not in VARS_SUFFIXES:
+            continue
         try:
             doc: object = yaml.safe_load(path.read_text(encoding="utf-8"))
         except (OSError, ValueError, yaml.YAMLError) as error:
             findings.append(f"R6 {where}: cannot be read as YAML, so R6 cannot read it: {error}")
             continue
-        _scan(
-            doc,
-            path.parent.resolve(),
-            resolved,
-            where,
-            _allowed_in(relative.as_posix()),
-            relative.parent == Path("playbooks"),
-            findings,
-        )
+        if relative.parent == Path("playbooks") and path.suffix in TASK_SUFFIXES:
+            _scan_playbook(doc, path, resolved, where, findings)
+        else:
+            allowed = _allowed_in(relative.as_posix())
+            _scan(doc, path.parent.resolve(), resolved, where, allowed, findings)
 
 
 def check(root: Path) -> list[str]:

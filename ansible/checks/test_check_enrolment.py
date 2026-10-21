@@ -429,6 +429,201 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R0 playbooks/includes/refuse_other_hosts.yml")
 
+    # R0: the refusal assert gains ignore_errors or tags, which can skip it.
+    def test_r0_refusal_assert_gains_a_skipping_key(self) -> None:
+        for key in ("ignore_errors: true", "tags: [never]"):
+            with self.subTest(key=key):
+                self.setUp()
+                self._edit(
+                    "playbooks/includes/refuse_other_hosts.yml",
+                    "    quiet: true\n",
+                    f"    quiet: true\n  {key}\n",
+                )
+                self._assert_rule("R0 playbooks/includes/refuse_other_hosts.yml")
+
+    # R6: a JSON file under the role's vars is loaded by Ansible, so R6 reads it.
+    def test_r6_role_vars_json_sets_signer(self) -> None:
+        self._write("roles/pull_trigger/vars/extra.json", '{"pull_trigger_signers": ["X"]}')
+        self._assert_rule("R6 ansible/roles/pull_trigger/vars/extra.json")
+
+    # R6: an extensionless file in group_vars is loaded by Ansible, so R6 reads it.
+    def test_r6_extensionless_group_vars_sets_signer(self) -> None:
+        self._write("inventories/production/group_vars/all", "---\npull_trigger_signers: []\n")
+        self._assert_rule("R6 ansible/inventories/production/group_vars/all")
+
+    # R6: a JSON file that does not parse is refused, not skipped.
+    def test_r6_unparseable_json_in_group_vars_is_refused(self) -> None:
+        self._write("inventories/production/group_vars/broken.json", '{"pull_trigger_signers": ')
+        self._assert_rule("R6 ansible/inventories/production/group_vars/broken.json")
+
+    # R6: an include of a JSON file is refused, because R6 reads task files of .yml only.
+    def test_r6_task_includes_a_json_file(self) -> None:
+        self._write("roles/pull_trigger/tasks/signers.json", '{"pull_trigger_signers": ["X"]}')
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "- name: Create the state directory\n",
+            "- name: Load a json\n  ansible.builtin.include_tasks: signers.json\n\n"
+            "- name: Create the state directory\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R6: a symlink under a loaded directory that leads out of ansible/ is refused.
+    def test_r6_symlink_out_of_ansible_in_vars_is_refused(self) -> None:
+        outside = self.root / "outside.yml"
+        outside.write_text("---\npull_trigger_signers: []\n", encoding="utf-8")
+        link = self.ansible / "roles" / "pull_trigger" / "vars" / "link.yml"
+        link.symlink_to(outside)
+        self._assert_rule("R6 ansible/roles/pull_trigger/vars/link.yml")
+
+    # R6: include_vars under its legacy FQCN is a loader R6 cannot read.
+    def test_r6_legacy_fqcn_include_vars(self) -> None:
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "- name: Create the state directory\n",
+            "- name: Load variables\n  ansible.legacy.include_vars: extra.yml\n\n"
+            "- name: Create the state directory\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R6: an action form of include_vars is a loader R6 cannot read.
+    def test_r6_action_form_include_vars(self) -> None:
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "- name: Create the state directory\n",
+            "- name: Load variables\n  action: include_vars extra.yml\n\n"
+            "- name: Create the state directory\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R6: include_role with tasks_from names a task file R6 does not read.
+    def test_r6_include_role_with_tasks_from(self) -> None:
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "- name: Create the state directory\n",
+            "- name: Run a role task file\n  ansible.builtin.include_role:\n"
+            "    name: pull_trigger\n    tasks_from: extra\n\n"
+            "- name: Create the state directory\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R6: the bare include alias of a molecule scenario is a loader R6 cannot read.
+    def test_r6_bare_include_alias_of_molecule(self) -> None:
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "- name: Create the state directory\n",
+            "- name: Load a scenario\n  include: ../molecule/default/converge.yml\n\n"
+            "- name: Create the state directory\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R6: a set_fact written as a string assigns a protected key, which R6 reads.
+    def test_r6_string_form_sets_a_signer(self) -> None:
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "- name: Create the state directory\n",
+            "- name: Trust a key\n  ansible.builtin.set_fact: pull_trigger_signers=[X]\n\n"
+            "- name: Create the state directory\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R6: a key written with a template is refused, since R6 cannot resolve its name.
+    def test_r6_templated_key_is_refused(self) -> None:
+        self._write("roles/pull_trigger/vars/extra.yml", "---\n'{{ x }}': 1\n")
+        self._assert_rule("R6 ansible/roles/pull_trigger/vars/extra.yml")
+
+    # R6: vars_files outside an enrolled play is refused, the play it may be in is pinned by R2.
+    def test_r6_vars_files_in_a_role_task(self) -> None:
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "- name: Create the state directory\n",
+            "- name: Load a file\n  vars_files: [extra.yml]\n\n"
+            "- name: Create the state directory\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R6: enrolled_host set in a task of an enrolled playbook names another host.
+    def test_r6_enrolled_host_set_fact_in_a_playbook_task(self) -> None:
+        self._edit(
+            "playbooks/ops1.yml",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
+            "  tasks:\n    - name: Name another host\n"
+            "      ansible.builtin.set_fact:\n        enrolled_host: edge1\n",
+        )
+        self._assert_rule("R6 ansible/playbooks/ops1.yml")
+
+    # R6: a top-level playbook that is not enrolled sets enrolled_host in its play vars.
+    def test_r6_unenrolled_playbook_sets_enrolled_host(self) -> None:
+        self._write(
+            "playbooks/tmp9.yml",
+            "---\n- name: x\n  hosts: all\n  vars:\n    enrolled_host: tmp9\n  tasks: []\n",
+        )
+        self._assert_rule("R6 ansible/playbooks/tmp9.yml")
+
+    # R6: a role dependency that names a molecule scenario is refused.
+    def test_r6_role_dependency_names_molecule(self) -> None:
+        self._edit(
+            "roles/pull_trigger/meta/main.yml",
+            "  min_ansible_version: '2.21.5'\n",
+            "  min_ansible_version: '2.21.5'\ndependencies:\n  - molecule/default\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/meta/main.yml")
+
+    # R6: the molecule exclusion is for a role's molecule directory only, not group_vars.
+    def test_r6_group_vars_molecule_is_read(self) -> None:
+        self._write(
+            "inventories/production/group_vars/molecule/all.yml",
+            "---\npull_trigger_signers: []\n",
+        )
+        self._assert_rule("R6 ansible/inventories/production/group_vars/molecule/all.yml")
+
+    # R6: meta/main.yml beside an argument spec stays read, only the spec file is excluded.
+    def test_r6_meta_main_beside_argument_specs_is_read(self) -> None:
+        self._edit(
+            "roles/pull_trigger/meta/main.yml",
+            "  min_ansible_version: '2.21.5'\n",
+            "  min_ansible_version: '2.21.5'\npull_trigger_signers: []\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/meta/main.yml")
+
+    # R8: a second task that carries the config var, after the writer, is a decoy writer.
+    def test_r8_decoy_writer_after_the_real_one(self) -> None:
+        self._write(
+            "roles/pull_trigger/tasks/decoy.yml",
+            "---\n- name: Decoy\n  ansible.builtin.copy:\n    content: 'x'\n"
+            "    dest: /etc/x.json\n  vars:\n    pull_trigger_config:\n"
+            "      signers: ['ATTACKERFPR']\n      remote_url: 'https://github.com/x/y.git'\n",
+        )
+        self._assert_rule("R8 roles/pull_trigger/tasks: found 2")
+
+    # R8: the config writer's copy writes its content from a literal.
+    def test_r8_writer_content_is_a_literal(self) -> None:
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "    content: \"{{ pull_trigger_config | ansible.builtin.to_nice_json }}\\n\"",
+            "    content: 'x'",
+        )
+        self._assert_rule("R8 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R8: the config writer's dest is a literal, not the pinned config path.
+    def test_r8_writer_dest_is_a_literal(self) -> None:
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "    dest: '{{ pull_trigger_config_path }}'\n    owner: root\n"
+            "    group: root\n    mode: '0644'",
+            "    dest: '/etc/pull-trigger/other.json'\n    owner: root\n"
+            "    group: root\n    mode: '0644'",
+        )
+        self._assert_rule("R8 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R8: a role with no config writer fails, it does not pass over nothing.
+    def test_r8_no_writer(self) -> None:
+        self._write(
+            "roles/pull_trigger/tasks/main.yml",
+            "---\n- name: x\n  ansible.builtin.debug:\n    msg: hi\n",
+        )
+        self._assert_rule("R8 roles/pull_trigger/tasks: found 0")
+
 
 if __name__ == "__main__":
     unittest.main()
