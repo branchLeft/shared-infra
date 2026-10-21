@@ -1,0 +1,6 @@
+---
+# The playbook mx1 runs, and the playbook allowlist that holds it. The shared
+# values (remote, signers) are in all/pull_trigger.yml.
+pull_trigger_playbook: ansible/playbooks/mx1.yml
+pull_trigger_playbooks:
+  - ansible/playbooks/mx1.yml
