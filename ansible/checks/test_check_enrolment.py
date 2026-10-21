@@ -291,6 +291,144 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R6 ansible/playbooks/edge1.yml")
 
+    # R8: the config writer takes its signers from a literal (the reproduction).
+    def test_r8_writer_signers_is_a_literal(self) -> None:
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "      signers: '{{ pull_trigger_signers }}'",
+            "      signers: ['ATTACKERFPR']",
+        )
+        self._assert_rule("R8 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R8: the config writer takes its remote from a fork's literal (the reproduction).
+    def test_r8_writer_remote_is_a_fork_literal(self) -> None:
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "      remote_url: '{{ pull_trigger_remote_url }}'",
+            "      remote_url: 'https://github.com/attacker/shared-infra.git'",
+        )
+        self._assert_rule("R8 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R6: a role task includes a file that is not YAML, which holds the signer list.
+    def test_r6_task_includes_a_non_yaml_file(self) -> None:
+        self._write("roles/pull_trigger/tasks/signers.txt", "pull_trigger_signers: [ATTACKERFPR]\n")
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "- name: Create the state directory\n",
+            "- name: Load a file\n  ansible.builtin.include_tasks: signers.txt\n\n"
+            "- name: Create the state directory\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R6: a role task includes a molecule scenario, which R6 does not read.
+    def test_r6_task_includes_a_molecule_scenario(self) -> None:
+        self._write(
+            "roles/pull_trigger/molecule/default/converge.yml",
+            "---\n- name: Trust a key\n  ansible.builtin.set_fact:\n"
+            "    pull_trigger_signers: [ATTACKERFPR]\n",
+        )
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "- name: Create the state directory\n",
+            "- name: Load a scenario\n"
+            "  ansible.builtin.include_tasks: ../molecule/default/converge.yml\n\n"
+            "- name: Create the state directory\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R6: a molecule scenario is not read, so a signer list in one alone is not a finding.
+    def test_r6_molecule_scenario_alone_is_not_read(self) -> None:
+        self._write(
+            "roles/pull_trigger/molecule/default/converge.yml",
+            "---\n- name: Trust a key\n  ansible.builtin.set_fact:\n"
+            "    pull_trigger_signers: [ATTACKERFPR]\n",
+        )
+        self.assertEqual(check(self.root), [])
+
+    # R6: an argument spec is not read, so an option named like a key alone is not a finding.
+    def test_r6_argument_specs_alone_is_not_read(self) -> None:
+        self._write(
+            "roles/pull_trigger/meta/argument_specs.yml",
+            "---\nargument_specs:\n  main:\n    options:\n      pull_trigger_signers:\n"
+            "        type: list\n",
+        )
+        self.assertEqual(check(self.root), [])
+
+    # R6: a role task includes an argument spec, which R6 does not read.
+    def test_r6_task_includes_an_argument_spec(self) -> None:
+        self._write(
+            "roles/pull_trigger/meta/argument_specs.yml",
+            "---\nargument_specs:\n  main:\n    options:\n      pull_trigger_signers:\n"
+            "        type: list\n",
+        )
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "- name: Create the state directory\n",
+            "- name: Load a spec\n  ansible.builtin.include_tasks: ../meta/argument_specs.yml\n\n"
+            "- name: Create the state directory\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R6: a task includes a file by a templated name, which R6 cannot resolve.
+    def test_r6_templated_include_target(self) -> None:
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "- name: Create the state directory\n",
+            "- name: Load by name\n  ansible.builtin.include_tasks: '{{ pull_trigger_extra }}.yml'\n\n"
+            "- name: Create the state directory\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R6: a role task loads variables with include_vars, which R6 cannot read.
+    def test_r6_role_task_includes_vars(self) -> None:
+        self._write("roles/pull_trigger/vars/extra.yml", "---\npull_trigger_signers: []\n")
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "- name: Create the state directory\n",
+            "- name: Load variables\n  ansible.builtin.include_vars: extra.yml\n\n"
+            "- name: Create the state directory\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R6: an unparseable file is refused, not read as text, so a hidden key cannot pass.
+    def test_r6_unparseable_file_is_refused(self) -> None:
+        self._write(
+            "roles/pull_trigger/tasks/broken.yml",
+            "- name: x\n  set_fact: [\n    pull_trigger_signers: y\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/broken.yml")
+
+    # R6: a role task sets the enrolled host, which decides the playbook derivation.
+    def test_r6_role_task_sets_enrolled_host(self) -> None:
+        self._edit(
+            "roles/pull_trigger/tasks/main.yml",
+            "- name: Create the state directory\n",
+            "- name: Name another host\n  ansible.builtin.set_fact:\n"
+            "    enrolled_host: edge1\n\n- name: Create the state directory\n",
+        )
+        self._assert_rule("R6 ansible/roles/pull_trigger/tasks/main.yml")
+
+    # R0: the signer assert gains a key that switches it off, one case per key.
+    def test_r0_signer_assert_gains_a_switching_key(self) -> None:
+        for key in ("when: false", "ignore_errors: true", "tags: [never]"):
+            with self.subTest(key=key):
+                self.setUp()
+                self._edit(
+                    "playbooks/includes/require_signers.yml",
+                    "    quiet: true\n",
+                    f"    quiet: true\n  {key}\n",
+                )
+                self._assert_rule("R0 playbooks/includes/require_signers.yml")
+
+    # R0: the refusal assert gains a when key, which switches the one-host test off.
+    def test_r0_refusal_assert_gains_when(self) -> None:
+        self._edit(
+            "playbooks/includes/refuse_other_hosts.yml",
+            "    quiet: true\n",
+            "    quiet: true\n  when: false\n",
+        )
+        self._assert_rule("R0 playbooks/includes/refuse_other_hosts.yml")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,5 +10,5 @@
     that:
       - ansible_play_hosts_all | length == 1
       - inventory_hostname in ['localhost', enrolled_host]
-    fail_msg: This playbook is for one host, enrolled_host. Limit the run to that host.
+    fail_msg: 'This playbook is for one host, {{ enrolled_host }}. Limit the run to that host.'
     quiet: true

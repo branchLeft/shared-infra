@@ -12,8 +12,12 @@ pull: a commit of `main` signed by a key on it is applied to the host as root
   the owner writes a value.
 - Public keys only. Never a secret.
 - `checks/check_enrolment.py` requires that the files here are exactly the enrolled
-  playbooks, one file each, and that no other file defines `pull_trigger_signers`.
+  playbooks, one file each, and that no other YAML file under `ansible/` sets
+  `pull_trigger_signers`. The config writer must take its signers from the pinned
+  variable (R8).
 - Owner-only in `.github/CODEOWNERS`: a change here is the owner's merge.
+- The check does not stop a role edit. A role runs as root and can set the list
+  in code. The deploy approval is the control on that (ws#2483).
 
-The rules are in `checks/check_enrolment.py` (R0 to R7). Which keys a host trusts,
+The rules are in `checks/README.md` (R0 to R8). Which keys a host trusts,
 and when, is an owner decision, not a code decision.
