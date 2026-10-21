@@ -27,15 +27,9 @@ cleanup() {
 pass() { PASSES=$((PASSES + 1)); echo "PASS: $*"; }
 fail() { FAILURES=$((FAILURES + 1)); echo "FAIL: $*"; }
 
-# Registry pulls can time out on a shared runner: retry, then fail loudly.
-pull_with_retry() {
-    attempt=1
-    until docker pull -q "$1" >/dev/null; do
-        [ "$attempt" -lt 3 ] || { echo "could not pull $1 after $attempt attempts"; return 1; }
-        attempt=$((attempt + 1))
-        sleep 5
-    done
-}
+# The shared registry pull retry: one home, sourced here and by the port policy proof.
+# shellcheck disable=SC1091 # sourced at run time; CI shellcheck runs without -x
+. "$HERE/scripts/lib/docker-pull.sh"
 
 # dockerd's own PATH, so the policy writes to the iptables backend dockerd uses.
 DOCKERD_PATH=""

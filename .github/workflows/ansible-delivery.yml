@@ -12,7 +12,7 @@ name: Ansible delivery
 # The environment is its own, not `production` or `production-mail`: those release the
 # Pulumi applies in ci.yml, and one approval must not release both. The owner creates
 # it before the first run, with all of these set:
-#   - required reviewer: one user, the repository owner, alone, no team and no other user;
+#   - required reviewer: one user, the single owner account the probe accepts, alone, no team and no other user;
 #   - Prevent self-review: ticked, so the person who merged a change cannot approve its deploy;
 #   - Allow administrators to bypass configured protection rules: unticked;
 #   - deployment branches: main only;
