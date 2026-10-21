@@ -75,9 +75,10 @@ command, public key only, and the forwardings and tty it does not allow. The dro
 later line of the main configuration is read as part of the tunnel account's
 block. If a check fails, the previous drop-in and authorized key are put back,
 and the run fails naming the cause. Under `--check` the role changes nothing.
-On a host that has not had its directories made yet, the writes that need a
-directory the run would create are skipped (they are guarded by a `stat`), and
-the check run completes.
+A check run on a host that has none of the role's directories yet completes (the
+harness's `check-fresh` step runs it): the role's modules report what they would
+do. The one read that cannot be reported is db1's public key file, which does not
+exist until the run creates it, so that read is guarded by a `stat`.
 
 ### Golden files
 

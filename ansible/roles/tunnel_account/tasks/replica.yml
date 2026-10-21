@@ -53,15 +53,6 @@
     quiet: true
     fail_msg: The sshd drop-in directory is missing. Is OpenSSH installed on this host?
 
-# The next two stats are the guards of the writes below. A check run on a fresh
-# host has not made the authorized keys directory yet, and a template into a
-# missing directory fails under --check.
-- name: Look at the authorized keys directory
-  ansible.builtin.stat:
-    path: '{{ tunnel_account_authorized_keys_dir }}'
-  register: tunnel_account_keys_dir_stat
-  check_mode: false
-
 - name: Look for the current sshd drop-in and authorized keys
   ansible.builtin.stat:
     path: '{{ item }}'
@@ -91,7 +82,6 @@
         owner: root
         group: root
         mode: '0644'
-      when: not ansible_check_mode or tunnel_account_keys_dir_stat.stat.exists
       no_log: true
       diff: false
       register: tunnel_account_keys

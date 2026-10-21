@@ -13,18 +13,11 @@
     group: root
     mode: '0755'
 
-- name: Look at the key directory
-  ansible.builtin.stat:
-    path: '{{ tunnel_account_key_dir }}'
-  register: tunnel_account_keydir_stat
-  check_mode: false
-
 # Generated once, owned by the unit's own user and readable by it alone. The
 # module writes the private half with that owner and mode, and a re-run puts a
-# drifted owner or mode back. A check run on a fresh host has no directory yet,
-# so nothing is generated there (ANS-9). The module returns the public half and
-# a fingerprint only, never the private half, and no_log keeps even those out
-# of the log.
+# drifted owner or mode back. It generates nothing under --check (ANS-9). The
+# module returns the public half and a fingerprint only, never the private
+# half, and no_log keeps even those out of the log.
 - name: Generate db1's key on db1, once
   community.crypto.openssh_keypair:
     path: '{{ tunnel_account_key_file }}'
@@ -34,7 +27,6 @@
     group: '{{ tunnel_account_user }}'
     mode: '0600'
     regenerate: never
-  when: not ansible_check_mode or tunnel_account_keydir_stat.stat.exists
   no_log: true
   diff: false
 

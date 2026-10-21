@@ -62,8 +62,7 @@
 
 # The known_hosts line pins the replica host key. The unit's StrictHostKeyChecking
 # is yes, so a key that does not match fails the connection instead of being
-# accepted (control 4). The templates write into the key directory, which a check
-# run on a fresh host does not have yet, so they wait for it there.
+# accepted (control 4).
 - name: Pin the replica host key
   ansible.builtin.template:
     src: known_hosts.j2
@@ -71,7 +70,6 @@
     owner: root
     group: '{{ tunnel_account_user }}'
     mode: '0640'
-  when: not ansible_check_mode or tunnel_account_keydir_stat.stat.exists
   no_log: true
   diff: false
   register: tunnel_account_known
@@ -83,7 +81,6 @@
     owner: root
     group: root
     mode: '0600'
-  when: not ansible_check_mode or tunnel_account_keydir_stat.stat.exists
   no_log: true
   diff: false
   register: tunnel_account_target
