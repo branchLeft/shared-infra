@@ -1,0 +1,56 @@
+---
+# One state of the renderer that the restart must refuse, given in
+# monitoring_stack_verify_renderer, with a restart due (SMTP_PASSWORD rotated).
+# The role must refuse before restarting, leave the unit running and stamp
+# nothing. The renderer is put back at the end.
+- name: Put the renderer in the state
+  ansible.builtin.file:
+    path: '{{ verify_renderer_path }}'
+    state: '{{ monitoring_stack_verify_renderer.state }}'
+    mode: '{{ monitoring_stack_verify_renderer.mode }}'
+    owner: '{{ monitoring_stack_verify_renderer.owner }}'
+
+- name: Snapshot before the restart that the renderer check refuses
+  ansible.builtin.include_tasks: snapshot.yml
+  vars:
+    monitoring_stack_verify_snap_name: renderer_check_before
+
+- name: Apply the role with a rotated key, the renderer being in the state
+  block:
+    - name: Apply the role with a rotated key while the renderer is unsafe
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+      vars:
+        monitoring_stack_smtp_password: '{{ verify_rot_f }}'
+    - name: Note that the role did not refuse
+      ansible.builtin.set_fact:
+        monitoring_stack_verify_failed_run: false
+  rescue:
+    - name: Note that the role refused
+      ansible.builtin.set_fact:
+        monitoring_stack_verify_failed_run: true
+
+- name: Snapshot after the refused restart
+  ansible.builtin.include_tasks: snapshot.yml
+  vars:
+    monitoring_stack_verify_snap_name: renderer_check_after
+
+- name: Assert the role refused before restarting, left the unit running, and did not stamp
+  ansible.builtin.assert:
+    that:
+      - monitoring_stack_verify_failed_run
+      - monitoring_stack_verify_snaps.renderer_check_after.calls == monitoring_stack_verify_snaps.renderer_check_before.calls
+      - monitoring_stack_verify_snaps.renderer_check_after.active == 'active'
+      - monitoring_stack_verify_snaps.renderer_check_after.stamp == monitoring_stack_verify_snaps.renderer_check_before.stamp
+    quiet: true
+    fail_msg: >-
+      The renderer check did not refuse before the restart with the renderer {{ monitoring_stack_verify_renderer.name }}:
+      the role did not fail, or the unit was restarted, or the stamp moved.
+
+- name: Put the renderer back
+  ansible.builtin.copy:
+    content: "# test stand-in: a changed renderer\n"
+    dest: '{{ verify_renderer_path }}'
+    owner: root
+    group: root
+    mode: '0644'

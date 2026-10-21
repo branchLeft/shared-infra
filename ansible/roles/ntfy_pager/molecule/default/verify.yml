@@ -89,7 +89,9 @@
     # The role delivers the renderer and nothing else of the stack: the eight
     # other files and the subdirectories are monitoring_stack's alone, and the
     # role restarts nothing. The project directory is the one place both roles
-    # create, with the same owner and mode.
+    # create, with the same owner and mode. The expected list is written out here
+    # and not read from ntfy_pager_files: a list read from the role would move
+    # with a file added to it, and the assertion could not notice.
     - name: Look at the project directory and at what is in it
       ansible.builtin.find:
         paths: /opt/branchleft/monitoring
@@ -114,11 +116,12 @@
         quiet: true
         fail_msg: >-
           The project directory is not a root-owned directory with mode 0755 holding exactly
-          the files of ntfy_pager_files: this role delivers the renderer and no other file
-          of the stack. Found: {{ ntfy_pager_verify_found }}.
+          the renderer: this role delivers the renderer and no other file of the stack.
+          Found: {{ ntfy_pager_verify_found }}.
       vars:
         ntfy_pager_verify_found: "{{ ntfy_pager_verify_project.files | map(attribute='path') | sort | list }}"
-        ntfy_pager_verify_expected: "{{ ntfy_pager_files | map('regex_replace', '^', '/opt/branchleft/monitoring/') | sort | list }}"
+        ntfy_pager_verify_expected:
+          - /opt/branchleft/monitoring/render_alertmanager_config.py
 
     # ----- The log of this scenario's Ansible runs -----
     # The four values are given to the role as sentinels. A task that handles one

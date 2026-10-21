@@ -161,6 +161,15 @@
   register: monitoring_stack_unit_status
   check_mode: false
 
+# The edge instance is read too, only for NeedDaemonReload: its drop-in is not in
+# the fingerprint, so a reload that a failed run did not do is found by asking
+# systemd whether the drop-in on disk is newer than the one it holds.
+- name: Read the edge instance's unit
+  ansible.builtin.systemd_service:
+    name: '{{ monitoring_stack_edge_unit }}'
+  register: monitoring_stack_edge_unit_status
+  check_mode: false
+
 # sha256 of each file the unit runs from: the eight stack files, the monitoring
 # drop-in and the renderer. A file that is missing hashes as absent.
 - name: Hash the files the unit runs from
@@ -228,15 +237,21 @@
       the first start. The role has nothing recorded as applied until it has restarted the unit.
   when: not (monitoring_stack_unit_enabled | bool)
 
-# Before the restart, so the restart runs the drop-ins this role installed. It is
-# also done whenever a restart is due, so a reload that failed on an earlier run
-# is not lost. A reload does not report a change.
+# Before the restart, so the restart runs the drop-ins this role installed. A
+# "changed" flag lasts one run, so it cannot carry a reload across a run that
+# failed after the copy: the rerun finds the file unchanged. So the reload is
+# also made whenever systemd says a unit's files on disk are newer than what it
+# holds (NeedDaemonReload), which covers the edge drop-in, outside the
+# fingerprint, and a monitoring drop-in on a unit that is not enabled. A reload
+# does not report a change.
 - name: Make systemd read the drop-ins before any restart
   ansible.builtin.systemd_service:
     daemon_reload: true
   when: >-
     monitoring_stack_dropin_copy.changed or monitoring_stack_edge_dropin_copy.changed
     or monitoring_stack_restart_due | bool
+    or (monitoring_stack_unit_status.status.NeedDaemonReload | default('no')) == 'yes'
+    or (monitoring_stack_edge_unit_status.status.NeedDaemonReload | default('no')) == 'yes'
 
 # The renderer is the unit's ExecStartPre, so a restart is the only thing that
 # runs it. The check comes before the restart: after it, it would be moot, and a
