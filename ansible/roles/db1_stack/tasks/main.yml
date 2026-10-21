@@ -109,49 +109,11 @@
 
 # ----- The database stack's inputs (part two) -----
 
-# The database image is not chosen by this role: branchleft-deploy writes its
-# digest to the pin file, and the stack's unit cannot start without it. A
-# missing file is the state after a first deploy that failed, so the role
-# refuses before it changes anything, and it reads the file only to check it.
-# These checks read no secret and print the file's text only in the pattern
-# check's own message, which names the rule and holds no value.
-- name: Look at the database image pin the deploy program writes
-  ansible.builtin.stat:
-    path: '{{ db1_stack_image_env_path }}'
-    get_checksum: false
-    get_mime: false
-    get_attributes: false
-  register: db1_stack_image_env_stat
-
-- name: Refuse a database image pin that is absent
-  ansible.builtin.assert:
-    that:
-      - db1_stack_image_env_stat.stat.exists | default(false)
-      - db1_stack_image_env_stat.stat.isreg | default(false)
-    fail_msg: >-
-      {{ db1_stack_image_env_path }} is absent or is not a file. branchleft-deploy
-      writes it on a successful deploy of the database; run that first, then run the
-      role again.
-    quiet: true
-
-- name: Read the database image pin the deploy program wrote
-  ansible.builtin.slurp:
-    src: '{{ db1_stack_image_env_path }}'
-  register: db1_stack_image_env_raw
-
-# The file must be the one line the deploy program writes: IMAGE=<digest of
-# the mysql image>, then a line break. An empty file, a file with no IMAGE key,
-# two lines, a tag without a digest, or upper-case hex all fail here, so the
-# compose file never starts from a pin the deploy program would not write.
-- name: Refuse a database image pin that is not one line of the form the deploy program writes
-  ansible.builtin.assert:
-    that:
-      - (db1_stack_image_env_raw.content | b64decode) is match(db1_stack_image_env_pattern)
-    fail_msg: >-
-      {{ db1_stack_image_env_path }} is not one line of the form IMAGE=mysql:TAG@sha256:HEX64
-      with lower-case hex. The deploy program writes that line; a hand edit or a
-      partial write is the usual cause. Run branchleft-deploy db to write it again.
-    quiet: true
+# The database image pin is checked in tasks/_compose.yml, just before the unit is
+# enabled, not here: rendering the compose file needs no pin (the unit cannot start
+# without one), and branchleft-deploy reads that compose file before it writes the
+# pin, so the rendering must come first on a rebuilt host. See the README, "The
+# database image pin".
 
 # The compose file is the one the deploy program reads. Compose would read a
 # second file of another name first, so the role refuses to run beside one.

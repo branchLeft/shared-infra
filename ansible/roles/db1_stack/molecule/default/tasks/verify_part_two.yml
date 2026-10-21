@@ -96,7 +96,7 @@
   no_log: true
 
 # The compose file, the configuration and the socket directory have the owners and
-# modes the role states. The socket directory is 0777 by design (see the role).
+# modes the role states. The socket directory is 1777 (world-writable, sticky; see the role).
 - name: Stat the files and directories the role creates
   ansible.builtin.stat:
     path: '{{ item.path }}'
@@ -104,7 +104,7 @@
     - { path: '{{ db1_stack_compose_path }}', mode: '0644' }
     - { path: '{{ db1_stack_cnf_directory }}/branchleft.cnf', mode: '0644' }
     - { path: '{{ db1_stack_db_directory }}', mode: '0755' }
-    - { path: '{{ db1_stack_socket_directory }}', mode: '0777' }
+    - { path: '{{ db1_stack_socket_directory }}', mode: '1777' }
   register: db1_stack_verify_modes
 
 - name: Assert the stack's files and directories have the owners and modes the role states
@@ -158,6 +158,7 @@
     that:
       - "db1_stack_verify_order_log.find(' : Remove the legacy drop-in file') >= 0"
       - "db1_stack_verify_order_log.find(' : Remove the legacy drop-in file') < db1_stack_verify_order_log.find(' : Write the exporter credentials file')"
+      - "db1_stack_verify_order_log.find(' : Reload systemd after the legacy drop-in was removed') >= 0"
       - "db1_stack_verify_order_log.find(' : Reload systemd after the legacy drop-in was removed')
         < db1_stack_verify_order_log.find(' : Write the exporter credentials file')"
     fail_msg: The legacy drop-in is not removed before the exporter file is written, so one restart could run the legacy writer.
@@ -180,23 +181,38 @@
 
 # The role starts, stops, restarts and recreates nothing, and removes no data. The
 # source is read, because a test cannot run docker compose here.
-- name: Read the source of the included task files
+- name: Read the source of the task files the role runs
   ansible.builtin.set_fact:
-    db1_stack_verify_part_two_source: >-
-      {{ lookup('ansible.builtin.file', verify_role_dir ~ '/tasks/_compose.yml')
-      ~ lookup('ansible.builtin.file', verify_role_dir ~ '/tasks/_unit.yml') }}
+    db1_stack_verify_main_source: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/tasks/main.yml') }}"
+    db1_stack_verify_compose_source: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/tasks/_compose.yml') }}"
+    db1_stack_verify_unit_source: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/tasks/_unit.yml') }}"
 
-- name: Assert the included tasks run no compose command and start, stop or remove nothing
+# The scan is over every task file the role runs, not a substring of two of them.
+# It matches the forms a task can take: a compose verb after compose or docker, a
+# docker_ or community.docker module, a command or shell task, and a state or a
+# started/restarted/stopped key in block or flow style and quoted or not. A
+# removal (state: absent) is allowed in main.yml, which removes the legacy files
+# and the exporter path before writing, and refused in _compose.yml, which is the
+# included file that handles the stack. _unit.yml removes the legacy drop-in and
+# the reload marker by design, so it is not scanned for a removal.
+- name: Assert the role runs no compose command, no docker module, no command or shell, and starts, stops or restarts nothing
   ansible.builtin.assert:
     that:
-      - "'docker_compose' not in db1_stack_verify_part_two_source"
-      - "'community.docker' not in db1_stack_verify_part_two_source"
-      - "'state: started' not in db1_stack_verify_part_two_source"
-      - "'state: restarted' not in db1_stack_verify_part_two_source"
-      - "'state: stopped' not in db1_stack_verify_part_two_source"
-      - "'compose down' not in db1_stack_verify_part_two_source"
-      - "'state: absent' not in lookup('ansible.builtin.file', verify_role_dir ~ '/tasks/_compose.yml')"
-    fail_msg: The included tasks start, stop, restart or remove something, which this role must not do.
+      - db1_stack_verify_main_source is not search('(?i)compose\s+(up|down|restart|start|stop|rm|kill|run|create|pull)')
+      - db1_stack_verify_compose_source is not search('(?i)compose\s+(up|down|restart|start|stop|rm|kill|run|create|pull)')
+      - db1_stack_verify_unit_source is not search('(?i)compose\s+(up|down|restart|start|stop|rm|kill|run|create|pull)')
+      - db1_stack_verify_main_source is not search('(?i)docker_|community[.]docker|docker\s+(restart|start|stop|rm|kill|run)')
+      - db1_stack_verify_compose_source is not search('(?i)docker_|community[.]docker|docker\s+(restart|start|stop|rm|kill|run)')
+      - db1_stack_verify_unit_source is not search('(?i)docker_|community[.]docker|docker\s+(restart|start|stop|rm|kill|run)')
+      - db1_stack_verify_main_source is not search('(?im)^\s*-?\s*(command|shell|raw|script)\s*:')
+      - db1_stack_verify_compose_source is not search('(?im)^\s*-?\s*(command|shell|raw|script)\s*:')
+      - db1_stack_verify_unit_source is not search('(?im)^\s*-?\s*(command|shell|raw|script)\s*:')
+      - db1_stack_verify_main_source is not search('(?i)(state|restarted|started|stopped)\s*:\s*[\x27"]?\s*(started|restarted|stopped)')
+      - db1_stack_verify_compose_source is not search('(?i)(state|restarted|started|stopped)\s*:\s*[\x27"]?\s*(started|restarted|stopped)')
+      - db1_stack_verify_unit_source is not search('(?i)(state|restarted|started|stopped)\s*:\s*[\x27"]?\s*(started|restarted|stopped)')
+      - db1_stack_verify_compose_source is not search('(?i)state\s*:\s*[\x27"]?\s*absent')
+      - db1_stack_verify_compose_source is not search('(?i)compose\s+down')
+    fail_msg: The role's task files start, stop, restart, recreate or remove something, which this role must not do.
     quiet: true
 
 # ----- The refusals -----

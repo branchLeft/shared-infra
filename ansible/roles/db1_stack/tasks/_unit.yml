@@ -15,6 +15,15 @@
     get_attributes: false
   register: db1_stack_systemd_running
 
+# Looked at before the removal, so the run knows whether the file was present.
+- name: Look at the legacy drop-in before the removal
+  ansible.builtin.stat:
+    path: '{{ db1_stack_legacy_drop_in }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_stack_legacy_drop_in_before
+
 # The file is removed, not rebuilt: with its ExecStartPre gone the drop-in would
 # hold nothing, and the role writes the exporter file itself. A removal is the
 # only change that stops the legacy second writer.
@@ -23,6 +32,16 @@
     path: '{{ db1_stack_legacy_drop_in }}'
     state: absent
   register: db1_stack_legacy_drop_in_removed
+
+# A drop-in present before this run was put back since the last reload (a hand copy
+# reinstalled it), so the marker that records that reload is forgotten, and the
+# reload below runs again. Without this, a reinstalled drop-in that is removed
+# again would leave the marker in place and the reload would be skipped.
+- name: Forget the reload marker when this run found the legacy drop-in present
+  ansible.builtin.file:
+    path: '{{ db1_stack_reload_marker }}'
+    state: absent
+  when: db1_stack_legacy_drop_in_before.stat.exists | default(false)
 
 # systemd reads a drop-in only on a reload, so a running manager keeps the legacy
 # ExecStartPre until this runs. A reload does not restart the unit.
