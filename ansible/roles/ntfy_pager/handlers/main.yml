@@ -1,0 +1,8 @@
+---
+# Restarts the monitoring stack unit. The unit's drop-in runs the Alertmanager
+# and ntfy renderer before the stack starts, so a restart is what makes a changed
+# secrets file or a changed stack file take effect on the host.
+- name: Restart the monitoring stack unit
+  ansible.builtin.systemd_service:
+    name: '{{ ntfy_pager_unit }}'
+    state: restarted

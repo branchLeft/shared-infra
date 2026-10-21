@@ -1,0 +1,38 @@
+---
+# Constants of the control-plane stack, not inputs: a caller cannot override
+# them. The paths are the ones the committed Compose file, the deploy wrapper
+# and the isolation unit already name, so they must move together with them.
+control_plane_host_dirs:
+  - path: /etc/branchleft
+    owner: root
+    group: root
+    mode: '0755'
+  - path: /etc/branchleft/control-plane
+    owner: root
+    group: root
+    mode: '0750'
+  - path: /var/lib/branchleft/control-plane/zitadel-state
+    owner: '1000'
+    group: '1000'
+    mode: '0700'
+
+control_plane_env_file: /etc/branchleft/control-plane.env
+control_plane_masterkey_file: /etc/branchleft/control-plane/zitadel-masterkey
+control_plane_init_stamp: /etc/branchleft/control-plane/zitadel-init.done
+
+control_plane_project_dir: /opt/branchleft/control-plane
+
+# The files of the stack directory the role carries. compose.init.yml is
+# carried but never read by the unit: it is the second -f file of the one-off
+# init run, and the unit does not read it.
+control_plane_stack_files:
+  - compose.yml
+  - compose.init.yml
+  - pg_hba.conf
+
+control_plane_stack_unit: branchleft-compose@control-plane.service
+control_plane_deploy_wrapper: /usr/local/sbin/branchleft-deploy
+
+control_plane_isolation_reconciler: /usr/local/sbin/branchleft-docker-user-policy
+control_plane_isolation_unit_name: branchleft-docker-user-policy.service
+control_plane_isolation_unit: /etc/systemd/system/branchleft-docker-user-policy.service

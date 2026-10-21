@@ -1,0 +1,70 @@
+---
+argument_specs:
+  main:
+    short_description: Install the broker's Node, release, state, key, environment file and unit, without starting it
+    description: >-
+      Pins the Node runtime the broker runs on, delivers one release of the
+      broker's bundle and points the current link at it, creates the broker
+      account and its state directories, installs the public half of the
+      request-signing key and the environment file, and installs the broker's
+      systemd unit. It enables and starts nothing: starting the broker is an
+      owner ruling, not part of this role. It also installs the sudoers
+      boundary that lets the broker run the slot wrapper as root for a fixed
+      list of invocations. The slot wrapper itself is not installed here.
+    author: branchLeft
+    options:
+      broker_deploy_release:
+        type: str
+        required: true
+        description: >-
+          Name of the release directory under the releases directory, for
+          example a timestamp or the build's commit. A release name that already
+          exists is not replaced by a different bundle.
+      broker_deploy_bundle_src:
+        type: path
+        required: true
+        description: >-
+          Path on the controller of the built bundle directory (the output of
+          the broker's bundle build). Its files are delivered as they are. None
+          of its files is a secret.
+      broker_deploy_verify_key_src:
+        type: path
+        required: true
+        description: >-
+          Path on the controller of the 32-byte public half of the broker's
+          request-signing key. The private half never leaves the owner's
+          workstation and is not an input to this role.
+      broker_deploy_node_version:
+        type: str
+        description: The Node version the broker runs, as it appears in the download path.
+        default: v26.5.0
+      broker_deploy_node_arch:
+        type: str
+        choices: [x64, arm64]
+        description: The Node architecture of the target host.
+        default: x64
+      broker_deploy_slot_names:
+        type: list
+        elements: str
+        description: >-
+          The demo slots the broker may drive, each a string of digits and
+          nothing else. The sudoers boundary grants the broker, for each slot,
+          exactly one reset, and a start, a stop and an email-batches check for
+          each of the two colours, as literal lines. Must match the slot table
+          of the wrapper on the host.
+        default: ['0', '1', '2', '3', '4', '5', '6']
+      broker_deploy_wrapper_path:
+        type: path
+        description: Absolute path of the slot wrapper the broker may run as root.
+        default: /usr/local/sbin/branchleft-slot
+      broker_deploy_image_stage_dir:
+        type: path
+        description: >-
+          Directory the broker stages a demo image in, as image.tar. It is
+          the one file the load grant names, and the broker's image temporary
+          directory setting.
+        default: /var/lib/branchleft-broker/image-tmp
+      broker_deploy_sudoers_path:
+        type: path
+        description: Where the sudoers grant is installed, a file under /etc/sudoers.d.
+        default: /etc/sudoers.d/branchleft-slot

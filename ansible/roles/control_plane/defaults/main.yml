@@ -1,0 +1,6 @@
+---
+# Switches for the two groups of tasks that talk to Docker and to systemd.
+# The production run leaves both on. The container test turns them off, because
+# the test container has no Docker daemon and no DOCKER-USER chain to apply to.
+control_plane_bring_up: true
+control_plane_start_units: true
