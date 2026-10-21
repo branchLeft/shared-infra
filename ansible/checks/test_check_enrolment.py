@@ -590,6 +590,21 @@ class Sabotage(unittest.TestCase):
         self._write(".mypy_cache/.gitignore", "# Automatically created by mypy\n*\n")
         self.assertEqual(check(self.root), [])
 
+    # R6: a ruff cache entry is binary, with no suffix, under a hidden cache directory; it is no
+    # vars file, so it is not read as YAML and gives no finding.
+    def test_r6_ruff_cache_entry_is_not_a_vars_file(self) -> None:
+        self._write(".ruff_cache/.gitignore", "*\n")
+        cache = self.ansible / ".ruff_cache" / "0.17.0"
+        cache.mkdir(parents=True, exist_ok=True)
+        (cache / "1a2b3c4d5e").write_bytes(b"\x00\x01\xff\xfe")
+        self.assertEqual(check(self.root), [])
+
+    # R6: a hidden artefact outside a loaded directory is still read; one that sets a signer is
+    # refused.
+    def test_r6_hidden_artefact_that_sets_signer_is_refused(self) -> None:
+        self._write(".ruff_cache/0.17.0/1a2b3c4d5e", "---\npull_trigger_signers: []\n")
+        self._assert_rule("R6 ansible/.ruff_cache/0.17.0/1a2b3c4d5e")
+
     # R6: a hidden extensionless file inside a loaded directory is still read.
     def test_r6_hidden_extensionless_group_vars_sets_signer(self) -> None:
         self._write("inventories/production/group_vars/.all", "---\npull_trigger_signers: []\n")

@@ -436,12 +436,20 @@ def _scan_playbook(doc: object, path: Path, ansible: Path, where: str, out: list
 
 
 def _is_vars_candidate(relative: Path) -> bool:
-    """True when R6 reads the file as vars. A hidden file with no suffix is read only inside a
-    loaded directory: a tool's own artefact, such as a cache's .gitignore, is no loader's input."""
-    if relative.suffix not in VARS_SUFFIXES:
-        return False
-    hidden = relative.name.startswith(".") and relative.suffix == ""
-    return not hidden or bool(LOADED_DIRS.intersection(relative.parts))
+    """True when R6 reads the file as vars: a file with a vars suffix, or with no suffix."""
+    return relative.suffix in VARS_SUFFIXES
+
+
+def _is_tool_artefact(relative: Path) -> bool:
+    """True for a file with no suffix under a hidden path part (.ruff_cache/0.17.0/<hash>, or a
+    cache's .gitignore) outside every loaded directory. Such a file is a tool's own artefact, not
+    a vars file Ansible loads from a loaded directory. It is still read, so one that parses and
+    sets a signer is refused; one that does not parse is no vars file, so it is not a finding."""
+    return (
+        relative.suffix == ""
+        and any(part.startswith(".") for part in relative.parts)
+        and not LOADED_DIRS.intersection(relative.parts)
+    )
 
 
 def _check_no_other_definition(ansible: Path, findings: list[str]) -> None:
@@ -457,7 +465,8 @@ def _check_no_other_definition(ansible: Path, findings: list[str]) -> None:
             continue
         if not path.is_file() or not _is_vars_candidate(relative):
             continue
-        doc = _load(path, findings, f"R6 {where}")
+        parse_findings = [] if _is_tool_artefact(relative) else findings
+        doc = _load(path, parse_findings, f"R6 {where}")
         if relative.parent == Path("playbooks") and path.suffix in TASK_SUFFIXES:
             _scan_playbook(doc, path, resolved, where, findings)
         else:
