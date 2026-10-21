@@ -849,6 +849,13 @@
           second_replica_host: 172.32.5.5
           second_from_address: 100.128.0.9
           db1_address: '{{ tunnel_account_verify_db1_address }}'
+          # The role reads each input with slurp, which returns the file's content
+          # in base64: that form in a log is a leak as much as the text is.
+          replica_host_b64: '{{ (tunnel_account_test_inputs.replica_host ~ tunnel_account_verify_nl) | b64encode }}'
+          replica_host_key_b64: '{{ (tunnel_account_test_inputs.replica_host_key ~ tunnel_account_verify_nl) | b64encode }}'
+          from_address_b64: '{{ (tunnel_account_test_inputs.from_address ~ tunnel_account_verify_nl) | b64encode }}'
+          second_replica_host_b64: '{{ ("172.32.5.5" ~ tunnel_account_verify_nl) | b64encode }}'
+          second_from_address_b64: '{{ ("100.128.0.9" ~ tunnel_account_verify_nl) | b64encode }}'
       no_log: true
 
     - name: Assert no private input reached the log

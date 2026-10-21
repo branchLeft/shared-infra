@@ -137,7 +137,8 @@ converge, idempotence, verify. Verify does these things, in order:
 - Runs teardown with confirmation, reads it back, and runs the three halves again
   so the configured check meets a configured host.
 - Last, scans the log of every Ansible run of the scenario, check runs with
-  `--diff` included, for each private input. It first requires the log to hold
+  `--diff` included, for each private input, as text and as the base64 that
+  `slurp` returns. It first requires the log to hold
   the names of tasks that handle inputs, a diff header, a censored result and the
   public key the role prints on purpose, so an empty log cannot pass.
 
