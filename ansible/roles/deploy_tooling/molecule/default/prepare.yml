@@ -14,11 +14,13 @@
   vars_files:
     - ../../vars/main.yml
   tasks:
-    # The image carries no iptables. sudo is already there; naming it makes the
-    # build stop here, with its own message, on an image that ever drops it.
-    - name: Install the firewall tools and sudo
+    # The image carries no iptables and no ACL tools. The role requires getfacl (the
+    # acl package) and the cases set ACLs with setfacl. sudo is already there; naming
+    # it makes the build stop here, with its own message, on an image that ever drops it.
+    - name: Install the firewall tools, the ACL tools and sudo
       ansible.builtin.apt:
         name:
+          - acl
           - iptables
           - sudo
         state: present

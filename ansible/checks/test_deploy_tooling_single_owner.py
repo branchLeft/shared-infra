@@ -12,6 +12,7 @@ program and its unit: it is retired by its own follow-up after this role has run
 from __future__ import annotations
 
 import hashlib
+import posixpath
 import re
 import shlex
 import shutil
@@ -42,6 +43,8 @@ COMMAND_KEYS = frozenset({"argv", "cmd", "command", "shell", "raw"})
 SHELL_SYNTAX = re.compile(r"[;&|<>`$()\\\n]")
 # The options of sudo that take a value.
 SUDO_VALUED = frozenset({"-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U"})
+# A word made of the characters a path is made of that holds a slash.
+_PATH_WORD = re.compile(r"[\w.@%+~-]*(?:/[\w.@%+~-]*)+")
 
 
 def _pieces(node: object, key: str = "") -> Iterator[tuple[str, str, tuple[str, ...] | None]]:
@@ -106,10 +109,17 @@ def _shared_variables(ansible: Path) -> dict[str, object]:
 
 
 def _variables(role: Path, shared: dict[str, object]) -> dict[str, object]:
-    """Return the variables a role's code can see, as far as they load: shared, then its own."""
+    """Return the variables a role's code can see, as far as they load: shared, then its own.
+
+    Every YAML file under the role's `defaults/` and `vars/` is read, at any depth, not only
+    `main.yml`: a file there is loaded by `include_vars` or `vars_files`, so a path set in
+    `vars/other.yml` is as much the role's as one in `vars/main.yml`.
+    """
     merged = dict(shared)
     for directory in ("defaults", "vars"):
-        merged.update(_load_mapping(role / directory / "main.yml"))
+        for pattern in ("*.yml", "*.yaml"):
+            for path in sorted((role / directory).rglob(pattern)):
+                merged.update(_load_mapping(path))
     return merged
 
 
@@ -142,6 +152,24 @@ def _resolved(text: str, variables: dict[str, object]) -> str:
         return role_vars.resolve(text, variables)
     except (role_vars.RoleVarsError, RecursionError):
         return text
+
+
+def _tidy(match: re.Match[str]) -> str:
+    """Return one path-shaped word with its `//`, `/./` and `x/../` spellings removed."""
+    tidy = posixpath.normpath(match.group(0))
+    # POSIX keeps exactly two leading slashes; on a host they are the same as one.
+    return "/" + tidy.lstrip("/") if tidy.startswith("//") else tidy
+
+
+def _normalised(text: str) -> str:
+    """Return ``text`` with every path-shaped word written in its one normal spelling.
+
+    `/usr/local//sbin/x` and `/usr/local/./sbin/x` name the same file as `/usr/local/sbin/x`,
+    so a path is compared only after `posixpath.normpath`. A word is a run of characters a path
+    is made of that holds a slash, wherever it sits in the string (a `dest=...` or a shell
+    string included).
+    """
+    return _PATH_WORD.sub(_tidy, text)
 
 
 def _mentions(key: str, text: str, path: str) -> bool:
@@ -214,13 +242,17 @@ def reference_problems(
             problems.append(f"{shown} is not YAML that can be read, so what it installs is unknown")
             continue
         for key, text, argv in _pieces(document):
-            resolved = _resolved(text, variables)
+            resolved = _normalised(_resolved(text, variables))
             program = _names_a_program(resolved, programs)
             if program is not None:
                 problems.append(f"{shown} reads {program}, which the {OWNER} role installs")
             if in_definitions:
                 continue
-            words = None if argv is None else tuple(_resolved(word, variables) for word in argv)
+            words = (
+                None
+                if argv is None
+                else tuple(_normalised(_resolved(word, variables)) for word in argv)
+            )
             problems.extend(
                 f"{shown} names {install}, which the {OWNER} role installs"
                 for install in paths
@@ -289,10 +321,12 @@ class TestSingleOwner(unittest.TestCase):
     def found(self) -> list[str]:
         return second_owner_problems(self.roles, self.provision)
 
-    def write_tasks(self, role: str, text: str, directory: str = "tasks") -> None:
+    def write_tasks(
+        self, role: str, text: str, directory: str = "tasks", name: str = "main.yml"
+    ) -> None:
         folder = self.roles / role / directory
         folder.mkdir(parents=True, exist_ok=True)
-        (folder / "main.yml").write_text(text, encoding="utf-8")
+        (folder / name).write_text(text, encoding="utf-8")
 
     def write_playbook(self, text: str, name: str = "other.yml") -> None:
         folder = self.work / "playbooks"
@@ -670,6 +704,149 @@ class TestSingleOwner(unittest.TestCase):
             "other_role",
             "other_role_target: /usr/local/sbin/branchleft-deploy\n",
             directory="defaults",
+        )
+        self.assertEqual(self.found(), [])
+
+    def test_a_path_set_in_a_sibling_vars_file_is_found_where_it_is_used(self) -> None:
+        self.write_tasks(
+            "other_role",
+            "other_role_dest: /usr/local/sbin/branchleft-deploy\n",
+            directory="vars",
+            name="other.yml",
+        )
+        self.write_tasks(
+            "other_role", "- ansible.builtin.copy: {src: x, dest: '{{ other_role_dest }}'}\n"
+        )
+        self.assertEqual(
+            self.found(),
+            [self.names("other_role/tasks/main.yml", "/usr/local/sbin/branchleft-deploy")],
+        )
+
+    def test_a_path_set_in_a_sibling_defaults_file_is_found_where_it_is_used(self) -> None:
+        self.write_tasks(
+            "other_role",
+            "other_role_dest: /etc/systemd/system/branchleft-compose@.service\n",
+            directory="defaults/extra",
+            name="paths.yml",
+        )
+        self.write_tasks(
+            "other_role", "- ansible.builtin.copy: {src: x, dest: '{{ other_role_dest }}'}\n"
+        )
+        self.assertEqual(
+            self.found(),
+            [
+                self.names(
+                    "other_role/tasks/main.yml", "/etc/systemd/system/branchleft-compose@.service"
+                )
+            ],
+        )
+
+    def test_a_program_read_through_a_sibling_vars_file_is_found(self) -> None:
+        self.write_tasks(
+            "other_role",
+            "other_role_home: /srv/checkout/hetzner/provision\n",
+            directory="vars",
+            name="other.yml",
+        )
+        self.write_tasks(
+            "other_role",
+            "- ansible.builtin.copy:\n"
+            "    src: '{{ other_role_home }}/branchleft_docker_user_policy.sh'\n"
+            "    dest: /opt/x\n",
+        )
+        self.assertEqual(
+            self.found(),
+            [
+                "other_role/tasks/main.yml reads branchleft_docker_user_policy.sh,"
+                " which the deploy_tooling role installs"
+            ],
+        )
+
+    def test_a_path_respelled_with_a_doubled_slash_is_found(self) -> None:
+        self.write_tasks(
+            "other_role",
+            "- ansible.builtin.copy: {src: x, dest: /usr/local//sbin/branchleft-deploy}\n",
+        )
+        self.assertEqual(
+            self.found(),
+            [self.names("other_role/tasks/main.yml", "/usr/local/sbin/branchleft-deploy")],
+        )
+
+    def test_a_path_respelled_with_a_dot_segment_is_found(self) -> None:
+        self.write_tasks(
+            "other_role",
+            "- ansible.builtin.copy: {src: x, dest: /usr/local/./sbin/branchleft-deploy}\n",
+        )
+        self.assertEqual(
+            self.found(),
+            [self.names("other_role/tasks/main.yml", "/usr/local/sbin/branchleft-deploy")],
+        )
+
+    def test_a_path_respelled_with_a_parent_segment_is_found(self) -> None:
+        self.write_tasks(
+            "other_role",
+            "- ansible.builtin.copy: {src: x, dest: /usr/local/bin/../sbin/branchleft-deploy}\n",
+        )
+        self.assertEqual(
+            self.found(),
+            [self.names("other_role/tasks/main.yml", "/usr/local/sbin/branchleft-deploy")],
+        )
+
+    def test_a_respelled_path_in_a_shell_string_and_a_variable_is_found(self) -> None:
+        self.write_tasks(
+            "other_role",
+            "other_role_dest: /usr/local//sbin/branchleft-deploy\n",
+            directory="vars",
+            name="other.yml",
+        )
+        self.write_tasks(
+            "other_role",
+            "- ansible.builtin.shell:"
+            " ln -sf /srv/x /etc//systemd/./system/branchleft-compose@.service\n"
+            "- ansible.builtin.copy: {src: x, dest: '{{ other_role_dest }}'}\n",
+        )
+        self.assertEqual(
+            self.found(),
+            [
+                self.names(
+                    "other_role/tasks/main.yml", "/etc/systemd/system/branchleft-compose@.service"
+                ),
+                self.names("other_role/tasks/main.yml", "/usr/local/sbin/branchleft-deploy"),
+            ],
+        )
+
+    def test_a_respelled_path_as_a_file_module_name_is_found(self) -> None:
+        self.write_tasks(
+            "other_role",
+            "- ansible.builtin.file:\n"
+            "    name: /usr/local//sbin/branchleft-deploy\n"
+            "    state: touch\n",
+        )
+        self.assertEqual(
+            self.found(),
+            [self.names("other_role/tasks/main.yml", "/usr/local/sbin/branchleft-deploy")],
+        )
+
+    def test_a_program_read_by_a_respelled_path_is_found(self) -> None:
+        self.write_tasks(
+            "other_role",
+            "- ansible.builtin.copy:\n"
+            "    src: ../../hetzner//provision/./branchleft_deploy.py\n"
+            "    dest: /opt/x\n",
+        )
+        self.assertEqual(
+            self.found(),
+            [
+                "other_role/tasks/main.yml reads branchleft_deploy.py,"
+                " which the deploy_tooling role installs"
+            ],
+        )
+
+    def test_a_role_that_runs_the_wrapper_by_a_respelled_path_is_not_found(self) -> None:
+        self.write_tasks(
+            "other_role",
+            "- ansible.builtin.command:\n"
+            "    argv: [sudo, -n, /usr/local//sbin/branchleft-deploy, website]\n",
         )
         self.assertEqual(self.found(), [])
 
