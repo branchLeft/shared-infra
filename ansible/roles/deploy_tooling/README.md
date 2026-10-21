@@ -306,6 +306,13 @@ stayed clean; the harness run that follows them is the green.
   chain a listed jump goes to is not read, so a rule inside it that accepts would pass.
   Both are in the acceptance criteria of the ticket that wires the app hosts, with a
   captured real chain as the fixture the fix is tested against.
+- **The single-owner check has limits.** It finds, in another role, a link to or a byte copy
+  of a program, a string in its tasks, handlers, variables or defaults that is a program's file
+  name or a path under `hetzner/provision/`, and a `dest` equal to a path this role installs
+  (a variable is filled in from that role's own variables). A path assembled in a loop from
+  separate parts is not seen by the last two rules; the byte-copy rule still sees a copy.
+  Fixtures under a role's `molecule/` stand in for a host and are not read. The one allowed
+  second role is retired by its own follow-up after this role has run live.
 - **The directory checks refuse; they do not repair.** A directory that fails them is
   somebody else's to change, and a group with members is read from the system's group
   database on the host. A directory whose group is not known by name is refused.
