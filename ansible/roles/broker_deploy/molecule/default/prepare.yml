@@ -1,0 +1,17 @@
+---
+# Test scaffolding, not role tasks. The Node tarball is unpacked on the host
+# with xz, and the sudoers grant is checked by visudo and read back with sudo.
+# The host build installs all three (the runbook's A-2 step); the test
+# container is a bare base image, so the packages are installed here.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install xz, which unpacks the Node tarball, and sudo, which holds visudo
+      ansible.builtin.apt:
+        name:
+          - xz-utils
+          - sudo
+        state: present
+        update_cache: true
+        cache_valid_time: 3600

@@ -1,0 +1,75 @@
+---
+# Removes the tunnel from the host it runs on. Every path is removed only if it
+# is here, so one run serves db1 and the replica. Teardown is selected only by
+# tasks_from: teardown; no state variable selects it. The run-time inputs are the
+# operator's, and teardown never removes them: it removes db1's private key and
+# its files one by one, not the key directory that holds the inputs.
+- name: Refuse a teardown that was not confirmed
+  ansible.builtin.assert:
+    that:
+      - tunnel_account_teardown_confirm | bool
+    quiet: true
+    fail_msg: Teardown destroys db1's private key. Set tunnel_account_teardown_confirm to true to run it.
+
+- name: Look for the tunnel unit
+  ansible.builtin.stat:
+    path: '{{ tunnel_account_unit_path }}'
+  register: tunnel_account_unit_stat
+
+- name: Stop and disable the tunnel unit when it is here
+  ansible.builtin.systemd_service:
+    name: '{{ tunnel_account_unit_name }}'
+    state: stopped
+    enabled: false
+  when: tunnel_account_unit_stat.stat.exists and not ansible_check_mode
+
+- name: Remove the tunnel unit
+  ansible.builtin.file:
+    path: '{{ tunnel_account_unit_path }}'
+    state: absent
+  register: tunnel_account_unit_removed
+
+- name: Reload systemd when the unit was removed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: not ansible_check_mode and tunnel_account_unit_removed.changed
+
+- name: Remove db1's key files, the known hosts line and the target file
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - '{{ tunnel_account_key_file }}'
+    - '{{ tunnel_account_key_pub_file }}'
+    - '{{ tunnel_account_known_hosts_file }}'
+    - '{{ tunnel_account_target_env_file }}'
+  no_log: true
+  diff: false
+
+- name: Remove the sshd drop-in and the authorized keys
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - '{{ tunnel_account_sshd_dropin }}'
+    - '{{ tunnel_account_authorized_keys_file }}'
+    - '{{ tunnel_account_authorized_keys_dir }}'
+  register: tunnel_account_sshd_removed
+
+- name: Check the whole sshd configuration when a drop-in went
+  ansible.builtin.command:
+    argv: [sshd, -t]
+  changed_when: false
+  when: not ansible_check_mode and tunnel_account_sshd_removed.changed
+
+- name: Reload sshd when a drop-in went
+  ansible.builtin.systemd_service:
+    name: '{{ tunnel_account_sshd_service }}'
+    state: reloaded
+  when: not ansible_check_mode and tunnel_account_sshd_removed.changed
+
+- name: Remove the tunnel account
+  ansible.builtin.user:
+    name: '{{ tunnel_account_user }}'
+    state: absent
+    remove: false

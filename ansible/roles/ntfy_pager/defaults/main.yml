@@ -1,0 +1,3 @@
+---
+ntfy_pager_project_dir: /opt/branchleft/monitoring
+ntfy_pager_env_file: /etc/branchleft/monitoring.env

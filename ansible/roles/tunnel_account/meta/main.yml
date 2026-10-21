@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  standalone: true
+  author: branchLeft
+  namespace: branchleft
+  description: Sets up the reverse tunnel that publishes db1's MySQL on the replica host's loopback, in two halves and a teardown.
+  license: PolyForm-Shield-1.0.0
+  min_ansible_version: '2.21.5'

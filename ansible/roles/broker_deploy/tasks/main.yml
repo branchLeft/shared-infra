@@ -1,0 +1,222 @@
+---
+# Order follows the broker runbook's install steps: the Node runtime, the
+# account, the directories, the release, the verify key, the environment file,
+# and last the unit, which is installed and never started.
+
+# The inputs are checked before anything is downloaded or written. The Node
+# digest must be pinned to a published sha256, and the release name must be a
+# plain directory name, so a path cannot escape the releases directory.
+- name: Refuse a release name that is not a plain directory name
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_release is match('^[A-Za-z0-9][A-Za-z0-9._-]*\Z')
+    quiet: true
+    fail_msg: The release name must be a plain directory name of letters, digits, dot, underscore and hyphen.
+
+- name: Refuse a Node digest that is not a pinned sha256
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_node_checksums[broker_deploy_node_arch] is match('^sha256:[0-9a-f]{64}\Z')
+    quiet: true
+    fail_msg: The Node tarball for {{ broker_deploy_node_arch }} needs a pinned sha256 digest.
+
+# The sudoers grant is literal text written as root's permission to run the
+# wrapper, so each value that reaches it is held to a plain shape first: a slot
+# name of digits only, and absolute paths of path characters only. A space, a
+# glob character or a line break would change what a grant line matches.
+- name: Refuse a slot name that is not a bare digit string
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_slot_names | length > 0
+      - broker_deploy_slot_names | map('string') | reject('match', '^[0-9]+\Z') | list | length == 0
+    quiet: true
+    fail_msg: The slot names must be a list of one or more strings of digits and nothing else.
+
+- name: Refuse a wrapper path or an image directory that is not a plain absolute path
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_wrapper_path is match('^/[A-Za-z0-9._/-]+\Z')
+      - broker_deploy_image_stage_dir is match('^/[A-Za-z0-9._/-]+\Z')
+    quiet: true
+    fail_msg: The wrapper path and the image directory must be absolute paths of letters, digits, dot, underscore, hyphen and slash.
+
+- name: Read the Node binary the host already has
+  ansible.builtin.stat:
+    path: '{{ broker_deploy_node_dir }}/bin/node'
+  register: broker_deploy_node_bin
+
+# A read, so it runs in check mode too (ANS-10): the command module otherwise
+# skips itself under --check, the version then reads as empty, and a configured
+# host would be planned for a Node download on every check.
+- name: Ask the Node binary its version when it is there
+  ansible.builtin.command:
+    argv:
+      - '{{ broker_deploy_node_dir }}/bin/node'
+      - --version
+  register: broker_deploy_node_version_out
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: broker_deploy_node_bin.stat.exists
+
+# The runbook skips the download when the version is already installed and
+# extracts over an older one, so this role does the same.
+- name: Decide whether the Node runtime has to be installed
+  ansible.builtin.set_fact:
+    broker_deploy_node_needed: >-
+      {{ not broker_deploy_node_bin.stat.exists
+      or (broker_deploy_node_version_out.stdout | default('')) != broker_deploy_node_version }}
+
+- name: Create the base directory of the broker
+  ansible.builtin.file:
+    path: '{{ broker_deploy_base_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the Node runtime directory
+  ansible.builtin.file:
+    path: '{{ broker_deploy_node_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: broker_deploy_node_needed
+
+- name: Download the Node tarball and check its published digest
+  ansible.builtin.get_url:
+    url: '{{ broker_deploy_node_base_url }}/{{ broker_deploy_node_version }}/node-{{ broker_deploy_node_version }}-linux-{{ broker_deploy_node_arch }}.tar.xz'
+    dest: '/var/tmp/branchleft-broker-node-{{ broker_deploy_node_arch }}.tar.xz'
+    checksum: '{{ broker_deploy_node_checksums[broker_deploy_node_arch] }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: broker_deploy_node_needed
+
+# Skipped in check mode (ANS-10), for a reason of the module and not of the
+# role: unarchive requires dest to exist before it reports anything, even
+# under --check, and on a host the role has not touched the directory above is
+# only reported as to be created, and the tarball above only as to be fetched.
+# Without this skip the first plan of a fresh host fails here instead of
+# showing the change. A configured host does not reach this task at all.
+- name: Unpack the checked Node tarball into the runtime directory
+  ansible.builtin.unarchive:
+    src: '/var/tmp/branchleft-broker-node-{{ broker_deploy_node_arch }}.tar.xz'
+    dest: '{{ broker_deploy_node_dir }}'
+    remote_src: true
+    extra_opts:
+      - --strip-components=1
+      - --no-same-owner
+  when: broker_deploy_node_needed and not ansible_check_mode
+
+- name: Remove the Node tarball once it is unpacked
+  ansible.builtin.file:
+    path: '/var/tmp/branchleft-broker-node-{{ broker_deploy_node_arch }}.tar.xz'
+    state: absent
+  when: broker_deploy_node_needed
+
+- name: Create the broker account, a system account with no login shell
+  ansible.builtin.user:
+    name: '{{ broker_deploy_user }}'
+    system: true
+    shell: /usr/sbin/nologin
+    home: '{{ broker_deploy_user_home }}'
+    create_home: false
+
+# After the account, as the runbook has it: the grant names the broker account.
+- name: Install the sudoers boundary for the slot wrapper
+  ansible.builtin.include_tasks: _sudoers.yml
+
+- name: Create the configuration directory
+  ansible.builtin.file:
+    path: '{{ broker_deploy_config_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the state directory, root-owned so the broker cannot rename inside it
+  ansible.builtin.file:
+    path: '{{ broker_deploy_state_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the broker's own slots directory
+  ansible.builtin.file:
+    path: '{{ broker_deploy_slots_dir }}'
+    state: directory
+    owner: '{{ broker_deploy_user }}'
+    group: '{{ broker_deploy_user }}'
+    mode: '0755'
+
+- name: Create the directory of the slot admin keys, closed to everyone but the broker
+  ansible.builtin.file:
+    path: '{{ broker_deploy_admin_keys_dir }}'
+    state: directory
+    owner: '{{ broker_deploy_user }}'
+    group: '{{ broker_deploy_user }}'
+    mode: '0700'
+
+- name: Create the releases directory
+  ansible.builtin.file:
+    path: '{{ broker_deploy_releases_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# A new directory under releases/ and then a link swap, never an overwrite in
+# place. Directories are 0755 and files 0644, all root-owned, as the runbook's
+# chmod -R u=rwX,go=rX gives them.
+- name: Deliver the bundle as one release directory
+  ansible.builtin.copy:
+    src: '{{ broker_deploy_bundle_src }}/'
+    dest: '{{ broker_deploy_releases_dir }}/{{ broker_deploy_release }}/'
+    owner: root
+    group: root
+    mode: 'u=rwX,go=rX'
+    directory_mode: 'u=rwX,go=rX'
+
+- name: Point the current link at the release
+  ansible.builtin.file:
+    src: '{{ broker_deploy_releases_dir }}/{{ broker_deploy_release }}'
+    dest: '{{ broker_deploy_current_link }}'
+    state: link
+    force: true
+
+# The public half of the request-signing key. The broker reads it, through the
+# group, and cannot replace it, so it is owned by root and not by the broker.
+- name: Install the public half of the request-signing key
+  ansible.builtin.copy:
+    src: '{{ broker_deploy_verify_key_src }}'
+    dest: '{{ broker_deploy_verify_key }}'
+    owner: root
+    group: '{{ broker_deploy_user }}'
+    mode: '0640'
+
+# The template is the shipped example with one line set from the variable
+# (the runbook's B-5 step). The file holds no secret: the verify key is a file.
+- name: Install the environment file
+  ansible.builtin.template:
+    src: broker.env.j2
+    dest: '{{ broker_deploy_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+
+# Installed, then loaded by the reload before the role returns. The unit is not
+# enabled and not started: the runbook's B-7 step waits on an owner ruling.
+- name: Install the broker unit
+  ansible.builtin.copy:
+    src: branchleft-broker.service
+    dest: '{{ broker_deploy_unit_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
+- name: Load queued unit changes before the role returns
+  ansible.builtin.meta: flush_handlers

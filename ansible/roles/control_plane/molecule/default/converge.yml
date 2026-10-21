@@ -1,0 +1,10 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        # Molecule links the role under its namespace and name, the namespace
+        # from galaxy_info in meta/main.yml.
+        name: branchleft.control_plane
