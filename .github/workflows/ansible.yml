@@ -115,6 +115,7 @@ jobs:
             hetzner/provision/fixtures/docker-apt-key.asc
             hetzner/monitoring/stack/
             hetzner/monitoring/systemd/monitoring.override.conf
+            hetzner/monitoring/systemd/edge.override.conf
             hetzner/monitoring/systemd/snds-collector.service
             hetzner/monitoring/systemd/snds-collector.timer
             hetzner/nextcloud1/stack/

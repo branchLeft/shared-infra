@@ -1,7 +1,98 @@
 ---
-# The directories first, each explicit: the shell copy this replaces made them
-# root-owned and 0755 with rsync --no-owner --no-group --chmod=u=rwX,go=rX, and a
-# container reads its bind-mounted configuration as its own user, not as root.
+# Every input is a secret or a URL carrying one. Each must be a non-empty single
+# line before anything is written. The assert names the key only, never the
+# value, and no_log hides the task. A blank value would make the renderer fail
+# at ExecStartPre, and a value with a newline would write a second line.
+- name: Check that each secret input is a non-empty single line
+  ansible.builtin.assert:
+    that:
+      - item.value | string | length > 0
+      - item.value | string is not search('[\r\n]')
+    quiet: true
+    fail_msg: '{{ item.key }} must be a non-empty single line.'
+  loop: '{{ monitoring_stack_env_keys }}'
+  loop_control:
+    label: '{{ item.key }}'
+  no_log: true
+
+# The renderer is delivered by ntfy_pager, not this role, and the unit's
+# ExecStartPre runs it. Without it the monitoring unit fails to start. The check
+# fails closed: the file must be a regular file, owned by root, with no group or
+# other write bit, because it runs as root on every unit start.
+- name: Look at the renderer
+  ansible.builtin.stat:
+    path: '{{ monitoring_stack_renderer }}'
+  register: monitoring_stack_renderer_stat
+
+- name: Refuse to run with a renderer that is missing or writable by others
+  ansible.builtin.assert:
+    that:
+      - monitoring_stack_renderer_stat.stat.exists
+      - monitoring_stack_renderer_stat.stat.isreg
+      - monitoring_stack_renderer_stat.stat.pw_name == 'root'
+      - monitoring_stack_renderer_stat.stat.gr_name == 'root'
+      - monitoring_stack_renderer_stat.stat.mode[-2] not in ['2', '3', '6', '7']
+      - monitoring_stack_renderer_stat.stat.mode[-1] not in ['2', '3', '6', '7']
+    quiet: true
+    fail_msg: >-
+      {{ monitoring_stack_renderer }} must be a root-owned regular file with no
+      group or other write bit. It is delivered by the ntfy_pager role, which
+      must run before this one on a fresh host (see the README, "Order").
+
+# The directory and the file are created here, because no other role does it.
+# The file is touched with its owner, group and mode in the same task, so it
+# never exists in a wider mode. The times are preserved, so a second run changes
+# nothing. Check mode writes nothing, so the value tasks below skip it.
+- name: Create the directory of the monitoring secrets file
+  ansible.builtin.file:
+    path: '{{ monitoring_stack_env_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the monitoring secrets file closed to root before any value is written
+  ansible.builtin.file:
+    path: '{{ monitoring_stack_env_file }}'
+    state: touch
+    owner: root
+    group: root
+    mode: '0600'
+    access_time: preserve
+    modification_time: preserve
+
+# One lineinfile per key, the regexp matching the key at the start of a line, so
+# a second run finds the line and changes nothing, and other keys are left in
+# place. The line is built from the key and a secret value: no_log hides it, and
+# diff is off so no value is shown under --diff.
+- name: Write the stack keys into the monitoring secrets file
+  ansible.builtin.lineinfile:
+    path: '{{ monitoring_stack_env_file }}'
+    regexp: '^{{ item.key }}='
+    line: '{{ item.key }}={{ item.value }}'
+    create: false
+  loop: '{{ monitoring_stack_env_keys | selectattr("restarts_stack") | list }}'
+  loop_control:
+    label: '{{ item.key }}'
+  no_log: true
+  diff: false
+  when: not ansible_check_mode
+  notify: Restart the monitoring stack unit
+
+- name: Write the SNDS collector key into the monitoring secrets file
+  ansible.builtin.lineinfile:
+    path: '{{ monitoring_stack_env_file }}'
+    regexp: '^{{ item.key }}='
+    line: '{{ item.key }}={{ item.value }}'
+    create: false
+  loop: '{{ monitoring_stack_env_keys | rejectattr("restarts_stack") | list }}'
+  loop_control:
+    label: '{{ item.key }}'
+  no_log: true
+  diff: false
+  when: not ansible_check_mode
+
+# The stack's files go into the project directory, as before.
 - name: Create the project directory
   ansible.builtin.file:
     path: '{{ monitoring_stack_project_dir }}'
@@ -47,10 +138,34 @@
     owner: root
     group: root
     mode: '0644'
-  notify: Reload systemd manager
+  register: monitoring_stack_dropin_copy
 
-# Without this the handler runs at the end of the play, and the role would
-# return with systemd still holding the old drop-in. The converge asks systemd
-# for the loaded value straight after the role.
-- name: Load the drop-in before the role returns
-  ansible.builtin.meta: flush_handlers
+# The edge drop-in is installed here because no edge role exists yet (see the
+# README). Its unit is restarted by runbook step 6, not by this role.
+- name: Create the drop-in directory of the edge instance
+  ansible.builtin.file:
+    path: '{{ monitoring_stack_edge_dropin_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the drop-in of the edge instance
+  ansible.builtin.copy:
+    src: edge.override.conf
+    dest: '{{ monitoring_stack_edge_dropin_dir }}/override.conf'
+    owner: root
+    group: root
+    mode: '0644'
+  register: monitoring_stack_edge_dropin_copy
+
+# Systemd is reloaded here, in the task list and not in a handler, so the role
+# returns with systemd holding the drop-ins it just installed. The converge asks
+# systemd for the loaded value straight after the role. The restart handler is
+# left pending on purpose: it runs once at the end of the play, not here, so a
+# run that also changes ntfy_pager is one restart, not two, as far as this role
+# can prevent it (see the README, "Restart").
+- name: Make systemd read the drop-ins the role installed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: monitoring_stack_dropin_copy.changed or monitoring_stack_edge_dropin_copy.changed
