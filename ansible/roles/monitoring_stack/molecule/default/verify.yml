@@ -871,6 +871,38 @@
         path: '{{ verify_renderer_path }}'
         mode: '0664'
 
+    # ----- The value check refuses a value with a second line, before anything is written -----
+    - name: Apply the role with SMTP_PASSWORD holding a second line
+      no_log: true
+      block:
+        - name: Apply the role with a value that has a second line
+          ansible.builtin.include_role:
+            name: branchleft.monitoring_stack
+          vars:
+            monitoring_stack_smtp_password: "{{ verify_rot_g }}\nNTFY_PAGER_TOKEN=test-sentinel-newline-0017"
+        - name: Note that the role did not refuse the value
+          ansible.builtin.set_fact:
+            monitoring_stack_verify_value_refused: false
+      rescue:
+        - name: Note that the role refused the value
+          ansible.builtin.set_fact:
+            monitoring_stack_verify_value_refused: true
+
+    - name: Read the secrets file after the refused value
+      ansible.builtin.slurp:
+        src: /etc/branchleft/monitoring.env
+      register: monitoring_stack_verify_value_env
+      no_log: true
+
+    - name: Assert the value check refused the second line and wrote none of it
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_value_refused
+          - "'test-sentinel-newline-0017' not in (monitoring_stack_verify_value_env.content | b64decode)"
+        quiet: true
+        fail_msg: The value check did not refuse a value with a second line, or the second line reached the secrets file.
+      no_log: true
+
     - name: Snapshot before the restart that the renderer check refuses
       ansible.builtin.include_tasks: tasks/snapshot.yml
       vars:
