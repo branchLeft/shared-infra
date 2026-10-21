@@ -76,7 +76,10 @@ What the role does, in the order of `tasks/main.yml`:
    the others, so either could point one at a directory root relies on, and a file
    task that followed the link would give that directory to the broker or the
    router. Every file task there also sets `follow: false`, so the module refuses
-   a link that appears after the check.
+   a link that appears after the check. The flags are written in a staging
+   directory under the state root, which only root can write, and the directory is
+   moved to the flag directory's name in one rename (see "Drain flags"), so root
+   never writes through a name in the broker's own tree.
 8. **Writes the units** (`_units.yml`): the fourteen colour drop-ins and the
    health router's template unit, from the pinned renderers' output; one systemd
    reload when any changed.
@@ -211,6 +214,9 @@ change the commit, compute each checksum with
   `0644`), one per slot and colour.
 - `/etc/branchleft/demo1-drain-flags-preseeded` (`root:root` `0644`, empty): the
   marker that says the flags were preseeded.
+- `/var/lib/branchleft/demo-drain-flags-staging` (`root:root` `0700`): where the flags
+  are written before the directory is moved into place. It exists only during the run
+  that makes the flag directory, and a run that died in the middle leaves it.
 - `/etc/systemd/system/branchleft-compose@demo-<n>-<colour>.service.d/colour.conf`
   (`root:root` `0644`) for each slot and colour, and
   `branchleft-health-router@.service`; one systemd reload when any changed.
@@ -231,6 +237,33 @@ seed them again. The flags are written only by the run that creates the flag
 directory, and only where there is no marker. A directory that was already there is
 never seeded, whatever it holds: one that holds a flag but has no marker (a host
 built before the marker existed) gets the marker and no flags.
+
+The order of the run that makes the directory, and why. The broker owns
+`/var/lib/branchleft-broker`, so it can rename a directory in it and put a link of
+the same name in its place, and a root task that writes a path through that name
+follows the link. The link check cannot close that, and nor can making the flag
+directory root's first, because the name is still resolved in the broker's directory
+at every write. So the order is: (1) the declared directories are read and refused
+if a link or not a directory; (2) the staging directory
+`/var/lib/branchleft/demo-drain-flags-staging` is made, root's `0700`, under the
+state root, which only root can write; (3) the fourteen flags are written into it;
+(4) the staging directory is moved to the flag directory's name with
+`mv -T` (a single rename of the directory itself); (5) the flag directory is declared
+as the broker's `0755` with `follow: false`; (6) the marker is written. Nothing the
+broker owns is resolved while root writes a flag. Step 4 names a path in the broker's
+tree, but as the destination of a rename: rename does not follow a link at the name
+it replaces, and refuses a directory over a link or over a directory that holds
+anything, so a link or a full directory the broker put there in the meantime stops
+the run with nothing written through it. A directory the broker made there empty is
+replaced.
+
+The declaration in step 5 runs on every run and is the only task that touches the
+flag directory on a host that already has one. It never sets the directory to root's
+and back: on a host with a live flag directory a later run changes nothing in it, so
+the broker, which may be running, never finds its directory changed under it. A run
+that dies between steps 2 and 4 leaves the staging directory: the next run uses it
+again (a flag already in it is kept). A run that dies after step 4 and before step 5
+leaves a flag directory that is root's, which the next run hands to the broker.
 
 A directory that exists, is empty and has no marker is refused, in a plan as well as
 an apply and before anything is created. It cannot be told apart from two hosts that
@@ -270,7 +303,7 @@ the task. In order:
 | `get_url` of the programs                                | Run where the release directory exists (nothing to do); skipped where the directory does not exist, because `get_url` cannot write into a missing directory. |
 | Colour drop-ins and edge candidate                       | Skipped where their directories do not exist yet, for the same reason.                                                                                       |
 | `demo_uid_claims.py`                                     | Never run.                                                                                                                                                   |
-| Drain-flag pre-seed and its marker                       | Never run.                                                                                                                                                   |
+| Drain-flag staging, pre-seed, move and marker            | Never run.                                                                                                                                                   |
 | Link check on the declared directories                   | Run: reads and refuses, so a plan on a host with a link in place stops there.                                                                                |
 | Refusal of an empty flag directory with no marker        | Run: reads and refuses, so a plan on such a host stops there with both remedies named.                                                                       |
 | Integrity read-back                                      | Not run: it reads the result of a real run.                                                                                                                  |
@@ -449,7 +482,16 @@ prepared grant back in every outcome. Each expects the refusal named in its case
   before anything is created with both remedies named, and nothing seeded, no marker
   written and the directory's owner unchanged (`refused_unmarked.yml`); and the same
   directory in the two states the role can read, accepted and not seeded: with the
-  marker, and holding one flag with no marker (which gets the marker);
+  marker, and holding one flag with no marker (which gets the marker). In those two
+  the directory is made the broker's first, as a running broker leaves it, and its
+  owner, mode and change time are the same after the role's step: a task that set it
+  to root's and back to write into it would leave the owner and change the time;
+- in the accepted control of the directory step, the order of the run that makes the
+  flag directory: the broker's state directory gained the flag directory after the
+  newest flag was written (a directory's modification time is when an entry was made
+  or moved into it), and the staging directory is gone. A directory made in the
+  broker's tree first and filled after has an older time than its newest flag, and a
+  copy leaves the staging directory behind;
 - an eighth slot in the role's slot table, refused by the slot-table assertion;
 - a pinned checksum with one digit changed, which stops the role at the download,
   naming the checksum.
@@ -491,35 +533,38 @@ assertion fires in its place or a later one is the only one left:
 4. the slots in the generator's grant are the slots of the role;
 5. every rule runs the wrapper path the role installs at.
 
-| Mechanism removed or changed                                      | Scenario, step                          | Owning assertion and message                                                                                               |
-| ----------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| A task that writes a different valid sudoers file                 | default, `converge`                     | "The role wrote the sudoers grant."                                                                                        |
-| The header split of the body reverted to a filter on any `#` line | refusals, `converge`                    | 3: "is not what render_slot_sudoers.py renders" for the `#1000` and `#includedir` cases, in both positions                 |
-| The body equality weakened to a prefix match on each rule         | refusals, `converge`                    | 3: the same message, for the `, ALL` and `, /bin/sh` cases                                                                 |
-| The comparison made one-directional (extra lines only)            | refusals, `converge`                    | 3: the same message, for the case with a rule removed                                                                      |
-| Both sides sorted before the comparison                           | refusals, `converge`                    | 3: the same message, for the swapped-rules case                                                                            |
-| The slot-table assertion removed                                  | refusals, `converge`                    | 4: "are not the slots in demo1_build_slot_names", for the eighth-slot case                                                 |
-| The wrapper tie (assertion 5) removed                             | refusals, `converge`                    | 5: "does not run /usr/bin/passwd in every rule"; and in default, the probe-path play                                       |
-| The wrapper tie weakened to a prefix match (`[^ ]` at its end)    | refusals, `converge`                    | 5: "does not run /usr/local/sbin/branchleft-slot in every rule", for the `, /bin/sh` case with no release staged           |
-| A backslash comment counted as header                             | refusals, `converge`                    | 3: "is not what render_slot_sudoers.py renders", for the comment ending in a backslash                                     |
-| The link check removed and `follow: false` set to true            | refusals, `converge`                    | "is a link or is not a directory"; the case gets "The role accepted a link or a file in place of a directory it declares." |
-| The link check removed, `follow: false` kept                      | refusals, `converge`                    | the module refuses with its own message, "already exists as a link", which is not the case's phrase, so the case is red    |
-| The not-a-directory half removed (the link test alone)            | refusals, `converge`                    | "is a link or is not a directory", for the regular-file case: without it the flag-directory refusal answers in its place   |
-| The refusal of an empty flag directory with no marker removed     | refusals, `converge`                    | "The role accepted a flag directory that is empty and has no marker."                                                      |
-| One of the two seeding tests removed (the other still holds)      | none                                    | not detected: the directory test and the marker test each hold alone (a named limit below)                                 |
-| `_programs.yml` run before `_sudoers_check.yml`                   | default, `converge`                     | "The role wrote /usr/local/sbin/branchleft-slot-refused-probe and then refused it." (the probe path exists after the run)  |
-| The NOT verified notice removed, or printed on a configured host  | plan, `check-fresh`, `check-configured` | "A plan on a host with no staged release did not say the sudoers grant was NOT verified"                                   |
-| The dot-segment condition of `_inputs.yml` removed                | default, `converge`                     | the dotted-path play: "for a reason other than The wrapper path must be an absolute path"                                  |
-| The checksum of the download task removed                         | refusals, `converge`                    | "did not match" at the download, for the case with one digit of a pin changed                                              |
-| The socket directory mode changed                                 | default, `verify`                       | "The router's socket tree is not root's 0755 at the top and the router's 0700 below."                                      |
-| The drain-flag directory's owner changed to root                  | default, `verify`                       | "The broker's state directory is not broker:broker 0750, or the drain-flag directory is not broker:broker 0755."           |
-| The candidate written as a `Caddyfile`                            | default, `verify`                       | "A Caddyfile exists, a slot directory exists, or the wrapper's lock directory exists."                                     |
-| The real wrapper's `reset` run by a task                          | default, `verify`                       | the same assertion (the real wrapper leaves its lock directory)                                                            |
-| The register directory made `0755` on the host                    | default, `converge`                     | "is not a directory owned by root with mode 0700."                                                                         |
-| The wrapper installed group-writable                              | default, `converge`                     | the integrity assertion on the installed programs                                                                          |
-| The claim program run in check mode                               | plan, `check-*`                         | "The check run changed"                                                                                                    |
-| A file added to the broker's slots directory                      | default, `converge`                     | "The role changed the broker's slots directory"                                                                            |
-| Both seeding tests removed (the pre-seed guard)                   | default, `converge`                     | "The role put a cleared drain flag back."                                                                                  |
+| Mechanism removed or changed                                                                              | Scenario, step                          | Owning assertion and message                                                                                               |
+| --------------------------------------------------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| A task that writes a different valid sudoers file                                                         | default, `converge`                     | "The role wrote the sudoers grant."                                                                                        |
+| The header split of the body reverted to a filter on any `#` line                                         | refusals, `converge`                    | 3: "is not what render_slot_sudoers.py renders" for the `#1000` and `#includedir` cases, in both positions                 |
+| The body equality weakened to a prefix match on each rule                                                 | refusals, `converge`                    | 3: the same message, for the `, ALL` and `, /bin/sh` cases                                                                 |
+| The comparison made one-directional (extra lines only)                                                    | refusals, `converge`                    | 3: the same message, for the case with a rule removed                                                                      |
+| Both sides sorted before the comparison                                                                   | refusals, `converge`                    | 3: the same message, for the swapped-rules case                                                                            |
+| The slot-table assertion removed                                                                          | refusals, `converge`                    | 4: "are not the slots in demo1_build_slot_names", for the eighth-slot case                                                 |
+| The wrapper tie (assertion 5) removed                                                                     | refusals, `converge`                    | 5: "does not run /usr/bin/passwd in every rule"; and in default, the probe-path play                                       |
+| The wrapper tie weakened to a prefix match (`[^ ]` at its end)                                            | refusals, `converge`                    | 5: "does not run /usr/local/sbin/branchleft-slot in every rule", for the `, /bin/sh` case with no release staged           |
+| A backslash comment counted as header                                                                     | refusals, `converge`                    | 3: "is not what render_slot_sudoers.py renders", for the comment ending in a backslash                                     |
+| The link check removed and `follow: false` set to true                                                    | refusals, `converge`                    | "is a link or is not a directory"; the case gets "The role accepted a link or a file in place of a directory it declares." |
+| The link check removed, `follow: false` kept                                                              | refusals, `converge`                    | the module refuses with its own message, "already exists as a link", which is not the case's phrase, so the case is red    |
+| The not-a-directory half removed (the link test alone)                                                    | refusals, `converge`                    | "is a link or is not a directory", for the regular-file case: without it the flag-directory refusal answers in its place   |
+| The refusal of an empty flag directory with no marker removed                                             | refusals, `converge`                    | "The role accepted a flag directory that is empty and has no marker."                                                      |
+| One of the two seeding tests removed (the other still holds)                                              | none                                    | not detected: the directory test and the marker test each hold alone (a named limit below)                                 |
+| The flags written in the broker's tree (staging removed, the directory made at its name and filled there) | refusals, `converge`                    | "gained the drain-flag directory before the newest flag was in it", in the accepted control of `refused_link.yml`          |
+| The move replaced by a copy (the staging directory left behind)                                           | refusals, `converge`                    | "The drain-flag staging directory is still there. The directory was copied and not moved into place."                      |
+| A task that sets an existing flag directory to root's before it is handed back                            | refusals, `converge`                    | "The role changed a flag directory that was already the broker's", in the two accepted cases of `refused_unmarked.yml`     |
+| `_programs.yml` run before `_sudoers_check.yml`                                                           | default, `converge`                     | "The role wrote /usr/local/sbin/branchleft-slot-refused-probe and then refused it." (the probe path exists after the run)  |
+| The NOT verified notice removed, or printed on a configured host                                          | plan, `check-fresh`, `check-configured` | "A plan on a host with no staged release did not say the sudoers grant was NOT verified"                                   |
+| The dot-segment condition of `_inputs.yml` removed                                                        | default, `converge`                     | the dotted-path play: "for a reason other than The wrapper path must be an absolute path"                                  |
+| The checksum of the download task removed                                                                 | refusals, `converge`                    | "did not match" at the download, for the case with one digit of a pin changed                                              |
+| The socket directory mode changed                                                                         | default, `verify`                       | "The router's socket tree is not root's 0755 at the top and the router's 0700 below."                                      |
+| The drain-flag directory's owner changed to root                                                          | default, `verify`                       | "The broker's state directory is not broker:broker 0750, or the drain-flag directory is not broker:broker 0755."           |
+| The candidate written as a `Caddyfile`                                                                    | default, `verify`                       | "A Caddyfile exists, a slot directory exists, or the wrapper's lock directory exists."                                     |
+| The real wrapper's `reset` run by a task                                                                  | default, `verify`                       | the same assertion (the real wrapper leaves its lock directory)                                                            |
+| The register directory made `0755` on the host                                                            | default, `converge`                     | "is not a directory owned by root with mode 0700."                                                                         |
+| The wrapper installed group-writable                                                                      | default, `converge`                     | the integrity assertion on the installed programs                                                                          |
+| The claim program run in check mode                                                                       | plan, `check-*`                         | "The check run changed"                                                                                                    |
+| A file added to the broker's slots directory                                                              | default, `converge`                     | "The role changed the broker's slots directory"                                                                            |
+| Both seeding tests removed (the pre-seed guard)                                                           | default, `converge`                     | "The role put a cleared drain flag back."                                                                                  |
 
 The harness's own controls (a failing second scenario fails its shard, a role with
 no `molecule/` still gets a shard and fails at the scenario limits, a privileged
@@ -543,7 +588,12 @@ other unit tests of `ansible/harness`.
 - **`follow: false` on a file task is covered by the role's own check.** The check
   refuses a link before any file task runs, so a test cannot show the module's
   refusal by itself: the module guards the moment between the read and the write,
-  which a test of this kind cannot hold open.
+  which a test of this kind cannot hold open. The same holds for the move of the
+  staging directory: that a link or a full directory put at the flag directory's name
+  between the read and the move stops the `mv -T` is the kernel's rename, and no test
+  can put the link in that gap. What the tests hold is the order around it: the flags
+  exist before the directory appears in the broker's tree, and the move leaves
+  nothing behind.
 - **A silent skip passes, except one.** Tasks skipped in check mode on a host with
   no release are not caught by the harness; this table and the comments at each
   skip are the review of it (ANS-10). The grant comparison is the exception: its

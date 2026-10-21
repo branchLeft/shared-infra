@@ -127,6 +127,68 @@
     mode: '0750'
     follow: false
 
+# Seeded only by the run that makes the directory, and never where the marker is: a
+# directory that was already there is the broker's to manage, whatever it holds (an
+# empty one with no marker was refused above). Skipped in check mode, which writes
+# nothing; the plan shows the directory by the declaration below.
+#
+# The flags are written in a staging directory and the directory is moved into place
+# whole, because the broker owns the state directory the flag directory lives in. The
+# broker can rename a directory in its own tree and put a link of the same name in its
+# place, and a root task that writes a path through that name follows the link, so the
+# flags would land in whatever directory the link names. The link check above cannot
+# close that, and neither can making the directory root's first: the name is still
+# resolved in the broker's directory at every write. The staging directory is under
+# the state root, which only root can write, so nothing the broker owns is resolved
+# while root writes. The move is one rename of the directory itself: rename does not
+# follow a link at the name it replaces, and it refuses to put a directory over a
+# link or over a directory that holds anything, so a link or a full directory the
+# broker put there in the meantime stops the run and nothing is written through it.
+# The staging directory stays root's until the declaration below hands the moved
+# directory to the broker.
+- name: Seed the drain flags in a staging directory the broker cannot reach, then move it into place
+  when:
+    - not ansible_check_mode
+    - not demo1_build_flag_dir_stat.stat.exists
+    - not demo1_build_preseed_marker_stat.stat.exists
+  block:
+    - name: Create the staging directory, root's and closed to everyone else
+      ansible.builtin.file:
+        path: '{{ demo1_build_flag_staging_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+        follow: false
+
+    - name: Preseed one flag per slot and colour, so a new colour boots drained
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ demo1_build_flag_staging_dir }}/{{ item }}'
+        owner: root
+        group: root
+        mode: '0644'
+        force: false
+      loop: '{{ demo1_build_flag_files }}'
+
+    # No module renames a directory (ANS-9). -T makes the destination the name itself
+    # and never a directory to move into, so a link or a directory the broker put
+    # there is an error and not a place to move the staging directory into.
+    - name: Move the staging directory to the drain-flag directory's name
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/mv
+          - -T
+          - '--'
+          - '{{ demo1_build_flag_staging_dir }}'
+          - '{{ demo1_build_flag_dir }}'
+      changed_when: true
+
+# Declared on every run, after the move. On the run that moved the directory it is
+# root's, and this hands it to the broker; on every later run it is the broker's
+# already and nothing changes. The root-owned directory is never created in place or
+# changed back, so a live broker-owned directory is not touched. follow: false makes
+# the module refuse a link at this name, which is the last component of the path.
 - name: Create the drain-flag directory, the broker's and readable by the sidecar
   ansible.builtin.file:
     path: '{{ demo1_build_flag_dir }}'
@@ -135,25 +197,6 @@
     group: '{{ demo1_build_broker_group }}'
     mode: '0755'
     follow: false
-
-# Seeded only by the run that made the directory, and never where the marker is:
-# a directory that was already there is the broker's to manage, whatever it holds
-# (an empty one with no marker was refused above). Skipped in check mode because
-# copy will not write into a directory the plan has not made, and the plan shows
-# the directory above.
-- name: Preseed one flag per slot and colour, so a new colour boots drained
-  ansible.builtin.copy:
-    content: ''
-    dest: '{{ demo1_build_flag_dir }}/{{ item }}'
-    owner: root
-    group: root
-    mode: '0644'
-    force: false
-  loop: '{{ demo1_build_flag_files }}'
-  when:
-    - not ansible_check_mode
-    - not demo1_build_flag_dir_stat.stat.exists
-    - not demo1_build_preseed_marker_stat.stat.exists
 
 # Written after the flags. A run that dies while seeding them leaves the directory
 # with some flags and no marker: the next run writes the marker without seeding, so

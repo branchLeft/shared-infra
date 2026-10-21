@@ -98,6 +98,41 @@
             quiet: true
             fail_msg: The accepted directories were not made, or the flags were not preseeded.
           when: converge_case.accepted | default(false)
+
+        # The ordering control. The broker owns its state directory and can swap a name in
+        # it for a link, so root must not resolve any name in it while it writes the flags.
+        # A directory gains an entry (and its modification time moves) when the entry is
+        # made or moved in. So the state directory's time is when the drain-flag directory
+        # appeared in the broker's tree, and every flag must be older than that: the flags
+        # were written elsewhere and the directory moved in whole. A directory made in the
+        # broker's tree first and filled after has an older time than its newest flag.
+        - name: Look at the broker's state directory and the staging path after the accepted control
+          ansible.builtin.stat:
+            path: '{{ item }}'
+            follow: false
+          loop:
+            - /var/lib/branchleft-broker
+            - /var/lib/branchleft/demo-drain-flags-staging
+          register: demo1_build_converge_link_order
+          when: converge_case.accepted | default(false)
+
+        - name: Assert the drain-flag directory appeared in the broker's tree after its last flag was written
+          ansible.builtin.assert:
+            that:
+              - demo1_build_converge_link_order.results[0].stat.mtime > (demo1_build_converge_link_flags.files | map(attribute='mtime') | max)
+            quiet: true
+            fail_msg: >-
+              The broker's state directory gained the drain-flag directory before the newest flag was in
+              it. Root wrote the flags through a name in a directory the broker owns.
+          when: converge_case.accepted | default(false)
+
+        - name: Assert the staging directory was moved and not copied
+          ansible.builtin.assert:
+            that:
+              - not demo1_build_converge_link_order.results[1].stat.exists
+            quiet: true
+            fail_msg: The drain-flag staging directory is still there. The directory was copied and not moved into place.
+          when: converge_case.accepted | default(false)
       rescue:
         - name: Assert the control case was not refused
           ansible.builtin.assert:
@@ -118,22 +153,27 @@
               The role failed at {{ converge_case.link_at | default(converge_case.file_at) | default('(none)') }} for a
               reason other than a link or a file in place of a directory: {{ ansible_failed_result.msg | default('') }}
 
-        - name: Look at the link's target after the refusal
+        - name: Look at the link's target and the staging path after the refusal
           ansible.builtin.stat:
-            path: '{{ converge_link_target }}'
+            path: '{{ item }}'
             follow: false
+          loop:
+            - '{{ converge_link_target }}'
+            - /var/lib/branchleft/demo-drain-flags-staging
           register: demo1_build_converge_link_target
 
-        - name: Assert the target is still root's mode 0711
+        - name: Assert the target is still root's mode 0711, and nothing was staged
           ansible.builtin.assert:
             that:
-              - demo1_build_converge_link_target.stat.pw_name == 'root'
-              - demo1_build_converge_link_target.stat.gr_name == 'root'
-              - demo1_build_converge_link_target.stat.mode == '0711'
+              - demo1_build_converge_link_target.results[0].stat.pw_name == 'root'
+              - demo1_build_converge_link_target.results[0].stat.gr_name == 'root'
+              - demo1_build_converge_link_target.results[0].stat.mode == '0711'
+              - not demo1_build_converge_link_target.results[1].stat.exists
             quiet: true
             fail_msg: >-
-              The role changed the owner or mode of the directory a link pointed at. A link in place of a
-              declared directory must stop the step before any file task follows it.
+              The role changed the owner or mode of the directory a link pointed at, or made the staging
+              directory. A link in place of a declared directory must stop the step before any file task
+              follows it and before anything is created.
       always:
         - name: Remove everything the case made, the link itself and not what it points at
           ansible.builtin.file:
@@ -142,6 +182,7 @@
           loop:
             - /var/lib/branchleft/demo-router
             - /var/lib/branchleft-broker
+            - /var/lib/branchleft/demo-drain-flags-staging
             - /etc/branchleft/demo1-drain-flags-preseeded
             - '{{ converge_link_target }}'
           changed_when: false

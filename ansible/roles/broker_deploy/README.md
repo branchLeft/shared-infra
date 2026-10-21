@@ -99,7 +99,10 @@ one would change the owner and mode of its target, as root: a link to
 `/etc/sudoers.d` would become the broker's, mode 0700. `verify.yml` runs that step
 alone, first on the real directory, which it must accept, then on a link to a root
 directory of mode 0711, which it must refuse with the role's own message and leave
-as it found it.
+as it found it, and then on a regular file in the directory's place, which it must
+refuse with the same message and leave as it found it. The file is the half of the
+check that the link does not reach: the file module refuses a file too, but with
+its own words ("already exists as a file"), and the case matches the role's.
 
 The Node unpack is skipped in check mode: `unarchive` needs its destination to
 exist even then, and on a host the role has not touched the directory and the

@@ -9,7 +9,7 @@
     converge_flag_dir: /var/lib/branchleft-broker/drain-flags
   tasks:
     # What a plan does is the plan scenario's (its converge.yml): this scenario's
-    # harness.yml leaves out the steps that run the role in check mode, so the
+    # skip-steps.txt leaves out the steps that run the role in check mode, so the
     # controls here are the ones that need the role applied.
     - name: Look at the sudoers grant before the role runs
       ansible.builtin.stat:

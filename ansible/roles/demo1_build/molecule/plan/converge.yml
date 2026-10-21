@@ -1,6 +1,6 @@
 ---
 # The plan scenario: what a plan (a run in check mode) must do, on a host in either
-# state. Its harness.yml leaves out the idempotence and verify steps, which the
+# state. Its skip-steps.txt leaves out the idempotence and verify steps, which the
 # default scenario runs, and runs the three that plan: check-fresh before any apply,
 # check-configured after one, and Molecule's own check. This converge applies the
 # role once, for real, and in check mode makes the comparisons below.

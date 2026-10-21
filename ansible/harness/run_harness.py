@@ -372,7 +372,7 @@ def molecule_steps(role: Path, tools: Path, scenario: str = DEFAULT_SCENARIO) ->
     not told, so a second scenario that was not named would never run and its shard
     would pass on the first. ``check-fresh`` precedes any real converge;
     ``molecule-check`` is Molecule's own action; ``destroy`` names the scenario too.
-    A step the scenario's ``harness.yml`` leaves out stays in the list, marked skipped,
+    A step the scenario's ``skip-steps.txt`` leaves out stays in the list, marked skipped,
     so the summary shows it as SKIP and not as missing.
     """
     molecule = str(tools / "molecule")

@@ -51,6 +51,7 @@
         - /usr/local/lib/branchleft
         - /var/lib/branchleft/demo-router
         - /var/lib/branchleft-broker
+        - /var/lib/branchleft/demo-drain-flags-staging
         - /var/tmp/demo1-link-target
         - /etc/branchleft/demo1-drain-flags-preseeded
         - /etc/branchleft/tenant-uids

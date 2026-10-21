@@ -62,6 +62,27 @@
           changed_when: false
           when: converge_case.marker | default(false)
 
+        # A directory the role can read is a running broker's: its owner is the broker. The
+        # role must leave it exactly as it is. Setting a directory to root and back, to write
+        # into it, leaves the same owner and a newer change time, which is what this reads.
+        - name: Make the flag directory the broker's, as a running broker leaves it
+          ansible.builtin.file:
+            path: '{{ converge_flag_dir }}'
+            state: directory
+            owner: broker
+            group: broker
+            mode: '0755'
+            follow: false
+          changed_when: false
+          when: converge_case.accepted | default(false)
+
+        - name: Look at the flag directory before the role's step
+          ansible.builtin.stat:
+            path: '{{ converge_flag_dir }}'
+            follow: false
+          register: demo1_build_converge_unmarked_before
+          when: converge_case.accepted | default(false)
+
         - name: Run the role's directory step
           ansible.builtin.include_role:
             name: branchleft.demo1_build
@@ -84,6 +105,27 @@
             path: '{{ converge_marker }}'
             follow: false
           register: demo1_build_converge_unmarked_marker
+          when: converge_case.accepted | default(false)
+
+        - name: Look at the flag directory after the role's step
+          ansible.builtin.stat:
+            path: '{{ converge_flag_dir }}'
+            follow: false
+          register: demo1_build_converge_unmarked_dir_after
+          when: converge_case.accepted | default(false)
+
+        - name: Assert the broker's flag directory was not touched
+          ansible.builtin.assert:
+            that:
+              - demo1_build_converge_unmarked_dir_after.stat.pw_name == 'broker'
+              - demo1_build_converge_unmarked_dir_after.stat.gr_name == 'broker'
+              - demo1_build_converge_unmarked_dir_after.stat.mode == '0755'
+              - demo1_build_converge_unmarked_dir_after.stat.ctime == demo1_build_converge_unmarked_before.stat.ctime
+            quiet: true
+            fail_msg: >-
+              The role changed a flag directory that was already the broker's. It set the directory to
+              another owner to write into it, or changed its owner or mode. A directory the role did not
+              make is the broker's to manage and is left as it is.
           when: converge_case.accepted | default(false)
 
         - name: Assert an existing directory was not seeded, and the marker is in place
@@ -135,6 +177,7 @@
           loop:
             - '{{ converge_marker }}'
             - '{{ converge_flag_dir }}'
+            - /var/lib/branchleft/demo-drain-flags-staging
           register: demo1_build_converge_unmarked_after
 
         - name: Assert the refusal seeded nothing, wrote no marker and changed nothing it declares
@@ -143,10 +186,11 @@
               - demo1_build_converge_unmarked_left.files | length == 0
               - not demo1_build_converge_unmarked_after.results[0].stat.exists
               - demo1_build_converge_unmarked_after.results[1].stat.pw_name == 'root'
+              - not demo1_build_converge_unmarked_after.results[2].stat.exists
             quiet: true
             fail_msg: >-
-              The refused step seeded a flag, wrote the marker, created the socket tree or changed the
-              flag directory's owner. It must stop before it creates anything.
+              The refused step seeded a flag, wrote the marker, created the socket tree, made the staging
+              directory or changed the flag directory's owner. It must stop before it creates anything.
       always:
         - name: Remove everything the case made
           ansible.builtin.file:
@@ -155,6 +199,7 @@
           loop:
             - /var/lib/branchleft/demo-router
             - /var/lib/branchleft-broker
+            - /var/lib/branchleft/demo-drain-flags-staging
             - '{{ converge_marker }}'
           changed_when: false
           when: not ansible_check_mode
