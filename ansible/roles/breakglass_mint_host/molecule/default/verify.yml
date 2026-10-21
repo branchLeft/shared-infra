@@ -36,6 +36,16 @@
       - tasks
       - post_tasks
       - handlers
+    # The roles entries of every play of ops1.yml, and the one list they may be. An
+    # entry may carry vars, tasks_from, vars_from, defaults_from or other keys; those
+    # are role parameters that outrank the role's own vars/main.yml, so they change
+    # what ops1 runs (the image, the files, the base URL, the key path) while verify
+    # still asserts the values of the file. So each entry holds the key role and
+    # nothing else, and the list is exactly the mint role: a second role makes its
+    # author extend this test, not slip past it unread.
+    verify_ops1_role_entries: "{{ verify_ops1_plays | map(attribute='roles', default=[]) | flatten }}"
+    verify_ops1_role_entries_expected:
+      - role: ../roles/breakglass_mint_host
     # The raw text of every file of the role that Ansible evaluates: the tasks and the two
     # variable files. A lookup or a template runs on the controller, which under
     # ansible-pull is the host itself, so it can read a file no module key shows.
@@ -316,6 +326,21 @@
         fail_msg: >-
           A play of ops1.yml carries a key that is not on the allow-list: {{ verify_ops1_extra_keys }}.
           A vars_files entry makes the controller read a file, which under ansible-pull is the host.
+        quiet: true
+
+    # The allow-list above admits the key roles but does not look inside its entries.
+    # A role entry with vars, tasks_from or vars_from changes what the role runs for
+    # ops1 alone, and every other check here would still read the role's own files.
+    # So the roles of ops1.yml are exactly the mint role, each entry with the key
+    # role and no other key.
+    - name: Assert the roles of ops1.yml are exactly the mint role, each entry with no key but role
+      ansible.builtin.assert:
+        that:
+          - verify_ops1_role_entries == verify_ops1_role_entries_expected
+        fail_msg: >-
+          The roles entries of ops1.yml are not exactly the mint role with no other key: {{ verify_ops1_role_entries }}.
+          An entry's vars, tasks_from or vars_from change what the role runs for ops1 and outrank the role's own
+          vars/main.yml. A second role needs its own test, and this one extended to list it.
         quiet: true
 
     # The exact argv of each of the three commands, to the last word: the probe's

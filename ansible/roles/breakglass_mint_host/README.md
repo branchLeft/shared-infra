@@ -143,8 +143,13 @@ for the tool and the image stay as the fallback.
   under `ansible-pull`) read a file with no lookup word for the text scan to see,
   fails, as does any other key the test does not read. So no task in this role or in that playbook reads a
   file's content or checksum through `stat`, and no task calls a module off the
-  list. The roles that `ops1.yml` lists are not read by this test: this role's own
-  tasks are, and any other role has its own test. What the test cannot prove is that
+  list. The `roles` list of every play is held to exactly this role, and each entry
+  to the one key `role`: an entry's `vars`, `tasks_from` or `vars_from` are role
+  parameters that outrank the role's own `vars/main.yml`, so they would change the
+  image, the files, the base URL or the key path that ops1 runs while this test
+  still read the role's own values. A second role in the list fails the test, so its
+  author extends the test and does not slip past it unread. Any other role has its
+  own test. What the test cannot prove is that
   a deliberate edit does not read the key: every role is root code, so a check on its
   text cannot stop one. The control for that is review plus the deployment approval
   of the gated workflow that applies the role to the host; ws#2483 is where the
