@@ -63,7 +63,9 @@ to be on an allow-list, the `roles` entry to be exactly this role with no other 
 and every task of the playbook to call a module on the allow-list (so a `set_fact`
 or an `include_vars` that sets a constant is refused), and it scans the playbook's
 text for `lookup`, `query`, `q` and `pipe`. Play-level `vars` and `vars_files` are
-refused as keys. Extra vars on the pull command line are not read by this check
+refused as keys, and a task of the playbook that sets its own `vars` is refused too.
+Every command of the role and of the playbook must be one of the three Docker
+commands in their exact shapes, word for word. Extra vars on the pull command line are not read by this check
 and are outside it: they are held by the gated pull's approval (ws#2483).
 
 ## Requirements

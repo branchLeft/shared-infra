@@ -30,6 +30,24 @@
       - ansible.builtin.meta
       - ansible.builtin.stat
       - ansible.builtin.systemd_service
+    # The raw text of every file of the role that Ansible evaluates, held to the
+    # controller-side scan with app1.yml's text by the playbook guard below.
+    verify_role_texts:
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') }}"
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') }}"
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') }}"
+    # The exact Docker commands the role may run, one regular expression per word,
+    # with the image held by its template's name and not its value. The shared
+    # guard holds every command of the role and of app1.yml to these shapes.
+    verify_docker_shapes:
+      - ['^/usr/bin/docker$', '^--version$']
+      - ['^/usr/bin/docker$', '^pull$', '^-q$', '^[{][{] breakglass_grant_host_node_image [}][}]$']
+      - - '^/usr/bin/docker$'
+        - '^image$'
+        - '^inspect$'
+        - '^--format$'
+        - '^[{]% raw [%][}][{][{][.]RepoDigests[}][}][{]% endraw [%][}]$'
+        - '^[{][{] breakglass_grant_host_node_image [}][}]$'
     # What a file or directory must be, written here from the intent and not read
     # from the role: a mode changed in the role's constants is a mode this table
     # refuses. Owner and group are root for every path.
@@ -180,6 +198,8 @@
           - handlers
         guard_allowed_modules: '{{ verify_allowed_modules }}'
         guard_tasks: '{{ verify_tasks }}'
+        guard_scan_texts: '{{ verify_role_texts }}'
+        guard_docker_shapes: '{{ verify_docker_shapes }}'
 
     # A loop over an empty list skips quietly, so the checks below would pass
     # against a tasks file they could not read. Require that they have work.
@@ -192,17 +212,7 @@
         fail_msg: The tasks file has a different number of command, file or download tasks than the checks below were written for.
         quiet: true
 
-    - name: Assert every command is /usr/bin/docker --version, pull -q or image inspect
-      ansible.builtin.assert:
-        that:
-          - item['ansible.builtin.command'].argv[0] == '/usr/bin/docker'
-          - item['ansible.builtin.command'].argv[1:2] == ['--version'] or item['ansible.builtin.command'].argv[1:3] in [['pull', '-q'], ['image', 'inspect']]
-        fail_msg: 'A command task runs something other than the three Docker commands the role may run: {{ item.name }}.'
-        quiet: true
-      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.command') | list }}"
-      loop_control:
-        label: '{{ item.name }}'
-
+    # The command shapes are held by the shared guard above, to the same tasks.
     - name: Assert every file task makes a directory
       ansible.builtin.assert:
         that:
