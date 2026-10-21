@@ -306,7 +306,7 @@ been raised.
 The first application of the role in `default` takes 140 s (the downloads, the
 units and the integrity read-back), the second 100 s, and the two refusal plays
 that follow 29 s and 3 s. What left `default/converge.yml` for `refusals` is every
-case that needed no install: the grant edits (nine), the wrong-pin case, the
+case that needed no install: the grant edits (ten), the wrong-pin case, the
 eighth-slot case and the `/usr/bin/passwd` wrapper-path case. What stayed is the
 case that proves a refusal comes before the install, which only a whole-role run
 can show.
@@ -355,7 +355,8 @@ prepared grant back in every outcome. Each expects the refusal named in its case
   the last, and a comment after the last rule;
 - the first rule with `, ALL` added, the last rule with `, /bin/sh` added, and the
   first rule replaced by a wildcard rule;
-- the first two rules swapped (the comparison is ordered);
+- the first rule removed (the comparison looks for a missing rule as well as an
+  extra one), and the first two rules swapped (the comparison is ordered);
 - a wrapper path the grant does not name (`/usr/bin/passwd`), refused by the
   last assertion of the grant check;
 - an eighth slot in the role's slot table, refused by the slot-table assertion;
@@ -404,6 +405,7 @@ assertion fires in its place or a later one is the only one left:
 | A task that writes a different valid sudoers file                 | default, `converge`                        | "The role wrote the sudoers grant."                                                                                       |
 | The header split of the body reverted to a filter on any `#` line | refusals, `converge`                       | 3: "is not what render_slot_sudoers.py renders" for the `#1000` and `#includedir` cases, in both positions                |
 | The body equality weakened to a prefix match on each rule         | refusals, `converge`                       | 3: the same message, for the `, ALL` and `, /bin/sh` cases                                                                |
+| The comparison made one-directional (extra lines only)            | refusals, `converge`                       | 3: the same message, for the case with a rule removed                                                                     |
 | Both sides sorted before the comparison                           | refusals, `converge`                       | 3: the same message, for the swapped-rules case                                                                           |
 | The slot-table assertion removed                                  | refusals, `converge`                       | 4: "are not the slots in demo1_build_slot_names", for the eighth-slot case                                                |
 | The wrapper tie (assertion 5) removed                             | refusals, `converge`                       | 5: "does not run /usr/bin/passwd in every rule"; and in default, the probe-path play                                      |
