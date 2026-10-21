@@ -10,12 +10,15 @@
 #   guard_allowed_modules  the modules a task may call (the includer's own list)
 #   guard_tasks            the includer's own role tasks, held to the same modules
 #   guard_scan_texts       other texts the includer holds to the controller-side scan
+#   guard_docker_shapes    the exact Docker commands, one regex per word (ws#2367)
 #
 # Every rule is an allow-list. A play key outside guard_play_keys, a roles entry
 # that is not guard_expected_roles exactly (vars, tasks_from and vars_from are
-# refused, because they outrank the role's own vars/main.yml), a task that calls a
-# module off the list, and a lookup, query, q or pipe in the text of the playbook
-# or of a scanned text, all fail the run before any later check.
+# refused, because they outrank the role's own vars/main.yml), a task of the
+# playbook that sets its own vars (the same precedence), a task that calls a
+# module off the list, a command that is not one of guard_docker_shapes, and a
+# lookup, query, q or pipe in the text of the playbook or of a scanned text, all
+# fail the run before any later check.
 #
 # Not read here, and named by the includers: the stat rule and the key-path
 # rules, which belong to the mint role alone. A deliberate edit is for review and
@@ -94,6 +97,48 @@
     fail_msg: >-
       The role or the playbook calls modules that are not on the allow-list:
       {{ playbook_guard_v_modules | from_json | difference(guard_allowed_modules) }}.
+    quiet: true
+
+# A task of the playbook that sets its own vars outranks the role's vars/main.yml for
+# that task, as a play's or an entry's vars do. The module check above does not see
+# it, because the keyword is not a module, so it is refused here.
+- name: Assert no task of the playbook sets its own vars
+  ansible.builtin.assert:
+    that:
+      - playbook_guard_v_tasks | select('contains', 'vars') | list | length == 0
+    fail_msg: >-
+      A task of the playbook sets its own vars, which outrank the role's vars/main.yml for
+      that task. The playbook may not do that.
+    quiet: true
+
+# Each command task of the role and of the playbook runs one of the includer's exact
+# shapes. A shape is a list of regular expressions, one per word; a command matches
+# only with the same number of words and each word matching its expression in full.
+# The set_fact collects the names of the command tasks that match no shape, in the
+# order the tasks were read, and the assert below refuses any.
+- name: Hold each command task to one of the exact Docker shapes the includer lists
+  ansible.builtin.set_fact:
+    playbook_guard_v_docker_bad: >-
+      {% set bad = [] %}
+      {% for t in guard_tasks + playbook_guard_v_tasks if 'ansible.builtin.command' in t %}
+      {% set argv = t['ansible.builtin.command'].argv | default([]) %}
+      {% set found = namespace(v=false) %}
+      {% for shape in guard_docker_shapes if argv | length == shape | length %}
+      {% set ok = namespace(v=true) %}
+      {% for i in range(shape | length) if not (argv[i] | string is match(shape[i])) %}{% set ok.v = false %}{% endfor %}
+      {% if ok.v %}{% set found.v = true %}{% endif %}
+      {% endfor %}
+      {% if not found.v %}{% set _ = bad.append(t.name | default('unnamed task')) %}{% endif %}
+      {% endfor %}
+      {{ bad | to_json }}
+
+- name: Assert every command task runs one of the Docker commands the role may run, in their exact shapes
+  ansible.builtin.assert:
+    that:
+      - playbook_guard_v_docker_bad | from_json | length == 0
+    fail_msg: >-
+      A command task runs something other than the Docker commands the role may run, in their
+      exact shapes: {{ playbook_guard_v_docker_bad | from_json }}.
     quiet: true
 
 # The words that run something on the controller: lookup, query, q and pipe, in any

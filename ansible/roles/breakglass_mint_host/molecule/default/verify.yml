@@ -48,6 +48,18 @@
       - ansible.builtin.file
       - ansible.builtin.get_url
       - ansible.builtin.stat
+    # The exact Docker commands the role may run, one regular expression per word,
+    # with the image held by its template's name and not its value. The shared
+    # guard holds every command of the role and of ops1.yml to these shapes.
+    verify_docker_shapes:
+      - ['^/usr/bin/docker$', '^--version$']
+      - ['^/usr/bin/docker$', '^pull$', '^-q$', '^[{][{] breakglass_mint_host_node_image [}][}]$']
+      - - '^/usr/bin/docker$'
+        - '^image$'
+        - '^inspect$'
+        - '^--format$'
+        - '^[{]% raw [%][}][{][{][.]RepoDigests[}][}][{]% endraw [%][}]$'
+        - '^[{][{] breakglass_mint_host_node_image [}][}]$'
     # What a path must be, written here from the intent and not read from the
     # role. Owner and group are root for every path.
     verify_expected_modes:
@@ -187,6 +199,7 @@
         guard_allowed_modules: '{{ verify_allowed_modules }}'
         guard_tasks: '{{ verify_tasks }}'
         guard_scan_texts: '{{ verify_role_texts }}'
+        guard_docker_shapes: '{{ verify_docker_shapes }}'
 
     # The naming check reads the tasks. A variable that holds or builds the key
     # path, and that a task then uses, would not be named in any task. So no
@@ -217,29 +230,7 @@
         fail_msg: The tasks file has a different number of command, file, download or stat tasks than the checks below were written for.
         quiet: true
 
-    # The exact argv of each of the three commands, to the last word: the probe's
-    # version, the pull by digest and the image inspect with its format and its
-    # digest reference. The image reference is written as a brace-free pattern so
-    # no template marker is needed in this file.
-    - name: Assert every command is one of the three Docker commands the role may run, in its exact shape
-      ansible.builtin.assert:
-        that:
-          - item['ansible.builtin.command'].argv[0] == '/usr/bin/docker'
-          - >-
-            item['ansible.builtin.command'].argv == ['/usr/bin/docker', '--version']
-            or (item['ansible.builtin.command'].argv[:3] == ['/usr/bin/docker', 'pull', '-q']
-            and item['ansible.builtin.command'].argv | length == 4
-            and item['ansible.builtin.command'].argv[3] is match('^[{][{] breakglass_mint_host_node_image [}][}]$'))
-            or (item['ansible.builtin.command'].argv[:4] == ['/usr/bin/docker', 'image', 'inspect', '--format']
-            and item['ansible.builtin.command'].argv | length == 6
-            and item['ansible.builtin.command'].argv[4] is search('RepoDigests')
-            and item['ansible.builtin.command'].argv[5] is match('^[{][{] breakglass_mint_host_node_image [}][}]$'))
-        fail_msg: 'A command task runs something other than the three Docker commands the role may run, in their exact shapes: {{ item.name }}.'
-        quiet: true
-      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.command') | list }}"
-      loop_control:
-        label: '{{ item.name }}'
-
+    # The command shapes are held by the shared guard above, to the same tasks.
     - name: Assert every file task makes a directory
       ansible.builtin.assert:
         that:

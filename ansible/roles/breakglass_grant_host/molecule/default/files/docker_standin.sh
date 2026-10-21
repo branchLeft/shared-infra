@@ -1,18 +1,7 @@
 #!/bin/sh
-# A stand-in for the docker command, for the role tests of the break-glass roles.
-# The test container has no Docker daemon (ANS-15 keeps the engine socket out of
-# it), so this program takes the place of /usr/local/bin/docker and
-# /usr/bin/docker. It does three things only:
-#
-#   1. Records each call: the path it was started as, then each argument, one
-#      call per line, separated by three bars. The tests read the record to learn what the
-#      roles, the wrapper and the unit asked Docker to do.
-#   2. Keeps a list of the image digests that were pulled, so that a probe
-#      (`image inspect`) answers "present" only after a pull.
-#   3. Answers `run` with an empty JSON list, as the wrapper's `status` does.
-#
-# What it does NOT prove: that the image pulls, that the tool runs, or that the
-# unit starts a real container. Those are proved on the host by the gated run.
+# A stand-in for docker in the break-glass role tests: the test container has no
+# daemon. It records each call, keeps the pulled digests for `image inspect`, and
+# answers `run` with []. It proves no pull and no container; the gated host run does.
 set -eu
 
 state=/var/lib/docker-standin
