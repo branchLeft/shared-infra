@@ -130,6 +130,13 @@ for the tool and the image stay as the fallback.
   holding only `main.yml`, and no meta dependency, so a handlers file, a second
   tasks file or a library cannot add a route to the key that those checks do not
   read.
+- **Nothing in the role runs on the controller.** Under `ansible-pull` the
+  controller is the host, so a `lookup`, `query`, `q` or `pipe` could read the key
+  without a module the checks above see, in a quiet `assert` that prints nothing.
+  The test fails on any of those words in the text of `tasks/main.yml`,
+  `vars/main.yml` or `defaults/main.yml`, after showing that its pattern matches
+  six spellings of one. It also fails if any variable other than the key-path
+  constant holds that constant's name, a path under `/etc` or the word `signing`.
 - **`command` is used for `docker`.** The Docker modules need the Docker API
   library on the host, which these hosts do not carry (ANS-9). The probes are
   read-only, so they run in check mode; the pull runs only after a probe finds the
