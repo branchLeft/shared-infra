@@ -11,10 +11,20 @@ name: Ansible delivery
 #
 # The environment is its own, not `production` or `production-mail`: those release the
 # Pulumi applies in ci.yml, and one approval must not release both. The owner creates
-# it before the first run (required reviewer, main only, secret
-# ssh_apply_key). ansible/checks/check_delivery.py fails on every line of this file
-# that would weaken that, and reads the environment's protection when given the
-# answers of three read-only GitHub calls.
+# it before the first run, with all of these set:
+#   - required reviewer: the user Rob-branchLeft alone, no team and no other user;
+#   - Prevent self-review: ticked (the owner's ruling, kept on);
+#   - Allow administrators to bypass configured protection rules: unticked;
+#   - deployment branches: main only;
+#   - environment secret: ssh_apply_key.
+# ansible/checks/check_delivery.py fails on every line of this file that would weaken
+# that. Its `environment` command reads the environment's protection when given the
+# answers of three read-only GitHub calls (the environment, its deployment branch
+# policies and its secrets); run it by hand after any change to the environment:
+#   python3 ansible/checks/check_delivery.py environment --environment environment.json \
+#     --policies policies.json --secrets secrets.json
+# where the three files are the output of `gh api` on repos/<owner>/<repo>/environments/
+# ansible-hosts, on its /deployment-branch-policies and on its /secrets.
 #
 # The apply key is an environment secret and is never passed here. The three secrets
 # below are repository secrets, named one by one: `secrets: inherit` would pass all.
