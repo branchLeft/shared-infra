@@ -45,6 +45,13 @@ and `ansible.legacy.` spellings, and the `action:` and `local_action:` forms of 
 does not parse the free-form arguments of other modules, other than a protected key
 written as `key=value` in a string. A loader or module outside those sets is not seen.
 
+Limits of the README exception. A README that the checker's YAML parser cannot read is
+accepted as prose, because the play-list check reads nothing from it. Ansible's loader and
+this parser are not the same code, so a README that Ansible could load as a play list and
+this parser cannot read passes. Parser parity is not checked, and no new refusal is added
+for it, because a fail-closed rule would refuse real Markdown READMEs. The control is the
+owner's merge of any change under `ansible/checks/` and `ansible/trust/` (CODEOWNERS).
+
 Out of scope: a case-insensitive filesystem. On macOS Ansible can find
 `group_vars/all.YML` under the name `all.yml`, and R6 reads only the exact suffix. This is
 not closed by the name rule, which covers `playbooks/` and `trust/` only. It does not reach

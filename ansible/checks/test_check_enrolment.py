@@ -63,7 +63,7 @@ class Sabotage(unittest.TestCase):
             (self.ansible / "trust" / f"{host}.yml").unlink()
         self._assert_rule("R1")
 
-    # R2: the refusal include is missing from pre_tasks (the plan's C1 red).
+    # R2: the refusal include is missing from pre_tasks.
     def test_r2_refusal_include_removed(self) -> None:
         self._edit(
             "playbooks/ops1.yml",
@@ -72,7 +72,7 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R2 ops1.yml")
 
-    # R2: a playbook names another host (the plan's C2 red, first value).
+    # R2: a playbook names another host.
     def test_r2_enrolled_host_names_another_host(self) -> None:
         self._edit("playbooks/app1.yml", "enrolled_host: app1", "enrolled_host: ops1")
         self._assert_rule("R2 app1.yml")
@@ -85,7 +85,7 @@ class Sabotage(unittest.TestCase):
         self.assertTrue(any(finding.startswith("R2 db9.yml") for finding in findings), findings)
         self.assertTrue(any(finding.startswith("R4 db9.yml") for finding in findings), findings)
 
-    # R2: the vars_files point at another host's trust file (the far copy, first target).
+    # R2: the vars_files point at another host's trust file.
     def test_r2_vars_files_points_at_another_hosts_trust_file(self) -> None:
         self._edit(
             "playbooks/ops1.yml",
@@ -94,7 +94,7 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R2 ops1.yml")
 
-    # R2: the far copy, second target, in the other direction.
+    # R2: the vars_files point at the other host's trust file, in the other direction.
     def test_r2_second_far_copy_points_at_edge1_trust(self) -> None:
         self._edit(
             "playbooks/app1.yml",
@@ -140,7 +140,7 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R5 trust/ops1.yml")
 
-    # R6: a signer list in group_vars (the C3 sabotage, first place).
+    # R6: a signer list in group_vars.
     def test_r6_signer_defined_in_group_vars(self) -> None:
         self._write(
             "inventories/production/group_vars/all.yml",
@@ -148,7 +148,7 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R6 ansible/inventories/production/group_vars/all.yml")
 
-    # R6: a signer list in a playbook's play vars (the C3 sabotage, second place).
+    # R6: a signer list in a playbook's play vars.
     def test_r6_signer_defined_in_playbook_vars(self) -> None:
         self._edit(
             "playbooks/edge1.yml",
@@ -157,7 +157,7 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R6 ansible/playbooks/edge1.yml")
 
-    # R6 and R2: a signer list in a vars_files target outside trust/ (the C3 sabotage, third).
+    # R6 and R2: a signer list in a vars_files target outside trust/.
     def test_r6_signer_defined_in_an_extra_vars_file(self) -> None:
         self._write("playbooks/includes/extra.yml", "---\npull_trigger_signers: []\n")
         self._edit(
@@ -195,60 +195,60 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R2 evil.YAML")
 
-    # D1, playbooks: a nested playbook whose name is not an exact .yml is refused (verdict repro).
+    # Playbooks: a nested playbook whose name is not an exact .yml is refused.
     def test_nested_uppercase_yaml_playbook_is_refused(self) -> None:
         self._write("playbooks/sub/evil.YAML", EVIL_PLAY)
         self._assert_rule("R2 sub/evil.YAML")
 
-    # D1, trust: an uppercase .YAML trust file is refused, not ignored by R4 and R5.
+    # Trust: an uppercase .YAML trust file is refused, not ignored by R4 and R5.
     def test_trust_uppercase_yaml_is_refused(self) -> None:
         self._write("trust/x.YAML", "---\npull_trigger_signers: [attacker]\n")
         self._assert_rule("R5 x.YAML")
 
-    # D1, trust: a lowercase .yaml trust file is refused, not ignored by R4 and R5.
+    # Trust: a lowercase .yaml trust file is refused, not ignored by R4 and R5.
     def test_trust_lowercase_yaml_is_refused(self) -> None:
         self._write("trust/x.yaml", "---\npull_trigger_signers: [attacker]\n")
         self._assert_rule("R5 x.yaml")
 
-    # D1, trust: case alone is enough to refuse, so a lower()-based test would be too weak.
+    # Trust: case alone is enough to refuse, so a lower()-based test would be too weak.
     def test_trust_uppercase_yml_is_refused(self) -> None:
         self._write("trust/x.YML", "---\npull_trigger_signers: [attacker]\n")
         self._assert_rule("R5 x.YML")
 
-    # D1, trust: a template suffix is a different name, so it is refused.
+    # Trust: a template suffix is a different name, so it is refused.
     def test_trust_yml_j2_is_refused(self) -> None:
         self._write("trust/x.yml.j2", "---\npull_trigger_signers: [attacker]\n")
         self._assert_rule("R5 x.yml.j2")
 
-    # D1, playbooks: a .txt file is refused, because ansible-playbook runs any name given.
+    # Playbooks: a .txt file is refused, because ansible-playbook runs any name given.
     def test_playbooks_txt_is_refused(self) -> None:
         self._write("playbooks/notes.txt", EVIL_PLAY)
         self._assert_rule("R2 notes.txt")
 
-    # D1 and the trust depth question: trust/ is flat, so a nested trust .yml is refused, and
-    # its stem never collides with a top-level trust file in R4 or R5.
+    # Trust is flat: a nested trust .yml is refused, and its stem never collides with a
+    # top-level trust file in R4 or R5.
     def test_nested_yml_in_trust_is_refused(self) -> None:
         self._write("trust/sub/edge1.yml", "---\npull_trigger_signers: []\n")
         self._assert_rule("R5 sub/edge1.yml")
 
-    # D1 and the playbook depth question: a nested playbook .yml is refused, not read by R2.
+    # Playbooks: a nested playbook .yml is refused, not read by R2.
     def test_nested_yml_playbook_is_refused(self) -> None:
         self._write("playbooks/sub/evil.yml", EVIL_PLAY)
         self._assert_rule("R2 sub/evil.yml")
 
-    # D1: playbooks/includes/ is the one nested place a .yml is read; one level deeper is refused.
+    # playbooks/includes/ is the one nested place a .yml is read; one level deeper is refused.
     def test_includes_nested_deeper_is_refused(self) -> None:
         self._write("playbooks/includes/sub/x.yml", "---\nfoo: bar\n")
         self._assert_rule("R2 includes/sub/x.yml")
 
-    # D1, exact README paths: a README.md at any other path is not the exception, so refused.
-    # The body is prose, not a play list, so only the exact-path pin refuses it (row 7).
+    # Exact README paths: a README.md at any other path is not the exception, so refused.
+    # The body is prose, not a play list, so only the exact-path pin refuses it.
     def test_nested_readme_is_not_the_exception(self) -> None:
         self._write("playbooks/sub/README.md", "# Notes\n\nProse only.\n")
         self._assert_rule("R2 sub/README.md")
 
-    # Plan-review finding 1: a README exception that parses as a YAML list is refused, because
-    # ansible-playbook would run it as plays. R6 does not read .md, so the name is no guard.
+    # A README exception that parses as a YAML list is refused, because ansible-playbook would
+    # run it as plays. R6 does not read .md, so the name is no guard.
     def test_playbooks_readme_play_list_is_refused(self) -> None:
         self._write("playbooks/README.md", EVIL_PLAY)
         self._assert_rule("R2 README.md")
@@ -258,8 +258,8 @@ class Sabotage(unittest.TestCase):
         self._write("trust/README.md", play)
         self._assert_rule("R5 README.md")
 
-    # Plan-review finding 1 (verdict 6322490514): a play list with an Ansible tag fails under
-    # SafeLoader, so it must still be refused. Ansible's loader runs it as plays.
+    # A play list with an Ansible tag fails under SafeLoader, so it must still be refused.
+    # Ansible's loader runs it as plays.
     def test_playbooks_readme_tagged_play_list_is_refused(self) -> None:
         play = "- hosts: all\n  pull_trigger_signers: [attacker]\n  note: !unsafe '{{ x }}'\n"
         self._write("playbooks/README.md", play)
@@ -269,6 +269,39 @@ class Sabotage(unittest.TestCase):
         play = "- hosts: all\n  vars:\n    pull_trigger_signers: !vault |\n      $ANSIBLE_VAULT\n"
         self._write("trust/README.md", play)
         self._assert_rule("R5 README.md")
+
+    # A play list whose item is a tagged mapping is refused. Without the mapping branch of
+    # _construct_any_tag, the tagged item raises, _load reads nothing, and the list passes.
+    def test_playbooks_readme_tagged_mapping_play_is_refused(self) -> None:
+        play = (
+            "- !unsafe\n"
+            "  hosts: all\n"
+            "  vars:\n"
+            "    pull_trigger_signers: [attacker]\n"
+            "  roles:\n"
+            "    - ../roles/pull_trigger\n"
+        )
+        self._write("playbooks/README.md", play)
+        self._assert_rule("R2 README.md")
+
+    def test_trust_readme_tagged_mapping_play_is_refused(self) -> None:
+        play = (
+            "- !unsafe\n"
+            "  hosts: all\n"
+            "  vars:\n"
+            "    pull_trigger_signers: [attacker]\n"
+            "  roles:\n"
+            "    - ../roles/pull_trigger\n"
+        )
+        self._write("trust/README.md", play)
+        self._assert_rule("R5 README.md")
+
+    # A tagged sequence value in a play is refused. Without the sequence branch of
+    # _construct_any_tag, the tagged value raises, _load reads nothing, and the list passes.
+    def test_playbooks_readme_tagged_sequence_value_is_refused(self) -> None:
+        play = "- hosts: all\n  vars:\n    pull_trigger_signers: !unsafe [attacker]\n"
+        self._write("playbooks/README.md", play)
+        self._assert_rule("R2 README.md")
 
     # Link handling: a link is refused whatever its name, so the check never follows it.
     def test_symlink_named_yml_in_trust_is_refused(self) -> None:
@@ -302,7 +335,7 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R0 playbooks/includes/require_signers.yml")
 
-    # R2: the roles entry of the pull_trigger role carries a signer list (the reproduction).
+    # R2: the roles entry of the pull_trigger role carries a signer list.
     def test_r2_role_entry_carries_a_signer_list(self) -> None:
         self._edit(
             "playbooks/edge1.yml",
@@ -335,7 +368,7 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R2 ops1.yml")
 
-    # R2: a refusal include is switched off by a when key (the reproduction).
+    # R2: a refusal include is switched off by a when key.
     def test_r2_refusal_include_switched_off_by_when(self) -> None:
         self._edit(
             "playbooks/edge1.yml",
@@ -391,7 +424,7 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R6 ansible/playbooks/edge1.yml")
 
-    # R8: the config writer takes its signers from a literal (the reproduction).
+    # R8: the config writer takes its signers from a literal.
     def test_r8_writer_signers_is_a_literal(self) -> None:
         self._edit(
             "roles/pull_trigger/tasks/main.yml",
@@ -400,7 +433,7 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R8 ansible/roles/pull_trigger/tasks/main.yml")
 
-    # R8: the config writer takes its remote from a fork's literal (the reproduction).
+    # R8: the config writer takes its remote from a fork's literal.
     def test_r8_writer_remote_is_a_fork_literal(self) -> None:
         self._edit(
             "roles/pull_trigger/tasks/main.yml",
