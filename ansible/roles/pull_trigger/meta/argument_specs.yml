@@ -83,8 +83,8 @@ argument_specs:
             type: str
             required: true
             description: >-
-              The word the approver types to confirm the step, 4 to 32 of A-Z, 0-9 and hyphen.
-              Public, and not a secret.
+              The word the person dispatching the step types to confirm it, 4 to 32 of A-Z, 0-9
+              and hyphen. Public, and not a secret.
   packages:
     short_description: Install the programs the trigger runs
     description: >-

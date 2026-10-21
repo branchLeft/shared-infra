@@ -202,9 +202,16 @@ tag: the first three are the control plane's database steps `migrate`, `identity
 `provision`. It is a second request kind and not a second program: it passes every
 check of an apply (the commit is an ancestor of `main`, newer than the floor, signed by
 an allowlisted key, with the playbook a regular file in it) and then runs the same
-playbook with `--tags TAG -e control_plane_db_step=ID`, so the tasks without that tag
-do not run. A plain apply and a check never pass either option, so a `never` step
-cannot run from them (a unit test and the harness both show it).
+playbook with `--tags TAG -e control_plane_db_step=ID`, so a task that has none of the
+selected tags does not run. The tag selects; it does not isolate. Ansible still gathers
+facts when the play does, and it runs every task tagged `always` (and every task in a
+play or role that gives `always`), whatever `--tags` says. A step is therefore the step's
+tasks **plus** the play's fact gathering and its `always` tasks, and a role that keeps
+a `never`-tagged step must tag nothing `always` that a step run should not repeat. The
+program cannot see inside the playbook, so this is a rule for the role's author and the
+reviewer of the role, and the first-run evidence rule below is written to match it. A plain
+apply and a check never pass either option, so a `never` step cannot run from them (a
+unit test and the harness both show it).
 
 **The interface, exactly.**
 
@@ -264,9 +271,23 @@ Each entry is checked when the configuration loads:
 **The word is a typing guard and not a secret.** It sits in the world-readable
 configuration of a public repository (the inventory file for the host). The person who
 adds an entry chooses it and the owner reads it in that pull request; at dispatch the
-approver reads it from the same inventory file, and types it into the workflow's
+person dispatching reads it from the same inventory file, and types it into the workflow's
 `confirm` input. What stops a step is the protected environment whose only reviewer is
 the owner, not the word. The word catches a wrong step or a wrong host and nothing more.
+
+**What "the owner's typed confirmation" means here.** Ruling 2B lets a routine step run
+on the owner's typed confirmation. GitHub gives that no single home: the word is typed by
+whoever **dispatches** the workflow (`confirm` is a `workflow_dispatch` input), and an
+environment approval is a button that takes no text. So the sender is built to this
+reading, stated here so it is not left to be guessed: the owner dispatches every step
+run himself and types the word at dispatch; the sender refuses a step dispatch whose
+actor is not the owner's account; and the owner's approval of the environment is a
+second, separate act. The word is then a slip guard on the owner's own typing, and the
+control is that both acts are the owner's. The owner can relax this to "the approval
+alone is the confirmation", in which case the sender drops the actor check and keeps the
+word as a slip guard. Nothing in this program changes either way: it compares the word
+with the allow-list and cannot know who typed it. That is why the actor check is in the
+sender and not here.
 
 **Order of refusal.** After the request is parsed, the program checks the playbook
 allowlist, then the step (on the list, then the word), and only then takes the lock,
@@ -315,7 +336,10 @@ Wiring a host is not done by this role or by its pull request. Adding the
 `ansible-gated-apply.yml` with the github-workflows tag it pins, are one ticket,
 [ISSUE branchLeft/workspace#2531](https://github.com/branchLeft/workspace/issues/2531).
 The ops1 enrolment ticket (branchLeft/workspace#2340) does not do them. Until that ticket
-is done the default empty list allows no step on any host.
+is done the default empty list allows no step on any host. The first live run also waits
+on [ISSUE branchLeft/workspace#2483](https://github.com/branchLeft/workspace/issues/2483)
+(the signer ops1 trusts) and [ISSUE branchLeft/workspace#2338](https://github.com/branchLeft/workspace/issues/2338)
+(the reusable workflow in a form a caller can use).
 
 When a step is run live, the evidence is the workflow run, the host's summary line with
 `mode=step` and `step=ID` that reports `verdict=applied` with a change count above zero on
@@ -329,7 +353,9 @@ done, or were never selected (no task carries the tag, or every task was skipped
 a summary of `verdict=unchanged` is the same line in both cases. A first run that
 reports no change is therefore not evidence that the step ran: find out why before
 counting it. Only the first run of a step on a host has to change something; the
-second is meant to report none.
+second is meant to report none. A change count is also reached by an `always`-tagged task
+that changed something (see the top of this section), so read the run's output for the
+step's own named tasks changing, not the count alone.
 
 ### Exit codes
 
@@ -625,6 +651,7 @@ the refusals is a change to a root program, and the owner reviews it.
 | A13 the line of an apply and a check has no step field                    | always adding the step field                             | `test_the_summary_of_a_step_ends_with_the_step...`, harness refusal check     |
 | A14 what the caller typed in a step request is never logged               | logging the typed id before it is found on the list      | `test_what_the_caller_typed_in_a_step_request...`                             |
 | A15 the step mode with a bare commit is refused, not run as a plain apply | removing the no-step test for `--mode step`              | `test_a_bare_commit_with_the_step_mode...`, harness refusal case              |
+| A16 the spec's step ids are the program's step ids                        | adding an id to the spec's `choices` only                | `test_the_spec_lists_exactly_the_step_ids_the_program_holds`                  |
 
 The `command=` text and the key restrictions of the step key are reviewed, not tested
 (no SSH server in the harness). A9 proves the sudo lines in this README, not the file
@@ -633,7 +660,8 @@ the `sudoers_and_keys` pattern writes on a host.
 ## How to change it safely
 
 1. Change the tasks, the defaults and `meta/argument_specs.yml` together: the spec
-   and the defaults must agree.
+   and the defaults must agree. A new step id is two edits, `STEP_IDS` in the program
+   and the `choices` of the step `id` in the spec; a unit test fails when they differ.
 2. Change the program, its configuration check, its `Why` sentences and the
    exit-code table in this README together. Every sentence a refusal can give is
    fixed text in the `Why` enumeration, so that no text from a caller reaches a log;

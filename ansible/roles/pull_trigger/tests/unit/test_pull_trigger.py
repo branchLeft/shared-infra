@@ -10,6 +10,7 @@ import io
 import json
 import os
 import random
+import re
 import shutil
 import stat
 import string
@@ -725,6 +726,26 @@ class StepConfigTests(unittest.TestCase):
         self,
     ) -> None:
         self.assertEqual(frozenset({"migrate", "identity", "provision"}), trigger.STEP_IDS)
+
+    def test_the_spec_lists_exactly_the_step_ids_the_program_holds(self) -> None:
+        """The spec's ``choices`` is a second copy of ``STEP_IDS``: it must not drift from it.
+
+        The program is the authority and fails closed on an id it does not hold, so a spec that
+        lists too few ids would block a step the program can run, and one that lists too many
+        would let an inventory pass the spec and fail every request later. A new step id is a
+        change to both, and this test is what makes a one-sided edit fail.
+        """
+        spec = PROGRAM.parent.parent / "meta" / "argument_specs.yml"
+        found = re.search(
+            r"pull_trigger_steps:.*?\n\s+options:\s*\n\s+id:\s*\n(?:\s+[a-z_]+:.*\n)*?"
+            r"\s+choices:\s*\[([^\]]*)\]",
+            spec.read_text(encoding="utf-8"),
+            re.DOTALL,
+        )
+        if found is None:
+            self.fail("the id option of pull_trigger_steps has no choices list in the spec")
+        listed = frozenset(item.strip() for item in found.group(1).split(","))
+        self.assertEqual(trigger.STEP_IDS, listed)
 
     def test_a_configuration_without_steps_allows_none(self) -> None:
         self.assertEqual((), trigger.parse_config(json.dumps(valid_config_data())).steps)

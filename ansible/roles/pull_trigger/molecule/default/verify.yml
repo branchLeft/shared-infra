@@ -1346,8 +1346,9 @@
         - /var/tmp/ptt-unit/files
         - /var/tmp/ptt-unit/tests
         - /var/tmp/ptt-unit/tests/unit
+        - /var/tmp/ptt-unit/meta
 
-    - name: Copy the program and its unit tests into the container
+    - name: Copy the program, its argument spec and its unit tests into the container
       ansible.builtin.copy:
         src: '{{ item.src }}'
         dest: '{{ item.dest }}'
@@ -1357,6 +1358,8 @@
       loop:
         - src: '{{ verify_role_directory }}/files/pull_trigger.py'
           dest: /var/tmp/ptt-unit/files/pull_trigger.py
+        - src: '{{ verify_role_directory }}/meta/argument_specs.yml'
+          dest: /var/tmp/ptt-unit/meta/argument_specs.yml
         - src: '{{ verify_role_directory }}/tests/unit/test_pull_trigger.py'
           dest: /var/tmp/ptt-unit/tests/unit/test_pull_trigger.py
       loop_control:
