@@ -27,6 +27,16 @@ cleanup() {
 pass() { PASSES=$((PASSES + 1)); echo "PASS: $*"; }
 fail() { FAILURES=$((FAILURES + 1)); echo "FAIL: $*"; }
 
+# Registry pulls can time out on a shared runner: retry, then fail loudly.
+pull_with_retry() {
+    attempt=1
+    until docker pull -q "$1" >/dev/null; do
+        [ "$attempt" -lt 3 ] || { echo "could not pull $1 after $attempt attempts"; return 1; }
+        attempt=$((attempt + 1))
+        sleep 5
+    done
+}
+
 # dockerd's own PATH, so the policy writes to the iptables backend dockerd uses.
 DOCKERD_PATH=""
 on_host() {
@@ -52,8 +62,8 @@ expect_blocked() {
     if eval "$2"; then fail "$1"; else pass "$1"; fi
 }
 
-docker image inspect "$PROBE_IMAGE" >/dev/null 2>&1 || docker pull -q "$PROBE_IMAGE" >/dev/null
-docker image inspect "$DIND_IMAGE" >/dev/null 2>&1 || docker pull -q "$DIND_IMAGE" >/dev/null
+docker image inspect "$PROBE_IMAGE" >/dev/null 2>&1 || pull_with_retry "$PROBE_IMAGE"
+docker image inspect "$DIND_IMAGE" >/dev/null 2>&1 || pull_with_retry "$DIND_IMAGE"
 
 docker network create "$NET" >/dev/null
 # NET_ADMIN so it can be given a return route to the spool bridge: the spool
