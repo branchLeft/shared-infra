@@ -585,6 +585,16 @@ class Sabotage(unittest.TestCase):
         self._write("inventories/production/group_vars/all", "---\npull_trigger_signers: []\n")
         self._assert_rule("R6 ansible/inventories/production/group_vars/all")
 
+    # R6: a tool's own cache .gitignore is no loader's input, so it is not a vars file.
+    def test_r6_tool_cache_gitignore_is_not_a_vars_file(self) -> None:
+        self._write(".mypy_cache/.gitignore", "# Automatically created by mypy\n*\n")
+        self.assertEqual(check(self.root), [])
+
+    # R6: a hidden extensionless file inside a loaded directory is still read.
+    def test_r6_hidden_extensionless_group_vars_sets_signer(self) -> None:
+        self._write("inventories/production/group_vars/.all", "---\npull_trigger_signers: []\n")
+        self._assert_rule("R6 ansible/inventories/production/group_vars/.all")
+
     # R6: a JSON file that does not parse is refused, not skipped.
     def test_r6_unparseable_json_in_group_vars_is_refused(self) -> None:
         self._write("inventories/production/group_vars/broken.json", '{"pull_trigger_signers": ')

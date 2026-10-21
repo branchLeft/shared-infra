@@ -435,6 +435,15 @@ def _scan_playbook(doc: object, path: Path, ansible: Path, where: str, out: list
         _scan({"vars": play_vars, **body}, path.parent, ansible, where, frozenset(), out)
 
 
+def _is_vars_candidate(relative: Path) -> bool:
+    """True when R6 reads the file as vars. A hidden file with no suffix is read only inside a
+    loaded directory: a tool's own artefact, such as a cache's .gitignore, is no loader's input."""
+    if relative.suffix not in VARS_SUFFIXES:
+        return False
+    hidden = relative.name.startswith(".") and relative.suffix == ""
+    return not hidden or bool(LOADED_DIRS.intersection(relative.parts))
+
+
 def _check_no_other_definition(ansible: Path, findings: list[str]) -> None:
     resolved = ansible.resolve()
     for path in sorted(ansible.rglob("*")):
@@ -446,7 +455,7 @@ def _check_no_other_definition(ansible: Path, findings: list[str]) -> None:
         if path.is_symlink() and loaded and _inside(path.resolve(), resolved) is None:
             findings.append(f"R6 {where}: links out of ansible/ where Ansible loads files")
             continue
-        if not path.is_file() or path.suffix not in VARS_SUFFIXES:
+        if not path.is_file() or not _is_vars_candidate(relative):
             continue
         doc = _load(path, findings, f"R6 {where}")
         if relative.parent == Path("playbooks") and path.suffix in TASK_SUFFIXES:
