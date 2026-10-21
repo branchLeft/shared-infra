@@ -12,7 +12,9 @@ match:
 - a duplicate key is refused (safe_load keeps the last one silently);
 - a merge key (`<<`) is refused;
 - only true and false (any case) are booleans, so `on`, `off`, `yes` and `no`
-  stay strings, as in YAML 1.2. The `on:` trigger key is then the string "on".
+  stay strings, as in YAML 1.2. The `on:` trigger key is then the string "on";
+- an explicit tag on any node (`!!bool "off"`, `!!str true`, a bare `!`) is
+  refused: it bypasses the resolver above, and how GitHub reads it is unverified.
 
 The rules, each on the parsed data:
 - A workflow with a pull_request or pull_request_target trigger has one
@@ -22,20 +24,26 @@ The rules, each on the parsed data:
   as pull_request: it has a pull request number, and the expression is false
   for it, so it is grouped and never cancels.
 - A workflow without one has a top-level group, if any, that is run-keyed: made
-  only of literal text and the expressions github.workflow and github.run_id
-  (or the pull request number with the run id fallback), with at least one
-  expression holding github.run_id. So no two runs share a group. The run id
-  counts only as a term inside ${{ }}: the text "github.run_id" in a literal
-  or a quoted string does not.
+  only of literal text and the expressions github.workflow and github.run_id,
+  with at least one expression holding github.run_id. So no two runs share a
+  group. The run id counts only as a term inside ${{ }}: the text
+  "github.run_id" in a literal or a quoted string does not. The pull request
+  number with the run id fallback is a term only in a workflow with a
+  pull_request trigger (the exact block above); a workflow that also has a
+  pull_request_review or pull_request_review_comment trigger is refused,
+  because those events carry the number with no fallback and every run for one
+  pull request would share the group.
 - A merge_group workflow has a top-level group that is run-keyed in that sense
   and does not hold the ref, so queued checks never replace one another.
-- cancel-in-progress is a whitelist: absent or the boolean false anywhere. The
-  one other value is the pull_request expression, on the pull_request block, or
-  on a job in a pull_request workflow that has no `environment:` and whose group
-  is that same per-pull-request group. A job group that every run shares, with
-  that expression, would let a pull request run cancel a push run, so it is
-  refused. Anything else (true, a string, "false", an expression, null) is
-  refused.
+- cancel-in-progress is a whitelist: absent or the boolean false on a job. The
+  one other value is the pull_request expression, and only on the top-level
+  pull_request block. On a job it is refused: a job group every run shares would
+  let a pull request run cancel a push run, and the per-pull-request group is
+  the workflow's own group. Anything else (true, a string, "false", an
+  expression, null) is refused.
+- A job whose group is the workflow's top-level group is refused: GitHub keeps
+  one group namespace for a workflow run and its jobs, so the job would wait on
+  its own run.
 
 Every check fails closed: a file that does not parse, whose top level is not a
 mapping, whose trigger block is missing or unreadable, or whose concurrency
@@ -67,11 +75,13 @@ ABSENT = object()
 # The only ${{ }} terms a run-keyed group may be built from. The run id is
 # accepted only as one of these, never as text in a literal or a quoted string.
 EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
-RUN_KEYED_TERMS = {
-    "github.workflow",
-    "github.run_id",
-    "github.event.pull_request.number || github.run_id",
-}
+RUN_KEYED_TERMS = {"github.workflow", "github.run_id"}
+# The pull request number falls back to the run id, so it keeps runs apart only
+# in a workflow that has a pull_request trigger. The review events carry the
+# number too, with no fallback, so there it would put every run for one pull
+# request in one group.
+PR_NUMBER_TERM = "github.event.pull_request.number || github.run_id"
+PR_NUMBER_TRIGGERS = {"pull_request_review", "pull_request_review_comment"}
 
 BOOL_TAG = "tag:yaml.org,2002:bool"
 MERGE_TAG = "tag:yaml.org,2002:merge"
@@ -87,7 +97,28 @@ class Unclassifiable(Exception):
 
 
 class WorkflowLoader(yaml.SafeLoader):
-    """SafeLoader that refuses duplicate and merge keys and reads booleans as YAML 1.2."""
+    """SafeLoader that refuses explicit tags, duplicate and merge keys, and reads booleans as YAML 1.2."""
+
+    def refuse_explicit_tag(self) -> None:
+        # The next event is the node about to be composed. An explicit tag
+        # (`!!bool`, `!!str`, a bare `!`) overrides the resolver below, and
+        # PyYAML applies its YAML 1.1 table to `!!bool "off"`; how GitHub reads
+        # a tagged scalar is unverified, so the file is refused.
+        tag = getattr(self.peek_event(), "tag", None)
+        if tag is not None:
+            raise StrictYamlError(f"explicit tag {tag!r} is refused")
+
+    def compose_scalar_node(self, anchor):
+        self.refuse_explicit_tag()
+        return super().compose_scalar_node(anchor)
+
+    def compose_sequence_node(self, anchor):
+        self.refuse_explicit_tag()
+        return super().compose_sequence_node(anchor)
+
+    def compose_mapping_node(self, anchor):
+        self.refuse_explicit_tag()
+        return super().compose_mapping_node(anchor)
 
     def construct_mapping(self, node, deep=False):
         if isinstance(node, yaml.MappingNode):
@@ -141,23 +172,36 @@ def trigger_names(data: dict) -> set[str]:
     raise Unclassifiable(f"trigger block has a form the test cannot read: {trigger!r}")
 
 
-def run_keyed(group: object) -> bool:
-    """True when the group is literal text plus whitelisted terms, with the run id as a term."""
+def run_keyed(group: object, pull_request: bool) -> bool:
+    """True when the group is literal text plus whitelisted terms, with the run id as a term.
+
+    The pull request number term is a whitelisted term only when pull_request is true.
+    """
     if not isinstance(group, str):
         return False
     terms = [" ".join(body.split()) for body in EXPRESSION.findall(group)]
     literal = EXPRESSION.sub("", group)
     if "${{" in literal or "}}" in literal:
         return False
-    return all(term in RUN_KEYED_TERMS for term in terms) and any("github.run_id" in term for term in terms)
+    allowed = RUN_KEYED_TERMS | ({PR_NUMBER_TERM} if pull_request else set())
+    return all(term in allowed for term in terms) and any("github.run_id" in term for term in terms)
 
 
-def cancel_problem(where: str, config: dict, allow_pr_expression: bool) -> str | None:
-    """None when this concurrency mapping's cancel-in-progress is allowed, else why not."""
+def canonical(group: object) -> object:
+    """The group with the spacing inside each ${{ }} normalised, so two spellings of one group compare equal."""
+    if not isinstance(group, str):
+        return group
+    return EXPRESSION.sub(lambda match: "${{ " + " ".join(match.group(1).split()) + " }}", group)
+
+
+def cancel_problem(where: str, config: dict) -> str | None:
+    """None when this concurrency mapping's cancel-in-progress is absent or false, else why not.
+
+    The pull_request expression is not allowed here: it is allowed only on the
+    top-level pull_request block, which top_level_problems checks by equality.
+    """
     value = config.get("cancel-in-progress", ABSENT)
     if value is ABSENT or value is False:
-        return None
-    if allow_pr_expression and value == PR_EXPRESSION:
         return None
     return f"{where} cancel-in-progress is {value!r}, which may cancel a non-pull_request run"
 
@@ -181,41 +225,49 @@ def top_level_problems(name: str, config: object, pull_request: bool) -> list[st
         return []
     found = []
     group = config.get("group")
-    if not run_keyed(group):
+    if not run_keyed(group, False):
         found.append(f"{name}: top-level group is shared across runs, or not run-keyed: {group!r}")
-    problem = cancel_problem("top-level", config, False)
+    problem = cancel_problem("top-level", config)
     if problem:
         found.append(f"{name}: {problem}")
     return found
 
 
-def merge_group_problems(name: str, data: dict) -> list[str]:
+def merge_group_problems(name: str, data: dict, pull_request: bool) -> list[str]:
     config = data.get("concurrency")
     group = config.get("group") if isinstance(config, dict) else None
     if not isinstance(group, str):
         return [f"{name}: merge_group workflow has no top-level group"]
     found = []
-    if not run_keyed(group):
+    if not run_keyed(group, pull_request):
         found.append(f"{name}: merge_group group is not keyed on the run id: {group!r}")
     if "github.ref" in group:
         found.append(f"{name}: merge_group group is keyed on the ref: {group!r}")
     return found
 
 
-def job_problems(name: str, job_name: str, job: dict, pull_request: bool) -> list[str]:
+def job_problems(name: str, job_name: str, job: dict, top_group: object) -> list[str]:
+    """A job never cancels, and never takes the workflow's own group.
+
+    The pull_request expression is refused here: a job group every run shares lets
+    a pull request run cancel a push run, and the per-pull-request group is the
+    workflow's own group, so the job would wait on its own run.
+    """
     where = f"job {job_name}"
     problem = shape_problem(where, job["concurrency"])
     if problem:
         return [f"{name}: {problem}"]
     config = job["concurrency"]
-    allow = pull_request and "environment" not in job
-    if allow and config.get("cancel-in-progress") == PR_EXPRESSION and config.get("group") != PR_GROUP:
-        return [
-            f"{name}: {where} cancel-in-progress is the pull_request expression but its group is not keyed per "
-            f"pull request: {config.get('group')!r}"
-        ]
-    problem = cancel_problem(where, config, allow)
-    return [f"{name}: {problem}"] if problem else []
+    found = []
+    group = config.get("group")
+    if isinstance(group, str) and isinstance(top_group, str) and canonical(group) == canonical(top_group):
+        found.append(
+            f"{name}: {where} has the same group as the workflow, so it would wait on its own run: {group!r}"
+        )
+    problem = cancel_problem(where, config)
+    if problem:
+        found.append(f"{name}: {problem}")
+    return found
 
 
 def violations(name: str, text: str) -> list[str]:
@@ -240,8 +292,15 @@ def violations(name: str, text: str) -> list[str]:
         found += top_level_problems(name, data["concurrency"], pull_request)
     elif pull_request:
         found.append(f"{name}: pull_request workflow has no top-level concurrency block")
+    if pull_request and names & PR_NUMBER_TRIGGERS:
+        found.append(
+            f"{name}: {sorted(names & PR_NUMBER_TRIGGERS)} carries a pull request number with no fallback, "
+            "so its runs for one pull request would share the per-pull-request group"
+        )
     if "merge_group" in names:
-        found += merge_group_problems(name, data)
+        found += merge_group_problems(name, data, pull_request)
+    top = data.get("concurrency")
+    top_group = top.get("group") if isinstance(top, dict) else None
     jobs = data.get("jobs")
     if not isinstance(jobs, dict):
         return found + [f"{name}: jobs is not a mapping"]
@@ -249,7 +308,7 @@ def violations(name: str, text: str) -> list[str]:
         if not isinstance(job, dict):
             found.append(f"{name}: job {job_name} is not a mapping")
         elif "concurrency" in job:
-            found += job_problems(name, job_name, job, pull_request)
+            found += job_problems(name, job_name, job, top_group)
     return found
 
 
@@ -437,23 +496,24 @@ REFUSED = {
         "on:\n  merge_group:\nconcurrency:\n  group: ${{ github.run_id }}-${{ github.ref }}\n" + JOBS,
         "merge_group group is keyed on the ref",
     ),
-    # Cycle 4, finding 1: the pull_request expression on a job needs a group
-    # keyed per pull request, or a pull request run cancels a push run in the
-    # group every run shares.
+    # Cycle 4, finding 1 and cycle 5, finding 1: the pull_request expression is
+    # refused on every job. A job group shared by every run lets a pull request
+    # run cancel a push run, and the per-pull-request group is the workflow's own
+    # group, which a job would wait on for its own run.
     "g1-mixed-triggers-shared-job-group": (
         PUSH_PR_ON + PR_BLOCK + JOBS_WITH_CHECK_GROUP,
-        "not keyed per pull request",
+        "job check cancel-in-progress is",
     ),
     "g1-pull-request-only-shared-job-group": (
         PR_ON + PR_BLOCK + JOBS_WITH_CHECK_GROUP,
-        "not keyed per pull request",
+        "job check cancel-in-progress is",
     ),
     "g1-job-group-keyed-on-the-ref": (
         PUSH_PR_ON
         + PR_BLOCK
         + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
         + job_concurrency(PR_EXPRESSION, "${{ github.workflow }}-${{ github.ref }}"),
-        "not keyed per pull request",
+        "job check cancel-in-progress is",
     ),
     "g1-job-group-without-a-group": (
         PUSH_PR_ON
@@ -461,7 +521,38 @@ REFUSED = {
         + "jobs:\n  check:\n    runs-on: ubuntu-latest\n    concurrency:\n      cancel-in-progress: "
         + PR_EXPRESSION
         + "\n",
-        "not keyed per pull request",
+        "job check cancel-in-progress is",
+    ),
+    # Cycle 5, finding 1: the two shapes cycle 4 accepted are refused.
+    "h1-job-expression-with-the-per-pr-group": (
+        PR_ON + PR_BLOCK + "jobs:\n  check:\n    runs-on: ubuntu-latest\n" + job_concurrency(PR_EXPRESSION, PR_GROUP),
+        "job check cancel-in-progress is",
+    ),
+    "h1-job-expression-with-the-per-pr-group-mixed": (
+        PUSH_PR_ON + PR_BLOCK + "jobs:\n  check:\n    runs-on: ubuntu-latest\n" + job_concurrency(PR_EXPRESSION, PR_GROUP),
+        "job check cancel-in-progress is",
+    ),
+    "h1-job-group-equals-the-workflow-group-never-cancels": (
+        PR_ON + PR_BLOCK + "jobs:\n  check:\n    runs-on: ubuntu-latest\n" + job_concurrency("false", PR_GROUP),
+        "same group as the workflow",
+    ),
+    "h1-job-group-equals-the-workflow-group-no-cancel-key": (
+        PR_ON + PR_BLOCK + "jobs:\n  check:\n    runs-on: ubuntu-latest\n    concurrency:\n      group: " + PR_GROUP + "\n",
+        "same group as the workflow",
+    ),
+    "h1-push-job-group-equals-the-workflow-group": (
+        PUSH_ON
+        + "concurrency:\n  group: x-${{ github.run_id }}\n  cancel-in-progress: false\n"
+        + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
+        + job_concurrency("false", "x-${{ github.run_id }}"),
+        "same group as the workflow",
+    ),
+    "h1-job-group-equals-the-workflow-group-spaced-differently": (
+        PUSH_ON
+        + "concurrency:\n  group: x-${{ github.run_id }}\n  cancel-in-progress: false\n"
+        + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
+        + job_concurrency("false", "x-${{github.run_id}}"),
+        "same group as the workflow",
     ),
     # Cycle 4, finding 2: the run id counts only as a term inside ${{ }}.
     "g2-literal-run-id-text": (
@@ -491,6 +582,52 @@ REFUSED = {
     "g2-merge-group-quoted-run-id": (
         "on:\n  merge_group:\nconcurrency:\n  group: ${{ '${{ github.run_id }}' }}\n" + JOBS,
         "merge_group group is not keyed on the run id",
+    ),
+    # Cycle 5, finding 2: the pull request number term is allowed only in a
+    # workflow with a pull_request trigger. Review events carry the number too,
+    # so every run for one pull request would share a group.
+    "h2-push-group-with-the-pr-number-term": (
+        PUSH_ON + f"concurrency:\n  group: {PR_GROUP}\n  cancel-in-progress: false\n" + JOBS,
+        "shared across runs",
+    ),
+    "h2-pull-request-review-group-with-the-pr-number-term": (
+        "on:\n  pull_request_review:\n" + f"concurrency:\n  group: {PR_GROUP}\n  cancel-in-progress: false\n" + JOBS,
+        "shared across runs",
+    ),
+    "h2-pull-request-review-comment-group-with-the-pr-number-term": (
+        "on:\n  pull_request_review_comment:\n" + f"concurrency:\n  group: {PR_GROUP}\n  cancel-in-progress: false\n" + JOBS,
+        "shared across runs",
+    ),
+    "h2-merge-group-with-the-pr-number-term": (
+        f"on:\n  merge_group:\nconcurrency:\n  group: {PR_GROUP}\n" + JOBS,
+        "merge_group group is not keyed on the run id",
+    ),
+    "h2-pull-request-plus-review-trigger": (
+        "on:\n  pull_request:\n  pull_request_review:\n" + PR_BLOCK + JOBS,
+        "share the per-pull-request group",
+    ),
+    "h2-pull-request-plus-review-comment-trigger": (
+        "on:\n  - pull_request\n  - pull_request_review_comment\n" + PR_BLOCK + JOBS,
+        "share the per-pull-request group",
+    ),
+    # Cycle 5, finding 3: an explicit tag overrides the resolver, and PyYAML
+    # still applies its YAML 1.1 table to !!bool.
+    "h3-explicit-bool-off": (PUSH_ON + deploy_jobs(job_concurrency('!!bool "off"')), "explicit tag"),
+    "h3-explicit-bool-no": (PUSH_ON + deploy_jobs(job_concurrency("!!bool 'no'")), "explicit tag"),
+    "h3-explicit-bool-false": (PUSH_ON + deploy_jobs(job_concurrency("!!bool false")), "explicit tag"),
+    "h3-explicit-str-true": (PUSH_ON + deploy_jobs(job_concurrency("!!str true")), "explicit tag"),
+    "h3-non-specific-tag": (PUSH_ON + deploy_jobs(job_concurrency("! false")), "explicit tag"),
+    "h3-explicit-tag-on-a-key": (
+        PUSH_ON + deploy_jobs("    concurrency:\n      group: deploy\n      !!str cancel-in-progress: true\n"),
+        "explicit tag",
+    ),
+    "h3-explicit-tag-on-a-mapping": (
+        PUSH_ON + deploy_jobs("    concurrency: !!map\n      group: deploy\n      cancel-in-progress: true\n"),
+        "explicit tag",
+    ),
+    "h3-explicit-tag-on-a-sequence": (
+        "on: !!seq [push]\n" + JOBS,
+        "explicit tag",
     ),
     # Finding 3: where PyYAML and GitHub could read a file differently.
     "f3-duplicate-cancel-key-top-level": (
@@ -537,18 +674,18 @@ ACCEPTED = {
     + "concurrency:\n  group: x-${{ github.run_id }}\n  cancel-in-progress: false\n"
     + JOBS,
     "a run-keyed merge_group workflow": "on:\n  merge_group:\nconcurrency:\n  group: ${{ github.workflow }}-${{ github.run_id }}\n" + JOBS,
-    "the pull_request expression on a job whose group is keyed per pull request": PR_ON
-    + PR_BLOCK
-    + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
-    + job_concurrency(PR_EXPRESSION, PR_GROUP),
-    "the same job in a push and pull_request workflow": PUSH_PR_ON
-    + PR_BLOCK
-    + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
-    + job_concurrency(PR_EXPRESSION, PR_GROUP),
-    "a run-keyed group with the pull request number fallback": PUSH_ON
-    + "concurrency:\n  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}\n"
-    + JOBS,
     "a never-cancelling job in a pull_request workflow": PR_ON + PR_BLOCK + deploy_jobs(job_concurrency("false")),
+    "a job with its own group and no cancel key in a pull_request workflow": PR_ON
+    + PR_BLOCK
+    + "jobs:\n  check:\n    runs-on: ubuntu-latest\n    concurrency:\n      group: check\n",
+    "a job group that differs from the run-keyed workflow group": PUSH_ON
+    + "concurrency:\n  group: x-${{ github.run_id }}\n  cancel-in-progress: false\n"
+    + "jobs:\n  check:\n    runs-on: ubuntu-latest\n"
+    + job_concurrency("false", "y-${{ github.run_id }}"),
+    "a '!' inside plain text is not a tag": PUSH_ON
+    + "jobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo !!bool !important\n",
+    "a quoted string that starts with '!!'": PUSH_ON
+    + deploy_jobs('    concurrency: {group: "!!bool off", cancel-in-progress: false}\n'),
 }
 
 
