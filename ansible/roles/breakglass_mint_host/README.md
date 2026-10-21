@@ -131,14 +131,21 @@ for the tool and the image stay as the fallback.
   tasks file or a library cannot add a route to the key that those checks do not
   read.
 - **Every stat asks for metadata only, under any name.** The test reads the parsed
-  tasks of this role and of `playbooks/ops1.yml` (tasks and pre_tasks), and requires
-  `get_checksum`, `get_mime` and `get_attributes` to be false on every `stat`
-  whatever its name or path, and holds every module of both to the allow-list. So no
-  task in this role or in that playbook reads a file's content or checksum through
-  `stat`, and no task calls a module off the list. What it cannot prove is that a
-  deliberate edit does not read the key: every role is root code, so a check on its
-  text cannot stop one. That control is the review, and the owner's deploy approval
-  (ws#2483). The check catches an accident, not an edit made on purpose.
+  tasks of this role and of every play in `playbooks/ops1.yml`, in all four task
+  lists of each play (`pre_tasks`, `tasks`, `post_tasks` and `handlers`). It
+  requires `get_checksum`, `get_mime` and `get_attributes` to be false on every
+  `stat` whatever its name or path, and holds every module of both to the
+  allow-list. It also requires every entry of that file to be a play (an
+  `import_playbook` entry has no `hosts` and fails), so no task is brought in from
+  a file the test does not read. So no task in this role or in that playbook reads a
+  file's content or checksum through `stat`, and no task calls a module off the
+  list. The roles that `ops1.yml` lists are not read by this test: this role's own
+  tasks are, and any other role has its own test. What the test cannot prove is that
+  a deliberate edit does not read the key: every role is root code, so a check on its
+  text cannot stop one. The control for that is review plus the deployment approval
+  of the gated workflow that applies the role to the host; ws#2483 is where the
+  trust in that approval is examined, and it has no ruling yet. The check catches an
+  accident, not an edit made on purpose.
 - **Nothing in the role runs on the controller.** Under `ansible-pull` the
   controller is the host, so a `lookup`, `query`, `q` or `pipe` could read the key
   without a module the checks above see, in a quiet `assert` that prints nothing.
@@ -149,7 +156,11 @@ for the tool and the image stay as the fallback.
 - **`command` is used for `docker`.** The Docker modules need the Docker API
   library on the host, which these hosts do not carry (ANS-9). The probes are
   read-only, so they run in check mode; the pull runs only after a probe finds the
-  digest absent.
+  digest absent. The test holds every command task to one of three exact shapes:
+  `/usr/bin/docker --version`, `/usr/bin/docker pull -q <image>` and
+  `/usr/bin/docker image inspect --format <format> <image>` (the plan names the
+  inspect shape without its `--format` argument; the role has always passed it, and
+  the test holds it to what the role runs).
 - **Check mode.** The pull is skipped in check mode when the digest is absent,
   and the read-back after the pull is skipped in check mode, because nothing was
   pulled to read. The download is skipped in check mode on a fresh host, where the
