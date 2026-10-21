@@ -8,6 +8,7 @@ and imported from a temporary directory: this repository keeps no copy. The READ
 import ast
 import atexit
 import hashlib
+import http.client
 import importlib
 import json
 import re
@@ -52,7 +53,7 @@ def fetch_bytes(url: str) -> bytes:
     for attempt in range(1, FETCH_ATTEMPTS):
         try:
             body = read_url(url)
-        except OSError:
+        except (OSError, http.client.HTTPException):
             time.sleep(FETCH_BACKOFF_SECONDS * attempt)
         else:
             return body

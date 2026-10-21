@@ -120,7 +120,6 @@ jobs:
             hetzner/nextcloud1/stack/
             hetzner/nextcloud1/systemd/nextcloud1.override.conf
             hetzner/control-plane/stack/
-            hetzner/provision/test_compose_unit_contract.py
           )
           files=$(git diff --name-only "$base" HEAD -- "${watched[@]}")
           if [ -n "$files" ]; then

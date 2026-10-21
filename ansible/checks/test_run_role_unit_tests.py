@@ -141,6 +141,30 @@ class RoleUnitTestScript(unittest.TestCase):
         self.assert_red(result)
         self.assertIn("test_library_value", result.stdout)
 
+    def test_an_unset_python_aborts_and_names_the_variable(self) -> None:
+        role_with_test(self.ansible, "alpha", PASSING)
+        env = {key: value for key, value in os.environ.items() if key != "PYTHON"}
+        result = subprocess.run(  # noqa: S603 - the fixed script in this repository
+            [str(SCRIPT), str(self.ansible)],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("PYTHON must name the interpreter", result.stderr)
+
+    def test_a_wrong_argument_count_exits_2_with_usage(self) -> None:
+        result = subprocess.run(  # noqa: S603 - the fixed script in this repository
+            [str(SCRIPT)],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHON": sys.executable},
+            check=False,
+        )
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn("usage: run_role_unit_tests.sh", result.stderr)
+
 
 class WorkflowCallsTheScript(unittest.TestCase):
     def setUp(self) -> None:

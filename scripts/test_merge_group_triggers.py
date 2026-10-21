@@ -155,8 +155,15 @@ class MergeGroupTriggerTests(unittest.TestCase):
         steps = [part for part in lint.split("\n      - name: ") if part.startswith("Run every role's unit tests")]
         self.assertEqual(1, len(steps), "the lint job must hold exactly one role unit step")
         self.assertNotIn("if:", steps[0])
-        self.assertIn("\n        run: 'PYTHON=", steps[0])
-        self.assertIn("ansible/checks/run_role_unit_tests.sh ansible", steps[0])
+        # The run line is exact: a trailing `|| true` or a continue-on-error on the step or
+        # the job would let a failing role test pass the gate, so neither may appear.
+        run_lines = [line for line in steps[0].splitlines() if line.strip().startswith("run:")]
+        self.assertEqual(
+            ["        run: 'PYTHON=\"$RUNNER_TEMP/ansible-venv/bin/python\" ansible/checks/run_role_unit_tests.sh ansible'"],
+            run_lines,
+        )
+        self.assertNotIn("continue-on-error", steps[0])
+        self.assertNotIn("continue-on-error", lint)
 
 
 if __name__ == "__main__":
