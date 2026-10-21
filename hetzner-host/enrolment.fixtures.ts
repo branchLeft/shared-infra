@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { Enrolment, PullBootstrap } from './cloudInit';
+import fixed from './pullBootstrapFixed.json';
 
 /**
  * Values the enrolment tests build their documents from. Not part of the
@@ -23,12 +24,11 @@ cLRaFQoSJoVfOt61opkLUzbWAehpbgT8EKln8JsENq0+0nDlWQi0h2Q9oGmqlgVz
 -----END PGP PUBLIC KEY BLOCK-----
 `;
 
-export const REPOSITORY_RAW = 'https://raw.githubusercontent.com/branchLeft/shared-infra';
-export const PATHS = {
-  wrapper: 'ansible/roles/pull_trigger/files/pull_trigger.py',
-  program: 'ansible/roles/ansible_runtime/files/install_runtime.py',
-  lock: 'ansible/requirements.txt',
-} as const;
+// The record's fixed values are read from their one home, as the code and the tool read them.
+export const REPOSITORY_RAW = fixed.rawBase;
+export const PATHS = fixed.fetched;
+export const EDGE_PLAYBOOK = fixed.playbook;
+export const REMOTE_URL = fixed.remoteUrl;
 export const FILE_NAMES = {
   wrapper: 'pull_trigger.py',
   program: 'install_runtime.py',
@@ -47,9 +47,9 @@ export function configText(overrides: Record<string, unknown> = {}): string {
     ansible_playbook: '/usr/local/bin/ansible-playbook',
     keep_runs: 50,
     log_dir: '/var/log/pull-trigger',
-    playbook: 'ansible/playbooks/edge1.yml',
-    playbooks: ['ansible/playbooks/edge1.yml'],
-    remote_url: 'https://github.com/branchLeft/shared-infra.git',
+    playbook: EDGE_PLAYBOOK,
+    playbooks: [EDGE_PLAYBOOK],
+    remote_url: REMOTE_URL,
     signers: [{ format: 'openpgp', key: PGP_PUBLIC_KEY }],
     state_dir: '/var/lib/pull-trigger',
     timeout_seconds: 3600,

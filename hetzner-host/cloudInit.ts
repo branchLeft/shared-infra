@@ -1,5 +1,7 @@
 import * as pulumi from '@pulumi/pulumi';
 
+import fixed from './pullBootstrapFixed.json';
+
 /**
  * The first-boot user-data every platform host is created with.
  *
@@ -81,7 +83,7 @@ export interface PullBootstrap {
   wrapper: PullBootstrapFile;
   /** The program that installs the pinned, hash-locked Ansible. */
   program: PullBootstrapFile;
-  /** `ansible/requirements.txt`. */
+  /** The hash-locked requirements of the pinned Ansible. */
   lock: PullBootstrapFile;
   /** The exact text of the pull program's `config.json`. */
   config: string;
@@ -324,14 +326,13 @@ export const PRODUCTION_LAYOUT: EnrolmentLayout = {
   ownerFlags: '-o root -g root',
 };
 
-const REPOSITORY_RAW = 'https://raw.githubusercontent.com/branchLeft/shared-infra';
-const REMOTE_URL = 'https://github.com/branchLeft/shared-infra.git';
-const EDGE_PLAYBOOK = 'ansible/playbooks/edge1.yml';
-const FETCHED_PATHS = {
-  wrapper: 'ansible/roles/pull_trigger/files/pull_trigger.py',
-  program: 'ansible/roles/ansible_runtime/files/install_runtime.py',
-  lock: 'ansible/requirements.txt',
-} as const;
+// The values the record's checks hold fixed live once, in `pullBootstrapFixed.json`.
+// `ansible/tools/pull_bootstrap.py` reads the same file to build the record, so a
+// path that moves is changed in one place and not in two languages.
+const REPOSITORY_RAW = fixed.rawBase;
+const REMOTE_URL = fixed.remoteUrl;
+const EDGE_PLAYBOOK = fixed.playbook;
+const FETCHED_PATHS = fixed.fetched;
 const COMMIT_HEX = /^[0-9a-f]{40}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const CONFIG_HEREDOC = 'BRANCHLEFT_CONFIG_EOF';
@@ -340,17 +341,7 @@ const PGP_BEGIN = '-----BEGIN PGP PUBLIC KEY BLOCK-----';
 const PGP_END = '-----END PGP PUBLIC KEY BLOCK-----';
 const PGP_PUBLIC_KEY_TAG = 6;
 const LAYOUT_VALUE = /^[A-Za-z0-9_./-]+$/;
-const REQUIRED_CONFIG_KEYS = [
-  'remote_url',
-  'signers',
-  'playbooks',
-  'playbook',
-  'ansible_playbook',
-  'state_dir',
-  'log_dir',
-  'timeout_seconds',
-  'keep_runs',
-] as const;
+const REQUIRED_CONFIG_KEYS: readonly string[] = fixed.requiredConfigKeys;
 
 type PlainRecord = Record<string, unknown>;
 
@@ -637,7 +628,13 @@ users:
 ${USERS_DEFAULT_ENTRY}
   # Root's keys are written here and not through write_files, so the key the
   # datasource injects for the owner stays: write_files would replace the file.
+  #
+  # lock_passwd defaults to true in cloud-init and is applied to an account
+  # that already exists, which would lock root's password. Key access is not
+  # affected, but the provider console login is the break-glass way in when
+  # sshd is down, so this entry leaves the password as the image has it.
   - name: root
+    lock_passwd: false
     ssh_authorized_keys:
       - ${JSON.stringify(applyLine)}
       - ${JSON.stringify(checkLine)}

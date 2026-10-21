@@ -105,6 +105,7 @@ jobs:
             hetzner/provision/30-install-deploy-tooling.sh
             hetzner/provision/app-host-isolation.sh
             hetzner-host/cloudInit.ts
+            hetzner-host/pullBootstrapFixed.json
             hetzner/scripts/check-address-plan-drift.py
             hetzner/provision/branchleft_host_egress.sh
             hetzner/provision/branchleft-host-egress.service
@@ -220,7 +221,8 @@ jobs:
 
       # The tools build the record a new host's first-boot document is made from. Their
       # tests run the role's own configuration task with this job's ansible-playbook and
-      # compare bytes, and read hetzner-host/cloudInit.ts, which the filter above names.
+      # compare bytes, and read hetzner-host/cloudInit.ts and the fixed values it shares with
+      # the tool, hetzner-host/pullBootstrapFixed.json; the filter above names both.
       # The interpreter is the venv's, so ansible-playbook is found beside it.
       - name: Test the tools
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/tools -p "test_*.py"'

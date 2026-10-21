@@ -39,24 +39,91 @@ from typing import Final
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-REPOSITORY: Final = "branchLeft/shared-infra"
-RAW_BASE: Final = "https://raw.githubusercontent.com"
 REMOTE: Final = "origin"
 MAIN_BRANCH: Final = "main"
 SCHEMA: Final = 1
 
+# The values the record holds fixed (where the files are served from, which files, the one
+# playbook, the keys the configuration needs) are written once, in this JSON file. The
+# first-boot document's TypeScript (hetzner-host/cloudInit.ts) imports the same file, so a
+# path that moves is changed in one place and not in two languages.
+FIXED_PATH: Final = Path(__file__).resolve().parents[2] / "hetzner-host" / "pullBootstrapFixed.json"
+
+
+class BootstrapError(Exception):
+    """The record cannot be built, or the inputs are not what the tool is built for."""
+
+
+def load_fixed(path: Path) -> dict[str, object]:
+    """Return the fixed values of the record, read from their one home.
+
+    Raises:
+        BootstrapError: The file cannot be read or is not a JSON object.
+    """
+    try:
+        loaded: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        message = f"{path} cannot be read as JSON: {type(error).__name__}"
+        raise BootstrapError(message) from error
+    if not isinstance(loaded, dict) or not all(isinstance(key, str) for key in loaded):
+        message = f"{path} is not a JSON object"
+        raise BootstrapError(message)
+    return {str(key): value for key, value in loaded.items()}
+
+
+def fixed_text(fixed: Mapping[str, object], key: str) -> str:
+    """Return one fixed value that must be a string.
+
+    Raises:
+        BootstrapError: The value is absent or not a string.
+    """
+    value = fixed.get(key)
+    if not isinstance(value, str):
+        message = f"{FIXED_PATH.name} has no string {key}"
+        raise BootstrapError(message)
+    return value
+
+
+def fixed_strings(fixed: Mapping[str, object], key: str) -> dict[str, str]:
+    """Return one fixed value that must be an object whose values are strings.
+
+    Raises:
+        BootstrapError: The value is absent, or not an object of strings.
+    """
+    value = fixed.get(key)
+    if not isinstance(value, dict) or not all(
+        isinstance(name, str) and isinstance(item, str) for name, item in value.items()
+    ):
+        message = f"{FIXED_PATH.name} has no object of strings {key}"
+        raise BootstrapError(message)
+    return {str(name): str(item) for name, item in value.items()}
+
+
+def fixed_names(fixed: Mapping[str, object], key: str) -> frozenset[str]:
+    """Return one fixed value that must be a list of strings.
+
+    Raises:
+        BootstrapError: The value is absent, or not a list of strings.
+    """
+    value = fixed.get(key)
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        message = f"{FIXED_PATH.name} has no list of strings {key}"
+        raise BootstrapError(message)
+    return frozenset(str(item) for item in value)
+
+
+_FIXED: Final = load_fixed(FIXED_PATH)
+RAW_BASE: Final = fixed_text(_FIXED, "rawBase")
+REMOTE_URL: Final = fixed_text(_FIXED, "remoteUrl")
+PLAYBOOK_PATH: Final = fixed_text(_FIXED, "playbook")
 # The three files a host fetches, by the name the record gives them.
-FETCHED: Final = {
-    "wrapper": "ansible/roles/pull_trigger/files/pull_trigger.py",
-    "program": "ansible/roles/ansible_runtime/files/install_runtime.py",
-    "lock": "ansible/requirements.txt",
-}
+FETCHED: Final = fixed_strings(_FIXED, "fetched")
+REQUIRED_CONFIG_KEYS: Final = fixed_names(_FIXED, "requiredConfigKeys")
 
 DEFAULTS_PATH: Final = "ansible/roles/pull_trigger/defaults/main.yml"
 VARS_PATH: Final = "ansible/roles/pull_trigger/vars/main.yml"
 TASKS_PATH: Final = "ansible/roles/pull_trigger/tasks/main.yml"
 GROUP_VARS_PATH: Final = "ansible/inventories/production/group_vars/edge/pull_trigger.yml"
-PLAYBOOK_PATH: Final = "ansible/playbooks/edge1.yml"
 INPUTS: Final = (DEFAULTS_PATH, VARS_PATH, TASKS_PATH, GROUP_VARS_PATH, PLAYBOOK_PATH)
 
 CONFIG_TASK_NAME: Final = "Write the configuration"
@@ -65,23 +132,6 @@ CONFIG_VARIABLE: Final = "pull_trigger_config"
 VALUE_EXPRESSION: Final = re.compile(r"\{\{ (?P<name>pull_trigger_[a-z_]+)(?P<int> \| int)? \}\}")
 COMMIT: Final = re.compile(r"[0-9a-f]{40}")
 SHA256: Final = re.compile(r"[0-9a-f]{64}")
-REQUIRED_CONFIG_KEYS: Final = frozenset(
-    {
-        "remote_url",
-        "signers",
-        "playbooks",
-        "playbook",
-        "ansible_playbook",
-        "state_dir",
-        "log_dir",
-        "timeout_seconds",
-        "keep_runs",
-    }
-)
-
-
-class BootstrapError(Exception):
-    """The record cannot be built, or the inputs are not what the tool is built for."""
 
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
@@ -254,6 +304,9 @@ def check_config(config: Mapping[str, object]) -> None:
     if playbook != PLAYBOOK_PATH or playbooks != [PLAYBOOK_PATH]:
         message = f"only {PLAYBOOK_PATH} is allowed, as the host's one playbook"
         raise BootstrapError(message)
+    if config["remote_url"] != REMOTE_URL:
+        message = f"the remote is not {REMOTE_URL}"
+        raise BootstrapError(message)
 
 
 def check_playbook(playbook_text: str) -> None:
@@ -330,7 +383,7 @@ def blob_sha256(repo: Path, commit: str, path: str) -> str:
 
 def raw_url(commit: str, path: str) -> str:
     """Return the address of a file at a commit."""
-    return f"{RAW_BASE}/{REPOSITORY}/{commit}/{path}"
+    return f"{RAW_BASE}/{commit}/{path}"
 
 
 def repository_config(repo: Path) -> str:

@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -51,20 +52,33 @@ class FakeRunner:
     """Records each command and plays the part of python -m venv and pip."""
 
     def __init__(
-        self, *, pip_status: int = 0, venv_status: int = 0, make_engine: bool = True
+        self,
+        *,
+        pip_status: int = 0,
+        venv_status: int = 0,
+        make_engine: bool = True,
+        half_made: bool = False,
     ) -> None:
         self.calls: list[tuple[tuple[str, ...], dict[str, str]]] = []
         self.pip_status = pip_status
         self.venv_status = venv_status
         self.make_engine = make_engine
+        # python -m venv puts bin/python down, then fails in ensurepip before bin/pip exists.
+        self.half_made = half_made
 
     def __call__(self, argv: Sequence[str], env: Mapping[str, str]) -> int:
         self.calls.append((tuple(argv), dict(env)))
         if argv[1:3] == ["-m", "venv"]:
-            if self.venv_status == 0:
-                bin_dir = Path(argv[3]) / "bin"
-                bin_dir.mkdir(parents=True)
+            target = Path(argv[-1])
+            if "--clear" in argv and target.exists():
+                shutil.rmtree(target)
+            if self.venv_status == 0 or self.half_made:
+                bin_dir = target / "bin"
+                bin_dir.mkdir(parents=True, exist_ok=True)
                 (bin_dir / "python").write_text("")
+                if not self.half_made:
+                    (bin_dir / "pip").write_text("")
+                    (bin_dir / "pip").chmod(0o755)
             return self.venv_status
         if argv[1] == "install":
             if self.pip_status == 0 and self.make_engine:
@@ -353,6 +367,31 @@ class StepsTest(Case):
         outcome = program.install(self.request(), runner)
         self.assertTrue(outcome.installed)
         self.assertEqual(1, len(runner.calls), "the environment exists, so only pip runs again")
+
+    def test_a_venv_that_failed_after_bin_python_is_made_again_on_the_next_run(self) -> None:
+        name = program.fingerprint(LOCK_A)
+        venv = self.root / f"venv-{name}"
+        self.refused(self.request(), FakeRunner(venv_status=1, half_made=True), program.Reason.VENV)
+        self.assertTrue((venv / "bin" / "python").exists(), "the control: bin/python is left")
+        self.assertFalse((venv / "bin" / "pip").exists())
+        runner = FakeRunner()
+        outcome = program.install(self.request(), runner)
+        self.assertTrue(outcome.installed)
+        self.assertEqual(
+            ("/usr/bin/python3", "-m", "venv", "--clear", str(venv)),
+            runner.calls[0][0],
+            "the half-made directory is cleared, not reused",
+        )
+        self.assertTrue((venv / "bin" / "pip").exists())
+        self.assertEqual(2, len(runner.calls))
+
+    def test_a_first_venv_is_not_cleared_and_a_finished_one_is_not_made_again(self) -> None:
+        first = FakeRunner(pip_status=1)
+        self.refused(self.request(), first, program.Reason.PIP)
+        self.assertNotIn("--clear", first.calls[0][0])
+        again = FakeRunner()
+        program.install(self.request(), again)
+        self.assertEqual(1, len(again.calls), "pip is there, so only pip runs again")
 
     def test_a_marker_naming_another_lock_does_not_count(self) -> None:
         program.install(self.request(), FakeRunner())

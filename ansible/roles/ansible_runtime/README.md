@@ -52,6 +52,12 @@ installs by hand. It never falls back to an engine that is not the locked one.
 The role's own link task stays last in `tasks/main.yml`, so the role is the one
 place that decides the link moves.
 
+A run that dies part-way recovers by being run again. The environment is made
+when its `bin/pip` is not executable, and pip is the last thing `python -m venv`
+puts down, so a venv that failed after `bin/python` and before pip is cleared and
+made again (`--clear`, only when the directory already exists); one that has pip
+only runs pip again. Nothing needs removing by hand.
+
 It does not install the trigger (`pull_trigger` does), manage users, SSH keys or
 services, or hold any secret. It does not install the collections separately:
 they arrive inside the pinned `ansible` package (`ansible/README.md`).

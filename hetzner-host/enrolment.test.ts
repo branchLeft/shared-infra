@@ -28,6 +28,7 @@ import {
   bootstrap,
   CHECK_KEY,
   configText,
+  EDGE_PLAYBOOK,
   enrolment,
   FILE_NAMES,
   PATHS,
@@ -90,6 +91,13 @@ describe('the root authorized_keys lines (C1, C6)', () => {
     expect(users.indexOf('  - default')).toBeGreaterThan(-1);
     expect(users.indexOf('  - default')).toBeLessThan(users.indexOf('  - name: root'));
     expect(users).toContain('ssh_authorized_keys:');
+  });
+
+  it('leaves root with lock_passwd false, so cloud-init does not lock the console login', async () => {
+    const users = block(await enrolled(), 'users');
+    const root = users.slice(users.indexOf('  - name: root'));
+    expect(root).toMatch(/^ {4}lock_passwd: false$/m);
+    expect(root.indexOf('lock_passwd: false')).toBeLessThan(root.indexOf('ssh_authorized_keys:'));
   });
 
   it('writes the keys through users, not write_files, so the datasource key survives', async () => {
@@ -331,12 +339,12 @@ describe('the bootstrap record is checked before anything is rendered (C9)', () 
           playbooks: ['ansible/playbooks/db1.yml'],
         }),
       },
-      /playbook must be ansible\/playbooks\/edge1.yml/,
+      new RegExp(`playbook must be ${EDGE_PLAYBOOK.replace(/[.]/g, '\\.')}`),
     ],
     'a playbook allowlist with another playbook beside edge1': [
       {
         config: configText({
-          playbooks: ['ansible/playbooks/edge1.yml', 'ansible/playbooks/db1.yml'],
+          playbooks: [EDGE_PLAYBOOK, 'ansible/playbooks/db1.yml'],
         }),
       },
       /playbooks must be exactly/,

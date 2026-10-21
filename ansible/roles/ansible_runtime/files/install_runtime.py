@@ -268,12 +268,19 @@ def install_environment(
     if marker.is_file() and not marker.is_symlink() and marker.read_text() == f"{name}\n":
         return venv, False
     env = pip_environment()
-    if not (venv / "bin" / "python").exists() and run(
-        [request.python, "-m", "venv", str(venv)], env
-    ):
-        raise Refusal(Reason.VENV)
+    pip_path = venv / "bin" / "pip"
+    if not os.access(pip_path, os.X_OK):
+        # pip is what a finished venv has last: ``python -m venv`` puts bin/python down first
+        # and runs ensurepip after, so a venv that failed in between has the one and not the
+        # other. Without --clear the next run would find bin/python, skip this step, and fail
+        # on the missing pip every time, until someone removed the directory by hand.
+        make = [request.python, "-m", "venv", str(venv)]
+        if os.path.lexists(venv):
+            make.insert(3, "--clear")
+        if run(make, env):
+            raise Refusal(Reason.VENV)
     pip = [
-        str(venv / "bin" / "pip"),
+        str(pip_path),
         "install",
         "--require-virtualenv",
         "--require-hashes",

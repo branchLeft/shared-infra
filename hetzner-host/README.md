@@ -153,6 +153,16 @@ regenerated). With it:
   The package carries no copy of the record; the stack passes the one it was
   given with the package. The committed record, its drift check and its
   packaging are a separate change.
+- **The fixed values live once.** Where the files are served from, which three
+  files, the one playbook, the remote and the keys the configuration needs are in
+  `pullBootstrapFixed.json`. `cloudInit.ts` imports it (the build copies it into
+  `dist`) and `pull_bootstrap.py` reads it, so a path that moves is changed in one
+  file and neither side holds a copy; the tools' tests fail when either source
+  writes one of the values again.
+- **Root keeps its console login.** The `root` entry sets `lock_passwd: false`.
+  cloud-init defaults it to true and applies it to an account that already
+  exists, which would lock the password. Key access is unaffected either way; the
+  provider console is the break-glass way in when sshd is down.
 - **Packages.** `ENROLMENT_PACKAGES` is held equal to the two roles' lists
   (`pull_trigger`, `ansible_runtime`) less the base ones by the tools' tests.
   The engine itself is never in the list.

@@ -424,6 +424,11 @@ class ConfigRefusalTest(unittest.TestCase):
         )
         self.refuses("only ansible/playbooks/edge1.yml is allowed", group=group)
 
+    def test_another_remote_is_refused(self) -> None:
+        group = ConfigTexts.group.replace(tool.REMOTE_URL, "https://example.invalid/x.git")
+        self.assertNotEqual(group, ConfigTexts.group)
+        self.refuses("the remote is not", group=group)
+
     def test_an_empty_signer_list_is_refused(self) -> None:
         group = (
             ConfigTexts.group[: ConfigTexts.group.index("pull_trigger_signers:")]
@@ -579,6 +584,82 @@ class PackagesTest(unittest.TestCase):
         # A control: an empty result on both sides would also be equal.
         self.assertIn("python3-venv", self.ts_list("ENROLMENT_PACKAGES"))
         self.assertIn("git", self.ts_list("ENROLMENT_PACKAGES"))
+
+
+class FixedValuesTest(unittest.TestCase):
+    """The record's fixed values live once, in a file both languages read, and are true."""
+
+    @staticmethod
+    def values() -> list[str]:
+        return [tool.RAW_BASE, tool.REMOTE_URL, tool.PLAYBOOK_PATH, *tool.FETCHED.values()]
+
+    def test_the_typescript_imports_the_file_and_holds_no_copy_of_a_value(self) -> None:
+        source = CLOUD_INIT.read_text(encoding="utf-8")
+        self.assertIn(f"from './{tool.FIXED_PATH.name}'", source)
+        for value in self.values():
+            with self.subTest(value=value):
+                self.assertFalse(value in source, f"cloudInit.ts writes {value} a second time")
+
+    def test_the_tool_holds_no_copy_of_a_value(self) -> None:
+        source = (ROOT / "ansible" / "tools" / "pull_bootstrap.py").read_text(encoding="utf-8")
+        for value in self.values():
+            with self.subTest(value=value):
+                self.assertFalse(value in source, f"pull_bootstrap.py writes {value} a second time")
+
+    def test_the_scan_finds_what_it_is_meant_to_find(self) -> None:
+        # A control: a scan that read the wrong file would find no copy in any case.
+        self.assertIn(tool.PLAYBOOK_PATH, tool.FIXED_PATH.read_text(encoding="utf-8"))
+        self.assertIn("pullBootstrapFixed.json", CLOUD_INIT.read_text(encoding="utf-8"))
+
+    def test_the_ansible_path_filter_runs_the_tools_when_the_file_changes(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ansible.yml").read_text(encoding="utf-8")
+        match = re.search(r"watched=\(\n(.*?)\n\s*\)", workflow, re.DOTALL)
+        self.assertIsNotNone(match, "the watched=( ... ) array is not found")
+        watched = [line.strip() for line in (match.group(1) if match else "").splitlines()]
+        self.assertIn(f"hetzner-host/{tool.FIXED_PATH.name}", watched)
+        self.assertIn("hetzner-host/cloudInit.ts", watched)
+
+    def test_every_fetched_file_and_the_playbook_exist_in_the_repository(self) -> None:
+        for path in (*tool.FETCHED.values(), tool.PLAYBOOK_PATH):
+            with self.subTest(path=path):
+                self.assertTrue((ROOT / path).is_file())
+
+    def test_the_raw_address_and_the_remote_name_one_repository(self) -> None:
+        from_raw = "/".join(tool.RAW_BASE.split("/")[-2:])
+        from_remote = "/".join(tool.REMOTE_URL.removesuffix(".git").split("/")[-2:])
+        self.assertEqual(from_raw, from_remote)
+
+    def test_the_required_keys_are_keys_the_roles_task_writes(self) -> None:
+        task = tool.config_task(YAML(typ="safe").load(ConfigTexts.tasks))
+        declared = tool.mapping(
+            tool.mapping(task.get("vars"), "vars").get(tool.CONFIG_VARIABLE), tool.CONFIG_VARIABLE
+        )
+        self.assertTrue(tool.REQUIRED_CONFIG_KEYS)
+        self.assertLessEqual(tool.REQUIRED_CONFIG_KEYS, set(declared))
+
+    def test_a_file_that_is_not_an_object_or_lacks_a_value_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fixed.json"
+            for text, pattern in (
+                ("[1]", "is not a JSON object"),
+                ("{not json", "cannot be read as JSON"),
+            ):
+                with self.subTest(text=text):
+                    path.write_text(text, encoding="utf-8")
+                    with self.assertRaisesRegex(tool.BootstrapError, pattern):
+                        tool.load_fixed(path)
+            with self.assertRaisesRegex(tool.BootstrapError, "cannot be read as JSON"):
+                tool.load_fixed(Path(directory) / "absent.json")
+        for read_value, key, value in (
+            (tool.fixed_text, "rawBase", 3),
+            (tool.fixed_strings, "fetched", {"a": 1}),
+            (tool.fixed_names, "requiredConfigKeys", ["a", 1]),
+        ):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(tool.BootstrapError, key):
+                    read_value({key: value}, key)
+                with self.assertRaisesRegex(tool.BootstrapError, key):
+                    read_value({}, key)
 
 
 if __name__ == "__main__":
