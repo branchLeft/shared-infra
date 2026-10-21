@@ -276,6 +276,9 @@ def install_environment(
         # on the missing pip every time, until someone removed the directory by hand.
         make = [request.python, "-m", "venv", str(venv)]
         if os.path.lexists(venv):
+            if venv.is_symlink():
+                # --clear empties what the path leads to; a link would send it elsewhere.
+                raise Refusal(Reason.VENV)
             make.insert(3, "--clear")
         if run(make, env):
             raise Refusal(Reason.VENV)

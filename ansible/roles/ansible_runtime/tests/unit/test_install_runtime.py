@@ -385,6 +385,21 @@ class StepsTest(Case):
         self.assertTrue((venv / "bin" / "pip").exists())
         self.assertEqual(2, len(runner.calls))
 
+    def test_a_link_where_the_venv_belongs_is_refused_and_nothing_behind_it_is_cleared(
+        self,
+    ) -> None:
+        name = program.fingerprint(LOCK_A)
+        elsewhere = self.base / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "kept").write_text("kept")
+        self.root.mkdir(mode=0o700)
+        os.symlink(elsewhere, self.root / f"venv-{name}")
+        runner = FakeRunner()
+        self.refused(self.request(link=True), runner, program.Reason.VENV)
+        self.assertEqual([], runner.calls)
+        self.assertEqual("kept", (elsewhere / "kept").read_text())
+        self.assertFalse(os.path.lexists(self.link))
+
     def test_a_first_venv_is_not_cleared_and_a_finished_one_is_not_made_again(self) -> None:
         first = FakeRunner(pip_status=1)
         self.refused(self.request(), first, program.Reason.PIP)
