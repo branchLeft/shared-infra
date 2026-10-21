@@ -19,8 +19,7 @@ backup_worker_service_unit: branchleft-backup-worker.service
 # The environment file's owner, group and mode: the one home of those values. The
 # create-empty task and the write read them from this list through the lookup
 # below, and the attribute task sets them on every run. Only attributes are here,
-# never content. It is a list of one entry, so the lookup has the same shape as
-# control_plane's.
+# never content. It is a list of one entry, found by path in the lookup below.
 backup_worker_secret_files:
   - path: '{{ backup_worker_env_file }}'
     owner: root
