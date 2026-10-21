@@ -1,0 +1,68 @@
+---
+# What a host of class gateway looks like once the role has been applied: the
+# wrapper and the template unit, and none of the isolation.
+- name: Look at the files only an app host gets
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+    follow: false
+  loop: '{{ deploy_tooling_app_file_targets }}'
+  loop_control:
+    label: '{{ item.path }}'
+  register: deploy_tooling_scenario_app_files
+
+- name: Assert the policy program and its unit are absent
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists
+    fail_msg: '{{ item.item.path }} is present on a gateway host'
+    quiet: true
+  loop: '{{ deploy_tooling_scenario_app_files.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+
+- name: Look at the files every host gets
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+    follow: false
+  loop: '{{ deploy_tooling_common_file_targets }}'
+  loop_control:
+    label: '{{ item.path }}'
+  register: deploy_tooling_scenario_common_files
+
+- name: Assert the wrapper and the template unit are in place
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg
+      - item.stat.pw_name == 'root'
+      - item.stat.mode == item.item.mode
+    fail_msg: '{{ item.item.path }} is not installed'
+    quiet: true
+  loop: '{{ deploy_tooling_scenario_common_files.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+
+- name: Read the filter rules as they stand
+  ansible.builtin.command:
+    argv: [iptables, -w, -S]
+  register: deploy_tooling_scenario_rules
+  changed_when: false
+
+- name: Assert the chains hold only Docker's own return and nothing of the policy
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_rules.stdout_lines | select('match', '^-A ') | list == ['-A DOCKER-USER -j RETURN']
+    fail_msg: 'The gateway carries firewall rules: {{ deploy_tooling_scenario_rules.stdout_lines | select("match", "^-A ") | list }}'
+    quiet: true
+
+- name: Read whether the policy unit exists
+  ansible.builtin.command:
+    argv: [systemctl, show, '{{ deploy_tooling_policy_unit_name }}', --property=LoadState, --value]
+  register: deploy_tooling_scenario_policy_load
+  changed_when: false
+
+- name: Assert systemd has no policy unit
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_policy_load.stdout_lines == ['not-found']
+    fail_msg: 'systemd knows the policy unit on a gateway host: {{ deploy_tooling_scenario_policy_load.stdout_lines }}'
+    quiet: true

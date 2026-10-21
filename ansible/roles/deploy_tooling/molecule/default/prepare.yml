@@ -1,0 +1,112 @@
+---
+# Test setup only, never part of the role. It makes the instance look as a host
+# does before the role runs: the account and the sudoers drop-in the host's
+# first-boot configuration makes, Docker's DOCKER-USER chains with Docker's own
+# RETURN in them, a stub of docker.service and of the docker command (the
+# compose template unit requires them), a probe instance of that template, and
+# the one stand-in, ip. Real iptables and ip6tables are used: the instance has
+# the NET_ADMIN capability for them.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  # The role's own fixed values, so the drop-in below is made from the same
+  # constant the role checks it against and cannot drift from it.
+  vars_files:
+    - ../../vars/main.yml
+  tasks:
+    # The image carries no iptables. sudo is already there; naming it makes the
+    # build stop here, with its own message, on an image that ever drops it.
+    - name: Install the firewall tools and sudo
+      ansible.builtin.apt:
+        name:
+          - iptables
+          - sudo
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Make the CI deploy account
+      ansible.builtin.user:
+        name: deploy
+        shell: /usr/sbin/nologin
+        create_home: false
+
+    # What cloud-init writes at first boot, from the same constant the role checks.
+    - name: Put the sudoers drop-in in place as cloud-init does
+      ansible.builtin.copy:
+        content: "{{ deploy_tooling_sudoers_line }}\n"
+        dest: '{{ deploy_tooling_sudoers_path }}'
+        owner: root
+        group: root
+        mode: '{{ deploy_tooling_sudoers_mode }}'
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Put Docker's chains in place, with Docker's own return in each
+      ansible.builtin.include_tasks: tasks/reset_chains.yml
+      vars:
+        deploy_tooling_scenario_ipv6_docker_user: true
+
+    # The compose template unit requires docker.service and runs the docker
+    # command. Neither exists in the image, and both are outside what the role
+    # does, so a stub service and a command that succeeds stand in for them. The
+    # policy unit is part of docker.service, and the test restarts the stub to
+    # show it follows.
+    - name: Put a stub docker.service in place
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Test stub standing in for docker.service
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/true
+        dest: /etc/systemd/system/docker.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Put a docker command that succeeds in place
+      ansible.builtin.copy:
+        content: |
+          #!/bin/sh
+          exit 0
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Put the stand-in for ip in place
+      ansible.builtin.copy:
+        src: ip
+        dest: /usr/local/bin/ip
+        owner: root
+        group: root
+        mode: '0755'
+
+    # The probe instance of the compose template unit: the files the unit asserts
+    # and reads, and the working directory it runs in. The role never creates or
+    # starts it; the test starts it after the role has installed the template.
+    - name: Make the directories the probe instance of the compose unit uses
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/branchleft
+        - /opt/branchleft
+        - /opt/branchleft/molecule-probe
+
+    - name: Put the probe instance's image pin in place
+      ansible.builtin.copy:
+        content: "IMAGE=example.invalid/probe:1\n"
+        dest: /etc/branchleft/molecule-probe.image.env
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Let systemd read the stub
+      ansible.builtin.systemd_service:
+        daemon_reload: true

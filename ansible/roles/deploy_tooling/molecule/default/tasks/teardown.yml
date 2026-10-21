@@ -1,0 +1,47 @@
+---
+# Puts the instance back to a host that has not been given the policy: the unit
+# stopped, disabled and removed, the program removed, the chains as Docker leaves
+# them, and the ip stand-in set back to the real ip. The chains are reset by
+# tasks/reset_chains.yml, which keeps Docker's own return, rather than flushed, so
+# that no phase asserts a chain that has lost its tail. A step here that fails
+# stops the build: a teardown that did not tear down would let the next phase pass
+# on the last one's state.
+- name: Look at the policy unit file
+  ansible.builtin.stat:
+    path: '{{ deploy_tooling_policy_unit_path }}'
+  register: deploy_tooling_scenario_teardown_unit
+
+- name: Stop and disable the policy unit
+  ansible.builtin.systemd_service:
+    name: '{{ deploy_tooling_policy_unit_name }}'
+    state: stopped
+    enabled: false
+  when: deploy_tooling_scenario_teardown_unit.stat.exists
+
+- name: Remove the unit file and the program
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - '{{ deploy_tooling_policy_unit_path }}'
+    - '{{ deploy_tooling_reconciler_path }}'
+    - /etc/molecule-ip-address
+
+- name: Let systemd forget the unit, and any failure it recorded
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# A unit that failed (the refusal phase) stays in systemd's failed list after its
+# file is gone, and enabling a new file of the same name then fails as busy.
+# reset-failed on a unit systemd has no record of exits 1, which is not a failure.
+- name: Clear the failed state of the policy unit
+  ansible.builtin.command:
+    argv: [systemctl, reset-failed, '{{ deploy_tooling_policy_unit_name }}']
+  register: deploy_tooling_scenario_reset_failed
+  changed_when: false
+  failed_when: deploy_tooling_scenario_reset_failed.rc not in [0, 1]
+
+- name: Reset the chains to what Docker leaves
+  ansible.builtin.include_tasks: reset_chains.yml
+  vars:
+    deploy_tooling_scenario_ipv6_docker_user: true

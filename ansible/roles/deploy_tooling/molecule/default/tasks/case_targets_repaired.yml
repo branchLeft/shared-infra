@@ -1,0 +1,26 @@
+---
+# Every target the role installs is made wrong in owner, group and mode at once,
+# then the role runs and every one is root-owned, in its group and in its mode
+# again. The role's own check names the attribute and the path when a repair task
+# leaves one wrong, and assert_applied reads each from the instance independently.
+- name: Make every target wrong in owner, group and mode
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: '{{ item.kind }}'
+    owner: nobody
+    group: nogroup
+    mode: '0777'
+  loop: '{{ deploy_tooling_directory_targets + deploy_tooling_common_file_targets + deploy_tooling_app_file_targets }}'
+  loop_control:
+    label: '{{ item.path }}'
+
+- name: Apply the role
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+- name: Assert every target is repaired
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: standard

@@ -1,0 +1,49 @@
+---
+# Puts the filter chains the policy writes to into the state of a host that has
+# not been given the policy. INPUT is emptied. DOCKER-USER is emptied and given
+# back Docker's own return, as dockerd leaves it, so no phase asserts a chain
+# that has lost its tail. With deploy_tooling_scenario_ipv6_docker_user false the IPv6
+# DOCKER-USER chain is removed, as on a host where Docker made none.
+- name: Empty INPUT in both families
+  ansible.builtin.iptables:
+    chain: INPUT
+    flush: true
+    ip_version: '{{ item }}'
+  loop:
+    - ipv4
+    - ipv6
+
+- name: Make sure DOCKER-USER exists in both families
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    chain_management: true
+    state: present
+    ip_version: '{{ item }}'
+  loop:
+    - ipv4
+    - ipv6
+
+- name: Empty DOCKER-USER in both families
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    flush: true
+    ip_version: '{{ item }}'
+  loop:
+    - ipv4
+    - ipv6
+
+- name: Give DOCKER-USER Docker's own return back in the families that keep the chain
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    jump: RETURN
+    action: append
+    ip_version: '{{ item }}'
+  loop: "{{ ['ipv4', 'ipv6'] if deploy_tooling_scenario_ipv6_docker_user | default(true) else ['ipv4'] }}"
+
+- name: Remove the IPv6 DOCKER-USER chain where the scenario says Docker made none
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    chain_management: true
+    state: absent
+    ip_version: ipv6
+  when: not (deploy_tooling_scenario_ipv6_docker_user | default(true))

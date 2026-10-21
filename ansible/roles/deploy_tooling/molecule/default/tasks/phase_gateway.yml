@@ -1,0 +1,22 @@
+---
+# The gateway holds the estate's shared address and the policy program refuses to
+# run on it, so the role gives it no program, no unit and no firewall rule, and
+# gives it no variant to name.
+- name: Apply the role to a host of class gateway
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: gateway
+    run_variant: not_applicable
+
+- name: Assert the gateway has the wrapper and none of the isolation
+  ansible.builtin.include_tasks: assert_gateway.yml
+
+# The class decides, not the host's address: a gateway-class run on a host that
+# has the program installed leaves the program alone (it installs none, removes
+# none). The check-mode run of the same class must also pass.
+- name: Apply the role to the gateway in check mode
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_check: true
+    run_class: gateway
+    run_variant: not_applicable

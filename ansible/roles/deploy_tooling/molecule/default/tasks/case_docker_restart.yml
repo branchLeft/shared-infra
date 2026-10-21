@@ -1,0 +1,38 @@
+---
+# The policy unit is part of docker.service, so a restart of Docker (an unattended
+# upgrade does one) restarts the policy against the chain Docker just rebuilt.
+# The stub docker.service stands in; the case shows the unit follows it and the
+# chain is intact afterwards. It is the unit's own property (the PartOf line), kept
+# true here because the role installs that unit.
+- name: Read the policy unit's invocation
+  ansible.builtin.command:
+    argv: [systemctl, show, '{{ deploy_tooling_policy_unit_name }}', --property=InvocationID]
+  register: deploy_tooling_scenario_policy_before
+  changed_when: false
+
+- name: Restart the stub of docker.service
+  ansible.builtin.systemd_service:
+    name: docker.service
+    state: restarted
+
+- name: Read the policy unit's invocation again
+  ansible.builtin.command:
+    argv: [systemctl, show, '{{ deploy_tooling_policy_unit_name }}', --property=InvocationID]
+  register: deploy_tooling_scenario_policy_after
+  changed_when: false
+
+- name: Assert the policy unit was restarted with docker.service
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_policy_before.stdout is match('^InvocationID=[0-9a-f]{32}$')
+      - deploy_tooling_scenario_policy_after.stdout is match('^InvocationID=[0-9a-f]{32}$')
+      - deploy_tooling_scenario_policy_after.stdout != deploy_tooling_scenario_policy_before.stdout
+    fail_msg: >-
+      The policy unit did not follow a restart of docker.service: {{ deploy_tooling_scenario_policy_before.stdout }} then
+      {{ deploy_tooling_scenario_policy_after.stdout }}
+    quiet: true
+
+- name: Assert the chains are the policy
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: standard

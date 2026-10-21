@@ -1,0 +1,24 @@
+---
+# Reads the chains back with the role's module, outside the role, and requires it
+# to fail with a message matching expect_msg. chain_variant is the variant to
+# expect. The same marker as expect_role_failure.yml keeps a pass from being read
+# as a failure.
+- name: Read the chains back, expecting the module to fail
+  block:
+    - name: Read the chains
+      deploy_tooling_chain:
+        reconciler_path: '{{ deploy_tooling_reconciler_path }}'
+        variant: '{{ chain_variant }}'
+        foreign_chain_allowlist: '{{ chain_allowlist | default([]) }}'
+
+    - name: Fail because the chains were accepted
+      ansible.builtin.fail:
+        msg: 'EXPECTED THE READ-BACK TO FAIL, IT PASSED: {{ expect_label }}'
+  rescue:
+    - name: Check that the failure is the expected one
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name != 'Fail because the chains were accepted'
+          - ansible_failed_result.msg is search(expect_msg)
+        fail_msg: 'WRONG READ-BACK FAILURE for {{ expect_label }}: {{ ansible_failed_result.msg | default("") }}'
+        success_msg: 'read-back red as expected: {{ expect_label }}'

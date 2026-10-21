@@ -1,0 +1,57 @@
+---
+# The policy program decides which chain it builds from the host's own address,
+# so the ip stand-in prints the control-plane host's address. The variant the
+# role is given is only what the role expects to find.
+- name: Make the host look like the control-plane host
+  ansible.builtin.copy:
+    content: "10.20.1.50{{ '\n' }}"
+    dest: /etc/molecule-ip-address
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Apply the role with the protected_no_db variant
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: protected_no_db
+
+- name: Assert the host carries the protected chain and no database exception
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: protected_no_db
+
+- name: Read DOCKER-USER as it stands
+  ansible.builtin.command:
+    argv: [iptables, -w, -S, DOCKER-USER]
+  register: deploy_tooling_scenario_protected_chain
+  changed_when: false
+
+# The chain the program built, read directly: both protected-port drops are in
+# it and no rule accepts traffic to the database's port.
+- name: Assert the protected drops are present and the database accept is not
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_protected_chain.stdout_lines | select('search', '--ctorigdstport 8301') | list | length == 1
+      - deploy_tooling_scenario_protected_chain.stdout_lines | select('search', '--ctorigdstport 8302') | list | length == 1
+      - deploy_tooling_scenario_protected_chain.stdout_lines | select('search', '--dport 3306') | list | length == 0
+    fail_msg: 'The chain is not the protected one: {{ deploy_tooling_scenario_protected_chain.stdout_lines }}'
+    quiet: true
+
+# Control: the host's chain is the protected one, and a role told to expect the
+# standard one reports the difference rather than passing.
+- name: Case, a protected host read as a standard host fails on the database accept
+  ansible.builtin.include_tasks: expect_chain_failure.yml
+  vars:
+    expect_label: protected host expected as standard
+    chain_variant: standard
+    expect_msg: 'database accept is missing'
+
+- name: Case, the same read-back through the role fails the run
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: role expecting the standard variant on a protected host
+    expect_msg: 'database accept is missing'
+    expect_task: 'Read the chains back again'
+    run_class: app
+    run_variant: standard
