@@ -8,7 +8,8 @@ and the configuration text, and checks a record against the repository.
 
 The pin of each file is the last commit that changed it, read from the history, so the record
 never names a commit that a squash merge could remove. That is enforced here, not assumed:
-both commands first fetch ``main`` from ``origin`` afresh and refuse without it. Both then
+both commands refuse a shallow clone, whose history cannot say which commit last changed a
+file, then fetch ``main`` from ``origin`` afresh and refuse without it. Both then
 refuse unless HEAD is the tip of that fetched ``main``: the history a pin is read from and the
 files the configuration is rendered from are HEAD's, so a checkout behind ``main`` would call a
 record current that ``main`` has since superseded. ``verify`` also refuses a record whose pin is
@@ -367,17 +368,38 @@ def main_tip(repo: Path) -> str:
     return tip
 
 
+def refuse_shallow(repo: Path) -> None:
+    """Refuse a repository that does not hold the whole history.
+
+    In a shallow clone ``git log -1 HEAD -- <path>`` answers HEAD for every file, because the
+    commit that really last changed it is not there. Every pin would then be the tip and the
+    stale-pin check would pass without checking anything. Anything but a plain ``false`` from
+    git is a refusal.
+
+    Raises:
+        BootstrapError: The repository is shallow, or git does not say that it is not.
+    """
+    answer = git(repo, "rev-parse", "--is-shallow-repository").stdout.decode().strip()
+    if answer != "false":
+        message = (
+            "the repository is a shallow clone, so the last commit that changed a file cannot "
+            "be read from it: check it out with the whole history (fetch-depth 0)"
+        )
+        raise BootstrapError(message)
+
+
 def checked_out_tip(repo: Path, rule: str) -> str:
     """Return the freshly fetched tip of ``main``, which the repository must have checked out.
 
     The history a pin is read from and the files a configuration is rendered from are HEAD's,
     so they are main's only when HEAD is main's tip. A checkout that is behind main would
     otherwise call a pin current that main has since superseded, and a configuration current
-    that main has since changed.
+    that main has since changed. The history must also be whole: see ``refuse_shallow``.
 
     Raises:
-        BootstrapError: The fetch fails, or HEAD is not that tip.
+        BootstrapError: The repository is shallow, the fetch fails, or HEAD is not that tip.
     """
+    refuse_shallow(repo)
     tip = main_tip(repo)
     top = head(repo)
     if top != tip:

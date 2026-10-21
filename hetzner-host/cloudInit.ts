@@ -442,6 +442,16 @@ function pgpPacketTags(bytes: Buffer): number[] {
  * of a type that a public key is made of (public key, public subkey, user id,
  * user attribute, signature). A secret key (tag 5) or a secret subkey (tag 7)
  * anywhere in the data, after a public key or not, does not pass.
+ *
+ * Why a walker and not a maintained OpenPGP library: this package's only runtime
+ * dependency is Pulumi itself, and a library (openpgp.js) would put a large parser and a
+ * lock change on the path of a production Pulumi program. `gpg --show-keys` is not an option here: this
+ * runs inside the Pulumi program, where a subprocess and a gpg binary cannot be assumed.
+ * The walker reads only packet headers and lengths, accepts a short allowlist, and
+ * refuses everything it cannot account for. It is the only check on the block today. The
+ * key comes from the reviewed group variables on main, so a publish-time `gpg --show-keys`
+ * over those variables, run by the Python tool, would be a maintained check ahead of it;
+ * it is not built.
  */
 export function assertPgpPublicKeyBlock(block: string): string {
   const lines = block.endsWith('\n') ? block.slice(0, -1).split('\n') : block.split('\n');

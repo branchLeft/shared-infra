@@ -51,6 +51,14 @@ MAX_LOCK_BYTES: Final = 4_000_000
 # environment marker, then one or more hashes and nothing else on the line. The marker
 # holds no option: no "--" anywhere in it, and no word that starts with "-", so an option
 # such as --index-url cannot hide in it. A hyphen inside a word (linux-gnu) is fine.
+#
+# Why a pattern and not a maintained parser: this runs under the host's own interpreter with -I
+# before any package is installed, so only the standard library exists (the maintained parser,
+# packaging.requirements, is a package, and pip's vendored copy is not a supported import).
+# It is also not the control. The lock's SHA-256 comes from a record built from reviewed main,
+# and pip's own --require-hashes (always passed, below) is the maintained refusal of an unpinned
+# or unhashed requirement and verifies every downloaded file against its hash. This pattern only
+# refuses early, with a reason of this program's own, and leaves nothing behind.
 REQUIREMENT: Final = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]+\])?"
     r"==[A-Za-z0-9.!+_-]+"

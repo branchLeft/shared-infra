@@ -87,8 +87,9 @@ No variable is a secret.
 ## What it changes on a host
 
 - The packages `python3` and `python3-venv`.
-- `/opt/ansible-runtime/` (root, 0755), and in it `requirements-<fingerprint>.txt`
-  (root, 0644) and `venv-<fingerprint>/` (the environment, owned by root).
+- `/opt/ansible-runtime/` (root, 0755), and in it `install_runtime.py` (the install
+  program, root, 0755), `requirements-<fingerprint>.txt` (root, 0644) and
+  `venv-<fingerprint>/` (the environment, owned by root).
 - `venv-<fingerprint>/.installed-from-lock`: the marker (root, 0644).
 - `/usr/local/bin/ansible-playbook`: a link into the environment.
 
@@ -130,6 +131,30 @@ host that has no trigger yet, which the owner runs by hand: its command is in th
 owner's runbook for `edge1`, and the playbook is
 `ansible/playbooks/edge1.yml`. After that bootstrap the gated pull applies the
 role from the signed checkout.
+
+## The first pull after the install moved into the program
+
+`edge1` already runs this role under the pull, so the merge of the change that
+moved the install into `files/install_runtime.py` reaches it on its first gated
+pull, and `edge1` runs the pull that delivers it. That is a live change, so the
+pull is read back (the approver reads it, or the owner at the gate, with the
+non-mutating diagnostics the registry grants for `edge1` and no other command).
+This is what a correct first pull shows for this role's tasks:
+
+- The program is placed: `/opt/ansible-runtime/install_runtime.py` exists, root,
+  0755, and the task that places it reports changed once.
+- The install is skipped, not run: the marker
+  `venv-<fingerprint>/.installed-from-lock` the old role wrote is already there
+  for the same lock, so the `creates` form skips the command. `/opt/ansible-runtime/`
+  holds the same single `venv-<fingerprint>` it held before, and no second one.
+- The link is unchanged: `/usr/local/bin/ansible-playbook` still resolves into that
+  same `venv-<fingerprint>`.
+- The next pull reports no change for this role's tasks (and `changed=0` for the
+  play when nothing else moved), so nothing the role does is a change the second time.
+
+A first pull that builds a second `venv-<fingerprint>`, moves the link, or fails
+at the program is not correct: the lock's fingerprint differed from the marker's,
+or the program refused, and its one-line JSON reason says which.
 
 ## Named limits
 

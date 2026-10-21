@@ -121,8 +121,10 @@ regenerated). With it:
   installs the pinned Ansible and the hash-locked requirements, each over HTTPS
   from a commit that the record names (a commit of `main`, as the record's
   tool enforces below), and checks each against the SHA-256 in the record
-  before anything runs. The files are too large for the 32 KiB user-data limit,
-  so they are fetched and not embedded. It then runs the install program (the
+  before anything runs. The files are too large for the 32 KiB user-data limit
+  (the Hetzner Cloud API reference for creating a server: "Cloud-Init user data
+  to use during Server creation. This field is limited to 32KiB."), so they are
+  fetched and not embedded. It then runs the install program (the
   same one the `ansible_runtime` role runs, with `--link`), writes the
   directories and the configuration, and places the pull program last of all.
   A failure writes a marker (`/var/lib/branchleft/pull-enrolment.failed`, with
@@ -144,8 +146,9 @@ regenerated). With it:
   squash merge cannot remove the pinned commit, and the configuration is
   rendered from the role's own task and variable files, never written a second
   time (`ansible/tools/test_pull_bootstrap.py` runs the role's task and compares
-  bytes). Both commands first fetch `main` from `origin` afresh and both refuse
-  unless HEAD is the tip of it, because the history a pin is read from and the
+  bytes). Both commands refuse a shallow clone (in one, every file's last commit
+  reads as HEAD, so no pin could be stale), then fetch `main` from `origin`
+  afresh and refuse unless HEAD is the tip of it, because the history a pin is read from and the
   files the configuration is rendered from are HEAD's: a checkout behind `main`
   would otherwise call current a record that `main` has since superseded.
   `verify` also refuses a record whose pin is not an ancestor of the tip, so a
@@ -165,7 +168,24 @@ regenerated). With it:
   its configuration, the state and log directories, the Ansible environment) are
   written in `PRODUCTION_LAYOUT` too, since a first boot has no Ansible to read
   them from; `ansible/tools/test_pull_bootstrap.py` holds each equal to the role
-  variable that owns it.
+  variable that owns it (`LayoutTest`). These and `ENROLMENT_PACKAGES` are the
+  accepted second spellings; the rest live once.
+- **Two readers are written by hand, and why.** `assertPgpPublicKeyBlock` (an
+  OpenPGP packet walk) and the install program's `REQUIREMENT` pattern parse input
+  on the first-boot path. The maintained options are `gpg --show-keys` and
+  `packaging.requirements`, with pip's own `--require-hashes`. The package's only
+  runtime dependency is Pulumi and a Pulumi program cannot assume a gpg binary
+  (an OpenPGP library would add a large parser and a lock change); the install
+  program runs under `python -I` before any package exists. pip's
+  `--require-hashes` is the control that stays on; the pattern only refuses
+  early. Both inputs come from reviewed `main`. A publish-time `gpg --show-keys`
+  in the Python tool is not built.
+- **Until the record has a producer, nothing checks where it came from.**
+  `assertPullBootstrap` checks the shape of a record, not its provenance. Nothing
+  produces a record in a stack yet, so a hand-made record that has the right
+  shape reaches a script that root runs at first boot. A consumer must use the
+  output of `generate` and `verify`, run from the tip of `main`, and cite that
+  `verify` output.
 - **Root keeps its console login.** The `root` entry sets `lock_passwd: false`.
   cloud-init defaults it to true and applies it to an account that already
   exists, which would lock the password. Key access is unaffected either way; the

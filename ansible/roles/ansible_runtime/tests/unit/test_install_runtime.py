@@ -238,7 +238,15 @@ class LockChecksTest(Case):
 
     def test_the_repositorys_own_lock_and_its_markers_are_accepted(self) -> None:
         # A control for the refusals above: a pattern that refused every marker would pass them.
-        lock = (Path(__file__).resolve().parents[5] / "ansible" / "requirements.txt").read_bytes()
+        # In a checkout the lock is found from this file's place; the Molecule verify has no
+        # checkout, so it copies the lock into the container and says where in REPOSITORY_LOCK.
+        given = os.environ.get("REPOSITORY_LOCK")
+        path = (
+            Path(given)
+            if given
+            else Path(__file__).resolve().parents[5] / "ansible" / "requirements.txt"
+        )
+        lock = path.read_bytes()
         self.assertIn(b" ; ", lock)
         program.check_lock_is_hashed(lock)
         for marker in (

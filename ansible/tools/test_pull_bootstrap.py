@@ -19,6 +19,7 @@ import unittest
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
+from unittest import mock
 
 import pull_bootstrap as tool
 from ruamel.yaml import YAML
@@ -425,6 +426,71 @@ class MainBindingTest(RepoCase):
         self.repo.run("remote", "set-url", "origin", str(self.repo.path.parent / "gone.git"))
         with self.assertRaisesRegex(tool.BootstrapError, "git fetch"):
             self.record()
+
+
+class ShallowTest(RepoCase):
+    """A shallow clone cannot say which commit last changed a file, so the tool refuses it."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # A second commit on main that changes one file only, so that the first commit is the
+        # real last change of the other two and a depth-1 clone cannot see it.
+        self.repo.edit(tool.FETCHED["lock"], lambda text: text + "# newer\n")
+        self.second = self.repo.commit("second: the lock only")
+        self.shallow = self.clone(["--depth", "1"], "shallow")
+        self.full = self.clone([], "full")
+
+    def clone(self, options: list[str], name: str) -> Path:
+        target = self.repo.path.parent / name
+        subprocess.run(  # noqa: S603 - fixed argv built from this test's own values
+            ["git", "clone", "-q", *options, f"file://{self.repo.origin}", str(target)],  # noqa: S607
+            check=True,
+            stdin=subprocess.DEVNULL,
+        )
+        return target
+
+    def test_the_premise_a_shallow_clone_reads_every_pin_as_head(self) -> None:
+        # A control for the refusals below: without them the tool would have written a pin that
+        # is not the last change, and the stale-pin check would have had nothing to compare.
+        self.assertEqual(self.second, tool.last_commit(self.shallow, tool.FETCHED["wrapper"]))
+        self.assertEqual(self.first, tool.last_commit(self.full, tool.FETCHED["wrapper"]))
+
+    def test_a_shallow_clone_is_refused_by_generate_and_writes_nothing(self) -> None:
+        with self.assertRaisesRegex(tool.BootstrapError, "shallow clone"):
+            tool.build_record(self.shallow)
+        out = self.repo.path.parent / "record.json"
+        self.assertEqual(1, tool.main(["generate", "--repo", str(self.shallow), "--out", str(out)]))
+        self.assertFalse(out.exists())
+
+    def test_a_shallow_clone_is_refused_by_verify_even_for_a_record_that_is_current(self) -> None:
+        record = self.record()
+        found = tool.verify_record(self.shallow, record)
+        self.assertEqual(1, len(found))
+        self.assertIn("shallow clone", found[0])
+        path = self.repo.path.parent / "record-to-verify.json"
+        path.write_text(json.dumps(record), encoding="utf-8")
+        self.assertEqual(
+            1, tool.main(["verify", "--repo", str(self.shallow), "--record", str(path)])
+        )
+
+    def test_a_full_clone_of_the_same_history_builds_and_verifies(self) -> None:
+        # A control: the refusals above are for the missing history, not for the clone.
+        record = tool.build_record(self.full)
+        self.assertEqual(self.record(), record)
+        self.assertEqual([], tool.verify_record(self.full, record))
+
+    def test_an_answer_other_than_false_from_git_is_a_refusal(self) -> None:
+        # Fail closed: the tool accepts only a plain "false", so a git that says anything else
+        # (or nothing) is not taken for a whole history.
+        for answer in (b"true\n", b"\n", b"", b"False\n", b"no\n"):
+            with self.subTest(answer=answer):
+                said = subprocess.CompletedProcess([], 0, stdout=answer)
+                with (
+                    mock.patch.object(tool, "git", return_value=said),
+                    self.assertRaisesRegex(tool.BootstrapError, "shallow clone"),
+                ):
+                    tool.refuse_shallow(self.full)
+        tool.refuse_shallow(self.full)
 
 
 class ConfigRefusalTest(unittest.TestCase):

@@ -154,6 +154,10 @@
           dest: /var/tmp/art-unit/files/install_runtime.py
         - src: '{{ ansible_runtime_verify_role_directory }}/tests/unit/test_install_runtime.py'
           dest: /var/tmp/art-unit/tests/unit/test_install_runtime.py
+        # The repository's own lock, which a unit test checks the line pattern against; the
+        # test reads it from REPOSITORY_LOCK, as the container holds no checkout.
+        - src: '{{ playbook_dir }}/../../../../requirements.txt'
+          dest: /var/tmp/art-unit/requirements.txt
       loop_control:
         label: '{{ item.dest }}'
 
@@ -173,6 +177,7 @@
       environment:
         PYTHONPATH: files:tests/unit
         PYTHONDONTWRITEBYTECODE: '1'
+        REPOSITORY_LOCK: /var/tmp/art-unit/requirements.txt
       register: ansible_runtime_verify_unit
       changed_when: false
       failed_when: false
