@@ -67,7 +67,7 @@ needed, which is ansible-core's own floor for the machine that runs it:
 
 ```text
 python3 -m venv .venv
-.venv/bin/pip install --require-virtualenv --require-hashes -r ansible/requirements.txt
+.venv/bin/pip install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt
 ```
 
 That one command installs the tools and the collections the roles use, which
@@ -276,18 +276,22 @@ unchanged. To see what a given install carries:
 ### Install, and install with no network
 
 ```text
-.venv/bin/pip install --require-virtualenv --require-hashes -r ansible/requirements.txt
+.venv/bin/pip install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt
 .venv/bin/pip check
 ```
 
-`--require-hashes` makes pip check every downloaded file against the hashes in
-the lock and refuse a file that differs by one byte, or a package the lock does
-not name. A machine with no route to the package index installs from a copy of
+`--require-hashes` makes pip refuse a package the lock does not name, and a
+wheel whose hash is not listed. It does not by itself cover every file pip
+runs: a package with no wheel for this machine's Python would be built from its
+source archive, and the build backend that archive asks for is fetched from the
+index with no hash, so code the lock never named would run on this machine.
+`--only-binary=:all:` removes that build, so such a package fails the install
+instead. A machine with no route to the package index installs from a copy of
 the files, the same way:
 
 ```text
-.venv/bin/pip download --require-hashes -r ansible/requirements.txt -d WHEELHOUSE
-.venv/bin/pip install --require-virtualenv --require-hashes --no-index --find-links WHEELHOUSE -r ansible/requirements.txt
+.venv/bin/pip download --require-hashes --only-binary=:all: -r ansible/requirements.txt -d WHEELHOUSE
+.venv/bin/pip install --require-virtualenv --require-hashes --only-binary=:all: --no-index --find-links WHEELHOUSE -r ansible/requirements.txt
 ```
 
 The first command runs once where there is a network; the second needs none.

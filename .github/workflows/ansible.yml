@@ -177,10 +177,13 @@ jobs:
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
 
       - name: Install the pinned tools
-        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes -r ansible/requirements.txt'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt'
 
       # --require-hashes makes pip refuse any package without a recorded hash, so
-      # the lock must name every package. The collections the roles use come with
+      # the lock must name every package. --only-binary=:all: is what makes it cover
+      # every file pip runs: an entry with no wheel for this Python would otherwise be
+      # built from its source archive, with a build backend fetched with no hash, so
+      # such an entry fails the install instead. The collections the roles use come with
       # the `ansible` package and are found by ansible-lint and Ansible with no
       # setting (ANS-4); this lists the versions in the job log.
       - name: Check the installed set and list the collections
@@ -324,10 +327,13 @@ jobs:
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
 
       - name: Install the pinned tools
-        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes -r ansible/requirements.txt'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt'
 
       # --require-hashes makes pip refuse any package without a recorded hash, so
-      # the lock must name every package. The collections the roles use come with
+      # the lock must name every package. --only-binary=:all: is what makes it cover
+      # every file pip runs: an entry with no wheel for this Python would otherwise be
+      # built from its source archive, with a build backend fetched with no hash, so
+      # such an entry fails the install instead. The collections the roles use come with
       # the `ansible` package and are found by ansible-lint and Ansible with no
       # setting (ANS-4); this lists the versions in the job log.
       - name: Check the installed set and list the collections

@@ -91,6 +91,26 @@ def make_role(
         (role / "library").mkdir()
 
 
+HASHED_PIP = re.compile(r"\bpip\"? (?:install|download)\b.*--require-hashes")
+WHEELS_ONLY = "--only-binary=:all:"
+README = ANSIBLE / "README.md"
+
+
+def sdist_reachable_lines(text: str) -> list[str]:
+    """Return the lines that install or download the lock without refusing a source build.
+
+    --require-hashes alone does not cover everything pip runs: an entry with no wheel for
+    the interpreter is built from its source archive, and the build backend it asks for is
+    fetched from the index with no hash. --only-binary=:all: removes the build. The check
+    reads one line at a time, which is how the workflow and the README write each command.
+    """
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if HASHED_PIP.search(line) and WHEELS_ONLY not in line
+    ]
+
+
 def python_directories() -> set[str]:
     """Return the directories directly under ansible/ with a test_*.py file in them."""
     return {path.parent.name for path in ANSIBLE.glob("*/test_*.py")}
@@ -152,6 +172,30 @@ class WorkflowPythonStepsTest(unittest.TestCase):
         pattern = re.compile(selector.group("pattern"), re.MULTILINE)
         text = (ANSIBLE / "roles" / "egress_nat" / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIsNone(pattern.search(text))
+
+    def test_the_install_scan_finds_the_commands_it_is_meant_to_find(self) -> None:
+        # A control: a scan that matched nothing would make the next two tests pass.
+        self.assertEqual(2, sum(1 for line in WORKFLOW.splitlines() if HASHED_PIP.search(line)))
+        self.assertLessEqual(
+            3, sum(1 for line in README.read_text("utf-8").splitlines() if HASHED_PIP.search(line))
+        )
+
+    def test_every_workflow_install_of_the_lock_is_wheels_only(self) -> None:
+        self.assertEqual([], sdist_reachable_lines(WORKFLOW))
+
+    def test_every_readme_install_of_the_lock_is_wheels_only(self) -> None:
+        self.assertEqual([], sdist_reachable_lines(README.read_text(encoding="utf-8")))
+
+    def test_an_install_that_can_build_from_source_is_found(self) -> None:
+        # The controls of the two tests above: each form of the command, with and without the
+        # flag, and prose that names the flag without running pip.
+        bare = ".venv/bin/pip install --require-virtualenv --require-hashes -r requirements.txt"
+        download = ".venv/bin/pip download --require-hashes -r requirements.txt -d WHEELHOUSE"
+        quoted = "run: '\"$RUNNER_TEMP/ansible-venv/bin/pip\" install --require-hashes -r lock'"
+        guarded = f"{bare} {WHEELS_ONLY}"
+        prose = "# --require-hashes makes pip refuse any package without a recorded hash"
+        text = "\n".join(["  " + bare, download, quoted, guarded, prose])
+        self.assertEqual([bare, download, quoted], sdist_reachable_lines(text))
 
 
 if __name__ == "__main__":
