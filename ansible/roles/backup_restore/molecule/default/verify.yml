@@ -233,6 +233,16 @@
             state: link
           changed_when: false
 
+        # A device node with the right owner and mode (the same node as /dev/null,
+        # which reads as empty, so nothing can block): only the plain-file check
+        # refuses it first. A link is refused by its mode as well, so it cannot
+        # show the plain-file check.
+        - name: Make a device node where a secret file should be
+          ansible.builtin.command:
+            argv: [mknod, -m, '0600', /etc/branchleft/secrets/test-device, c, '1', '3']
+            creates: /etc/branchleft/secrets/test-device
+          changed_when: false
+
         - name: Place a secret file holding two lines
           ansible.builtin.copy:
             content: "EXAMPLEONLYfirstline000000000000006\nEXAMPLEONLYsecondline0000000000007\n"
@@ -287,6 +297,14 @@
             backup_restore_case_message: three state-copy buckets must be three different buckets
             backup_restore_state_copy_estate_bucket: '{{ backup_worker_bucket }}'
             backup_restore_state_copy_estate_endpoint: '{{ backup_worker_s3_endpoint }}'
+
+        - name: Refuse a tenant bucket that is the estate bucket
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: tenant bucket is the estate bucket
+            backup_restore_case_message: three state-copy buckets must be three different buckets
+            backup_restore_state_copy_tenant_bucket: '{{ backup_restore_state_copy_estate_bucket }}'
+            backup_restore_state_copy_tenant_endpoint: '{{ backup_restore_state_copy_estate_endpoint }}'
 
         - name: Refuse a secret path outside the secrets directory
           ansible.builtin.include_tasks: tasks/refused.yml
@@ -343,6 +361,13 @@
             backup_restore_case_name: secret file is a link
             backup_restore_case_message: must be a plain file owned by root
             backup_restore_state_copy_dest_secret_file: /etc/branchleft/secrets/test-link
+
+        - name: Refuse a secret file that is a device node
+          ansible.builtin.include_tasks: tasks/refused.yml
+          vars:
+            backup_restore_case_name: secret file is a device node
+            backup_restore_case_message: must be a plain file owned by root
+            backup_restore_state_copy_dest_secret_file: /etc/branchleft/secrets/test-device
 
         - name: Refuse a secret file that holds two lines
           ansible.builtin.include_tasks: tasks/refused.yml
@@ -562,6 +587,7 @@
             - /etc/branchleft/secrets/test-marker
             - /etc/branchleft/secrets/test-mode
             - /etc/branchleft/secrets/test-link
+            - /etc/branchleft/secrets/test-device
             - /etc/branchleft/secrets/test-malformed
             - '{{ backup_restore_test_scratch_state_copy_env }}'
             - '{{ backup_restore_test_scratch_drill_env }}'
