@@ -26,10 +26,50 @@
   ansible.builtin.copy:
     content: ''
     dest: '{{ control_plane_env_file }}'
-    owner: root
-    group: root
-    mode: '0600'
+    owner: '{{ control_plane_env_secret.owner }}'
+    group: '{{ control_plane_env_secret.group }}'
+    mode: '{{ control_plane_env_secret.mode }}'
     force: false
+
+# The master key is written the same way, and never overwritten once it holds a value.
+- name: Create the master key empty, if it is absent
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ control_plane_masterkey_file }}'
+    owner: '{{ control_plane_masterkey_secret.owner }}'
+    group: '{{ control_plane_masterkey_secret.group }}'
+    mode: '{{ control_plane_masterkey_secret.mode }}'
+    force: false
+
+# Every run sets the owner, group and mode of both secret files, so a file widened
+# by hand is put back at the next run. The task changes attributes only, never content.
+# It runs after BOTH create-empty tasks and before EVERY fill task: a fill writes
+# through the existing file, which keeps its owner and mode while the content moves,
+# so an attribute left wide until after the fill would expose the content.
+# The stat comes first because check mode creates nothing: the create-empty tasks
+# above leave a file absent in check mode, so there a file still absent is skipped.
+# In a real run the create-empty tasks have made both files, and an absent file
+# fails here. The file diff holds owner, group and mode only, never content (ANS-16).
+- name: Look at each secret file before its owner, group and mode are set
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+    get_checksum: false
+  loop: '{{ control_plane_secret_files }}'
+  register: control_plane_secret_file_stats
+  loop_control:
+    label: '{{ item.path }}'
+
+- name: Set the owner, group and mode of each secret file on every run
+  ansible.builtin.file:
+    path: '{{ item.item.path }}'
+    state: file
+    owner: '{{ item.item.owner }}'
+    group: '{{ item.item.group }}'
+    mode: '{{ item.item.mode }}'
+  loop: '{{ control_plane_secret_file_stats.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+  when: not ansible_check_mode or item.stat.exists
 
 - name: Look at the environment file
   ansible.builtin.stat:
@@ -44,23 +84,13 @@
   ansible.builtin.copy:
     content: '{{ control_plane_env_content }}'
     dest: '{{ control_plane_env_file }}'
-    owner: root
-    group: root
-    mode: '0600'
+    owner: '{{ control_plane_env_secret.owner }}'
+    group: '{{ control_plane_env_secret.group }}'
+    mode: '{{ control_plane_env_secret.mode }}'
     force: true
   no_log: true
   diff: false
   when: not control_plane_env_stat.stat.exists or control_plane_env_stat.stat.size == 0
-
-# The master key is written the same way, and never overwritten once it holds a value.
-- name: Create the master key empty, if it is absent
-  ansible.builtin.copy:
-    content: ''
-    dest: '{{ control_plane_masterkey_file }}'
-    owner: '1000'
-    group: '1000'
-    mode: '0400'
-    force: false
 
 - name: Look at the master key
   ansible.builtin.stat:
@@ -72,9 +102,9 @@
   ansible.builtin.copy:
     content: '{{ control_plane_masterkey }}'
     dest: '{{ control_plane_masterkey_file }}'
-    owner: '1000'
-    group: '1000'
-    mode: '0400'
+    owner: '{{ control_plane_masterkey_secret.owner }}'
+    group: '{{ control_plane_masterkey_secret.group }}'
+    mode: '{{ control_plane_masterkey_secret.mode }}'
     force: true
   no_log: true
   diff: false

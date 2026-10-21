@@ -9,8 +9,10 @@ argument_specs:
       then the sign-in service (running the one-off init phase once, on a fresh
       database), enables the stack's unit and runs the deploy wrapper with the
       pinned image. It then installs the DOCKER-USER isolation reconciler and its
-      unit and applies the policy when either changed. It never removes a volume,
-      an environment file or a master key.
+      unit and applies the policy when either changed. On every run it sets the owner,
+      group and mode of the environment file and the master key back to their declared
+      values, without changing their content. It never removes a volume, an environment
+      file or a master key.
     author: branchLeft
     options:
       control_plane_app_image:
