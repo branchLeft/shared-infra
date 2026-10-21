@@ -504,6 +504,7 @@ class StepsTest(Case):
                     "install",
                     "--require-virtualenv",
                     "--require-hashes",
+                    "--only-binary=:all:",
                     "--no-input",
                     "--disable-pip-version-check",
                     "-r",
@@ -514,6 +515,17 @@ class StepsTest(Case):
         )
         for _, env in runner.calls:
             self.assertEqual({"PATH", "HOME", "LANG"}, set(env))
+
+    def test_pip_installs_wheels_only_so_nothing_is_built_as_root(self) -> None:
+        # pip does not hash-check the build dependencies of a source build (build_env.py passes
+        # require_hashes=False), so a source build as root would run a backend fetched from the
+        # index with no hash. --only-binary=:all: removes the build, not just the check.
+        runner = FakeRunner()
+        program.install(self.request(), runner)
+        pip_calls = [call[0] for call in runner.calls if call[0][1:2] == ("install",)]
+        self.assertEqual(1, len(pip_calls))
+        self.assertIn("--only-binary=:all:", pip_calls[0])
+        self.assertNotIn("--no-binary", " ".join(pip_calls[0]))
 
     def test_the_marker_is_written_last(self) -> None:
         runner = FakeRunner(pip_status=1)

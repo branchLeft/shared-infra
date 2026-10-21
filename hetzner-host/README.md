@@ -177,8 +177,9 @@ regenerated). With it:
   runtime dependency is Pulumi and a Pulumi program cannot assume a gpg binary
   (an OpenPGP library would add a large parser and a lock change); the install
   program runs under `python -I` before any package exists. pip's
-  `--require-hashes` is the control that stays on; the pattern only refuses
-  early. Both inputs come from reviewed `main`. A publish-time `gpg --show-keys`
+  `--require-hashes`, with `--only-binary=:all:` (pip does not hash-check the
+  build dependencies of a source build, so nothing is built), is the control that
+  stays on; the pattern only refuses early. Both inputs come from reviewed `main`. A publish-time `gpg --show-keys`
   in the Python tool is not built.
 - **Until the record has a producer, nothing checks where it came from.**
   `assertPullBootstrap` checks the shape of a record, not its provenance. Nothing

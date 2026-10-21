@@ -13,12 +13,15 @@ same steps, in the same order:
    encoding other than UTF-8;
 3. name the environment by a fingerprint of the lock text;
 4. build ``venv-<fingerprint>`` and install the lock into it with hash checking
-   required;
+   required and wheels only (``--only-binary=:all:``);
 5. write the marker that the install finished, then, only when asked, move the
    ``ansible-playbook`` link.
 
 A failure at any step leaves the link where it was. It never installs an engine
-that the lock does not name, and it never installs from anywhere but the lock.
+that the lock does not name. Every file pip installs is a wheel whose hash the lock lists:
+pip is told to build nothing, because pip does not hash-check the build dependencies of a
+source build, so a package with no wheel for the host's interpreter fails the install
+(the host stays un-enrolled) and is never built.
 
 The paths and the fingerprint are the ones the role has always used, so the
 role's environments do not change.
@@ -65,8 +68,10 @@ MAX_LOCK_BYTES: Final = 4_000_000
 # packaging.requirements, is a package, and pip's vendored copy is not a supported import).
 # It is also not the control. The lock's SHA-256 comes from a record built from reviewed main,
 # and pip's own --require-hashes (always passed, below) is the maintained refusal of an unpinned
-# or unhashed requirement and verifies every downloaded file against its hash. This pattern only
-# refuses early, with a reason of this program's own, and leaves nothing behind.
+# or unhashed requirement and checks each requirement's downloaded file against its hash. That
+# covers every installed file only because --only-binary=:all: is passed with it: pip does not
+# hash-check the build dependencies of a source build, and with wheels only there is no build.
+# This pattern only refuses early, with a reason of this program's own, and leaves nothing behind.
 MARKER_CHARS: Final = r"[A-Za-z0-9_.'\" =!<>()]"
 REQUIREMENT: Final = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]+\])?"
@@ -366,6 +371,12 @@ def install_environment(
         "install",
         "--require-virtualenv",
         "--require-hashes",
+        # No source build, ever. pip does not hash-check the build dependencies of a source
+        # build (build_env.py passes require_hashes=False), so a lock entry with no wheel for
+        # this interpreter would otherwise run, as root, a build backend fetched from the index
+        # with no hash. With this flag such an entry fails the install instead (ruling 1C: the
+        # host stays un-enrolled), and every file pip installs is a wheel checked against the lock.
+        "--only-binary=:all:",
         "--no-input",
         "--disable-pip-version-check",
         "-r",

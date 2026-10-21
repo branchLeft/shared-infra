@@ -15,8 +15,15 @@ This role puts one there. It:
 1. Installs the packages `python3` and `python3-venv`.
 2. Copies the lock file to the host, named by a fingerprint of its text.
 3. Makes a virtual environment for that lock and installs the lock into it with
-   hash checking required, so that every package must match a hash in the lock
-   and a package the lock does not name is refused.
+   hash checking required and wheels only (`--only-binary=:all:`), so that every
+   package must match a hash in the lock, a package the lock does not name is
+   refused, and nothing is built from source. The wheels-only flag is part of the
+   control: pip does not hash-check the build dependencies of a source build, so
+   without it a lock entry with no wheel for the host's interpreter would run, as
+   root, a build backend fetched from the index with no hash. With it, such an
+   entry fails the install and the host stays as it was. The Molecule test
+   installs the repository's real lock with the flag on, on the production Debian
+   release.
 4. Writes a marker in the environment when the install finished.
 5. Points the `ansible-playbook` link at that environment, last, so a failed
    install leaves the previous environment in service.
@@ -43,7 +50,7 @@ tests and in the Molecule verify); refuses a fingerprint other than the one the
 caller expects; opens the lock without following a link; refuses an
 environments directory that is a link, not the caller's own or writable by
 others; builds the environment with a scrubbed process environment (no pip
-variable of the caller reaches the install); installs with hash checking required; checks that
+variable of the caller reaches the install); installs with hash checking required and wheels only; checks that
 `ansible-playbook` is an executable file in the environment; writes the marker
 last; and, only when asked with `--link`, replaces the `ansible-playbook` link
 atomically. Every failure exits 1 with one JSON line on stdout that names the
