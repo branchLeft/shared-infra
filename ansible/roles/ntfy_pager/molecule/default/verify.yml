@@ -1,4 +1,43 @@
 ---
+# The project directory is a constant of the role, not an input. A play variable
+# of the same name is below a value in vars/ in Ansible's order, as an inventory
+# variable is, so applying the role with one must move nothing. The play sits
+# first so that a role which obeyed the variable would leave the other directory
+# behind for the checks of the next play to find. The four values are the
+# converge's, so on a converged instance nothing else changes.
+- name: Verify a play variable does not move the project directory
+  hosts: all
+  gather_facts: false
+  vars:
+    ntfy_pager_project_dir: /opt/elsewhere
+    ntfy_pager_pager_token: test-sentinel-pager-token-0001
+    ntfy_pager_watcher_token: test-sentinel-watcher-token-0002
+    ntfy_pager_owner_password_hash: test-sentinel-owner-hash-0003
+    ntfy_pager_machine_password_hash: test-sentinel-machine-hash-0004
+  tasks:
+    - name: Apply the role with a play variable that names another project directory
+      ansible.builtin.include_role:
+        name: branchleft.ntfy_pager
+
+    - name: Look at the other directory and at the renderer where the unit runs it
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /opt/elsewhere
+        - /opt/branchleft/monitoring/render_alertmanager_config.py
+      register: ntfy_pager_verify_moved
+
+    - name: Assert a play variable did not move the project directory
+      ansible.builtin.assert:
+        that:
+          - not ntfy_pager_verify_moved.results[0].stat.exists
+          - ntfy_pager_verify_moved.results[1].stat.exists
+          - ntfy_pager_verify_moved.results[1].stat.isreg
+        quiet: true
+        fail_msg: >-
+          A play variable moved the project directory: /opt/elsewhere exists, or the renderer is no longer in
+          /opt/branchleft/monitoring. The path is a constant of the role.
+
 - name: Verify
   hosts: all
   gather_facts: false

@@ -218,6 +218,42 @@
         verify_image_pattern: '^[^\s@]+@sha256:[0-9a-f]{64}\Z'
       delegate_to: localhost
 
+# The project directory is a constant of the role, not an input. A play variable
+# of the same name is below a value in vars/ in Ansible's order, as an inventory
+# variable is, so applying the role with one must move nothing. Were it obeyed,
+# the role would deliver and hash the files in the other directory while the unit
+# went on running the ones in /opt/branchleft/monitoring, and every check would
+# stay green. The play runs on the converged instance with the scenario's own
+# inputs, so a role that ignores the variable changes nothing here.
+- name: Verify a play variable does not move the project directory
+  hosts: all
+  gather_facts: false
+  vars:
+    monitoring_stack_project_dir: /opt/elsewhere
+  tasks:
+    - name: Apply the role with a play variable that names another project directory
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+
+    - name: Look at the other directory and at the stack where the unit runs it
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /opt/elsewhere
+        - /opt/branchleft/monitoring/compose.yml
+      register: monitoring_stack_verify_moved
+
+    - name: Assert a play variable did not move the project directory
+      ansible.builtin.assert:
+        that:
+          - not monitoring_stack_verify_moved.results[0].stat.exists
+          - monitoring_stack_verify_moved.results[1].stat.exists
+          - monitoring_stack_verify_moved.results[1].stat.isreg
+        quiet: true
+        fail_msg: >-
+          A play variable moved the project directory: /opt/elsewhere exists, or the stack is no longer in
+          /opt/branchleft/monitoring. The path is a constant of the role.
+
 # The secrets file, the edge drop-in and the renderer path. The secrets file is
 # read with no_log, so no value reaches the output: the check counts the keys.
 - name: Verify the monitoring secrets file, the edge drop-in and the renderer path
@@ -232,6 +268,8 @@
     verify_dropin_repo: '{{ verify_repo }}/hetzner/monitoring/systemd/monitoring.override.conf'
     verify_ntfy_vars: '{{ verify_repo }}/ansible/roles/ntfy_pager/vars/main.yml'
     verify_role_vars: '{{ verify_repo }}/ansible/roles/monitoring_stack/vars/main.yml'
+    verify_project_dir: /opt/branchleft/monitoring
+    verify_template_source: '{{ verify_repo }}/hetzner/provision/branchleft-compose@.service'
     verify_env_keys:
       - SMTP_USERNAME
       - SMTP_PASSWORD
@@ -337,6 +375,33 @@
           ntfy_pager's constant ({{ monitoring_stack_verify_ntfy.ntfy_pager_env_file | default('not in its vars/main.yml') }}) and the monitoring drop-in's
           EnvironmentFile, which must name {{ verify_env_file }}.
 
+    # The project directory is held in three places as well: this role's constant,
+    # ntfy_pager's constant and the WorkingDirectory the shared unit template
+    # derives from the instance name. The unit runs from the template's directory
+    # and the monitoring drop-in names the renderer in it, so a copy that differs
+    # sends files where the unit does not run them while the checks stay green.
+    # Both roles hold it in vars/, so no inventory or play value can move one copy;
+    # a path moved back to defaults/ or dropped from vars/ reads as absent here and
+    # fails. The message names all three.
+    - name: Read the shared unit template
+      ansible.builtin.set_fact:
+        monitoring_stack_verify_template_text: "{{ lookup('ansible.builtin.file', verify_template_source) }}"
+
+    - name: Assert the three places agree on the project directory
+      ansible.builtin.assert:
+        that:
+          - (monitoring_stack_verify_role.monitoring_stack_project_dir | default('absent')) == verify_project_dir
+          - (monitoring_stack_verify_ntfy.ntfy_pager_project_dir | default('absent')) == verify_project_dir
+          - ('WorkingDirectory=/opt/branchleft/%i') in monitoring_stack_verify_template_text
+        quiet: true
+        fail_msg: >-
+          The project directory differs between this role's constant
+          ({{ monitoring_stack_verify_role.monitoring_stack_project_dir | default('not in its vars/main.yml') }}),
+          ntfy_pager's constant
+          ({{ monitoring_stack_verify_ntfy.ntfy_pager_project_dir | default('not in its vars/main.yml') }})
+          and the WorkingDirectory of the shared unit template, which for the instance named monitoring
+          must be {{ verify_project_dir }}.
+
 # The restart decision. Everything above looked at the converged host; here each
 # case changes one thing the decision depends on, runs the role again, and reads
 # what happened: how many times the docker stand-in was called (every restart of
@@ -357,6 +422,7 @@
     verify_rot_f: test-sentinel-rotated-smtp-0015
     verify_rot_g: test-sentinel-rotated-smtp-0016
     verify_rot_h: test-sentinel-rotated-smtp-0022
+    verify_rot_i: test-sentinel-rotated-smtp-0023
     verify_rot_snds: https://test.invalid/snds/test-sentinel-rotated-0009
     verify_ntfy_pager_1: test-sentinel-ntfy-pager-0010
     verify_ntfy_pager_2: test-sentinel-ntfy-pager-0018
@@ -369,6 +435,7 @@
     verify_renderer_path: /opt/branchleft/monitoring/render_alertmanager_config.py
     verify_template_path: /etc/systemd/system/branchleft-compose@.service
     verify_fail_flag: /run/docker-standin.fail
+    verify_dropin_repo: '{{ playbook_dir }}/../../../../../hetzner/monitoring/systemd/monitoring.override.conf'
   tasks:
     # ----- The stamp, and what the fingerprint is made of -----
     - name: Look at the stamp and the directory it is in
@@ -488,6 +555,114 @@
           A rotated SMTP_PASSWORD did not restart the unit exactly once and move the stamp, or the rerun with
           the same value restarted it again.
 
+    # ----- A key changed, then a run that fails before the restart: the rerun restarts -----
+    # The crash window of a handler. The key is written, the run fails before it
+    # reaches the restart, and the rerun finds the file already holding the new
+    # value: only the stamp, which the failed run did not move, can tell the role
+    # that a restart is still due. The run is made to fail by putting a plain file
+    # where the stamp's directory is, which the role cannot turn into a directory;
+    # no hook is in the role. The key is put back at the end, with one more
+    # restart, so the cases that follow start from the value they expect.
+    - name: Snapshot before a key is changed and the run fails
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: crash_before
+
+    - name: Move the stamp's directory aside
+      ansible.builtin.command:
+        argv: [mv, /var/lib/branchleft, /var/lib/branchleft.aside]
+      changed_when: true
+
+    - name: Put a plain file where the stamp's directory was
+      ansible.builtin.copy:
+        content: ''
+        dest: /var/lib/branchleft
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Apply the role with a changed key, which writes it and then fails
+      block:
+        - name: Apply the role with SMTP_PASSWORD changed while the stamp's directory cannot be made
+          ansible.builtin.include_role:
+            name: branchleft.monitoring_stack
+          vars:
+            monitoring_stack_smtp_password: '{{ verify_rot_i }}'
+        - name: Note that the role did not fail
+          ansible.builtin.set_fact:
+            monitoring_stack_verify_failed_run: false
+      rescue:
+        - name: Note that the role failed
+          ansible.builtin.set_fact:
+            monitoring_stack_verify_failed_run: true
+
+    - name: Take the plain file away and put the stamp's directory back
+      ansible.builtin.file:
+        path: /var/lib/branchleft
+        state: absent
+
+    - name: Move the stamp's directory back
+      ansible.builtin.command:
+        argv: [mv, /var/lib/branchleft.aside, /var/lib/branchleft]
+      changed_when: true
+
+    - name: Snapshot after the run that failed before the restart
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: crash_failed
+
+    - name: Read the monitoring secrets file after the failed run
+      ansible.builtin.slurp:
+        src: /etc/branchleft/monitoring.env
+      register: monitoring_stack_verify_crash_env
+      no_log: true
+
+    - name: Assert the failed run wrote the key, restarted nothing and left the stamp
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_failed_run
+          - ('SMTP_PASSWORD=' ~ verify_rot_i) in (monitoring_stack_verify_crash_env.content | b64decode).splitlines()
+          - monitoring_stack_verify_snaps.crash_failed.calls == monitoring_stack_verify_snaps.crash_before.calls
+          - monitoring_stack_verify_snaps.crash_failed.stamp == monitoring_stack_verify_snaps.crash_before.stamp
+        quiet: true
+        fail_msg: >-
+          The run that was made to fail did not fail, or did not write the changed key, or restarted the unit,
+          or moved the stamp.
+      no_log: true
+
+    - name: Apply the role again with the same changed key
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+      vars:
+        monitoring_stack_smtp_password: '{{ verify_rot_i }}'
+
+    - name: Snapshot after the rerun
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: crash_after
+
+    - name: Assert the rerun, which finds the key already in the file, restarted the unit once and stamped
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_snaps.crash_after.calls == monitoring_stack_verify_snaps.crash_failed.calls + 1
+          - monitoring_stack_verify_snaps.crash_after.stamp != monitoring_stack_verify_snaps.crash_before.stamp
+          - monitoring_stack_verify_snaps.crash_after.active == 'active'
+        quiet: true
+        fail_msg: >-
+          The rerun after a run that failed before the restart did not restart the unit exactly once and stamp
+          the fingerprint: the restart of a changed key was lost with the failed run.
+
+    - name: Apply the role with the key put back
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+      vars:
+        monitoring_stack_smtp_password: '{{ verify_rot_a }}'
+
+    - name: Snapshot with the key put back
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: crash_restore
+
     # ----- The SNDS key is left out of the fingerprint -----
     - name: Apply the role with SNDS_DATA_URL rotated
       ansible.builtin.include_role:
@@ -511,8 +686,8 @@
       ansible.builtin.assert:
         that:
           - ('SNDS_DATA_URL=' ~ verify_rot_snds) in (monitoring_stack_verify_snds_env.content | b64decode).splitlines()
-          - monitoring_stack_verify_snaps.snds_after.calls == monitoring_stack_verify_snaps.rotate_rerun.calls
-          - monitoring_stack_verify_snaps.snds_after.stamp == monitoring_stack_verify_snaps.rotate_rerun.stamp
+          - monitoring_stack_verify_snaps.snds_after.calls == monitoring_stack_verify_snaps.crash_restore.calls
+          - monitoring_stack_verify_snaps.snds_after.stamp == monitoring_stack_verify_snaps.crash_restore.stamp
         quiet: true
         fail_msg: A rotation of SNDS_DATA_URL was not written, or restarted the unit, or moved the stamp.
       no_log: true
@@ -624,6 +799,142 @@
         quiet: true
         fail_msg: A changed renderer did not restart the unit exactly once.
 
+    # ----- The monitoring drop-in is in the fingerprint: a new release of its ExecStart restarts the unit -----
+    # A release of the repository that changes the drop-in is made on the
+    # controller: a copy of this role, links followed, in a scratch directory, with
+    # a drop-in that differs from the repository's in its limit and in one argument
+    # of its ExecStart. The host is then in the state a release leaves it in: the
+    # stamp holds the previous release and the unit runs from it. Applying the copy
+    # must install the new drop-in, make systemd read it, and restart the unit under
+    # it, once: the stand-in docker is the ExecStart, and it logs the argument, so a
+    # restart that ran under the earlier drop-in does not show it. Nothing else
+    # changes, so only the drop-in can make a restart due. This is the case that the
+    # static assertion on the fingerprint's list cannot make: that the file the list
+    # names is the file the unit runs from. Applying this role again puts the
+    # repository's drop-in back and restarts once more, which is also the state the
+    # cases below expect. The repository is not written: the copy is checked not to
+    # be a link before it is changed.
+    - name: Make a scratch directory on the controller
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: monitoring_stack_next_release_
+      register: monitoring_stack_verify_scratch
+      delegate_to: localhost
+
+    - name: Copy this role into it, with its links followed
+      ansible.builtin.command:
+        argv:
+          - cp
+          - -RL
+          - '{{ playbook_dir }}/../..'
+          - '{{ monitoring_stack_verify_scratch.path }}/monitoring_stack'
+      changed_when: true
+      delegate_to: localhost
+
+    - name: Look at the copy's drop-in without following a link
+      ansible.builtin.stat:
+        path: '{{ monitoring_stack_verify_scratch.path }}/monitoring_stack/files/monitoring.override.conf'
+        follow: false
+      register: monitoring_stack_verify_copy_dropin
+      delegate_to: localhost
+
+    - name: Assert the copy's drop-in is a file of its own and not a link into the repository
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_copy_dropin.stat.exists
+          - monitoring_stack_verify_copy_dropin.stat.isreg
+          - not monitoring_stack_verify_copy_dropin.stat.islnk
+        quiet: true
+        fail_msg: The copy of the role still links its drop-in into the repository, so writing it would change the repository.
+
+    - name: Write the next release of the drop-in into the copy
+      ansible.builtin.copy:
+        content: >-
+          {{ lookup('ansible.builtin.file', verify_dropin_repo)
+          | ansible.builtin.regex_replace('MemoryMax=2048M', 'MemoryMax=3072M')
+          | ansible.builtin.regex_replace('--force-recreate\n', '--force-recreate --test-next-release\n') }}
+        dest: '{{ monitoring_stack_verify_scratch.path }}/monitoring_stack/files/monitoring.override.conf'
+        mode: '0644'
+      delegate_to: localhost
+
+    - name: Snapshot before the next release of the monitoring drop-in
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: dropin_before
+
+    - name: Name the copy of the role by its path
+      ansible.builtin.set_fact:
+        monitoring_stack_verify_next_role: '{{ monitoring_stack_verify_scratch.path ~ "/monitoring_stack" }}'
+
+    - name: Apply the copy of the role that carries the next release
+      ansible.builtin.include_role:
+        name: '{{ monitoring_stack_verify_next_role }}'
+      vars:
+        monitoring_stack_smtp_password: '{{ verify_rot_a }}'
+        monitoring_stack_snds_data_url: '{{ verify_rot_snds }}'
+
+    - name: Snapshot after the next release of the monitoring drop-in
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: dropin_after
+
+    - name: Ask systemd for the monitoring instance after the next release
+      ansible.builtin.systemd_service:
+        name: '{{ verify_unit }}'
+      register: monitoring_stack_verify_dropin_unit
+
+    - name: Read the log of the docker stand-in's calls after the next release
+      ansible.builtin.slurp:
+        src: /var/log/docker-standin.calls
+      register: monitoring_stack_verify_dropin_calls
+
+    - name: Assert the next release of the drop-in was read by systemd and restarted the unit once under it
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_dropin_unit.status.MemoryMax == '3221225472'
+          - monitoring_stack_verify_snaps.dropin_after.calls == monitoring_stack_verify_snaps.dropin_before.calls + 1
+          - monitoring_stack_verify_snaps.dropin_after.stamp != monitoring_stack_verify_snaps.dropin_before.stamp
+          - monitoring_stack_verify_snaps.dropin_after.active == 'active'
+          - "'--test-next-release' in (monitoring_stack_verify_dropin_calls.content | b64decode).splitlines()[-1]"
+        quiet: true
+        fail_msg: >-
+          A new release of the monitoring drop-in did not restart the unit exactly once under it, or systemd did not
+          read it, or the stamp did not move (monitoring MemoryMax
+          {{ monitoring_stack_verify_dropin_unit.status.MemoryMax }}, calls
+          {{ monitoring_stack_verify_snaps.dropin_before.calls }} before and {{ monitoring_stack_verify_snaps.dropin_after.calls }} after).
+
+    - name: Apply this role, which puts the repository's drop-in back
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+      vars:
+        monitoring_stack_smtp_password: '{{ verify_rot_a }}'
+        monitoring_stack_snds_data_url: '{{ verify_rot_snds }}'
+
+    - name: Snapshot with the repository's drop-in back
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: dropin_restored
+
+    - name: Ask systemd for the monitoring instance with the repository's drop-in back
+      ansible.builtin.systemd_service:
+        name: '{{ verify_unit }}'
+      register: monitoring_stack_verify_dropin_back
+
+    - name: Assert the repository's drop-in is loaded again and the unit was restarted once under it
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_dropin_back.status.MemoryMax == '2147483648'
+          - monitoring_stack_verify_snaps.dropin_restored.calls == monitoring_stack_verify_snaps.dropin_after.calls + 1
+          - monitoring_stack_verify_snaps.dropin_restored.active == 'active'
+        quiet: true
+        fail_msg: Putting the repository's drop-in back did not restart the unit exactly once under it.
+
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: '{{ monitoring_stack_verify_scratch.path }}'
+        state: absent
+      delegate_to: localhost
+
     # ----- A change to the edge drop-in is applied and does not restart monitoring -----
     - name: Put an earlier release of the edge drop-in on the instance
       ansible.builtin.copy:
@@ -656,8 +967,8 @@
       ansible.builtin.assert:
         that:
           - monitoring_stack_verify_edge_unit.status.MemoryMax == '1610612736'
-          - monitoring_stack_verify_snaps.edge_after.calls == monitoring_stack_verify_snaps.renderer_after.calls
-          - monitoring_stack_verify_snaps.edge_after.stamp == monitoring_stack_verify_snaps.renderer_after.stamp
+          - monitoring_stack_verify_snaps.edge_after.calls == monitoring_stack_verify_snaps.dropin_restored.calls
+          - monitoring_stack_verify_snaps.edge_after.stamp == monitoring_stack_verify_snaps.dropin_restored.stamp
         quiet: true
         fail_msg: >-
           A change to the edge drop-in was not put back and read by systemd, or it restarted the monitoring unit
@@ -1282,6 +1593,7 @@
       - test-sentinel-rotated-smtp-0015
       - test-sentinel-rotated-smtp-0016
       - test-sentinel-rotated-smtp-0022
+      - test-sentinel-rotated-smtp-0023
   tasks:
     - name: Read the log of this scenario's Ansible runs
       ansible.builtin.set_fact:
