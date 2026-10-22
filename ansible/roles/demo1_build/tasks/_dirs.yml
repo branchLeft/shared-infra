@@ -92,6 +92,52 @@
       colour drained, seed the directory: remove the empty directory (rmdir {{ demo1_build_flag_dir }})
       and run the role again, which creates and seeds it.
 
+# The staged move below is one rename(2), and a rename cannot cross filesystems. When
+# the staging directory and the broker's state directory are on different ones, GNU mv
+# does not fail: it falls back to copying the tree and removing the source. The copy
+# makes the directory in the broker's tree first and writes each flag through that
+# name, which is the write through a name the broker owns that the staged move exists
+# to prevent, and neither the order check nor the staging check in the refusals
+# scenario would see it. So the premise, one filesystem, is asserted here, before
+# anything is created and in a plan as well as an apply, only where the move will run.
+# The two sides are the parent of the staging directory (the state root) and the
+# broker's state directory, or its parent where it does not exist yet. A staging
+# directory a dead run left is read too. The device number is the check; a bind mount
+# of the same filesystem shares it, which is a named limit in the README.
+- name: Check that the staged move stays on one filesystem
+  when:
+    - not demo1_build_flag_dir_stat.stat.exists
+    - not demo1_build_preseed_marker_stat.stat.exists
+  block:
+    - name: Look at the filesystems on both sides of the move, without following a link
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - '{{ demo1_build_flag_staging_dir | dirname }}'
+        - '{{ demo1_build_flag_staging_dir }}'
+        - '{{ demo1_build_broker_state_dir }}'
+        - '{{ demo1_build_broker_state_dir | dirname }}'
+      register: demo1_build_move_stat
+
+    - name: Refuse a move between two filesystems
+      ansible.builtin.assert:
+        that:
+          - demo1_build_move_devs | unique | length == 1
+        quiet: true
+        fail_msg: >-
+          The drain flags are written in {{ demo1_build_flag_staging_dir }} and that directory is moved to
+          {{ demo1_build_flag_dir }}, and a rename cannot cross filesystems: mv would copy the tree into the
+          broker's directory and write each flag through a name the broker owns. The staging parent and the
+          broker's state directory (or its parent) are on devices {{ demo1_build_move_devs }}, which must be one.
+      vars:
+        demo1_build_move_results: '{{ demo1_build_move_stat.results }}'
+        demo1_build_move_devs: >-
+          {{ [demo1_build_move_results[0].stat.dev]
+          + ([demo1_build_move_results[1].stat.dev] if demo1_build_move_results[1].stat.exists else [])
+          + [(demo1_build_move_results[2].stat if demo1_build_move_results[2].stat.exists
+          else demo1_build_move_results[3].stat).dev] }}
+
 # The root of the router's sockets is root's and closed to everyone else:
 # whoever can write it can rename the router's whole tree. Below it every slot
 # and colour directory is private to the router, by number, because the account
@@ -140,7 +186,9 @@
 # close that, and neither can making the directory root's first: the name is still
 # resolved in the broker's directory at every write. The staging directory is under
 # the state root, which only root can write, so nothing the broker owns is resolved
-# while root writes. The move is one rename of the directory itself: rename does not
+# while root writes. The move is one rename of the directory itself, which holds only
+# where the staging directory and the broker's state directory are on one filesystem
+# (asserted before anything is created, above): rename does not
 # follow a link at the name it replaces, and it refuses to put a directory over a
 # link or over a directory that holds anything, so a link or a full directory the
 # broker put there in the meantime stops the run and nothing is written through it.

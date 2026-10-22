@@ -244,7 +244,9 @@ the same name in its place, and a root task that writes a path through that name
 follows the link. The link check cannot close that, and nor can making the flag
 directory root's first, because the name is still resolved in the broker's directory
 at every write. So the order is: (1) the declared directories are read and refused
-if a link or not a directory; (2) the staging directory
+if a link or not a directory, and the staging directory's parent (the state root) and
+the broker's state directory (or its parent, where it does not exist yet) are read and
+refused unless they are on one filesystem (see the premise below); (2) the staging directory
 `/var/lib/branchleft/demo-drain-flags-staging` is made, root's `0700`, under the
 state root, which only root can write; (3) the fourteen flags are written into it;
 (4) the staging directory is moved to the flag directory's name with
@@ -256,6 +258,20 @@ it replaces, and refuses a directory over a link or over a directory that holds
 anything, so a link or a full directory the broker put there in the meantime stops
 the run with nothing written through it. A directory the broker made there empty is
 replaced.
+
+The premise of step 4: it is one rename only where the staging directory and the
+broker's state directory are on the same filesystem. A rename cannot cross
+filesystems, and GNU `mv` does not then fail: it copies the tree and removes the
+source. The copy makes the directory in the broker's tree first and writes each flag
+through that name, which is the write through a name the broker owns that the staged
+move is there to prevent; the order and staging checks below would not see it (the
+copy keeps the flags' times and `mv` removes the source). So step 1 compares the device
+number of the state root with that of the broker's state directory (and of a staging
+directory a dead run left) and refuses the run, before anything is created, naming both
+devices, in a plan as well as an apply. The two are one filesystem on the demo host
+(`/var/lib` is not split, and no mount in this repository splits it), which is why this
+is a guard and not a live fault. The device number does not see a bind mount of the same
+filesystem (see the named limits).
 
 The declaration in step 5 runs on every run and is the only task that touches the
 flag directory on a host that already has one. It never sets the directory to root's
@@ -305,6 +321,7 @@ the task. In order:
 | `demo_uid_claims.py`                                     | Never run.                                                                                                                                                   |
 | Drain-flag staging, pre-seed, move and marker            | Never run.                                                                                                                                                   |
 | Link check on the declared directories                   | Run: reads and refuses, so a plan on a host with a link in place stops there.                                                                                |
+| Same-filesystem check of the staged move                 | Run where the move would run (no flag directory, no marker): reads and refuses, so a plan on a host whose state root and broker directory are split stops.   |
 | Refusal of an empty flag directory with no marker        | Run: reads and refuses, so a plan on such a host stops there with both remedies named.                                                                       |
 | Integrity read-back                                      | Not run: it reads the result of a real run.                                                                                                                  |
 
@@ -492,6 +509,12 @@ prepared grant back in every outcome. Each expects the refusal named in its case
   or moved into it), and the staging directory is gone. A directory made in the
   broker's tree first and filled after has an older time than its newest flag, and a
   copy leaves the staging directory behind;
+- the staged move between two filesystems, refused before anything is created
+  (`refused_device.yml`): the staging directory on `/run`, a tmpfs in the test
+  container, and the broker's state directory on it (not yet made, so its parent is
+  read), each refused with "cannot cross filesystems" naming the devices, and nothing
+  left behind. The control that the check does not refuse everything is the accepted
+  case of `refused_link.yml`, which runs the step on the real paths, on one filesystem;
 - an eighth slot in the role's slot table, refused by the slot-table assertion;
 - a pinned checksum with one digit changed, which stops the role at the download,
   naming the checksum.
@@ -551,6 +574,8 @@ assertion fires in its place or a later one is the only one left:
 | One of the two seeding tests removed (the other still holds)                                              | none                                    | not detected: the directory test and the marker test each hold alone (a named limit below)                                 |
 | The flags written in the broker's tree (staging removed, the directory made at its name and filled there) | refusals, `converge`                    | "gained the drain-flag directory before the newest flag was in it", in the accepted control of `refused_link.yml`          |
 | The move replaced by a copy (the staging directory left behind)                                           | refusals, `converge`                    | "The drain-flag staging directory is still there. The directory was copied and not moved into place."                      |
+| The same-filesystem assertion made vacuous (`- true`)                                                     | refusals, `converge`                    | "The role accepted a staging directory and a flag directory on different filesystems." (the copy fallback of `mv` ran)     |
+| The broker directory's parent no longer read where the directory does not exist yet                       | refusals, `converge`                    | the same message, for the staging directory on a tmpfs                                                                     |
 | A task that sets an existing flag directory to root's before it is handed back                            | refusals, `converge`                    | "The role changed a flag directory that was already the broker's", in the two accepted cases of `refused_unmarked.yml`     |
 | `_programs.yml` run before `_sudoers_check.yml`                                                           | default, `converge`                     | "The role wrote /usr/local/sbin/branchleft-slot-refused-probe and then refused it." (the probe path exists after the run)  |
 | The NOT verified notice removed, or printed on a configured host                                          | plan, `check-fresh`, `check-configured` | "A plan on a host with no staged release did not say the sudoers grant was NOT verified"                                   |
@@ -594,6 +619,15 @@ other unit tests of `ansible/harness`.
   can put the link in that gap. What the tests hold is the order around it: the flags
   exist before the directory appears in the broker's tree, and the move leaves
   nothing behind.
+- **One filesystem is read as one device number.** The same-filesystem check compares
+  `stat` device numbers, so it does not see a bind mount of the same filesystem (the
+  device number is shared and a rename across the mount point still fails), nor a mount
+  that appears between the read and the move. Only root can mount, and no mount in this
+  repository splits `/var/lib`. The test container cannot mount (no capability is
+  added), so it uses `/run`, a tmpfs, as the other filesystem, and cannot make a
+  broker directory that exists and is itself a mount point, so no test reaches the
+  branch that reads an existing broker directory's own device: it is the same
+  comparison with the directory in place of its parent.
 - **A silent skip passes, except one.** Tasks skipped in check mode on a host with
   no release are not caught by the harness; this table and the comments at each
   skip are the review of it (ANS-10). The grant comparison is the exception: its

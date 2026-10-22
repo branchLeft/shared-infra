@@ -29,6 +29,8 @@ demo1_build_flag_dir: /var/lib/branchleft-broker/drain-flags
 # Its parent, the state root, is root's and closed to group and others (the
 # preconditions require it), so the broker cannot rename or replace the staging
 # directory, which the broker could do to the drain-flag directory in its own tree.
+# It must stay on the same filesystem as the broker's state directory: the move is a
+# rename, and across filesystems mv copies instead (_dirs.yml refuses that).
 demo1_build_flag_staging_dir: /var/lib/branchleft/demo-drain-flags-staging
 demo1_build_broker_env_file: /etc/branchleft/broker.env
 # Says the drain flags were preseeded once. It lives in root's configuration

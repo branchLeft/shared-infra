@@ -243,6 +243,30 @@
       file_at: /var/lib/branchleft-broker/drain-flags
       parents: [/var/lib/branchleft-broker]
 
+# The staged move is one rename and a rename cannot cross filesystems; GNU mv copies
+# instead of failing, and the copy writes each flag through a name the broker owns. So
+# the step refuses a staging directory and a flag directory on different filesystems,
+# before it creates anything. /run is a tmpfs in the test container, a filesystem none
+# of the role's own paths is on. The real paths, on one filesystem, are the control: the
+# accepted case of refused_link.yml above.
+- name: Refuse a staging directory on another filesystem
+  ansible.builtin.import_playbook: refused_device.yml
+  vars:
+    converge_case:
+      name: the staging directory on a tmpfs
+      staging_dir: /run/demo-drain-flags-staging
+
+# The broker's state directory does not exist on a first build, so the step reads its
+# parent in its place; the case puts both on the tmpfs. (A directory that exists and is
+# itself a mount point cannot be made without a mount, which the unprivileged test
+# container cannot do: the README names it.)
+- name: Refuse a broker state directory, not yet made, whose parent is on another filesystem
+  ansible.builtin.import_playbook: refused_device.yml
+  vars:
+    converge_case:
+      name: the broker's state directory on a tmpfs, not yet made
+      broker_dir: /run/demo-broker-state
+
 # A flag directory that was already there is never seeded. One that exists, is empty
 # and has no marker cannot be told from a host where every colour has gone live, so it
 # is refused with both remedies named. The two controls are the same directory in a
