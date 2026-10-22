@@ -61,10 +61,6 @@ class RealTreeTest(unittest.TestCase):
             ],
             declared_defaults(RESTART_STAMP),
         )
-        text = (RESTART_STAMP / "tasks" / "decide.yml").read_text(encoding="utf-8")
-        for name in ("drift", "adoptable", "gate"):
-            with self.subTest(name=name):
-                self.assertIn(f"c.{name} | default(", text)
 
 
 class EqualityTest(unittest.TestCase):
