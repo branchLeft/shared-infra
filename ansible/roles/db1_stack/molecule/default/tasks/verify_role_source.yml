@@ -10,7 +10,13 @@
 # - the tasks: every task names one module on an allowlist, and each module takes
 #   only the options the role uses, written as a mapping, never as a string;
 # - the values: a systemd task cannot start or restart, a file task can remove only
-#   the paths the role removes, and no lookup runs a command.
+#   through four variables, each of which vars/main.yml sets to the one path this
+#   test names for it, and no lookup runs a command.
+#
+# What the values check does not cover is in the README's named limits: where a
+# copy, a template or a file task that does not remove writes, what a copy or a
+# template reads, which packages apt installs, and what a playbook that applies
+# the role passes in.
 #
 # It needs db1_stack_verify_role_files, the list of the role directory that
 # verify.yml registers before part two. It runs on the controller's copy of the
@@ -335,6 +341,44 @@
   loop_control:
     label: '{{ item.name | default("(no name)") }}'
   no_log: true
+
+# The assertion above binds a removal to the name of a variable. These bind each
+# name to the path it holds, read as written from vars/main.yml, so a one-line
+# change of a value, to the database's data or its secrets file, fails here. The
+# paths are written out in this test, not read from the role. The list of names
+# must be the names the removal check allows, so a name cannot be allowed there
+# without a path here. These tasks handle no secret.
+- name: Read the role's vars file as written, and name the path each removal variable may hold
+  ansible.builtin.set_fact:
+    db1_stack_verify_role_vars: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/vars/main.yml') | from_yaml }}"
+    db1_stack_verify_removal_values:
+      db1_stack_legacy_files:
+        - /etc/apt/sources.list.d/mysql-community.list
+        - /usr/share/keyrings/mysql.gpg
+      db1_stack_exporter_cnf_path: /etc/branchleft/db-exporter.my.cnf
+      db1_stack_legacy_drop_in: /etc/systemd/system/branchleft-compose@db.service.d/override.conf
+      db1_stack_reload_marker: /var/cache/db1-stack/legacy-drop-in-reloaded
+
+- name: Assert the variables a removal may name are the ones this test names a path for
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_role_vars is mapping
+      - (db1_stack_verify_removal_names | difference(['item']) + ['db1_stack_legacy_files']) | sort == db1_stack_verify_removal_values.keys() | list | sort
+    fail_msg: The removal check allows a variable that this test names no path for, or the reverse.
+    quiet: true
+
+- name: Assert each variable a removal names holds the path this test names for it
+  ansible.builtin.assert:
+    that:
+      - item.key in db1_stack_verify_role_vars
+      - db1_stack_verify_role_vars[item.key] == item.value
+    fail_msg: >-
+      vars/main.yml sets {{ item.key }} to a value other than the path a removal may
+      reach. Expected {{ item.value }}; found {{ db1_stack_verify_role_vars[item.key] | default('nothing') }}.
+    quiet: true
+  loop: '{{ db1_stack_verify_removal_values | dict2items }}'
+  loop_control:
+    label: '{{ item.key }}'
 
 - name: Assert an apt task only installs
   ansible.builtin.assert:

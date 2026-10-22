@@ -41,25 +41,29 @@
     loop_var: db1_stack_verify_case
     label: '{{ db1_stack_verify_case.name }}'
 
-# A second compose file beside compose.yml is refused before any change. Compose
-# would read compose.yaml first, and the deploy program checks compose.yml.
-- name: Put a second compose file beside the compose file
-  ansible.builtin.copy:
-    content: "name: db\n"
-    dest: '{{ db1_stack_db_directory }}/compose.yaml'
-    owner: root
-    group: root
-    mode: '0644'
+# A second compose file, or an override file, beside compose.yml is refused before
+# any change. Compose would read a second base file in place of compose.yml and
+# would merge an override file into it, and the deploy program checks only
+# compose.yml. The names are written out here, not read from the role, so a name
+# removed from the role's list fails its own case. The unit runs `docker compose
+# up` with no -f, so these are the names Compose looks for by default, other
+# than compose.yml itself.
+- name: Make the names of the files Compose reads beside the compose file
+  ansible.builtin.set_fact:
+    db1_stack_verify_compose_names:
+      - compose.yaml
+      - docker-compose.yml
+      - docker-compose.yaml
+      - compose.override.yml
+      - compose.override.yaml
+      - docker-compose.override.yml
+      - docker-compose.override.yaml
 
-- name: Refuse the role beside a second compose file at its named task
-  ansible.builtin.include_tasks: refused.yml
-  vars:
-    refused_task: Refuse a second compose file in the database directory
-
-- name: Remove the second compose file
-  ansible.builtin.file:
-    path: '{{ db1_stack_db_directory }}/compose.yaml'
-    state: absent
+- name: Refuse the role beside each of those files at its named task
+  ansible.builtin.include_tasks: verify_compose_name_case.yml
+  loop: '{{ db1_stack_verify_compose_names }}'
+  loop_control:
+    loop_var: db1_stack_verify_compose_name
 
 - name: Read the database image pin again after the refusals
   ansible.builtin.slurp:

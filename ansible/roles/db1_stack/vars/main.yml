@@ -114,13 +114,20 @@ db1_stack_socket_directory: /opt/branchleft/db/run/mysqld
 db1_stack_unit: branchleft-compose@db.service
 db1_stack_systemd_running_path: /run/systemd/system
 
-# The compose file names that Docker Compose also reads from the project
-# directory. A second one beside compose.yml would be read by Compose and not by
-# the deploy program's check, so the role refuses to run while one exists.
+# The file names Docker Compose also reads from the project directory. The
+# stack's unit runs `docker compose up` there with no -f, and the deploy program
+# checks only compose.yml. A base file of another name would be read by Compose
+# in place of compose.yml. An override file would be merged into compose.yml, and
+# could swap the image, publish a port or add a service. Neither is seen by the
+# deploy program's check, so the role refuses to run while one exists.
 db1_stack_other_compose_names:
   - compose.yaml
   - docker-compose.yml
   - docker-compose.yaml
+  - compose.override.yml
+  - compose.override.yaml
+  - docker-compose.override.yml
+  - docker-compose.override.yaml
 
 # The pin file the deploy program writes (CONFIG_DIR/db.image.env). The role
 # reads it and never writes it: branchleft-deploy owns the database image pin.

@@ -37,8 +37,8 @@ It does not start, stop, restart or recreate any container, does not run
 `docker compose`, removes no volume and no data, and creates no user. A
 restart of the database is an owner's step, not this role's.
 
-It refuses to run, before it changes anything, when a second compose file sits
-beside `compose.yml`. It refuses when the database image pin that
+It refuses to run, before it changes anything, when a second compose file or a
+compose override file sits beside `compose.yml`. It refuses when the database image pin that
 `branchleft-deploy` writes is absent or is not the one line that program writes,
 but that check runs after the compose file is rendered and before the unit is
 enabled (see "The database image pin" for why, and for the bootstrap order).
@@ -215,9 +215,17 @@ recreated or started is not.
 
 `templates/compose.yml.j2` is rendered to `/opt/branchleft/db/compose.yml`. That
 is the name the deploy program checks, and the one the systemd template runs with
-`WorkingDirectory=/opt/branchleft/db`. The role refuses to run while
-`compose.yaml`, `docker-compose.yml` or `docker-compose.yaml` sits in the same
-directory: Compose would read it in place of `compose.yml`.
+`WorkingDirectory=/opt/branchleft/db`. The unit runs `docker compose up` there with
+no `-f`, so Compose reads whatever default file names it finds, and the deploy
+program checks only `compose.yml`. The role refuses to run while any of seven
+other names sits in the same directory. Three are base files that Compose would
+read in place of `compose.yml`: `compose.yaml`, `docker-compose.yml` and
+`docker-compose.yaml`. Four are override files that Compose would merge into
+`compose.yml`, where they could swap the image, publish a port or add a service
+without the deploy program's check seeing it: `compose.override.yml`,
+`compose.override.yaml`, `docker-compose.override.yml` and
+`docker-compose.override.yaml`. The `compose_stack` pattern refuses the same
+override names, for the same reason.
 
 - The database image is `image: ${IMAGE}`. `branchleft-deploy` writes the digest
   into `/etc/branchleft/db.image.env`, and the stack's unit reads it as its
@@ -387,7 +395,18 @@ showed only the test files); and verify passed again. How the rows were run:
   `verify_role_source.yml`. They were run on a converged instance as the play
   header of `verify.yml` followed by those two files, without the refusals in
   `verify_refusals.yml` (which run the role many times and are most of verify's run
-  time, and which no row below exercises, other than the first two).
+  time, and which no row below exercises, other than the first two and the
+  override rows).
+- The rows for the override files and the rows for the paths a removal holds were
+  added in the fourth review cycle and run against that head. The override rows
+  were run on a converged instance as the play header of `verify.yml` followed by
+  `verify_refusals.yml` alone: six cases for the image pin, then one case for each
+  of the seven file names. The row names the case that failed, counted in that
+  order. The rows for the paths a removal holds need no instance: the file reads
+  only the role's own files, so they were run on the controller as the role
+  directory and its file list followed by `verify_role_source.yml`. In a full
+  verify, the pins assertion in `verify.yml` compares the legacy file list with its
+  own copy and comes earlier, so the legacy-list row would fail there first.
 - A row that alters a rendered file or a task was converged again after the edit
   and after the revert, so the check read what the altered role wrote.
 - The rows that read the order of tasks in the log were converged on a fresh
@@ -396,42 +415,52 @@ showed only the test files); and verify passed again. How the rows were run:
 - The first two rows, the bind-address, TLS and row-format rows, the reorder row
   of the drop-in, the reload-name row, the socket directory row, the marker row and
   the render-before-pin row were recorded when they were added, against checks that
-  have not changed since. Every other row was run against the final head.
+  have not changed since. Every other row was run against the head of the cycle
+  that added it, and the checks those rows exercise have not been edited since.
 
-| Control                                                           | Removed by                                                                                                                 | The harness then fails at                                                                                                                                                    |
-| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The database image pin is one line of the writer's form           | the pattern accepts a tag with no digest (`(@sha256:HEX64)?`)                                                              | verify, the tag-only case: "Expected the role to stop at ... it stopped at 'NOTHING: the role accepted the input'"                                                           |
-| A second compose file beside `compose.yml` is refused             | `compose.yaml` removed from `db1_stack_other_compose_names`                                                                | verify, the second-file case: "Expected the role to stop at 'Refuse a second compose file in the database directory'"                                                        |
-| The mysql image is read from `${IMAGE}`                           | `image: ${IMAGE}` changed to `image: mysql:8.0.43` in `compose.yml.j2`                                                     | "The compose file does not read the mysql image from ${IMAGE}."                                                                                                              |
-| The exporter image is the pinned digest                           | `abed8dac` changed to `abed8dad` in `db1_stack_exporter_image` in `vars/main.yml`                                          | "The exporter image in the compose file is not the pinned digest."                                                                                                           |
-| The exporter's healthcheck is the `mysql_up 1` gate               | `grep -qx "mysql_up 1"` changed to `grep -q mysql_up` in `compose.yml.j2`                                                  | "The compose file does not gate the exporter on mysql_up 1 and a healthy database."                                                                                          |
-| No service publishes a port                                       | `ports:` with `'3306:3306'` added to the mysql service in `compose.yml.j2`                                                 | "The compose file publishes a port or does not read the exporter's socket."                                                                                                  |
-| The exporter reads the socket                                     | `--mysqld.address=unix:///var/run/mysqld/mysqld.sock` changed to the private address and port 3306 in `compose.yml.j2`     | "The compose file publishes a port or does not read the exporter's socket." (the same assertion: its other two conditions held)                                              |
-| The MySQL configuration keeps its bind address                    | `bind-address = 0.0.0.0` in `branchleft.cnf.j2`                                                                            | verify, "Assert the MySQL configuration keeps its boundary and its replay settings"                                                                                          |
-| The MySQL configuration requires TLS                              | `require_secure_transport = OFF` in `branchleft.cnf.j2`                                                                    | verify, "Assert the MySQL configuration keeps its boundary and its replay settings"                                                                                          |
-| The MySQL binary log is row-based                                 | `binlog_format = STATEMENT` in `branchleft.cnf.j2`                                                                         | verify, "Assert the MySQL configuration keeps its boundary and its replay settings"                                                                                          |
-| The legacy drop-in is removed before the exporter file is written | the include moved after the exporter write in `main.yml`                                                                   | verify, "Assert the legacy drop-in is removed and reloaded before the exporter file is written"                                                                              |
-| The reload is required to be in the log (order guard)             | renaming the reload task in `_unit.yml`                                                                                    | verify, the same assertion, failing on its `>= 0` guard                                                                                                                      |
-| The exporter file is written before the compose file is rendered  | a second `include_tasks: _compose.yml` added after the `_unit.yml` include in `main.yml` (fresh instance)                  | "The compose file is rendered before the exporter file is written."                                                                                                          |
-| The compose file is rendered before the pin is checked            | the render task moved below the enable task in `_compose.yml`                                                              | verify, "Assert the compose file is rendered before the pin is refused and before the unit is enabled"                                                                       |
-| The role never writes the database image pin                      | a `copy` task in `_compose.yml` writing a different, well-formed pin to the pin path before the pin is read                | "The role changed the database image pin, which branchleft-deploy owns."                                                                                                     |
-| The reload marker is forgotten when the drop-in is found          | the forget task deleted from `_unit.yml`, after a fresh prepare that puts the marker in place                              | verify, "Assert the reload marker was forgotten when the legacy drop-in was found"                                                                                           |
-| The socket directory is uid 999 and mode `0755`                   | mode `1777` in the socket task of `_compose.yml`                                                                           | verify, "Assert the stack's files and directories have the owners and modes the role states"                                                                                 |
-| Nothing starts, stops, restarts or removes, by text               | a comment line `# state: restarted` added to `_compose.yml`                                                                | "The role's task files start, stop, restart, recreate or remove something, which this role must not do."                                                                     |
-| Every task names a module on the allowlist                        | a task with `ansible.builtin.command: /usr/bin/id` and `when: false` added to `_compose.yml`                               | "A task runs a module the role does not allow, or carries a keyword it does not use: Run a command" (the count assertion: the module is not on the list)                     |
-| `args` is refused, not read as the module's options               | a `systemd_service` task (`name` only) with `args: {state: "{{ 'restarted' }}"}` and `when: false` added to `_unit.yml`    | the same assertion, "... or carries a keyword it does not use: Restart the unit through args": the task names two non-keyword keys, so the count of one fails first          |
-| An include names only the role's own task files                   | a task `include_tasks: _extra.yml` with `when: false` added to `_compose.yml`                                              | "An include names a task file outside main.yml, _compose.yml and _unit.yml, or a templated target: Include a task file outside the role's three"                             |
-| A module's arguments are never one string                         | `ansible.builtin.file: path=/var/lib/docker/volumes/db_mysql-data state=absent` with `when: false` added to `_compose.yml` | "A task gives a module its arguments as a string, which the option check cannot read: Remove the database volume through a free-form string"                                 |
-| The systemd task takes only name, enabled and daemon_reload       | `state: "{{ 'started' }}"` added to the mapping of the enable task in `_compose.yml`                                       | "A systemd task takes an option other than name, enabled or daemon_reload: Enable the database stack's unit, without starting it"                                            |
-| A file task's state is a plain word the role uses                 | a file task on the docker volume path with `state: "{{ 'absent' }}"` and `when: false` added to `_compose.yml`             | "A file task has a state that is not a plain word the role uses: Remove the database volume with a templated state"                                                          |
-| A removal names only a path the role removes                      | a file task on the docker volume path with `state: absent` and `when: false` added to `_unit.yml`                          | "A file task removes a path the role does not remove: Remove the database volume by its literal path"                                                                        |
-| A module takes only the options the role uses                     | `validate: /usr/bin/id %s` added to the compose render task in `_compose.yml`                                              | "A task gives a module an option the role does not use, such as validate: Render the compose file the deploy program reads"                                                  |
-| No lookup but the file lookup runs, in any file the role renders  | a line `# {{ lookup('ansible.builtin.pipe', 'id') }}` added to `compose.yml.j2`                                            | "The role calls a lookup other than ansible.builtin.file, or names one without a quoted literal. Lookups named: ['ansible.builtin.file', 'ansible.builtin.pipe']"            |
-| The role has no handlers                                          | `handlers/main.yml` with a `systemd_service` task of `state: restarted` created                                            | "The role holds a path outside README.md, defaults, files, meta, molecule, tasks, templates and vars ... ['handlers', 'handlers/main.yml']"                                  |
-| The tasks directory holds the three task files and no other       | `tasks/_extra.yml` (a `command` task) created and included by nothing                                                      | "The tasks directory holds a path other than main.yml, _compose.yml and _unit.yml: ['tasks/_compose.yml', 'tasks/_extra.yml', 'tasks/_unit.yml', 'tasks/main.yml']"          |
-| The role has no dependency                                        | `dependencies:` with one role added to `meta/main.yml`                                                                     | "meta/main.yml names a role dependency, whose tasks these checks do not read."                                                                                               |
-| A task carries only the keywords the role uses (no `notify`)      | `notify: Restart the database stack` added to the legacy drop-in removal task in `_unit.yml`                               | "A task runs a module the role does not allow, or carries a keyword it does not use: Remove the legacy drop-in file"                                                         |
-| The daemon-reload and the unit's enablement                       | not removed: no run can exercise them                                                                                      | the container has no systemd, so both tasks are skipped there (`/run/systemd/system` is absent); verify asserts their names, their order and their options, not their effect |
+| Control                                                           | Removed by                                                                                                                 | The harness then fails at                                                                                                                                                                |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The database image pin is one line of the writer's form           | the pattern accepts a tag with no digest (`(@sha256:HEX64)?`)                                                              | verify, the tag-only case: "Expected the role to stop at ... it stopped at 'NOTHING: the role accepted the input'"                                                                       |
+| A second compose file beside `compose.yml` is refused             | `compose.yaml` removed from `db1_stack_other_compose_names`                                                                | verify, the first of the seven file cases: "Expected the role to stop at 'Refuse a second compose file in the database directory'; it stopped at 'NOTHING: the role accepted the input'" |
+| An override file beside `compose.yml` is refused (1 of 4)         | `compose.override.yml` removed from `db1_stack_other_compose_names`                                                        | verify, the fourth of the seven file cases: the same message                                                                                                                             |
+| An override file beside `compose.yml` is refused (2 of 4)         | `compose.override.yaml` removed from `db1_stack_other_compose_names`                                                       | verify, the fifth of the seven file cases: the same message                                                                                                                              |
+| An override file beside `compose.yml` is refused (3 of 4)         | `docker-compose.override.yml` removed from `db1_stack_other_compose_names`                                                 | verify, the sixth of the seven file cases: the same message                                                                                                                              |
+| An override file beside `compose.yml` is refused (4 of 4)         | `docker-compose.override.yaml` removed from `db1_stack_other_compose_names`                                                | verify, the seventh of the seven file cases: the same message                                                                                                                            |
+| The mysql image is read from `${IMAGE}`                           | `image: ${IMAGE}` changed to `image: mysql:8.0.43` in `compose.yml.j2`                                                     | "The compose file does not read the mysql image from ${IMAGE}."                                                                                                                          |
+| The exporter image is the pinned digest                           | `abed8dac` changed to `abed8dad` in `db1_stack_exporter_image` in `vars/main.yml`                                          | "The exporter image in the compose file is not the pinned digest."                                                                                                                       |
+| The exporter's healthcheck is the `mysql_up 1` gate               | `grep -qx "mysql_up 1"` changed to `grep -q mysql_up` in `compose.yml.j2`                                                  | "The compose file does not gate the exporter on mysql_up 1 and a healthy database."                                                                                                      |
+| No service publishes a port                                       | `ports:` with `'3306:3306'` added to the mysql service in `compose.yml.j2`                                                 | "The compose file publishes a port or does not read the exporter's socket."                                                                                                              |
+| The exporter reads the socket                                     | `--mysqld.address=unix:///var/run/mysqld/mysqld.sock` changed to the private address and port 3306 in `compose.yml.j2`     | "The compose file publishes a port or does not read the exporter's socket." (the same assertion: its other two conditions held)                                                          |
+| The MySQL configuration keeps its bind address                    | `bind-address = 0.0.0.0` in `branchleft.cnf.j2`                                                                            | verify, "Assert the MySQL configuration keeps its boundary and its replay settings"                                                                                                      |
+| The MySQL configuration requires TLS                              | `require_secure_transport = OFF` in `branchleft.cnf.j2`                                                                    | verify, "Assert the MySQL configuration keeps its boundary and its replay settings"                                                                                                      |
+| The MySQL binary log is row-based                                 | `binlog_format = STATEMENT` in `branchleft.cnf.j2`                                                                         | verify, "Assert the MySQL configuration keeps its boundary and its replay settings"                                                                                                      |
+| The legacy drop-in is removed before the exporter file is written | the include moved after the exporter write in `main.yml`                                                                   | verify, "Assert the legacy drop-in is removed and reloaded before the exporter file is written"                                                                                          |
+| The reload is required to be in the log (order guard)             | renaming the reload task in `_unit.yml`                                                                                    | verify, the same assertion, failing on its `>= 0` guard                                                                                                                                  |
+| The exporter file is written before the compose file is rendered  | a second `include_tasks: _compose.yml` added after the `_unit.yml` include in `main.yml` (fresh instance)                  | "The compose file is rendered before the exporter file is written."                                                                                                                      |
+| The compose file is rendered before the pin is checked            | the render task moved below the enable task in `_compose.yml`                                                              | verify, "Assert the compose file is rendered before the pin is refused and before the unit is enabled"                                                                                   |
+| The role never writes the database image pin                      | a `copy` task in `_compose.yml` writing a different, well-formed pin to the pin path before the pin is read                | "The role changed the database image pin, which branchleft-deploy owns."                                                                                                                 |
+| The reload marker is forgotten when the drop-in is found          | the forget task deleted from `_unit.yml`, after a fresh prepare that puts the marker in place                              | verify, "Assert the reload marker was forgotten when the legacy drop-in was found"                                                                                                       |
+| The socket directory is uid 999 and mode `0755`                   | mode `1777` in the socket task of `_compose.yml`                                                                           | verify, "Assert the stack's files and directories have the owners and modes the role states"                                                                                             |
+| Nothing starts, stops, restarts or removes, by text               | a comment line `# state: restarted` added to `_compose.yml`                                                                | "The role's task files start, stop, restart, recreate or remove something, which this role must not do."                                                                                 |
+| Every task names a module on the allowlist                        | a task with `ansible.builtin.command: /usr/bin/id` and `when: false` added to `_compose.yml`                               | "A task runs a module the role does not allow, or carries a keyword it does not use: Run a command" (the count assertion: the module is not on the list)                                 |
+| `args` is refused, not read as the module's options               | a `systemd_service` task (`name` only) with `args: {state: "{{ 'restarted' }}"}` and `when: false` added to `_unit.yml`    | the same assertion, "... or carries a keyword it does not use: Restart the unit through args": the task names two non-keyword keys, so the count of one fails first                      |
+| An include names only the role's own task files                   | a task `include_tasks: _extra.yml` with `when: false` added to `_compose.yml`                                              | "An include names a task file outside main.yml, _compose.yml and _unit.yml, or a templated target: Include a task file outside the role's three"                                         |
+| A module's arguments are never one string                         | `ansible.builtin.file: path=/var/lib/docker/volumes/db_mysql-data state=absent` with `when: false` added to `_compose.yml` | "A task gives a module its arguments as a string, which the option check cannot read: Remove the database volume through a free-form string"                                             |
+| The systemd task takes only name, enabled and daemon_reload       | `state: "{{ 'started' }}"` added to the mapping of the enable task in `_compose.yml`                                       | "A systemd task takes an option other than name, enabled or daemon_reload: Enable the database stack's unit, without starting it"                                                        |
+| A file task's state is a plain word the role uses                 | a file task on the docker volume path with `state: "{{ 'absent' }}"` and `when: false` added to `_compose.yml`             | "A file task has a state that is not a plain word the role uses: Remove the database volume with a templated state"                                                                      |
+| A removal names only a path the role removes                      | a file task on the docker volume path with `state: absent` and `when: false` added to `_unit.yml`                          | "A file task removes a path the role does not remove: Remove the database volume by its literal path"                                                                                    |
+| A removal variable holds the path the test names (marker)         | `db1_stack_reload_marker` set to `/etc/branchleft/db.env` in `vars/main.yml`                                               | "vars/main.yml sets db1_stack_reload_marker to a value other than the path a removal may reach. Expected /var/cache/db1-stack/legacy-drop-in-reloaded; found /etc/branchleft/db.env."    |
+| A removal variable holds the path the test names (exporter file)  | `db1_stack_exporter_cnf_path` set to `/etc/branchleft/db.image.env`                                                        | the same assertion: "... sets db1_stack_exporter_cnf_path ... Expected /etc/branchleft/db-exporter.my.cnf; found /etc/branchleft/db.image.env."                                          |
+| A removal variable holds the path the test names (drop-in)        | `db1_stack_legacy_drop_in` set to `/etc/branchleft/db.env`                                                                 | the same assertion: "... sets db1_stack_legacy_drop_in ... found /etc/branchleft/db.env."                                                                                                |
+| A removal variable holds the paths the test names (legacy list)   | `/var/lib/docker/volumes/db_mysql-data` added to `db1_stack_legacy_files`                                                  | the same assertion: "... sets db1_stack_legacy_files ... found [... '/var/lib/docker/volumes/db_mysql-data']."                                                                           |
+| The removal variables are the ones the test names a path for      | `db1_stack_download_directory` added to `db1_stack_verify_removal_names` in `verify_role_source.yml`                       | "Assert the variables a removal may name are the ones this test names a path for": the removal check allows a variable that this test names no path for, or the reverse.                 |
+| A module takes only the options the role uses                     | `validate: /usr/bin/id %s` added to the compose render task in `_compose.yml`                                              | "A task gives a module an option the role does not use, such as validate: Render the compose file the deploy program reads"                                                              |
+| No lookup but the file lookup runs, in any file the role renders  | a line `# {{ lookup('ansible.builtin.pipe', 'id') }}` added to `compose.yml.j2`                                            | "The role calls a lookup other than ansible.builtin.file, or names one without a quoted literal. Lookups named: ['ansible.builtin.file', 'ansible.builtin.pipe']"                        |
+| The role has no handlers                                          | `handlers/main.yml` with a `systemd_service` task of `state: restarted` created                                            | "The role holds a path outside README.md, defaults, files, meta, molecule, tasks, templates and vars ... ['handlers', 'handlers/main.yml']"                                              |
+| The tasks directory holds the three task files and no other       | `tasks/_extra.yml` (a `command` task) created and included by nothing                                                      | "The tasks directory holds a path other than main.yml, _compose.yml and _unit.yml: ['tasks/_compose.yml', 'tasks/_extra.yml', 'tasks/_unit.yml', 'tasks/main.yml']"                      |
+| The role has no dependency                                        | `dependencies:` with one role added to `meta/main.yml`                                                                     | "meta/main.yml names a role dependency, whose tasks these checks do not read."                                                                                                           |
+| A task carries only the keywords the role uses (no `notify`)      | `notify: Restart the database stack` added to the legacy drop-in removal task in `_unit.yml`                               | "A task runs a module the role does not allow, or carries a keyword it does not use: Remove the legacy drop-in file"                                                                     |
+| The daemon-reload and the unit's enablement                       | not removed: no run can exercise them                                                                                      | the container has no systemd, so both tasks are skipped there (`/run/systemd/system` is absent); verify asserts their names, their order and their options, not their effect             |
 
 The last row is a limit and not a control with a record: the reload branch (and the
 marker it writes after the reload) and the enablement of the unit are skipped in the
@@ -451,12 +480,15 @@ directories and no other, with the three task files, no handlers and no
 dependency. Every task names one module on the allowlist, carries only the keywords
 the role uses, gives the module a mapping of only the options the role uses, and the
 only include is of one of the three task files. A file task's state is a plain word,
-and a removal names only the paths the role removes. No lookup but the file lookup
-appears in the tasks, templates, defaults or vars. This closes the gaps of earlier
-drafts (an include of a file that was not read, `args`, free-form strings,
-handlers) and it is a check on the text of the role's own files, not a sandbox: a
-person who edits `verify_role_source.yml` in the same change can widen it, which
-review of that file is for.
+and a removal names only one of four variables (the list of the legacy repository
+files, the exporter file, the legacy drop-in and the reload marker), each of which
+`vars/main.yml` sets to the one path the test names for it. No lookup but the file
+lookup appears in the tasks, templates, defaults or vars. This closes the gaps of
+earlier drafts (an include of a file that was not read, `args`, free-form strings,
+handlers, a removal variable whose value was changed) and it is a check on the text
+of the role's own files, not a sandbox: a person who edits `verify_role_source.yml`
+in the same change can widen it, which review of that file is for. The arguments it
+leaves open are listed under "Named limits".
 
 The log scan reads the whole log of every run (verbosity 3): the sentinel text,
 its SHA-1, MD5 and SHA-256, and its base64 form (whole, and as the middle of the
@@ -554,6 +586,21 @@ bot sees it.
   tested on an amd64 host.
 - The role has not been applied to the host. After it is, the hand-run
   prerequisites script must not be run again.
+- The source check is a closed set, not a check of every argument. It does not
+  restrict where a `copy`, a `template` or a `file` task that does not remove
+  writes: the destination can be any path, the database's data volume and
+  `/etc/branchleft/db.env` included. It does not restrict what a `copy` or a
+  `template` reads: `src` can be any path, an absolute path on the controller
+  included, so a file outside the role, such as a key under the operator's home,
+  would be delivered to the host. It does not restrict which package names `apt`
+  installs, or where `get_url` fetches from and writes to (its checksum is
+  required; its `url` and `dest` are not). It does not read the playbook that
+  applies the role: role parameters take precedence over `vars/main.yml`, so the
+  paths a removal holds are checked in the file and not in what a caller passes,
+  and a task's `register` can reuse a variable name. A reviewer reads these
+  arguments in any change to the tasks. They are filed as a follow-up item on the
+  tracker, which the pull request names; each is closed there by a literal
+  allowlist with a recorded sabotage row, or kept here with its reason.
 - MySQL 8.0 reaches the end of its vendor support at a date this README does not
   state, because it was not checked here; the database's own ticket owns that.
 
