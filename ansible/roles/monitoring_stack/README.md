@@ -113,7 +113,19 @@ it with a stamp that it writes only after a restart was read back as active.
 - **In check mode** the role reports the restart as a pending change and restarts
   nothing, writes no stamp, and does not read a value into the output. The
   fingerprint is worked out from the files as they are on the host, so a plan or
-  a drift run sees a stale stamp as a pending restart.
+  a drift run sees a stale stamp as a pending restart. The test's check-mode case
+  sets the task keyword `check_mode`, which does not set the `ansible_check_mode`
+  variable the role's guards read; the guards are reviewed, not proven (see "Sabotage rows").
+- **A reload is made whenever systemd says it needs one**, not only in the run that
+  wrote a drop-in. The role reads `NeedDaemonReload` of the monitoring instance and
+  of the edge instance and reloads when either says `yes`, as well as when a
+  drop-in changed or a restart is due. A run that fails after it wrote the edge
+  drop-in (the stamp directory cannot be made, say) leaves the old drop-in loaded;
+  the rerun finds nothing changed, and without this term the new limit would wait
+  for the next reboot.
+- **A hand write to the secrets file restarts the unit once**, like any other change
+  to it: the `STALWART_PROMETHEUS_SECRET` block, or any line but `SNDS_DATA_URL`,
+  written by hand changes the fingerprint, and the next run restarts and stamps.
 
 The role does not restart `edge` and does not start `monitoring` for the first
 time.
@@ -137,8 +149,12 @@ No playbook in this repository runs either role. `ansible/playbooks/edge1.yml`
 wires neither: a playbook that runs `monitoring_stack` must supply its seven
 secret inputs, and how those inputs reach a run (the secrets pattern, not a file
 in the repository) is settled with that wiring. So the order is written here and
-tested role by role, not across the two roles. The fresh-host run across both is
-open until the wiring exists.
+the fresh-host run across both is open until the wiring exists. The seam between
+the two is tested with the real `ntfy_pager` role: the `verify.yml` of this role
+runs it by path (`include_role`), then this role, and rotates a pager token to
+see one restart. A second assertion makes the three places that name the secrets
+file agree: this role's `monitoring_stack_env_file`, `ntfy_pager_env_file`, and the
+drop-in's `EnvironmentFile=-` line.
 
 Under `--check` on a fresh host no file exists, so the line tasks are skipped and
 the fingerprint is worked out without a secrets file; the plan shows the files
@@ -327,11 +343,14 @@ What each part of the scenario does:
   - nothing changed: no restart, stamp unchanged;
   - `SMTP_PASSWORD` rotated: one restart, stamp moved; the same value again: none;
   - `SNDS_DATA_URL` rotated: the file holds the new value, no restart;
-  - an `NTFY_` line changed the way `ntfy_pager` writes it: one restart on this
-    role's next run; the same again: none;
+  - an `NTFY_` line written by the real `ntfy_pager` role (run by path): one
+    restart on this role's next run; the same again: none;
   - the renderer changed: one restart;
   - the edge drop-in changed: put back and read by systemd, no restart of
     monitoring;
+  - the role failing after it wrote the edge drop-in (the stamp directory is a
+    file): systemd still holds the earlier limit; the rerun makes systemd read the
+    new one with no restart of monitoring;
   - the unit stopped but enabled: started once;
   - the unit stopped and disabled: not started, nothing stamped; enabled and
     started again by the test, as at runbook step 7a: the next run restarts once
@@ -341,10 +360,11 @@ What each part of the scenario does:
     and stamps;
   - the restart succeeding but the unit not staying `active` (a template swap): the
     role fails on the read-back and does not stamp; repaired, the rerun stamps;
-  - the renderer writable by its group: the role refuses before restarting, the
-    unit keeps running, nothing is stamped;
-  - a value with a second line: the role refuses before writing it, and the
-    second line is not in the secrets file;
+  - the renderer missing, writable by its group, or owned by nobody: the role
+    refuses before restarting, the unit keeps running, nothing is stamped;
+  - a value that is empty, only spaces, or has a second line: the role refuses
+    before writing it, the file keeps the last good value, and the second line is
+    not in the file;
   - check mode with a changed key and a stale stamp: the restart is found due,
     nothing is restarted, nothing is written; the real run then restarts once and
     replaces the stale stamp.
@@ -359,51 +379,100 @@ What each part of the scenario does:
 
 ### Sabotage rows
 
-Each row is an edit made with the editor, one harness run (the whole harness over
-this role, so the lint and every container step run), and a `git restore`
-afterwards. Rows 1 to 7 were run on 2026-10-20 against the role as it was before
-the restart moved into a fingerprint; the assertion each names is unchanged, and
-CI at the head that carries this README is the run of the rest. The harness run is
-the retrieval: make the row's edit and run it to see the message.
+A control is shown to work only by breaking it. Each row is one edit to the role,
+made in a detached worktree at the commit under test; one run of the scenario in a
+fresh container (`create`, `prepare`, `check-fresh`, `converge`, `idempotence`,
+`verify`, stopping at the first red, then `destroy`); the edit reverted with
+`git restore`; and `git diff HEAD` and `git status --porcelain` empty after the
+revert. A run on a long-lived host is not evidence. The red assertion of every row
+is quoted in the pull request body, which is where the record of a particular head
+lives; this table is what each row is and what names it. To see a row, make its
+edit and run `ansible/harness/run_harness.py` over the role.
 
-| Edit to the role                                                          | Step that fails | Assertion that names it                                                                                                                                                |
-| ------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The task that installs the drop-in removed                                | `converge`      | "systemd does not hold the drop-in the role installed (MemoryMax 1073741824)"                                                                                          |
-| The daemon-reload task removed (no reload)                                | `converge`      | the same assertion                                                                                                                                                     |
-| Mode of the delivered files changed from `0644` to `0640`                 | `verify`        | "alertmanager/alertmanager.yml.tmpl is missing on the instance, is not a regular file owned by root with mode 0644, or differs from" the source (one failure per file) |
-| `files/stack` replaced by a copy with one byte of `blackbox.yml` changed  | `verify`        | "blackbox/blackbox.yml is ... or differs from" its source in `hetzner/monitoring/stack`                                                                                |
-| `compose.yml` removed from `monitoring_stack_files`                       | `verify`        | "compose.yml is missing on the instance, is not a regular file ..."                                                                                                    |
-| The drop-in directory name changed by one character (`monitorinq`)        | `converge`      | the same assertion as the first row                                                                                                                                    |
-| A new file added to `hetzner/monitoring/stack/` (not touched by the role) | `verify`        | "zz_probe_file.txt is missing on the instance, is not a regular file ..."                                                                                              |
+The reload and the files:
 
-The controls of the restart decision are proven by the same method, each run in a
-fresh container on 2026-10-21 with the whole harness, the edit reverted after
-each (the red assertion is in the pull request body):
+| Edit to the role                                                       | Step that fails | Assertion or task that names it                                                                                    |
+| ---------------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------ |
+| The task that installs the monitoring drop-in removed                  | `converge`      | systemd does not hold the drop-in the role installed (monitoring `MemoryMax`)                                      |
+| The daemon-reload task removed                                         | `converge`      | the same assertion                                                                                                 |
+| The monitoring drop-in directory misspelt (`monitorinq`)               | `converge`      | the same assertion                                                                                                 |
+| The edge drop-in directory misspelt (`edgf`)                           | `converge`      | the edge `MemoryMax` assertion                                                                                     |
+| The reload moved after the restart                                     | `converge`      | "Assert the unit was restarted once, under the new drop-in"                                                        |
+| The reload only when a drop-in changed in this run (the old condition) | `verify`        | "Assert the failed run left the old drop-in loaded, and the rerun made systemd read the new one without a restart" |
+| Mode of the delivered files changed from `0644` to `0640`              | `verify`        | "Assert every file is on the instance ..." (one failure per file)                                                  |
+| The delivered file taken from another source file                      | `verify`        | the same task: the file differs from its source                                                                    |
+| `compose.yml` removed from `monitoring_stack_files`                    | `verify`        | the same task                                                                                                      |
+| A new file added to `hetzner/monitoring/stack/`                        | `verify`        | the same task names the file                                                                                       |
+| The stamp written with mode `0644`                                     | `verify`        | "Assert the stamp is one sha256 and a newline, in a root-only file ..."                                            |
 
-| Control removed or changed                     | Step that fails | Assertion that names it                                                                                  |
-| ---------------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------- |
-| Stamp written before the read-back             | `verify`        | "The restart that left the unit not active did not fail the role, or moved the stamp"                    |
-| The `enabled` gate in `restart_due`            | `verify`        | "A unit that is not enabled was started or stamped by the role"                                          |
-| `SNDS_DATA_URL` line hashed                    | `verify`        | task "Assert the rotated SNDS_DATA_URL is in the file and restarted nothing"                             |
-| Renderer left out of the fingerprint           | `verify`        | task "Assert the fingerprint hashes the eight stack files, the monitoring drop-in and the renderer"      |
-| `no_log` removed from the line task            | `verify`        | "A sentinel value is in the Ansible log, so a task that handles it lacks no_log"                         |
-| Single-line check of the secret values removed | `verify`        | "The value check did not refuse a value with a second line, or the second line reached the secrets file" |
+The restart decision:
 
-Each red was one harness run. One green run of the reverted tree, with every step
-passing, stands for every row, because the tree after each revert is the same. The red assertion of the
-secrets-file hash row is censored by `no_log`, so the failing task is named
-instead.
+| Edit to the role                                        | Step that fails | Assertion or task that names it                                               |
+| ------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------- |
+| `restart_due` ignoring the fingerprint                  | `idempotence`   | the restart task changes on the second run                                    |
+| Stamp written before the read-back                      | `verify`        | "Assert the role failed on the read-back and did not stamp"                   |
+| The `enabled` gate removed from `restart_due`           | `verify`        | "Assert the unit that is not enabled was not started and nothing was stamped" |
+| The `failed` state no longer restarted                  | `verify`        | "Assert the rerun restarted the failed unit and stamped"                      |
+| The `inactive` state no longer started                  | `verify`        | "Assert the inactive but enabled unit was started once"                       |
+| The renderer left out of the fingerprint list           | `verify`        | the fingerprint-definition assertion for `monitoring_stack_renderer`          |
+| The monitoring drop-in left out of the fingerprint list | `verify`        | the same assertion for `monitoring_stack_dropin_dest`                         |
+| The eight stack files left out of the fingerprint list  | `verify`        | the same assertion for `monitoring_stack_files`                               |
+| The edge drop-in added to the fingerprint               | `verify`        | the assertion that `monitoring_stack_edge` is not in the definition           |
+| The `env=` part of the fingerprint removed              | `verify`        | "Assert a rotated key restarted the unit once ..."                            |
+| The `SNDS_DATA_URL` line hashed                         | `verify`        | "Assert the rotated SNDS_DATA_URL is in the file and restarted nothing"       |
+| The `NTFY_` lines left out of the hash                  | `verify`        | "Assert the NTFY_ rotation restarted the unit on this role's next run, once"  |
 
-The first two rows share one message because it covers both causes (no drop-in, or
-no reload). An earlier version of the converge started no unit, and the second row
-stayed green: systemd unloads an inactive unit that nothing refers to and reads the
-new drop-in from disk with no reload. The converge now starts the placeholder
-instance so systemd keeps the earlier drop-in loaded. The control for the reload
-is therefore the converge's question to systemd, not the verify play.
+The seam with `ntfy_pager`, the refusals and the log:
 
-Reviewed or asserted, but not proven by a sabotage run (a control with no row above is
-not shown to fail):
+| Edit                                                      | Step that fails | Assertion or task that names it                                |
+| --------------------------------------------------------- | --------------- | -------------------------------------------------------------- |
+| `ntfy_pager`'s secrets-file path changed by one character | `verify`        | "Assert the three places agree on the secrets file's path"     |
+| A default given to a secret input                         | `verify`        | "Assert the defaults hold no value for a secret input"         |
+| `no_log` removed from the line task                       | `verify`        | "Assert the log holds none of the sentinel values"             |
+| The renderer check task removed (missing renderer)        | `verify`        | the renderer case "missing": the unit failed in `ExecStartPre` |
+| The renderer's group and other write-bit lines removed    | `verify`        | the renderer case "writable by its group"                      |
+| The renderer's owner line removed                         | `verify`        | the renderer case "owned by another user"                      |
+| The empty-value check removed                             | `verify`        | the value case "an empty value"                                |
+| The spaces-only check removed (the `trim` dropped)        | `verify`        | the value case "only spaces"                                   |
+| The second-line check (`[\r\n]`) removed                  | `verify`        | the value case "a second line"                                 |
 
+In `ntfy_pager`, the scenario's own rows:
+
+| Edit                                                            | Step that fails | Assertion or task that names it                                        |
+| --------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------- |
+| The secrets-file task given mode `0644`                         | `verify`        | "Assert the secrets file is owned by root and closed to everyone else" |
+| A second stack file (`compose.yml`) added to `ntfy_pager_files` | `verify`        | "Assert the project directory holds the renderer and nothing else"     |
+
+The secrets-file hash and log rows have their message censored by `no_log`, so the
+failing task is named instead.
+
+The first two reload rows share one message because it covers both causes (no
+drop-in, or no reload). An earlier version of the converge started no unit, and the
+reload row stayed green: systemd unloads an inactive unit that nothing refers to and
+reads the new drop-in from disk with no reload. The converge now starts the
+placeholder instance so systemd keeps the earlier drop-in loaded.
+
+Run, and stayed green (so the control is not shown to work):
+
+- `diff: false` removed from the line task. `no_log` already censors the task and its
+  diff, so the keyword is a second layer that no test can tell from the first. Kept
+  on the rule that a task handling a value carries both.
+- `and not ansible_check_mode` added to `restart_due`. The scenario's check-mode case
+  sets the task keyword `check_mode`, which does not set the variable
+  `ansible_check_mode` that the role's guards read, so the case runs the same
+  guards as a real run. A play-level `--check` is run by the harness only at
+  `check-fresh` and `check-configured`, where no restart is due. The guards on the
+  read-back and the stamp in check mode are reviewed, not proven.
+
+Reviewed or asserted, but not proven by a sabotage run (a control with no row above
+is not shown to fail):
+
+- the reload for a monitoring drop-in on a unit that is not enabled: it shares one
+  condition term with the proven edge case, but is not separately broken;
+- the order of the mode before the values in the secrets-file tasks (a first run
+  that wrote a value before closing the file);
+- that a changed stack file restarts the unit: covered by the assertion on the
+  fingerprint's list of files, not by a run that changes a file and counts restarts;
 - the mode `0755` of the directories, and `owner`/`group` of every file and directory
   (the last cannot be told from a default on a root instance);
 - the `DropInPaths` and `CPUWeight` assertions in `verify.yml` (`MemoryMax` is proven

@@ -321,7 +321,11 @@ fails anywhere leaves the stamp old, so the next run restarts. **The first
 gated run on a host that has no stamp and an enabled, running unit restarts the
 whole alert stack once (`--force-recreate`, a few seconds with no scraping),
 even when nothing changed.** That is expected, and the second run of the same
-commit reports zero changes. The role's README, "Restart", has the detail.
+commit reports zero changes. **The same single restart follows a hand write**:
+the `STALWART_PROMETHEUS_SECRET` block below (or any other hand edit of the
+secrets file except its `SNDS_DATA_URL` line) changes the hashed file, so the
+first role run after it restarts the stack once, even when the role's own inputs
+are unchanged. The role's README, "Restart", has the detail.
 
 **The role does not yet run on a host, so these hand paths stay the runnable
 ones until the first gated converge.** No playbook in this repository runs
