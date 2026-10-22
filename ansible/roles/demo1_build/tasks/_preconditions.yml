@@ -1,0 +1,106 @@
+---
+# Internal to the role. Everything here only reads, so it runs in check mode as
+# well (ANS-10). The role depends on what broker_deploy leaves behind: the
+# broker account, the configuration and state directories, the broker's own
+# slots directory and its environment file. It writes none of them, and it
+# refuses, naming the missing piece, when one is not as it expects. That is how
+# the order "broker_deploy first" is enforced without a role dependency (ANS-12).
+- name: Look for the broker account
+  ansible.builtin.getent:
+    database: passwd
+    key: '{{ demo1_build_broker_user }}'
+    fail_key: false
+  register: demo1_build_broker_passwd
+
+- name: Refuse a host that has no broker account
+  ansible.builtin.assert:
+    that:
+      - demo1_build_broker_passwd.ansible_facts.getent_passwd[demo1_build_broker_user] is not none
+    quiet: true
+    fail_msg: The broker account is missing. Apply the broker_deploy role to this host first; this role creates no broker account.
+
+# The directories this role reads and does not own. The health router and the
+# pinned programs refuse a parent that anyone but root can write, because whoever
+# can write a directory can rename what is inside it. An unprivileged check is
+# not a boundary, so the role refuses here too, before it puts a program under
+# any of them.
+- name: Look at the directories the role relies on and does not own
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+  loop:
+    - '{{ demo1_build_config_dir }}'
+    - '{{ demo1_build_state_dir }}'
+    - /usr/local
+    - /usr/local/sbin
+    - /usr/local/lib
+    - /opt
+  register: demo1_build_parent_stats
+
+- name: Refuse a directory that is missing, a link, not root's or writable by group or others
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+      - not item.stat.islnk
+      - item.stat.pw_name == 'root'
+      - not item.stat.wgrp
+      - not item.stat.woth
+    quiet: true
+    fail_msg: >-
+      {{ item.item }} is missing, is a link, is not owned by root or is writable by group or others.
+      Every directory above a program that root runs must be root's and closed to everyone else.
+  loop: '{{ demo1_build_parent_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Look at the broker's own slots directory
+  ansible.builtin.stat:
+    path: '{{ demo1_build_broker_slots_dir }}'
+    follow: false
+  register: demo1_build_broker_slots_stat
+
+# Both broker_deploy and the pinned socket-directory program create this
+# directory, with the same owner and mode. broker_deploy is the one that does:
+# this role never creates it, and refuses if it is not what both agree on.
+- name: Refuse a broker slots directory that is not broker's, mode 0755
+  ansible.builtin.assert:
+    that:
+      - demo1_build_broker_slots_stat.stat.exists
+      - demo1_build_broker_slots_stat.stat.isdir
+      - not demo1_build_broker_slots_stat.stat.islnk
+      - demo1_build_broker_slots_stat.stat.pw_name == demo1_build_broker_user
+      - demo1_build_broker_slots_stat.stat.gr_name == demo1_build_broker_group
+      - demo1_build_broker_slots_stat.stat.mode == '0755'
+    quiet: true
+    fail_msg: >-
+      {{ demo1_build_broker_slots_dir }} is missing or is not {{ demo1_build_broker_user }}:{{ demo1_build_broker_group }} mode 0755.
+      broker_deploy creates it; this role does not.
+
+# The broker writes its drain flags where its environment file says, and the
+# sidecars read the directory this role declares. Two directories here is the
+# split that once left every flag the broker set unseen by any sidecar.
+- name: Look at the broker's environment file
+  ansible.builtin.stat:
+    path: '{{ demo1_build_broker_env_file }}'
+    follow: false
+  register: demo1_build_broker_env_stat
+
+- name: Read the broker's environment file
+  ansible.builtin.slurp:
+    src: '{{ demo1_build_broker_env_file }}'
+  register: demo1_build_broker_env_raw
+  no_log: true
+  when: demo1_build_broker_env_stat.stat.exists
+
+- name: Refuse a broker environment file that names another drain-flag directory
+  ansible.builtin.assert:
+    that:
+      - >-
+        (demo1_build_broker_env_raw.content | b64decode).splitlines() | select('match', 'BROKER_DRAIN_FLAG_DIR=') | list
+        == ['BROKER_DRAIN_FLAG_DIR=' ~ demo1_build_flag_dir]
+    quiet: true
+    fail_msg: >-
+      {{ demo1_build_broker_env_file }} does not name {{ demo1_build_flag_dir }} on exactly one BROKER_DRAIN_FLAG_DIR line.
+      The broker would write its flags where no sidecar reads them.
+  when: demo1_build_broker_env_stat.stat.exists

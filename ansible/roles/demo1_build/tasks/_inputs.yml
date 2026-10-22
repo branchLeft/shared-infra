@@ -1,0 +1,42 @@
+---
+# Internal to the role: included first from main.yml. The inputs are refused
+# before anything is downloaded or written. The argument spec has already run;
+# it coerces a wrong type rather than rejecting it, so these reject the shapes.
+- name: Refuse a release that is not pinned to a commit and a checksum for every program
+  ansible.builtin.assert:
+    that:
+      - demo1_build_source_sha is match(demo1_build_sha_pattern)
+      - >-
+        demo1_build_release_files | map(attribute='path') | select('match', demo1_build_release_path_pattern) | list | length
+        == demo1_build_release_files | length
+      - >-
+        demo1_build_release_files | map(attribute='sha256') | select('match', demo1_build_checksum_pattern) | list | length
+        == demo1_build_release_files | length
+      - demo1_build_release_files | map(attribute='path') | unique | list | length == demo1_build_release_files | length
+      - demo1_build_required_programs | difference(demo1_build_release_files | map(attribute='path') | map('basename') | list) | length == 0
+    quiet: true
+    fail_msg: >-
+      The release needs a full 40-character commit, a 64-character sha256 for
+      every file, no file twice, only paths under demo-host/provision/, and
+      must list all ten programs the role runs, installs or stages.
+
+- name: Refuse a slot table that is empty, repeats a slot or holds anything but digits
+  ansible.builtin.assert:
+    that:
+      - demo1_build_slot_names is sequence
+      - demo1_build_slots | length > 0
+      - demo1_build_slots | select('match', demo1_build_slot_pattern) | list | length == demo1_build_slots | length
+      - demo1_build_slots | unique | list | length == demo1_build_slots | length
+    quiet: true
+    fail_msg: The slot names must be a list of one or more distinct strings of digits and nothing else.
+
+- name: Refuse a wrapper path that is not a plain absolute path
+  ansible.builtin.assert:
+    that:
+      - demo1_build_wrapper_path is string
+      - demo1_build_wrapper_path is match(demo1_build_path_pattern)
+      - demo1_build_wrapper_path is not search(demo1_build_path_dots_pattern)
+    quiet: true
+    fail_msg: >-
+      The wrapper path must be an absolute path of letters, digits, dot, underscore, hyphen and slash,
+      with no dot segment, no doubled slash and no trailing slash.

@@ -1,0 +1,233 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars:
+    converge_sudoers_path: /etc/sudoers.d/branchleft-slot
+    converge_slots_dir: /var/lib/branchleft/broker-slots
+    converge_flag: /var/lib/branchleft-broker/drain-flags/0-a.drain
+    converge_flag_dir: /var/lib/branchleft-broker/drain-flags
+  tasks:
+    # What a plan does is the plan scenario's (its converge.yml): this scenario's
+    # skip-steps.txt leaves out the steps that run the role in check mode, so the
+    # controls here are the ones that need the role applied.
+    - name: Look at the sudoers grant before the role runs
+      ansible.builtin.stat:
+        path: '{{ converge_sudoers_path }}'
+        follow: false
+        checksum_algorithm: sha256
+      register: demo1_build_converge_sudoers_before
+      when: not ansible_check_mode
+
+    # The broker's slots directory is broker_deploy's, like the grant: the role
+    # only checks its owner and mode. The control reads its entries and its
+    # modification time before and after, so a file the role adds is seen.
+    - name: Look at the broker's slots directory before the role runs
+      ansible.builtin.stat:
+        path: '{{ converge_slots_dir }}'
+        follow: false
+      register: demo1_build_converge_slots_before
+      when: not ansible_check_mode
+
+    - name: List the broker's slots directory before the role runs
+      ansible.builtin.find:
+        paths: '{{ converge_slots_dir }}'
+        hidden: true
+        file_type: any
+      register: demo1_build_converge_slots_list_before
+      when: not ansible_check_mode
+
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml. The include carries no no_log.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.demo1_build
+
+    # The control for the second writer: the sudoers grant belongs to
+    # broker_deploy, and the role must leave the file exactly as it found it,
+    # whatever it reads from it.
+    - name: Look at the sudoers grant after the role ran
+      ansible.builtin.stat:
+        path: '{{ converge_sudoers_path }}'
+        follow: false
+        checksum_algorithm: sha256
+      register: demo1_build_converge_sudoers_after
+      when: not ansible_check_mode
+
+    - name: Assert the role did not write the sudoers grant
+      ansible.builtin.assert:
+        that:
+          - demo1_build_converge_sudoers_after.stat.checksum == demo1_build_converge_sudoers_before.stat.checksum
+          - demo1_build_converge_sudoers_after.stat.mtime == demo1_build_converge_sudoers_before.stat.mtime
+        quiet: true
+        fail_msg: The role wrote the sudoers grant. broker_deploy is its only writer.
+      when: not ansible_check_mode
+
+    - name: Look at the broker's slots directory after the role ran
+      ansible.builtin.stat:
+        path: '{{ converge_slots_dir }}'
+        follow: false
+      register: demo1_build_converge_slots_after
+      when: not ansible_check_mode
+
+    - name: List the broker's slots directory after the role ran
+      ansible.builtin.find:
+        paths: '{{ converge_slots_dir }}'
+        hidden: true
+        file_type: any
+      register: demo1_build_converge_slots_list_after
+      when: not ansible_check_mode
+
+    - name: Assert the role left the broker's slots directory as it found it
+      ansible.builtin.assert:
+        that:
+          - demo1_build_converge_slots_after.stat.mtime == demo1_build_converge_slots_before.stat.mtime
+          - demo1_build_converge_slots_after.stat.pw_name == demo1_build_converge_slots_before.stat.pw_name
+          - demo1_build_converge_slots_after.stat.mode == demo1_build_converge_slots_before.stat.mode
+          - >-
+            demo1_build_converge_slots_list_after.files | map(attribute='path') | sort
+            == demo1_build_converge_slots_list_before.files | map(attribute='path') | sort
+        quiet: true
+        fail_msg: The role changed the broker's slots directory or an entry in it. broker_deploy is its only writer.
+      when: not ansible_check_mode
+
+    # The control for the drain flags. A running colour clears its flag by
+    # deleting it, and a later run must not put it back, because that would
+    # drain a colour that is serving. The deletion is test scaffolding and reports
+    # no change; the role is then applied again and must leave the flag absent.
+    - name: Clear a drain flag, as the broker does when a colour goes live
+      ansible.builtin.file:
+        path: '{{ converge_flag }}'
+        state: absent
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Apply the role again
+      ansible.builtin.include_role:
+        name: branchleft.demo1_build
+      when: not ansible_check_mode
+
+    - name: Look at the cleared flag
+      ansible.builtin.stat:
+        path: '{{ converge_flag }}'
+        follow: false
+      register: demo1_build_converge_flag_stat
+      when: not ansible_check_mode
+
+    - name: Assert the role did not put a cleared flag back
+      ansible.builtin.assert:
+        that:
+          - not demo1_build_converge_flag_stat.stat.exists
+        quiet: true
+        fail_msg: The role put a cleared drain flag back. That would drain a colour that is serving traffic.
+      when: not ansible_check_mode
+
+    # The same control for a host where every colour has gone live and so no flag
+    # is left. A rule that seeds a directory with no flag in it would drain all
+    # fourteen colours here. The directory step alone is run, which is the only
+    # step that writes flags (the whole role was applied twice above). The flags
+    # the role seeded are read first, so what they are is checked here, and put
+    # back after, so that verify reads the host as the role left it.
+    - name: Look at the flags the role seeded and the broker has not cleared
+      ansible.builtin.find:
+        paths: '{{ converge_flag_dir }}'
+        patterns: '*.drain'
+      register: demo1_build_converge_flags_seeded
+      when: not ansible_check_mode
+
+    - name: Assert they are the thirteen not cleared above, root's mode 0644
+      ansible.builtin.assert:
+        that:
+          - demo1_build_converge_flags_seeded.files | map(attribute='path') | map('basename') | sort == expected | sort
+          - demo1_build_converge_flags_seeded.files | map(attribute='pw_name') | unique | list == ['root']
+          - demo1_build_converge_flags_seeded.files | map(attribute='mode') | unique | list == ['0644']
+        quiet: true
+        fail_msg: The drain flags the role seeded are not the thirteen left, root's mode 0644.
+      vars:
+        expected: >-
+          {{ ['0', '1', '2', '3', '4', '5', '6'] | product(['a', 'b']) | map('join', '-') | map('regex_replace', '$', '.drain')
+          | reject('equalto', '0-a.drain') | list }}
+      when: not ansible_check_mode
+
+    - name: Clear every flag, as the broker does once every colour is live
+      ansible.builtin.file:
+        path: '{{ item.path }}'
+        state: absent
+      loop: '{{ demo1_build_converge_flags_seeded.files }}'
+      loop_control:
+        label: '{{ item.path | basename }}'
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Run the directory step again with no flag in the directory
+      ansible.builtin.include_role:
+        name: branchleft.demo1_build
+        tasks_from: _dirs.yml
+      when: not ansible_check_mode
+
+    - name: Look for flags after the directory step
+      ansible.builtin.find:
+        paths: '{{ converge_flag_dir }}'
+        patterns: '*.drain'
+      register: demo1_build_converge_flags_after
+      when: not ansible_check_mode
+
+    - name: Look at the preseed marker
+      ansible.builtin.stat:
+        path: /etc/branchleft/demo1-drain-flags-preseeded
+        follow: false
+      register: demo1_build_converge_marker
+      when: not ansible_check_mode
+
+    - name: Assert no flag was put back and the marker is root's
+      ansible.builtin.assert:
+        that:
+          - demo1_build_converge_flags_after.files | length == 0
+          - demo1_build_converge_marker.stat.isreg
+          - demo1_build_converge_marker.stat.pw_name == 'root'
+          - demo1_build_converge_marker.stat.mode == '0644'
+        quiet: true
+        fail_msg: >-
+          The role seeded the drain flags again on a host where every colour had cleared its flag, or the
+          preseed marker is missing. That would drain every colour that is serving traffic.
+      when: not ansible_check_mode
+
+    - name: Put back the flags cleared above, as the role seeded them
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ item.path }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop: '{{ demo1_build_converge_flags_seeded.files }}'
+      loop_control:
+        label: '{{ item.path | basename }}'
+      changed_when: false
+      when: not ansible_check_mode
+
+# The one control that needs the whole role: a refusal by the grant check must
+# stop the run before the install. The grant is valid and whole; only the path the
+# role is asked to install the wrapper at differs from the one every rule names.
+# The probe path does not exist, so a role that installed before it checked would
+# leave a file there, and the play reads the path after the refusal. A role that
+# only fails does not prove the order: it can fail after the install and leave the
+# wrapper live under a refused grant. The second case is a dotted spelling of a
+# system binary, refused by the input check before anything runs.
+#
+# Every other refusal case lives in the refusals scenario, where the role is not
+# applied again for each case (the default scenario's shard has to stay under its
+# time limit). That scenario cannot see an install, because it runs the check
+# alone, so the order control stays here.
+- name: Refuse a wrapper path the grant does not name, a probe path
+  ansible.builtin.import_playbook: refused_wrapper_path.yml
+  vars:
+    converge_case:
+      path: /usr/local/sbin/branchleft-slot-refused-probe
+      expect: 'does not run /usr/local/sbin/branchleft-slot-refused-probe in every rule'
+
+- name: Refuse a wrapper path the grant does not name, a dotted spelling
+  ansible.builtin.import_playbook: refused_wrapper_path.yml
+  vars:
+    converge_case:
+      path: /usr/local/sbin/../../bin/passwd
+      expect: 'The wrapper path must be an absolute path'

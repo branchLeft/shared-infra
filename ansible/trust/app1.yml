@@ -1,0 +1,6 @@
+---
+# app1's trust file. Empty on purpose: no signer is trusted until the owner sets one.
+# With an empty list playbooks/includes/require_signers.yml refuses the run before any
+# task, so the host fails closed until the owner writes the one value here. Nothing in
+# this file is a trust decision made by code (see ansible/checks/README.md).
+pull_trigger_signers: []

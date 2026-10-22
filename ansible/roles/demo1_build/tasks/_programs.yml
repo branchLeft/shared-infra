@@ -1,0 +1,49 @@
+---
+# Internal to the role. Puts the three programs that something other than the
+# role runs where that something expects them: sudo runs the wrapper as root for
+# the broker, and systemd runs the sidecar and the health router. They are
+# copied from the checked release, never from the network a second time, with the
+# owner, group and mode explicit. Nothing here runs them.
+
+# The sidecar reads the drain flags from a directory it hard-codes, and the role
+# declares that directory. A pin older than the commit that moved the flags would
+# install a sidecar that reads another one, so the file about to be installed is
+# read for both names before it is.
+- name: Read the sidecar that is about to be installed
+  ansible.builtin.slurp:
+    src: '{{ demo1_build_provision_dir }}/demo_sidecar.py'
+  register: demo1_build_sidecar_raw
+  when: demo1_build_release_ready | bool
+
+- name: Refuse a sidecar that reads another drain-flag directory or names flags another way
+  ansible.builtin.assert:
+    that:
+      - '(''FLAG_DIR = "'' ~ demo1_build_flag_dir ~ ''"'') in (demo1_build_sidecar_raw.content | b64decode).splitlines()'
+      - '''FLAG_FILE = "{slot}-{colour}.drain"'' in (demo1_build_sidecar_raw.content | b64decode).splitlines()'
+    quiet: true
+    fail_msg: >-
+      The pinned demo_sidecar.py does not read the drain flags from {{ demo1_build_flag_dir }}
+      as {slot}-{colour}.drain. The pin is older than the commit that moved them, or the
+      program changed; the broker and the sidecars would disagree about where a flag is.
+  when: demo1_build_release_ready | bool
+
+- name: Create the directory the sidecar and the health router run from
+  ansible.builtin.file:
+    path: '{{ demo1_build_lib_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install a program where its grant or its unit expects it
+  ansible.builtin.copy:
+    src: '{{ demo1_build_provision_dir }}/{{ item.src }}'
+    remote_src: true
+    dest: '{{ item.dest }}'
+    owner: root
+    group: root
+    mode: '0755'
+  loop: '{{ demo1_build_installed_programs }}'
+  loop_control:
+    label: '{{ item.name }}'
+  when: demo1_build_release_ready | bool

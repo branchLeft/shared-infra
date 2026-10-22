@@ -8,6 +8,12 @@ on:
   merge_group:
     types: [checks_requested]
 
+# One run per pull request. A push or merge_group run is its own group and is
+# never cancelled (pinned by scripts/test_workflow_concurrency.py).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   docs-lint:
     uses: branchLeft/github-workflows/.github/workflows/docs-lint.yml@v1.0.8

@@ -1,0 +1,162 @@
+---
+# The database stack's directories, compose file, MySQL configuration and unit
+# enablement. Included by tasks/main.yml after the exporter file is written.
+#
+# Nothing here starts, stops, restarts or recreates a container, runs docker
+# compose, or removes a volume. The unit is enabled, so it starts at boot, and the
+# compose file is read on the next start. A change to the bind-mounted
+# configuration reaches the running database only at a restart, which this role
+# never triggers; the owner's live steps say so. The root password is not in this
+# role: the compose file reads it from the unit's environment, which the host
+# owns in /etc/branchleft/db.env.
+
+# A directory the stack is installed into. In check mode the directories below are
+# not created, so the template tasks that need them are gated on the stat that
+# follows each creation (ANS-10).
+- name: Create the directory the deploy program installs stacks into
+  ansible.builtin.file:
+    path: '{{ db1_stack_stack_directory }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the database stack's project directory
+  ansible.builtin.file:
+    path: '{{ db1_stack_db_directory }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Look at the database stack's project directory
+  ansible.builtin.stat:
+    path: '{{ db1_stack_db_directory }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_stack_db_directory_stat
+
+- name: Create the directory the MySQL configuration is mounted from
+  ansible.builtin.file:
+    path: '{{ db1_stack_cnf_directory }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: db1_stack_db_directory_stat.stat.exists
+
+- name: Create the run directory that holds the socket directory
+  ansible.builtin.file:
+    path: '{{ db1_stack_db_directory }}/run'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: db1_stack_db_directory_stat.stat.exists
+
+# The socket directory is owned by the database's uid (999, the mysql image's user)
+# and is 0755. Only that owner and root can add an entry to it, so no other local
+# account can create or replace the socket file. Every root-authenticated client (the
+# healthcheck, the grants program and the exporter) opens the socket in this
+# directory, so a squatter there would receive the root password. Clients need only
+# search the directory, which 0755 allows, and mysqld creates the socket file itself,
+# world-connectable.
+- name: Create the socket directory the database and the exporter share
+  ansible.builtin.file:
+    path: '{{ db1_stack_socket_directory }}'
+    state: directory
+    owner: '999'
+    group: root
+    mode: '0755'
+  when: db1_stack_db_directory_stat.stat.exists
+
+- name: Look at the directories the rendered files are written into
+  ansible.builtin.stat:
+    path: '{{ db1_stack_cnf_directory }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_stack_cnf_directory_stat
+
+# The compose file is the one the deploy program checks: it must read the image
+# from ${IMAGE}, which the template does. The role does not run docker compose.
+# Skipped in check mode with a stated reason (ANS-10): the directory it is written
+# to is created by the task above, which check mode does not perform.
+- name: Render the compose file the deploy program reads
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: '{{ db1_stack_compose_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: db1_stack_db_directory_stat.stat.exists
+
+- name: Render the MySQL configuration the database mounts
+  ansible.builtin.template:
+    src: branchleft.cnf.j2
+    dest: '{{ db1_stack_cnf_directory }}/branchleft.cnf'
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - db1_stack_db_directory_stat.stat.exists
+    - db1_stack_cnf_directory_stat.stat.exists
+
+# The database image is not chosen by this role: branchleft-deploy writes its
+# digest to the pin file, and the stack's unit cannot start without it. The pin is
+# checked here, before the unit is enabled, so a missing or malformed pin stops the
+# run before the unit could ever start, while the compose file above is still
+# rendered (it needs no pin to render). A missing file is the state after a first
+# deploy that failed, and on a rebuilt host the first run stops here by design:
+# branchleft-deploy writes the pin from the compose file this run rendered, and the
+# next run completes. These checks read no secret and print the file's text only in
+# the pattern check's own message, which names the rule and holds no value.
+- name: Look at the database image pin the deploy program writes
+  ansible.builtin.stat:
+    path: '{{ db1_stack_image_env_path }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_stack_image_env_stat
+
+- name: Refuse a database image pin that is absent
+  ansible.builtin.assert:
+    that:
+      - db1_stack_image_env_stat.stat.exists | default(false)
+      - db1_stack_image_env_stat.stat.isreg | default(false)
+    fail_msg: >-
+      {{ db1_stack_image_env_path }} is absent or is not a file. branchleft-deploy
+      writes it on a successful deploy of the database; run that first, then run the
+      role again.
+    quiet: true
+
+- name: Read the database image pin the deploy program wrote
+  ansible.builtin.slurp:
+    src: '{{ db1_stack_image_env_path }}'
+  register: db1_stack_image_env_raw
+
+# The file must be the one line the deploy program writes: IMAGE=<digest of
+# the mysql image>, then a line break. An empty file, a file with no IMAGE key,
+# two lines, a tag without a digest, or upper-case hex all fail here, so the
+# unit is never enabled on a pin the deploy program would not write.
+- name: Refuse a database image pin that is not one line of the form the deploy program writes
+  ansible.builtin.assert:
+    that:
+      - (db1_stack_image_env_raw.content | b64decode) is match(db1_stack_image_env_pattern)
+    fail_msg: >-
+      {{ db1_stack_image_env_path }} is not one line of the form IMAGE=mysql:TAG@sha256:HEX64
+      with lower-case hex. The deploy program writes that line; a hand edit or a
+      partial write is the usual cause. Run branchleft-deploy db to write it again.
+    quiet: true
+
+# Enabling is not starting: the unit comes up at boot and only then. Skipped in
+# check mode with a stated reason (ANS-10), and where systemd is not running (see
+# tasks/_unit.yml).
+- name: Enable the database stack's unit, without starting it
+  ansible.builtin.systemd_service:
+    name: '{{ db1_stack_unit }}'
+    enabled: true
+  when:
+    - db1_stack_systemd_running.stat.isdir | default(false)
+    - not ansible_check_mode

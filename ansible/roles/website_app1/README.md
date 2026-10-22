@@ -62,7 +62,7 @@ repository supplies them, and the role must not be run with invented values.
   refusal would fail on every correct file. The role copies the file whole instead.
 - The CI steps that write the deploy key on the runner, pin the host key and remove the key
   are not in the role. They exist only because CI reaches the host over SSH with a key it
-  holds. A gated Ansible path (ANS-17, not built) replaces them, and the role is the part
+  holds. A gated Ansible path (ANS-17, its state is in ansible/README.md) replaces them, and the role is the part
   that runs on the host.
 - The compose validator of `compose_stack` (`docker compose config`) is not run. The file
   needs `IMAGE` and the SMTP variables, which are not known until the deploy, and the test

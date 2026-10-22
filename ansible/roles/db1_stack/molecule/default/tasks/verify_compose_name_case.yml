@@ -1,0 +1,22 @@
+---
+# One case of the refusal of a file Compose reads beside compose.yml. The name is
+# db1_stack_verify_compose_name, set by the loop in verify_refusals.yml. The file
+# is put in the database directory, the role must stop at the named task, and the
+# file is removed so the next case starts clean.
+- name: Put the file beside the compose file
+  ansible.builtin.copy:
+    content: "{{ 'COMPOSE_FILE=other.yml' if db1_stack_verify_compose_name == '.env' else 'services: {}' }}\n"
+    dest: '{{ db1_stack_db_directory }}/{{ db1_stack_verify_compose_name }}'
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Refuse the role beside the file at its named task
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse a second compose file in the database directory
+
+- name: Remove the file again
+  ansible.builtin.file:
+    path: '{{ db1_stack_db_directory }}/{{ db1_stack_verify_compose_name }}'
+    state: absent

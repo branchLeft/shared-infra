@@ -1,0 +1,70 @@
+# Rendered by the db1_stack role of branchLeft/shared-infra. A change made on the
+# host is overwritten by the next run.
+#
+# mysql takes its image from ${IMAGE}, which branchleft-deploy writes into
+# /etc/branchleft/db.image.env as a digest. The deploy program refuses a compose
+# file that does not read its image from ${IMAGE}, so the image is never written
+# here as a literal: a literal would stop the pin file from controlling the image.
+# The exporter image is pinned by digest here, because nothing else writes it.
+#
+# Both containers use the host network. Only that lets mysqld bind the private
+# address the tenant accounts use. The root and service accounts are socket-only,
+# so no port is published.
+name: db
+
+services:
+  mysql:
+    image: ${IMAGE}
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in /etc/branchleft/db.env}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./conf.d:/etc/mysql/conf.d:ro
+      - ./run/mysqld:/var/run/mysqld
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'mysqladmin',
+          'ping',
+          '--socket=/var/run/mysqld/mysqld.sock',
+          '-uroot',
+          '-p${MYSQL_ROOT_PASSWORD}',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+
+  mysqld-exporter:
+    image: {{ db1_stack_exporter_image }}
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./run/mysqld:/var/run/mysqld
+      # Written by the db1_stack role before this stack is enabled. It holds the
+      # exporter's password, so it is mounted as a file, not an environment
+      # variable: docker inspect would show every variable to anyone who can reach
+      # the Docker socket.
+      - /etc/branchleft/db-exporter.my.cnf:/etc/mysqld-exporter/.my.cnf:ro
+    command:
+      - --config.my-cnf=/etc/mysqld-exporter/.my.cnf
+      - --mysqld.address=unix:///var/run/mysqld/mysqld.sock
+      - --web.listen-address={{ db1_stack_private_address }}:{{ db1_stack_exporter_metrics_port }}
+    healthcheck:
+      # mysql_up 1, not process liveness and not an HTTP 200. The exporter serves
+      # /metrics while failing to authenticate, so anything weaker reports a healthy
+      # container that exports nothing.
+      test: ['CMD-SHELL', 'wget -qO- http://{{ db1_stack_private_address }}:{{ db1_stack_exporter_metrics_port }}/metrics | grep -qx "mysql_up 1"']
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql-data:
