@@ -1,13 +1,16 @@
 ---
-# Test scaffolding, not role tasks: the shared Compose unit template the
-# drop-in belongs to. The real template is part of the host baseline, which is
-# another role, so the test installs a placeholder with the same name and no
-# real content: a oneshot that runs /bin/true. Systemd needs the template to
-# exist to load an instance and apply a drop-in to it. Nothing starts it.
+# Test scaffolding, not role tasks. What the host has before the role runs: the
+# shared Compose unit template (a placeholder here, the real one is part of the
+# host baseline), a stand-in for the docker command the monitoring drop-in runs,
+# and a stand-in for the renderer that ntfy_pager delivers.
 - name: Prepare
   hosts: all
   gather_facts: false
   tasks:
+    # A oneshot that runs /bin/true, with the [Install] section the real template
+    # has: the role restarts a unit only when it is enabled, and a unit cannot be
+    # enabled without that section. Nothing starts an instance except where
+    # converge.yml and verify.yml say so.
     - name: Install a placeholder for the shared Compose unit template
       ansible.builtin.copy:
         content: |
@@ -17,6 +20,8 @@
           Type=oneshot
           RemainAfterExit=yes
           ExecStart=/bin/true
+          [Install]
+          WantedBy=multi-user.target
         dest: /etc/systemd/system/branchleft-compose@.service
         owner: root
         group: root
@@ -25,3 +30,55 @@
     - name: Make systemd read the placeholder
       ansible.builtin.systemd_service:
         daemon_reload: true
+
+    # The monitoring drop-in resets ExecStart to `docker compose up`. A restart
+    # of the instance runs that command, and the container has no Docker. This
+    # stand-in is a test double, not a Docker, and nothing here proves the stack
+    # starts (README, "Named limits"). It does two things the tests rely on: it
+    # appends a line to a log each time it is called, so a test can count the
+    # restarts the role made; and it exits 1 while the flag file exists, so a test
+    # can make a restart fail without any hook in the role.
+    - name: Install a stand-in for the docker command the drop-in runs
+      ansible.builtin.copy:
+        content: |
+          #!/bin/sh
+          # test stand-in for docker: counts its calls, and fails while the flag exists
+          echo "$@" >> /var/log/docker-standin.calls
+          if [ -e /run/docker-standin.fail ]; then
+            exit 1
+          fi
+          exit 0
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create the log of the stand-in's calls, empty
+      ansible.builtin.copy:
+        content: ''
+        dest: /var/log/docker-standin.calls
+        owner: root
+        group: root
+        mode: '0644'
+
+    # ntfy_pager is the single delivery owner of the renderer, and it is not run
+    # by this scenario. The check in the role needs a root-owned regular file
+    # there, so the test stands one in, at the path the role's constant names.
+    # This is a stand-in, not a copy of the renderer: its content is a no-op, and
+    # the verify play asserts ntfy_pager's file list still names the renderer, so
+    # a rename there fails the test rather than hiding here.
+    - name: Create the project directory the renderer is delivered into
+      ansible.builtin.file:
+        path: /opt/branchleft/monitoring
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Stand in for the renderer that ntfy_pager delivers
+      ansible.builtin.copy:
+        content: "# test stand-in: not the renderer\n"
+        dest: /opt/branchleft/monitoring/render_alertmanager_config.py
+        owner: root
+        group: root
+        mode: '0644'

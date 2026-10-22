@@ -1,27 +1,9 @@
 name: Ansible
 
-# Runs the role test harness (ansible/harness) on a runner that holds no
-# credentials and reaches no host: the roles are applied to containers on the
-# runner's own Docker daemon, and nothing else.
-#
-# It is a gate on pull requests, on the merge queue and on push to `main`
-# (CI-3). The workflow has
-# no `paths:` filter, so the job reports on every pull request and can be a
-# required check (CI-14); the first step decides whether the Ansible inputs
-# changed, and the rest run only when they did. Where nothing changed the job
-# passes after a checkout and one diff.
-#
-# Three kinds of job. `discover` lists the roles and patterns and the fresh
-# role skeleton from the repository tree. `lint` runs the static checks once.
-# `shard` runs the harness once per entry `discover` listed, so a new pattern
-# needs no edit here. The gate job, named `Lint and test the Ansible roles`,
-# is the one check the ruleset requires; it needs every other job and fails
-# unless each of them succeeded.
-#
-# The tools and the `ansible` package, which carries the collections, install
-# from ansible/requirements.txt at exact versions, each file checked against its
-# recorded hash (ANS-4).
-# DOCKER_HOST is deliberately left unset (ANS-15).
+# Runs the role test harness (ansible/harness) on a runner with no credentials
+# and no host reach; roles apply to containers on the runner's Docker daemon.
+# The gate (CI-3, CI-14), the job layout and the pinned tools are in
+# ansible/README.md. DOCKER_HOST is deliberately left unset (ANS-15).
 
 on:
   pull_request:
@@ -116,6 +98,7 @@ jobs:
             hetzner/provision/test_compose_unit_contract.py
             hetzner/monitoring/stack/
             hetzner/monitoring/systemd/monitoring.override.conf
+            hetzner/monitoring/systemd/edge.override.conf
             hetzner/monitoring/systemd/snds-collector.service
             hetzner/monitoring/systemd/snds-collector.timer
             hetzner/nextcloud1/stack/

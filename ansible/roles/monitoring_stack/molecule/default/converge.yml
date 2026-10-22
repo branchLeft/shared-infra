@@ -1,18 +1,26 @@
 ---
+# The first converge puts an earlier release of the host in front of the role: the
+# monitoring instance enabled and running, with an earlier drop-in loaded. The role
+# must then install the new drop-in, make systemd read it, and restart the unit
+# under it. Every later converge (the idempotence step, the check-mode step after
+# verify) finds the host converged and must change nothing, so the setup below runs
+# only when the drop-in is not yet on the instance. The seven inputs come from the
+# scenario's group_vars (molecule.yml).
 - name: Converge
   hosts: all
   gather_facts: false
   tasks:
-    - name: Read whether the drop-in is already on the instance
+    - name: Read whether the monitoring drop-in is already on the instance
       ansible.builtin.stat:
         path: /etc/systemd/system/branchleft-compose@monitoring.service.d/override.conf
       register: monitoring_stack_converge_existing_dropin
 
     # An instance with no drop-in stands for a host that has an earlier release
-    # of it: systemd is given a drop-in with a different MemoryMax and asked
-    # about the instance, so it holds that value. The role then replaces the
-    # drop-in, and systemd must be told. Once the drop-in exists this is
-    # skipped, so a second converge changes nothing.
+    # of it: systemd is given a drop-in with a different MemoryMax and a different
+    # ExecStart, and asked about the instance, so it holds both. The earlier
+    # ExecStart runs /bin/true; the role's drop-in runs the docker stand-in, which
+    # logs a call. So a restart that ran before systemd had read the role's
+    # drop-in would run /bin/true and log nothing.
     - name: Create the drop-in directory for an earlier release
       ansible.builtin.file:
         path: /etc/systemd/system/branchleft-compose@monitoring.service.d
@@ -27,13 +35,42 @@
         content: |
           [Service]
           MemoryMax=1024M
+          ExecStart=
+          ExecStart=/bin/true
         dest: /etc/systemd/system/branchleft-compose@monitoring.service.d/override.conf
         owner: root
         group: root
         mode: '0644'
       when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
 
-    - name: Make systemd read the earlier release
+    # The edge drop-in is probed the same way. Its earlier release is 1024M, the
+    # role's file is 1536M, so a missing install or reload reads as 1024M here.
+    - name: Read whether the edge drop-in is already on the instance
+      ansible.builtin.stat:
+        path: /etc/systemd/system/branchleft-compose@edge.service.d/override.conf
+      register: monitoring_stack_converge_existing_edge_dropin
+
+    - name: Create the edge drop-in directory for an earlier release
+      ansible.builtin.file:
+        path: /etc/systemd/system/branchleft-compose@edge.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: not monitoring_stack_converge_existing_edge_dropin.stat.exists and not ansible_check_mode
+
+    - name: Install an earlier release of the edge drop-in
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          MemoryMax=1024M
+        dest: /etc/systemd/system/branchleft-compose@edge.service.d/override.conf
+        owner: root
+        group: root
+        mode: '0644'
+      when: not monitoring_stack_converge_existing_edge_dropin.stat.exists and not ansible_check_mode
+
+    - name: Make systemd read the earlier releases
       ansible.builtin.systemd_service:
         daemon_reload: true
       when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
@@ -41,11 +78,22 @@
     # Started, because systemd unloads an inactive unit that nothing refers to
     # and would then read the new drop-in from disk with no reload: the test
     # could not tell a missing reload from a present one. The unit here is the
-    # placeholder from prepare.yml, a oneshot that runs /bin/true.
-    - name: Start the instance so that systemd keeps the earlier release loaded
+    # placeholder from prepare.yml, a oneshot that runs /bin/true. The monitoring
+    # instance is also enabled, because the role restarts a unit only when it is
+    # enabled (the edge instance is not restarted by the role at all).
+    - name: Start the instances so that systemd keeps the earlier releases loaded
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
+        state: started
+      loop:
+        - branchleft-compose@monitoring.service
+        - branchleft-compose@edge.service
+      when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
+
+    - name: Enable the monitoring instance, as it is on a host that is already running
       ansible.builtin.systemd_service:
         name: branchleft-compose@monitoring.service
-        state: started
+        enabled: true
       when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
 
     - name: Ask systemd for the instance so that the test sees what it holds
@@ -59,8 +107,9 @@
         that:
           - monitoring_stack_converge_earlier.status.MemoryMax == '1073741824'
           - monitoring_stack_converge_earlier.status.ActiveState == 'active'
+          - monitoring_stack_converge_earlier.status.UnitFileState == 'enabled'
         quiet: true
-        fail_msg: The test could not put the earlier drop-in in front of systemd.
+        fail_msg: The test could not put the earlier drop-in, a running unit and the enabled state in front of systemd.
       when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
 
     - name: Apply the role
@@ -72,19 +121,56 @@
     # Asked of systemd straight after the role, before the end of the play, so
     # a reload that is missing or left to the end of the play fails here. A
     # check-mode run writes no drop-in, so there is nothing to ask.
-    - name: Ask systemd for the instance as soon as the role has run
+    - name: Ask systemd for the instances as soon as the role has run
       ansible.builtin.systemd_service:
-        name: branchleft-compose@monitoring.service
+        name: '{{ item }}'
+      loop:
+        - branchleft-compose@monitoring.service
+        - branchleft-compose@edge.service
       register: monitoring_stack_converge_loaded
       when: not ansible_check_mode
 
-    - name: Assert systemd has loaded the drop-in the role installed
+    - name: Assert systemd has loaded the drop-ins the role installed
       ansible.builtin.assert:
         that:
-          - monitoring_stack_converge_loaded.status.MemoryMax == '2147483648'
+          - monitoring_stack_converge_loaded.results[0].status.MemoryMax == '2147483648'
+          - monitoring_stack_converge_loaded.results[1].status.MemoryMax == '1610612736'
         quiet: true
         fail_msg: >-
-          systemd does not hold the drop-in the role installed (MemoryMax
-          {{ monitoring_stack_converge_loaded.status.MemoryMax }}): the role did not install
-          it, or returned before the manager reloaded.
+          systemd does not hold the drop-ins the role installed (monitoring MemoryMax
+          {{ monitoring_stack_converge_loaded.results[0].status.MemoryMax }}, edge MemoryMax
+          {{ monitoring_stack_converge_loaded.results[1].status.MemoryMax }}): the role did not install
+          them, or returned before the manager reloaded.
       when: not ansible_check_mode
+
+    # The first converge restarts the running unit exactly once, under the drop-in
+    # the role installed: the docker stand-in is that drop-in's ExecStart, and the
+    # earlier release's ExecStart was /bin/true. One call means the restart came
+    # after the reload and the unit ran the new ExecStart. None means the restart
+    # ran under the old drop-in, or did not run.
+    - name: Read the log of the docker stand-in's calls
+      ansible.builtin.slurp:
+        src: /var/log/docker-standin.calls
+      register: monitoring_stack_converge_calls
+      when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
+
+    - name: Assert the unit was restarted once, under the new drop-in
+      ansible.builtin.assert:
+        that:
+          - (monitoring_stack_converge_calls.content | b64decode).splitlines() | length == 1
+        quiet: true
+        fail_msg: >-
+          The docker stand-in was not called exactly once by the first converge: the restart did not run under the
+          drop-in the role installed, did not run, or ran more than once.
+      when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
+
+    # The control case for the log scan in verify.yml: a task with no no_log that
+    # is given a known canary. If the log did not show it, an empty result of the
+    # scan would mean nothing.
+    - name: Run a harmless command that is given a canary argument
+      ansible.builtin.command:
+        argv:
+          - /bin/true
+          - MONITORING_STACK_LOG_CANARY
+      changed_when: false
+      check_mode: false

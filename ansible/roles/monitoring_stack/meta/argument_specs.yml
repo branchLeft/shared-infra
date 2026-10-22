@@ -1,20 +1,63 @@
 ---
 argument_specs:
   main:
-    short_description: Deliver the monitoring Compose stack's files and its systemd drop-in
+    short_description: Write the monitoring secrets, deliver the monitoring stack and its systemd drop-ins
     description: >-
-      Copies the monitoring stack's committed files (the Compose file, the
-      Prometheus, Blackbox and Grafana configuration, and the Alertmanager and
-      ntfy templates) into the stack's project directory, installs the stack's
-      systemd drop-in and reloads systemd when it changed. It renders no
-      template, writes no secret, starts nothing and removes nothing.
+      Writes seven values into the monitoring secrets file, each under its own key
+      and the other keys left in place, closes that file to root before any value is
+      written, copies the eight files of the monitoring stack into the project
+      directory (/opt/branchleft/monitoring, a constant of the role, not an input:
+      it is the unit's WorkingDirectory), installs the monitoring and edge systemd drop-ins, and restarts the
+      monitoring stack unit when the fingerprint of what the unit runs from differs
+      from the stamp of the last restart that was read back as active. The
+      fingerprint covers the eight stack files, the monitoring drop-in, the renderer
+      and the secrets file without its SNDS_DATA_URL line. The restart happens only
+      when the unit is enabled, whatever state it is in; a unit that is not enabled
+      is left alone for runbook step 7a. The role sets one fact for its caller,
+      monitoring_stack_restart_due. The seven values arrive from the caller; the role
+      never reads, generates or stores one. It removes nothing. The renderer is
+      delivered by ntfy_pager, which must run before this role.
     author: branchLeft
     options:
-      monitoring_stack_project_dir:
+      monitoring_stack_smtp_username:
         type: str
+        required: true
+        no_log: true
+        description: The submission username, the value of SMTP_USERNAME. Supplied by the caller; no default.
+      monitoring_stack_smtp_password:
+        type: str
+        required: true
+        no_log: true
+        description: The submission password, the value of SMTP_PASSWORD. Supplied by the caller; no default.
+      monitoring_stack_healthchecks_ping_url:
+        type: str
+        required: true
+        no_log: true
+        description: The Healthchecks.io ping URL, the value of HEALTHCHECKS_PING_URL. Supplied by the caller; no default.
+      monitoring_stack_alert_recipient_email:
+        type: str
+        required: true
+        no_log: true
+        description: The mailbox that receives routine alerts, the value of ALERT_RECIPIENT_EMAIL. Supplied by the caller; no default.
+      monitoring_stack_mailhost_ping_url:
+        type: str
+        required: true
+        no_log: true
+        description: The dedicated Healthchecks.io /fail URL, the value of MAILHOST_PING_URL. Supplied by the caller; no default.
+      monitoring_stack_grafana_admin_password:
+        type: str
+        required: true
+        no_log: true
         description: >-
-          Absolute path of the stack's project directory. It must equal the
-          WorkingDirectory the shared Compose unit template derives from the
-          instance name, which is /opt/branchleft/monitoring for the instance
-          named monitoring. None of the role's variables is a secret.
-        default: /opt/branchleft/monitoring
+          The Grafana admin password, the value of GRAFANA_ADMIN_PASSWORD. Grafana
+          reads it only when it first creates its database, so a later change here
+          rewrites the file and restarts the stack, and does not change the live
+          password. Supplied by the caller; no default.
+      monitoring_stack_snds_data_url:
+        type: str
+        required: true
+        no_log: true
+        description: >-
+          The SNDS Automated Data Access URL, the value of SNDS_DATA_URL. It is read
+          by the SNDS collector only, not by the stack, and it expires every 30 days.
+          Supplied by the caller; no default.

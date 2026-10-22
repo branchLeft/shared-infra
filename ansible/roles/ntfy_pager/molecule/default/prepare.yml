@@ -1,30 +1,12 @@
 ---
-# Test scaffolding, not role tasks. Three things the host has before the role
-# runs: the shared Compose unit template (a placeholder here, the real one is
-# part of the host baseline), the monitoring secrets file with an earlier NTFY_
-# line and a key the role must leave alone, and the directory that holds it.
+# Test scaffolding, not role tasks. The host has, before the role runs, the
+# monitoring secrets file with an earlier NTFY_ line and a key the role must
+# leave alone, and the directory that holds it. The role touches no unit any
+# more, so no unit template is installed here.
 - name: Prepare
   hosts: all
   gather_facts: false
   tasks:
-    - name: Install a placeholder for the shared Compose unit template
-      ansible.builtin.copy:
-        content: |
-          [Unit]
-          Description=PLACEHOLDER Compose stack %i
-          [Service]
-          Type=oneshot
-          RemainAfterExit=yes
-          ExecStart=/bin/true
-        dest: /etc/systemd/system/branchleft-compose@.service
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Make systemd read the placeholder
-      ansible.builtin.systemd_service:
-        daemon_reload: true
-
     - name: Create the directory of the monitoring secrets file
       ansible.builtin.file:
         path: /etc/branchleft
@@ -35,7 +17,8 @@
 
     # An earlier release of the file: an old pager token, a key the role does
     # not own, and a mode wider than the role sets. The values are fixed test
-    # strings, not credentials.
+    # strings, not credentials. The branch of the role that creates the file on
+    # a fresh host is therefore reviewed and not run here (README, "Named limits").
     - name: Write the earlier monitoring secrets file
       ansible.builtin.copy:
         content: |
@@ -45,11 +28,3 @@
         owner: root
         group: root
         mode: '0644'
-
-    - name: Create the project directory the stack is delivered to
-      ansible.builtin.file:
-        path: /opt/branchleft/monitoring
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'

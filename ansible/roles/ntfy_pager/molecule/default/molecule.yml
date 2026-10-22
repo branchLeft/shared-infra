@@ -16,9 +16,9 @@ platforms:
     # Third-party systemd test base on Debian 13, the release every production
     # host runs, trusted by digest (see the README of the files_and_units
     # pattern for why this image and what it does not prove). The digest is the
-    # pin; the tag is informational and moves weekly. The role reloads systemd,
-    # so the platform runs systemd as PID 1, a platform the author justifies
-    # here, per ANS-15.
+    # pin; the tag is informational and moves weekly. This role no longer touches
+    # a unit, so it does not need systemd as PID 1; the platform stays the one
+    # monitoring_stack uses, so the two roles share one pinned image (ANS-15).
     image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
     # Pre-built, so that the reference can carry a digest.
     pre_build_image: true

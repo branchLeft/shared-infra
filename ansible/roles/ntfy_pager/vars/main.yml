@@ -1,31 +1,28 @@
 ---
 # What the role carries. Constants of the stack, not inputs, so a caller cannot
-# override them. The paths are relative to the stack directory in the repository
-# (files/stack, a link to hetzner/monitoring/stack). The list is the monitoring_stack
-# role's plus render_alertmanager_config.py, which the unit's ExecStartPre runs
-# before the stack starts (see the README, "One home for the stack").
-ntfy_pager_dirs:
-  - alertmanager
-  - blackbox
-  - grafana
-  - grafana/provisioning
-  - grafana/provisioning/datasources
-  - ntfy
-  - prometheus
+# override them. The path is relative to the stack directory in the repository
+# (files/stack, a link to hetzner/monitoring/stack).
+#
+# The renderer is the only stack file this role delivers: the unit's
+# ExecStartPre runs it, and this role is its single delivery owner. The eight
+# other files of the stack belong to monitoring_stack alone, and
+# ansible/checks/test_monitoring_single_home.py fails if this list names one.
+#
+# The project directory the renderer goes into. A constant, not an input, as it
+# is in monitoring_stack: the shared Compose unit template fixes the unit's
+# WorkingDirectory to /opt/branchleft/<instance> and the drop-in's ExecStartPre
+# names the renderer under /opt/branchleft/monitoring. A copy moved here would put
+# a new renderer where the unit does not run it, while monitoring_stack went on
+# hashing the old one at its own constant path: the fingerprint would not change,
+# and the stale renderer would stay in use with no signal. It was an overridable
+# default; inventory and play variables override a default but not a value in
+# vars/. The monitoring_stack scenario asserts the two constants equal each other
+# and the template's WorkingDirectory; this role's scenario asserts that a play
+# variable does not move the renderer.
+ntfy_pager_project_dir: /opt/branchleft/monitoring
 
 ntfy_pager_files:
-  - compose.yml
-  - alertmanager/alertmanager.yml.tmpl
-  - alertmanager/email.gotmpl
-  - blackbox/blackbox.yml
-  - grafana/provisioning/datasources/prometheus.yaml
-  - ntfy/server.yml.tmpl
-  - prometheus/alerts.yml
-  - prometheus/prometheus.yml
   - render_alertmanager_config.py
-
-# The unit of the monitoring stack, the one the runbook restarts.
-ntfy_pager_unit: branchleft-compose@monitoring.service
 
 # The four names the runbook writes into the monitoring secrets file. They are
 # fixed here, so an input cannot rename a key the stack reads.
@@ -34,3 +31,23 @@ ntfy_pager_env_names:
   watcher_token: NTFY_WATCHER_TOKEN
   owner_password_hash: NTFY_OWNER_PASSWORD_HASH
   machine_password_hash: NTFY_MACHINE_PASSWORD_HASH
+
+# The four lines, each key with the input that carries its value. The check
+# that each value is a non-empty single line and the write both loop over this
+# one list, so a line cannot be written without being checked.
+ntfy_pager_env_lines:
+  - key: '{{ ntfy_pager_env_names.pager_token }}'
+    value: '{{ ntfy_pager_pager_token }}'
+  - key: '{{ ntfy_pager_env_names.watcher_token }}'
+    value: '{{ ntfy_pager_watcher_token }}'
+  - key: '{{ ntfy_pager_env_names.owner_password_hash }}'
+    value: '{{ ntfy_pager_owner_password_hash }}'
+  - key: '{{ ntfy_pager_env_names.machine_password_hash }}'
+    value: '{{ ntfy_pager_machine_password_hash }}'
+
+# The monitoring secrets file. A constant, not an input, as it is in
+# monitoring_stack: the unit reads the file monitoring_stack fingerprints, so a
+# caller that moved this copy would send rotated NTFY_ credentials to a file no
+# restart looks at, and every test would stay green. The Molecule scenario of
+# monitoring_stack asserts the two constants are equal.
+ntfy_pager_env_file: /etc/branchleft/monitoring.env
