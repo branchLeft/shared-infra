@@ -206,11 +206,15 @@
   no_log: true
   diff: false
 
-# restart_due is the whole decision: the fingerprint differs from the stamp, and
-# the unit is enabled. Any ActiveState counts (active, failed, activating,
-# inactive), so a unit that failed on a bad key is restarted when the key is
-# corrected. A unit that is not enabled is a fresh host awaiting the owner's
-# first start (runbook step 7a): it is neither started nor stamped.
+# restart_due is the whole decision, and the unit must be enabled: either the
+# fingerprint differs from the stamp, or the unit is failed or inactive. The
+# second term is what repairs a unit left down by a bad change that is then
+# reverted: the revert brings the fingerprint back to the stamp, which still
+# holds the last good restart, so only the unit's own state can say the unit is
+# down. A unit that is activating is left alone, so a slow start is not
+# interrupted by the next run. A unit that is not enabled is a fresh host
+# awaiting the owner's first start (runbook step 7a): it is neither started nor
+# stamped.
 - name: Decide whether a restart is due
   ansible.builtin.set_fact:
     monitoring_stack_fingerprint: >-
@@ -224,11 +228,15 @@
       {{ (monitoring_stack_stamp.content | b64decode | trim) if monitoring_stack_stamp.content is defined else 'none' }}
     monitoring_stack_unit_enabled: >-
       {{ (monitoring_stack_unit_status.status.UnitFileState | default('')) in monitoring_stack_enabled_states }}
+    monitoring_stack_unit_down: >-
+      {{ (monitoring_stack_unit_status.status.ActiveState | default('active')) in monitoring_stack_down_states }}
   no_log: true
 
 - name: Work out whether the restart is due
   ansible.builtin.set_fact:
-    monitoring_stack_restart_due: '{{ (monitoring_stack_fingerprint != monitoring_stack_stamp_value) and (monitoring_stack_unit_enabled | bool) }}'
+    monitoring_stack_restart_due: >-
+      {{ (monitoring_stack_unit_enabled | bool)
+      and ((monitoring_stack_fingerprint != monitoring_stack_stamp_value) or (monitoring_stack_unit_down | bool)) }}
 
 - name: Say that the unit is not enabled and is left alone
   ansible.builtin.debug:

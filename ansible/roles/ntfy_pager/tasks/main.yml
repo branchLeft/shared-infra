@@ -1,4 +1,21 @@
 ---
+# Every input is a secret. Each must be a non-empty single line before anything
+# is written, as in monitoring_stack: a blank value would be written as an empty
+# credential, and a value with a newline would write a second line, possibly
+# another KEY=, into the file the unit reads. The assert names the key only,
+# never the value, and no_log hides the task.
+- name: Check that each credential input is a non-empty single line
+  ansible.builtin.assert:
+    that:
+      - item.value | string | trim | length > 0
+      - item.value | string is not search('[\r\n]')
+    quiet: true
+    fail_msg: '{{ item.key }} must be a non-empty single line.'
+  loop: '{{ ntfy_pager_env_lines }}'
+  loop_control:
+    label: '{{ item.key }}'
+  no_log: true
+
 # Section 2 of the runbook: the four NTFY_ lines go into the monitoring secrets
 # file. The runbook wrote them with grep -v and a mv of a temporary file; here
 # each key is one lineinfile, so the other keys in the file are left in place.
@@ -48,15 +65,7 @@
     regexp: '^{{ item.key }}='
     line: '{{ item.key }}={{ item.value }}'
     create: false
-  loop:
-    - key: '{{ ntfy_pager_env_names.pager_token }}'
-      value: '{{ ntfy_pager_pager_token }}'
-    - key: '{{ ntfy_pager_env_names.watcher_token }}'
-      value: '{{ ntfy_pager_watcher_token }}'
-    - key: '{{ ntfy_pager_env_names.owner_password_hash }}'
-      value: '{{ ntfy_pager_owner_password_hash }}'
-    - key: '{{ ntfy_pager_env_names.machine_password_hash }}'
-      value: '{{ ntfy_pager_machine_password_hash }}'
+  loop: '{{ ntfy_pager_env_lines }}'
   loop_control:
     label: '{{ item.key }}'
   no_log: true

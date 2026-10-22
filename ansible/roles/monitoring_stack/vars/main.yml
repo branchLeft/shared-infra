@@ -93,6 +93,13 @@ monitoring_stack_unit: branchleft-compose@monitoring.service
 # The edge instance: read for NeedDaemonReload only, never restarted here.
 monitoring_stack_edge_unit: branchleft-compose@edge.service
 
+# The ActiveStates that make a restart due even when the fingerprint equals the
+# stamp: the unit is down. An unreadable state counts as active, so the
+# fingerprint alone decides then.
+monitoring_stack_down_states:
+  - failed
+  - inactive
+
 # The unit file states that count as enabled.
 monitoring_stack_enabled_states:
   - enabled

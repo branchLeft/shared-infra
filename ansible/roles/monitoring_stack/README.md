@@ -92,12 +92,20 @@ it with a stamp that it writes only after a restart was read back as active.
   read-back that finds the unit `active`. The directory `/var/lib/branchleft` is
   shared with `broker_deploy`, which sets it to `0755` `root:root`, so this role
   sets the same.
-- **A restart is due** when the fingerprint differs from the stamp and the unit is
-  enabled (`enabled` or `enabled-runtime`). The role sets the fact
-  `monitoring_stack_restart_due` so a caller can see the decision.
-- **Whatever state the unit is in**, a due restart is made: an `active` unit is
+- **A restart is due** when the unit is enabled (`enabled` or `enabled-runtime`)
+  and either the fingerprint differs from the stamp, or the unit is `failed` or
+  `inactive` (`monitoring_stack_down_states`). The second term matters when a bad
+  change is reverted: the revert brings the fingerprint back to the stamp, which
+  still holds the last good restart, and only the unit's own state can say that
+  the unit is down. The role sets the fact `monitoring_stack_restart_due` so a
+  caller can see the decision.
+- **A due restart is made whatever state the unit is in**: an `active` unit is
   recreated (the drop-in adds `--force-recreate`), a `failed` unit is started
-  again when the cause was corrected, an `inactive` but enabled unit is started.
+  again whether the cause was corrected by a new value or by a revert to the
+  stamped one, an `inactive` but enabled unit is started. A unit that is
+  `activating` is left alone when the fingerprint matches, so a slow start is
+  not interrupted. An `enabled` unit that an operator stopped by hand is started
+  again by the next run: the role holds an enabled unit up.
 - **A unit that is not enabled is left alone.** It is a fresh host awaiting the
   owner's first start (runbook step 7a). The role neither starts nor stamps it,
   and says so in a debug message.
@@ -154,7 +162,8 @@ the two is tested with the real `ntfy_pager` role: the `verify.yml` of this role
 runs it by path (`include_role`), then this role, and rotates a pager token to
 see one restart. A second assertion makes the three places that name the secrets
 file agree: this role's `monitoring_stack_env_file`, `ntfy_pager_env_file`, and the
-drop-in's `EnvironmentFile=-` line.
+drop-in's `EnvironmentFile=-` line. Both roles hold the path as a constant in
+`vars/main.yml`, not as an input, so no caller can move one copy.
 
 Under `--check` on a fresh host no file exists, so the line tasks are skipped and
 the fingerprint is worked out without a secrets file; the plan shows the files
@@ -358,6 +367,10 @@ What each part of the scenario does:
   - the restart failing (the stand-in fails): the role fails, the unit is
     `failed`, the stamp is not moved; the stand-in repaired: the rerun restarts
     and stamps;
+  - a bad change whose restart fails, then a revert to the inputs the stamp holds
+    (the stand-in working again): the fingerprint equals the stamp, the unit is
+    `failed`, and the revert restarts it once without moving the stamp; the run
+    after that restarts nothing;
   - the restart succeeding but the unit not staying `active` (a template swap): the
     role fails on the read-back and does not stamp; repaired, the rerun stamps;
   - the renderer missing, writable by its group, or owned by nobody: the role
@@ -407,34 +420,36 @@ The reload and the files:
 
 The restart decision:
 
-| Edit to the role                                        | Step that fails | Assertion or task that names it                                               |
-| ------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------- |
-| `restart_due` ignoring the fingerprint                  | `idempotence`   | the restart task changes on the second run                                    |
-| Stamp written before the read-back                      | `verify`        | "Assert the role failed on the read-back and did not stamp"                   |
-| The `enabled` gate removed from `restart_due`           | `verify`        | "Assert the unit that is not enabled was not started and nothing was stamped" |
-| The `failed` state no longer restarted                  | `verify`        | "Assert the rerun restarted the failed unit and stamped"                      |
-| The `inactive` state no longer started                  | `verify`        | "Assert the inactive but enabled unit was started once"                       |
-| The renderer left out of the fingerprint list           | `verify`        | the fingerprint-definition assertion for `monitoring_stack_renderer`          |
-| The monitoring drop-in left out of the fingerprint list | `verify`        | the same assertion for `monitoring_stack_dropin_dest`                         |
-| The eight stack files left out of the fingerprint list  | `verify`        | the same assertion for `monitoring_stack_files`                               |
-| The edge drop-in added to the fingerprint               | `verify`        | the assertion that `monitoring_stack_edge` is not in the definition           |
-| The `env=` part of the fingerprint removed              | `verify`        | "Assert a rotated key restarted the unit once ..."                            |
-| The `SNDS_DATA_URL` line hashed                         | `verify`        | "Assert the rotated SNDS_DATA_URL is in the file and restarted nothing"       |
-| The `NTFY_` lines left out of the hash                  | `verify`        | "Assert the NTFY_ rotation restarted the unit on this role's next run, once"  |
+| Edit to the role                                               | Step that fails | Assertion or task that names it                                                   |
+| -------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------- |
+| `restart_due` ignoring the fingerprint                         | `idempotence`   | the restart task changes on the second run                                        |
+| Stamp written before the read-back                             | `verify`        | "Assert the role failed on the read-back and did not stamp"                       |
+| The `enabled` gate removed from `restart_due`                  | `verify`        | "Assert the unit that is not enabled was not started and nothing was stamped"     |
+| The `failed` state no longer restarted                         | `verify`        | "Assert the rerun restarted the failed unit and stamped"                          |
+| The `inactive` state no longer started                         | `verify`        | "Assert the inactive but enabled unit was started once"                           |
+| The unit's state removed from `restart_due` (fingerprint only) | `verify`        | "Assert the revert restarted the failed unit, once, and left the stamp as it was" |
+| The renderer left out of the fingerprint list                  | `verify`        | the fingerprint-definition assertion for `monitoring_stack_renderer`              |
+| The monitoring drop-in left out of the fingerprint list        | `verify`        | the same assertion for `monitoring_stack_dropin_dest`                             |
+| The eight stack files left out of the fingerprint list         | `verify`        | the same assertion for `monitoring_stack_files`                                   |
+| The edge drop-in added to the fingerprint                      | `verify`        | the assertion that `monitoring_stack_edge` is not in the definition               |
+| The `env=` part of the fingerprint removed                     | `verify`        | "Assert a rotated key restarted the unit once ..."                                |
+| The `SNDS_DATA_URL` line hashed                                | `verify`        | "Assert the rotated SNDS_DATA_URL is in the file and restarted nothing"           |
+| The `NTFY_` lines left out of the hash                         | `verify`        | "Assert the NTFY_ rotation restarted the unit on this role's next run, once"      |
 
 The seam with `ntfy_pager`, the refusals and the log:
 
-| Edit                                                      | Step that fails | Assertion or task that names it                                |
-| --------------------------------------------------------- | --------------- | -------------------------------------------------------------- |
-| `ntfy_pager`'s secrets-file path changed by one character | `verify`        | "Assert the three places agree on the secrets file's path"     |
-| A default given to a secret input                         | `verify`        | "Assert the defaults hold no value for a secret input"         |
-| `no_log` removed from the line task                       | `verify`        | "Assert the log holds none of the sentinel values"             |
-| The renderer check task removed (missing renderer)        | `verify`        | the renderer case "missing": the unit failed in `ExecStartPre` |
-| The renderer's group and other write-bit lines removed    | `verify`        | the renderer case "writable by its group"                      |
-| The renderer's owner line removed                         | `verify`        | the renderer case "owned by another user"                      |
-| The empty-value check removed                             | `verify`        | the value case "an empty value"                                |
-| The spaces-only check removed (the `trim` dropped)        | `verify`        | the value case "only spaces"                                   |
-| The second-line check (`[\r\n]`) removed                  | `verify`        | the value case "a second line"                                 |
+| Edit                                                       | Step that fails | Assertion or task that names it                                |
+| ---------------------------------------------------------- | --------------- | -------------------------------------------------------------- |
+| `ntfy_pager`'s secrets-file path changed by one character  | `verify`        | "Assert the three places agree on the secrets file's path"     |
+| `ntfy_pager`'s secrets-file path moved back to `defaults/` | `verify`        | the same assertion (the key is not in `vars/main.yml`)         |
+| A default given to a secret input                          | `verify`        | "Assert the defaults hold no value for a secret input"         |
+| `no_log` removed from the line task                        | `verify`        | "Assert the log holds none of the sentinel values"             |
+| The renderer check task removed (missing renderer)         | `verify`        | the renderer case "missing": the unit failed in `ExecStartPre` |
+| The renderer's group and other write-bit lines removed     | `verify`        | the renderer case "writable by its group"                      |
+| The renderer's owner line removed                          | `verify`        | the renderer case "owned by another user"                      |
+| The empty-value check removed                              | `verify`        | the value case "an empty value"                                |
+| The spaces-only check removed (the `trim` dropped)         | `verify`        | the value case "only spaces"                                   |
+| The second-line check (`[\r\n]`) removed                   | `verify`        | the value case "a second line"                                 |
 
 In `ntfy_pager`, the scenario's own rows:
 
