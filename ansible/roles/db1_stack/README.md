@@ -149,7 +149,9 @@ Part two:
   not start it.
 
 It reads, and never writes, `/etc/branchleft/db.image.env` (the database image
-pin that `branchleft-deploy` writes), and it never reads `/etc/branchleft/db.env`.
+pin that `branchleft-deploy` writes). That is the one environment file it reads.
+It never reads `/etc/branchleft/db.env`, and it does not check the environment the
+unit loads from elsewhere (see "Named limits").
 
 ## How to run its test
 
@@ -609,6 +611,16 @@ bot sees it.
   arguments in any change to the tasks. They are filed as a follow-up item on the
   tracker, which the pull request names; each is closed there by a literal
   allowlist with a recorded sabotage row, or kept here with its reason.
+- The project-directory check stops a second compose project only when it is named
+  in the role's own files. It does not see the environment that the stack's unit
+  loads from elsewhere. That is `/etc/branchleft/db.env`, a drop-in under
+  `branchleft-compose@db.service.d`, a replaced unit file, `Environment=` lines, and
+  the `DOCKER_*`, `COMPOSE_PATH_SEPARATOR` and `COMPOSE_ENV_FILES` variables. Any of
+  these can set `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME`, `COMPOSE_PROFILES` or
+  `ExecStart`, and the deploy program checks none of them. The owner writes those
+  files; the role reads none of them, because `db.env` holds secrets. The one
+  environment file the role reads is `/etc/branchleft/db.image.env`. The follow-up
+  is filed as an item on the tracker, which the pull request names.
 - MySQL 8.0 reaches the end of its vendor support at a date this README does not
   state, because it was not checked here; the database's own ticket owns that.
 
