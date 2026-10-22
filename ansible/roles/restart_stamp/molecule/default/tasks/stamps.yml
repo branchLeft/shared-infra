@@ -1,0 +1,34 @@
+---
+# Reads the state of the stamp files named in restart_stamp_verify_paths (a list of
+# absolute paths) into restart_stamp_verify_state, a dictionary from path to what is
+# there: whether it exists, what kind of thing it is, its owner and mode, and its content
+# when it is a plain file. Nothing is changed.
+- name: Look at each path
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+  loop: '{{ restart_stamp_verify_paths }}'
+  register: restart_stamp_verify_stats
+  no_log: true
+
+- name: Read each plain file
+  ansible.builtin.slurp:
+    src: '{{ item.item }}'
+  loop: '{{ restart_stamp_verify_stats.results }}'
+  register: restart_stamp_verify_reads
+  when: item.stat.exists and item.stat.isreg
+  no_log: true
+
+- name: Keep the state by path
+  ansible.builtin.set_fact:
+    restart_stamp_verify_state: >-
+      {%- set ns = namespace(out={}) -%}
+      {%- for s in restart_stamp_verify_stats.results -%}
+      {%- set r = restart_stamp_verify_reads.results[loop.index0] -%}
+      {%- set kind = 'none' if not s.stat.exists else ('link' if s.stat.islnk else ('dir' if s.stat.isdir else 'file')) -%}
+      {%- set _ = ns.out.update({s.item: {'kind': kind, 'content': (r.content | b64decode) if r.content is defined else 'none',
+      'mode': s.stat.mode | default('none'), 'owner': s.stat.pw_name | default('none')}}) -%}
+      {%- endfor -%}
+      {{ ns.out }}
+  no_log: true

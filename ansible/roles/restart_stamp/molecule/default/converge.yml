@@ -1,0 +1,116 @@
+---
+# One run of a restart-by-fingerprint role's stamp steps, in the order a caller runs
+# them: read, decide, mark the pending, adopt, act (here nothing: the action is the
+# caller's), record. Three classes cover the two callers' shapes:
+#   adopted  an edge-shape class (adoptable) whose files already equal the repository's
+#   acted    an edge-shape class whose files differ until it has a stamp
+#   plain    a monitoring-shape class (not adoptable, no host-side comparison)
+# Every later run (the idempotence step, the check-mode step after verify) finds the
+# stamps written and must change nothing, so each input is derived from the stamps the
+# way a caller derives it from the host.
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars:
+    restart_stamp_converge_fp:
+      adopted: "{{ 'a1' * 32 }}"
+      acted: "{{ 'b2' * 32 }}"
+      plain: "{{ 'c3' * 32 }}"
+  tasks:
+    - name: Read the stamps
+      ansible.builtin.include_role:
+        # Molecule links the role under its namespace and name, the namespace
+        # from galaxy_info in meta/main.yml.
+        name: branchleft.restart_stamp
+        tasks_from: read
+      vars:
+        restart_stamp_classes:
+          - { name: adopted, file: /var/lib/branchleft/rs-adopted.applied }
+          - { name: acted, file: /var/lib/branchleft/rs-acted.applied }
+          - { name: plain, file: /var/lib/branchleft/rs-plain.applied }
+
+    - name: Decide
+      ansible.builtin.include_role:
+        name: branchleft.restart_stamp
+        tasks_from: decide
+      vars:
+        restart_stamp_classes:
+          - name: adopted
+            stamp: '{{ restart_stamp_found.adopted }}'
+            fingerprint: '{{ restart_stamp_converge_fp.adopted }}'
+            adoptable: true
+          - name: acted
+            stamp: '{{ restart_stamp_found.acted }}'
+            fingerprint: '{{ restart_stamp_converge_fp.acted }}'
+            drift: '{{ restart_stamp_found.acted == "absent" }}'
+            adoptable: true
+          - name: plain
+            stamp: '{{ restart_stamp_found.plain }}'
+            fingerprint: '{{ restart_stamp_converge_fp.plain }}'
+
+    - name: Mark the classes that are about to change
+      ansible.builtin.include_role:
+        name: branchleft.restart_stamp
+        tasks_from: mark_pending
+      vars:
+        restart_stamp_classes:
+          - name: adopted
+            file: /var/lib/branchleft/rs-adopted.applied
+            mark: '{{ restart_stamp_decisions.adopted.mark }}'
+          - name: acted
+            file: /var/lib/branchleft/rs-acted.applied
+            mark: '{{ restart_stamp_decisions.acted.mark }}'
+          - name: plain
+            file: /var/lib/branchleft/rs-plain.applied
+            mark: '{{ restart_stamp_decisions.plain.mark }}'
+
+    - name: Adopt the classes the host already has
+      ansible.builtin.include_role:
+        name: branchleft.restart_stamp
+        tasks_from: adopt
+      vars:
+        restart_stamp_classes:
+          - name: adopted
+            file: /var/lib/branchleft/rs-adopted.applied
+            fingerprint: '{{ restart_stamp_converge_fp.adopted }}'
+            adopt: '{{ restart_stamp_decisions.adopted.adopt }}'
+          - name: acted
+            file: /var/lib/branchleft/rs-acted.applied
+            fingerprint: '{{ restart_stamp_converge_fp.acted }}'
+            adopt: '{{ restart_stamp_decisions.acted.adopt }}'
+          - name: plain
+            file: /var/lib/branchleft/rs-plain.applied
+            fingerprint: '{{ restart_stamp_converge_fp.plain }}'
+            adopt: '{{ restart_stamp_decisions.plain.adopt }}'
+
+    # The caller's action goes here and is read back; this scenario's action is empty and
+    # always read back as done, so a class that was due is recorded.
+    - name: Record the classes that were acted on and read back
+      ansible.builtin.include_role:
+        name: branchleft.restart_stamp
+        tasks_from: record
+      vars:
+        restart_stamp_classes:
+          - name: adopted
+            file: /var/lib/branchleft/rs-adopted.applied
+            fingerprint: '{{ restart_stamp_converge_fp.adopted }}'
+            read_back: '{{ restart_stamp_decisions.adopted.due }}'
+          - name: acted
+            file: /var/lib/branchleft/rs-acted.applied
+            fingerprint: '{{ restart_stamp_converge_fp.acted }}'
+            read_back: '{{ restart_stamp_decisions.acted.due }}'
+          - name: plain
+            file: /var/lib/branchleft/rs-plain.applied
+            fingerprint: '{{ restart_stamp_converge_fp.plain }}'
+            read_back: '{{ restart_stamp_decisions.plain.due }}'
+
+    # The control case for the log scan in verify.yml: a task with no no_log that is
+    # given a known canary. If the log did not show it, an empty result of the scan
+    # would mean nothing.
+    - name: Run a harmless command that is given a canary argument
+      ansible.builtin.command:
+        argv:
+          - /bin/true
+          - RESTART_STAMP_LOG_CANARY
+      changed_when: false
+      check_mode: false

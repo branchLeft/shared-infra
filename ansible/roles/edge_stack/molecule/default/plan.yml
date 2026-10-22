@@ -1,0 +1,8 @@
+---
+# The role as the plan job runs it: ansible-playbook --check, started by verify (case p8)
+# with the stack directory as an extra variable. It is not one of Molecule's own steps.
+- name: Plan
+  hosts: all
+  gather_facts: false
+  roles:
+    - role: branchleft.edge_stack

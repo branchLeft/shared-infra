@@ -1,0 +1,45 @@
+---
+argument_specs:
+  main:
+    short_description: Deliver the edge Compose stack's files and apply each class of file by its own action
+    description: >-
+      Delivers the three classes of file in the edge stack directory and applies each
+      by its own action, then records it as applied. The Caddyfile is validated in the
+      pinned image, written in place, reloaded in the running container and read back
+      by sha256 inside the container. The Compose file is applied by restarting
+      branchleft-compose@edge, the only path that runs docker compose up. The
+      CrowdSec files are applied by restarting the CrowdSec container once and
+      reading them back inside it. Every action runs under the deploy lock of the
+      stack. The role reads /etc/branchleft/edge.image.env and never writes it, and
+      asserts that /etc/branchleft/edge.env exists, is owned by root and is mode 0600,
+      without bringing its content into the run (only its sha256 comes back). It
+      starts no unit that is not enabled, removes
+      nothing outside the CrowdSec acquisition directory and applies no live change in
+      check mode.
+    author: branchLeft
+    options:
+      edge_stack_source_dir:
+        type: path
+        description: >-
+          Absolute path, on the machine that runs Ansible, of the directory the stack
+          is delivered from. The default is the link files/stack, which points at
+          hetzner/edge/stack in this repository. A caller has no reason to change it;
+          the role's container test points it at fixture directories.
+        default: '{{ role_path }}/files/stack'
+      edge_stack_lock_timeout:
+        type: int
+        description: >-
+          Seconds to wait for /etc/branchleft/edge.deploy.lock before the role fails
+          with exit code 75 and changes nothing under it. The deploy wrapper itself
+          waits up to 1260 seconds for the same lock, which covers a deploy that
+          fails once and rolls back; this role gives up sooner and the next run
+          repeats.
+        default: 600
+      edge_stack_crowdsec_wait_tries:
+        type: int
+        description: Times the role asks CrowdSec's Local API whether it answers after the restart, before it fails the read-back.
+        default: 24
+      edge_stack_crowdsec_wait_interval:
+        type: int
+        description: Seconds between those asks. Together with the tries this is the time CrowdSec has to come back.
+        default: 5

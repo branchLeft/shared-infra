@@ -1,6 +1,7 @@
 ---
-# edge1: the first host under the gated pull. Two roles, in order: the Ansible
-# toolchain the host runs this playbook with, then the trigger that runs it.
+# edge1: the first host under the gated pull. Three roles, in order: the Ansible
+# toolchain the host runs this playbook with, the trigger that runs it, then the
+# files of the edge Compose stack and the restart of what each class of file needs.
 #
 # The host's trigger runs this file on a signed checkout with the inventory
 # `localhost,`, which loads no group variables, and a playbook must target `all`
@@ -31,3 +32,4 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/edge_stack # noqa: role-name[path]

@@ -1,0 +1,107 @@
+---
+# Test scaffolding, not role tasks. What an edge host has before the role runs, as
+# the owner steps leave it: the shared Compose unit template (a placeholder here, the
+# real one is part of the host baseline), the pin file the deploy wrapper writes, the
+# secrets file the owner places, and stand-ins for the programs the role's locked
+# script calls. The stand-ins prove wiring only (README, "Named limits").
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    # A oneshot with the [Install] section the real template has: the role restarts a
+    # unit only when it is enabled, and a unit cannot be enabled without that section.
+    # Its ExecStart is a program that logs a line to the stand-in's call log (and fails
+    # while a flag exists), so a test can count the restarts and see what was on disk
+    # when each one ran. Nothing starts an instance except where converge.yml and
+    # verify.yml say so.
+    - name: Install the program the placeholder unit runs
+      ansible.builtin.copy:
+        src: standin-unit-start.sh
+        dest: /usr/local/bin/standin-unit-start
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install a placeholder for the shared Compose unit template
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=PLACEHOLDER Compose stack %i
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/usr/local/bin/standin-unit-start
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/branchleft-compose@.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Make systemd read the placeholder
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Install a stand-in for docker
+      ansible.builtin.copy:
+        src: standin-docker.sh
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create the log of the stand-in's calls, empty
+      ansible.builtin.copy:
+        content: ''
+        dest: /var/log/docker-standin.calls
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create the directory that holds the containers' view of the single-file mounts
+      ansible.builtin.file:
+        path: /var/lib/standin-mount
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    # Both services are running, as on a host that was delivered by hand and started.
+    - name: Say that both services are running
+      ansible.builtin.copy:
+        content: "caddy\ncrowdsec\n"
+        dest: /run/standin.running
+        owner: root
+        group: root
+        mode: '0644'
+
+    # What the owner steps leave: the deploy wrapper's pin file, written by
+    # branchleft-deploy as exactly one line, and the owner's secrets file, closed
+    # to root. The values are sentinels, not secrets: the scenario writes them into a
+    # throwaway container, and verify scans the log for them.
+    - name: Create the configuration directory
+      ansible.builtin.file:
+        path: /etc/branchleft
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Write the pin the way the deploy wrapper does
+      ansible.builtin.copy:
+        content: "IMAGE=ghcr.io/branchleft/edge-caddy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+        dest: /etc/branchleft/edge.image.env
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Place the secrets file the way the owner does
+      ansible.builtin.copy:
+        content: |
+          CROWDSEC_BOUNCER_KEY=test-sentinel-edge-key-0001
+          ACME_EMAIL=test-sentinel-0002@test.invalid
+        dest: /etc/branchleft/edge.env
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true

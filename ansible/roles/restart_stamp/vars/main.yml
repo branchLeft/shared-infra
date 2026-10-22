@@ -1,0 +1,22 @@
+---
+# What the role carries. These are constants of the shape, not inputs, so they live
+# here and not in defaults/: a caller cannot override them.
+
+# The one directory a stamp may be in, and what a stamp's file name looks like. A
+# caller names the file of each of its stamps, and the role refuses any other path,
+# so a mistake in a caller cannot make this role write somewhere else. \Z, not $,
+# so that a name ending in a newline does not match.
+restart_stamp_file_pattern: '^/var/lib/branchleft/[A-Za-z0-9_.-]+\.applied\Z'
+
+# A class name is a lowercase word: it keys the facts the role sets.
+restart_stamp_name_pattern: '^[a-z][a-z0-9_]*\Z'
+
+# A fingerprint is a sha256 in hex. Anything else (`pending` above all) is refused,
+# so a stamp that means "an action is under way" can never be written as the record
+# of a finished one.
+restart_stamp_fingerprint_pattern: '^[0-9a-f]{64}\Z'
+
+# What a stamp holds when it is not a fingerprint. `absent` is what a read reports
+# for a stamp that is not there; `pending` is what mark_pending writes.
+restart_stamp_absent: absent
+restart_stamp_pending: pending

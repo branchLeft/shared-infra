@@ -1,0 +1,140 @@
+---
+# Everything here is a read, so it runs in check mode as well, and the plan job and
+# the nightly drift run see the same decisions a real run makes. For each class
+# the decision has two parts that are both read from the host: the file on the host
+# against the file in the repository (drift, which a hand edit or a torn file
+# shows), and the stamp against the fingerprint of what the repository holds now.
+# This role works out the hashes, the fingerprints and the drift; the restart_stamp
+# role reads the stamps and says what is to be adopted, what is due and what is
+# marked (README, "Shared home").
+
+- name: Hash every file of the stack in the repository
+  ansible.builtin.stat:
+    path: '{{ edge_stack_source_dir }}/{{ item }}'
+    checksum_algorithm: sha256
+  loop: '{{ edge_stack_hashed }}'
+  register: edge_stack_repo_stats
+  delegate_to: localhost
+  become: false
+  loop_control:
+    label: '{{ item }}'
+
+- name: Hash the same files on the host
+  ansible.builtin.stat:
+    path: '{{ edge_stack_project_dir }}/{{ item }}'
+    checksum_algorithm: sha256
+  loop: '{{ edge_stack_hashed }}'
+  register: edge_stack_host_stats
+  loop_control:
+    label: '{{ item }}'
+
+# The acquisition directory is the one place the role prunes: a file in it that the
+# repository does not hold is a CrowdSec configuration nobody reads in the repository.
+- name: List the acquisition directory on the host
+  ansible.builtin.find:
+    paths: '{{ edge_stack_project_dir }}/{{ edge_stack_acquis_dir }}'
+    file_type: any
+    hidden: true
+  register: edge_stack_host_acquis
+
+# A stamp that is there and cannot be read fails the run here, before anything is
+# placed; only a stamp that is not there is `absent` (restart_stamp, entry point read).
+- name: Read the three stamps
+  ansible.builtin.include_role:
+    name: '{{ edge_stack_stamp_role }}'
+    tasks_from: read
+  vars:
+    restart_stamp_classes: "{{ edge_stack_stamp_files | dict2items(key_name='name', value_name='file') }}"
+
+# Read-only; a unit that is not enabled is a host awaiting the owner's first start.
+- name: Read the edge unit
+  ansible.builtin.systemd_service:
+    name: '{{ edge_stack_unit }}'
+  register: edge_stack_unit_status
+
+- name: Keep the hashes by name
+  ansible.builtin.set_fact:
+    edge_stack_repo_sha: >-
+      {{ dict(edge_stack_hashed | zip(edge_stack_repo_stats.results | map(attribute='stat.checksum', default='absent'))) }}
+    edge_stack_host_sha: >-
+      {{ dict(edge_stack_hashed | zip(edge_stack_host_stats.results | map(attribute='stat.checksum', default='absent'))) }}
+    edge_stack_stale_acquis: >-
+      {{ edge_stack_host_acquis.files | map(attribute='path')
+      | reject('in', edge_stack_acquis_files | map('regex_replace', '^', edge_stack_project_dir ~ '/') | list) | sort | list }}
+    edge_stack_unit_enabled: '{{ (edge_stack_unit_status.status.UnitFileState | default("")) in edge_stack_enabled_states }}'
+  no_log: true
+
+# The fingerprint of a class is the hash of what the repository holds for it now.
+# The Compose class also holds the hash of edge.env, so a rotated key is applied by
+# restarting the unit, which recreates the containers (README, "Restart shape").
+- name: Work out the fingerprints and the files that differ from the repository
+  ansible.builtin.set_fact:
+    edge_stack_fp_caddy: "{{ ('caddy=' ~ edge_stack_repo_sha[edge_stack_caddy_file]) | hash('sha256') }}"
+    edge_stack_fp_compose: "{{ ('compose=' ~ edge_stack_repo_sha[edge_stack_compose_file] ~ ';env=' ~ edge_stack_env_stat.stat.checksum) | hash('sha256') }}"
+    edge_stack_fp_crowdsec: >-
+      {%- set ns = namespace(parts=[]) -%}
+      {%- for f in edge_stack_crowdsec_all | sort -%}
+      {%- set _ = ns.parts.append(f ~ '=' ~ edge_stack_repo_sha[f]) -%}
+      {%- endfor -%}
+      {{ ('crowdsec=' ~ ns.parts | join(';')) | hash('sha256') }}
+    edge_stack_differs: >-
+      {%- set ns = namespace(out=[]) -%}
+      {%- for f in edge_stack_hashed -%}
+      {%- if edge_stack_host_sha[f] != edge_stack_repo_sha[f] -%}
+      {%- set _ = ns.out.append(f) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ ns.out }}
+  no_log: true
+
+- name: Work out which classes have drifted on the host
+  ansible.builtin.set_fact:
+    edge_stack_caddy_drift: '{{ edge_stack_caddy_file in edge_stack_differs }}'
+    edge_stack_compose_drift: '{{ edge_stack_compose_file in edge_stack_differs }}'
+    edge_stack_crowdsec_drift: '{{ ((edge_stack_differs | intersect(edge_stack_crowdsec_all)) | length > 0) or (edge_stack_stale_acquis | length > 0) }}'
+
+# What the three classes are to the decision. All three can be adopted (a hand-delivered
+# host has the repository's files and no stamp). The Compose class is gated by its unit:
+# a unit that is not enabled is the owner's first start, so it is neither adopted nor
+# due, but its mark is still written when its file drifts, so the placed file never
+# makes a host with no stamp look hand-delivered (README, "Adoption").
+- name: Decide what to adopt, what is due and what to mark pending
+  ansible.builtin.include_role:
+    name: '{{ edge_stack_stamp_role }}'
+    tasks_from: decide
+  vars:
+    restart_stamp_classes:
+      - name: caddy
+        stamp: '{{ restart_stamp_found.caddy }}'
+        fingerprint: '{{ edge_stack_fp_caddy }}'
+        drift: '{{ edge_stack_caddy_drift }}'
+        adoptable: true
+      - name: compose
+        stamp: '{{ restart_stamp_found.compose }}'
+        fingerprint: '{{ edge_stack_fp_compose }}'
+        drift: '{{ edge_stack_compose_drift }}'
+        adoptable: true
+        gate: '{{ edge_stack_unit_enabled }}'
+      - name: crowdsec
+        stamp: '{{ restart_stamp_found.crowdsec }}'
+        fingerprint: '{{ edge_stack_fp_crowdsec }}'
+        drift: '{{ edge_stack_crowdsec_drift }}'
+        adoptable: true
+
+- name: Keep what is due under the names this role uses
+  ansible.builtin.set_fact:
+    edge_stack_caddy_due: '{{ restart_stamp_decisions.caddy.due }}'
+    edge_stack_compose_due: '{{ restart_stamp_decisions.compose.due }}'
+    edge_stack_crowdsec_due: '{{ restart_stamp_decisions.crowdsec.due }}'
+
+- name: Say whether any class is due
+  ansible.builtin.set_fact:
+    edge_stack_any_due: '{{ edge_stack_caddy_due | bool or edge_stack_compose_due | bool or edge_stack_crowdsec_due | bool }}'
+
+- name: Say that the unit is not enabled and is left alone
+  ansible.builtin.debug:
+    msg: >-
+      {{ edge_stack_unit }} is not enabled, so it is not started or restarted here and its Compose class is not
+      recorded (a Compose file that differs leaves the class pending, so it is acted on once the unit is enabled):
+      the owner's first start is RUNBOOK-edge step 5. The files are still placed.
+  when: not edge_stack_unit_enabled | bool

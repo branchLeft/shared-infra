@@ -1,0 +1,30 @@
+---
+# One list the role must refuse, with nothing written. Inputs: restart_stamp_verify_refuse_name,
+# restart_stamp_verify_refuse_entry, restart_stamp_verify_refuse_classes and
+# restart_stamp_verify_refuse_untouched (paths that must not exist afterwards, the good
+# class beside the bad one among them: a refusal is of the whole list or of none of it).
+- name: Call the entry point with the list
+  ansible.builtin.include_tasks: call.yml
+  vars:
+    restart_stamp_verify_name: 'refuse_{{ restart_stamp_verify_refuse_name }}'
+    restart_stamp_verify_entry: '{{ restart_stamp_verify_refuse_entry }}'
+    restart_stamp_verify_classes: '{{ restart_stamp_verify_refuse_classes }}'
+
+- name: Look at the paths that must not exist
+  ansible.builtin.include_tasks: stamps.yml
+  vars:
+    restart_stamp_verify_paths: '{{ restart_stamp_verify_refuse_untouched }}'
+
+# The message is the role's own check, so a refusal by the argument specification, or a
+# failure of some other task, is not taken for it.
+- name: Assert the role refused the list and wrote nothing
+  ansible.builtin.assert:
+    that:
+      - restart_stamp_verify_calls['refuse_' ~ restart_stamp_verify_refuse_name].failed
+      - "'Nothing was read or written' in restart_stamp_verify_calls['refuse_' ~ restart_stamp_verify_refuse_name].msg"
+      - restart_stamp_verify_state.values() | map(attribute='kind') | unique | list == ['none']
+    quiet: true
+    fail_msg: >-
+      The list '{{ restart_stamp_verify_refuse_name }}' was not refused by the role's own check with nothing written. The
+      call said '{{ restart_stamp_verify_calls['refuse_' ~ restart_stamp_verify_refuse_name].msg }}' and the paths are
+      {{ restart_stamp_verify_state }}.

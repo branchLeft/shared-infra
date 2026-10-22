@@ -1,0 +1,742 @@
+---
+# Each case is a block with its own tag (r0, r1, ...), starts from the converged host with
+# no stamp of a case left (tasks/clean.yml), makes its own stamps, calls the entry points
+# (tasks/call.yml) and asserts on the files and on the two facts the role sets. Cases
+# never rely on one another, so one can be run alone (`molecule verify -- --tags r2`).
+# The stamps the converge wrote are rs-adopted, rs-acted and rs-plain; a case's own are
+# rs-r<number>-<what>. This scenario owns the rows of the stamp logic: the read, the
+# decision, the pending mark, the adoption and the record. A caller's scenario keeps the
+# rows that need its host.
+- name: Verify the stamp steps
+  hosts: all
+  gather_facts: false
+  vars:
+    restart_stamp_verify_dir: /var/lib/branchleft
+    restart_stamp_verify_fp: "{{ '1f' * 32 }}"
+    restart_stamp_verify_fp_other: "{{ '2e' * 32 }}"
+  tasks:
+    - name: Start from a host with none of the cases' stamps
+      ansible.builtin.include_tasks:
+        file: tasks/clean.yml
+        # The tag of an include does not reach the tasks it includes, so without this a
+        # run of one case (`--tags r3`) would not clean up before or after itself.
+        apply:
+          tags: [always]
+      tags: [always]
+
+    # ----- r0: the converge wrote what a caller's first run writes -----
+    - name: Case r0, the stamps of the converged host
+      tags: [r0]
+      block:
+        - name: Look at the three stamps
+          ansible.builtin.include_tasks: tasks/stamps.yml
+          vars:
+            restart_stamp_verify_paths:
+              - /var/lib/branchleft/rs-adopted.applied
+              - /var/lib/branchleft/rs-acted.applied
+              - /var/lib/branchleft/rs-plain.applied
+
+        - name: Assert each holds its fingerprint and a newline, closed to root
+          ansible.builtin.assert:
+            that:
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-adopted.applied'].content == ('a1' * 32) ~ "\n"
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-acted.applied'].content == ('b2' * 32) ~ "\n"
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-plain.applied'].content == ('c3' * 32) ~ "\n"
+              - restart_stamp_verify_state.values() | map(attribute='kind') | unique | list == ['file']
+              - restart_stamp_verify_state.values() | map(attribute='mode') | unique | list == ['0600']
+              - restart_stamp_verify_state.values() | map(attribute='owner') | unique | list == ['root']
+            quiet: true
+            fail_msg: A converged stamp is missing, holds the wrong fingerprint, or is not a plain file of root's with mode 0600.
+
+    # ----- r1: the read -----
+    - name: Case r1, reading the stamps, and failing on one that is there and cannot be read
+      tags: [r1]
+      block:
+        - name: Put stamps of every kind in place
+          ansible.builtin.copy:
+            content: '{{ item.content }}'
+            dest: '/var/lib/branchleft/rs-r1-{{ item.name }}.applied'
+            owner: root
+            group: root
+            mode: '0600'
+          loop:
+            - { name: good, content: "{{ restart_stamp_verify_fp }}\n" }
+            - { name: pending, content: "pending\n" }
+            - { name: padded, content: "  {{ restart_stamp_verify_fp }}  \n\n" }
+            - { name: empty, content: '' }
+          loop_control:
+            label: '{{ item.name }}'
+
+        - name: Read them, and one that is not there
+          ansible.builtin.include_tasks: tasks/call.yml
+          vars:
+            restart_stamp_verify_name: r1_read
+            restart_stamp_verify_entry: read
+            restart_stamp_verify_classes:
+              - { name: absent, file: /var/lib/branchleft/rs-r1-absent.applied }
+              - { name: good, file: /var/lib/branchleft/rs-r1-good.applied }
+              - { name: pending, file: /var/lib/branchleft/rs-r1-pending.applied }
+              - { name: padded, file: /var/lib/branchleft/rs-r1-padded.applied }
+              - { name: empty, file: /var/lib/branchleft/rs-r1-empty.applied }
+
+        - name: Read the same in check mode
+          ansible.builtin.include_tasks: tasks/call.yml
+          vars:
+            restart_stamp_verify_name: r1_read_check
+            restart_stamp_verify_entry: read
+            restart_stamp_verify_check: true
+            restart_stamp_verify_classes:
+              - { name: absent, file: /var/lib/branchleft/rs-r1-absent.applied }
+              - { name: good, file: /var/lib/branchleft/rs-r1-good.applied }
+              - { name: pending, file: /var/lib/branchleft/rs-r1-pending.applied }
+              - { name: padded, file: /var/lib/branchleft/rs-r1-padded.applied }
+              - { name: empty, file: /var/lib/branchleft/rs-r1-empty.applied }
+
+        - name: Assert a missing stamp is absent, the others are read and trimmed, and nothing was written
+          ansible.builtin.assert:
+            that:
+              - not restart_stamp_verify_calls[item].failed
+              - restart_stamp_verify_calls[item].found.absent == 'absent'
+              - restart_stamp_verify_calls[item].found.good == restart_stamp_verify_fp
+              - restart_stamp_verify_calls[item].found.pending == 'pending'
+              - restart_stamp_verify_calls[item].found.padded == restart_stamp_verify_fp
+              - restart_stamp_verify_calls[item].found.empty == ''
+            quiet: true
+            fail_msg: The read did not report a missing stamp as absent and the others as they are, trimmed. It said {{ restart_stamp_verify_calls[item] }}.
+          loop: [r1_read, r1_read_check]
+          no_log: true
+
+        - name: Look at the stamp that was not there
+          ansible.builtin.include_tasks: tasks/stamps.yml
+          vars:
+            restart_stamp_verify_paths: [/var/lib/branchleft/rs-r1-absent.applied]
+
+        - name: Assert the read created nothing
+          ansible.builtin.assert:
+            that:
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r1-absent.applied'].kind == 'none'
+            quiet: true
+            fail_msg: The read created a stamp.
+
+        # A stamp that is there and cannot be read is not a stamp that is missing: if it
+        # were read as absent, a class a run left half-done could be adopted.
+        - name: Make a stamp that is a link to nothing
+          ansible.builtin.file:
+            src: /nonexistent/stamp
+            path: /var/lib/branchleft/rs-r1-dangling.applied
+            state: link
+            force: true
+
+        - name: Make a stamp that is a directory
+          ansible.builtin.file:
+            path: /var/lib/branchleft/rs-r1-dir.applied
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Read each of them
+          ansible.builtin.include_tasks: tasks/call.yml
+          vars:
+            restart_stamp_verify_name: 'r1_{{ item }}'
+            restart_stamp_verify_entry: read
+            restart_stamp_verify_classes:
+              - { name: good, file: /var/lib/branchleft/rs-r1-good.applied }
+              - { name: '{{ item }}', file: '/var/lib/branchleft/rs-r1-{{ item }}.applied' }
+          loop: [dangling, dir]
+
+        - name: Assert the read failed on a stamp that is there and cannot be read
+          ansible.builtin.assert:
+            that:
+              - restart_stamp_verify_calls['r1_' ~ item].failed
+              - restart_stamp_verify_calls['r1_' ~ item].found == {}
+            quiet: true
+            fail_msg: A stamp that is there and cannot be read ({{ item }}) was read as absent or as a value, instead of failing the run.
+          loop: [dangling, dir]
+
+    # ----- r2: the decision -----
+    - name: Case r2, adopted, due and marked, class by class
+      tags: [r2]
+      vars:
+        # id, stamp, drift, adoptable, gate, then what is decided: adopt, due, mark, and why.
+        restart_stamp_verify_rows:
+          - [row01, ABSENT, false, true, true, true, false, false, a hand-delivered host]
+          - [row02, ABSENT, true, true, true, false, true, true, drift stops an adoption]
+          - [row03, ABSENT, false, false, true, false, true, true, a class that is not adoptable]
+          - [row04, FP, false, true, true, false, false, false, applied and unchanged]
+          - [row05, FP, true, true, true, false, true, true, drift under an equal stamp]
+          - [row06, PENDING, false, true, true, false, true, true, pending is no fingerprint]
+          - [row07, OTHER, false, true, true, false, true, true, a stamp of other files]
+          - [row08, ABSENT, false, true, false, false, false, false, a closed gate adopts nothing]
+          - [row09, ABSENT, true, true, false, false, false, true, drift behind a closed gate]
+          - [row10, OTHER, false, false, false, false, false, false, a closed gate is not due]
+          - [row11, FP, false, false, true, false, false, false, applied, not adoptable]
+          - [row12, PENDING, true, false, true, false, true, true, pending with drift]
+          - [row13, PENDING, false, true, false, false, false, false, pending behind a closed gate]
+        restart_stamp_verify_tokens:
+          FP: '{{ restart_stamp_verify_fp }}'
+          OTHER: '{{ restart_stamp_verify_fp_other }}'
+          PENDING: pending
+          ABSENT: absent
+      block:
+        # row14 leaves out drift, adoptable and gate, so their defaults (false, false, true)
+        # are decided on too.
+        - name: Build the classes from the rows
+          ansible.builtin.set_fact:
+            restart_stamp_verify_r2_classes: >-
+              {%- set ns = namespace(out=[]) -%}
+              {%- for r in restart_stamp_verify_rows -%}
+              {%- set _ = ns.out.append({'name': r[0], 'stamp': restart_stamp_verify_tokens[r[1]],
+              'fingerprint': restart_stamp_verify_fp, 'drift': r[2], 'adoptable': r[3], 'gate': r[4]}) -%}
+              {%- endfor -%}
+              {%- set _ = ns.out.append({'name': 'row14', 'stamp': 'absent', 'fingerprint': restart_stamp_verify_fp}) -%}
+              {{ ns.out }}
+          no_log: true
+
+        - name: Decide on all of them in one call
+          ansible.builtin.include_tasks: tasks/call.yml
+          vars:
+            restart_stamp_verify_name: r2
+            restart_stamp_verify_entry: decide
+            restart_stamp_verify_classes: '{{ restart_stamp_verify_r2_classes }}'
+
+        - name: Assert each row was decided as the rule says
+          ansible.builtin.assert:
+            that:
+              - not restart_stamp_verify_calls.r2.failed
+              - restart_stamp_verify_calls.r2.decisions[item[0]].adopt == item[5]
+              - restart_stamp_verify_calls.r2.decisions[item[0]].due == item[6]
+              - restart_stamp_verify_calls.r2.decisions[item[0]].mark == item[7]
+            quiet: true
+            fail_msg: >-
+              Row {{ item[0] }} ({{ item[8] }}: stamp {{ item[1] }}, drift {{ item[2] }}, adoptable {{ item[3] }}, gate {{ item[4] }})
+              was decided {{ restart_stamp_verify_calls.r2.decisions[item[0]] }}; the rule says adopt {{ item[5] }}, due {{ item[6] }},
+              mark {{ item[7] }}.
+          loop: '{{ restart_stamp_verify_rows }}'
+          loop_control:
+            label: '{{ item[0] }}'
+
+        - name: Assert the defaults of the three flags are false, false and true
+          ansible.builtin.assert:
+            that:
+              - "restart_stamp_verify_calls.r2.decisions.row14 == {'adopt': false, 'due': true, 'mark': true}"
+            quiet: true
+            fail_msg: A class with no drift, adoptable or gate was not decided with the defaults (no drift, not adoptable, gate open).
+
+    # ----- r3: the pending mark -----
+    - name: Case r3, the pending mark
+      tags: [r3]
+      block:
+        - name: Put stamps in place that hold a fingerprint
+          ansible.builtin.copy:
+            content: "{{ restart_stamp_verify_fp }}\n"
+            dest: '/var/lib/branchleft/rs-r3-{{ item }}.applied'
+            owner: root
+            group: root
+            mode: '0600'
+          loop: [old, keep, chk]
+
+        - name: Mark two classes, leave two alone
+          ansible.builtin.include_tasks: tasks/call.yml
+          vars:
+            restart_stamp_verify_name: r3
+            restart_stamp_verify_entry: mark_pending
+            restart_stamp_verify_classes:
+              - name: old
+                file: /var/lib/branchleft/rs-r3-old.applied
+                mark: true
+              - name: new
+                file: /var/lib/branchleft/rs-r3-new.applied
+                mark: true
+              - name: keep
+                file: /var/lib/branchleft/rs-r3-keep.applied
+                mark: false
+              - name: none
+                file: /var/lib/branchleft/rs-r3-none.applied
+                mark: false
+
+        - name: Mark a class in check mode
+          ansible.builtin.include_tasks: tasks/call.yml
+          vars:
+            restart_stamp_verify_name: r3_check
+            restart_stamp_verify_entry: mark_pending
+            restart_stamp_verify_check: true
+            restart_stamp_verify_classes:
+              - name: chk
+                file: /var/lib/branchleft/rs-r3-chk.applied
+                mark: true
+
+        - name: Look at the stamps
+          ansible.builtin.include_tasks: tasks/stamps.yml
+          vars:
+            restart_stamp_verify_paths:
+              - /var/lib/branchleft/rs-r3-old.applied
+              - /var/lib/branchleft/rs-r3-new.applied
+              - /var/lib/branchleft/rs-r3-keep.applied
+              - /var/lib/branchleft/rs-r3-none.applied
+              - /var/lib/branchleft/rs-r3-chk.applied
+
+        - name: Assert a marked class holds pending, closed to root, and nothing else was touched
+          ansible.builtin.assert:
+            that:
+              - not restart_stamp_verify_calls.r3.failed
+              - not restart_stamp_verify_calls.r3_check.failed
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r3-old.applied'].content == "pending\n"
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r3-new.applied'].content == "pending\n"
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r3-new.applied'].mode == '0600'
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r3-new.applied'].owner == 'root'
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r3-keep.applied'].content == restart_stamp_verify_fp ~ "\n"
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r3-none.applied'].kind == 'none'
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r3-chk.applied'].content == restart_stamp_verify_fp ~ "\n"
+            quiet: true
+            fail_msg: The pending mark was written to a class that was not marked, not written to one that was, or written in check mode.
+
+    # ----- r4: the adoption -----
+    - name: Case r4, adopting
+      tags: [r4]
+      block:
+        - name: Put a pending stamp in place
+          ansible.builtin.copy:
+            content: "pending\n"
+            dest: /var/lib/branchleft/rs-r4-over.applied
+            owner: root
+            group: root
+            mode: '0600'
+
+        - name: Adopt one class, and ask for another not to be
+          ansible.builtin.include_tasks: tasks/call.yml
+          vars:
+            restart_stamp_verify_name: r4
+            restart_stamp_verify_entry: adopt
+            restart_stamp_verify_classes:
+              - name: done
+                file: /var/lib/branchleft/rs-r4-done.applied
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                adopt: true
+              - name: skip
+                file: /var/lib/branchleft/rs-r4-skip.applied
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                adopt: false
+              - name: over
+                file: /var/lib/branchleft/rs-r4-over.applied
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                adopt: false
+
+        - name: Look at the stamps
+          ansible.builtin.include_tasks: tasks/stamps.yml
+          vars:
+            restart_stamp_verify_paths:
+              - /var/lib/branchleft/rs-r4-done.applied
+              - /var/lib/branchleft/rs-r4-skip.applied
+              - /var/lib/branchleft/rs-r4-over.applied
+
+        - name: Assert only the adopted class was written, with its fingerprint and a newline
+          ansible.builtin.assert:
+            that:
+              - not restart_stamp_verify_calls.r4.failed
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r4-done.applied'].content == restart_stamp_verify_fp ~ "\n"
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r4-done.applied'].mode == '0600'
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r4-done.applied'].owner == 'root'
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r4-skip.applied'].kind == 'none'
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r4-over.applied'].content == "pending\n"
+            quiet: true
+            fail_msg: An adoption was not written, was written for a class that was not adopted, or overwrote a stamp it should not have.
+
+    # ----- r5: the record -----
+    - name: Case r5, recording only what was read back
+      tags: [r5]
+      block:
+        - name: Put pending stamps in place
+          ansible.builtin.copy:
+            content: "pending\n"
+            dest: '/var/lib/branchleft/rs-r5-{{ item }}.applied'
+            owner: root
+            group: root
+            mode: '0600'
+          loop: [done, skip, chk]
+
+        - name: Record one class that was read back, and two that were not
+          ansible.builtin.include_tasks: tasks/call.yml
+          vars:
+            restart_stamp_verify_name: r5
+            restart_stamp_verify_entry: record
+            restart_stamp_verify_classes:
+              - name: done
+                file: /var/lib/branchleft/rs-r5-done.applied
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                read_back: true
+              - name: skip
+                file: /var/lib/branchleft/rs-r5-skip.applied
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                read_back: false
+              - name: new
+                file: /var/lib/branchleft/rs-r5-new.applied
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                read_back: false
+
+        - name: Record a class in check mode
+          ansible.builtin.include_tasks: tasks/call.yml
+          vars:
+            restart_stamp_verify_name: r5_check
+            restart_stamp_verify_entry: record
+            restart_stamp_verify_check: true
+            restart_stamp_verify_classes:
+              - name: chk
+                file: /var/lib/branchleft/rs-r5-chk.applied
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                read_back: true
+
+        - name: Look at the stamps
+          ansible.builtin.include_tasks: tasks/stamps.yml
+          vars:
+            restart_stamp_verify_paths:
+              - /var/lib/branchleft/rs-r5-done.applied
+              - /var/lib/branchleft/rs-r5-skip.applied
+              - /var/lib/branchleft/rs-r5-new.applied
+              - /var/lib/branchleft/rs-r5-chk.applied
+
+        # A stamp written for a class whose read-back did not happen says "applied" of
+        # something that was not: the next run would skip the action.
+        - name: Assert only the class that was read back was recorded
+          ansible.builtin.assert:
+            that:
+              - not restart_stamp_verify_calls.r5.failed
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r5-done.applied'].content == restart_stamp_verify_fp ~ "\n"
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r5-done.applied'].mode == '0600'
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r5-skip.applied'].content == "pending\n"
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r5-new.applied'].kind == 'none'
+              - restart_stamp_verify_state['/var/lib/branchleft/rs-r5-chk.applied'].content == "pending\n"
+            quiet: true
+            fail_msg: A class whose action was not read back was recorded, one that was read back was not, or a record was written in check mode.
+
+    # ----- r6: the lists the role refuses -----
+    # Each row: a name, the entry point, the class that is added to the good one, the paths
+    # that must not exist afterwards (besides the good class's). A refusal is of the whole
+    # list or of none of it, so the good class beside the bad one is never written.
+    - name: Case r6, lists the role refuses, with nothing written
+      tags: [r6]
+      vars:
+        restart_stamp_verify_ok:
+          name: ok
+          file: /var/lib/branchleft/rs-r6-ok.applied
+          fingerprint: '{{ restart_stamp_verify_fp }}'
+          read_back: true
+        restart_stamp_verify_x: /var/lib/branchleft/rs-r6-x.applied
+        restart_stamp_verify_refusals:
+          - name: empty_list
+            entry: record
+            ok: false
+            extra: []
+            untouched: []
+          - name: same_name
+            entry: record
+            ok: true
+            extra:
+              - name: ok
+                file: /var/lib/branchleft/rs-r6-b.applied
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                read_back: true
+            untouched: [/var/lib/branchleft/rs-r6-b.applied]
+          - name: same_file
+            entry: record
+            ok: true
+            extra:
+              - name: other
+                file: /var/lib/branchleft/rs-r6-ok.applied
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                read_back: true
+            untouched: []
+          - name: bad_name
+            entry: record
+            ok: true
+            extra:
+              - name: Bad-Name
+                file: /var/lib/branchleft/rs-r6-b.applied
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                read_back: true
+            untouched: [/var/lib/branchleft/rs-r6-b.applied]
+          - name: outside_directory
+            entry: record
+            ok: true
+            extra:
+              - name: x
+                file: /tmp/rs-r6-x.applied
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                read_back: true
+            untouched: [/tmp/rs-r6-x.applied]
+          - name: traversal
+            entry: record
+            ok: true
+            extra:
+              - name: x
+                file: /var/lib/branchleft/../rs-r6-x.applied
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                read_back: true
+            untouched: [/var/lib/rs-r6-x.applied]
+          - name: subdirectory
+            entry: record
+            ok: true
+            extra:
+              - name: x
+                file: /var/lib/branchleft/sub/rs-r6-x.applied
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                read_back: true
+            untouched: [/var/lib/branchleft/sub/rs-r6-x.applied]
+          - name: not_a_stamp_name
+            entry: record
+            ok: true
+            extra:
+              - name: x
+                file: /var/lib/branchleft/rs-r6-x.conf
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                read_back: true
+            untouched: [/var/lib/branchleft/rs-r6-x.conf]
+          - name: fingerprint_pending
+            entry: record
+            ok: true
+            extra:
+              - name: x
+                file: '{{ restart_stamp_verify_x }}'
+                fingerprint: pending
+                read_back: true
+            untouched: ['{{ restart_stamp_verify_x }}']
+          - name: fingerprint_short
+            entry: record
+            ok: true
+            extra:
+              - name: x
+                file: '{{ restart_stamp_verify_x }}'
+                fingerprint: '{{ restart_stamp_verify_fp[:63] }}'
+                read_back: true
+            untouched: ['{{ restart_stamp_verify_x }}']
+          - name: fingerprint_upper_case
+            entry: record
+            ok: true
+            extra:
+              - name: x
+                file: '{{ restart_stamp_verify_x }}'
+                fingerprint: '{{ restart_stamp_verify_fp | upper }}'
+                read_back: true
+            untouched: ['{{ restart_stamp_verify_x }}']
+          - name: fingerprint_newline
+            entry: record
+            ok: true
+            extra:
+              - name: x
+                file: '{{ restart_stamp_verify_x }}'
+                fingerprint: "{{ restart_stamp_verify_fp }}\n"
+                read_back: true
+            untouched: ['{{ restart_stamp_verify_x }}']
+          - name: adopt_outside_directory
+            entry: adopt
+            ok: false
+            extra:
+              - name: x
+                file: /tmp/rs-r6-x.applied
+                fingerprint: '{{ restart_stamp_verify_fp }}'
+                adopt: true
+            untouched: [/tmp/rs-r6-x.applied]
+          - name: mark_outside_directory
+            entry: mark_pending
+            ok: false
+            extra:
+              - name: x
+                file: /tmp/rs-r6-x.applied
+                mark: true
+            untouched: [/tmp/rs-r6-x.applied]
+          - name: read_outside_directory
+            entry: read
+            ok: false
+            extra:
+              - name: x
+                file: /etc/passwd
+            untouched: []
+          - name: decide_fingerprint_pending
+            entry: decide
+            ok: false
+            extra:
+              - name: x
+                stamp: absent
+                fingerprint: pending
+            untouched: []
+      block:
+        - name: Refuse each list
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            restart_stamp_verify_refuse_name: '{{ item.name }}'
+            restart_stamp_verify_refuse_entry: '{{ item.entry }}'
+            restart_stamp_verify_refuse_classes: '{{ ([restart_stamp_verify_ok] if item.ok else []) + item.extra }}'
+            restart_stamp_verify_refuse_untouched: "{{ ['/var/lib/branchleft/rs-r6-ok.applied'] + item.untouched }}"
+          loop: '{{ restart_stamp_verify_refusals }}'
+          loop_control:
+            label: '{{ item.name }}'
+
+    # ----- r7: check mode -----
+    - name: Case r7, a plan reports an adoption and writes nothing
+      tags: [r7]
+      block:
+        # A separate ansible-playbook --check, the way the plan job runs, because the
+        # check_mode keyword of a task does not set ansible_check_mode, which the role reads.
+        - name: Plan the writing entry points in check mode
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - --check
+              - --inventory
+              - '{{ inventory_dir }}'
+              - '{{ playbook_dir }}/plan.yml'
+          delegate_to: localhost
+          # The plan inherits the environment of this run, and a run of one case
+          # (ANSIBLE_RUN_TAGS=r7) would skip every task of the plan, which has no tags.
+          environment:
+            ANSIBLE_RUN_TAGS: all
+          register: restart_stamp_verify_r7_plan
+          changed_when: false
+          failed_when: false
+
+        - name: Look at the three stamps the plan was asked to write
+          ansible.builtin.include_tasks: tasks/stamps.yml
+          vars:
+            restart_stamp_verify_paths:
+              - /var/lib/branchleft/rs-r7-adopt.applied
+              - /var/lib/branchleft/rs-r7-mark.applied
+              - /var/lib/branchleft/rs-r7-record.applied
+
+        - name: Assert the plan succeeded and wrote nothing
+          ansible.builtin.assert:
+            that:
+              - restart_stamp_verify_r7_plan.rc == 0
+              - restart_stamp_verify_state.values() | map(attribute='kind') | unique | list == ['none']
+            quiet: true
+            fail_msg: A plan failed ({{ restart_stamp_verify_r7_plan.rc }}) or wrote a stamp.
+
+        - name: Keep the output of the plan
+          ansible.builtin.set_fact:
+            restart_stamp_verify_r7_log: '{{ restart_stamp_verify_r7_plan.stdout }}'
+          no_log: true
+
+        # An adoption is the one stamp a plan shows, as a change.
+        - name: Assert the plan reported the adoption as a change
+          ansible.builtin.assert:
+            that:
+              - restart_stamp_verify_r7_log is search('(?s)Record each adopted class\]\s\*+(?:(?!TASK \[).){0,8000}?changed:\s\[')
+            quiet: true
+            fail_msg: The output of the plan does not show the adoption as a change, so a plan would show nothing for it.
+
+        - name: Assert the plan reported neither the mark nor the record as a change
+          ansible.builtin.assert:
+            that:
+              - restart_stamp_verify_r7_log is not search('(?s)' ~ item ~ '\]\s\*+(?:(?!TASK \[).){0,8000}?changed:\s\[')
+            quiet: true
+            fail_msg: The output of the plan shows '{{ item }}' as a change, so a plan claims an action that did not run.
+          loop:
+            - Mark each marked class as pending
+            - Record each class whose action was read back
+
+    # ----- r8: no fingerprint in the log -----
+    - name: Case r8, the Ansible log holds no fingerprint
+      tags: [r8]
+      block:
+        # The log of the scenario keeps what every earlier run of it wrote, so a fixed
+        # fingerprint left by one run (a role without no_log, then a fix) would fail the
+        # next. A fingerprint made for this run is in no earlier output. It is set once
+        # here, because a variable holding a lookup would be made again at each use.
+        - name: Make a fingerprint that no earlier run used
+          ansible.builtin.set_fact:
+            restart_stamp_verify_fp_leak: "{{ lookup('ansible.builtin.password', '/dev/null length=40') | hash('sha256') }}"
+          no_log: true
+
+        - name: Call every entry point with that fingerprint
+          ansible.builtin.include_tasks: tasks/call.yml
+          vars:
+            restart_stamp_verify_name: 'r8_{{ item.entry }}'
+            restart_stamp_verify_entry: '{{ item.entry }}'
+            restart_stamp_verify_classes: '{{ [item.class] }}'
+          loop:
+            - entry: read
+              class:
+                name: leak
+                file: /var/lib/branchleft/rs-r8-leak.applied
+            - entry: decide
+              class:
+                name: leak
+                stamp: absent
+                fingerprint: '{{ restart_stamp_verify_fp_leak }}'
+                drift: true
+            - entry: mark_pending
+              class:
+                name: leak
+                file: /var/lib/branchleft/rs-r8-leak.applied
+                mark: true
+            - entry: adopt
+              class:
+                name: leak
+                file: /var/lib/branchleft/rs-r8-leak.applied
+                fingerprint: '{{ restart_stamp_verify_fp_leak }}'
+                adopt: true
+            - entry: record
+              class:
+                name: leak
+                file: /var/lib/branchleft/rs-r8-leak.applied
+                fingerprint: '{{ restart_stamp_verify_fp_leak }}'
+                read_back: true
+          loop_control:
+            label: '{{ item.entry }}'
+
+        # Compared by hash, so that this check does not itself put the fingerprint in the log.
+        - name: Hash the stamp the record wrote
+          ansible.builtin.stat:
+            path: /var/lib/branchleft/rs-r8-leak.applied
+            checksum_algorithm: sha256
+          register: restart_stamp_verify_r8_stat
+
+        - name: Assert every call succeeded and the stamp holds the fingerprint
+          ansible.builtin.assert:
+            that:
+              - restart_stamp_verify_calls['r8_' ~ item].failed == false
+              - restart_stamp_verify_r8_stat.stat.checksum == (restart_stamp_verify_fp_leak ~ "\n") | hash('sha256')
+            quiet: true
+            fail_msg: A call with the fingerprint failed, or the stamp does not hold it.
+          loop: [read, decide, mark_pending, adopt, record]
+          no_log: true
+
+        - name: Read the log of this scenario's Ansible runs
+          ansible.builtin.set_fact:
+            restart_stamp_verify_log: "{{ lookup('ansible.builtin.file', lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') ~ '/ansible.log') }}"
+          no_log: true
+
+        - name: Assert the log holds the output the scan is meant to read
+          ansible.builtin.assert:
+            that:
+              - "'RESTART_STAMP_LOG_CANARY' in restart_stamp_verify_log"
+              - "'Record each class whose action was read back' in restart_stamp_verify_log"
+            quiet: true
+            fail_msg: The log lacks the canary or the role's task name, so an empty scan would prove nothing.
+          no_log: true
+
+        - name: Assert the log holds no fingerprint, in the clear or encoded
+          ansible.builtin.assert:
+            that:
+              - item not in restart_stamp_verify_log
+            quiet: true
+            fail_msg: A fingerprint is in the Ansible log, so a task that handles it lacks no_log.
+          loop:
+            - '{{ restart_stamp_verify_fp_leak }}'
+            - '{{ (restart_stamp_verify_fp_leak ~ "\n") | b64encode }}'
+          loop_control:
+            label: scan
+          no_log: true
+
+        - name: Forget the log content
+          ansible.builtin.set_fact:
+            restart_stamp_verify_log: ''
+          no_log: true
+
+    - name: Remove the stamps of the cases
+      ansible.builtin.include_tasks:
+        file: tasks/clean.yml
+        # The tag of an include does not reach the tasks it includes, so without this a
+        # run of one case (`--tags r3`) would not clean up before or after itself.
+        apply:
+          tags: [always]
+      tags: [always]

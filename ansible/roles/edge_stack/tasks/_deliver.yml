@@ -1,0 +1,332 @@
+---
+# Owner, group and mode are explicit everywhere. The shell copy this replaces made
+# every directory root-owned 0755 and every file root-owned 0644 (rsync
+# --no-owner --no-group --chmod=u=rwX,go=rX), and a container reads its bind-mounted
+# configuration as its own user, not as root, so a tighter mode would break it.
+- name: Create the project directory
+  ansible.builtin.file:
+    path: '{{ edge_stack_project_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the directories of the stack
+  ansible.builtin.file:
+    path: '{{ edge_stack_project_dir }}/{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: '{{ edge_stack_dirs }}'
+
+# Shared with monitoring_stack, which creates it in the same mode: whichever runs
+# first creates it and the second finds it. The stamps in it are 0600.
+- name: Create the directory of the stamps
+  ansible.builtin.file:
+    path: '{{ edge_stack_stamp_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Validate, place, apply and record
+  block:
+    # A pin from an earlier validation in the same play is not this run's: the apply is
+    # given the pin this run's validation printed, or none.
+    - name: Forget the pin of an earlier validation
+      ansible.builtin.set_fact:
+        edge_stack_validated_pin: ''
+
+    # The candidates of the classes that will change are put in a directory closed to
+    # root, so the validation reads exactly the bytes that will be placed: the locked
+    # script writes the Caddyfile from its candidate, and the Compose file is copied from
+    # its candidate below. Nothing is put there in check mode, and nothing when no file differs.
+    - name: Create the candidate directory closed to root
+      ansible.builtin.file:
+        path: '{{ edge_stack_candidate_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: (edge_stack_caddy_drift | bool or edge_stack_compose_drift | bool) and not ansible_check_mode
+
+    - name: Put the candidate Caddyfile in it
+      ansible.builtin.copy:
+        src: '{{ edge_stack_source_dir }}/{{ edge_stack_caddy_file }}'
+        dest: '{{ edge_stack_candidate_dir }}/Caddyfile'
+        owner: root
+        group: root
+        mode: '0644'
+      when: edge_stack_caddy_drift | bool and not ansible_check_mode
+
+    - name: Put the candidate Compose file in it
+      ansible.builtin.copy:
+        src: '{{ edge_stack_source_dir }}/{{ edge_stack_compose_file }}'
+        dest: '{{ edge_stack_candidate_dir }}/compose.yml'
+        owner: root
+        group: root
+        mode: '0644'
+      when: edge_stack_compose_drift | bool and not ansible_check_mode
+
+    # Under the deploy lock, because it reads the pin. Nothing has been placed yet:
+    # a candidate that is refused stops the run with the host as it was. It runs
+    # whenever the apply below will run, even when no candidate differs, because the
+    # pin it prints is the one the apply is held to (README, "The locked script").
+    - name: Validate the candidates under the deploy lock
+      ansible.builtin.command:
+        argv:
+          - flock
+          - -E
+          - '{{ edge_stack_lock_exit_code }}'
+          - -w
+          - '{{ edge_stack_lock_timeout }}'
+          - '{{ edge_stack_lock_file }}'
+          - /bin/sh
+          - -ec
+          - "{{ lookup('ansible.builtin.file', 'edge_apply.sh') }}"
+          - edge_apply
+          - validate
+      environment:
+        EDGE_PROJECT_DIR: '{{ edge_stack_project_dir }}'
+        EDGE_IMAGE_ENV: '{{ edge_stack_image_env_file }}'
+        EDGE_ENV_FILE: '{{ edge_stack_env_file }}'
+        EDGE_IMAGE_PATTERN: '{{ edge_stack_image_pin_pattern }}'
+        EDGE_CADDY_CANDIDATE: "{{ edge_stack_candidate_dir ~ '/Caddyfile' if edge_stack_caddy_drift | bool else '' }}"
+        EDGE_COMPOSE_CANDIDATE: "{{ edge_stack_candidate_dir ~ '/compose.yml' if edge_stack_compose_drift | bool else '' }}"
+      register: edge_stack_validate
+      changed_when: false
+      failed_when: false
+      when: (edge_stack_any_due | bool or edge_stack_compose_drift | bool) and not ansible_check_mode
+
+    - name: Refuse to place anything when a candidate is refused or the lock is not free
+      ansible.builtin.assert:
+        that:
+          - edge_stack_validate.rc == 0
+        quiet: true
+        fail_msg: >-
+          {{ ('The deploy lock ' ~ edge_stack_lock_file ~ ' was not free within ' ~ edge_stack_lock_timeout
+          ~ ' seconds, so nothing was validated or placed. A deploy is running; run again.')
+          if edge_stack_validate.rc == edge_stack_lock_exit_code | int
+          else ('A candidate was refused (exit code ' ~ edge_stack_validate.rc ~ '). Nothing was placed. ' ~ edge_stack_validate.stderr) }}
+      when: edge_stack_validate is not skipped
+
+    # The pin the validation read, inside its lock. The apply is given it and refuses to
+    # act on any other (exit code 74), so the digest the candidates were validated in is
+    # the digest the classes are applied with, and a deploy that moves the pin between
+    # the two sections stops the apply instead of being used by it.
+    - name: Keep the pin the validation used
+      ansible.builtin.set_fact:
+        edge_stack_validated_pin: >-
+          {{ edge_stack_validate.stdout_lines | select('match', '^EDGE_PIN ')
+          | map('regex_replace', '^EDGE_PIN ', '') | first | default('') }}
+      when: edge_stack_validate is not skipped
+
+    # `pending` goes in after every candidate is accepted and before the first file
+    # is placed or acted on (restart_stamp, entry point mark_pending). A run that dies
+    # anywhere after this point leaves a stamp that is no fingerprint, so the next run
+    # acts on the class again. A refused candidate stops the run above, with the host
+    # and its stamps as they were. The Compose class is marked whenever its file
+    # drifts, not only when it is due (README, "Adoption").
+    - name: Mark each class that is due as pending
+      ansible.builtin.include_role:
+        name: '{{ edge_stack_stamp_role }}'
+        tasks_from: mark_pending
+      vars:
+        restart_stamp_classes:
+          - name: caddy
+            file: '{{ edge_stack_stamp_files.caddy }}'
+            mark: '{{ restart_stamp_decisions.caddy.mark }}'
+          - name: compose
+            file: '{{ edge_stack_stamp_files.compose }}'
+            mark: '{{ restart_stamp_decisions.compose.mark }}'
+          - name: crowdsec
+            file: '{{ edge_stack_stamp_files.crowdsec }}'
+            mark: '{{ restart_stamp_decisions.crowdsec.mark }}'
+
+    # copy puts a file in place by rename, which is right for these: the Compose file
+    # is not bind-mounted, the CrowdSec files are read again at the restart below, and
+    # the acquisition directory is a directory mount, which sees renamed entries.
+    # The Compose file is placed from the candidate that was validated, not read from
+    # the repository a second time: a checkout that changes between the two reads must
+    # not put a file on the host that no validation saw.
+    - name: Deliver the Compose file from the candidate that was validated
+      ansible.builtin.copy:
+        src: '{{ edge_stack_candidate_dir }}/compose.yml'
+        remote_src: true
+        dest: '{{ edge_stack_project_dir }}/{{ edge_stack_compose_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when: edge_stack_compose_drift | bool and not ansible_check_mode
+
+    # In check mode there is no candidate, so the repository's file is compared with the
+    # host's and the diff is shown.
+    - name: Show in check mode what the Compose file would change
+      ansible.builtin.copy:
+        src: '{{ edge_stack_source_dir }}/{{ edge_stack_compose_file }}'
+        dest: '{{ edge_stack_project_dir }}/{{ edge_stack_compose_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when: ansible_check_mode
+
+    - name: Deliver the CrowdSec files
+      ansible.builtin.copy:
+        src: '{{ edge_stack_source_dir }}/{{ item }}'
+        dest: '{{ edge_stack_project_dir }}/{{ item }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop: '{{ edge_stack_deliver }}'
+
+    - name: Remove the acquisition files the repository does not hold
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop: '{{ edge_stack_stale_acquis }}'
+
+    # A Caddyfile that is there keeps its inode and gets its owner and mode set; one
+    # that is not there is created by the locked script with the same owner and mode.
+    - name: Set the owner and mode of the Caddyfile that is on the host
+      ansible.builtin.file:
+        path: '{{ edge_stack_project_dir }}/{{ edge_stack_caddy_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when: edge_stack_caddyfile_stat.stat.exists
+
+    # In check mode nothing is run under the lock, so each class that would be acted on
+    # is reported here, and a plan or a drift run shows it. The task runs /bin/true,
+    # which changes nothing, and reports changed only when the class is due.
+    - name: Report in check mode that the Caddyfile would be validated, written and reloaded
+      ansible.builtin.command:
+        argv:
+          - /bin/true
+      changed_when: true
+      check_mode: false
+      when: ansible_check_mode and edge_stack_caddy_due | bool and edge_stack_caddy_drift | bool
+
+    - name: Report in check mode that Caddy would be reloaded and the Caddyfile on the host is current
+      ansible.builtin.command:
+        argv:
+          - /bin/true
+      changed_when: true
+      check_mode: false
+      when: ansible_check_mode and edge_stack_caddy_due | bool and not edge_stack_caddy_drift | bool
+
+    - name: Report in check mode that the edge unit would be restarted
+      ansible.builtin.command:
+        argv:
+          - /bin/true
+      changed_when: true
+      check_mode: false
+      when: ansible_check_mode and edge_stack_compose_due | bool
+
+    - name: Report in check mode that the crowdsec container would be restarted
+      ansible.builtin.command:
+        argv:
+          - /bin/true
+      changed_when: true
+      check_mode: false
+      when: ansible_check_mode and edge_stack_crowdsec_due | bool
+
+    - name: Apply the due classes under the deploy lock
+      ansible.builtin.command:
+        argv:
+          - flock
+          - -E
+          - '{{ edge_stack_lock_exit_code }}'
+          - -w
+          - '{{ edge_stack_lock_timeout }}'
+          - '{{ edge_stack_lock_file }}'
+          - /bin/sh
+          - -ec
+          - "{{ lookup('ansible.builtin.file', 'edge_apply.sh') }}"
+          - edge_apply
+          - apply
+      environment:
+        EDGE_PROJECT_DIR: '{{ edge_stack_project_dir }}'
+        EDGE_IMAGE_ENV: '{{ edge_stack_image_env_file }}'
+        EDGE_ENV_FILE: '{{ edge_stack_env_file }}'
+        EDGE_IMAGE_PATTERN: '{{ edge_stack_image_pin_pattern }}'
+        EDGE_UNIT: '{{ edge_stack_unit }}'
+        EDGE_VALIDATED_PIN: '{{ edge_stack_validated_pin | default("") }}'
+        EDGE_CADDY_CANDIDATE: '{{ edge_stack_candidate_dir }}/Caddyfile'
+        EDGE_CADDY_WRITE: "{{ '1' if edge_stack_caddy_drift | bool else '0' }}"
+        EDGE_CADDY_RELOAD: "{{ '1' if edge_stack_caddy_due | bool else '0' }}"
+        EDGE_COMPOSE_RESTART: "{{ '1' if edge_stack_compose_due | bool else '0' }}"
+        EDGE_CROWDSEC_RESTART: "{{ '1' if edge_stack_crowdsec_due | bool else '0' }}"
+        EDGE_WAIT_TRIES: '{{ edge_stack_crowdsec_wait_tries }}'
+        EDGE_WAIT_INTERVAL: '{{ edge_stack_crowdsec_wait_interval }}'
+      register: edge_stack_apply
+      changed_when: "'EDGE_APPLY ' in edge_stack_apply.stdout"
+      failed_when: false
+      when: edge_stack_any_due | bool and not ansible_check_mode
+
+    # A class with no stamp whose files equal the repository's is adopted: the stamp is
+    # the whole change (restart_stamp, entry point adopt). It runs in check mode too,
+    # which is how a plan shows the adoption.
+    - name: Adopt the classes the host already has
+      ansible.builtin.include_role:
+        name: '{{ edge_stack_stamp_role }}'
+        tasks_from: adopt
+      vars:
+        restart_stamp_classes:
+          - name: caddy
+            file: '{{ edge_stack_stamp_files.caddy }}'
+            fingerprint: '{{ edge_stack_fp_caddy }}'
+            adopt: '{{ restart_stamp_decisions.caddy.adopt }}'
+          - name: compose
+            file: '{{ edge_stack_stamp_files.compose }}'
+            fingerprint: '{{ edge_stack_fp_compose }}'
+            adopt: '{{ restart_stamp_decisions.compose.adopt }}'
+          - name: crowdsec
+            file: '{{ edge_stack_stamp_files.crowdsec }}'
+            fingerprint: '{{ edge_stack_fp_crowdsec }}'
+            adopt: '{{ restart_stamp_decisions.crowdsec.adopt }}'
+
+    # A stamp is written for a class whose marker the locked script printed after the
+    # read-back, whether or not a later step failed, and last of all
+    # (restart_stamp, entry point record). The marker is the caller's: the script
+    # prints it, this role reads it.
+    - name: Record the classes the locked script read back
+      ansible.builtin.include_role:
+        name: '{{ edge_stack_stamp_role }}'
+        tasks_from: record
+      vars:
+        restart_stamp_classes:
+          - name: caddy
+            file: '{{ edge_stack_stamp_files.caddy }}'
+            fingerprint: '{{ edge_stack_fp_caddy }}'
+            read_back: "{{ edge_stack_apply is not skipped and 'EDGE_APPLY caddy-reloaded' in edge_stack_apply.stdout }}"
+          - name: compose
+            file: '{{ edge_stack_stamp_files.compose }}'
+            fingerprint: '{{ edge_stack_fp_compose }}'
+            read_back: "{{ edge_stack_apply is not skipped and 'EDGE_APPLY compose-restarted' in edge_stack_apply.stdout }}"
+          - name: crowdsec
+            file: '{{ edge_stack_stamp_files.crowdsec }}'
+            fingerprint: '{{ edge_stack_fp_crowdsec }}'
+            read_back: "{{ edge_stack_apply is not skipped and 'EDGE_APPLY crowdsec-restarted' in edge_stack_apply.stdout }}"
+
+    - name: Fail the run when the locked step failed or the lock was not free
+      ansible.builtin.assert:
+        that:
+          - edge_stack_apply is skipped or edge_stack_apply.rc == 0
+        quiet: true
+        fail_msg: >-
+          {{ ('The deploy lock ' ~ edge_stack_lock_file ~ ' was not free within ' ~ edge_stack_lock_timeout
+          ~ ' seconds, so nothing was applied. A deploy is running; run again.')
+          if edge_stack_apply.rc | default(0) == edge_stack_lock_exit_code | int
+          else ('The locked step failed (exit code ' ~ edge_stack_apply.rc | default(0)
+          ~ '). Classes it did not finish are not recorded, so the next run acts on them again. '
+          ~ edge_stack_apply.stderr | default('')) }}
+
+  always:
+    # Removed on every run, a failed one included. The directory holds the TLS
+    # edge's configuration, and a leftover would make the next check-mode run report
+    # a change.
+    - name: Remove the candidates
+      ansible.builtin.file:
+        path: '{{ edge_stack_candidate_dir }}'
+        state: absent

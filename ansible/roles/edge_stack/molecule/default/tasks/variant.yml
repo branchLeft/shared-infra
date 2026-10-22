@@ -1,0 +1,60 @@
+---
+# Builds a variant of the repository's stack directory on the machine that runs the
+# test, under edge_stack_verify_tmp/<edge_stack_verify_variant_name>: a copy of the real directory with
+# text appended to the named files (a comment, so the file stays valid), or a new
+# file where the name is not in the real directory. Its sha256 are kept in
+# edge_stack_verify_variants[<name>] so an assert can compare the host with them.
+# Inputs: edge_stack_verify_variant_name, edge_stack_verify_variant_edits (a list of {path, append}).
+- name: Make the directory of the variant
+  ansible.builtin.file:
+    path: '{{ edge_stack_verify_tmp }}/{{ edge_stack_verify_variant_name }}'
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+
+- name: Copy the repository's stack directory into it
+  ansible.builtin.copy:
+    src: '{{ edge_stack_verify_real_stack }}/'
+    dest: '{{ edge_stack_verify_tmp }}/{{ edge_stack_verify_variant_name }}/'
+    mode: preserve
+  delegate_to: localhost
+
+- name: Make the directory of each edited file
+  ansible.builtin.file:
+    path: '{{ (edge_stack_verify_tmp ~ "/" ~ edge_stack_verify_variant_name ~ "/" ~ item.path) | dirname }}'
+    state: directory
+    mode: '0755'
+  loop: '{{ edge_stack_verify_variant_edits }}'
+  loop_control:
+    label: '{{ item.path }}'
+  delegate_to: localhost
+
+- name: Append the edits
+  ansible.builtin.copy:
+    content: "{{ lookup('ansible.builtin.file', edge_stack_verify_real_stack ~ '/' ~ item.path, errors='ignore') | default('', true) }}{{ item.append }}"
+    dest: '{{ edge_stack_verify_tmp }}/{{ edge_stack_verify_variant_name }}/{{ item.path }}'
+    mode: '0644'
+  loop: '{{ edge_stack_verify_variant_edits }}'
+  loop_control:
+    label: '{{ item.path }}'
+  delegate_to: localhost
+
+- name: Hash the files that matter in the variant
+  ansible.builtin.stat:
+    path: '{{ edge_stack_verify_tmp }}/{{ edge_stack_verify_variant_name }}/{{ item }}'
+    checksum_algorithm: sha256
+  loop:
+    - Caddyfile
+    - compose.yml
+    - crowdsec/config.yaml.local
+  register: edge_stack_verify_variant_stats
+  delegate_to: localhost
+
+- name: Keep the hashes of the variant
+  ansible.builtin.set_fact:
+    edge_stack_verify_variants: >-
+      {{ edge_stack_verify_variants | default({}) | combine({edge_stack_verify_variant_name: {
+      'caddy': edge_stack_verify_variant_stats.results[0].stat.checksum,
+      'compose': edge_stack_verify_variant_stats.results[1].stat.checksum,
+      'config': edge_stack_verify_variant_stats.results[2].stat.checksum,
+      'path': edge_stack_verify_tmp ~ '/' ~ edge_stack_verify_variant_name}}) }}

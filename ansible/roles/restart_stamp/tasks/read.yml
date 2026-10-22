@@ -1,0 +1,41 @@
+---
+# Entry point `read`. Everything here is a read, so it runs in check mode as well, and
+# a plan job and a nightly drift run see the same stamps a real run does.
+- name: Check the list of classes before reading anything
+  ansible.builtin.include_tasks: _check.yml
+
+# Not following links: a stamp that is a link is seen as there, and the read below fails
+# on one that leads nowhere.
+- name: Look for each stamp
+  ansible.builtin.stat:
+    path: '{{ item.file }}'
+    follow: false
+    get_checksum: false
+  loop: '{{ restart_stamp_classes }}'
+  register: restart_stamp_stats
+  loop_control:
+    label: '{{ item.name }}'
+
+# Only a stamp that is not there is `absent`, and only `absent` can be adopted. A stamp
+# that is there and cannot be read (a directory, a link to nothing, an I/O error) fails
+# this task and so the run, before the caller changes anything: it is not a host nobody has
+# applied the role to. The content is a hash of files that may hold a key.
+- name: Read the stamps that are there
+  ansible.builtin.slurp:
+    src: '{{ item.item.file }}'
+  loop: '{{ restart_stamp_stats.results }}'
+  register: restart_stamp_reads
+  when: item.stat.exists
+  no_log: true
+  loop_control:
+    label: '{{ item.item.name }}'
+
+- name: Keep the stamps by name
+  ansible.builtin.set_fact:
+    restart_stamp_found: >-
+      {%- set ns = namespace(out={}) -%}
+      {%- for read in restart_stamp_reads.results -%}
+      {%- set _ = ns.out.update({read.item.item.name: (read.content | b64decode | trim) if read.content is defined else restart_stamp_absent}) -%}
+      {%- endfor -%}
+      {{ ns.out }}
+  no_log: true

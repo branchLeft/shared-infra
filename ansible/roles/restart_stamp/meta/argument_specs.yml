@@ -1,0 +1,165 @@
+---
+# Five entry points, one per tasks file that does not start with an underscore. Each
+# takes the same list, restart_stamp_classes, with the fields that entry point needs.
+# None of the inputs is a secret, but a fingerprint is the hash of files that may hold
+# one, so every task that handles it is no_log (README, "What it changes").
+argument_specs:
+  read:
+    short_description: Read the stamp of each class, and fail the run on a stamp that is there and cannot be read
+    description: >-
+      Sets restart_stamp_found, a dictionary from each class name to the content of its
+      stamp with the whitespace trimmed, or to `absent` when there is no stamp. A stamp
+      that is there and cannot be read (a directory, a link to nothing, an I/O error) fails
+      the run before the caller changes anything, so it is never mistaken for a host nobody
+      has applied the role to. Changes nothing; runs in check mode.
+    author: branchLeft
+    options:
+      restart_stamp_classes:
+        type: list
+        elements: dict
+        required: true
+        description: One entry per class of files with its own stamp.
+        options:
+          name:
+            type: str
+            required: true
+            description: The class name, a lowercase word. It keys restart_stamp_found.
+          file:
+            type: path
+            required: true
+            description: >-
+              The stamp file, /var/lib/branchleft/<name>.applied. Any other path is refused.
+  decide:
+    short_description: Work out, for each class, whether it is adopted, due, and to be marked pending
+    description: >-
+      Sets restart_stamp_decisions, a dictionary from each class name to adopt, due and mark,
+      all booleans. Adopted means a class that has no stamp and nothing differs on the host, so
+      the host already has these files and the stamp is the whole change; it needs adoptable and
+      the gate. Due means the class must be acted on now, which is the gate open, not adopted,
+      and a file that drifts or a stamp that is not this fingerprint (`pending` never is one).
+      Mark means a file of the class is about to be placed, whether or not the class is due now.
+      Changes nothing; runs in check mode.
+    author: branchLeft
+    options:
+      restart_stamp_classes:
+        type: list
+        elements: dict
+        required: true
+        description: One entry per class.
+        options:
+          name:
+            type: str
+            required: true
+            description: The class name, a lowercase word. It keys restart_stamp_decisions.
+          stamp:
+            type: str
+            required: true
+            description: The class's entry in restart_stamp_found.
+          fingerprint:
+            type: str
+            required: true
+            description: The sha256 in hex of what the repository holds for the class now.
+          drift:
+            type: bool
+            default: false
+            description: >-
+              A file of the class on the host differs from the repository's. A caller with
+              no host-side comparison leaves it false.
+          adoptable:
+            type: bool
+            default: false
+            description: >-
+              A class with no stamp and no drift may be adopted. False means a missing stamp
+              is simply due.
+          gate:
+            type: bool
+            default: true
+            description: >-
+              False when the class must be left alone for now (a unit that is not enabled).
+              A class behind a closed gate is neither adopted nor due.
+  mark_pending:
+    short_description: Write `pending` into the stamp of each class that is marked
+    description: >-
+      Writes `pending` into the stamp of each class whose mark is true, before any file of the
+      class is placed, so a run that dies afterwards leaves a stamp that is no fingerprint and
+      the next run acts again. Writes nothing in check mode.
+    author: branchLeft
+    options:
+      restart_stamp_classes:
+        type: list
+        elements: dict
+        required: true
+        description: One entry per class.
+        options:
+          name:
+            type: str
+            required: true
+            description: The class name, a lowercase word.
+          file:
+            type: path
+            required: true
+            description: The stamp file, /var/lib/branchleft/<name>.applied.
+          mark:
+            type: bool
+            required: true
+            description: The class's mark from restart_stamp_decisions.
+  adopt:
+    short_description: Write the fingerprint into the stamp of each class that is adopted
+    description: >-
+      Writes the fingerprint into the stamp of each class whose adopt is true, with no action
+      on the class. Runs in check mode too, which is how a plan shows the adoption.
+    author: branchLeft
+    options:
+      restart_stamp_classes:
+        type: list
+        elements: dict
+        required: true
+        description: One entry per class.
+        options:
+          name:
+            type: str
+            required: true
+            description: The class name, a lowercase word.
+          file:
+            type: path
+            required: true
+            description: The stamp file, /var/lib/branchleft/<name>.applied.
+          fingerprint:
+            type: str
+            required: true
+            description: The sha256 in hex of what the repository holds for the class now.
+          adopt:
+            type: bool
+            required: true
+            description: The class's adopt from restart_stamp_decisions.
+  record:
+    short_description: Write the fingerprint into the stamp of each class whose action was read back
+    description: >-
+      Writes the fingerprint into the stamp of each class whose read_back is true, and nothing
+      for any other class. The caller sets read_back only after its action ran and its result
+      was read back, and calls this entry point last, so a stamp is never written before the
+      read-back. Writes nothing in check mode.
+    author: branchLeft
+    options:
+      restart_stamp_classes:
+        type: list
+        elements: dict
+        required: true
+        description: One entry per class.
+        options:
+          name:
+            type: str
+            required: true
+            description: The class name, a lowercase word.
+          file:
+            type: path
+            required: true
+            description: The stamp file, /var/lib/branchleft/<name>.applied.
+          fingerprint:
+            type: str
+            required: true
+            description: The sha256 in hex of what the repository holds for the class now.
+          read_back:
+            type: bool
+            required: true
+            description: True only when the action on this class ran and was read back as done.
