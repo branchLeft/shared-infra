@@ -124,18 +124,7 @@ db1_stack_systemd_running_path: /run/systemd/system
 # another set of containers) or COMPOSE_PROFILES (starting profile services). None
 # of these is seen by the deploy program's check, so the role refuses to run while
 # one exists. The role writes none of them.
-# The check reads only the directory's files and the names above. The definition and
-# environment the stack's unit loads from elsewhere include /etc/branchleft/db.env,
-# Environment= and EnvironmentFile= lines, WorkingDirectory=, a template drop-in under
-# /etc/systemd/system/branchleft-compose@.service.d/ that applies to every instance
-# including db, the per-instance drop-in directory
-# /etc/systemd/system/branchleft-compose@db.service.d/, other drop-in directories
-# systemd searches for this unit, and a replaced unit file, and whatever else the
-# unit's definition and environment set. These can set the same variables. A drop-in or
-# a replaced unit file can set ExecStart or WorkingDirectory, and a WorkingDirectory
-# change makes Compose read compose.yml and .env from another directory. None of these
-# is read or checked. The one environment file the role reads is
-# /etc/branchleft/db.image.env. See the README's "Named limits".
+# The unit's environment and drop-ins are not read: see README "Named limits".
 db1_stack_other_compose_names:
   - compose.yaml
   - docker-compose.yml
