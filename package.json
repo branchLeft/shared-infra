@@ -10,8 +10,8 @@
   },
   "comment": "No Pulumi program lives at the repository root any more -- the GCP edge program (edge.ts and friends) was removed in the GCP wind-down (branchLeft/workspace#1000) once the GCP estate was destroyed. What remains here is sites.ts/siteTypes.ts, the hostname registry the Hetzner Caddy renderer in hetzner/edge/ still reads, plus this typecheck/format tooling. Neither needs @pulumi/gcp or @pulumi/pulumi.",
   "devDependencies": {
-    "@branchleft/prettier-config": "^0.3.1",
-    "@branchleft/tsconfig": "^0.3.1",
+    "@branchleft/prettier-config": "^0.8.3",
+    "@branchleft/tsconfig": "^0.8.3",
     "@types/node": "^26",
     "prettier": "^3.9.10",
     "typescript": "^7.0.2"
