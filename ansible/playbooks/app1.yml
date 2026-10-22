@@ -1,0 +1,24 @@
+---
+# app1: an app host that runs tenants. One role: the break-glass grant tool, its
+# wrapper and the timer that closes a grant at its deadline. The play lists no
+# private input; the role's two inputs have defaults. This host is applied by the
+# gated pull once it is enrolled; until then nothing runs this file.
+#
+# Another app host gets its own playbook, as each host here has. Run against
+# more than one host this playbook would apply app1's role to every one, so the
+# first play refuses any host but app1 (or the localhost the trigger names).
+- name: Bring app1's break-glass tools under Ansible
+  hosts: all
+  gather_facts: false
+  pre_tasks:
+    - name: Refuse any host but app1
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in ['app1', 'localhost']
+        fail_msg: This playbook is app1's. Limit the run to app1.
+        quiet: true
+  # The roles live in ansible/roles/ (ANS-13), one level above this directory, and a
+  # playbook finds roles only beside itself unless a path is given. One suppression
+  # per line.
+  roles:
+    - role: ../roles/breakglass_grant_host # noqa: role-name[path]

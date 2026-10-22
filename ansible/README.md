@@ -8,7 +8,9 @@ This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
 the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
 `roles/ansible_runtime` and `roles/pull_trigger`) and `db1` (`playbooks/db1.yml`, which applies
-`roles/db1_stack` and `roles/db1_grants`); the other trees hold only what those hosts need.
+`roles/db1_stack` and `roles/db1_grants`), `ops1` (`playbooks/ops1.yml`, which applies
+`roles/breakglass_mint_host`) and `app1` (`playbooks/app1.yml`, which applies
+`roles/breakglass_grant_host`); the other trees hold only what those hosts need.
 
 ## Layout
 
@@ -465,7 +467,7 @@ oversight. Each is a decision the standard assigns to later work.
   required (CI-14), but making it required is a repository ruleset change and
   belongs to the owner. Until it is done a red Ansible job does not block a
   merge on its own.
-- **Delivery.** Only edge1 and db1 have a playbook, and edge1's first apply is the one-time root bootstrap and then the gated pull; db1's waits on the gated pull. ANS-17 describes the only
+- **Delivery.** Only edge1, db1, ops1 and app1 have a playbook, and edge1's first apply is the one-time root bootstrap and then the gated pull; the others wait on the gated pull (ops1 and app1 on the host's enrolment). ANS-17 describes the only
   approved path; the trigger and the reusable workflow it needs are separate
   work.
 - **Reuse by other repositories.** The harness is code another repository may

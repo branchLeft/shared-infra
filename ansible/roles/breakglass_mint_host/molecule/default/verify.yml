@@ -1,0 +1,542 @@
+---
+# Facts and registers made by tasks carry the role's name as a prefix, as the
+# lint rule for roles asks: breakglass_mint_host_v_ marks this play's.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') | from_yaml }}"
+    verify_spec: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../meta/argument_specs.yml') | from_yaml }}"
+    verify_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') | from_yaml }}"
+    verify_grant_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_grant_host/defaults/main.yml') | from_yaml }}"
+    verify_grant_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_grant_host/vars/main.yml') | from_yaml }}"
+    verify_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') | from_yaml }}"
+    # The raw text of every file of the role that Ansible evaluates, held to the
+    # controller-side scan with ops1.yml's text by the playbook guard below.
+    verify_role_texts:
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') }}"
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') }}"
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') }}"
+    # The names the key path may be reached by. Only the key-path constant, in
+    # vars/main.yml, may hold or build it: no other variable of the role may.
+    verify_key_path_name: breakglass_mint_host_key_path
+    verify_key_path_fragments:
+      - key_path
+      - /etc
+      - signing
+    verify_other_variables: >-
+      {{ (verify_role_vars | dict2items | rejectattr('key', 'equalto', verify_key_path_name) | list)
+      + (verify_defaults | dict2items | rejectattr('key', 'equalto', verify_key_path_name) | list) }}
+    verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+    # The role directory, from the playbook's directory (two levels below the role).
+    verify_role_dir: '{{ playbook_dir }}/../..'
+    # An inventory value wins over a default, as it does in the role.
+    verify_commit: '{{ breakglass_mint_host_source_commit | default(verify_defaults.breakglass_mint_host_source_commit) }}'
+    # The image is a constant of the role (vars/main.yml), never an input.
+    verify_image: '{{ verify_role_vars.breakglass_mint_host_node_image }}'
+    # The role's base URL with its own placeholder filled by the commit it ran with.
+    verify_base_url: >-
+      {{ verify_role_vars.breakglass_mint_host_source_base_url
+      | regex_replace('[{][{] *breakglass_mint_host_source_commit *[}][}]', verify_commit) }}
+    verify_url_prefix: https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ verify_commit }}/adapters/sso/scripts
+    # The only modules the role's tasks and ops1.yml's tasks may call. A module not
+    # on this list, whatever its spelling or its siblings (slurp, fetch, copy with
+    # remote_src, lineinfile, assemble, a command that cats), fails the guard below.
+    verify_allowed_modules:
+      - ansible.builtin.assert
+      - ansible.builtin.command
+      - ansible.builtin.file
+      - ansible.builtin.get_url
+      - ansible.builtin.stat
+    # The exact Docker commands the role may run, one regular expression per word,
+    # with the image held by its template's name and not its value. The shared
+    # guard holds every command of the role and of ops1.yml to these shapes.
+    verify_docker_shapes:
+      - ['^/usr/bin/docker$', '^--version$']
+      - ['^/usr/bin/docker$', '^pull$', '^-q$', '^[{][{] breakglass_mint_host_node_image [}][}]$']
+      - - '^/usr/bin/docker$'
+        - '^image$'
+        - '^inspect$'
+        - '^--format$'
+        - '^[{]% raw [%][}][{][{][.]RepoDigests[}][}][{]% endraw [%][}]$'
+        - '^[{][{] breakglass_mint_host_node_image [}][}]$'
+    # What a path must be, written here from the intent and not read from the
+    # role. Owner and group are root for every path.
+    verify_expected_modes:
+      - path: /usr/local/lib/branchleft
+        kind: dir
+        mode: '0755'
+      - path: /usr/local/lib/branchleft/break-glass
+        kind: dir
+        mode: '0755'
+      - path: /var/log/branchleft
+        kind: dir
+        mode: '0700'
+      - path: /usr/local/lib/branchleft/break-glass/break-glass-mint.mjs
+        kind: file
+        mode: '0644'
+    # The same strings the log scan looks for: the placeholder's text, with and
+    # without the newline the file ends in. Each is searched for as text, as
+    # SHA-1, as MD5 and in base64 (the form slurp prints a file's content in).
+    verify_key_texts:
+      - '{{ scenario_key_content }}'
+      - '{{ scenario_key_file_text }}'
+    verify_control_texts:
+      - '{{ scenario_digest_control_file_text }}'
+    # The paths and names a role directory may hold. Anything else, a handlers
+    # directory above all, is a route to the key the task checks below do not
+    # read, so it fails the check.
+    verify_allowed_role_entries:
+      - README.md
+      - defaults
+      - meta
+      - molecule
+      - tasks
+      - vars
+  tasks:
+    # The role's constants, so that the file list and its destinations are the
+    # ones the role used. The URL base is checked from the raw text above, since
+    # it needs the commit the role ran with.
+    - name: Read the role's constants
+      ansible.builtin.include_vars:
+        file: '{{ playbook_dir }}/../../vars/main.yml'
+
+    # ----- the two roles agree on the pin and on the image -----
+    # The pin is held as an input in both roles' defaults and the image as a
+    # constant in both roles' vars. Nothing else makes them agree, and a role
+    # that lags runs different code on its host. The image is read from vars,
+    # where it lives: it is not an input, so no inventory value can differ from
+    # the digest the grant role's wrapper and expire unit carry.
+    - name: Assert the grant role's pin and image equal this role's
+      ansible.builtin.assert:
+        that:
+          - verify_grant_defaults.breakglass_grant_host_source_commit == verify_defaults.breakglass_mint_host_source_commit
+          - verify_grant_role_vars.breakglass_grant_host_node_image == verify_role_vars.breakglass_mint_host_node_image
+        fail_msg: >-
+          The two roles hold different pins or different images. breakglass_mint_host has
+          commit {{ verify_defaults.breakglass_mint_host_source_commit }} and image
+          {{ verify_role_vars.breakglass_mint_host_node_image }}; breakglass_grant_host has commit
+          {{ verify_grant_defaults.breakglass_grant_host_source_commit }} and image
+          {{ verify_grant_role_vars.breakglass_grant_host_node_image }}. Change both together.
+        quiet: true
+
+    - name: Assert the spec and the defaults agree and hold exactly the one input, with the image a constant
+      ansible.builtin.assert:
+        that:
+          - verify_defaults.keys() | sort | list == ['breakglass_mint_host_source_commit']
+          - verify_spec.argument_specs.main.options.keys() | sort | list == ['breakglass_mint_host_source_commit']
+          - verify_spec.argument_specs.main.options.breakglass_mint_host_source_commit.default == verify_defaults.breakglass_mint_host_source_commit
+          - verify_role_vars.breakglass_mint_host_node_image is match('^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$')
+        quiet: true
+
+    # ----- the role holds no second route to the key -----
+    # The checks below read tasks/main.yml. A handlers file (a notify is an
+    # allowed keyword), a second tasks file, a library, a plugin, a template or
+    # a meta dependency would run tasks those checks never see, and one of them
+    # could read the key. So the role directory is listed and held to the entries
+    # it has, the tasks directory to one file, and the meta file to no
+    # dependencies.
+    - name: List the role directory and its tasks directory
+      ansible.builtin.find:
+        paths: '{{ item }}'
+        hidden: true
+        file_type: any
+        patterns: '*'
+      delegate_to: localhost
+      become: false
+      loop:
+        - '{{ verify_role_dir }}'
+        - '{{ verify_role_dir }}/tasks'
+      register: breakglass_mint_host_v_role_entries
+
+    - name: Assert the role holds no handlers, no other tasks file and nothing else that runs tasks
+      ansible.builtin.assert:
+        that:
+          - breakglass_mint_host_v_role_entries.results[0].files | map(attribute='path') | map('basename') | sort | list == verify_allowed_role_entries | sort
+          - breakglass_mint_host_v_role_entries.results[1].files | map(attribute='path') | map('basename') | sort | list == ['main.yml']
+          - (lookup('ansible.builtin.file', verify_role_dir ~ '/meta/main.yml') | from_yaml).dependencies | default([]) | length == 0
+        fail_msg: >-
+          The role has an entry the key checks do not read: a handlers file, a second tasks file, a library,
+          a template, a plugin or a dependency. Role entries:
+          {{ breakglass_mint_host_v_role_entries.results[0].files | map(attribute='path') | map('basename') | sort | list }};
+          tasks entries:
+          {{ breakglass_mint_host_v_role_entries.results[1].files | map(attribute='path') | map('basename') | sort | list }}.
+        quiet: true
+
+    # ----- the pin is in every URL: the commit, never a branch -----
+    - name: Assert every download URL carries the pinned commit and every file a sha256
+      ansible.builtin.assert:
+        that:
+          - (verify_base_url ~ '/' ~ item.path).startswith(verify_url_prefix ~ '/')
+          - item.sha256 is match('^[0-9a-f]{64}$')
+        fail_msg: 'The URL for {{ item.path }} does not carry the pinned commit, or the file has no sha256.'
+        quiet: true
+      loop: '{{ breakglass_mint_host_files }}'
+      loop_control:
+        label: '{{ item.path }}'
+
+    # ----- the playbook that applies this role: one guard, shared with the grant role -----
+    # The guard reads every play of ops1.yml and every task of its four lists: its
+    # play keys, its roles entry, the modules its tasks and the role's call, and the
+    # controller-side reads in the text of the playbook and of the role's files. It is
+    # one file, ansible/harness/tasks/playbook_guard.yml, included by both role tests so
+    # the rule cannot drift (ws#2367).
+    - name: Hold ops1.yml and the role's own tasks to the playbook guard
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../../harness/tasks/playbook_guard.yml'
+      vars:
+        guard_playbook: '{{ playbook_dir }}/../../../../playbooks/ops1.yml'
+        guard_expected_roles:
+          - role: ../roles/breakglass_mint_host
+        guard_play_keys:
+          - name
+          - hosts
+          - gather_facts
+          - pre_tasks
+          - roles
+          - tasks
+          - post_tasks
+          - handlers
+        guard_allowed_modules: '{{ verify_allowed_modules }}'
+        guard_tasks: '{{ verify_tasks }}'
+        guard_scan_texts: '{{ verify_role_texts }}'
+        guard_docker_shapes: '{{ verify_docker_shapes }}'
+
+    # The naming check reads the tasks. A variable that holds or builds the key
+    # path, and that a task then uses, would not be named in any task. So no
+    # variable of the role other than the key-path constant itself may hold the
+    # name of that constant, a path under /etc or the word signing.
+    - name: Assert no variable other than the key-path constant refers to the key path
+      ansible.builtin.assert:
+        that:
+          - verify_role_vars[verify_key_path_name] is string
+          - verify_defaults[verify_key_path_name] is not defined
+          - >-
+            verify_other_variables | map(attribute='value') | map('to_json') | map('lower')
+            | select('search', verify_key_path_fragments | join('|')) | list | length == 0
+        fail_msg: >-
+          A variable of the role other than breakglass_mint_host_key_path holds or builds the key path
+          (the name key_path, a path under /etc, or the word signing). Only the constant may.
+        quiet: true
+
+    # A loop over an empty list skips quietly, so the checks below would pass
+    # against a tasks file they could not read. Require that they have work.
+    - name: Assert the structure checks below have tasks to check
+      ansible.builtin.assert:
+        that:
+          - verify_tasks | select('contains', 'ansible.builtin.command') | list | length == 4
+          - verify_tasks | select('contains', 'ansible.builtin.file') | list | length == 1
+          - verify_tasks | select('contains', 'ansible.builtin.get_url') | list | length == 1
+          - verify_tasks | select('contains', 'ansible.builtin.stat') | list | length == 2
+        fail_msg: The tasks file has a different number of command, file, download or stat tasks than the checks below were written for.
+        quiet: true
+
+    # The command shapes are held by the shared guard above, to the same tasks.
+    - name: Assert every file task makes a directory
+      ansible.builtin.assert:
+        that:
+          - item['ansible.builtin.file'].state == 'directory'
+        fail_msg: 'A file task does something other than make a directory: {{ item.name }}.'
+        quiet: true
+      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.file') | list }}"
+      loop_control:
+        label: '{{ item.name }}'
+
+    - name: Assert every download takes its URL from the pinned base
+      ansible.builtin.assert:
+        that:
+          - item['ansible.builtin.get_url'].url is match('^[{][{] breakglass_mint_host_source_base_url [}][}]/')
+        fail_msg: 'A download does not start from the pinned base URL: {{ item.name }}.'
+        quiet: true
+      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.get_url') | list }}"
+      loop_control:
+        label: '{{ item.name }}'
+
+    # The key's path is named by exactly two tasks: a stat with the three
+    # arguments that keep it from reading the file, and the assertion on the
+    # result. No other task, of any module, names it, and no task spells out the
+    # key directory's real path.
+    - name: List the tasks that name the key path
+      ansible.builtin.set_fact:
+        breakglass_mint_host_v_key_tasks: >-
+          {% set out = [] %}
+          {% for t in (verify_tasks + playbook_guard_v_tasks) if 'breakglass_mint_host_key_path' in (t | to_json) %}{% set _ = out.append(t.name) %}{% endfor %}
+          {{ out | to_json }}
+
+    - name: Assert only the stat and its assertion name the key path, and nothing spells the real path
+      ansible.builtin.assert:
+        that:
+          - >-
+            breakglass_mint_host_v_key_tasks | from_json ==
+            ['Look at the signing key and its directory without reading either',
+            'Refuse a host whose signing key is missing or not private to root']
+          - "'/etc/branchleft' not in ((verify_tasks + playbook_guard_v_tasks) | to_json)"
+        fail_msg: 'The key path is named by tasks other than the one stat and its assertion: {{ breakglass_mint_host_v_key_tasks }}.'
+        quiet: true
+
+    - name: Assert that stat asks for metadata only
+      ansible.builtin.assert:
+        that:
+          - item['ansible.builtin.stat'].get_checksum | default(true) is false
+          - item['ansible.builtin.stat'].get_mime | default(true) is false
+          - item['ansible.builtin.stat'].get_attributes | default(true) is false
+          - item['ansible.builtin.stat'].follow | default(true) is false
+        fail_msg: 'The key stat does not turn off the checksum, the MIME guess and the attribute read, or follows links: {{ item.name }}.'
+        quiet: true
+      loop: "{{ verify_tasks | select('contains', 'ansible.builtin.stat') | selectattr('name', 'match', '^Look at the signing key') | list }}"
+      loop_control:
+        label: '{{ item.name }}'
+
+    # Every stat of the role and of ops1.yml (every play; pre_tasks, tasks,
+    # post_tasks and handlers) asks for metadata only, under whatever name or path
+    # it has. The check reads the parsed tasks, not the names, so a stat with the
+    # default arguments (a checksum, a MIME guess) fails here even when it is named
+    # nothing like the key's. A deliberate edit that reads the key is stopped by
+    # review and by the deployment approval of the gated workflow that applies the
+    # role (ws#2483 is where that approval's trust is examined); this check catches
+    # an accident.
+    - name: Assert every stat of the role and of ops1 asks for metadata only, under any name
+      ansible.builtin.assert:
+        that:
+          - item['ansible.builtin.stat'].get_checksum | default(true) is false
+          - item['ansible.builtin.stat'].get_mime | default(true) is false
+          - item['ansible.builtin.stat'].get_attributes | default(true) is false
+        fail_msg: 'A stat of the role or of ops1 may read a checksum, a MIME type or attributes of its file: {{ item.name }}.'
+        quiet: true
+      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.stat') | list }}"
+      loop_control:
+        label: '{{ item.name }}'
+
+    # ----- owners and modes -----
+    - name: Read the owner, group and mode of every path the role makes
+      ansible.builtin.stat:
+        path: '{{ item.path }}'
+        follow: false
+      loop: '{{ verify_expected_modes }}'
+      loop_control:
+        label: '{{ item.path }}'
+      register: breakglass_mint_host_v_stats
+
+    - name: Assert each path has its kind, its mode and root as owner and group
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir if item.item.kind == 'dir' else item.stat.isreg
+          - item.stat.mode == item.item.mode
+          - item.stat.uid == 0
+          - item.stat.gid == 0
+        fail_msg: '{{ item.item.path }} is not a {{ item.item.kind }} owned by root:root in mode {{ item.item.mode }}.'
+        quiet: true
+      loop: '{{ breakglass_mint_host_v_stats.results }}'
+      loop_control:
+        label: '{{ item.item.path }}'
+
+    # ----- the bytes are the pinned bytes -----
+    - name: Hash the installed file
+      ansible.builtin.stat:
+        path: '{{ item.dest }}'
+        checksum_algorithm: sha256
+        follow: false
+      loop: '{{ breakglass_mint_host_files }}'
+      loop_control:
+        label: '{{ item.path }}'
+      register: breakglass_mint_host_v_hashes
+
+    - name: Assert the installed file has the pinned sha256
+      ansible.builtin.assert:
+        that:
+          - item.stat.checksum == item.item.sha256
+        fail_msg: '{{ item.item.dest }} does not have the pinned sha256.'
+        quiet: true
+      loop: '{{ breakglass_mint_host_v_hashes.results }}'
+      loop_control:
+        label: '{{ item.item.path }}'
+
+    # ----- the wrong-host case: nothing of the grant tool is here -----
+    - name: Look for what belongs to an app host, not this one
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /usr/local/sbin/branchleft-break-glass
+        - /etc/systemd/system/branchleft-break-glass-expire.service
+        - /etc/systemd/system/branchleft-break-glass-expire.timer
+        - /usr/local/lib/branchleft/break-glass/break-glass-grant.mjs
+        - /usr/local/lib/branchleft/break-glass/docker-engine.mjs
+        - /usr/local/lib/branchleft/break-glass/provision-support-account.mjs
+        - /usr/local/lib/branchleft/break-glass/provision-owner.mjs
+        - /var/lib/branchleft/break-glass-grants
+      register: breakglass_mint_host_v_foreign
+
+    - name: Assert none of it is on this host
+      ansible.builtin.assert:
+        that:
+          - breakglass_mint_host_v_foreign.results | map(attribute='stat.exists') | select | list | length == 0
+        fail_msg: A file of the app host's role is on the control host.
+        quiet: true
+
+    - name: List the tool directory
+      ansible.builtin.find:
+        paths: /usr/local/lib/branchleft/break-glass
+        hidden: true
+        file_type: any
+        patterns: '*'
+      register: breakglass_mint_host_v_tool_dir
+
+    - name: Assert the tool directory holds exactly the minter
+      ansible.builtin.assert:
+        that:
+          - breakglass_mint_host_v_tool_dir.files | map(attribute='path') | map('basename') | sort | list == ['break-glass-mint.mjs']
+        quiet: true
+
+    # ----- what the role asked Docker to do -----
+    - name: Read the stand-in's record
+      ansible.builtin.slurp:
+        src: '{{ scenario_calls_log }}'
+      register: breakglass_mint_host_v_calls_raw
+
+    - name: Split the record into calls and pick out the pulls
+      ansible.builtin.set_fact:
+        breakglass_mint_host_v_calls: '{{ (breakglass_mint_host_v_calls_raw.content | b64decode).splitlines() | map("split", "|||") | list }}'
+        breakglass_mint_host_v_pulls: >-
+          {{ (breakglass_mint_host_v_calls_raw.content | b64decode).splitlines() | map("split", "|||") | list | selectattr("1", "equalto", "pull") | list }}
+
+    - name: Assert the role pulled exactly once, by digest, with the pinned reference
+      ansible.builtin.assert:
+        that:
+          - breakglass_mint_host_v_pulls | length == 1
+          - breakglass_mint_host_v_pulls[0][1:] == ['pull', '-q', verify_image]
+          - breakglass_mint_host_v_pulls[0][-1] is search('@sha256:[0-9a-f]{64}$')
+        fail_msg: >-
+          Expected exactly one `docker pull -q <image by digest>` over two applies (the second must find
+          the image and not pull). Saw {{ breakglass_mint_host_v_pulls | length }} pulls: {{ breakglass_mint_host_v_pulls }}.
+        quiet: true
+
+    - name: Assert the role asked Docker whether the image was there, and asked nothing else unknown
+      ansible.builtin.assert:
+        that:
+          - breakglass_mint_host_v_calls | selectattr("1", "equalto", "image") | selectattr("2", "equalto", "inspect") | list | length >= 2
+          - >-
+            breakglass_mint_host_v_calls | map(attribute="1") | select('in', ['--version', 'image', 'pull']) | list | length
+            == breakglass_mint_host_v_calls | length
+        fail_msg: The role did not probe the image, or ran a Docker command it may not (the minter is never run by the role).
+        quiet: true
+
+    # ----- the key was looked at, never read or changed, and no digest of it reached the log -----
+    - name: Look at the placeholder key from outside the role
+      ansible.builtin.stat:
+        path: '{{ scenario_key_path }}'
+        checksum_algorithm: sha1
+        follow: false
+      register: breakglass_mint_host_v_key
+      no_log: true
+
+    - name: Assert the role left the placeholder as it was
+      ansible.builtin.assert:
+        that:
+          - breakglass_mint_host_v_key.stat.checksum == scenario_key_file_text | hash('sha1')
+          - breakglass_mint_host_v_key.stat.mode == '0600'
+        quiet: true
+      no_log: true
+
+    - name: Assert the log holds the output the scan is meant to read
+      ansible.builtin.assert:
+        that:
+          - "'SCENARIO_LOG_CANARY' in verify_log"
+          - "' : Download the minter and hold it to its checksum' in verify_log"
+          - "' : Look at the signing key and its directory without reading either' in verify_log"
+        fail_msg: The log lacks the canary or a task of the role, so an empty scan would prove nothing.
+        quiet: true
+      no_log: true
+
+    - name: Assert the scan can see a digest, by finding the digest control's SHA-1
+      ansible.builtin.assert:
+        that:
+          - verify_control_texts | map('hash', 'sha1') | select('in', verify_log) | list | length == verify_control_texts | length
+        fail_msg: The log does not hold the SHA-1 that stat printed for the digest control, so a scan that finds nothing proves nothing.
+        quiet: true
+      no_log: true
+
+    # slurp, which no role task may call, prints a file's content in base64. The
+    # scan therefore also looks for the base64 form, and it is shown to be able
+    # to see that form by finding the digest control's, which converge slurped.
+    - name: Assert the scan can see a base64 content, by finding the digest control's base64
+      ansible.builtin.assert:
+        that:
+          - verify_control_texts | map('b64encode') | select('in', verify_log) | list | length == verify_control_texts | length
+        fail_msg: The log does not hold the base64 that slurp printed for the digest control, so a base64 scan that finds nothing proves nothing.
+        quiet: true
+      no_log: true
+
+    - name: Work out which strings of the placeholder the log holds
+      ansible.builtin.set_fact:
+        breakglass_mint_host_v_leaked: >-
+          {{ (verify_key_texts + (verify_key_texts | map('hash', 'sha1') | list) + (verify_key_texts | map('hash', 'md5') | list)
+          + (verify_key_texts | map('b64encode') | list))
+          | select('in', verify_log) | length }}
+      no_log: true
+
+    - name: Assert the log holds neither the placeholder, nor its SHA-1, MD5 or base64
+      ansible.builtin.assert:
+        that:
+          - breakglass_mint_host_v_leaked | int == 0
+        fail_msg: The log holds the placeholder key, or its SHA-1, MD5 or base64. The role read the key.
+        quiet: true
+      no_log: true
+
+# ----- the playbook that applies this role: its host guard and its role list -----
+# Runs on the controller. The playbook is applied in check mode to a host of the
+# wrong name, over a local connection, so nothing is changed anywhere; the guard
+# must stop it before the role's first task.
+- name: Verify the playbook
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    verify_playbook: '{{ playbook_dir }}/../../../../playbooks/ops1.yml'
+    verify_ansible_playbook: '{{ ansible_playbook_python | dirname }}/ansible-playbook'
+  tasks:
+    - name: Apply the playbook, in check mode, to a host that is not its own
+      ansible.builtin.command:
+        argv:
+          [
+            '{{ verify_ansible_playbook }}',
+            '{{ verify_playbook }}',
+            -i,
+            'wronghost,',
+            -c,
+            local,
+            --check,
+          ]
+      register: breakglass_mint_host_v_wrong_host
+      changed_when: false
+      failed_when: false
+      environment:
+        ANSIBLE_LOG_PATH: ''
+        ANSIBLE_VERBOSITY: '0'
+
+    - name: Assert the guard stopped it before any task of the role
+      ansible.builtin.assert:
+        that:
+          - breakglass_mint_host_v_wrong_host.rc != 0
+          - "'This playbook is ops1' in breakglass_mint_host_v_wrong_host.stdout ~ breakglass_mint_host_v_wrong_host.stderr"
+          - "'Look for Docker' not in breakglass_mint_host_v_wrong_host.stdout"
+        fail_msg: >-
+          The playbook did not refuse a host that is not ops1. Output: {{ breakglass_mint_host_v_wrong_host.stdout }}
+        quiet: true
+
+    - name: List the tasks the playbook runs for its own host
+      ansible.builtin.command:
+        argv: ['{{ verify_ansible_playbook }}', '{{ verify_playbook }}', -i, 'ops1,', --list-tasks]
+      register: breakglass_mint_host_v_own_host
+      changed_when: false
+      environment:
+        ANSIBLE_LOG_PATH: ''
+        ANSIBLE_VERBOSITY: '0'
+
+    - name: Assert it applies this role and not the app host's
+      ansible.builtin.assert:
+        that:
+          - "'Look at the signing key and its directory' in breakglass_mint_host_v_own_host.stdout"
+          - "'Enable and start the timer' not in breakglass_mint_host_v_own_host.stdout"
+          - "'Docker socket' not in breakglass_mint_host_v_own_host.stdout"
+        fail_msg: The playbook for the control host does not apply the mint role alone.
+        quiet: true

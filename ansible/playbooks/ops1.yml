@@ -1,0 +1,25 @@
+---
+# ops1: the control host. One role so far: the break-glass minter and the check
+# that its signing key is in place. ops1 will list other roles later; this play
+# lists the roles of this host in order. The role takes no private input and sets
+# no run-time secret. This host is applied by the gated pull once it is enrolled;
+# until then nothing runs this file.
+#
+# Run against more than one host this playbook would apply ops1's role to every
+# one, so the first play refuses any host but ops1 (or the localhost the trigger
+# names).
+- name: Bring ops1's break-glass minter under Ansible
+  hosts: all
+  gather_facts: false
+  pre_tasks:
+    - name: Refuse any host but ops1
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in ['ops1', 'localhost']
+        fail_msg: This playbook is ops1's. Limit the run to ops1.
+        quiet: true
+  # The roles live in ansible/roles/ (ANS-13), one level above this directory, and a
+  # playbook finds roles only beside itself unless a path is given. One suppression
+  # per line.
+  roles:
+    - role: ../roles/breakglass_mint_host # noqa: role-name[path]

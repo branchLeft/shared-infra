@@ -1,0 +1,70 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container.
+#
+# What this scenario is NOT: a Docker host. The container has no Docker daemon,
+# so a stand-in program (files/docker_standin.sh) takes the place of the docker
+# command, records what it is asked and answers a probe after a pull. The test
+# proves what the role asked Docker to do, and runs the shipped wrapper and the
+# shipped unit against the stand-in to show they agree with the role's image.
+# It does not prove that the image pulls or that the tool runs; the gated run
+# on the host is that proof (README, "What the test proves").
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party systemd test base on Debian 13, the release every production
+    # host runs, trusted by digest (see the role README). The digest is the
+    # pin; the tag is informational and moves weekly. The role enables a timer
+    # and the test asks systemd whether it is active, so the platform runs
+    # systemd as PID 1, which is the justification ANS-15 asks for here.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # Destroy removes the container's anonymous volumes. This scenario's cgroup
+    # bind mount means none is created; the key guards against one if the mount
+    # is ever dropped.
+    keep_volumes: false
+    # No privileged mode and no added capabilities. The mounts, the cgroup
+    # namespace and the command below are the whole set this image needs to
+    # run systemd.
+    # The host cgroup namespace is a stated exception (ANS-15): on a cgroup v2
+    # host such as a native Linux runner, a private namespace over the
+    # read-write cgroup mount below makes systemd exit at once. The host
+    # namespace is the least privilege that works. It shares the host's
+    # cgroup view and, with the read-write mount, write access to the host
+    # cgroup tree, which is why the test image is trusted by digest and the
+    # job holds no credentials.
+    cgroupns_mode: host
+    # The cgroup tree systemd manages, mounted read-write: without it the
+    # container exits at start.
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    # systemd's runtime and lock directories are tmpfs in a real boot: without
+    # them the container exits at start.
+    tmpfs:
+      - /run
+      - /run/lock
+    # Start systemd as the init process, the image's own CMD.
+    command: /lib/systemd/systemd
+    # The run's label, so the harness can check that a destroy removed only
+    # this run's container.
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  inventory:
+    # The paths the prepare, converge and verify plays share with the stand-in.
+    # The role's own inputs are left at their defaults here, so the test runs
+    # the role as the playbook will. Nothing here is a secret.
+    group_vars:
+      all:
+        scenario_state_dir: /var/lib/docker-standin
+        scenario_calls_log: /var/lib/docker-standin/calls.log
+verifier:
+  name: ansible

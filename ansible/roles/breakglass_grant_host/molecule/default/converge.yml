@@ -1,0 +1,90 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars:
+    converge_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') | from_yaml }}"
+    # The image is a constant of the role, not an input with a default.
+    converge_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') | from_yaml }}"
+    # What a role that stopped at a refusal must not have left behind. The files
+    # and units come last in the role, after the image is confirmed, so they are
+    # absent for every refusal below.
+    converge_installed_paths:
+      - /usr/local/sbin/branchleft-break-glass
+      - /etc/systemd/system/branchleft-break-glass-expire.service
+      - /etc/systemd/system/branchleft-break-glass-expire.timer
+      - /usr/local/lib/branchleft/break-glass/break-glass-grant.mjs
+      - /usr/local/lib/branchleft/break-glass/docker-engine.mjs
+      - /usr/local/lib/branchleft/break-glass/provision-support-account.mjs
+    converge_directory_paths:
+      - /usr/local/lib/branchleft
+      - /var/lib/branchleft
+      - /var/log/branchleft
+    # Every input and precondition the role must refuse, with the task it must
+    # stop at. A case changes only what it lists. `setup` names what the case
+    # does to the instance first and undoes after; `leaves_directories` is true
+    # only where the role legitimately got as far as making its directories.
+    converge_refusals:
+      - case: commit that is a branch name
+        commit: main
+        expect: Refuse an input that is not a full commit or an image pinned by digest
+        leaves_directories: false
+      - case: image named by tag alone
+        image: node:26.5.0-bookworm-slim
+        expect: Refuse an input that is not a full commit or an image pinned by digest
+        leaves_directories: false
+      - case: no docker command
+        setup: docker_missing
+        expect: Refuse a host with no working Docker
+        leaves_directories: false
+      # A docker that answers from elsewhere on the PATH (a snap install, say)
+      # while /usr/bin/docker, the binary the expire unit runs, is absent.
+      - case: docker on the PATH but not at /usr/bin/docker
+        setup: usr_bin_docker_missing
+        expect: Refuse a host with no working Docker
+        leaves_directories: false
+      - case: no Docker socket
+        setup: socket_missing
+        expect: Refuse a host with no Docker socket
+        leaves_directories: false
+      - case: a pull that exits 0 and stores nothing
+        setup: pull_stores_nothing
+        expect: Refuse a host where the image is not present under the pinned digest
+        leaves_directories: true
+  tasks:
+    - name: Read whether the wrapper is already installed
+      ansible.builtin.stat:
+        path: /usr/local/sbin/branchleft-break-glass
+      register: breakglass_grant_host_c_before
+
+    # Refusals come first, on a host where nothing is installed: a refused
+    # input must leave no trace. Check mode writes nothing and a refusal is a
+    # fact of the real run, so these are skipped in check mode (ANS-10).
+    - name: Apply the role with each input or host it must refuse
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/refusal_case.yml'
+      loop: '{{ converge_refusals }}'
+      loop_control:
+        loop_var: refused
+        label: '{{ refused.case }}'
+      when:
+        - not ansible_check_mode
+        - not breakglass_grant_host_c_before.stat.exists
+
+    # The refusal cases called the stand-in too. Clear its record so that the
+    # verify play counts only the calls of the real applies.
+    - name: Clear the stand-in's record of the refusal cases
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ scenario_calls_log }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when:
+        - not ansible_check_mode
+        - not breakglass_grant_host_c_before.stat.exists
+
+    - name: Apply the role
+      ansible.builtin.include_role:
+        # Molecule links the role under its namespace and name, the namespace
+        # from galaxy_info in meta/main.yml.
+        name: branchleft.breakglass_grant_host

@@ -1,0 +1,59 @@
+---
+# What the role expects to find on a host before it runs: a docker command that
+# answers, and a Docker socket. Nothing here is the role's own work. The
+# stand-in is the one program of this test that stands in for a real component
+# (molecule.yml), so it is installed at both paths the shipped files call: the
+# wrapper finds docker on its PATH, and the expire unit calls /usr/bin/docker.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  vars:
+    prepare_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') | from_yaml }}"
+  tasks:
+    - name: Create the directory the stand-in keeps its state in
+      ansible.builtin.file:
+        path: '{{ scenario_state_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install the docker stand-in where the wrapper finds it
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/files/docker_standin.sh'
+        dest: /usr/local/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install the docker stand-in where the expire unit calls it
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/files/docker_standin.sh'
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    # What a registry would resolve a bare tag to, so a pull by tag stores the
+    # pinned digest and a test of the pull's arguments is not masked by a failed
+    # read-back.
+    - name: Tell the stand-in which digest a bare tag resolves to
+      ansible.builtin.copy:
+        content: "{{ prepare_role_vars.breakglass_grant_host_node_image.split('@') | last }}\n"
+        dest: '{{ scenario_state_dir }}/registry_digest'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Put the socket-making program on the instance
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/files/make_socket.py'
+        dest: /root/make_socket.py
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Make the file the role looks at as the Docker socket
+      ansible.builtin.command:
+        argv: [python3, /root/make_socket.py, /var/run/docker.sock]
+        creates: /var/run/docker.sock
