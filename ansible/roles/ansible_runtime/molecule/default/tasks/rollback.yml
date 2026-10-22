@@ -1,0 +1,83 @@
+---
+# The rollback case. Lock A (the repository's own) is in service. Lock B is lock A with one
+# more comment line, so it has its own fingerprint and its own environment. The role is
+# applied with B and then with A again, in the same directory and with the same link.
+# Applying A the second time finds A's marker, so the install is skipped, and the link
+# must still go back to A's environment: a bad lock bump that is reverted must not leave
+# the host on the bad environment.
+- name: Make a temporary file for lock B on the machine that runs the test
+  ansible.builtin.tempfile:
+    state: file
+    suffix: .lock-b.txt
+  delegate_to: localhost
+  become: false
+  register: ansible_runtime_verify_lock_b_file
+
+- name: Write lock B
+  ansible.builtin.copy:
+    content: "{{ ansible_runtime_verify_lock }}\n# lock B of the rollback case\n"
+    dest: '{{ ansible_runtime_verify_lock_b_file.path }}'
+    mode: '0600'
+  delegate_to: localhost
+  become: false
+  diff: false
+
+# Both names come from the expression the role used before the install moved into a program
+# (the file lookup, then the SHA-256 of the text), not from the program.
+- name: Work out the environment names of lock A and of lock B
+  ansible.builtin.set_fact:
+    ansible_runtime_verify_fp_a: '{{ ansible_runtime_verify_fingerprint }}'
+    ansible_runtime_verify_fp_b: >-
+      {{ lookup('ansible.builtin.file', ansible_runtime_verify_lock_b_file.path)
+      | ansible.builtin.hash('sha256') | truncate(16, True, '') }}
+
+- name: Look at the marker of lock A before lock B is applied
+  ansible.builtin.stat:
+    path: /opt/ansible-runtime/venv-{{ ansible_runtime_verify_fp_a }}/.installed-from-lock
+  register: ansible_runtime_verify_marker_before
+
+- name: Apply the role with lock B
+  ansible.builtin.include_role:
+    name: branchleft.ansible_runtime
+  vars:
+    ansible_runtime_requirements_src: '{{ ansible_runtime_verify_lock_b_file.path }}'
+
+- name: Look at the link after lock B
+  ansible.builtin.stat:
+    path: /usr/local/bin/ansible-playbook
+  register: ansible_runtime_verify_link_b
+
+- name: Assert the link names the environment of lock B
+  ansible.builtin.assert:
+    that:
+      - ansible_runtime_verify_link_b.stat.lnk_source == '/opt/ansible-runtime/venv-' ~ ansible_runtime_verify_fp_b ~ '/bin/ansible-playbook'
+    success_msg: Lock B moved the link to its own environment.
+
+- name: Apply the role with lock A again
+  ansible.builtin.include_role:
+    name: branchleft.ansible_runtime
+  vars:
+    ansible_runtime_requirements_src: '{{ playbook_dir }}/../../../../requirements.txt'
+
+- name: Look at the link and at the marker of lock A after it is put back
+  ansible.builtin.stat:
+    path: '{{ item }}'
+  loop:
+    - /usr/local/bin/ansible-playbook
+    - /opt/ansible-runtime/venv-{{ ansible_runtime_verify_fp_a }}/.installed-from-lock
+  register: ansible_runtime_verify_after
+
+- name: Assert the link is back on lock A and A was not installed a second time
+  ansible.builtin.assert:
+    that:
+      - ansible_runtime_verify_after.results[0].stat.lnk_source == '/opt/ansible-runtime/venv-' ~ ansible_runtime_verify_fp_a ~ '/bin/ansible-playbook'
+      - ansible_runtime_verify_after.results[1].stat.checksum == ansible_runtime_verify_marker_before.stat.checksum
+      - ansible_runtime_verify_after.results[1].stat.mtime == ansible_runtime_verify_marker_before.stat.mtime
+    success_msg: The link went back to lock A and its environment was not built again.
+
+- name: Remove the temporary file of lock B
+  ansible.builtin.file:
+    path: '{{ ansible_runtime_verify_lock_b_file.path }}'
+    state: absent
+  delegate_to: localhost
+  become: false

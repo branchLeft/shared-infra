@@ -3,24 +3,13 @@ import * as pulumi from '@pulumi/pulumi';
 
 import type { EuCentralLocation } from './addressPlan';
 import { renderCloudInit } from './cloudInit';
+import type { Enrolment } from './cloudInit';
 import { EDGE_RULES, INTERNAL_RULES } from './firewalls';
 
 /**
- * The create pattern for a platform host: server, firewall, private-network
- * attachment at a fixed address.
- *
- * This is the piece the mx1 stack does not provide. That stack *imports* a
- * hand-built server and is written to never create or replace it, and its
- * `ignoreChanges` on `publicNets` and `firewallIds` exists to make a
- * pre-existing machine reconcile cleanly — neither generalises to a machine
- * this program creates, where both are inputs rather than facts to be
- * tolerated. `sshKeys` and `image` are different: they are create-time-only
- * at the provider regardless of how the server came to exist, and both are
- * ignored here for that reason rather than by inheritance.
- *
- * Consumed by the per-role host stacks rather than instantiated here: the
- * network must never share a stack with anything applied on a delivery
- * cadence, so this project declares the pattern and creates no host with it.
+ * The create pattern for a platform host: server, firewall, private-network attachment
+ * at a fixed address. Per-role host stacks consume it; this project creates no host.
+ * The reasoning: hetzner-host/README.md, "Notes kept from the source".
  */
 
 export type HostRole = 'edge' | 'app' | 'db' | 'mon';
@@ -46,25 +35,25 @@ export interface HostArgs {
    * deploy key is a separate, non-root identity injected through cloud-init
    * and must never appear in this list. */
   ownerSshKeyNames: pulumi.Input<pulumi.Input<string>[]>;
-  deployPublicKey: pulumi.Input<string>;
+  /**
+   * The CI deploy key's public half. Required unless `enrolment` is set, and
+   * refused when it is: an enrolled host is deployed by the pull and has no
+   * `deploy` account, so the two never exist together.
+   */
+  deployPublicKey?: pulumi.Input<string>;
+  /**
+   * Bring the host under the gated pull at first boot (an `edge` host only).
+   * Absent, the first-boot document is exactly what it was before this
+   * field. See `Enrolment`.
+   */
+  enrolment?: Enrolment;
   networkId: pulumi.Input<string>;
   /** Fixed private address from the estate's address plan. */
   privateIp: pulumi.Input<string>;
   /**
-   * Whether the host gets public addresses at all. Defaulted on because the
-   * deploy path is SSH from GitHub-hosted runners, and a host CI must reach
-   * needs a public address to reach.
-   *
-   * A host no deploy path touches should set this to `false` and be reached
-   * over the private network from a host that does. Only the hosts that
-   * terminate public traffic need an address of their own; every other public
-   * address that exists is a standing exception to that. Doing so means accepting that recovery is the Hetzner console.
-   *
-   * **Choose this at creation.** Flipping it from `true` to `false` on a
-   * live host removes two delete-protected primary IPs from the program, and
-   * the API refuses to delete them — which wedges the stack mid-update. To
-   * change it later, apply once with `protection: false` so the protection
-   * comes off, then apply again with `publicNetworking: false`.
+   * Defaults on: deploy is SSH from GitHub-hosted runners. Set `false` only on a host no
+   * deploy path touches. Choose at creation: flipping it on a live host wedges the stack.
+   * To change it later, apply with `protection: false`, then with `publicNetworking: false`.
    */
   publicNetworking?: boolean;
   /**
@@ -120,6 +109,23 @@ export class Host extends pulumi.ComponentResource {
       'managed-by': 'pulumi',
     };
 
+    // Rendered before any resource is declared. A refused key, a refused
+    // enrolment or a role that cannot be enrolled stops the program here, with
+    // nothing created: `userData` is create-time-only, so a document accepted
+    // by mistake is permanent.
+    if (args.enrolment !== undefined && args.role !== 'edge') {
+      throw new Error(
+        `Only an edge host can be enrolled in the pull; ${args.name} is a ${args.role} host. ` +
+          "The pull's playbook is edge1's, and no other role has one."
+      );
+    }
+    const userData = renderCloudInit({
+      hostname: args.name,
+      deployPublicKey: args.deployPublicKey,
+      privateOnly: !wantsPublicNetworking,
+      enrolment: args.enrolment,
+    });
+
     this.firewall = new hcloud.Firewall(
       `${args.name}-firewall`,
       {
@@ -131,17 +137,9 @@ export class Host extends pulumi.ComponentResource {
     );
 
     /**
-     * Declared as their own resources rather than left to Hetzner's
-     * server-creation allocation, which sets `auto_delete` and releases the
-     * address back to the pool when the server goes.
-     *
-     * That is not survivable here. Certificate issuance is HTTP-01, so an
-     * address that changes breaks every hostname until each record naming it
-     * has been repointed and has propagated, and only then can any of them
-     * reissue. A mail host's sending reputation is attached to its address
-     * and does not move at all. The rebuild that this component deliberately
-     * permits would otherwise take the whole estate's public reachability
-     * with it.
+     * Declared as their own resources: Hetzner's server-creation allocation releases the
+     * address when the server goes, and a changed address breaks HTTP-01 issuance and
+     * mail reputation for every hostname that names it.
      */
     if (wantsPublicNetworking) {
       this.primaryIpv4 = new hcloud.PrimaryIp(
@@ -182,11 +180,7 @@ export class Host extends pulumi.ComponentResource {
         image: args.image,
         backups: args.backups ?? false,
         sshKeys: args.ownerSshKeyNames,
-        userData: renderCloudInit({
-          hostname: args.name,
-          deployPublicKey: args.deployPublicKey,
-          privateOnly: !wantsPublicNetworking,
-        }),
+        userData,
         // Declared on the server rather than through a separate attachment
         // resource: this is the only place the provider treats the firewall
         // as being in effect from the moment the server first boots. An
@@ -203,17 +197,9 @@ export class Host extends pulumi.ComponentResource {
               }
             : { ipv4Enabled: false, ipv6Enabled: false },
         ],
-        // A private-only host must carry its network interface at first
-        // boot: with no public interface and no inline network, Hetzner
-        // refuses to start the server at all ("no public or private network
-        // interfaces found"). The separate ServerNetwork attachment below is
-        // created only after the server exists, which is too late for that
-        // case — so a private-only host attaches inline here and skips the
-        // separate resource. A public host keeps the separate attachment:
-        // moving a live host between the two shapes plans a detach/attach,
-        // so the shape is fixed at creation. `aliasIps: []` is required —
-        // left undefined, the provider detaches and reattaches the network
-        // on every apply (upstream provider issue #650).
+        // A private-only host attaches its network inline: Hetzner refuses to start a server
+        // with no interface, and the separate attachment comes too late. `aliasIps: []` is
+        // required, or the provider reattaches the network on every apply.
         networks: wantsPublicNetworking
           ? undefined
           : [

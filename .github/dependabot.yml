@@ -106,6 +106,20 @@ updates:
     labels:
       - 'dependencies'
 
+  # The one pip the lock-reader parity test asks (ansible/checks/pip-requirements.txt:
+  # a single hashed pin, installed before the lock in the CI tool environments).
+  # A bump is its own pull request on purpose: the parity table is re-checked
+  # against the new pip's req_file before it merges (ansible/checks/README.md).
+  # ansible/checks/check_pins.py fails if this entry goes.
+  - package-ecosystem: 'pip'
+    directory: '/ansible/checks'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 1
+    labels:
+      - 'dependencies'
+
   # GitHub Actions workflows
   - package-ecosystem: 'github-actions'
     directory: '/'

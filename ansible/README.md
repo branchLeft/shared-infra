@@ -22,6 +22,7 @@ the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
 | `requirements.txt`    | The hash-locked toolchain compiled from it, collections included.      |
 | `requirements.yml`    | Empty by design: no collection is fetched outside the lock (ANS-4).    |
 | `checks/`             | The pin check, the enrolment check and their unit tests.               |
+| `tools/`              | The record a new host's first boot is built from, and its tests.       |
 | `inventories/`        | The inventory and group-variable trees. `production` holds edge1, db1. |
 | `playbooks/`          | One playbook per host: selects hosts and lists roles (ANS-13).         |
 | `playbooks/includes/` | The shared pull values and refusals, each defined once.                |
@@ -68,13 +69,17 @@ needed, which is ansible-core's own floor for the machine that runs it:
 
 ```text
 python3 -m venv .venv
-.venv/bin/pip install --require-virtualenv --require-hashes -r ansible/requirements.txt
+.venv/bin/pip install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt
+.venv/bin/pip install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt
 ```
 
-That one command installs the tools and the collections the roles use, which
-come with the `ansible` package (the section on pins below says why). Nothing
-else is installed, and `ansible-lint` and `ansible-playbook` find the
-collections with no setting. Then one command runs everything for one or more roles:
+The first install is the one pip that `checks/test_lock_reader_parity.py` asks,
+pinned in `checks/pip-requirements.txt`; without it that test fails on whatever
+pip the virtual environment came with. The second installs the tools and the
+collections the roles use, which come with the `ansible` package (the section
+on pins below says why). Nothing else is installed, and `ansible-lint` and
+`ansible-playbook` find the collections with no setting. Then one command runs
+everything for one or more roles:
 
 ```text
 .venv/bin/python ansible/harness/run_harness.py ansible/roles/example_config
@@ -243,14 +248,15 @@ maintainer can run them again.
 
 ### What is pinned, and where
 
-| What                                           | Where                        | Exact form                                    |
-| ---------------------------------------------- | ---------------------------- | --------------------------------------------- |
-| The seven tools chosen on purpose              | `requirements.in`            | `name==version`, one per line, no hashes      |
-| Every Python package, `ansible-core` among     | `requirements.txt`           | `name==version` and one or more sha256 hashes |
-| The collections the roles use                  | `requirements.txt`           | inside the pinned `ansible` package           |
-| That no collection is fetched outside the lock | `requirements.yml`           | the single line `collections: []`             |
-| What raises a bump                             | `../.github/dependabot.yml`  | a `uv` entry for `/ansible`                   |
-| The `ansible-lint` pre-commit hook, if any     | `../.pre-commit-config.yaml` | `rev: v` and the `requirements.txt` pin       |
+| What                                           | Where                         | Exact form                                                       |
+| ---------------------------------------------- | ----------------------------- | ---------------------------------------------------------------- |
+| The seven tools chosen on purpose              | `requirements.in`             | `name==version`, one per line, no hashes                         |
+| Every Python package, `ansible-core` among     | `requirements.txt`            | `name==version` and one or more sha256 hashes                    |
+| The collections the roles use                  | `requirements.txt`            | inside the pinned `ansible` package                              |
+| That no collection is fetched outside the lock | `requirements.yml`            | the single line `collections: []`                                |
+| The pip the parity test asks                   | `checks/pip-requirements.txt` | `pip==version` and one sha256 hash                               |
+| What raises a bump                             | `../.github/dependabot.yml`   | a `uv` entry for `/ansible`, a `pip` entry for `/ansible/checks` |
+| The `ansible-lint` pre-commit hook, if any     | `../.pre-commit-config.yaml`  | `rev: v` and the `requirements.txt` pin                          |
 
 ### Why `requirements.txt` is long, and that a tool writes it
 
@@ -317,21 +323,28 @@ unchanged. To see what a given install carries:
 ### Install, and install with no network
 
 ```text
-.venv/bin/pip install --require-virtualenv --require-hashes -r ansible/requirements.txt
+.venv/bin/pip install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt
+.venv/bin/pip install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt
 .venv/bin/pip check
 ```
 
-`--require-hashes` makes pip check every downloaded file against the hashes in
-the lock and refuse a file that differs by one byte, or a package the lock does
-not name. A machine with no route to the package index installs from a copy of
+`--require-hashes` makes pip refuse a package the lock does not name, and a
+wheel whose hash is not listed. It does not by itself cover every file pip
+runs: a package with no wheel for this machine's Python would be built from its
+source archive, and the build backend that archive asks for is fetched from the
+index with no hash, so code the lock never named would run on this machine.
+`--only-binary=:all:` removes that build, so such a package fails the install
+instead. A machine with no route to the package index installs from a copy of
 the files, the same way:
 
 ```text
-.venv/bin/pip download --require-hashes -r ansible/requirements.txt -d WHEELHOUSE
-.venv/bin/pip install --require-virtualenv --require-hashes --no-index --find-links WHEELHOUSE -r ansible/requirements.txt
+.venv/bin/pip download --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt -d WHEELHOUSE
+.venv/bin/pip download --require-hashes --only-binary=:all: -r ansible/requirements.txt -d WHEELHOUSE
+.venv/bin/pip install --require-virtualenv --require-hashes --only-binary=:all: --no-index --find-links WHEELHOUSE -r ansible/checks/pip-requirements.txt
+.venv/bin/pip install --require-virtualenv --require-hashes --only-binary=:all: --no-index --find-links WHEELHOUSE -r ansible/requirements.txt
 ```
 
-The first command runs once where there is a network; the second needs none.
+The two downloads run once where there is a network; the two installs need none.
 The lock lists the packages for every platform, so a machine takes the files
 for its own.
 
@@ -359,8 +372,15 @@ setting that is not a file in git. The advisory database lists `ansible`
 advisories that name a bundled collection, so a collection fix is covered by the
 alert for the package that carries it.
 
-`checks/check_pins.py` fails if the `uv` entry for `/ansible` goes missing, so
-the route cannot be switched off by an edit that looks unrelated.
+`../.github/dependabot.yml` also has a weekly `pip` entry for `/ansible/checks`,
+which reads the one-line pin in `checks/pip-requirements.txt` and opens a pull
+request of its own for a new pip. That pull request fails the parity test until
+the table in `checks/test_lock_reader_parity.py` is re-checked against the new
+pip (`checks/README.md` says how), which is the prompt to do it.
+
+`checks/check_pins.py` fails if the `uv` entry for `/ansible` or the `pip` entry
+for `/ansible/checks` goes missing, so the route cannot be switched off by an
+edit that looks unrelated.
 
 ### Where an SBOM reads the versions
 
@@ -385,6 +405,12 @@ It fails when:
   `--hash=sha256:` of 64 hex digits (a range, `~=`, a wildcard, a bare name, an
   include, an editable install, a URL, an index option, or a pin with no hash),
   or a named tool is missing, or a package is pinned twice;
+- `requirements.txt` starts with a byte-order mark or carries a `coding:` /
+  `coding=` declaration in a comment on its first two lines (pip would read it
+  in another encoding), or is not UTF-8 text. The check reads the lock with the
+  reader of `roles/ansible_runtime/files/install_runtime.py`, loaded by path
+  and not copied, so the install program and this gate read a lock one way
+  (`checks/test_lock_reader_parity.py` holds that to pip's own code);
 - `requirements.in` is missing, has a line that is not an exact
   `name==version`, does not name one of the seven chosen tools, or disagrees
   with the lock on a version;
@@ -398,7 +424,11 @@ It fails when:
   is fetched outside the lock;
 - an archive (`.tar.gz`, `.tgz`, `.tar`) or an `ansible_collections` tree sits
   anywhere under `ansible/`, a copy that the lock and an SBOM cannot see;
-- `../.github/dependabot.yml` has no scheduled `uv` entry for `/ansible`;
+- `checks/pip-requirements.txt` is anything but one `pip==version` line with one
+  `--hash=sha256:` of 64 hex digits (and comments): a range, a second package, a
+  second hash, a marker or an option is refused;
+- `../.github/dependabot.yml` has no scheduled `uv` entry for `/ansible`, or no
+  scheduled `pip` entry for `/ansible/checks`;
 - a Molecule scenario under `roles/`, `patterns/` or `role_skeleton/` does not
   set `dependency: enabled: false`;
 - the `ansible-lint` hook in `.pre-commit-config.yaml`, when there is one, is
@@ -435,6 +465,11 @@ Normally a person does nothing to learn of a bump: Dependabot opens it.
    check compares it as soon as one does.
 4. Merge when the checks are green.
 
+A pull request that changes `checks/pip-requirements.txt` is the other bump. Take
+the new version's wheel hash from PyPI's JSON API (`https://pypi.org/pypi/pip/<version>/json`,
+the `bdist_wheel` entry, not the source archive: the install is wheels-only),
+and re-check the parity table against the new pip before merging.
+
 To bump by hand, edit the pin in `requirements.in` and regenerate the lock with
 the command under "Why `requirements.txt` is long", run from `ansible/`, then
 run the install above, the check and the harness. Never edit `requirements.txt`
@@ -455,6 +490,10 @@ options from the header.
   merge, and a person should read it once to confirm it changes `requirements.in`
   and `requirements.txt` and nothing else. The advisory alert is a repository
   setting the check cannot see.
+- The `pip` entry for `/ansible/checks` was not run with the Dependabot CLI. The
+  check proves the entry is there and the pin file has the shape that ecosystem
+  reads; whether its first pull request rewrites the hash as well as the version
+  is read once, when it opens.
 - The check runs in CI and by hand, not in pre-commit.
 - ANS-5 says lint runs in pre-commit as well as CI. This repository has no
   ansible-lint hook yet, so no rev is compared; the check says so on every run.

@@ -1,19 +1,13 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { assertDeployPublicKey, renderCloudInit } from './cloudInit';
 
 /**
- * `renderCloudInit` builds a `#cloud-config` document that creates the `deploy`
- * account, installs its `authorized_keys` entry, and writes a sudoers drop-in
- * granting that account a root command. The only value flowing into it from
- * stack configuration is the public key, and a newline in it appends arbitrary
- * cloud-config to the document.
- *
- * Three properties make that permanent rather than merely wrong: cloud-init
- * runs once and never again, `userData` is create-time-only at the provider,
- * and it sits in the component's `ignoreChanges` — so an injected document
- * survives every later apply and appears in no diff. There is no second
- * control behind this one.
+ * `renderCloudInit` writes the `deploy` account and its root sudoers drop-in. A newline in
+ * the public key would append arbitrary cloud-config, and `userData` is never re-applied.
  */
 
 const ED25519 = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLE';
@@ -102,26 +96,9 @@ describe('assertDeployPublicKey', () => {
 });
 
 /**
- * A private-only host's DHCP lease carries the private subnet route and the
- * metadata route, but never a default one, and no resolver at all -- so
- * without this, `package_update` below is the first thing on such a host
- * with nowhere to reach, and cloud-init's package installation fails for the
- * whole of first boot. `privateOnly` is what threads that host shape through
- * from `Host`.
- *
- * The bootstrap has to land in `bootcmd`, not `runcmd`: `runcmd`'s own
- * module only writes the command list to disk during cloud-init's config
- * stage, and that script is not actually executed until `scripts-user`,
- * which runs near the end of the *later* final stage -- after
- * `package-update-upgrade-install`, which sits at the *start* of that same
- * final stage. Putting the bootstrap in `runcmd` would place it in the
- * document but have it execute too late to help, which is exactly what an
- * earlier version of this file got wrong (and asserted incorrectly, via a
- * test that only checked string position in the rendered YAML rather than
- * which module the position belongs to). `bootcmd` is a distinct, earlier
- * module in cloud-init's *init* stage, which precedes both config and final
- * — the assertions below check block membership, not text order, because
- * text order is exactly what let the wrong placement pass before.
+ * Private-only hosts get no default route or resolver from DHCP, so the bootstrap must
+ * sit in `bootcmd` (it runs before `package_update`). Assertions check block membership.
+ * The reasoning: hetzner-host/README.md, "Notes kept from the source".
  */
 describe('renderCloudInit', () => {
   const BASE = {
@@ -183,5 +160,40 @@ describe('renderCloudInit', () => {
     const document = await render(true);
     expect(document.split('bootcmd:').length - 1).toBe(1);
     expect(document.split('runcmd:').length - 1).toBe(1);
+  });
+});
+
+/**
+ * With no enrolment the document is what it was before enrolment existed, byte
+ * for byte. The two files in `testdata/` were rendered by `cloudInit.ts` as it
+ * stands on `origin/main`, before any edit of this change, from the arguments
+ * below, and are not regenerated. `userData` is create-time-only and in the
+ * component's `ignoreChanges`, so a flag-off change here would not reach a
+ * running host, but it would reach the next host created, and no diff would show it.
+ */
+describe('a host with no enrolment gets the document it always did', () => {
+  const golden = (name: string): string =>
+    readFileSync(join(__dirname, 'testdata', `cloud-init-${name}.golden`), 'utf8');
+  const args = {
+    hostname: 'db1',
+    deployPublicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLE deploy@db1',
+  };
+
+  for (const [name, privateOnly] of [
+    ['public', false],
+    ['private-only', true],
+  ] as const) {
+    it(`is byte for byte the ${name} document from origin/main`, async () => {
+      const document = await new Promise<string>((resolve) => {
+        renderCloudInit({ ...args, privateOnly }).apply(resolve);
+      });
+      expect(document).toBe(golden(name));
+    });
+  }
+
+  it('keeps the default entry first and the deploy entry beside it', () => {
+    const document = golden('public');
+    expect(document.indexOf('  - default')).toBeGreaterThan(-1);
+    expect(document.indexOf('  - default')).toBeLessThan(document.indexOf('  - name: deploy'));
   });
 });

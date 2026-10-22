@@ -1,19 +1,13 @@
 import * as pulumi from '@pulumi/pulumi';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { bootstrap, enrolment } from './enrolment.fixtures';
 import { Host } from './host';
 
 /**
- * `Host` has three branches whose failure modes are all silent at apply time:
- * the role picks the firewall rule set, `publicNetworking` decides whether two
- * primary IPs exist, and the firewall is declared *on the server* rather than
- * attached afterwards. A wrong branch produces a host that boots, answers SSH,
- * and is exposed — nothing errors.
- *
- * `setMocks` runs in `beforeAll`, which is early enough: `host.ts` constructs
- * nothing at module scope, so the mocks only have to be in place before the
- * first `new Host(...)`. `estate.ts` and `network.ts` are the modules that do
- * build resources on import, and neither is imported here.
+ * `Host` has three branches that fail silently at apply time: the firewall rule set,
+ * the primary IPs of `publicNetworking`, and the firewall declared on the server.
+ * The reasoning: hetzner-host/README.md, "Notes kept from the source".
  */
 
 type Created = { type: string; name: string; inputs: Record<string, unknown> };
@@ -193,6 +187,95 @@ describe('Host', () => {
     expect(server?.inputs.deleteProtection).toBe(false);
     expect(server?.inputs.rebuildProtection).toBe(false);
     expect(server?.inputs.labels).toMatchObject({ env: 'lab', role: 'app' });
+  });
+
+  describe('enrolment in the pull', () => {
+    const hcloudTypes = (before: number) =>
+      created.slice(before).filter((r) => r.type.startsWith('hcloud:'));
+
+    it('puts the enrolment document on an edge host, and no deploy account', async () => {
+      const { resources } = await build({
+        name: 'enrol1',
+        role: 'edge',
+        deployPublicKey: undefined,
+        enrolment: enrolment(),
+      });
+      const server = resources.find((r) => r.type === 'hcloud:index/server:Server');
+      const userData = server?.inputs.userData as string;
+      expect(userData).toContain('--mode apply');
+      expect(userData).not.toContain('name: deploy');
+    });
+
+    it('leaves the document of a host with no enrolment alone', async () => {
+      const { resources } = await build({ name: 'enrol2', role: 'edge' });
+      const server = resources.find((r) => r.type === 'hcloud:index/server:Server');
+      expect(server?.inputs.userData as string).not.toContain('pull-trigger');
+    });
+
+    it.each(['app', 'db', 'mon'] as const)(
+      'refuses to enrol a %s host, before creating anything',
+      (role) => {
+        const before = created.length;
+        expect(
+          () =>
+            new Host({
+              ...BASE,
+              name: `enrol-${role}`,
+              role,
+              privateIp: '10.20.1.150',
+              deployPublicKey: undefined,
+              enrolment: enrolment(),
+            })
+        ).toThrow(/Only an edge host can be enrolled/);
+        expect(hcloudTypes(before)).toEqual([]);
+      }
+    );
+
+    it('refuses an enrolment and a deploy key together, before creating anything', () => {
+      const before = created.length;
+      expect(
+        () =>
+          new Host({
+            ...BASE,
+            name: 'enrol3',
+            role: 'edge',
+            privateIp: '10.20.1.151',
+            enrolment: enrolment(),
+          })
+      ).toThrow(/no deploy account/);
+      expect(hcloudTypes(before)).toEqual([]);
+    });
+
+    it('refuses neither a deploy key nor an enrolment, before creating anything', () => {
+      const before = created.length;
+      expect(
+        () =>
+          new Host({
+            ...BASE,
+            name: 'enrol4',
+            role: 'edge',
+            privateIp: '10.20.1.152',
+            deployPublicKey: undefined,
+          })
+      ).toThrow(/required unless the host has an enrolment/);
+      expect(hcloudTypes(before)).toEqual([]);
+    });
+
+    it('refuses a bad bootstrap record, before creating anything', () => {
+      const before = created.length;
+      expect(
+        () =>
+          new Host({
+            ...BASE,
+            name: 'enrol5',
+            role: 'edge',
+            privateIp: '10.20.1.153',
+            deployPublicKey: undefined,
+            enrolment: enrolment({ bootstrap: bootstrap({ schema: 2 }) }),
+          })
+      ).toThrow(/schema 1/);
+      expect(hcloudTypes(before)).toEqual([]);
+    });
   });
 
   it('refuses a deploy key that could inject cloud-config, before creating anything', async () => {

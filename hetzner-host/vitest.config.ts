@@ -13,6 +13,12 @@ export default defineConfig(
   defineStandardTest({
     environment: 'node',
     coverageInclude: ['*.ts'],
-    coverageExclude: ['**/*.test.ts', '**/*.d.ts', 'vitest.config.ts', 'index.ts'],
+    coverageExclude: [
+      '**/*.test.ts',
+      '**/*.fixtures.ts',
+      '**/*.d.ts',
+      'vitest.config.ts',
+      'index.ts',
+    ],
   })
 );

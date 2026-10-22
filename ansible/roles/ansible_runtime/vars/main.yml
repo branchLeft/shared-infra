@@ -8,6 +8,7 @@ ansible_runtime_lock_fingerprint: "{{ ansible_runtime_lock_text | ansible.builti
 ansible_runtime_venv: '{{ ansible_runtime_root }}/venv-{{ ansible_runtime_lock_fingerprint }}'
 ansible_runtime_lock_copy: '{{ ansible_runtime_root }}/requirements-{{ ansible_runtime_lock_fingerprint }}.txt'
 ansible_runtime_done_marker: '{{ ansible_runtime_venv }}/.installed-from-lock'
+ansible_runtime_program: '{{ ansible_runtime_root }}/install_runtime.py'
 ansible_runtime_packages:
   - python3
   - python3-venv

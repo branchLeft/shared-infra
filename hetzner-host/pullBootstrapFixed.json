@@ -1,0 +1,21 @@
+{
+  "rawBase": "https://raw.githubusercontent.com/branchLeft/shared-infra",
+  "remoteUrl": "https://github.com/branchLeft/shared-infra.git",
+  "playbook": "ansible/playbooks/edge1.yml",
+  "fetched": {
+    "wrapper": "ansible/roles/pull_trigger/files/pull_trigger.py",
+    "program": "ansible/roles/ansible_runtime/files/install_runtime.py",
+    "lock": "ansible/requirements.txt"
+  },
+  "requiredConfigKeys": [
+    "remote_url",
+    "signers",
+    "playbooks",
+    "playbook",
+    "ansible_playbook",
+    "state_dir",
+    "log_dir",
+    "timeout_seconds",
+    "keep_runs"
+  ]
+}

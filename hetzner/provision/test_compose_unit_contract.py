@@ -203,6 +203,7 @@ SCANNED_SUFFIXES = frozenset(
         ".authoring",
         ".conf",
         ".enforcing",
+        ".golden",
         ".gotmpl",
         ".in",
         ".j2",

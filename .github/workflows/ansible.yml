@@ -114,6 +114,7 @@ jobs:
             hetzner/provision/30-install-deploy-tooling.sh
             hetzner/provision/app-host-isolation.sh
             hetzner-host/cloudInit.ts
+            hetzner-host/pullBootstrapFixed.json
             hetzner/scripts/check-address-plan-drift.py
             hetzner/provision/branchleft_host_egress.sh
             hetzner/provision/branchleft-host-egress.service
@@ -174,11 +175,19 @@ jobs:
       - name: Create the tool environment
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
 
+      # The pip the parity oracle reads is pinned by hash before the lock, so the oracle
+      # does not depend on the runner image's ensurepip (ansible/checks/README.md).
+      - name: Install the pinned pip
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt'
+
       - name: Install the pinned tools
-        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes -r ansible/requirements.txt'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt'
 
       # --require-hashes makes pip refuse any package without a recorded hash, so
-      # the lock must name every package. The collections the roles use come with
+      # the lock must name every package. --only-binary=:all: is what makes it cover
+      # every file pip runs: an entry with no wheel for this Python would otherwise be
+      # built from its source archive, with a build backend fetched with no hash, so
+      # such an entry fails the install instead. The collections the roles use come with
       # the `ansible` package and are found by ansible-lint and Ansible with no
       # setting (ANS-4); this lists the versions in the job log.
       - name: Check the installed set and list the collections
@@ -199,23 +208,70 @@ jobs:
       - name: ansible-lint at the production profile
         run: '"$RUNNER_TEMP/ansible-venv/bin/ansible-lint" --strict ansible'
 
-      - name: Type-check the harness and the checks
+      - name: Type-check the harness, the checks and the tools
         working-directory: ansible
-        run: '"$RUNNER_TEMP/ansible-venv/bin/mypy" harness checks'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/mypy" harness checks tools'
 
-      - name: Lint the harness and the checks
+      - name: Lint the harness, the checks and the tools
         working-directory: ansible
-        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" check harness checks'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" check harness checks tools'
 
-      - name: Check the harness and checks formatting
+      - name: Check the harness, checks and tools formatting
         working-directory: ansible
-        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" format --check harness checks'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" format --check harness checks tools'
 
       - name: Test the harness
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/harness -p "test_*.py"'
 
       - name: Test the checks
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/checks -p "test_*.py"'
+
+      # The tools build the record a new host's first-boot document is made from. Their
+      # tests run the role's own configuration task with this job's ansible-playbook and
+      # compare bytes, and read hetzner-host/cloudInit.ts and the fixed values it shares with
+      # the tool, hetzner-host/pullBootstrapFixed.json; the filter above names both.
+      # The interpreter is the venv's, so ansible-playbook is found beside it.
+      - name: Test the tools
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/tools -p "test_*.py"'
+
+      # A role that ships a program in files/ names that directory as the mypy_path of its
+      # own pyproject.toml, and keeps tests of the program in tests/unit/. It is checked from
+      # the role's directory, so that pyproject.toml is the one the tools read. The program
+      # is the code a host runs as root, so such a role with no files/ fails here: tests
+      # with nothing under them would pass in silence. The step covers every such role and
+      # has no list to edit. A role with a library/ is checked by the step below; a role
+      # whose pyproject.toml names no files/ path is covered by neither.
+      - name: Check each role's own program in files/
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bin="$RUNNER_TEMP/ansible-venv/bin"
+          checked=0
+          for tests in ansible/roles/*/tests/unit; do
+            role="$(dirname "$(dirname "$tests")")"
+            if [ -d "$role/library" ] || ! grep -qs '^mypy_path = .*/files"' "$role/pyproject.toml"; then
+              continue
+            fi
+            echo "::group::$role"
+            if [ ! -d "$role/files" ]; then
+              echo "$role has a tests/unit/ and no files/, so the tests test nothing."
+              exit 1
+            fi
+            (
+              cd "$role"
+              "$bin/mypy" --strict files tests/unit
+              "$bin/ruff" check files tests
+              "$bin/ruff" format --check files tests
+              PYTHONPATH=files "$bin/python" -m unittest discover -b -s tests/unit -p "test_*.py"
+            )
+            echo "::endgroup::"
+            checked=$((checked + 1))
+          done
+          if [ "$checked" -eq 0 ]; then
+            echo "No role program with tests found, so there is nothing to check."
+            exit 1
+          fi
+          echo "Checked the program of $checked role(s)."
 
       # A role that ships a typed module of its own in library/ (ANS-2) is checked
       # from the role's directory, so the role's pyproject.toml, with its mypy_path
@@ -264,7 +320,11 @@ jobs:
       matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
     # Pinned until the harness is verified on the next Ubuntu LTS image.
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # The longest shard, ansible/roles/db1_grants, runs about 3,000 tasks, each a docker
+    # exec, and its four passing runs took 17 to 24.5 minutes, so a limit of 25 left it
+    # a margin of seconds and a fifth run was cancelled at the limit. 45 leaves it
+    # nearly double its slowest passing run; a shard that hangs is still ended at 45.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -274,11 +334,19 @@ jobs:
       - name: Create the tool environment
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
 
+      # The pip the parity oracle reads is pinned by hash before the lock, so the oracle
+      # does not depend on the runner image's ensurepip (ansible/checks/README.md).
+      - name: Install the pinned pip
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt'
+
       - name: Install the pinned tools
-        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes -r ansible/requirements.txt'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt'
 
       # --require-hashes makes pip refuse any package without a recorded hash, so
-      # the lock must name every package. The collections the roles use come with
+      # the lock must name every package. --only-binary=:all: is what makes it cover
+      # every file pip runs: an entry with no wheel for this Python would otherwise be
+      # built from its source archive, with a build backend fetched with no hash, so
+      # such an entry fails the install instead. The collections the roles use come with
       # the `ansible` package and are found by ansible-lint and Ansible with no
       # setting (ANS-4); this lists the versions in the job log.
       - name: Check the installed set and list the collections

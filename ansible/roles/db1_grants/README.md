@@ -134,7 +134,7 @@ describes:
 
 ```text
 python3 -m venv .venv
-.venv/bin/pip install -r ansible/requirements.txt
+# Install the lock with the one recipe: ansible/README.md, "Install, and install with no network".
 .venv/bin/python ansible/harness/run_harness.py ansible/roles/db1_grants
 .venv/bin/python -m unittest discover -b -s ansible/roles/db1_grants/tests/unit -p "test_*.py"
 ```
