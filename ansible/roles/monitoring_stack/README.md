@@ -230,17 +230,25 @@ decides how.
 
 ## Interface
 
-[`meta/argument_specs.yml`](meta/argument_specs.yml) declares the variables and
-[`defaults/main.yml`](defaults/main.yml) holds their defaults. There is one,
-`monitoring_stack_project_dir`, the stack's project directory. It must equal the
-`WorkingDirectory` the shared unit template derives from the instance name
-(`/opt/branchleft/monitoring`), so a caller has no reason to change it. The seven
-secret inputs of "Secrets" are required and have no default. The role never
+[`meta/argument_specs.yml`](meta/argument_specs.yml) declares the variables. The
+seven secret inputs of "Secrets" are required and have no default, and
+[`defaults/main.yml`](defaults/main.yml) is empty on purpose. The role never
 generates or stores a value. The role sets one fact, `monitoring_stack_restart_due`.
 
-`vars/main.yml` holds the constants of the stack (the directories, the files, the
-drop-in directories, the fingerprint's file list, the stamp and the unit). They
-are not inputs; a caller cannot override them.
+`vars/main.yml` holds the constants of the stack (the project directory, the
+directories, the files, the drop-in directories, the fingerprint's file list, the
+stamp and the unit). They are not inputs. The project directory
+(`monitoring_stack_project_dir`, `/opt/branchleft/monitoring`) is one because the
+shared unit template fixes the unit's `WorkingDirectory` to `/opt/branchleft/` and
+the instance name, and the monitoring drop-in names the renderer in it: a role
+that delivered and hashed the files in another directory would restart the unit
+onto the old files, read it back as active, write the stamp and stay green. It was
+an overridable default; inventory and play variables override a default but not a
+value in `vars/`. The scenario asserts that this role's, `ntfy_pager`'s and the
+template's copies of the path agree, and that a play variable does not move it. A
+role parameter or an extra variable still outranks `vars/`: the constant stops an
+inventory or play value, which is the realistic way a path gets moved, and nothing
+stops a caller who passes a role parameter on purpose.
 
 ## Requirements
 
@@ -345,16 +353,28 @@ What each part of the scenario does:
   pinned by digest; and the stamp is one sha256 and a newline, `0600`, in a
   directory of mode `0755`, and the fingerprint's list names the eight files, the
   monitoring drop-in and the renderer and not the edge drop-in.
+- `verify.yml`, the project directory: a play applies the role with a play variable
+  that names another project directory, and that directory must not exist and the
+  stack must stay where the unit runs it; the three copies of the path (this
+  role's, `ntfy_pager`'s, the unit template's `WorkingDirectory`) must agree.
 - `verify.yml`, "Exercise the restart decision": each case applies the role (with
   `include_role`, overriding inputs where the case needs it), and compares
   snapshots of the stand-in's calls log, the stamp and systemd's `ActiveState` and
   `UnitFileState` before and after. The cases:
   - nothing changed: no restart, stamp unchanged;
   - `SMTP_PASSWORD` rotated: one restart, stamp moved; the same value again: none;
+  - a key changed and the run failing before the restart (the stamp directory is a
+    file): the key is in the file, nothing is restarted, the stamp is not moved;
+    the rerun, which finds the key already written, restarts once and stamps;
   - `SNDS_DATA_URL` rotated: the file holds the new value, no restart;
   - an `NTFY_` line written by the real `ntfy_pager` role (run by path): one
     restart on this role's next run; the same again: none;
   - the renderer changed: one restart;
+  - a new release of the monitoring drop-in (a copy of this role in a scratch
+    directory on the controller, links followed, with another limit and one more
+    argument in the `ExecStart`): read by systemd, and one restart that runs the
+    stand-in with that argument; this role applied again puts the repository's
+    drop-in back with one more restart;
   - the edge drop-in changed: put back and read by systemd, no restart of
     monitoring;
   - the role failing after it wrote the edge drop-in (the stamp directory is a
@@ -420,21 +440,25 @@ The reload and the files:
 
 The restart decision:
 
-| Edit to the role                                               | Step that fails | Assertion or task that names it                                                   |
-| -------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------- |
-| `restart_due` ignoring the fingerprint                         | `idempotence`   | the restart task changes on the second run                                        |
-| Stamp written before the read-back                             | `verify`        | "Assert the role failed on the read-back and did not stamp"                       |
-| The `enabled` gate removed from `restart_due`                  | `verify`        | "Assert the unit that is not enabled was not started and nothing was stamped"     |
-| The `failed` state no longer restarted                         | `verify`        | "Assert the rerun restarted the failed unit and stamped"                          |
-| The `inactive` state no longer started                         | `verify`        | "Assert the inactive but enabled unit was started once"                           |
-| The unit's state removed from `restart_due` (fingerprint only) | `verify`        | "Assert the revert restarted the failed unit, once, and left the stamp as it was" |
-| The renderer left out of the fingerprint list                  | `verify`        | the fingerprint-definition assertion for `monitoring_stack_renderer`              |
-| The monitoring drop-in left out of the fingerprint list        | `verify`        | the same assertion for `monitoring_stack_dropin_dest`                             |
-| The eight stack files left out of the fingerprint list         | `verify`        | the same assertion for `monitoring_stack_files`                                   |
-| The edge drop-in added to the fingerprint                      | `verify`        | the assertion that `monitoring_stack_edge` is not in the definition               |
-| The `env=` part of the fingerprint removed                     | `verify`        | "Assert a rotated key restarted the unit once ..."                                |
-| The `SNDS_DATA_URL` line hashed                                | `verify`        | "Assert the rotated SNDS_DATA_URL is in the file and restarted nothing"           |
-| The `NTFY_` lines left out of the hash                         | `verify`        | "Assert the NTFY_ rotation restarted the unit on this role's next run, once"      |
+| Edit to the role                                                                         | Step that fails | Assertion or task that names it                                                                   |
+| ---------------------------------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------- |
+| `restart_due` ignoring the fingerprint                                                   | `idempotence`   | the restart task changes on the second run                                                        |
+| `restart_due` always true for an enabled unit                                            | `verify`        | "Assert a run with nothing changed restarts nothing and leaves the stamp"                         |
+| `restart_due` decided by what changed in this run (a handler)                            | `verify`        | "Assert the rerun, which finds the key already in the file, restarted the unit once and stamped"  |
+| Stamp written before the restart                                                         | `verify`        | "Assert the role failed, the unit is failed, and the stamp was not moved"                         |
+| Stamp written before the read-back                                                       | `verify`        | "Assert the role failed on the read-back and did not stamp"                                       |
+| The monitoring drop-in hashed at a path that does not exist (its name stays in the list) | `verify`        | "Assert the next release of the drop-in was read by systemd and restarted the unit once under it" |
+| The `enabled` gate removed from `restart_due`                                            | `verify`        | "Assert the unit that is not enabled was not started and nothing was stamped"                     |
+| The `failed` state no longer restarted                                                   | `verify`        | "Assert the rerun restarted the failed unit and stamped"                                          |
+| The `inactive` state no longer started                                                   | `verify`        | "Assert the inactive but enabled unit was started once"                                           |
+| The unit's state removed from `restart_due` (fingerprint only)                           | `verify`        | "Assert the revert restarted the failed unit, once, and left the stamp as it was"                 |
+| The renderer left out of the fingerprint list                                            | `verify`        | the fingerprint-definition assertion for `monitoring_stack_renderer`                              |
+| The monitoring drop-in left out of the fingerprint list                                  | `verify`        | the same assertion for `monitoring_stack_dropin_dest`                                             |
+| The eight stack files left out of the fingerprint list                                   | `verify`        | the same assertion for `monitoring_stack_files`                                                   |
+| The edge drop-in added to the fingerprint                                                | `verify`        | the assertion that `monitoring_stack_edge` is not in the definition                               |
+| The `env=` part of the fingerprint removed                                               | `verify`        | "Assert a rotated key restarted the unit once ..."                                                |
+| The `SNDS_DATA_URL` line hashed                                                          | `verify`        | "Assert the rotated SNDS_DATA_URL is in the file and restarted nothing"                           |
+| The `NTFY_` lines left out of the hash                                                   | `verify`        | "Assert the NTFY_ rotation restarted the unit on this role's next run, once"                      |
 
 The seam with `ntfy_pager`, the refusals and the log:
 
@@ -442,6 +466,8 @@ The seam with `ntfy_pager`, the refusals and the log:
 | ---------------------------------------------------------- | --------------- | -------------------------------------------------------------- |
 | `ntfy_pager`'s secrets-file path changed by one character  | `verify`        | "Assert the three places agree on the secrets file's path"     |
 | `ntfy_pager`'s secrets-file path moved back to `defaults/` | `verify`        | the same assertion (the key is not in `vars/main.yml`)         |
+| `ntfy_pager`'s project directory changed by one character  | `verify`        | "Assert the three places agree on the project directory"       |
+| `monitoring_stack_project_dir` moved back to `defaults/`   | `verify`        | "Assert a play variable did not move the project directory"    |
 | A default given to a secret input                          | `verify`        | "Assert the defaults hold no value for a secret input"         |
 | `no_log` removed from the line task                        | `verify`        | "Assert the log holds none of the sentinel values"             |
 | The renderer check task removed (missing renderer)         | `verify`        | the renderer case "missing": the unit failed in `ExecStartPre` |
@@ -457,6 +483,7 @@ In `ntfy_pager`, the scenario's own rows:
 | --------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------- |
 | The secrets-file task given mode `0644`                         | `verify`        | "Assert the secrets file is owned by root and closed to everyone else" |
 | A second stack file (`compose.yml`) added to `ntfy_pager_files` | `verify`        | "Assert the project directory holds the renderer and nothing else"     |
+| `ntfy_pager_project_dir` moved back to `defaults/`              | `verify`        | "Assert a play variable did not move the project directory"            |
 
 The secrets-file hash and log rows have their message censored by `no_log`, so the
 failing task is named instead.
@@ -487,7 +514,9 @@ is not shown to fail):
 - the order of the mode before the values in the secrets-file tasks (a first run
   that wrote a value before closing the file);
 - that a changed stack file restarts the unit: covered by the assertion on the
-  fingerprint's list of files, not by a run that changes a file and counts restarts;
+  fingerprint's list of files, not by a run that changes a file and counts restarts
+  (the monitoring drop-in, the renderer, a rotated key and an `NTFY_` line each have
+  such a run);
 - the mode `0755` of the directories, and `owner`/`group` of every file and directory
   (the last cannot be told from a default on a root instance);
 - the `DropInPaths` and `CPUWeight` assertions in `verify.yml` (`MemoryMax` is proven

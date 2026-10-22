@@ -64,24 +64,32 @@ playbooks):
 
 ## Interface
 
-[`meta/argument_specs.yml`](meta/argument_specs.yml) declares the variables and
-[`defaults/main.yml`](defaults/main.yml) holds the project directory:
+[`meta/argument_specs.yml`](meta/argument_specs.yml) declares the variables. The
+role has four inputs and no default:
 
-| Variable                           | Default                      | Meaning                                              |
-| ---------------------------------- | ---------------------------- | ---------------------------------------------------- |
-| `ntfy_pager_project_dir`           | `/opt/branchleft/monitoring` | The stack's project directory                        |
-| `ntfy_pager_pager_token`           | none, required               | The value of `NTFY_PAGER_TOKEN` (`no_log`)           |
-| `ntfy_pager_watcher_token`         | none, required               | The value of `NTFY_WATCHER_TOKEN` (`no_log`)         |
-| `ntfy_pager_owner_password_hash`   | none, required               | The value of `NTFY_OWNER_PASSWORD_HASH` (`no_log`)   |
-| `ntfy_pager_machine_password_hash` | none, required               | The value of `NTFY_MACHINE_PASSWORD_HASH` (`no_log`) |
+| Variable                           | Default        | Meaning                                              |
+| ---------------------------------- | -------------- | ---------------------------------------------------- |
+| `ntfy_pager_pager_token`           | none, required | The value of `NTFY_PAGER_TOKEN` (`no_log`)           |
+| `ntfy_pager_watcher_token`         | none, required | The value of `NTFY_WATCHER_TOKEN` (`no_log`)         |
+| `ntfy_pager_owner_password_hash`   | none, required | The value of `NTFY_OWNER_PASSWORD_HASH` (`no_log`)   |
+| `ntfy_pager_machine_password_hash` | none, required | The value of `NTFY_MACHINE_PASSWORD_HASH` (`no_log`) |
 
-`vars/main.yml` holds the constants: the one file the role delivers, the four
-key names, and the path of the monitoring secrets file
+`vars/main.yml` holds the constants: the one file the role delivers, the project
+directory it goes into (`ntfy_pager_project_dir`, `/opt/branchleft/monitoring`),
+the four key names, and the path of the monitoring secrets file
 (`ntfy_pager_env_file`, `/etc/branchleft/monitoring.env`). They are not inputs.
-The path is a constant because the unit reads the file `monitoring_stack`
-fingerprints: a caller that moved this role's copy would send rotated credentials
-to a file no restart looks at. The `monitoring_stack` scenario asserts the two
-constants are equal.
+Both paths are constants because the unit reads what `monitoring_stack`
+fingerprints. A caller that moved the secrets file would send rotated credentials
+to a file no restart looks at. A caller that moved the project directory would put
+a new renderer where the unit does not run it, while `monitoring_stack` went on
+hashing the old one at its own constant path: the fingerprint would not change,
+and the stale renderer would stay in use with no signal. Inventory and play
+variables override a default but not a value in `vars/`. The `monitoring_stack` scenario asserts that the two
+roles' copies of each path are equal to each other and to the unit template, and
+this role's scenario asserts that a play variable does not move the renderer. A
+role parameter or an extra variable still outranks `vars/`: the constant stops an
+inventory or play value, which is the realistic way a path gets moved, and nothing
+stops a caller who passes a role parameter on purpose.
 
 Each of the four values must be a non-empty single line. The role checks that
 before it writes anything, and refuses an empty value, a value of spaces only, or
@@ -192,17 +200,22 @@ What each part of the scenario does:
   sets of inputs, each with one bad value in a different input (an empty pager
   token, a watcher token of spaces, an owner hash and a machine hash with a second
   line), are each refused with the file still holding the converge's four lines
-  and no second line in it. The
+  and no second line in it. A first play applies the role with a play variable
+  that names another project directory: the other directory must not exist and the
+  renderer must stay where it was, because the path is a constant. The
   log scan is the proof that `no_log` is on the tasks that handle a value:
   removing it from the task that writes the lines makes the scan fail.
 - `check-fresh`, `check-configured` and `molecule-check` run the role under
   `--check --diff` against the fresh and the configured container.
 
-Two sabotage rows were run for this scenario, each in a fresh container with the
-edit reverted afterwards: the secrets-file task given mode `0644` fails `verify` at
-"Assert the secrets file is owned by root and closed to everyone else", and a second
+Three sabotage rows are named for this scenario, each run in a fresh container with
+the edit reverted afterwards: the secrets-file task given mode `0644` fails `verify`
+at "Assert the secrets file is owned by root and closed to everyone else", a second
 stack file (`compose.yml`) added to `ntfy_pager_files` fails `verify` at "Assert the
-project directory holds the renderer and nothing else". The seam with
+project directory holds the renderer and nothing else", and `ntfy_pager_project_dir`
+moved back from `vars/main.yml` to `defaults/main.yml` fails `verify` at "Assert a
+play variable did not move the project directory". The record of a particular
+head is in the pull request body. The seam with
 `monitoring_stack` is tested in that role's scenario, which runs this role.
 
 ## Named limits

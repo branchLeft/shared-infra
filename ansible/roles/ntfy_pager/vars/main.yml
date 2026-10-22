@@ -7,6 +7,20 @@
 # ExecStartPre runs it, and this role is its single delivery owner. The eight
 # other files of the stack belong to monitoring_stack alone, and
 # ansible/checks/test_monitoring_single_home.py fails if this list names one.
+#
+# The project directory the renderer goes into. A constant, not an input, as it
+# is in monitoring_stack: the shared Compose unit template fixes the unit's
+# WorkingDirectory to /opt/branchleft/<instance> and the drop-in's ExecStartPre
+# names the renderer under /opt/branchleft/monitoring. A copy moved here would put
+# a new renderer where the unit does not run it, while monitoring_stack went on
+# hashing the old one at its own constant path: the fingerprint would not change,
+# and the stale renderer would stay in use with no signal. It was an overridable
+# default; inventory and play variables override a default but not a value in
+# vars/. The monitoring_stack scenario asserts the two constants equal each other
+# and the template's WorkingDirectory; this role's scenario asserts that a play
+# variable does not move the renderer.
+ntfy_pager_project_dir: /opt/branchleft/monitoring
+
 ntfy_pager_files:
   - render_alertmanager_config.py
 

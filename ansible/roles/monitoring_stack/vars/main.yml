@@ -8,6 +8,18 @@
 # monitoring_stack_files is the one list of the eight stack files in the whole
 # repository. No other role delivers any of them, and
 # ansible/checks/test_monitoring_single_home.py fails if one does.
+#
+# The project directory is a constant too. The shared Compose unit template fixes
+# the unit's WorkingDirectory to /opt/branchleft/<instance> and the monitoring
+# drop-in names the renderer under /opt/branchleft/monitoring, so a role that
+# delivered the files and hashed them anywhere else would restart the unit onto
+# the old files and report every check green. It was an overridable default, and
+# inventory and play variables override a default but not a value in vars/.
+# ntfy_pager holds the same constant, and the Molecule scenario asserts that both
+# equal the template's WorkingDirectory and that a play variable does not move
+# either.
+monitoring_stack_project_dir: /opt/branchleft/monitoring
+
 monitoring_stack_dirs:
   - alertmanager
   - blackbox

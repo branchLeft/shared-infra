@@ -1,2 +1,5 @@
 ---
-monitoring_stack_project_dir: /opt/branchleft/monitoring
+# Deliberately empty. The role has no default: its seven secret inputs are
+# required and the project directory is a constant in vars/main.yml. The Molecule
+# scenario reads this file and fails if a default names a secret input.
+{}
