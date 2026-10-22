@@ -323,13 +323,13 @@
     # the NTFY_ lines into its copy and this role hashes its own, so a drift
     # between them would stop a rotated credential restarting the unit while the
     # rest of the scenario stayed green. A path moved back to defaults/ or
-    # dropped from ntfy_pager's vars/ leaves the key undefined here and fails.
-    # The message names all three paths.
+    # dropped from ntfy_pager's vars/ reads as absent here and fails. The message
+    # names all three paths.
     - name: Assert the three places agree on the secrets file's path
       ansible.builtin.assert:
         that:
           - monitoring_stack_verify_role.monitoring_stack_env_file == verify_env_file
-          - monitoring_stack_verify_ntfy.ntfy_pager_env_file == verify_env_file
+          - (monitoring_stack_verify_ntfy.ntfy_pager_env_file | default('absent')) == verify_env_file
           - ('EnvironmentFile=-' ~ verify_env_file) in monitoring_stack_verify_dropin_text
         quiet: true
         fail_msg: >-
