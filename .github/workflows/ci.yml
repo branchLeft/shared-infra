@@ -63,6 +63,13 @@ permissions:
   contents: read
   packages: read
 
+# One run per pull request. A push or merge_group run is its own group and is
+# never cancelled, so no run queues behind an apply paused for approval
+# (pinned by scripts/test_workflow_concurrency.py).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   typecheck:
     name: Type check
@@ -765,6 +772,16 @@ jobs:
         with:
           persist-credentials: false
 
+      # A managed Python, so the YAML parser the workflow-concurrency test reads
+      # workflows with can be installed without touching the system interpreter.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the YAML parser the workflow-concurrency test uses
+        run: python3 -m pip install --quiet pyyaml==6.0.3
+
       - name: Python unit tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
 
@@ -812,6 +829,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The scripts suite imports the YAML parser the workflow-concurrency test
+      # reads workflows with, so this job installs it the way scripts-tests does.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the YAML parser the workflow-concurrency test uses
+        run: python3 -m pip install --quiet pyyaml==6.0.3
 
       - name: Python unit tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
@@ -872,10 +899,10 @@ jobs:
   #     id 5090756).
   #   - A newer push run cancels older runs of this workflow still `waiting`
   #     for approval, from each plan job (the step after its checkout, which
-  #     the script it runs needs on disk). No `concurrency`
-  #     group does this job: a run paused for approval counts as in progress,
-  #     so a workflow-level group would queue the newer run behind it (and
-  #     cancel-in-progress would also cancel an apply that had started).
+  #     the script it runs needs on disk). The workflow-level group does not do
+  #     this job. It is keyed on the run id for every push, so no push run
+  #     queues behind a run paused for approval, and its cancel-in-progress is
+  #     false for every such run (pinned by scripts/test_workflow_concurrency.py).
   # ---------------------------------------------------------------------------
 
   changes:

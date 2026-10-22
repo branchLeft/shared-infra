@@ -39,6 +39,12 @@ on:
 permissions:
   contents: read
 
+# One run per pull request. A push or merge_group run is its own group and is
+# never cancelled (pinned by scripts/test_workflow_concurrency.py).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   discover:
     name: Discover the Ansible shards
