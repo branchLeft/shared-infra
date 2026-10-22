@@ -18,8 +18,10 @@ from role_tasks import (
     mapping_at,
     own_file,
     parsed_tasks,
+    parsed_tasks_with_inputs,
     role_call,
     task_modules,
+    var_names,
 )
 
 # Held by the gate: a mechanical test fails the pull request that breaks one.
@@ -30,8 +32,8 @@ CONDITIONS = (
     "required input of the entry point it names and no input that entry point does not declare.",
     "It includes no role itself, and no role's `meta/main.yml` carries `dependencies`.",
     "Its README names the roles that call it.",
-    "A role's `include_tasks` and `import_tasks` name a YAML file under their own role's "
-    "`tasks/` or `handlers/`, as a literal path.",
+    "A role's `include_tasks` and `import_tasks` name a YAML file that exists under their own "
+    "role's `tasks/` or `handlers/` (with links followed), as a literal path.",
 )
 # Held by review only: nothing in a task file shows any of them.
 REVIEW_ONLY = (
@@ -77,9 +79,17 @@ def role_dirs(base: Path) -> list[Path]:
 
 
 def call_problems(
-    role: Path, where: str, task: Mapping[str, object], arguments: object
+    role: Path,
+    where: str,
+    task: Mapping[str, object],
+    arguments: object,
+    inherited: frozenset[str],
 ) -> list[str]:
-    """Return how an include_role of ``role`` breaks the conditions of a capability role."""
+    """Return how an include_role of ``role`` breaks the conditions of a capability role.
+
+    ``inherited`` is the names of the vars that reach the call from above it (the blocks round
+    it and the includes of its file): they reach the callee as the call's own vars do.
+    """
     name, entry = role_call(arguments)
     target = included_role(role, name)
     if target is None:
@@ -103,8 +113,7 @@ def call_problems(
         for key, spec in (inputs.items() if isinstance(inputs, Mapping) else [])
         if isinstance(spec, Mapping) and spec.get("required") is True
     }
-    given_vars = task.get("vars")
-    given = {str(key) for key in (given_vars if isinstance(given_vars, Mapping) else {})}
+    given = set(var_names(task)) | inherited
     missing = required - given
     if missing:
         found.append(f"{where}: the call does not give required input(s) {sorted(missing)}")
@@ -136,7 +145,7 @@ def composition_problems(bases: tuple[Path, ...]) -> list[str]:
             label = f"{base.name}/{role.name}"
             if mapping_at(role / "meta" / "main.yml").get("dependencies"):
                 found.append(f"{label}: meta/main.yml carries dependencies")
-            for name, task in parsed_tasks(role):
+            for name, task, inherited in parsed_tasks_with_inputs(role):
                 where = f"{label} ({name})"
                 for module, arguments in task_modules(task):
                     if module in TASK_FILE_MODULES and not own_file(role, arguments):
@@ -147,7 +156,7 @@ def composition_problems(bases: tuple[Path, ...]) -> list[str]:
                     elif module == "import_role":
                         found.append(f"{where}: import_role is never used to compose roles")
                     elif module == "include_role":
-                        found.extend(call_problems(role, where, task, arguments))
+                        found.extend(call_problems(role, where, task, arguments, inherited))
     return found
 
 

@@ -161,6 +161,21 @@ SPECS = (
 THIRD = "---\n- name: Pass on\n  ansible.builtin.include_role:\n    name: third\n"
 
 
+def blocked(key: str, section: str = "block") -> str:
+    """The call of CALL inside a block that sets ``key`` for everything in it."""
+    return (
+        f"---\n- name: Round\n  vars:\n    {key}: 1\n  {section}:\n"
+        "    - name: Call\n      ansible.builtin.include_role:\n"
+        "        name: '{{ caller_cap_role }}'\n        tasks_from: read\n"
+        "      vars:\n        cap_items: [x]\n"
+    )
+
+
+def go(target: str, key: str) -> str:
+    """An include of a file of the role that sets ``key`` for every task in that file."""
+    return f"---\n- name: Go\n  ansible.builtin.include_tasks: {target}\n  vars:\n    {key}: 1\n"
+
+
 @dataclass(frozen=True)
 class Pair:
     """The files of the throwaway pair; a test changes the one it breaks."""
@@ -387,15 +402,18 @@ class CompositionTest(unittest.TestCase):
         self.assertIn("import_tasks names a file that is not a literal path", problems[0])
 
     def test_an_include_of_the_roles_own_files_is_not_reported(self) -> None:
-        for path in (
-            "_check.yml",
-            "'{{ role_path }}/tasks/sub/_check.yml'",
-            "'{{ role_path }}/handlers/_check.yml'",
-            "sub/_check.yml",
+        # Each file is there: an include of a file the role does not have is not an own file.
+        for path, where in (
+            ("_check.yml", "tasks/_check.yml"),
+            ("'{{ role_path }}/tasks/sub/_check.yml'", "tasks/sub/_check.yml"),
+            ("'{{ role_path }}/handlers/_check.yml'", "handlers/_check.yml"),
+            ("sub/_check.yml", "tasks/sub/_check.yml"),
         ):
             text = CALL + f"- name: Own\n  ansible.builtin.include_tasks: {path}\n"
             with self.subTest(path=path):
-                self.assertEqual([], problems_of(Pair(call=text)))
+                self.assertEqual(
+                    [], problems_of(Pair(call=text, caller_files=((where, "---\n[]\n"),)))
+                )
 
     def test_an_include_of_a_file_the_scan_does_not_read_is_reported(self) -> None:
         # The scan reads tasks/ and handlers/ only. A file anywhere else in the role, though
@@ -435,6 +453,111 @@ class CompositionTest(unittest.TestCase):
             ["roles/caller (tasks/more.yml): import_role is never used to compose roles"], problems
         )
 
+    def test_an_include_of_a_file_the_role_does_not_have_is_reported(self) -> None:
+        # Ansible looks for a relative file in the role and then in the playbook's directory
+        # and the working directory, which the scan does not read. Here the file is in the
+        # playbook directory; the same import in a file under tasks/ is found (the control
+        # above), so a clean result would be the file being missed.
+        hidden = "---\n- name: Hide\n  ansible.builtin.import_role:\n    name: third\n"
+        for path in ("helper.yml", "'{{ role_path }}/tasks/helper.yml'"):
+            text = CALL + f"- name: Borrow\n  ansible.builtin.include_tasks: {path}\n"
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as tmp:
+                roles = make_pair(Path(tmp), Pair(call=text))
+                (Path(tmp) / "playbooks").mkdir()
+                (Path(tmp) / "playbooks" / "helper.yml").write_text(hidden, encoding="utf-8")
+                problems = composition_problems(roles)
+                self.assertEqual(1, len(problems), problems)
+                self.assertIn("include_tasks names a file that is not a literal path", problems[0])
+
+    def test_an_include_through_a_linked_directory_that_leaves_the_scan_is_reported(self) -> None:
+        # tasks/link points at vars/, and the scan does not go into a linked directory: it
+        # reads tasks/main.yml and never vars/more.yml, which holds the import.
+        hidden = "---\n- name: Hide\n  ansible.builtin.import_role:\n    name: third\n"
+        for path in ("link/more.yml", "'{{ role_path }}/tasks/link/more.yml'"):
+            text = CALL + f"- name: Borrow\n  ansible.builtin.include_tasks: {path}\n"
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as tmp:
+                pair = Pair(call=text, caller_files=(("vars/more.yml", hidden),))
+                roles = make_pair(Path(tmp), pair)
+                (roles[0] / "caller" / "tasks" / "link").symlink_to(
+                    "../vars", target_is_directory=True
+                )
+                problems = composition_problems(roles)
+                self.assertEqual(1, len(problems), problems)
+                self.assertIn("include_tasks names a file that is not a literal path", problems[0])
+
+    def test_an_include_through_a_linked_directory_inside_the_scan_is_read(self) -> None:
+        # The control of the case above: tasks/link points at tasks/sub, which the scan reads,
+        # so the same import is found there and a link is not refused for being a link.
+        hidden = "---\n- name: Hide\n  ansible.builtin.import_role:\n    name: third\n"
+        text = CALL + "- name: Borrow\n  ansible.builtin.include_tasks: link/more.yml\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            pair = Pair(call=text, caller_files=(("tasks/sub/more.yml", hidden),))
+            roles = make_pair(Path(tmp), pair)
+            (roles[0] / "caller" / "tasks" / "link").symlink_to("sub", target_is_directory=True)
+            self.assertEqual(
+                ["roles/caller (tasks/sub/more.yml): import_role is never used to compose roles"],
+                composition_problems(roles),
+            )
+
+    def test_a_var_given_by_a_block_round_the_call_is_checked(self) -> None:
+        # The call gives what the blocks round it give, as well as its own vars. The same key on
+        # the task is reported by the test above, so this is that report through a block.
+        for section in ("block", "rescue", "always"):
+            text = blocked("not_declared_anywhere", section)
+            with self.subTest(section=section):
+                self.assertEqual(
+                    [
+                        "roles/caller (tasks/main.yml): the call gives input(s) "
+                        "['not_declared_anywhere'] that the entry point read of capability "
+                        "does not declare"
+                    ],
+                    problems_of(Pair(call=text)),
+                )
+
+    def test_a_var_given_by_two_blocks_round_the_call_is_checked(self) -> None:
+        text = (
+            "---\n- name: Outer\n  vars:\n    not_declared_anywhere: 1\n  block:\n"
+            "    - name: Inner\n      vars:\n        cap_extra: y\n      block:\n"
+            "        - name: Call\n          ansible.builtin.include_role:\n"
+            "            name: '{{ caller_cap_role }}'\n            tasks_from: read\n"
+            "          vars:\n            cap_items: [x]\n"
+        )
+        problems = problems_of(Pair(call=text))
+        self.assertEqual(1, len(problems), problems)
+        self.assertIn("['not_declared_anywhere']", problems[0])
+
+    def test_a_declared_var_given_by_a_block_is_not_reported_and_counts_as_given(self) -> None:
+        # The controls of the two cases above: a declared optional input is passed on, and a
+        # required input given by the block alone is given.
+        self.assertEqual([], problems_of(Pair(call=blocked("cap_extra"))))
+        by_block = blocked("cap_items").replace("      vars:\n        cap_items: [x]\n", "")
+        self.assertEqual([], problems_of(Pair(call=by_block)))
+
+    def test_a_var_given_by_an_include_above_the_call_is_checked(self) -> None:
+        # The call is in tasks/_call.yml and the vars are on the include of that file, at one
+        # level, at two, and in a file that includes itself (which must end).
+        on = "- name: On\n  ansible.builtin.include_tasks: _call.yml\n"
+        again = "---\n- name: Again\n  ansible.builtin.include_tasks: _again.yml\n" + on
+        starts = {
+            "one": ("_call.yml", ()),
+            "two": ("_mid.yml", (("tasks/_mid.yml", "---\n" + on),)),
+            "self": ("_again.yml", (("tasks/_again.yml", again),)),
+        }
+        for label, (target, others) in starts.items():
+            files = (("tasks/_call.yml", CALL), *others)
+            with self.subTest(label=label):
+                self.assertEqual(
+                    [
+                        "roles/caller (tasks/_call.yml): the call gives input(s) "
+                        "['not_declared_anywhere'] that the entry point read of capability "
+                        "does not declare"
+                    ],
+                    problems_of(Pair(call=go(target, "not_declared_anywhere"), caller_files=files)),
+                )
+                self.assertEqual(
+                    [], problems_of(Pair(call=go(target, "cap_extra"), caller_files=files))
+                )
+
     def test_the_legacy_spellings_of_an_include_are_seen(self) -> None:
         # The module word of action and local_action, and the key=value form of the include.
         outside = CALL + "- name: Borrow\n  action: include_tasks ../capability/tasks/read.yml\n"
@@ -451,7 +574,9 @@ class CompositionTest(unittest.TestCase):
             ],
             problems_of(Pair(call=bare)),
         )
-        self.assertEqual([], problems_of(Pair(call=own)))
+        self.assertEqual(
+            [], problems_of(Pair(call=own, caller_files=(("tasks/_check.yml", "---\n[]\n"),)))
+        )
 
     def test_the_legacy_mapping_form_of_an_include_is_seen(self) -> None:
         text = (

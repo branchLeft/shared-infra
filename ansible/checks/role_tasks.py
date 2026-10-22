@@ -97,29 +97,84 @@ def short_name(key: str) -> str:
     return key.rsplit(".", 1)[-1]
 
 
-def tasks_in(items: object) -> Iterator[Mapping[str, object]]:
-    """Yield every task of a parsed task list, going into blocks, rescues and always sections."""
+def var_names(task: Mapping[str, object]) -> frozenset[str]:
+    """Return the names a task sets in its ``vars``: what it hands to every task it holds."""
+    given = task.get("vars")
+    return frozenset(str(key) for key in (given if isinstance(given, Mapping) else ()))
+
+
+def tasks_in(
+    items: object, inherited: frozenset[str] = frozenset()
+) -> Iterator[tuple[Mapping[str, object], frozenset[str]]]:
+    """Yield every task of a parsed task list, going into blocks, rescues and always sections.
+
+    Each task comes with the names of the vars the blocks around it set, because those reach
+    the task (and any role it includes) as its own do.
+    """
     if not isinstance(items, list):
         return
     for item in items:
         if not isinstance(item, Mapping):
             continue
-        yield item
+        yield item, inherited
         for key in BLOCK_KEYS:
-            yield from tasks_in(item.get(key))
+            yield from tasks_in(item.get(key), inherited | var_names(item))
 
 
-def parsed_tasks(role: Path) -> Iterator[tuple[str, Mapping[str, object]]]:
-    """Yield the file name and each task of a role's task and handler files."""
+def task_files(role: Path) -> list[tuple[str, Path]]:
+    """Return the name and path of each task and handler file the scan reads."""
+    found: list[tuple[str, Path]] = []
     for area in CODE_AREAS:
         base = role / area
         if not base.is_dir():
             continue
         for path in sorted(base.rglob("*")):
             if path.is_file() and path.suffix in YAML_SUFFIXES:
-                name = path.relative_to(role).as_posix()
-                for task in tasks_in(YAML_LOADER.load(path.read_text(encoding="utf-8"))):
-                    yield name, task
+                found.append((path.relative_to(role).as_posix(), path))
+    return found
+
+
+def parsed_tasks_with_inputs(
+    role: Path,
+) -> Iterator[tuple[str, Mapping[str, object], frozenset[str]]]:
+    """Yield the file name, each task and the names of the vars that reach it from above.
+
+    Above a task are the blocks around it and the ``include_tasks`` or ``import_tasks`` that
+    name its file, whatever file that is, as many levels up as there are: all of their vars
+    reach the task, and so reach an ``include_role`` in it.
+    """
+    files = task_files(role)
+    loaded = {
+        name: list(tasks_in(YAML_LOADER.load(path.read_text(encoding="utf-8"))))
+        for name, path in files
+    }
+    names_at: dict[Path, list[str]] = {}
+    for name, path in files:
+        names_at.setdefault(path.resolve(), []).append(name)
+    reaching: dict[str, frozenset[str]] = {name: frozenset() for name in loaded}
+    changed = True
+    while changed:
+        changed = False
+        for name, entries in loaded.items():
+            for task, around in entries:
+                passed = reaching[name] | around | var_names(task)
+                for module, arguments in task_modules(task):
+                    if module not in TASK_FILE_MODULES:
+                        continue
+                    for path in own_files(role, arguments):
+                        for target in names_at.get(path.resolve(), ()):
+                            if not passed <= reaching[target]:
+                                reaching[target] = reaching[target] | passed
+                                changed = True
+    for name, entries in loaded.items():
+        for task, around in entries:
+            yield name, task, reaching[name] | around
+
+
+def parsed_tasks(role: Path) -> Iterator[tuple[str, Mapping[str, object]]]:
+    """Yield the file name and each task of a role's task and handler files."""
+    for name, task, _ in parsed_tasks_with_inputs(role):
+        yield name, task
 
 
 def task_modules(task: Mapping[str, object]) -> list[tuple[str, object]]:
@@ -202,32 +257,49 @@ def role_call(arguments: object) -> tuple[object, str]:
     return given.get("name"), str(given.get("tasks_from", "main")).removesuffix(".yml")
 
 
-def own_file(role: Path, arguments: object) -> bool:
-    """Say whether an include_tasks or import_tasks names a literal file the scan reads.
+def read_by_the_scan(role: Path, candidate: Path) -> bool:
+    """Say whether a file, once its links are followed, is one under ``tasks/`` or ``handlers/``.
+
+    The scan lists those two directories and does not go into a linked directory, so only the
+    resolved path shows whether it reads the file an include would run.
+    """
+    resolved = candidate.resolve()
+    return any(resolved.is_relative_to((role / area).resolve()) for area in CODE_AREAS)
+
+
+def own_files(role: Path, arguments: object) -> list[Path]:
+    """Return the files an include_tasks or import_tasks may run, none unless the scan reads all.
 
     The path is a YAML file, relative and with no ``..``, or ``{{ role_path }}/`` and then the
     same. The scan reads only ``tasks/`` and ``handlers/`` (``CODE_AREAS``), so the file must
-    be there: a rooted path must start with one of them, and a relative path must not also
-    name a file anywhere else in the role, where Ansible might find it instead. A computed
-    path cannot be shown to stay inside the role, so it is not an own file.
+    exist there, once links are followed. Where Ansible looks for a relative path is in the
+    role and then in the playbook's directory and the working directory, which the scan does
+    not read: a path that names no file in the role is not an own file. Nor is one that also
+    names a file elsewhere in the role, where Ansible might find it instead. A computed path
+    cannot be shown to stay inside the role either, so it names none.
     """
     path = arguments
     if isinstance(arguments, Mapping):
         path = arguments.get("file", arguments.get("_raw_params"))
     if not isinstance(path, str):
-        return False
+        return []
     match = OWN_FILE_PATH.fullmatch(path.strip())
     if not match:
-        return False
+        return []
     relative = match.group("path")
     parts = relative.split("/")
     if ".." in parts or Path(relative).suffix not in YAML_SUFFIXES:
-        return False
+        return []
     if match.group("rooted"):
-        return parts[0] in CODE_AREAS
-    candidates = [role / area / relative for area in CODE_AREAS] + [role / relative]
-    return all(
-        candidate.relative_to(role).parts[0] in CODE_AREAS
-        for candidate in candidates
-        if candidate.is_file()
-    )
+        if parts[0] not in CODE_AREAS:
+            return []
+        candidates = [role / relative]
+    else:
+        candidates = [role / area / relative for area in CODE_AREAS] + [role / relative]
+    found = [candidate for candidate in candidates if candidate.is_file()]
+    return found if all(read_by_the_scan(role, candidate) for candidate in found) else []
+
+
+def own_file(role: Path, arguments: object) -> bool:
+    """Say whether an include_tasks or import_tasks names a file, and only files, the scan reads."""
+    return bool(own_files(role, arguments))

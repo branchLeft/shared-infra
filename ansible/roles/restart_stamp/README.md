@@ -86,7 +86,7 @@ A role that calls this one composes two roles, and ANS-12 carries a named limit 
 3. It declares its inputs in `meta/argument_specs.yml`, and the call gives every required input of the entry point it names and no input that entry point does not declare.
 4. It includes no role itself, and no role's `meta/main.yml` carries `dependencies`.
 5. Its README names the roles that call it.
-6. A role's `include_tasks` and `import_tasks` name a YAML file under their own role's `tasks/` or `handlers/`, as a literal path.
+6. A role's `include_tasks` and `import_tasks` name a YAML file that exists under their own role's `tasks/` or `handlers/` (with links followed), as a literal path.
 
 <!-- /gate-conditions -->
 
@@ -104,7 +104,7 @@ For this role the second review-only condition is also held by code: the single-
 
 The path of condition 2 (`{{ role_path | realpath | dirname }}/restart_stamp`, kept in `edge_stack_stamp_role`) is there because the host trigger starts in `ansible/`, the lint at the repository root and Molecule in a role directory, and a bare name is found by a search path they do not share. `realpath` is there because Molecule links the caller under its namespace, and the path must be that of the real directory. The gate resolves that name through the including role's own `vars/` and `defaults/` with one function that the single-home check also calls, so the two checks agree on what is included; a name it cannot resolve is reported by both.
 
-"Every required input" is the wording, not "every input". The optional fields of an entry point (`drift`, `adoptable` and `gate` of `decide`) default so that a caller with no host-side comparison, such as `monitoring_stack`, passes none of them and keeps its behaviour. The gate checks the required ones are given; it cannot check that an optional one is passed on purpose, and does not try.
+"Every required input" is the wording, not "every input". The optional fields of an entry point (`drift`, `adoptable` and `gate` of `decide`) default so that a caller with no host-side comparison, such as `monitoring_stack`, passes none of them and keeps its behaviour. The gate checks the required ones are given; it cannot check that an optional one is passed on purpose, and does not try. What a call "gives" is every var that reaches it: the call's own `vars`, the `vars` of each block round it, and the `vars` of each `include_tasks` or `import_tasks` that names its file, however many levels up. An input given through any of them counts as given, and one the entry point does not declare is reported wherever it came from.
 
 **Gate.** The pull request that adds this role does not merge until the amendment is merged in the standards repository and cited. Two checks in `ansible/checks/test_role_composition_gate.py` hold it, kept apart so each can fail alone:
 
@@ -134,7 +134,7 @@ The lookup is the workflow's own `GITHUB_TOKEN` against the public API, so it is
 - a script or other non-YAML file of a role names a stamp file;
 - this role uses any module that is not one of `assert`, `copy`, `include_tasks`, `set_fact`, `slurp` and `stat`. Every module key of every task is read, not only those on a list.
 
-The three tasks of another role that may carry a stamp in their arguments are `include_role` of this role (found by the same resolution as the composition gate), a fact, an assertion or a message (`set_fact`, `assert`, `debug`), and `include_tasks` of the role's own files, meaning a literal YAML file under `tasks/` or `handlers/`, the only places the check reads: an include of a file anywhere else in the role (`vars/`, `files/`) is not an own file, is reported by the composition gate, and may carry no stamp. A role may name its stamp files in `vars/` or `defaults/`, which are data, and hand them to this role by `include_role`. The directory of the stamps is not a stamp: a role may create it. Named limit: a stamp variable with a name outside those three endings is not seen; the check reads names, not what a variable holds.
+The three tasks of another role that may carry a stamp in their arguments are `include_role` of this role (found by the same resolution as the composition gate), a fact, an assertion or a message (`set_fact`, `assert`, `debug`), and `include_tasks` of the role's own files, meaning a literal YAML file that exists under `tasks/` or `handlers/`, the only places the check reads, with links followed: an include of a file anywhere else in the role (`vars/`, `files/`), of a file reached through a linked directory that leads out of those two, or of a file the role does not have at all (Ansible would then look in the playbook's directory and the working directory, which the check does not read) is not an own file, is reported by the composition gate, and may carry no stamp. A role may name its stamp files in `vars/` or `defaults/`, which are data, and hand them to this role by `include_role`. The directory of the stamps is not a stamp: a role may create it. Named limit: a stamp variable with a name outside those three endings is not seen; the check reads names, not what a variable holds.
 
 The tests that follow the scan prove it can fail: each way a role could keep a copy is built in a throwaway role and must be reported, and so must the real `edge_stack` with a stamp write put back.
 

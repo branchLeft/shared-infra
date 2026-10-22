@@ -398,7 +398,7 @@ class RestartStampSingleHomeTest(unittest.TestCase):
             "  ansible.builtin.include_tasks: '{{ role_path }}/../x/tasks/y.yml'\n"
             "  vars:\n    next_stamp_file: '{{ other_stamp_files.caddy }}'\n"
         )
-        self.assertEqual([], self.reported(own))
+        self.assertEqual([], self.reported(own, extra_files={"tasks/_next.yml": "---\n[]\n"}))
         self.assertEqual(["tasks/main.yml: include_tasks is given a stamp"], self.reported(outside))
 
     def test_an_include_of_a_file_the_scan_does_not_read_may_carry_no_stamp(self) -> None:
@@ -407,8 +407,8 @@ class RestartStampSingleHomeTest(unittest.TestCase):
         # The first path in each pair is the one the scan reads, the control of the second.
         stamp_var = "  vars:\n    next_stamp_file: '{{ other_stamp_files.caddy }}'\n"
         for path, extra in (
-            ("'{{ role_path }}/tasks/more.yml'", {}),
-            ("'{{ role_path }}/handlers/more.yml'", {}),
+            ("'{{ role_path }}/tasks/more.yml'", {"tasks/more.yml": "---\n[]\n"}),
+            ("'{{ role_path }}/handlers/more.yml'", {"handlers/more.yml": "---\n[]\n"}),
             ("_more.yml", {"tasks/_more.yml": "---\n[]\n"}),
         ):
             text = f"---\n- name: Go on\n  ansible.builtin.include_tasks: {path}\n{stamp_var}"
@@ -418,6 +418,10 @@ class RestartStampSingleHomeTest(unittest.TestCase):
             ("'{{ role_path }}/vars/more.yml'", {"vars/more.yml": "---\n[]\n"}),
             ("'{{ role_path }}/files/more.yml'", {"files/more.yml": "---\n[]\n"}),
             ("files/more.yml", {"files/more.yml": "---\n[]\n"}),
+            # A file the role does not have: Ansible then looks in the playbook's directory and
+            # the working directory, which the scan does not read.
+            ("helper.yml", {}),
+            ("'{{ role_path }}/tasks/absent.yml'", {}),
             # A bare name that is also a file at the root of the role: Ansible may find it there.
             ("more.yml", {"tasks/more.yml": "---\n[]\n", "more.yml": "---\n[]\n"}),
             ("'{{ role_path }}/tasks/more.txt'", {"tasks/more.txt": "---\n[]\n"}),
@@ -428,6 +432,26 @@ class RestartStampSingleHomeTest(unittest.TestCase):
                     ["tasks/main.yml: include_tasks is given a stamp"],
                     self.reported(text, extra_files=extra),
                 )
+
+    def test_an_include_through_a_linked_directory_may_carry_a_stamp_only_inside_the_scan(
+        self,
+    ) -> None:
+        # tasks/link points at vars/ (the scan does not go into a linked directory, so what is
+        # run through it is never seen) or at tasks/sub (which the scan reads: the control).
+        stamp_var = "  vars:\n    next_stamp_file: '{{ other_stamp_files.caddy }}'\n"
+        text = f"---\n- name: Go on\n  ansible.builtin.include_tasks: link/more.yml\n{stamp_var}"
+        for goes_to, extra, expected in (
+            ("sub", {"tasks/sub/more.yml": "---\n[]\n"}, []),
+            (
+                "../vars",
+                {"vars/more.yml": "---\n[]\n"},
+                ["tasks/main.yml: include_tasks is given a stamp"],
+            ),
+        ):
+            with self.subTest(goes_to=goes_to), tempfile.TemporaryDirectory() as tmp:
+                role = make_role(Path(tmp), "other", text, extra_files=extra)
+                (role / "tasks" / "link").symlink_to(goes_to, target_is_directory=True)
+                self.assertEqual(expected, violations(role))
 
     def test_stamp_files_named_in_vars_and_the_stamp_directory_are_not_reported(self) -> None:
         text = (
