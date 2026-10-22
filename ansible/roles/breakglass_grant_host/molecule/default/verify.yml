@@ -191,13 +191,13 @@
 
     # ----- the structure of the tasks: an allow-list, not a deny-list -----
     # ----- the playbook that applies this role: one guard, shared with the mint role -----
-    # app1.yml is held to the same guard as ops1.yml (ansible/harness/playbook_guard.yml,
+    # app1.yml is held to the same guard as ops1.yml (ansible/harness/tasks/playbook_guard.yml,
     # the one home of the rule, ws#2367): its play keys, its roles entry, the modules
     # of its tasks and of the role's, and the controller-side reads in its text. A
     # pre_task that sets an image or includes vars is a module off the list, so it is
     # refused here, and so is an entry's vars, tasks_from or vars_from.
     - name: Hold app1.yml and the role's own tasks to the playbook guard
-      ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../../harness/playbook_guard.yml'
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../../harness/tasks/playbook_guard.yml'
       vars:
         guard_playbook: '{{ playbook_dir }}/../../../../playbooks/app1.yml'
         guard_expected_roles:

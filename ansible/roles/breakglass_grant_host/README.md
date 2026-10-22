@@ -57,7 +57,7 @@ sha256 of each file, the download base, the paths and the Docker socket are
 constants in `vars/main.yml` too. No variable is a secret.
 
 Neither an inventory value nor a playbook value may change those constants. The
-check that enforces it is the playbook guard, `ansible/harness/playbook_guard.yml`,
+check that enforces it is the playbook guard, `ansible/harness/tasks/playbook_guard.yml`,
 which the role's test includes for `playbooks/app1.yml`. It requires the play keys
 to be on an allow-list, the `roles` entry to be exactly this role with no other key,
 and every task of the playbook to call a module on the allow-list (so a `set_fact`
