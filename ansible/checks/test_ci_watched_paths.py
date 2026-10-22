@@ -12,6 +12,8 @@ import re
 import unittest
 from pathlib import Path
 
+from role_tasks import role_files
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ansible.yml"
 ROLES = ROOT / "ansible" / "roles"
@@ -67,14 +69,8 @@ def outside_links(role: Path) -> set[str]:
 
 def role_text(role: Path, areas: tuple[str, ...]) -> str:
     """Return the text of every file in the named areas of a role."""
-    chunks = []
-    for area in areas:
-        base = role / area
-        if base.is_dir():
-            for path in sorted(base.rglob("*")):
-                if path.is_file():
-                    chunks.append(path.read_text(encoding="utf-8", errors="ignore"))
-    return "\n".join(chunks)
+    files = role_files(role, areas, suffixes=None)
+    return "\n".join(path.read_text(encoding="utf-8", errors="ignore") for _, path in files)
 
 
 def role_reads(roles: Path) -> dict[str, set[str]]:

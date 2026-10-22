@@ -14,6 +14,8 @@ from pathlib import Path
 from ruamel.yaml import YAML
 
 CODE_AREAS = ("tasks", "handlers")
+# Every directory of a role that holds YAML a task may template or an include may name.
+ROLE_YAML_AREAS = (*CODE_AREAS, "vars", "defaults")
 YAML_SUFFIXES = frozenset({".yml", ".yaml"})
 BLOCK_KEYS = ("block", "rescue", "always")
 
@@ -121,17 +123,54 @@ def tasks_in(
             yield from tasks_in(item.get(key), inherited | var_names(item))
 
 
-def task_files(role: Path) -> list[tuple[str, Path]]:
-    """Return the name and path of each task and handler file the scan reads."""
+def role_files(
+    role: Path,
+    areas: tuple[str, ...] = CODE_AREAS,
+    suffixes: frozenset[str] | None = YAML_SUFFIXES,
+) -> list[tuple[str, Path]]:
+    """Return the name and path of each file in the named areas of a role.
+
+    The one walk of a role's directories. By default it is the task and handler files the scan
+    reads; ``suffixes=None`` lists a file of any kind.
+    """
     found: list[tuple[str, Path]] = []
-    for area in CODE_AREAS:
+    for area in areas:
         base = role / area
         if not base.is_dir():
             continue
         for path in sorted(base.rglob("*")):
-            if path.is_file() and path.suffix in YAML_SUFFIXES:
+            if path.is_file() and (suffixes is None or path.suffix in suffixes):
                 found.append((path.relative_to(role).as_posix(), path))
     return found
+
+
+def load_yaml(path: Path) -> object:
+    """Return a YAML file parsed with the one loader the checks use."""
+    return YAML_LOADER.load(path.read_text(encoding="utf-8"))
+
+
+def task_includes(role: Path, task: Mapping[str, object]) -> list[Path]:
+    """Return the files a task's ``include_tasks`` or ``import_tasks`` names that the scan reads."""
+    return [
+        path
+        for module, arguments in task_modules(task)
+        if module in TASK_FILE_MODULES
+        for path in own_files(role, arguments)
+    ]
+
+
+def reached_from(role: Path, entry: Path) -> list[tuple[str, Path]]:
+    """Return the entry file and each task file it includes, at any depth, as name and path."""
+    found: dict[Path, str] = {}
+    waiting = [entry] if entry.is_file() else []
+    while waiting:
+        path = waiting.pop()
+        if path.resolve() in found:
+            continue
+        found[path.resolve()] = path.relative_to(role).as_posix()
+        for task, _ in tasks_in(load_yaml(path)):
+            waiting.extend(task_includes(role, task))
+    return [(name, path) for path, name in found.items()]
 
 
 def parsed_tasks_with_inputs(
@@ -143,11 +182,8 @@ def parsed_tasks_with_inputs(
     name its file, whatever file that is, as many levels up as there are: all of their vars
     reach the task, and so reach an ``include_role`` in it.
     """
-    files = task_files(role)
-    loaded = {
-        name: list(tasks_in(YAML_LOADER.load(path.read_text(encoding="utf-8"))))
-        for name, path in files
-    }
+    files = role_files(role)
+    loaded = {name: list(tasks_in(load_yaml(path))) for name, path in files}
     names_at: dict[Path, list[str]] = {}
     for name, path in files:
         names_at.setdefault(path.resolve(), []).append(name)
@@ -158,14 +194,11 @@ def parsed_tasks_with_inputs(
         for name, entries in loaded.items():
             for task, around in entries:
                 passed = reaching[name] | around | var_names(task)
-                for module, arguments in task_modules(task):
-                    if module not in TASK_FILE_MODULES:
-                        continue
-                    for path in own_files(role, arguments):
-                        for target in names_at.get(path.resolve(), ()):
-                            if not passed <= reaching[target]:
-                                reaching[target] = reaching[target] | passed
-                                changed = True
+                for path in task_includes(role, task):
+                    for target in names_at.get(path.resolve(), ()):
+                        if not passed <= reaching[target]:
+                            reaching[target] = reaching[target] | passed
+                            changed = True
     for name, entries in loaded.items():
         for task, around in entries:
             yield name, task, reaching[name] | around
@@ -212,7 +245,7 @@ def mapping_at(path: Path, *keys: str) -> Mapping[str, object]:
     The one reader of a role's YAML file as a mapping: it is empty when the file is absent or
     holds anything but a mapping at the end of the keys.
     """
-    value: object = YAML_LOADER.load(path.read_text(encoding="utf-8")) if path.is_file() else None
+    value: object = load_yaml(path) if path.is_file() else None
     for key in keys:
         value = value.get(key) if isinstance(value, Mapping) else None
     return value if isinstance(value, Mapping) else {}

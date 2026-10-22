@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from role_tasks import ROLE_YAML_AREAS, mapping_at, role_files
+
 ROOT = Path(__file__).resolve().parents[2]
 ROLES = ROOT / "ansible" / "roles"
 STACK = ROOT / "hetzner" / "edge" / "stack"
@@ -17,9 +19,7 @@ OWNER = "edge_stack"
 PROJECT_DIR = "/opt/branchleft/edge"
 UNIT = "branchleft-compose@edge"
 DROP_IN_DIRECTORY = "branchleft-compose@edge.service.d"
-CODE_AREAS = ("tasks", "handlers", "vars", "defaults")
 
-LIST_ITEM = re.compile(r"^\s*-\s+['\"]?([^'\"\s#]+)['\"]?\s*(?:#.*)?$")
 # The directory name is a prefix of nothing else: a path component that continues with
 # another word character is a different directory (edge1, edge-staging).
 PROJECT_DIR_PATTERN = re.compile(re.escape(PROJECT_DIR) + r"(?![\w.-])")
@@ -30,17 +30,13 @@ def stack_files() -> list[str]:
     return sorted(p.relative_to(STACK).as_posix() for p in STACK.rglob("*") if p.is_file())
 
 
-def code_of(role: Path) -> dict[str, str]:
-    """Map the path of each YAML file in a role's code areas to its text."""
-    found: dict[str, str] = {}
-    for area in CODE_AREAS:
-        base = role / area
-        if not base.is_dir():
-            continue
-        for path in sorted(base.rglob("*")):
-            if path.is_file() and path.suffix in {".yml", ".yaml"}:
-                found[path.relative_to(role).as_posix()] = path.read_text(encoding="utf-8")
-    return found
+def owner_classes() -> tuple[set[str], str]:
+    """Return the files the owner names one by one, and the directory it takes whole."""
+    owner = mapping_at(ROLES / OWNER / "vars" / "main.yml")
+    crowdsec = owner.get("edge_stack_crowdsec_files")
+    named = {str(owner.get("edge_stack_caddy_file")), str(owner.get("edge_stack_compose_file"))}
+    named |= {str(file) for file in (crowdsec if isinstance(crowdsec, list) else [])}
+    return named, f"{owner.get('edge_stack_acquis_dir')}/"
 
 
 def delivers_from_stack(role: Path, stack: Path) -> bool:
@@ -62,7 +58,8 @@ def violations(role: Path, stack: Path = STACK) -> list[str]:
     found: list[str] = []
     if delivers_from_stack(role, stack):
         found.append("files/ links into the edge stack directory")
-    for name, text in code_of(role).items():
+    for name, path in role_files(role, ROLE_YAML_AREAS):
+        text = path.read_text(encoding="utf-8")
         if UNIT in text.replace(DROP_IN_DIRECTORY, ""):
             found.append(f"{name} names the edge unit")
         if PROJECT_DIR_PATTERN.search(text):
@@ -83,18 +80,10 @@ def make_role(base: Path, name: str, vars_text: str, link_to: Path | None) -> Pa
 
 class EdgeSingleHomeTest(unittest.TestCase):
     def test_the_owner_puts_every_file_of_the_stack_in_a_class(self) -> None:
-        owner_vars = (ROLES / OWNER / "vars" / "main.yml").read_text(encoding="utf-8")
-        named = {
-            m.group(1)
-            for line in owner_vars.splitlines()
-            if (m := LIST_ITEM.match(line)) and "/" in m.group(1)
-        }
-        named |= {"Caddyfile", "compose.yml"}
+        named, acquis_dir = owner_classes()
         stack = stack_files()
         self.assertNotEqual([], stack, "the stack directory must hold the edge files")
-        unclassified = [
-            f for f in stack if f not in named and not f.startswith("crowdsec/acquis.d/")
-        ]
+        unclassified = [f for f in stack if f not in named and not f.startswith(acquis_dir)]
         self.assertEqual([], unclassified, "every stack file must be in a class of the owner")
 
     def test_no_other_role_names_the_project_directory_the_stack_or_the_edge_unit(self) -> None:

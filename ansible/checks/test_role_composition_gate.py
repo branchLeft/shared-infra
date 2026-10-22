@@ -874,6 +874,20 @@ class OneReaderTest(unittest.TestCase):
                 self.assertNotIn("YAML_LOADER", source)
                 self.assertNotIn("YAML(", source)
 
+    def test_the_files_of_a_role_are_listed_in_one_place(self) -> None:
+        # The walk is role_tasks.role_files, and the checks that list a role's files call it.
+        # A second walk drifts (ws#2439). The edge test also reads its owner's classes through
+        # mapping_at, not with a pattern of its own.
+        checks = Path(__file__).resolve().parent
+        for module in ("role_defaults.py", "test_edge_single_home.py", "test_ci_watched_paths.py"):
+            with self.subTest(module=module):
+                self.assertIn("role_files(", (checks / module).read_text(encoding="utf-8"))
+        edge = (checks / "test_edge_single_home.py").read_text(encoding="utf-8")
+        self.assertIn("mapping_at(", edge)
+        for second in ("def code_of", "LIST_ITEM", "CODE_AREAS"):
+            with self.subTest(second=second):
+                self.assertNotIn(second, edge)
+
 
 class CitationTest(unittest.TestCase):
     def test_the_merged_amendment_is_accepted(self) -> None:
