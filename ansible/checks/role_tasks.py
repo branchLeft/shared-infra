@@ -21,6 +21,11 @@ BLOCK_KEYS = ("block", "rescue", "always")
 
 YAML_LOADER = YAML(typ="safe")
 
+# The keys that repeat a task: ``loop`` and ``loop_control``, and every ``with_*``. Written once
+# here; ``task_modules`` skips them as keywords and ``loop_keys`` reports them.
+LOOP_KEYWORDS = frozenset({"loop", "loop_control"})
+LOOP_PREFIX = "with_"
+
 # The keywords of a task. Any other key of a task is the module it calls, so a module this
 # list does not know is read as a module: the checks that screen tasks then fail closed.
 TASK_KEYWORDS = frozenset(
@@ -47,8 +52,6 @@ TASK_KEYWORDS = frozenset(
         "ignore_errors",
         "ignore_unreachable",
         "listen",
-        "loop",
-        "loop_control",
         "module_defaults",
         "name",
         "no_log",
@@ -66,6 +69,7 @@ TASK_KEYWORDS = frozenset(
         "vars",
         "when",
         *BLOCK_KEYS,
+        *LOOP_KEYWORDS,
     }
 )
 WRAPPING_KEYS = frozenset({"action", "local_action"})
@@ -219,7 +223,7 @@ def task_modules(task: Mapping[str, object]) -> list[tuple[str, object]]:
     found: list[tuple[str, object]] = []
     for key, value in task.items():
         word = str(key)
-        if word in TASK_KEYWORDS or word.startswith("with_"):
+        if word in TASK_KEYWORDS or word.startswith(LOOP_PREFIX):
             continue
         if word not in WRAPPING_KEYS:
             found.append((short_name(word), value))
@@ -232,6 +236,19 @@ def task_modules(task: Mapping[str, object]) -> list[tuple[str, object]]:
         else:
             found.append((word, value))
     return found
+
+
+def loop_keys(task: Mapping[str, object]) -> list[str]:
+    """Return the loop keys a task carries, by presence: ``loop: []`` is carried.
+
+    The keys sit on the task itself, so they are the same whatever spelling the module has
+    (``include_role``, ``ansible.builtin.include_role``, ``action:`` or ``local_action:``).
+    """
+    return sorted(
+        word
+        for word in (str(key) for key in task)
+        if word in LOOP_KEYWORDS or word.startswith(LOOP_PREFIX)
+    )
 
 
 def text_of(value: object) -> str:

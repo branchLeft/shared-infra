@@ -643,6 +643,156 @@ class CompositionTest(unittest.TestCase):
             self.assertEqual({}, including_roles(roles))
 
 
+# A callee that declares only the entry point main, with one required input, and the call
+# of it that names no tasks_from.
+MAIN_SPECS = (
+    "---\nargument_specs:\n  main:\n    short_description: Main\n    options:\n"
+    "      cap_items:\n        type: list\n        required: true\n"
+    "      cap_extra:\n        type: str\n        default: x\n"
+)
+NO_ENTRY = CALL.replace("    tasks_from: read\n", "")
+WHERE = "roles/caller (tasks/main.yml)"
+BAN = "and the call of a capability role carries no `loop`, `with_*` or `loop_control`"
+
+
+def carries(*keys: str, where: str = WHERE) -> list[str]:
+    """The one problem a call reports when it carries these loop keys."""
+    shown = ", ".join(f"`{key}`" for key in keys)
+    return [f"{where}: the call carries {shown}, {BAN}"]
+
+
+class LoopOnTheCallTest(unittest.TestCase):
+    """ANS-12: the call of a capability role carries no ``loop``, ``with_*`` or ``loop_control``.
+
+    One test per keyword, each asserted by its own message, so a check that sees one spelling
+    and not the others fails the test of the others.
+    """
+
+    def test_a_loop_on_the_call_is_reported(self) -> None:
+        self.assertEqual(carries("loop"), problems_of(Pair(call=CALL + "  loop: [a, b]\n")))
+
+    def test_a_with_loop_on_the_call_is_reported_whatever_its_name(self) -> None:
+        # The prefix is the rule, not one name: two different loops of the family.
+        for key in ("with_items", "with_sequence"):
+            with self.subTest(key=key):
+                self.assertEqual(carries(key), problems_of(Pair(call=CALL + f"  {key}: [a, b]\n")))
+
+    def test_loop_control_alone_on_the_call_is_reported(self) -> None:
+        # The clause bans it with no loop beside it.
+        text = CALL + "  loop_control:\n    label: x\n"
+        self.assertEqual(carries("loop_control"), problems_of(Pair(call=text)))
+
+    def test_every_loop_key_the_call_carries_is_named(self) -> None:
+        text = CALL + "  loop: [a, b]\n  loop_control:\n    label: x\n"
+        self.assertEqual(carries("loop", "loop_control"), problems_of(Pair(call=text)))
+
+    def test_a_loop_key_with_an_empty_value_is_reported_by_its_presence(self) -> None:
+        # The clause says the call "carries" the key, so an empty loop is carried.
+        for tail in ("  loop: []\n", "  loop:\n", "  with_items: []\n"):
+            with self.subTest(tail=tail):
+                problems = problems_of(Pair(call=CALL + tail))
+                self.assertEqual(1, len(problems), problems)
+                self.assertIn(f"`{tail.split(':')[0].strip()}`", problems[0])
+
+    def test_a_loop_on_the_legacy_spellings_of_the_call_is_reported(self) -> None:
+        # The loop is a key of the task, so the spelling of the module does not hide it.
+        string_form = (
+            '---\n- name: Call\n  local_action: "include_role name={{caller_cap_role}} '
+            'tasks_from=read"\n  vars:\n    cap_items: [x]\n  loop: [a, b]\n'
+        )
+        mapping_form = (
+            "---\n- name: Call\n  action:\n    module: ansible.builtin.include_role\n"
+            "    name: '{{ caller_cap_role }}'\n    tasks_from: read\n"
+            "  vars:\n    cap_items: [x]\n  with_items: [a, b]\n"
+        )
+        self.assertEqual(carries("loop"), problems_of(Pair(call=string_form)))
+        self.assertEqual(carries("with_items"), problems_of(Pair(call=mapping_form)))
+
+    def test_a_loop_on_the_call_is_reported_beside_the_other_problems(self) -> None:
+        # The loop is one problem among the call's, also when the name cannot be resolved.
+        text = (
+            CALL.replace("{{ caller_cap_role }}", "{{ somebody_elses_variable }}") + "  loop: [a]\n"
+        )
+        problems = problems_of(Pair(call=text))
+        self.assertEqual(2, len(problems), problems)
+        self.assertEqual(carries("loop")[0], problems[0])
+        self.assertIn("cannot be resolved", problems[1])
+
+    def test_a_loop_on_an_include_of_the_callers_own_file_that_makes_one_call_is_not_reported(
+        self,
+    ) -> None:
+        # The form ANS-12 allows: the loop is on the include_tasks, and the file it includes
+        # makes one plain call per item. A rule written as "a loop above the call" fails here.
+        for loop in (
+            "  loop: [a, b]\n",
+            "  with_items: [a, b]\n",
+            "  loop: [a]\n  loop_control:\n    loop_var: unit\n",
+        ):
+            text = "---\n- name: Each\n  ansible.builtin.include_tasks: _call.yml\n" + loop
+            with self.subTest(loop=loop):
+                self.assertEqual(
+                    [], problems_of(Pair(call=text, caller_files=(("tasks/_call.yml", CALL),)))
+                )
+
+    def test_the_call_in_a_looped_include_is_still_read(self) -> None:
+        # The control of the case above: the same file is scanned, so a clean result is the
+        # loop being on the include and not the file being missed.
+        text = "---\n- name: Each\n  ansible.builtin.include_tasks: _call.yml\n  loop: [a, b]\n"
+        bad = CALL.replace("cap_items: [x]", "cap_items: [x]\n    not_declared_anywhere: 1")
+        self.assertEqual(
+            [
+                "roles/caller (tasks/_call.yml): the call gives input(s) ['not_declared_anywhere'] "
+                "that the entry point read of capability does not declare"
+            ],
+            problems_of(Pair(call=text, caller_files=(("tasks/_call.yml", bad),))),
+        )
+
+    def test_a_loop_on_a_task_that_is_not_an_include_role_is_not_reported(self) -> None:
+        # As in edge_stack's _decide.yml: a loop elsewhere in a file with a call is not a loop
+        # on the call.
+        for loop in (
+            "  loop: [a, b]\n",
+            "  with_items: [a, b]\n",
+            "  loop: [a]\n  loop_control:\n    label: x\n",
+        ):
+            text = CALL + "- name: Many\n  ansible.builtin.debug:\n    msg: x\n" + loop
+            with self.subTest(loop=loop):
+                self.assertEqual([], problems_of(Pair(call=text)))
+
+    def test_the_loop_keywords_are_written_once(self) -> None:
+        # The keys are those role_tasks already encodes (the with_ prefix of task_modules and
+        # the loop keywords of TASK_KEYWORDS); the gate calls the one reader (ws#2439).
+        self.assertIs(role_tasks.loop_keys, vars(role_composition)["loop_keys"])
+        self.assertLessEqual(role_tasks.LOOP_KEYWORDS, role_tasks.TASK_KEYWORDS)
+        checks = Path(__file__).resolve().parent
+        composition = (checks / "role_composition.py").read_text(encoding="utf-8")
+        tasks = (checks / "role_tasks.py").read_text(encoding="utf-8")
+        self.assertFalse('"with_' in composition, "role_composition.py writes a loop prefix")
+        self.assertFalse('"loop' in composition, "role_composition.py writes a loop keyword")
+        self.assertEqual(1, tasks.count('"with_"'), "role_tasks.py writes the prefix once")
+
+
+class EntryPointTest(unittest.TestCase):
+    """ANS-12: a call with no ``tasks_from`` names the ``main`` entry point.
+
+    ``role_call`` already defaults to main, so the case is a mutation of that default and not
+    a new check. The callee declares main alone, with a required input, so a call read against
+    any other entry point reports another reason.
+    """
+
+    def test_a_call_with_no_tasks_from_is_checked_against_main(self) -> None:
+        text = NO_ENTRY.replace("cap_items: [x]", "cap_extra: y")
+        self.assertEqual(
+            [f"{WHERE}: the call does not give required input(s) ['cap_items']"],
+            problems_of(Pair(call=text, specs=MAIN_SPECS)),
+        )
+
+    def test_a_call_with_no_tasks_from_that_gives_the_required_input_is_not_reported(self) -> None:
+        # The control of the case above: the entry point is found, so a report there is the
+        # missing input and not a callee without a main.
+        self.assertEqual([], problems_of(Pair(call=NO_ENTRY, specs=MAIN_SPECS)))
+
+
 class OptionalDefaultTest(unittest.TestCase):
     """ANS-12: every option that is not ``required: true`` has a ``default`` in the spec.
 

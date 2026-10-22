@@ -15,6 +15,7 @@ from role_tasks import (
     ROLE_MODULES,
     TASK_FILE_MODULES,
     included_role,
+    loop_keys,
     mapping_at,
     options_without_default,
     own_file,
@@ -30,8 +31,10 @@ CONDITIONS = (
     "It is included with `include_role`, never `import_role`.",
     "It is named by a path built from the caller's own `role_path`, not by a bare name.",
     "It declares its inputs in `meta/argument_specs.yml`, and the call gives every "
-    "top-level required input of the entry point it names and no input that entry point does "
-    "not declare.",
+    "top-level required input of the entry point it names (`main` when the call has no "
+    "`tasks_from`) and no input that entry point does not declare.",
+    "The call carries no `loop`, `with_*` or `loop_control`: a caller that needs several calls "
+    "writes them out, or loops in an included task file of its own that makes one call per item.",
     "Every option of the entry point it names, an option of a list element or of a dictionary "
     "included, is `required: true` or has a `default` key in `meta/argument_specs.yml`: the key "
     "counts whatever its value, null included, and a default found only in `defaults/main.yml`, "
@@ -103,13 +106,22 @@ def call_problems(
     it and the includes of its file): they reach the callee as the call's own vars do.
     """
     name, entry = role_call(arguments)
+    found: list[str] = []
+    looped = loop_keys(task)
+    if looped:
+        # Only the call's own keys: a loop on an include_tasks above it, or on another task, is
+        # not a loop on the call.
+        found.append(
+            f"{where}: the call carries {', '.join(f'`{key}`' for key in looped)}, and the call "
+            "of a capability role carries no `loop`, `with_*` or `loop_control`"
+        )
     target = included_role(role, name)
     if target is None:
         return [
+            *found,
             f"{where}: the role it includes ({name!r}) cannot be resolved through this role's "
-            "vars/ and defaults/ to a path built from role_path"
+            "vars/ and defaults/ to a path built from role_path",
         ]
-    found: list[str] = []
     if not target.by_path:
         found.append(f"{where}: {target.name} is named bare, not by a path built from role_path")
     callee = role.parent / target.name
