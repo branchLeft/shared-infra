@@ -322,7 +322,11 @@ jobs:
       matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
     # Pinned until the harness is verified on the next Ubuntu LTS image.
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # The longest shard, ansible/roles/db1_grants, runs about 3,000 tasks, each a docker
+    # exec, and its four passing runs took 17 to 24.5 minutes, so a limit of 25 left it
+    # a margin of seconds and a fifth run was cancelled at the limit. 45 leaves it
+    # nearly double its slowest passing run; a shard that hangs is still ended at 45.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
