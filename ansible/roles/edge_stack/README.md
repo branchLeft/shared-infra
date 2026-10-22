@@ -152,6 +152,7 @@ The scenario runs the real `restart_stamp`, not a stand-in. The stamp logic itse
 - Posture flips are not applied.
 - A torn Caddyfile after a power cut (above).
 - The read of `edge.image.env` is early (a pin the role refuses stops it before anything changes), again inside the validation and again inside the apply. The apply acts only on the pin the validation read, so a deploy between the two sections is refused (exit code 74), never acted on. What stays on the host after that refusal is in "Lock windows".
+- The fingerprints are computed from the first read of the repository. A checkout that changes before the candidate Compose file is copied leaves a stamp that is not the fingerprint of the file that was placed (the placed file is the one that was validated). The next run sees the difference and acts again.
 - Role-in-role composition (this role calls `restart_stamp`) is not yet decided by ANS-12. The text of the amendment is in the pull request, and `ansible/checks/test_role_composition_gate.py` is red until the merged amendment is cited.
 
 ### Differences from the monitoring_stack family
