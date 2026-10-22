@@ -217,7 +217,9 @@ recreated or started is not.
 
 `templates/compose.yml.j2` is rendered to `/opt/branchleft/db/compose.yml`. That
 is the name the deploy program checks, and the one the systemd template runs with
-`WorkingDirectory=/opt/branchleft/db`. The unit runs `docker compose up` there with
+`WorkingDirectory=/opt/branchleft/db`. A drop-in or a replaced unit file can change
+that directory, and the role does not read or check it (see "Named limits"). The unit
+runs `docker compose up` there with
 no `-f`, so Compose reads whatever default file names it finds, and the deploy
 program checks only `compose.yml`. The role refuses to run while any of eight
 other names sits in the same directory. Three are base files that Compose would
@@ -613,13 +615,22 @@ bot sees it.
   allowlist with a recorded sabotage row, or kept here with its reason.
 - The project-directory check stops a second compose project only when it is named
   in the role's own files. It does not see what the stack's unit definition and
-  environment set. Those sources are `/etc/branchleft/db.env`, `Environment=` lines in
-  the unit, a template drop-in under `/etc/systemd/system/branchleft-compose@.service.d/`
-  (it applies to every instance, `db` included), and a replaced unit file. The
-  environment sources can set `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME` and
-  `COMPOSE_PROFILES`; `COMPOSE_ENV_FILES` names further env files Compose reads, and
-  `COMPOSE_PATH_SEPARATOR` sets how a `COMPOSE_FILE` list is split. Only a drop-in or
-  a replaced unit file can set `ExecStart`. The `DOCKER_HOST` and `DOCKER_CONTEXT`
+  environment set. That includes, and is not limited to,
+  `/etc/branchleft/db.env`, `Environment=` and `EnvironmentFile=` lines in the unit,
+  `WorkingDirectory=`, a template drop-in under
+  `/etc/systemd/system/branchleft-compose@.service.d/` (it applies to every instance,
+  `db` included), the per-instance drop-in directory
+  `/etc/systemd/system/branchleft-compose@db.service.d/` (the role removes only
+  `override.conf` there, and the owner reinstalls that drop-in until cutover), other
+  drop-in directories systemd searches for this unit, such as
+  `branchleft-.service.d/` and drop-ins under `/run/systemd/system`, and a replaced
+  unit file. The environment sources can set `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME`
+  and `COMPOSE_PROFILES`; `COMPOSE_ENV_FILES` names further env files Compose reads,
+  and `COMPOSE_PATH_SEPARATOR` sets how a `COMPOSE_FILE` list is split. Only a
+  drop-in or a replaced unit file can set `ExecStart` or `WorkingDirectory`. A
+  `WorkingDirectory` set there moves the directory Compose reads `compose.yml` and
+  `.env` from, which bypasses the eight-name refusal and the deploy program's
+  `compose.yml` check. The `DOCKER_HOST` and `DOCKER_CONTEXT`
   variables redirect the daemon rather than name a compose file. The deploy program
   checks none of these. The owner writes those files; the role reads none of them,
   because `db.env` holds secrets. The one environment file the role reads is
