@@ -27,6 +27,10 @@ cleanup() {
 pass() { PASSES=$((PASSES + 1)); echo "PASS: $*"; }
 fail() { FAILURES=$((FAILURES + 1)); echo "FAIL: $*"; }
 
+# The shared registry pull retry: one home, sourced here and by the port policy proof.
+# shellcheck disable=SC1091 # sourced at run time; CI shellcheck runs without -x
+. "$HERE/scripts/lib/docker-pull.sh"
+
 # dockerd's own PATH, so the policy writes to the iptables backend dockerd uses.
 DOCKERD_PATH=""
 on_host() {
@@ -52,8 +56,8 @@ expect_blocked() {
     if eval "$2"; then fail "$1"; else pass "$1"; fi
 }
 
-docker image inspect "$PROBE_IMAGE" >/dev/null 2>&1 || docker pull -q "$PROBE_IMAGE" >/dev/null
-docker image inspect "$DIND_IMAGE" >/dev/null 2>&1 || docker pull -q "$DIND_IMAGE" >/dev/null
+docker image inspect "$PROBE_IMAGE" >/dev/null 2>&1 || pull_with_retry "$PROBE_IMAGE"
+docker image inspect "$DIND_IMAGE" >/dev/null 2>&1 || pull_with_retry "$DIND_IMAGE"
 
 docker network create "$NET" >/dev/null
 # NET_ADMIN so it can be given a return route to the spool bridge: the spool

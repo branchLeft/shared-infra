@@ -76,7 +76,9 @@ jobs:
       # the whole directory (monitoring_stack, nextcloud_stack); everywhere else the
       # list names the files, so a change to any other file under hetzner/ does not
       # run every shard. ansible/checks/test_ci_watched_paths.py fails when a role
-      # reads a path outside ansible/ that this list does not name.
+      # reads a path outside ansible/ that this list does not name. The delivery
+      # caller is named too: ansible/checks/test_check_delivery.py reads it, so an
+      # edit to that file alone must run the checks and not pass unread.
       - name: Decide whether the Ansible inputs changed
         id: changes
         env:
@@ -104,6 +106,7 @@ jobs:
             .ansible-lint
             .yamllint
             .github/workflows/ansible.yml
+            .github/workflows/ansible-delivery.yml
             hetzner/provision/branchleft_deploy.py
             hetzner/provision/branchleft_docker_user_policy.sh
             hetzner/provision/branchleft-compose@.service
