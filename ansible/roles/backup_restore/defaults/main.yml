@@ -1,0 +1,30 @@
+---
+# No private value is a default. The state-copy recipient, the bucket names,
+# endpoints, regions and key ids are required inputs (meta/argument_specs.yml)
+# that come from the private inventory. What is here is public and safe to
+# commit.
+
+# Both timers stay off. Turning the state-copy timer on is a production apply
+# (README). The restore-drill timer cannot be turned on at all yet: setting it
+# true fails the role.
+backup_restore_state_copy_timer_enabled: false
+backup_restore_drill_timer_enabled: false
+
+# False leaves a timer as it is on the host. Set true, together with the
+# matching enabled variable false, to stop a running timer (README).
+backup_restore_state_copy_timer_may_disable: false
+backup_restore_drill_timer_may_disable: false
+
+# The restore-drill environment file is opt-in. With false the role writes no
+# drill environment, needs no drill credential and no image digest, and the
+# drill units are installed with the timer off.
+backup_restore_drill_env_enabled: false
+
+# Where the owner places each secret access key, once, as a root-only file
+# holding that key and nothing else. The role reads these files and writes the
+# environment files; it never creates a secret. A path must be a file directly
+# in /etc/branchleft/secrets (backup_restore_secret_path_pattern).
+backup_restore_drill_secret_file: /etc/branchleft/secrets/restore-drill-primary-secret-access-key
+backup_restore_state_copy_dest_secret_file: /etc/branchleft/secrets/state-copy-dest-secret-access-key
+backup_restore_state_copy_estate_secret_file: /etc/branchleft/secrets/state-copy-estate-secret-access-key
+backup_restore_state_copy_tenant_secret_file: /etc/branchleft/secrets/state-copy-tenant-secret-access-key

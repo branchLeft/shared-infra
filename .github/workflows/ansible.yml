@@ -4,7 +4,8 @@ name: Ansible
 # credentials and reaches no host: the roles are applied to containers on the
 # runner's own Docker daemon, and nothing else.
 #
-# It is a gate on pull requests and on push to `main` (CI-3). The workflow has
+# It is a gate on pull requests, on the merge queue and on push to `main`
+# (CI-3). The workflow has
 # no `paths:` filter, so the job reports on every pull request and can be a
 # required check (CI-14); the first step decides whether the Ansible inputs
 # changed, and the rest run only when they did. Where nothing changed the job
@@ -26,6 +27,14 @@ on:
   pull_request:
   push:
     branches: [main]
+  # The merge queue tests a queued pull request on a gh-readonly-queue/main/...
+  # ref, and only this event reports checks there. No `paths:` filter (merge_group
+  # supports none, and this workflow has none). Under it the first job decides
+  # the Ansible inputs changed without diffing anything, so the lint and every
+  # shard run in full: a queued entry is the last check before main, and a diff
+  # base wrong in either direction would pass the gate without running it.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -48,6 +57,20 @@ jobs:
 
       # A base commit the runner cannot resolve (a new branch, a forced push)
       # counts as changed, so the gate runs rather than being skipped.
+      #
+      # Some role tests read files outside ansible/. The deploy_tooling role links
+      # four programs in hetzner/provision, its checks read the two hand scripts
+      # that install the same files and the cloud-init source that writes its
+      # sudoers drop-in, and its program's address literals are checked against
+      # the address plan. The other roles' molecule verify files copy the files
+      # they compare against from hetzner/provision, hetzner/monitoring and
+      # hetzner/nextcloud1, and the egress_nat and tunnel_account roles read their
+      # own unit files there. A change to one of those files alone must still run
+      # the tests that read it. A directory is named only where a verify step copies
+      # the whole directory (monitoring_stack, nextcloud_stack); everywhere else the
+      # list names the files, so a change to any other file under hetzner/ does not
+      # run every shard. ansible/checks/test_ci_watched_paths.py fails when a role
+      # reads a path outside ansible/ that this list does not name.
       - name: Decide whether the Ansible inputs changed
         id: changes
         env:
@@ -56,6 +79,11 @@ jobs:
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
+          if [ "$EVENT_NAME" = "merge_group" ]; then
+            echo "A merge-queue run always runs every check, so nothing is diffed."
+            echo "ansible=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           base="$PUSH_BEFORE"
           if [ "$EVENT_NAME" = "pull_request" ]; then
             base="$PULL_REQUEST_BASE"
@@ -65,7 +93,36 @@ jobs:
             echo "ansible=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          files=$(git diff --name-only "$base" HEAD -- ansible .ansible-lint .yamllint .github/workflows/ansible.yml)
+          watched=(
+            ansible
+            .ansible-lint
+            .yamllint
+            .github/workflows/ansible.yml
+            hetzner/provision/branchleft_deploy.py
+            hetzner/provision/branchleft_docker_user_policy.sh
+            hetzner/provision/branchleft-compose@.service
+            hetzner/provision/branchleft-docker-user-policy.service
+            hetzner/provision/30-install-deploy-tooling.sh
+            hetzner/provision/app-host-isolation.sh
+            hetzner-host/cloudInit.ts
+            hetzner/scripts/check-address-plan-drift.py
+            hetzner/provision/branchleft_host_egress.sh
+            hetzner/provision/branchleft-host-egress.service
+            hetzner/provision/branchleft_nat.sh
+            hetzner/provision/branchleft-nat.service
+            hetzner/provision/branchleft-db-tunnel.service
+            hetzner/provision/node-exporter.service
+            hetzner/provision/fixtures/docker-apt-key.asc
+            hetzner/provision/test_compose_unit_contract.py
+            hetzner/monitoring/stack/
+            hetzner/monitoring/systemd/monitoring.override.conf
+            hetzner/monitoring/systemd/snds-collector.service
+            hetzner/monitoring/systemd/snds-collector.timer
+            hetzner/nextcloud1/stack/
+            hetzner/nextcloud1/systemd/nextcloud1.override.conf
+            hetzner/control-plane/stack/
+          )
+          files=$(git diff --name-only "$base" HEAD -- "${watched[@]}")
           if [ -n "$files" ]; then
             echo "The Ansible inputs changed:"
             echo "$files"
@@ -149,6 +206,44 @@ jobs:
 
       - name: Test the checks
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/checks -p "test_*.py"'
+
+      # A role that ships a typed module of its own in library/ (ANS-2) is checked
+      # from the role's directory, so the role's pyproject.toml, with its mypy_path
+      # and its ruff settings, is the one the tools read; the step runs once from
+      # ansible/ for everything else. It covers every role and has no list to edit.
+      # A tree with no library reports that and passes: it does not fail, and it
+      # does not pass in silence. A library with no tests/unit fails, because a
+      # module with no test is not checked (TEST-1). ansible/patterns/*/library is
+      # not covered: the typed_module pattern keeps its tests where they are, and
+      # moving them into CI is a separate change.
+      - name: Check each role's own library modules
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bin="$RUNNER_TEMP/ansible-venv/bin"
+          checked=0
+          for library in ansible/roles/*/library; do
+            role="$(dirname "$library")"
+            echo "::group::$role"
+            if [ ! -d "$role/tests/unit" ]; then
+              echo "$role has a library/ and no tests/unit/, so its module is not tested."
+              exit 1
+            fi
+            (
+              cd "$role"
+              "$bin/mypy" --strict library tests/unit
+              "$bin/ruff" check library tests
+              "$bin/ruff" format --check library tests
+              PYTHONPATH=library "$bin/python" -m unittest discover -b -s tests/unit -p "test_*.py"
+            )
+            echo "::endgroup::"
+            checked=$((checked + 1))
+          done
+          if [ "$checked" -eq 0 ]; then
+            echo "No role library found, so there is no module to check."
+          else
+            echo "Checked the library of $checked role(s)."
+          fi
 
   shard:
     name: 'Harness: ${{ matrix.name }}'

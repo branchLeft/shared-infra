@@ -1,0 +1,38 @@
+---
+# Internal: one read-only statement through the mysql client, as the admin
+# account over the socket. The caller sets db1_grants_step (what is being read, for
+# the message) and db1_grants_sql, and takes the output from db1_grants_out.
+#
+# The admin password is the first line of the standard input and the statement
+# follows it (vars/main.yml, db1_grants_secret_wrapper), so neither is ever on a
+# command line, and neither is in the environment Ansible writes in front of a
+# command (ANS-16).
+# Every client call of this role is one of three tasks, this one, the write in
+# _write.yml and the program run in _tenant_run.yml. This task reads and changes
+# nothing, so it runs in check mode too (ANS-10): the readback is what check mode
+# compares the declared state with.
+- name: Run one read-only statement through the mysql client
+  ansible.builtin.command:
+    argv: '{{ db1_grants_secret_wrapper + db1_grants_mysql_argv }}'
+    stdin: '{{ db1_grants_admin_password ~ db1_grants_newline ~ db1_grants_sql }}'
+  register: db1_grants_read_result
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+  diff: false
+
+# The message carries the client's own error text. A read holds no password in
+# its statement, so the text cannot echo one.
+- name: Stop when a read failed
+  ansible.builtin.assert:
+    that:
+      - db1_grants_read_result.rc == 0
+    fail_msg: >-
+      db1_grants[sql-read]: the mysql client exited {{ db1_grants_read_result.rc }} while reading
+      {{ db1_grants_step }}: {{ db1_grants_read_result.stderr | default('') | trim }}
+    quiet: true
+
+- name: Keep the output of the read
+  ansible.builtin.set_fact:
+    db1_grants_out: '{{ db1_grants_read_result.stdout }}'

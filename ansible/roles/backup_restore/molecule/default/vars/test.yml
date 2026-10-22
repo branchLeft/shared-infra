@@ -1,0 +1,37 @@
+---
+# Documentation values only: hosts under example.invalid and made-up
+# credentials. Nothing here is a real value, and none is real-looking enough to
+# pass as one. These are the role's own inputs; the backup_worker inputs it reads
+# come from backup_worker's own test variables, loaded beside this file.
+backup_restore_state_copy_recipient: age1rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr
+backup_restore_state_copy_dest_access_key_id: EXAMPLEONLYdestkeyid
+backup_restore_state_copy_estate_bucket: example-estate-state
+backup_restore_state_copy_estate_endpoint: s3.estate.example.invalid
+backup_restore_state_copy_estate_region: example-estate-region
+backup_restore_state_copy_estate_access_key_id: EXAMPLEONLYestatekeyid
+backup_restore_state_copy_tenant_bucket: example-tenant-state
+backup_restore_state_copy_tenant_endpoint: s3.tenant.example.invalid
+backup_restore_state_copy_tenant_region: example-tenant-region
+backup_restore_state_copy_tenant_access_key_id: EXAMPLEONLYtenantkeyid
+backup_restore_drill_env_enabled: true
+backup_restore_drill_access_key_id: EXAMPLEONLYdrillkeyid
+backup_restore_drill_image_recovery: example.invalid/db-recovery@sha256:1111111111111111111111111111111111111111111111111111111111111111
+backup_restore_drill_image_mysql: example.invalid/mysql@sha256:2222222222222222222222222222222222222222222222222222222222222222
+backup_restore_drill_image_ghost: example.invalid/ghost@sha256:3333333333333333333333333333333333333333333333333333333333333333
+backup_restore_drill_image_sidecar: example.invalid/sidecar@sha256:4444444444444444444444444444444444444444444444444444444444444444
+
+# The secret files prepare.yml places. Each value is a throwaway sentinel made
+# for the test, written by the test and compared by the test; no real secret
+# is ever used. The first three end in a line break, as a file written with
+# printf '%s\n' does, and the drill's does not, so both forms are covered.
+backup_restore_test_secrets:
+  state_copy_dest: EXAMPLEONLYdestsecret0000000000001
+  state_copy_estate: EXAMPLEONLYestatesecret000000002
+  state_copy_tenant: EXAMPLEONLYtenantsecret00000003
+  drill_primary: EXAMPLEONLYdrillsecret000000000004
+
+# The scratch paths the cases write to instead of the real environment files.
+# They end in .test-env, not .env, so the repository's Compose-stack scanner
+# (hetzner/provision/test_compose_unit_contract.py) does not read them as stacks.
+backup_restore_test_scratch_state_copy_env: /etc/branchleft/scratch-state-copy.test-env
+backup_restore_test_scratch_drill_env: /etc/branchleft/scratch-restore-drill.test-env

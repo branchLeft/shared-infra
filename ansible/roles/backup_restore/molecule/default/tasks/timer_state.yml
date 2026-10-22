@@ -1,0 +1,18 @@
+---
+# The state of one timer, asserted. Included by verify.yml with
+# backup_restore_timer_unit, backup_restore_timer_on (true: enabled and running;
+# false: installed, disabled and stopped) and backup_restore_timer_why, the
+# sentence a failure carries, which names the mechanism the step tests.
+- name: Ask systemd for the timer
+  ansible.builtin.systemd_service:
+    name: '{{ backup_restore_timer_unit }}'
+  register: backup_restore_timer_status
+
+- name: Assert the timer is as the step expects
+  ansible.builtin.assert:
+    that:
+      - backup_restore_timer_status.status.LoadState == 'loaded'
+      - backup_restore_timer_status.status.UnitFileState == ('enabled' if backup_restore_timer_on | bool else 'disabled')
+      - backup_restore_timer_status.status.ActiveState == ('active' if backup_restore_timer_on | bool else 'inactive')
+    quiet: true
+    fail_msg: '{{ backup_restore_timer_unit }} is not in the expected state (on: {{ backup_restore_timer_on }}). {{ backup_restore_timer_why }}'

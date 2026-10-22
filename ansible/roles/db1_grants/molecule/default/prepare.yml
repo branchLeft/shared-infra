@@ -1,0 +1,82 @@
+---
+# Test setup only, never part of the role. It makes the throwaway password
+# sentinels on the controller and puts db1 in the state the role finds it in: the
+# host's files (tasks/fixtures.yml) and the fake database as it is today. Every
+# task that handles a sentinel has no_log and diff: false: the scan in verify.yml
+# reads the log of this play too.
+- name: Make the throwaway sentinels and fetch the pinned programs on the controller
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../vars/main.yml
+  tasks:
+    # The programs are ghost-platform's own code and that repository is their one
+    # home: none is copied into this one. They are fetched here, on the controller,
+    # at the pinned commit and held to the pinned digest, and tasks/fixtures.yml
+    # copies them into the container, which has no network.
+    - name: Make the directory for the pinned programs
+      ansible.builtin.file:
+        path: '{{ db1_grants_scenario_program_dir }}'
+        state: directory
+        mode: '0700'
+
+    - name: Fetch each pinned program from ghost-platform at the pinned commit
+      ansible.builtin.get_url:
+        url: '{{ db1_grants_source_raw_base }}/{{ item.key }}'
+        dest: '{{ db1_grants_scenario_program_dir }}/{{ item.key }}'
+        checksum: 'sha256:{{ item.value }}'
+        mode: '0600'
+      loop: '{{ db1_grants_program_sha256 | dict2items }}'
+      loop_control:
+        label: '{{ item.key }}'
+
+    - name: Make the directory for this run's sentinels
+      ansible.builtin.file:
+        path: '{{ db1_grants_scenario_sentinel_dir }}'
+        state: directory
+        mode: '0700'
+
+    # The /dev/null path makes the lookup keep nothing, and the seed makes the
+    # value repeat, so the same label gives the same value in every play. The
+    # value is 40 letters and digits made for this scenario, never a real one.
+    - name: Make one sentinel for each label the scenario uses
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.password', '/dev/null seed=' ~ item ~ ' chars=ascii_letters,digits length=40') }}"
+        dest: '{{ db1_grants_scenario_sentinel_dir }}/{{ item }}'
+        mode: '0600'
+      loop: '{{ db1_grants_scenario_sentinel_labels }}'
+      no_log: true
+      diff: false
+
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+  tasks:
+    - name: Put the host's files in place
+      ansible.builtin.include_tasks: tasks/fixtures.yml
+
+    - name: Put the fake database in the state db1 is in today
+      ansible.builtin.copy:
+        content: '{{ db1_grants_scenario_initial_state | to_nice_json }}'
+        dest: '{{ db1_grants_scenario_state_path }}'
+        owner: root
+        group: root
+        mode: '0600'
+
+    # Prepare is the start of a fresh host: the record starts empty and the stamp of
+    # the ops1 password is absent, also when the instance was kept from an earlier
+    # run and prepared again by hand.
+    - name: Start an empty record of the client's calls
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ db1_grants_scenario_calls_path }}'
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Remove the stamp of the ops1 password
+      ansible.builtin.file:
+        path: /etc/branchleft/db1-backup-ops1.pw.sha256
+        state: absent

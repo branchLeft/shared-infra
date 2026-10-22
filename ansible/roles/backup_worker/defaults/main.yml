@@ -58,3 +58,27 @@ backup_worker_release_files:
     sha256: b31e5787cb76d104eaeace9fe9aab5d6c59a87d3fbd5136e26515632d280069a
   - path: control/provision/branchleft-backup-worker.timer
     sha256: 610c45d1bf726db592a534e422138f056d94d24a2d8f67dc19f0d40747b27df4
+  # Staged for the backup_restore role, which installs the restore drill and
+  # the state copy from this release and never downloads a file itself. They are
+  # the installers' REQUIRED_RELEASE_FILES that the worker's list above does not
+  # already hold, the two installers, nextcloud_backup.py, and the four units.
+  - path: infra/provisioning/scripts/restore_drill.py
+    sha256: 0b598b2be1edfbe44b00a477f27242045582ebe3f958aa970aa07d349040732b
+  - path: infra/provisioning/scripts/state_copy.py
+    sha256: 0fb1031a373760d0bb81c32f02adbe8be286826f145e14a642a859a1359b8cd7
+  - path: db/recovery/restore_drained.py
+    sha256: cfd6a02d990359596056dea785fc4881001c20282ba55a77cbfb0c88be97c1d0
+  - path: control/provision/install_restore_drill.py
+    sha256: 51cdea6bfc3524e6359c523948441c00749a359cded99ef2643e37658cbb80cc
+  - path: control/provision/install_state_copy.py
+    sha256: fdf301377f51b60107154ae389f3ddea41c426f2b9f6c00a8b6f097f65e8d6c7
+  - path: control/provision/nextcloud_backup.py
+    sha256: dd451d0652606e5b229dbe6ade7271d5c1a88a7eea12c226e04fed82a8010132
+  - path: control/provision/branchleft-restore-drill.service
+    sha256: 9482c19f09dd69505ac15c3aee0cd851826b8a20d54f313ad5501fb961896abc
+  - path: control/provision/branchleft-restore-drill.timer
+    sha256: 8b01aa0f6969b2598bdf6764e4e1d7184e972b24d74f0f3950207329207ca4bf
+  - path: control/provision/branchleft-state-copy.service
+    sha256: fb1d8581605fb6d6a2e7256d0fe55ed22328b1d25df81d1269c884da1b2c9558
+  - path: control/provision/branchleft-state-copy.timer
+    sha256: b103be112e14e3ac69c0565e2e23fd7c2a652d44e56322e3eeea1c67cfcafa0a

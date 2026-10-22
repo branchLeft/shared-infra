@@ -1,0 +1,58 @@
+---
+# Internal: read one account (db1_grants_acct: key, user, host) into
+# db1_grants_found. The user and host are a constant, a validated slug or a
+# validated IPv4 literal, so they are safe inside a single-quoted literal. All
+# of it is read-only.
+- name: Read the account's row
+  ansible.builtin.include_tasks: _read.yml
+  vars:
+    db1_grants_step: the row of {{ db1_grants_acct.key }}
+    db1_grants_sql: >-
+      SELECT ssl_type, max_user_connections FROM mysql.user
+      WHERE User='{{ db1_grants_acct.user }}' AND Host='{{ db1_grants_acct.host }}';
+
+- name: Keep the account's row
+  ansible.builtin.set_fact:
+    db1_grants_row: '{{ db1_grants_out }}'
+
+# An account that is not there has no grants to show, and SHOW GRANTS on it is an
+# error, so the role asks only about accounts the row read found.
+- name: Read the account's grants
+  ansible.builtin.include_tasks: _read.yml
+  vars:
+    db1_grants_step: the grants of {{ db1_grants_acct.key }}
+    db1_grants_sql: SHOW GRANTS FOR '{{ db1_grants_acct.user }}'@'{{ db1_grants_acct.host }}';
+  when: db1_grants_row | trim | length > 0
+
+- name: Keep the account's grants
+  ansible.builtin.set_fact:
+    db1_grants_grants_text: "{{ db1_grants_out if (db1_grants_row | trim | length > 0) else '' }}"
+
+# The columns are tab separated and an empty ssl_type is an empty first column, so
+# the row is split before it is trimmed. A line of SHOW GRANTS the role does not
+# understand (a role, a proxy grant) is kept in unrecognised, and the checks fail
+# on it: an account the role cannot read in full is not one it may call correct.
+- name: Parse the account
+  ansible.builtin.set_fact:
+    db1_grants_entry:
+      present: '{{ db1_grants_row | trim | length > 0 }}'
+      ssl_type: '{{ db1_grants_fields[0] }}'
+      muc: '{{ (db1_grants_fields[1] | default(0)) | int }}'
+      unrecognised: >-
+        {{ db1_grants_grants_text.splitlines() | reject('match', '^GRANT .+ ON .+ TO ') | list }}
+      global_privs: >-
+        {{ db1_grants_grants_text.splitlines() | select('match', '^GRANT .+ ON \*\.\* TO ')
+        | map('split', ' ON *.* TO ') | map('first') | map('replace', 'GRANT ', '', 1) | map('split', ', ')
+        | flatten | reject('equalto', 'USAGE') | list }}
+      grant_option: >-
+        {{ (db1_grants_grants_text.splitlines() | select('match', '^GRANT .+ ON \*\.\* TO ')
+        | select('search', ' WITH GRANT OPTION$') | list | length) > 0 }}
+      object_lines: >-
+        {{ db1_grants_grants_text.splitlines() | select('match', '^GRANT .+ ON .+ TO ')
+        | reject('match', '^GRANT .+ ON \*\.\* TO ') | list }}
+  vars:
+    db1_grants_fields: "{{ (db1_grants_row.splitlines() | first | default('')).split(db1_grants_tab) }}"
+
+- name: Add the account to the readback
+  ansible.builtin.set_fact:
+    db1_grants_found: '{{ db1_grants_found | combine({db1_grants_acct.key: db1_grants_entry}) }}'

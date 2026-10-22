@@ -1,0 +1,102 @@
+---
+# Constants of the service, not inputs: role variables outrank every value a
+# caller passes. What the role reads from backup_worker (its bucket, endpoint,
+# region, release directory, unit directory and patterns) is not declared here:
+# one home, read where it is defined.
+
+# The paths the installers hard-code (install_restore_drill.py ENV_FILE,
+# install_state_copy.py Paths.env_file). The installers are the source; the
+# scenario holds these to a recorded copy of them (README, "What breaks which step").
+backup_restore_drill_env_file: /etc/branchleft/restore-drill.env
+backup_restore_state_copy_env_file: /etc/branchleft/state-copy.env
+
+# The directory the owner places each secret access key in: root only.
+backup_restore_secrets_dir: /etc/branchleft/secrets
+
+backup_restore_drill_timer_unit: branchleft-restore-drill.timer
+backup_restore_state_copy_timer_unit: branchleft-state-copy.timer
+backup_restore_unit_files:
+  - branchleft-restore-drill.service
+  - branchleft-restore-drill.timer
+  - branchleft-state-copy.service
+  - branchleft-state-copy.timer
+
+# Copies of the installers' lists, held to a recorded copy by the scenario.
+# install_restore_drill.py REQUIRED_RELEASE_FILES:
+backup_restore_drill_required_files:
+  - infra/provisioning/scripts/restore_drill.py
+  - db/recovery/restore_drained.py
+  - control/provision/branchleft-restore-drill.service
+  - control/provision/branchleft-restore-drill.timer
+# install_state_copy.py REQUIRED_RELEASE_FILES:
+backup_restore_state_copy_required_files:
+  - infra/provisioning/scripts/state_copy.py
+  - infra/provisioning/scripts/media_backup_restore.py
+  - infra/provisioning/scripts/shared_objectstorage.py
+  - db/provision/objectstorage.py
+  - control/provision/branchleft-state-copy.service
+  - control/provision/branchleft-state-copy.timer
+# Staged for the installers and the Nextcloud backup, which no installer lists.
+backup_restore_staged_files:
+  - control/provision/install_restore_drill.py
+  - control/provision/install_state_copy.py
+  - control/provision/nextcloud_backup.py
+
+# install_state_copy.py REQUIRED_ENV_NAMES: the 16 names of state-copy.env.
+backup_restore_state_copy_env_names:
+  - STATE_COPY_RECIPIENT
+  - STATE_COPY_DEST_BUCKET
+  - STATE_COPY_DEST_ENDPOINT
+  - STATE_COPY_DEST_REGION
+  - STATE_COPY_DEST_ACCESS_KEY_ID
+  - STATE_COPY_DEST_SECRET_ACCESS_KEY
+  - STATE_COPY_ESTATE_BUCKET
+  - STATE_COPY_ESTATE_ENDPOINT
+  - STATE_COPY_ESTATE_REGION
+  - STATE_COPY_ESTATE_ACCESS_KEY_ID
+  - STATE_COPY_ESTATE_SECRET_ACCESS_KEY
+  - STATE_COPY_TENANT_BUCKET
+  - STATE_COPY_TENANT_ENDPOINT
+  - STATE_COPY_TENANT_REGION
+  - STATE_COPY_TENANT_ACCESS_KEY_ID
+  - STATE_COPY_TENANT_SECRET_ACCESS_KEY
+# restore_drill.py copies_from_env and images_from_env: the nine names of
+# restore-drill.env (the optional secondary copy is not written).
+backup_restore_drill_env_names:
+  - BACKUP_DRILL_COPY_PRIMARY_BUCKET
+  - BACKUP_DRILL_COPY_PRIMARY_ENDPOINT
+  - BACKUP_DRILL_COPY_PRIMARY_REGION
+  - BACKUP_DRILL_COPY_PRIMARY_ACCESS_KEY_ID
+  - BACKUP_DRILL_COPY_PRIMARY_SECRET_ACCESS_KEY
+  - BACKUP_DRILL_RECOVERY_IMAGE
+  - BACKUP_DRILL_MYSQL_IMAGE
+  - BACKUP_DRILL_GHOST_IMAGE
+  - BACKUP_DRILL_SIDECAR_IMAGE
+
+# The secret files the role reads. The drill's is read only when its
+# environment is switched on.
+backup_restore_state_copy_secrets:
+  - name: state_copy_dest
+    path: '{{ backup_restore_state_copy_dest_secret_file }}'
+  - name: state_copy_estate
+    path: '{{ backup_restore_state_copy_estate_secret_file }}'
+  - name: state_copy_tenant
+    path: '{{ backup_restore_state_copy_tenant_secret_file }}'
+backup_restore_drill_secrets:
+  - name: drill_primary
+    path: '{{ backup_restore_drill_secret_file }}'
+backup_restore_wanted_secrets: >-
+  {{ backup_restore_state_copy_secrets + (backup_restore_drill_secrets if backup_restore_drill_env_enabled | bool else []) }}
+
+# The private-key marker of an age identity. A recipient is age1..., the public
+# half; this one never belongs on this host in any file the role writes.
+backup_restore_age_identity_marker: AGE-SECRET-KEY-1
+
+# The patterns end in \Z, not $, so a trailing line break does not pass.
+# A secret file holds one credential and at most one final line break.
+backup_restore_secret_path_pattern: '^/etc/branchleft/secrets/[A-Za-z0-9][A-Za-z0-9._-]*\Z'
+backup_restore_secret_content_pattern: '^[A-Za-z0-9/+=_.-]+\n?\Z'
+# state_copy.py accepts exactly this shape of recipient.
+backup_restore_recipient_pattern: '^age1[0-9a-z]{50,100}\Z'
+# restore_drill.py DIGEST_PINNED: a name pinned by digest, never by tag.
+backup_restore_image_pattern: '^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}\Z'

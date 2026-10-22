@@ -1,0 +1,49 @@
+---
+# Test scaffolding, not role tasks. The test-only release (placeholder programs
+# and units) and the stand-ins for age and the mysql tools are backup_worker's,
+# so they have one home: this imports its prepare. The secret files are what the
+# owner places by hand on a real host.
+- name: Prepare the release and the tools, as backup_worker's scenario does
+  ansible.builtin.import_playbook: ../../../backup_worker/molecule/default/prepare.yml
+
+- name: Place the secret files, as the owner does
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+  tasks:
+    - name: Create the secrets directory, closed to everyone but root
+      ansible.builtin.file:
+        path: /etc/branchleft/secrets
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    # The first three end in a line break; the drill's does not.
+    - name: Place the state-copy secret files
+      ansible.builtin.copy:
+        content: "{{ backup_restore_test_secrets[item.key] }}\n"
+        dest: '/etc/branchleft/secrets/{{ item.file }}'
+        owner: root
+        group: root
+        mode: '0600'
+      loop:
+        - key: state_copy_dest
+          file: state-copy-dest-secret-access-key
+        - key: state_copy_estate
+          file: state-copy-estate-secret-access-key
+        - key: state_copy_tenant
+          file: state-copy-tenant-secret-access-key
+      loop_control:
+        label: '{{ item.file }}'
+      no_log: true
+
+    - name: Place the restore-drill secret file
+      ansible.builtin.copy:
+        content: '{{ backup_restore_test_secrets.drill_primary }}'
+        dest: /etc/branchleft/secrets/restore-drill-primary-secret-access-key
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true

@@ -23,7 +23,10 @@ It does these, in order:
    inputs `control_plane_env_content` and `control_plane_masterkey`, both secrets
    supplied at run time. A file that holds a value is never replaced. How the
    file is written without a window of wider access is under "Writing a secret
-   without an exposure window" below.
+   without an exposure window" below. On every run it also sets the owner, group
+   and mode of both files back to the values in `control_plane_secret_files`
+   (`vars/main.yml`), so a file widened by hand is corrected. It never changes
+   the content of either file.
 3. Copies `compose.yml`, `compose.init.yml` and `pg_hba.conf` from
    `hetzner/control-plane/stack/` into `/opt/branchleft/control-plane`, as
    `root:root` mode `0644` in a `0755` directory.
@@ -89,7 +92,8 @@ and `control_plane_masterkey`. The two secrets carry `no_log: true`. Two switche
   `/var/lib/branchleft/control-plane/zitadel-state` (`0700`, owned `1000:1000`).
 - `/etc/branchleft/control-plane.env` (`0600`, root) and
   `/etc/branchleft/control-plane/zitadel-masterkey` (`0400`, `1000:1000`), each
-  created once.
+  created once, with their content written once. On every run their owner, group
+  and mode are set back to these values, and their content is not changed.
 - `/opt/branchleft/control-plane` (`0755`) and its three files (`0644`).
 - Containers: the database and the sign-in service are started and healthy;
   the init phase runs once on a fresh database.
@@ -120,8 +124,11 @@ The chosen approach is create-empty-then-fill. For each of the two secrets:
 
 The directory `/etc/branchleft` stays `0755`: other roles' units and the deploy
 tooling read files in it, so its mode is not this role's to narrow. A person who
-puts a file in it by hand can still choose a wider mode; the role corrects the
-mode of the two files it owns at every run.
+puts a file in it by hand can still choose a wider mode. The task "Set the owner,
+group and mode of each secret file on every run" corrects the owner, group and
+mode of the two files it owns at every run, from the one list in
+`control_plane_secret_files`. The create-empty and fill tasks read their owner
+and mode from that list too, so the values are not written twice.
 
 ### Differences from the runbook
 
@@ -159,6 +166,9 @@ converge is the idempotence step. `verify.yml` checks:
   throwaway values;
 - the write-once rule: the role is applied again with different values and both
   files must still hold the first values;
+- the widened files: both files are widened by hand (owner, group and mode), the
+  role is applied again, and each file's owner, group and mode must be back to
+  the declared values, with the first values still in place;
 - the interrupted run: both files are emptied by hand, the role is applied
   again, and both must be filled with the new values at the same owner and mode;
 - that no throwaway value, from any apply, appears in the run's log.
@@ -170,6 +180,9 @@ the isolation policy's effect on the firewall are not proven by this scenario.
 
 - **The Docker bring-up is not exercised.** No container of the stack is started
   in the test. The first live run through the gated pull is the proof.
+- **The owner and mode of the secret files are corrected at each run, not
+  continuously.** A file widened between two runs stays wider until the next run
+  that reaches this role.
 - **The absence of the exposure window is by construction, not observed.** The
   scenario proves the final owner, mode and content and the write-once rule. It
   cannot see the mode a file has for the moment a write takes, so it does not

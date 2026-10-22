@@ -1,0 +1,406 @@
+---
+# Inputs and preconditions are refused before any task changes anything. No
+# message names a value (ANS-16). The argument spec has already run; it coerces
+# a wrong type rather than rejecting it, and accepts an empty string for a
+# required input, so these reject both.
+
+# The role reads backup_worker's variables and does not declare them again. In a
+# play's roles: list they are visible to every role after backup_worker; in a
+# test they are exported with include_role public: true. Run alone they are
+# undefined, and this refuses instead of failing later on a missing name.
+- name: Refuse to run before backup_worker has been applied in this play
+  ansible.builtin.assert:
+    that:
+      - backup_worker_current_link is defined
+      - backup_worker_release_dir is defined
+      - backup_worker_unit_dir is defined
+      - backup_worker_bucket is defined
+      - backup_worker_s3_endpoint is defined
+      - backup_worker_s3_region is defined
+      - backup_worker_host_pattern is defined
+      - backup_worker_bucket_pattern is defined
+      - backup_worker_region_pattern is defined
+      - backup_worker_credential_pattern is defined
+    quiet: true
+    fail_msg: >-
+      backup_restore reads variables that backup_worker defines (its bucket, endpoint, region,
+      release directory and patterns). Apply backup_worker earlier in the same play.
+
+# The timers are booleans. A string such as "false" is a true value to a
+# when: without the filter, so the role compares the filtered form everywhere.
+- name: Refuse the restore-drill timer
+  ansible.builtin.assert:
+    that:
+      - not (backup_restore_drill_timer_enabled | bool)
+    quiet: true
+    fail_msg: >-
+      The restore-drill timer cannot be enabled on this host. The drill reads each tenant's private
+      age identity, and no identity is placed here: how one would be kept is an open owner decision.
+
+- name: Refuse a state-copy input that is empty or has the wrong shape
+  ansible.builtin.assert:
+    that:
+      - backup_restore_state_copy_recipient is string
+      - backup_restore_state_copy_recipient is match(backup_restore_recipient_pattern)
+      - backup_restore_state_copy_dest_access_key_id is string
+      - backup_restore_state_copy_dest_access_key_id is match(backup_worker_credential_pattern)
+      - backup_restore_state_copy_estate_bucket is string
+      - backup_restore_state_copy_estate_bucket is match(backup_worker_bucket_pattern)
+      - backup_restore_state_copy_estate_endpoint is string
+      - backup_restore_state_copy_estate_endpoint is match(backup_worker_host_pattern)
+      - backup_restore_state_copy_estate_region is string
+      - backup_restore_state_copy_estate_region is match(backup_worker_region_pattern)
+      - backup_restore_state_copy_estate_access_key_id is string
+      - backup_restore_state_copy_estate_access_key_id is match(backup_worker_credential_pattern)
+      - backup_restore_state_copy_tenant_bucket is string
+      - backup_restore_state_copy_tenant_bucket is match(backup_worker_bucket_pattern)
+      - backup_restore_state_copy_tenant_endpoint is string
+      - backup_restore_state_copy_tenant_endpoint is match(backup_worker_host_pattern)
+      - backup_restore_state_copy_tenant_region is string
+      - backup_restore_state_copy_tenant_region is match(backup_worker_region_pattern)
+      - backup_restore_state_copy_tenant_access_key_id is string
+      - backup_restore_state_copy_tenant_access_key_id is match(backup_worker_credential_pattern)
+      - backup_worker_bucket is string
+      - backup_worker_bucket is match(backup_worker_bucket_pattern)
+      - backup_worker_s3_endpoint is string
+      - backup_worker_s3_endpoint is match(backup_worker_host_pattern)
+      - backup_worker_s3_region is string
+      - backup_worker_s3_region is match(backup_worker_region_pattern)
+    quiet: true
+    fail_msg: >-
+      A state-copy input is empty or has the wrong shape: the recipient, a bucket, an endpoint, a
+      region or a key id (the destination's bucket, endpoint and region are backup_worker's). They
+      come from the private inventory and have no default.
+
+# state_copy.py refuses a configuration whose three buckets are not distinct, so
+# a pair that matches fails here, at the pull, not at 03:40 on the first run.
+- name: Refuse three state-copy buckets that are not three different buckets
+  ansible.builtin.assert:
+    that:
+      - >-
+        [backup_worker_s3_endpoint ~ '/' ~ backup_worker_bucket,
+        backup_restore_state_copy_estate_endpoint ~ '/' ~ backup_restore_state_copy_estate_bucket,
+        backup_restore_state_copy_tenant_endpoint ~ '/' ~ backup_restore_state_copy_tenant_bucket] | unique | list | length == 3
+    quiet: true
+    fail_msg: >-
+      The three state-copy buckets must be three different buckets: the destination (backup_worker's
+      bucket), the estate state bucket and the tenant state bucket.
+
+- name: Refuse a secret file path that is not a file in the secrets directory
+  ansible.builtin.assert:
+    that:
+      - backup_restore_wanted_secrets | map(attribute='path') | select('string') | list | length == backup_restore_wanted_secrets | length
+      - >-
+        backup_restore_wanted_secrets | map(attribute='path') | select('match', backup_restore_secret_path_pattern) | list | length
+        == backup_restore_wanted_secrets | length
+    quiet: true
+    fail_msg: >-
+      A secret file path must be a file directly in /etc/branchleft/secrets, named with letters,
+      digits, dot, underscore and hyphen.
+
+- name: Refuse a restore-drill input that is empty or has the wrong shape
+  ansible.builtin.assert:
+    that:
+      - backup_restore_drill_access_key_id is defined
+      - backup_restore_drill_access_key_id is string
+      - backup_restore_drill_access_key_id is match(backup_worker_credential_pattern)
+      - backup_restore_drill_image_recovery is defined
+      - backup_restore_drill_image_recovery is string
+      - backup_restore_drill_image_recovery is match(backup_restore_image_pattern)
+      - backup_restore_drill_image_mysql is defined
+      - backup_restore_drill_image_mysql is string
+      - backup_restore_drill_image_mysql is match(backup_restore_image_pattern)
+      - backup_restore_drill_image_ghost is defined
+      - backup_restore_drill_image_ghost is string
+      - backup_restore_drill_image_ghost is match(backup_restore_image_pattern)
+      - backup_restore_drill_image_sidecar is defined
+      - backup_restore_drill_image_sidecar is string
+      - backup_restore_drill_image_sidecar is match(backup_restore_image_pattern)
+    quiet: true
+    fail_msg: >-
+      A restore-drill input is empty or has the wrong shape: the drill's read key id, or an image that
+      is not pinned by digest (name@sha256:, 64 hex characters). They are required only when
+      backup_restore_drill_env_enabled is true.
+  when: backup_restore_drill_env_enabled | bool
+
+# The release. backup_worker has staged it and pointed current at it by now; in
+# check mode on a host it has never touched, nothing is staged and nothing below
+# that needs the release runs (the README lists this as a limit).
+- name: Look at the current link
+  ansible.builtin.stat:
+    path: '{{ backup_worker_current_link }}'
+    follow: false
+    get_checksum: false
+  register: backup_restore_current
+
+- name: Work out whether current is a link to the pinned release
+  ansible.builtin.set_fact:
+    backup_restore_release_ready: >-
+      {{ backup_restore_current.stat.islnk | default(false)
+      and (backup_restore_current.stat.lnk_source | default('')) == backup_worker_release_dir }}
+
+- name: Refuse a host whose current link is not the pinned release
+  ansible.builtin.assert:
+    that:
+      - backup_restore_release_ready | bool
+    quiet: true
+    fail_msg: >-
+      current is not a link to the pinned release directory. Apply backup_worker earlier in the
+      same play: it stages the release and points current at it.
+  when: not ansible_check_mode
+
+# C7: every file an installer requires, and the programs this role's units run,
+# must be in the release. The installers refuse a release without them, and a
+# unit that starts a missing program fails only when its timer fires.
+- name: Look at each file the installers require in the release
+  ansible.builtin.stat:
+    path: '{{ backup_worker_release_dir }}/{{ item }}'
+    get_checksum: false
+  loop: '{{ (backup_restore_drill_required_files + backup_restore_state_copy_required_files + backup_restore_staged_files) | unique | list }}'
+  register: backup_restore_required_stat
+  when: backup_restore_release_ready | bool
+
+- name: Refuse a release that lacks a file an installer requires
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+    quiet: true
+    fail_msg: 'The release lacks a file an installer requires: {{ item.item }}. Add it to backup_worker_release_files.'
+  loop: '{{ backup_restore_required_stat.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+  when: backup_restore_release_ready | bool
+
+- name: Install the restore-drill and state-copy units from the release
+  ansible.builtin.copy:
+    src: '{{ backup_worker_release_dir }}/control/provision/{{ item }}'
+    remote_src: true
+    dest: '{{ backup_worker_unit_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ backup_restore_unit_files }}'
+  when: backup_restore_release_ready | bool
+  notify: Reload systemd after the restore units change
+
+# The directory the owner places each secret access key in. It is made, closed
+# to everyone but root, before the owner is asked to put anything in it.
+- name: Create the directory for the owner-placed secret files, closed to everyone but root
+  ansible.builtin.file:
+    path: '{{ backup_restore_secrets_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Start with no secret read and none missing
+  ansible.builtin.set_fact:
+    backup_restore_secret_values: {}
+    backup_restore_secrets_missing: []
+  no_log: true
+
+# Everything that holds a secret value is inside this block, and the always
+# section empties the fact, after a failure as well.
+- name: Read the secret files and write the environment files
+  block:
+    - name: Read each secret file the role needs
+      ansible.builtin.include_tasks: _read_secret.yml
+      loop: '{{ backup_restore_wanted_secrets }}'
+      loop_control:
+        loop_var: backup_restore_source
+        label: '{{ backup_restore_source.name }}'
+
+    - name: Work out which environment files can be written
+      ansible.builtin.set_fact:
+        backup_restore_state_copy_missing: "{{ backup_restore_secrets_missing | select('match', '^state_copy_') | list }}"
+        backup_restore_drill_missing: "{{ backup_restore_secrets_missing | select('match', '^drill_') | list }}"
+
+    # A missing secret file skips the environment that needs it and says so. It
+    # does not fail the run: the owner places the files after the first apply,
+    # and a failing pull would hold every other change to this host until then.
+    # A timer that needs the environment is refused below.
+    - name: Say which secret files are not placed yet
+      ansible.builtin.debug:
+        msg: >-
+          Secret file(s) not placed yet: {{ backup_restore_secrets_missing | join(', ') }}. The environment
+          file that needs them is not written; one already on the host is left as it is.
+      when: backup_restore_secrets_missing | length > 0
+
+    - name: Refuse the state-copy timer while a secret file it needs is not placed
+      ansible.builtin.assert:
+        that:
+          - backup_restore_state_copy_missing | length == 0
+        quiet: true
+        fail_msg: >-
+          The state-copy timer cannot be enabled while a secret file it needs is not placed. Place the
+          file(s) named in the previous message, root-only, then apply again.
+      when: backup_restore_state_copy_timer_enabled | bool
+
+    # The environment is built whole, checked, and only then written. The text
+    # holds secrets, so the tasks that handle it say no_log, and the write says
+    # diff: false (ANS-16). The file is created empty at 0600 first, so there is
+    # no instant at which a value is in a wider file.
+    - name: Write the state-copy environment file
+      when: backup_restore_state_copy_missing | length == 0
+      block:
+        - name: Assemble the state-copy environment
+          ansible.builtin.set_fact:
+            backup_restore_state_copy_env_text: "{{ lookup('ansible.builtin.template', 'state-copy.env.j2') }}"
+          no_log: true
+
+        - name: Work out whether the state-copy environment holds a private age identity
+          ansible.builtin.set_fact:
+            backup_restore_state_copy_env_identity: '{{ backup_restore_age_identity_marker in backup_restore_state_copy_env_text }}'
+          no_log: true
+
+        - name: Refuse a state-copy environment that would hold a private age identity
+          ansible.builtin.assert:
+            that:
+              - not (backup_restore_state_copy_env_identity | bool)
+            quiet: true
+            fail_msg: >-
+              The state-copy environment file would hold a private age identity. An input or a secret
+              file holds one; nothing was written.
+
+        - name: Create the state-copy environment file empty, closed to everyone but root
+          ansible.builtin.copy:
+            content: ''
+            dest: '{{ backup_restore_state_copy_env_file }}'
+            owner: root
+            group: root
+            mode: '0600'
+            force: false
+          no_log: true
+          diff: false
+
+        - name: Write the state-copy environment file
+          ansible.builtin.copy:
+            content: "{{ backup_restore_state_copy_env_text | trim }}\n"
+            dest: '{{ backup_restore_state_copy_env_file }}'
+            owner: root
+            group: root
+            mode: '0600'
+            backup: false
+          no_log: true
+          diff: false
+      always:
+        - name: Forget the state-copy environment text
+          ansible.builtin.set_fact:
+            backup_restore_state_copy_env_text: ''
+          no_log: true
+
+    - name: Write the restore-drill environment file
+      when:
+        - backup_restore_drill_env_enabled | bool
+        - backup_restore_drill_missing | length == 0
+      block:
+        - name: Assemble the restore-drill environment
+          ansible.builtin.set_fact:
+            backup_restore_drill_env_text: "{{ lookup('ansible.builtin.template', 'restore-drill.env.j2') }}"
+          no_log: true
+
+        - name: Work out whether the restore-drill environment holds a private age identity
+          ansible.builtin.set_fact:
+            backup_restore_drill_env_identity: '{{ backup_restore_age_identity_marker in backup_restore_drill_env_text }}'
+          no_log: true
+
+        - name: Refuse a restore-drill environment that would hold a private age identity
+          ansible.builtin.assert:
+            that:
+              - not (backup_restore_drill_env_identity | bool)
+            quiet: true
+            fail_msg: >-
+              The restore-drill environment file would hold a private age identity. An input or a secret
+              file holds one; nothing was written.
+
+        - name: Create the restore-drill environment file empty, closed to everyone but root
+          ansible.builtin.copy:
+            content: ''
+            dest: '{{ backup_restore_drill_env_file }}'
+            owner: root
+            group: root
+            mode: '0600'
+            force: false
+          no_log: true
+          diff: false
+
+        - name: Write the restore-drill environment file
+          ansible.builtin.copy:
+            content: "{{ backup_restore_drill_env_text | trim }}\n"
+            dest: '{{ backup_restore_drill_env_file }}'
+            owner: root
+            group: root
+            mode: '0600'
+            backup: false
+          no_log: true
+          diff: false
+      always:
+        - name: Forget the restore-drill environment text
+          ansible.builtin.set_fact:
+            backup_restore_drill_env_text: ''
+          no_log: true
+  always:
+    - name: Forget every secret read
+      ansible.builtin.set_fact:
+        backup_restore_secret_values: {}
+      no_log: true
+
+# Without this the handler runs at the end of the play, and the timer tasks
+# below would meet a unit systemd has not read.
+- name: Load the units before the timers are handled
+  ansible.builtin.meta: flush_handlers
+
+# The installer's own read-only check says whether every input is in place. It
+# prints the names of what is missing and never a value. The role does not run
+# the installer to install: that would enable the timer, which only the variable
+# may do.
+- name: Ask the state-copy installer whether every input is in place
+  ansible.builtin.command:
+    argv:
+      - python3
+      - '{{ backup_worker_current_link }}/control/provision/install_state_copy.py'
+      - --check
+  register: backup_restore_state_copy_ready
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - backup_restore_state_copy_timer_enabled | bool
+    - backup_restore_release_ready | bool
+
+- name: Refuse the state-copy timer while the installer reports that an input is missing
+  ansible.builtin.assert:
+    that:
+      - backup_restore_state_copy_ready.rc == 0
+    quiet: true
+    fail_msg: >-
+      The state-copy timer cannot be enabled: the installer reports that an input is missing. It
+      says: {{ backup_restore_state_copy_ready.stderr | default('') }}
+  when:
+    - backup_restore_state_copy_timer_enabled | bool
+    - backup_restore_release_ready | bool
+
+# A timer the host already has on is left alone unless the matching may_disable
+# variable is true: with the defaults this task does nothing, so a first apply
+# cannot stop a timer that was enabled by hand. The gate is the second variable,
+# never a change to the default.
+- name: Hold the state-copy timer to the state the variable asks for
+  ansible.builtin.systemd_service:
+    name: '{{ backup_restore_state_copy_timer_unit }}'
+    enabled: '{{ backup_restore_state_copy_timer_enabled | bool }}'
+    state: "{{ 'started' if backup_restore_state_copy_timer_enabled | bool else 'stopped' }}"
+  when:
+    - backup_restore_release_ready | bool
+    - backup_restore_state_copy_timer_enabled | bool or backup_restore_state_copy_timer_may_disable | bool
+
+# The restore-drill timer is never turned on by this role (refused above). It
+# is stopped and disabled only when the owner asks for that.
+- name: Hold the restore-drill timer off when asked to
+  ansible.builtin.systemd_service:
+    name: '{{ backup_restore_drill_timer_unit }}'
+    enabled: false
+    state: stopped
+  when:
+    - backup_restore_release_ready | bool
+    - backup_restore_drill_timer_may_disable | bool
