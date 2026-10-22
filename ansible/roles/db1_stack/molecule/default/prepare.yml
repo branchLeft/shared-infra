@@ -113,3 +113,62 @@
         owner: root
         group: root
         mode: '0644'
+
+    # The database image pin. branchleft-deploy's write_image_env writes one line,
+    # IMAGE=<reference>, then a line break, into a file of mode 0600 owned by root
+    # (hetzner/provision/branchleft_deploy.py). This fixture has that form, with a
+    # made-up digest; no image is pulled here.
+    - name: Create the configuration directory the deploy program writes its pin into
+      ansible.builtin.file:
+        path: /etc/branchleft
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Write the database image pin in the form the deploy program writes
+      ansible.builtin.copy:
+        content: "IMAGE=mysql:8.0.43@sha256:{{ scenario_image_digest }}\n"
+        dest: /etc/branchleft/db.image.env
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    # The legacy drop-in: the second writer of the exporter file. The role must
+    # remove it. Its ExecStartPre is the line ghost-platform's db/systemd/db.override.conf
+    # carries.
+    - name: Create the directory of the stack's systemd drop-in
+      ansible.builtin.file:
+        path: /etc/systemd/system/branchleft-compose@db.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Write the legacy drop-in with its ExecStartPre
+      ansible.builtin.copy:
+        content: "[Service]\nExecStartPre=/usr/bin/python3 /opt/branchleft/db/provision/render_exporter_my_cnf.py\n"
+        dest: /etc/systemd/system/branchleft-compose@db.service.d/override.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    # A reload marker left by an earlier run, with the drop-in present. The converge
+    # must forget it (the forget task in tasks/_unit.yml), so verify asserts it is gone.
+    - name: Create the directory the role keeps the reload marker in
+      ansible.builtin.file:
+        path: /var/cache/db1-stack
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Put a reload marker in place from an earlier run
+      ansible.builtin.file:
+        path: /var/cache/db1-stack/legacy-drop-in-reloaded
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'

@@ -1,0 +1,88 @@
+---
+# The legacy drop-in and the reload that makes systemd forget it. Included by
+# tasks/main.yml before the exporter file is written. Nothing here handles a
+# secret.
+
+# The systemd tasks run only where systemd is the running init, which /run/systemd/system
+# shows. The test container has no systemd, so they are skipped there: a named
+# limit of the test. The order of these tasks against the exporter write is proven
+# from the log, which shows a skipped task's name as well.
+- name: Look for a running systemd
+  ansible.builtin.stat:
+    path: '{{ db1_stack_systemd_running_path }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_stack_systemd_running
+
+# Looked at before the removal, so the run knows whether the file was present.
+- name: Look at the legacy drop-in before the removal
+  ansible.builtin.stat:
+    path: '{{ db1_stack_legacy_drop_in }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_stack_legacy_drop_in_before
+
+# The file is removed, not rebuilt: with its ExecStartPre gone the drop-in would
+# hold nothing, and the role writes the exporter file itself. A removal is the
+# only change that stops the legacy second writer.
+- name: Remove the legacy drop-in file
+  ansible.builtin.file:
+    path: '{{ db1_stack_legacy_drop_in }}'
+    state: absent
+  register: db1_stack_legacy_drop_in_removed
+
+# A drop-in present before this run was put back since the last reload (a hand copy
+# reinstalled it), so the marker that records that reload is forgotten, and the
+# reload below runs again. Without this, a reinstalled drop-in that is removed
+# again would leave the marker in place and the reload would be skipped.
+- name: Forget the reload marker when this run found the legacy drop-in present
+  ansible.builtin.file:
+    path: '{{ db1_stack_reload_marker }}'
+    state: absent
+  when: db1_stack_legacy_drop_in_before.stat.exists | default(false)
+
+# systemd reads a drop-in only on a reload, so a running manager keeps the legacy
+# ExecStartPre until this runs. A reload does not restart the unit.
+#
+# The reload is keyed on a marker, not on this run's removal. A run that stops
+# between the removal and the reload leaves the file gone and no marker; the next
+# run would see no change and never reload, so it reloads whenever the file is gone
+# and the marker is absent. The marker is written only after the reload succeeds.
+# Skipped in check mode with a stated reason (ANS-10): a reload changes the running
+# manager, which a plan must not do.
+- name: Look at the legacy drop-in after the removal
+  ansible.builtin.stat:
+    path: '{{ db1_stack_legacy_drop_in }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_stack_legacy_drop_in_now
+
+- name: Look for the marker that records the reload after the legacy drop-in was removed
+  ansible.builtin.stat:
+    path: '{{ db1_stack_reload_marker }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db1_stack_reload_marker_stat
+
+- name: Reload systemd after the legacy drop-in was removed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when:
+    - not (db1_stack_legacy_drop_in_now.stat.exists | default(false))
+    - not (db1_stack_reload_marker_stat.stat.exists | default(false))
+    - db1_stack_systemd_running.stat.isdir | default(false)
+    - not ansible_check_mode
+  register: db1_stack_reloaded
+
+- name: Record that systemd was reloaded after the legacy drop-in was removed
+  ansible.builtin.file:
+    path: '{{ db1_stack_reload_marker }}'
+    state: touch
+    owner: root
+    group: root
+    mode: '0644'
+  when: db1_stack_reloaded is not skipped

@@ -1,0 +1,82 @@
+---
+# Part two's refusals, imported by verify.yml after the source checks. Each one
+# applies the role with a bad input and requires it to stop at the named task. They
+# run the role several times, which is most of part two's run time, so they sit in
+# their own file: the content, order and source checks can then be run without
+# them.
+
+# ----- The refusals -----
+
+# Each form of the pin file the deploy program never writes is refused at the named
+# task. The pin is checked in tasks/_compose.yml, after the packages, the drop-in
+# removal, the exporter file and the compose file have been written, so a bad-pin run
+# has changed the host before it stops. The case file restores a good pin after each
+# case.
+- name: Make the forms of the database image pin the role must refuse
+  ansible.builtin.set_fact:
+    db1_stack_verify_pin_cases:
+      - name: absent
+        absent: true
+        task: Refuse a database image pin that is absent
+      - name: empty
+        content: ''
+        task: Refuse a database image pin that is not one line of the form the deploy program writes
+      - name: no IMAGE key
+        content: "DATABASE=mysql:8.0.43@sha256:{{ scenario_image_digest }}\n"
+        task: Refuse a database image pin that is not one line of the form the deploy program writes
+      - name: two lines
+        content: "IMAGE=mysql:8.0.43@sha256:{{ scenario_image_digest }}\nIMAGE=mysql:8.0.43@sha256:{{ scenario_image_digest }}\n"
+        task: Refuse a database image pin that is not one line of the form the deploy program writes
+      - name: tag only
+        content: "IMAGE=mysql:8.0.43\n"
+        task: Refuse a database image pin that is not one line of the form the deploy program writes
+      - name: upper-case hex
+        content: "IMAGE=mysql:8.0.43@sha256:{{ scenario_image_digest | upper }}\n"
+        task: Refuse a database image pin that is not one line of the form the deploy program writes
+
+- name: Refuse each form of the database image pin the deploy program does not write
+  ansible.builtin.include_tasks: verify_pin_case.yml
+  loop: '{{ db1_stack_verify_pin_cases }}'
+  loop_control:
+    loop_var: db1_stack_verify_case
+    label: '{{ db1_stack_verify_case.name }}'
+
+# A second compose file, an override file, or a .env file, beside compose.yml is
+# refused before any change. Compose would read a second base file in place of
+# compose.yml, would merge an override file into it, and would take COMPOSE_FILE,
+# COMPOSE_PROJECT_NAME or COMPOSE_PROFILES from a .env file, and the deploy
+# program checks only compose.yml. The names are written out here, not read from
+# the role, so a name removed from the role's list fails its own case. The unit
+# runs `docker compose up` with no -f, so these are the names Compose looks for
+# by default, other than compose.yml itself.
+- name: Make the names of the files Compose reads beside the compose file
+  ansible.builtin.set_fact:
+    db1_stack_verify_compose_names:
+      - compose.yaml
+      - docker-compose.yml
+      - docker-compose.yaml
+      - compose.override.yml
+      - compose.override.yaml
+      - docker-compose.override.yml
+      - docker-compose.override.yaml
+      - .env
+
+- name: Refuse the role beside each of those files at its named task
+  ansible.builtin.include_tasks: verify_compose_name_case.yml
+  loop: '{{ db1_stack_verify_compose_names }}'
+  loop_control:
+    loop_var: db1_stack_verify_compose_name
+
+- name: Read the database image pin again after the refusals
+  ansible.builtin.slurp:
+    src: '{{ db1_stack_image_env_path }}'
+  register: db1_stack_verify_pin_after
+  no_log: true
+
+- name: Assert the database image pin is the good one again after the refusals
+  ansible.builtin.assert:
+    that:
+      - (db1_stack_verify_pin_after.content | b64decode) == ('IMAGE=mysql:8.0.43@sha256:' ~ scenario_image_digest) ~ ('%c' | format(10))
+    fail_msg: The restored database image pin is not the good one.
+    quiet: true
+  no_log: true

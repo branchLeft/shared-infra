@@ -1,8 +1,10 @@
 ---
-# Order matters. Every input is checked before anything changes the host; the
-# repository, its key and its pin are in place before the index is refreshed;
-# the local package file is installed before the packages that depend on it; and
-# the exporter file is created closed before it holds the password.
+# Order matters. The password, the downloads and the repository key are checked
+# before anything changes the host. The database image pin is not: it is checked
+# in tasks/_compose.yml, after this file has changed the host (see the README, "The
+# database image pin"). The repository, its key and its pin are in place before the
+# index is refreshed; the local package file is installed before the packages that
+# depend on it; and the exporter file is created closed before it holds the password.
 #
 # The exporter password is the one secret. Each task that reads, templates or
 # passes it sets no_log: true, and diff: false where a diff would show it
@@ -106,6 +108,41 @@
       - lookup('ansible.builtin.file', 'mysql-repo-keys.asc', rstrip=False) | hash('sha256') == db1_stack_mysql_key_sha256
     fail_msg: The repository key file files/mysql-repo-keys.asc does not match the digest pinned in vars/main.yml.
     quiet: true
+
+# ----- The database stack's inputs (part two) -----
+
+# The database image pin is checked in tasks/_compose.yml, just before the unit is
+# enabled, not here: rendering the compose file needs no pin (the unit cannot start
+# without one), and branchleft-deploy reads that compose file before it writes the
+# pin, so the rendering must come first on a rebuilt host. See the README, "The
+# database image pin".
+
+# The compose file is the one the deploy program reads. Compose would read a
+# second file of another name first, would merge an override file into it, and
+# would read a .env file that can name another file or another project, so the
+# role refuses to run beside any of them.
+- name: Look for a second compose file in the database directory
+  ansible.builtin.stat:
+    path: '{{ db1_stack_db_directory }}/{{ item }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ db1_stack_other_compose_names }}'
+  register: db1_stack_other_compose
+
+- name: Refuse a second compose file in the database directory
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists
+    fail_msg: >-
+      {{ item.item }} exists in {{ db1_stack_db_directory }}. Compose would read it
+      in place of compose.yml, merge it into compose.yml, or take from it the
+      name of another file or project, and the deploy program checks only
+      compose.yml. Move it aside, then run the role again.
+    quiet: true
+  loop: '{{ db1_stack_other_compose.results }}'
+  loop_control:
+    label: '{{ item.item }}'
 
 # ----- The host prerequisites -----
 
@@ -234,6 +271,15 @@
   loop: '{{ db1_stack_mysql_checked_packages }}'
   when: not ansible_check_mode
 
+# ----- The legacy drop-in (part two) -----
+
+# The drop-in that wrote the exporter file on every start is removed before this
+# run writes that file. Its daemon-reload is in the same included file. Nothing in
+# this run restarts the unit; the order is the control, because a daemon that
+# still holds the legacy line would run it on any later restart.
+- name: Remove the legacy drop-in that rewrote the exporter file before every start
+  ansible.builtin.include_tasks: _unit.yml
+
 # ----- The exporter credentials file -----
 
 # The host's provisioning creates this directory with this owner and mode. This
@@ -357,3 +403,12 @@
   when:
     - db1_stack_branchleft_directory_stat.stat.exists
     - not (db1_stack_exporter_path_now.stat.isdir | default(false))
+
+# ----- The database stack (part two) -----
+
+# The compose file, the MySQL configuration and the unit's enablement. The
+# exporter file above is written before this include, so the stack is never
+# enabled ahead of the file its exporter mounts. Nothing here starts, restarts or
+# recreates a container; see _compose.yml.
+- name: Deliver the database stack's compose file, configuration and enablement
+  ansible.builtin.include_tasks: _compose.yml
