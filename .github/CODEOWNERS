@@ -50,6 +50,8 @@
 /ansible/checks/                         @branchLeft/branchleft-admin
 # The pin check loads the lock reader and the allowed marker set from the role's install program and keeps no copy, so what the gate reads is decided in this one file: a role pull request does not change it on the reviewer App's approval alone.
 /ansible/roles/ansible_runtime/files/install_runtime.py  @branchLeft/branchleft-admin
+# Each host's trusted signer list is the trust anchor of the pull. An edit to a file here is the owner's merge. check_enrolment.py (R2, R3, R6, R8) fails a change that sets a protected key outside its own file. It does not judge a role edit: roles run as root. The reusable gated apply exists in branchLeft/github-workflows, but nothing here calls it, so no gate on a role edit is wired.
+/ansible/trust/                          @branchLeft/branchleft-admin
 
 /.standardsignore        @branchLeft/branchleft-admin
 /.standards.mode         @branchLeft/branchleft-admin

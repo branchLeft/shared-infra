@@ -1,0 +1,110 @@
+---
+# The plan scenario: what a plan (a run in check mode) must do, on a host in either
+# state. Its skip-steps.txt leaves out the idempotence and verify steps, which the
+# default scenario runs, and runs the three that plan: check-fresh before any apply,
+# check-configured after one, and Molecule's own check. This converge applies the
+# role once, for real, and in check mode makes the comparisons below.
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars:
+    # Everything a plan must leave exactly as it found it. Each is read before
+    # and after the role runs in check mode; a path that did not exist must still
+    # not exist, and one that did must have the same modification time (a
+    # directory's changes when an entry is added or removed). The run is the
+    # control for ANS-10: it holds on a host in either state, fresh or configured.
+    converge_watched_paths:
+      - /etc/passwd
+      - /etc/group
+      - /etc/branchleft
+      - /etc/branchleft/tenant-uids
+      - /etc/branchleft/tenant-uids/demo-0
+      - /etc/branchleft/tenant-uids/demo-router
+      - /etc/branchleft/demo1-drain-flags-preseeded
+      - /opt/branchleft
+      - /opt/branchleft/demo-host
+      - /opt/branchleft/demo-host/current
+      - /var/lib/branchleft/broker-slots
+      - /usr/local/sbin
+      - /usr/local/sbin/branchleft-slot
+      - /usr/local/lib/branchleft
+      - /usr/local/lib/branchleft/demo_sidecar.py
+      - /usr/local/lib/branchleft/health_router.py
+      - /var/lib/branchleft
+      - /var/lib/branchleft/demo-router
+      - /var/lib/branchleft/demo-router/0
+      - /var/lib/branchleft/demo-router/0/a
+      - /var/lib/branchleft/demo-candidates
+      - /var/lib/branchleft/demo-candidates/edge-upstreams.caddy
+      - /var/lib/branchleft-broker
+      - /var/lib/branchleft-broker/drain-flags
+      - /var/lib/branchleft-broker/drain-flags/0-a.drain
+      - /etc/systemd/system
+      - /etc/systemd/system/branchleft-compose@demo-0-a.service.d
+      - /etc/systemd/system/branchleft-compose@demo-0-a.service.d/colour.conf
+      - /etc/systemd/system/branchleft-health-router@.service
+  tasks:
+    # A plan makes no change. Every program the role runs in check mode only
+    # prints, and every program that writes is skipped there; this reads the
+    # watched paths before and after the role's check run and compares them.
+    - name: Look at the watched paths before a plan
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop: '{{ converge_watched_paths }}'
+      register: demo1_build_converge_before
+      when: ansible_check_mode
+
+    # The link to the staged release exists only on a host the role has applied,
+    # so it says which state a plan meets: a fresh host, where no generator is
+    # staged and the grant cannot be compared, or a configured one.
+    - name: Look at the release link before a plan
+      ansible.builtin.stat:
+        path: /opt/branchleft/demo-host/current
+        follow: false
+      register: demo1_build_converge_release_before
+      when: ansible_check_mode
+
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml. The include carries no no_log.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.demo1_build
+
+    # The control for the grant check in a plan (ANS-10). A fresh host has no
+    # staged generator, so the check is skipped with a reason and must say the
+    # grant was NOT verified; it must not fail the plan (there would be nothing to
+    # approve) and must not stay silent (a skip would read as a pass). A configured
+    # host has the generator, so the comparison runs and the notice is skipped.
+    - name: Assert a plan says whether the sudoers grant was verified
+      ansible.builtin.assert:
+        that:
+          - demo1_build_converge_release_before.stat.exists == (demo1_build_grant_notice.skipped | default(false))
+          - >-
+            demo1_build_converge_release_before.stat.exists
+            or ('NOT verified' in (demo1_build_grant_notice.msg | default('')))
+        quiet: true
+        fail_msg: >-
+          A plan on a host with no staged release did not say the sudoers grant was NOT verified,
+          or a plan on a configured host said it. A skipped comparison must not look like a pass.
+      when: ansible_check_mode
+
+    - name: Look at the watched paths after a plan
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop: '{{ converge_watched_paths }}'
+      register: demo1_build_converge_after
+      when: ansible_check_mode
+
+    - name: Assert the plan changed nothing
+      ansible.builtin.assert:
+        that:
+          - item.1.stat.exists == item.0.stat.exists
+          - (item.1.stat.mtime | default(0)) == (item.0.stat.mtime | default(0))
+        quiet: true
+        fail_msg: The check run changed {{ item.0.item }}. A plan must read and change nothing.
+      loop: '{{ demo1_build_converge_before.results | zip(demo1_build_converge_after.results) | list }}'
+      loop_control:
+        label: '{{ item.0.item }}'
+      when: ansible_check_mode

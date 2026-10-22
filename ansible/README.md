@@ -12,22 +12,24 @@ the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
 
 ## Layout
 
-| Path               | What it is                                                             |
-| ------------------ | ---------------------------------------------------------------------- |
-| `role_skeleton/`   | The skeleton `ansible-galaxy role init --role-skeleton` copies.        |
-| `roles/`           | One directory per role. `example_config` is the worked example.        |
-| `patterns/`        | One directory per pattern, each a role the harness runs like `roles/`. |
-| `harness/`         | The test harness, its unit tests and nothing else.                     |
-| `requirements.in`  | The seven tools chosen on purpose, exact pins (ANS-4).                 |
-| `requirements.txt` | The hash-locked toolchain compiled from it, collections included.      |
-| `requirements.yml` | Empty by design: no collection is fetched outside the lock (ANS-4).    |
-| `checks/`          | The pin check and its unit tests (ANS-4).                              |
-| `tools/`           | The record a new host's first boot is built from, and its tests.       |
-| `inventories/`     | The inventory and group-variable trees. `production` holds edge1, db1. |
-| `playbooks/`       | One playbook per host: selects hosts and lists roles (ANS-13).         |
-| `pyproject.toml`   | The Python floor for the harness: version, mypy strict, ruff (ANS-2).  |
-| `../.ansible-lint` | The lint floor, production profile (ANS-5). Not editable by a role PR. |
-| `../.yamllint`     | The YAML floor (ANS-6). Not editable by a role PR.                     |
+| Path                  | What it is                                                             |
+| --------------------- | ---------------------------------------------------------------------- |
+| `role_skeleton/`      | The skeleton `ansible-galaxy role init --role-skeleton` copies.        |
+| `roles/`              | One directory per role. `example_config` is the worked example.        |
+| `patterns/`           | One directory per pattern, each a role the harness runs like `roles/`. |
+| `harness/`            | The test harness, its unit tests and nothing else.                     |
+| `requirements.in`     | The seven tools chosen on purpose, exact pins (ANS-4).                 |
+| `requirements.txt`    | The hash-locked toolchain compiled from it, collections included.      |
+| `requirements.yml`    | Empty by design: no collection is fetched outside the lock (ANS-4).    |
+| `checks/`             | The pin check, the enrolment check and their unit tests.               |
+| `tools/`              | The record a new host's first boot is built from, and its tests.       |
+| `inventories/`        | The inventory and group-variable trees. `production` holds edge1, db1. |
+| `playbooks/`          | One playbook per host: selects hosts and lists roles (ANS-13).         |
+| `playbooks/includes/` | The shared pull values and refusals, each defined once.                |
+| `trust/`              | One signer file per host under the pull, loaded only by its playbook.  |
+| `pyproject.toml`      | The Python floor for the harness: version, mypy strict, ruff (ANS-2).  |
+| `../.ansible-lint`    | The lint floor, production profile (ANS-5). Not editable by a role PR. |
+| `../.yamllint`        | The YAML floor (ANS-6). Not editable by a role PR.                     |
 
 ## Make a new role
 
@@ -83,6 +85,14 @@ everything for one or more roles:
 .venv/bin/python ansible/harness/run_harness.py ansible/roles/example_config
 ```
 
+`--scenario <name>` runs one other scenario of the role, from `molecule/<name>/`
+(the default is `default`). The name is checked before anything runs: a name that
+is not a plain directory name is refused, and a role without that scenario's
+`molecule.yml` fails at `scenario-limits`, like a role without a `default` one.
+The static steps read the whole role either way; the container steps run the
+scenario named, every Molecule command with `-s <name>`, the final `destroy`
+included, so a second scenario's container is always removed.
+
 For each role it runs, in this order, and prints one line per step at the end,
 with the reason beneath each failed interface or scenario check:
 
@@ -117,6 +127,24 @@ The static steps do not depend on each other or on the container steps. A
 failed container step skips the later ones except `destroy`. The exit status is
 non-zero if any step failed.
 
+### Sharing steps between scenarios
+
+Each scenario is its own shard with its own 25-minute limit. A role whose steps do not
+fit one shard shares them out between its scenarios: a scenario's `skip-steps.txt`,
+beside its `molecule.yml`, lists the steps its shard leaves out, one name per line,
+and a line that starts with `#` is a comment. A scenario with no such file runs every
+step. The leaving-out is shown, as `SKIP` in the summary, and not hidden.
+
+Only `check-fresh`, `idempotence`, `verify`, `check-configured` and `molecule-check`
+may be left out. `create`, `prepare`, `converge` and `destroy` are what any run needs.
+A line that is not one of those five names fails `scenario-limits` and leaves nothing
+out. So does a step that every scenario of the role leaves out: a role may share its
+steps but not drop one, and the check reads every scenario's list whichever one the
+run executes. The list is plain text and not YAML because `ansible-lint` takes any
+YAML file in a scenario directory for a playbook.
+
+A scenario that leaves out `verify` needs no `verify.yml`.
+
 The harness's own tests, type check and lint run from `ansible/`, with the
 virtual environment's Python because the harness reads YAML with the library the
 tools bring. The pin check (below) is held to the same standard and run the
@@ -138,17 +166,23 @@ changed; when none did, the other jobs are skipped and the gate passes.
 
 The workflow has three kinds of job:
 
-- `discover` lists every directory directly under `ansible/roles/` and
-  `ansible/patterns/`, plus the fresh-role skeleton, from the repository tree.
-  It fails if the list is empty, so the shard job cannot skip silently. A
-  directory with no `molecule/` scenario is still listed, and its shard fails at
-  the `scenario-limits` step. A directory name containing a newline splits into
-  two entries; both fail, so the gate is red.
+- `discover` runs `ansible/harness/list_shards.py`, which lists one shard for
+  each scenario of every directory directly under `ansible/roles/` and
+  `ansible/patterns/` (the `default` scenario first, then every other directory
+  under `molecule/`), plus the fresh-role skeleton, from the repository tree. It
+  prints the matrix as JSON, so no name is split by a line break. It fails if the
+  list is empty, so the shard job cannot skip silently. A directory with no
+  `molecule/` scenario still gets its `default` shard, and that shard fails at the
+  `scenario-limits` step. A shard's name is the directory, and the directory and
+  the scenario in brackets for any scenario but `default`, so names are unique.
 - `lint` runs the static checks once: yamllint, ansible-lint, mypy, ruff and the
   harness's unit tests.
-- `shard` runs the harness once for each entry `discover` listed, in parallel.
-  Each shard has its own time limit, so the run time does not grow with the
-  number of roles in one job.
+- `shard` runs the harness once for each entry `discover` listed, in parallel,
+  with `--scenario` set to the entry's scenario. Each shard has its own time
+  limit (25 minutes), so the run time does not grow with the number of roles in
+  one job. A role whose one scenario would not fit in the limit puts its
+  refusal cases in a second scenario, which is a second shard, not in a longer
+  limit.
 
 The gate job is named `Lint and test the Ansible roles`. The ruleset requires
 a check with exactly that name, and a matrix job would report its checks under
@@ -158,7 +192,11 @@ nothing changed, `lint` and the shards are skipped and the gate passes.
 
 How to add a pattern: nothing to edit here. A directory directly under
 `ansible/patterns/` or `ansible/roles/` is picked up by `discover` on the next
-run. It needs a `molecule/default/molecule.yml` to pass its shard.
+run. It needs a `molecule/default/molecule.yml` to pass its shard. A second
+scenario is a directory `molecule/<name>/` with its own `molecule.yml`; it gets
+its own shard, held to the same scenario limits. A second scenario that must share
+the first's platform links its `molecule.yml` to `../default/molecule.yml`, so the
+platform pin has one home.
 
 ## The scenario limits the harness reads
 
@@ -177,7 +215,11 @@ ANS-15 says a test never touches a host that already exists. The
 - a platform that mounts a Docker or Podman socket;
 - a platform that sets `privileged` or `capabilities` without a comment on the
   line above the key saying why (ANS-15 allows privilege with a stated reason);
-- a role with no `molecule/default/molecule.yml`.
+- a role with no `molecule/default/molecule.yml`, or no `molecule.yml` for the
+  scenario it is run with (a link to nothing counts as missing).
+
+Every scenario directory under `molecule/` is read, not only the one being run, so
+a second scenario cannot hold a privilege the default one is not allowed.
 
 The harness also refuses a `DOCKER_HOST` that is not a local unix socket.
 
@@ -504,9 +546,11 @@ oversight. Each is a decision the standard assigns to later work.
   required (CI-14), but making it required is a repository ruleset change and
   belongs to the owner. Until it is done a red Ansible job does not block a
   merge on its own.
-- **Delivery.** Only edge1 and db1 have a playbook, and edge1's first apply is the one-time root bootstrap and then the gated pull; db1's waits on the gated pull. ANS-17 describes the only
-  approved path; the trigger and the reusable workflow it needs are separate
-  work.
+- **Delivery.** Each of edge1, db1, app1 and ops1 has a playbook under `playbooks/`.
+  edge1's first apply is the one-time root bootstrap and then the gated pull; db1's
+  waits on the gated pull. ANS-17 describes the only approved path. The trigger is
+  `roles/pull_trigger`, and its reusable workflow is in `branchLeft/github-workflows`;
+  nothing in this repo calls that workflow yet.
 - **Reuse by other repositories.** The harness is code another repository may
   one day run. It is not to be copied between repositories (ANS-13). The
   reusable CI work in the github-workflows repository is where it will be

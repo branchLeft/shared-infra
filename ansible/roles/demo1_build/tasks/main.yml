@@ -1,0 +1,47 @@
+---
+# The order follows the host build: check the inputs and what broker_deploy left
+# behind, stage the pinned programs, compare the sudoers grant with the generator,
+# install the three programs that something else runs, claim the uids and make the
+# router's account, declare the directories, write the units, stage the edge
+# candidate, and last read back what root will run.
+#
+# Each step is its own internal tasks file, named for what it does. The role
+# applies nothing outside this host build: it does not write the sudoers file, run
+# a slot reset, run the go-live step, write the live edge, or start or enable a
+# unit.
+- name: Check the inputs
+  ansible.builtin.include_tasks: _inputs.yml
+
+- name: Check what broker_deploy left behind and the directories root relies on
+  ansible.builtin.include_tasks: _preconditions.yml
+
+- name: Stage the pinned programs
+  ansible.builtin.include_tasks: _release.yml
+
+# The comparison comes before the install on purpose. The grant is what makes the
+# wrapper reachable as root, so a grant this refuses (any difference from the
+# generator's body, a slot table that is not the generator's, or a rule that does
+# not run the wrapper path) must stop the run before the wrapper is put anywhere,
+# wherever the wrapper path points. It needs only the staged release above, never
+# the installed wrapper. On a host with no release (a first plan) it says the
+# grant was not verified; an apply always has the release.
+- name: Compare the sudoers grant with the pinned generator
+  ansible.builtin.include_tasks: _sudoers_check.yml
+
+- name: Install the programs that sudo and systemd run
+  ansible.builtin.include_tasks: _programs.yml
+
+- name: Record the uid claims and make the router's account
+  ansible.builtin.include_tasks: _accounts.yml
+
+- name: Declare the socket tree and the drain-flag directory
+  ansible.builtin.include_tasks: _dirs.yml
+
+- name: Write the colour drop-ins and the router unit
+  ansible.builtin.include_tasks: _units.yml
+
+- name: Stage the candidate edge fragment
+  ansible.builtin.include_tasks: _candidate.yml
+
+- name: Read back what root will run
+  ansible.builtin.include_tasks: _integrity.yml

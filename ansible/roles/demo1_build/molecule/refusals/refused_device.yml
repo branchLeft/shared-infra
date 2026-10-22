@@ -1,0 +1,92 @@
+---
+# One case of the same-filesystem control, imported by converge.yml. The drain flags are
+# written in a staging directory and the directory is moved to the flag directory's name
+# with one rename. A rename cannot cross filesystems, and GNU mv does not fail when it
+# would: it copies the tree and removes the source, and the copy writes each flag through
+# a name in the broker's tree, which is what the staged move exists to prevent. The
+# order and staging checks of refused_link.yml cannot see it (the copy keeps the flags'
+# times and mv removes the source), so the step must refuse a staging directory and a
+# flag directory on different filesystems, before it creates anything.
+#
+# The container has a filesystem the roles' paths are not on: /run is a tmpfs (the
+# platform's molecule.yml mounts it). converge_case.staging_dir puts the staging
+# directory there, or converge_case.broker_dir puts the broker's state directory (and
+# the flag directory in it) there; that directory is not made, so the step reads its
+# parent, /run, in its place, as it does on a first build. The role's own paths are the
+# defaults below. The control that the check does not refuse everything is the accepted
+# case of refused_link.yml, which runs the same step on the real paths and counts the
+# fourteen flags.
+#
+# Everything the case made is removed in every outcome. The case is skipped by
+# Molecule's idempotence step (the tag below), and a plan makes no change, so a check
+# run skips it.
+- name: Refuse a staged move between two filesystems
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    converge_staging_dir: '{{ converge_case.staging_dir | default("/var/lib/branchleft/demo-drain-flags-staging") }}'
+    converge_broker_dir: '{{ converge_case.broker_dir | default("/var/lib/branchleft-broker") }}'
+  tasks:
+    - name: Prove a move between two filesystems is refused before anything is created
+      when: not ansible_check_mode
+      block:
+        - name: Run the role's directory step with the paths the case says
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+            tasks_from: _dirs.yml
+          vars:
+            demo1_build_flag_staging_dir: '{{ converge_staging_dir }}'
+            demo1_build_broker_state_dir: '{{ converge_broker_dir }}'
+            demo1_build_flag_dir: '{{ converge_broker_dir }}/drain-flags'
+
+        - name: Fail if the move between two filesystems was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a staging directory and a flag directory on different filesystems.
+      rescue:
+        - name: Assert the refusal was the one this case is for
+          ansible.builtin.assert:
+            that:
+              - "'cannot cross filesystems' in (ansible_failed_result.msg | default(''))"
+              - converge_staging_dir in (ansible_failed_result.msg | default(''))
+            quiet: true
+            fail_msg: >-
+              The role failed for a reason other than the two filesystems:
+              {{ ansible_failed_result.msg | default('') }}
+
+        - name: Look at what the refused step may have created
+          ansible.builtin.stat:
+            path: '{{ item }}'
+            follow: false
+          loop:
+            - '{{ converge_staging_dir }}'
+            - '{{ converge_broker_dir }}/drain-flags'
+            - /var/lib/branchleft/demo-router
+            - /etc/branchleft/demo1-drain-flags-preseeded
+          register: demo1_build_converge_device_after
+
+        - name: Assert the refusal created nothing
+          ansible.builtin.assert:
+            that:
+              - not demo1_build_converge_device_after.results[0].stat.exists
+              - not demo1_build_converge_device_after.results[1].stat.exists
+              - not demo1_build_converge_device_after.results[2].stat.exists
+              - not demo1_build_converge_device_after.results[3].stat.exists
+            quiet: true
+            fail_msg: >-
+              The refused step made the staging directory, the flag directory, the socket tree or the
+              marker. It must stop before it creates anything.
+      always:
+        - name: Remove everything the case made
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /var/lib/branchleft/demo-router
+            - /var/lib/branchleft-broker
+            - /var/lib/branchleft/demo-drain-flags-staging
+            - '{{ converge_staging_dir }}'
+            - '{{ converge_broker_dir }}'
+            - /etc/branchleft/demo1-drain-flags-preseeded
+          changed_when: false
+          when: not ansible_check_mode

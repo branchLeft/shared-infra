@@ -97,3 +97,72 @@ db1_stack_exporter_cnf_mode: '0400'
 # break.
 db1_stack_password_alphabet_pattern: '^[A-Za-z0-9._~-]*\Z'
 db1_stack_password_min_length: 20
+
+# ----- The database stack (part two) -----
+
+# The paths the deploy program (hetzner/provision/branchleft_deploy.py) and the
+# stack's systemd template read. The deploy program builds the compose path as
+# STACK_DIR/<stack>/compose.yml and the pin file as CONFIG_DIR/<stack>.image.env,
+# so the role writes the same names. The compose file is compose.yml, not
+# compose.yaml: Compose would prefer compose.yaml, and the deploy program checks
+# compose.yml, so the two must never both exist (see tasks/main.yml).
+db1_stack_stack_directory: /opt/branchleft
+db1_stack_db_directory: /opt/branchleft/db
+db1_stack_compose_path: /opt/branchleft/db/compose.yml
+db1_stack_cnf_directory: /opt/branchleft/db/conf.d
+db1_stack_socket_directory: /opt/branchleft/db/run/mysqld
+db1_stack_unit: branchleft-compose@db.service
+db1_stack_systemd_running_path: /run/systemd/system
+
+# The file names Docker Compose also reads from the project directory. The
+# stack's unit runs `docker compose up` there with no -f, and the deploy program
+# checks only compose.yml. A base file of another name would be read by Compose
+# in place of compose.yml. An override file would be merged into compose.yml, and
+# could swap the image, publish a port or add a service. A .env file is read by
+# Compose from the project directory too, and can set COMPOSE_FILE (naming any
+# file, or a second one to merge), COMPOSE_PROJECT_NAME (another project, so
+# another set of containers) or COMPOSE_PROFILES (starting profile services). None
+# of these is seen by the deploy program's check, so the role refuses to run while
+# one exists. The role writes none of them.
+# The unit's environment and drop-ins are not read: see README "Named limits".
+db1_stack_other_compose_names:
+  - compose.yaml
+  - docker-compose.yml
+  - docker-compose.yaml
+  - compose.override.yml
+  - compose.override.yaml
+  - docker-compose.override.yml
+  - docker-compose.override.yaml
+  - .env
+
+# The pin file the deploy program writes (CONFIG_DIR/db.image.env). The role
+# reads it and never writes it: branchleft-deploy owns the database image pin.
+# Its writer, write_image_env in branchleft_deploy.py, writes exactly one line,
+# IMAGE=<reference>, followed by a line break, and the reference is a digest
+# (IMAGE_REF in the same file). The pattern below is that one line for the
+# database image; the test derives its fixture from the same writer's format.
+db1_stack_image_env_path: /etc/branchleft/db.image.env
+db1_stack_image_env_pattern: '^IMAGE=mysql:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}@sha256:[0-9a-f]{64}\n\Z'
+
+# The legacy second writer of the exporter file: the ExecStartPre in the
+# database stack's systemd drop-in (db/systemd/db.override.conf in ghost-platform).
+# The role removes the file, because the role writes the exporter file itself.
+db1_stack_legacy_drop_in: /etc/systemd/system/branchleft-compose@db.service.d/override.conf
+
+# Written after systemd is reloaded following the drop-in's removal, so a run that
+# stopped between the two reloads again (see tasks/_unit.yml). It holds no content.
+# It lives beside the download directory the role already keeps.
+db1_stack_reload_marker: /var/cache/db1-stack/legacy-drop-in-reloaded
+
+# The address the database and the exporter listen on, and the exporter's
+# metrics port. bind-address is the private address tenant accounts use; the
+# root and exporter accounts are socket-only (see the compose file).
+db1_stack_private_address: 10.20.1.20
+db1_stack_exporter_metrics_port: 9104
+
+# The exporter image, pinned by digest because nothing else writes it. The value
+# is copied from ghost-platform db/stack/compose.yml on origin/main, where the
+# line reads:
+#   image: prom/mysqld-exporter:v0.20.0@sha256:abed8dac117b4ae5b70757f988e44795935b9a72c3b58d720c67ba688f8cb79e
+# A bump is a human-reviewed change here, the same rule as the key pin in part one.
+db1_stack_exporter_image: prom/mysqld-exporter:v0.20.0@sha256:abed8dac117b4ae5b70757f988e44795935b9a72c3b58d720c67ba688f8cb79e

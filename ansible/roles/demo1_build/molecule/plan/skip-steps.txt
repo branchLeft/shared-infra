@@ -1,0 +1,9 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is
+# a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# This scenario is the three steps that plan: check-fresh before any apply,
+# check-configured after one, and Molecule's own check. The idempotence and verify
+# steps are the default scenario's (it leaves these three out in turn), so that
+# neither shard holds all eight and each fits the 25-minute limit with room to spare.
+idempotence
+verify

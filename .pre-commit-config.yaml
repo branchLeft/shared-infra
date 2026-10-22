@@ -139,7 +139,10 @@ repos:
       - id: scripts-tests
         name: scripts unit tests
         entry: sh -c "python3 -m unittest discover -s scripts -p 'test_*.py'"
-        language: system
+        # A managed environment, not the system Python: the suite imports PyYAML
+        # (test_workflow_concurrency.py), which a bare machine does not have.
+        language: python
+        additional_dependencies: [pyyaml==6.0.3]
         files: ^scripts/.*\.py$
         pass_filenames: false
 

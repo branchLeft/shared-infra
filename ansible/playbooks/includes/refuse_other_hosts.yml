@@ -1,0 +1,14 @@
+---
+# The refusal every host playbook under the pull runs first. Its single home.
+# A run is refused unless it has exactly one host and that host is the localhost the
+# trigger names or the host this playbook is for. On an inline one-host inventory
+# (-i 'HOST,') the one-host test is true by construction, so only the name test does
+# any work on that route. An extra -e outranks every variable, and no in-play check
+# sees it reliably. This is not a host control: the root-owned pull config is.
+- name: Refuse a run that is not this host's
+  ansible.builtin.assert:
+    that:
+      - ansible_play_hosts_all | length == 1
+      - inventory_hostname in ['localhost', enrolled_host]
+    fail_msg: 'This playbook is for one host, {{ enrolled_host }}. Limit the run to that host.'
+    quiet: true
