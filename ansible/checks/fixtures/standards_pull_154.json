@@ -1,0 +1,10 @@
+{
+  "number": 154,
+  "state": "closed",
+  "merged": true,
+  "merge_commit_sha": "893535f41582ec5f0579a23e309147ed2020c9ac",
+  "base": {
+    "ref": "main"
+  },
+  "html_url": "https://github.com/branchLeft/standards/pull/154"
+}

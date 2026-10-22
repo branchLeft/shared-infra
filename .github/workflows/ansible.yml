@@ -217,7 +217,12 @@ jobs:
       - name: Test the harness
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/harness -p "test_*.py"'
 
+      # One check reads the standards repository's public API to confirm the cited pull
+      # request is the merged ANS-12 amendment (ansible/checks/test_role_composition_gate.py).
+      # The token is the workflow's own, read-only, and is there for the rate limit alone.
       - name: Test the checks
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/checks -p "test_*.py"'
 
       # A role that ships a typed module of its own in library/ (ANS-2) is checked

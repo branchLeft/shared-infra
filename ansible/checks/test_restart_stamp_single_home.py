@@ -12,7 +12,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from role_tasks import parsed_tasks, short_name
+from role_tasks import (
+    BLOCK_KEYS,
+    included_role,
+    own_file,
+    parsed_tasks,
+    role_call,
+    task_modules,
+    text_of,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 ROLE_DIRS = (ROOT / "ansible" / "roles", ROOT / "ansible" / "patterns")
@@ -34,67 +42,54 @@ CONDITION_KEYS = (
     "register",
 )
 PENDING_MARK = re.compile(r"(?<![\w-])pending(?![\w-])")
+LOOKUP = re.compile(r"(?<![\w.])(?:lookup|query|q)\s*\(")
 
-# Modules that act on a file, a command or a service. Another role may not point one at a stamp.
-ACTING = frozenset(
-    {
-        "assemble",
-        "blockinfile",
-        "command",
-        "copy",
-        "fetch",
-        "file",
-        "find",
-        "get_url",
-        "lineinfile",
-        "raw",
-        "replace",
-        "script",
-        "service",
-        "shell",
-        "slurp",
-        "stat",
-        "synchronize",
-        "systemd",
-        "systemd_service",
-        "template",
-        "unarchive",
-        "uri",
-    }
-)
-WRITING = frozenset({"blockinfile", "copy", "lineinfile", "replace", "template"})
+# The tasks of another role that do not act on a file, a command or a service, so they may
+# carry a stamp as data. Every other module is screened, whether or not this list knows it.
+NON_ACTING = frozenset({"assert", "debug", "set_fact"})
 
 # Modules restart_stamp may use: they read or write a file it is given, or work on facts.
 OWNER_MODULES = frozenset({"assert", "copy", "include_tasks", "set_fact", "slurp", "stat"})
 
 
-def text_of(value: object) -> str:
-    """Return a task's arguments as one text, so a pattern can be searched in all of them."""
-    return repr(value)
+def does_not_act(role: Path, module: str, arguments: object) -> bool:
+    """Say whether a task of another role is one of the three that may carry a stamp.
+
+    These are a fact, an assertion or a message; an include of restart_stamp, resolved by the
+    check that finds compositions; and an include of one of the role's own files.
+    """
+    if module == "include_role":
+        target = included_role(role, role_call(arguments)[0])
+        return target is not None and target.name == OWNER
+    if module == "include_tasks":
+        return own_file(arguments)
+    return module in NON_ACTING
 
 
 def violations(role: Path) -> list[str]:
     """Return every way a role other than restart_stamp reads, writes or runs on a stamp."""
     found: list[str] = []
     for name, task in parsed_tasks(role):
-        for key, value in task.items():
-            module = short_name(str(key))
-            if module not in ACTING:
+        # Every key of a task, not only the module's arguments: the stamp may be reached
+        # through the task's vars or its loop. The tasks of a block are read as tasks of their own.
+        around = text_of({k: v for k, v in task.items() if k != "name" and k not in BLOCK_KEYS})
+        names_stamp = bool(STAMP_FILE.search(around) or STAMP_VARIABLE.search(around))
+        for module, arguments in task_modules(task):
+            if does_not_act(role, module, arguments):
                 continue
-            arguments = text_of(value)
             label = f"{name}: {module}"
-            # Every key of a task that acts, not only the module's arguments: the stamp may
-            # be reached through the task's vars or its loop.
-            around = text_of({k: v for k, v in task.items() if k != "name"})
-            if STAMP_FILE.search(around) or STAMP_VARIABLE.search(around):
+            if names_stamp:
                 found.append(f"{label} is given a stamp")
-            if module in WRITING and PENDING_MARK.search(arguments):
+            if PENDING_MARK.search(text_of(arguments)):
                 found.append(f"{label} writes the pending mark")
-        # A stamp named in a task that does not act is data in the call to restart_stamp, or a
-        # fact, and is allowed; a stamp named in a loop or a condition is a read or write in
-        # the making, whatever the task is.
-        for key in CONDITION_KEYS:
-            if key not in task:
+        # A lookup reads a file whatever the task is, so a lookup in a task that names a stamp
+        # is a read in the making, even in a fact.
+        if names_stamp and LOOKUP.search(around):
+            found.append(f"{name}: a lookup or query is given a stamp")
+        # A stamp named in a loop or a condition is a read or write in the making, whatever
+        # the task is.
+        for key in task:
+            if key not in CONDITION_KEYS and not str(key).startswith("with_"):
                 continue
             if STAMP_FILE.search(text_of(task[key])):
                 found.append(f"{name}: {key} names a stamp file")
@@ -116,24 +111,30 @@ def violations(role: Path) -> list[str]:
 
 
 def owner_modules(role: Path) -> set[str]:
-    """Return every module restart_stamp's tasks call, by short name."""
-    used: set[str] = set()
-    for _, task in parsed_tasks(role):
-        for key in task:
-            module = short_name(str(key))
-            if module in ACTING or module in OWNER_MODULES:
-                used.add(module)
-    return used
+    """Return every module restart_stamp's tasks call, by short name, whatever the module."""
+    return {module for _, task in parsed_tasks(role) for module, _ in task_modules(task)}
 
 
-def make_role(base: Path, name: str, tasks_text: str, script_text: str | None = None) -> Path:
-    """Write a throwaway role with one task file and, when asked, a script in files/."""
+OWNER_ROLE_VARIABLE = "other_stamp_role: '{{ role_path | realpath | dirname }}/restart_stamp'\n"
+
+
+def make_role(
+    base: Path,
+    name: str,
+    tasks_text: str,
+    script_text: str | None = None,
+    vars_text: str | None = None,
+) -> Path:
+    """Write a throwaway role with one task file and, when asked, a script and a vars file."""
     role = base / name
     (role / "tasks").mkdir(parents=True)
     (role / "tasks" / "main.yml").write_text(tasks_text, encoding="utf-8")
     if script_text is not None:
         (role / "files").mkdir()
         (role / "files" / "apply.sh").write_text(script_text, encoding="utf-8")
+    if vars_text is not None:
+        (role / "vars").mkdir()
+        (role / "vars" / "main.yml").write_text("---\n" + vars_text, encoding="utf-8")
     return role
 
 
@@ -148,6 +149,10 @@ WRITE_BACK = """\
 
 
 class RestartStampSingleHomeTest(unittest.TestCase):
+    def reported(self, tasks_text: str, vars_text: str | None = None) -> list[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            return violations(make_role(Path(tmp), "other", tasks_text, vars_text=vars_text))
+
     def test_no_other_role_reads_writes_or_decides_from_a_stamp(self) -> None:
         found: dict[str, list[str]] = {}
         for base in ROLE_DIRS:
@@ -176,45 +181,75 @@ class RestartStampSingleHomeTest(unittest.TestCase):
         self.assertLessEqual({"stat", "slurp", "copy"}, used)
 
     def test_a_write_to_a_stamp_is_reported(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            role = make_role(Path(tmp), "other", WRITE_BACK)
-            self.assertEqual(["tasks/main.yml: copy is given a stamp"], violations(role))
+        self.assertEqual(["tasks/main.yml: copy is given a stamp"], self.reported(WRITE_BACK))
 
     def test_a_write_of_the_pending_mark_is_reported_whatever_the_destination(self) -> None:
         text = (
             "---\n- name: Mark\n  ansible.builtin.copy:\n"
             "    content: \"pending\\n\"\n    dest: '{{ somewhere }}'\n"
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            role = make_role(Path(tmp), "other", text)
-            self.assertEqual(["tasks/main.yml: copy writes the pending mark"], violations(role))
+        self.assertEqual(["tasks/main.yml: copy writes the pending mark"], self.reported(text))
+
+    def test_a_write_of_the_pending_mark_by_a_module_that_is_not_a_file_module_is_reported(
+        self,
+    ) -> None:
+        text = "---\n- name: Mark\n  ansible.builtin.shell: echo pending > /somewhere\n"
+        self.assertEqual(["tasks/main.yml: shell writes the pending mark"], self.reported(text))
 
     def test_a_read_of_a_stamp_is_reported(self) -> None:
         text = (
             "---\n- name: Read\n  ansible.builtin.slurp:\n"
             "    src: '{{ other_stamp_files.caddy }}'\n"
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            role = make_role(Path(tmp), "other", text)
-            self.assertEqual(["tasks/main.yml: slurp is given a stamp"], violations(role))
+        self.assertEqual(["tasks/main.yml: slurp is given a stamp"], self.reported(text))
 
     def test_a_look_at_a_stamp_by_its_file_name_is_reported(self) -> None:
         text = (
             "---\n- name: Look\n  ansible.builtin.stat:\n"
             "    path: /var/lib/branchleft/other.applied\n"
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            role = make_role(Path(tmp), "other", text)
-            self.assertEqual(["tasks/main.yml: stat is given a stamp"], violations(role))
+        self.assertEqual(["tasks/main.yml: stat is given a stamp"], self.reported(text))
 
     def test_a_command_on_a_stamp_is_reported(self) -> None:
         text = (
             "---\n- name: Cat\n  ansible.builtin.command:\n"
             "    argv:\n      - cat\n      - /var/lib/branchleft/other.applied\n"
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            role = make_role(Path(tmp), "other", text)
-            self.assertEqual(["tasks/main.yml: command is given a stamp"], violations(role))
+        self.assertEqual(["tasks/main.yml: command is given a stamp"], self.reported(text))
+
+    def test_a_module_the_screen_does_not_list_is_reported_when_it_is_given_a_stamp(self) -> None:
+        # The screen allows three kinds of task and reports a stamp in every other, so a module
+        # nobody listed is screened. These two were outside the list the screen used to hold.
+        waiting = (
+            "---\n- name: Wait\n  ansible.builtin.wait_for:\n"
+            "    path: /var/lib/branchleft/other.applied\n"
+        )
+        editing = (
+            "---\n- name: Edit\n  community.general.ini_file:\n"
+            "    path: /var/lib/branchleft/other.applied\n    option: x\n    value: y\n"
+        )
+        self.assertEqual(["tasks/main.yml: wait_for is given a stamp"], self.reported(waiting))
+        self.assertEqual(["tasks/main.yml: ini_file is given a stamp"], self.reported(editing))
+
+    def test_a_task_in_the_action_or_local_action_form_is_read_by_its_module_word(self) -> None:
+        legacy = (
+            "---\n- name: Write\n"
+            "  action: copy content=pending dest=/var/lib/branchleft/o.applied\n"
+        )
+        local = "---\n- name: Cat\n  local_action: command cat /var/lib/branchleft/o.applied\n"
+        mapping = (
+            "---\n- name: Write\n  action:\n    module: ansible.builtin.copy\n"
+            "    dest: /var/lib/branchleft/o.applied\n    content: x\n"
+        )
+        self.assertEqual(
+            [
+                "tasks/main.yml: copy is given a stamp",
+                "tasks/main.yml: copy writes the pending mark",
+            ],
+            self.reported(legacy),
+        )
+        self.assertEqual(["tasks/main.yml: command is given a stamp"], self.reported(local))
+        self.assertEqual(["tasks/main.yml: copy is given a stamp"], self.reported(mapping))
 
     def test_a_stamp_in_a_block_or_a_rescue_is_reported(self) -> None:
         nested = (
@@ -222,18 +257,14 @@ class RestartStampSingleHomeTest(unittest.TestCase):
             "        - name: Read\n          ansible.builtin.slurp:\n"
             "            src: /var/lib/branchleft/other.applied\n"
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            role = make_role(Path(tmp), "other", nested)
-            self.assertEqual(["tasks/main.yml: slurp is given a stamp"], violations(role))
+        self.assertEqual(["tasks/main.yml: slurp is given a stamp"], self.reported(nested))
 
     def test_a_condition_on_a_stamp_file_is_reported(self) -> None:
         text = (
             "---\n- name: Do\n  ansible.builtin.debug:\n    msg: x\n"
             "  when: \"'other.applied' in other_list\"\n"
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            role = make_role(Path(tmp), "other", text)
-            self.assertEqual(["tasks/main.yml: when names a stamp file"], violations(role))
+        self.assertEqual(["tasks/main.yml: when names a stamp file"], self.reported(text))
 
     def test_a_copy_looped_over_the_stamp_variable_is_reported(self) -> None:
         # The module arguments name no stamp: the destination is the loop item. The loop is
@@ -243,20 +274,23 @@ class RestartStampSingleHomeTest(unittest.TestCase):
             "    content: \"{{ item.value }}\\n\"\n    dest: '{{ item.key }}'\n"
             '  loop: "{{ other_stamp_files | dict2items }}"\n'
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            role = make_role(Path(tmp), "other", text)
-            problems = violations(role)
-            self.assertIn("tasks/main.yml: loop names a stamp variable", problems)
-            self.assertIn("tasks/main.yml: copy is given a stamp", problems)
+        problems = self.reported(text)
+        self.assertIn("tasks/main.yml: loop names a stamp variable", problems)
+        self.assertIn("tasks/main.yml: copy is given a stamp", problems)
 
     def test_a_loop_over_a_stamp_variable_of_another_name_is_reported(self) -> None:
         text = (
             "---\n- name: Look\n  ansible.builtin.debug:\n    msg: x\n"
             '  with_dict: "{{ other_stamps }}"\n'
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            role = make_role(Path(tmp), "other", text)
-            self.assertEqual(["tasks/main.yml: with_dict names a stamp variable"], violations(role))
+        self.assertEqual(["tasks/main.yml: with_dict names a stamp variable"], self.reported(text))
+
+    def test_a_loop_that_reads_files_is_reported_whatever_its_with_word(self) -> None:
+        text = (
+            "---\n- name: Look\n  ansible.builtin.debug:\n    msg: x\n"
+            '  with_file: "{{ other_stamp_files.caddy }}"\n'
+        )
+        self.assertEqual(["tasks/main.yml: with_file names a stamp variable"], self.reported(text))
 
     def test_a_stamp_variable_named_in_the_vars_of_a_file_task_is_reported(self) -> None:
         text = (
@@ -264,9 +298,7 @@ class RestartStampSingleHomeTest(unittest.TestCase):
             "    content: x\n    dest: '{{ target }}'\n"
             "  vars:\n    target: '{{ other_stamps.caddy }}'\n"
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            role = make_role(Path(tmp), "other", text)
-            self.assertEqual(["tasks/main.yml: copy is given a stamp"], violations(role))
+        self.assertEqual(["tasks/main.yml: copy is given a stamp"], self.reported(text))
 
     def test_a_script_that_names_a_stamp_file_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -274,6 +306,28 @@ class RestartStampSingleHomeTest(unittest.TestCase):
                 Path(tmp), "other", "---\n[]\n", "cat /var/lib/branchleft/other.applied\n"
             )
             self.assertEqual(["files/apply.sh names a stamp file"], violations(role))
+
+    def test_a_lookup_that_reads_a_stamp_in_a_fact_is_reported(self) -> None:
+        # A fact is allowed to carry a stamp as data, but not to read one: the lookup runs
+        # on the controller and reads the file whatever module the task is.
+        for call in (
+            "lookup('file', other_stamp_files.caddy)",
+            "lookup('pipe', 'cat ' + other_stamp_files.caddy)",
+            "query('file', other_stamp_files.caddy)",
+            "q('file', other_stamp_files.caddy)",
+        ):
+            text = f'---\n- name: Keep\n  ansible.builtin.set_fact:\n    x: "{{{{ {call} }}}}"\n'
+            with self.subTest(call=call):
+                self.assertEqual(
+                    ["tasks/main.yml: a lookup or query is given a stamp"], self.reported(text)
+                )
+
+    def test_a_lookup_that_names_no_stamp_is_not_reported(self) -> None:
+        text = (
+            "---\n- name: Keep\n  ansible.builtin.set_fact:\n"
+            "    x: \"{{ lookup('ansible.builtin.env', 'HOME') }}\"\n"
+        )
+        self.assertEqual([], self.reported(text))
 
     def test_a_call_to_restart_stamp_is_not_reported(self) -> None:
         text = (
@@ -283,9 +337,56 @@ class RestartStampSingleHomeTest(unittest.TestCase):
             "- name: Keep\n  ansible.builtin.set_fact:\n"
             "    other_due: '{{ restart_stamp_decisions.caddy.due }}'\n"
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            role = make_role(Path(tmp), "other", text)
-            self.assertEqual([], violations(role))
+        self.assertEqual([], self.reported(text, OWNER_ROLE_VARIABLE))
+
+    def test_a_call_to_another_role_is_given_no_stamp(self) -> None:
+        # The name resolves to a role that is not restart_stamp, so the include is a task like
+        # any other and a stamp in it is reported.
+        text = (
+            "---\n- name: Hand over\n  ansible.builtin.include_role:\n"
+            "    name: '{{ other_stamp_role }}'\n"
+            "  vars:\n    classes: '{{ other_stamp_files }}'\n"
+        )
+        elsewhere = "other_stamp_role: '{{ role_path | realpath | dirname }}/another_role'\n"
+        self.assertEqual(
+            ["tasks/main.yml: include_role is given a stamp"], self.reported(text, elsewhere)
+        )
+
+    def test_a_block_is_read_by_its_own_tasks_and_not_through_its_children(self) -> None:
+        # The lookup of a script in one child and the stamp in the call to restart_stamp in
+        # another are not one task: the outer block names both, and is not given either.
+        text = (
+            "---\n- name: Outer\n  block:\n"
+            "    - name: Script\n      ansible.builtin.command:\n"
+            "        argv: ['/bin/sh', \"{{ lookup('ansible.builtin.file', 'apply.sh') }}\"]\n"
+            "    - name: Hand over\n      ansible.builtin.include_role:\n"
+            "        name: '{{ other_stamp_role }}'\n"
+            "      vars:\n        classes: '{{ other_stamp_files }}'\n"
+        )
+        self.assertEqual([], self.reported(text, OWNER_ROLE_VARIABLE))
+
+    def test_a_call_whose_name_cannot_be_resolved_is_given_no_stamp(self) -> None:
+        # The same include with no variable behind its name: the check cannot show it is the
+        # owner, which is what the composition check also says of it.
+        text = (
+            "---\n- name: Hand over\n  ansible.builtin.include_role:\n"
+            "    name: '{{ somebody_elses_variable }}'\n"
+            "  vars:\n    classes: '{{ other_stamp_files }}'\n"
+        )
+        self.assertEqual(["tasks/main.yml: include_role is given a stamp"], self.reported(text))
+
+    def test_an_include_of_the_roles_own_file_may_carry_a_stamp_and_another_may_not(self) -> None:
+        own = (
+            "---\n- name: Go on\n  ansible.builtin.include_tasks: _next.yml\n"
+            "  vars:\n    next_stamp_file: '{{ other_stamp_files.caddy }}'\n"
+        )
+        outside = (
+            "---\n- name: Go on\n"
+            "  ansible.builtin.include_tasks: '{{ role_path }}/../x/tasks/y.yml'\n"
+            "  vars:\n    next_stamp_file: '{{ other_stamp_files.caddy }}'\n"
+        )
+        self.assertEqual([], self.reported(own))
+        self.assertEqual(["tasks/main.yml: include_tasks is given a stamp"], self.reported(outside))
 
     def test_stamp_files_named_in_vars_and_the_stamp_directory_are_not_reported(self) -> None:
         text = (
@@ -293,20 +394,38 @@ class RestartStampSingleHomeTest(unittest.TestCase):
             "    path: '{{ other_stamp_dir }}'\n    state: directory\n"
         )
         with tempfile.TemporaryDirectory() as tmp:
-            role = make_role(Path(tmp), "other", text)
-            (role / "vars").mkdir()
-            (role / "vars" / "main.yml").write_text(
-                "other_stamp_dir: /var/lib/branchleft\nother_stamp_files:\n"
-                "  caddy: /var/lib/branchleft/other.caddy.applied\n",
-                encoding="utf-8",
+            role = make_role(
+                Path(tmp),
+                "other",
+                text,
+                vars_text=(
+                    "other_stamp_dir: /var/lib/branchleft\nother_stamp_files:\n"
+                    "  caddy: /var/lib/branchleft/other.caddy.applied\n"
+                ),
             )
             self.assertEqual([], violations(role))
 
     def test_a_module_that_acts_on_more_than_a_stamp_is_reported_in_the_owner(self) -> None:
-        text = "---\n- name: Restart\n  ansible.builtin.command:\n    argv: [/bin/true]\n"
+        # Named in no list the screen holds: the owner's tasks are all read, so a module that
+        # is neither a stamp module nor a fact module is reported by name.
+        texts = {
+            "command": "---\n- name: Run\n  ansible.builtin.command:\n    argv: [/bin/true]\n",
+            "reboot": "---\n- name: Reboot\n  ansible.builtin.reboot:\n",
+            "docker_container": (
+                "---\n- name: Start\n  community.docker.docker_container:\n    name: x\n"
+            ),
+            "wait_for": "---\n- name: Wait\n  ansible.builtin.wait_for:\n    timeout: 1\n",
+        }
+        for module, text in texts.items():
+            with self.subTest(module=module), tempfile.TemporaryDirectory() as tmp:
+                role = make_role(Path(tmp), OWNER, text)
+                self.assertEqual({module}, owner_modules(role) - OWNER_MODULES)
+
+    def test_a_module_in_the_legacy_form_is_reported_in_the_owner_by_its_module_word(self) -> None:
+        text = "---\n- name: Reboot\n  action: reboot\n"
         with tempfile.TemporaryDirectory() as tmp:
             role = make_role(Path(tmp), OWNER, text)
-            self.assertEqual({"command"}, owner_modules(role) - OWNER_MODULES)
+            self.assertEqual({"reboot"}, owner_modules(role) - OWNER_MODULES)
 
     def test_the_real_edge_stack_with_a_stamp_write_put_back_is_reported(self) -> None:
         # The real role passes, so the scan is also run on it with the copy of the stamp
