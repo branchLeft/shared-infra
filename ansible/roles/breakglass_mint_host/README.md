@@ -138,7 +138,7 @@ for the tool and the image stay as the fallback.
   reads a file's content or checksum through `stat`.
 - **The playbook guard, one home, shared with the grant role.** The rules that
   hold `playbooks/ops1.yml` to its shape live in one file,
-  `ansible/harness/playbook_guard.yml`. This test and the grant role's test both
+  `ansible/harness/tasks/playbook_guard.yml`. This test and the grant role's test both
   include it, with their own inputs, so the rule cannot drift between them. The
   guard requires every entry of the file to be a play (an `import_playbook` entry
   has no `hosts` and fails); the keys of every play to be on an allow-list

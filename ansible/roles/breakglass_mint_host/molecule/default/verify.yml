@@ -179,10 +179,10 @@
     # The guard reads every play of ops1.yml and every task of its four lists: its
     # play keys, its roles entry, the modules its tasks and the role's call, and the
     # controller-side reads in the text of the playbook and of the role's files. It is
-    # one file, ansible/harness/playbook_guard.yml, included by both role tests so
+    # one file, ansible/harness/tasks/playbook_guard.yml, included by both role tests so
     # the rule cannot drift (ws#2367).
     - name: Hold ops1.yml and the role's own tasks to the playbook guard
-      ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../../harness/playbook_guard.yml'
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../../harness/tasks/playbook_guard.yml'
       vars:
         guard_playbook: '{{ playbook_dir }}/../../../../playbooks/ops1.yml'
         guard_expected_roles:
