@@ -1,10 +1,16 @@
 # Inventories
 
 This directory holds the inventories and the group variables that go with
-them. It holds two hosts: `edge1`, in the group `edge`, with that group's role
-variables, and `db1`, in the group `db`, which has no group variables because
-its inputs are private and reach the host through its delivery channel
-(`roles/db1_grants`). A role applied to a new host adds its host and variables in the same pull request.
+them. It holds two hosts: `edge1`, in the group `edge`, which has no group
+variables now. Its values, and its trusted signer list, are loaded by
+`playbooks/edge1.yml` through `vars_files`, and `db1`, in the group `db`,
+which has no group variables because its inputs are private and reach the host
+through its delivery channel (`roles/db1_grants`). A role applied to a new host
+adds its host and variables in the same pull request. `ops1` and `app1` have
+playbooks under the pull but no inventory entry: no host is enrolled by this
+layout, and against this inventory `--limit ops1` and `--limit app1` match nothing.
+Their bootstrap route is the one the refusal include describes: on an inline
+one-host inventory (`-i 'HOST,'`) the one-host test is true by construction.
 `ANS-13` leaves the placement of inventories undecided; this layout is a
 proposal that the repository owner confirms or changes.
 

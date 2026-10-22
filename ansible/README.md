@@ -12,21 +12,23 @@ the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
 
 ## Layout
 
-| Path               | What it is                                                             |
-| ------------------ | ---------------------------------------------------------------------- |
-| `role_skeleton/`   | The skeleton `ansible-galaxy role init --role-skeleton` copies.        |
-| `roles/`           | One directory per role. `example_config` is the worked example.        |
-| `patterns/`        | One directory per pattern, each a role the harness runs like `roles/`. |
-| `harness/`         | The test harness, its unit tests and nothing else.                     |
-| `requirements.in`  | The seven tools chosen on purpose, exact pins (ANS-4).                 |
-| `requirements.txt` | The hash-locked toolchain compiled from it, collections included.      |
-| `requirements.yml` | Empty by design: no collection is fetched outside the lock (ANS-4).    |
-| `checks/`          | The pin check and its unit tests (ANS-4).                              |
-| `inventories/`     | The inventory and group-variable trees. `production` holds edge1, db1. |
-| `playbooks/`       | One playbook per host: selects hosts and lists roles (ANS-13).         |
-| `pyproject.toml`   | The Python floor for the harness: version, mypy strict, ruff (ANS-2).  |
-| `../.ansible-lint` | The lint floor, production profile (ANS-5). Not editable by a role PR. |
-| `../.yamllint`     | The YAML floor (ANS-6). Not editable by a role PR.                     |
+| Path                  | What it is                                                             |
+| --------------------- | ---------------------------------------------------------------------- |
+| `role_skeleton/`      | The skeleton `ansible-galaxy role init --role-skeleton` copies.        |
+| `roles/`              | One directory per role. `example_config` is the worked example.        |
+| `patterns/`           | One directory per pattern, each a role the harness runs like `roles/`. |
+| `harness/`            | The test harness, its unit tests and nothing else.                     |
+| `requirements.in`     | The seven tools chosen on purpose, exact pins (ANS-4).                 |
+| `requirements.txt`    | The hash-locked toolchain compiled from it, collections included.      |
+| `requirements.yml`    | Empty by design: no collection is fetched outside the lock (ANS-4).    |
+| `checks/`             | The pin check, the enrolment check and their unit tests.               |
+| `inventories/`        | The inventory and group-variable trees. `production` holds edge1, db1. |
+| `playbooks/`          | One playbook per host: selects hosts and lists roles (ANS-13).         |
+| `playbooks/includes/` | The shared pull values and refusals, each defined once.                |
+| `trust/`              | One signer file per host under the pull, loaded only by its playbook.  |
+| `pyproject.toml`      | The Python floor for the harness: version, mypy strict, ruff (ANS-2).  |
+| `../.ansible-lint`    | The lint floor, production profile (ANS-5). Not editable by a role PR. |
+| `../.yamllint`        | The YAML floor (ANS-6). Not editable by a role PR.                     |
 
 ## Make a new role
 
@@ -505,9 +507,11 @@ oversight. Each is a decision the standard assigns to later work.
   required (CI-14), but making it required is a repository ruleset change and
   belongs to the owner. Until it is done a red Ansible job does not block a
   merge on its own.
-- **Delivery.** Only edge1 and db1 have a playbook, and edge1's first apply is the one-time root bootstrap and then the gated pull; db1's waits on the gated pull. ANS-17 describes the only
-  approved path; the trigger and the reusable workflow it needs are separate
-  work.
+- **Delivery.** Each of edge1, db1, app1 and ops1 has a playbook under `playbooks/`.
+  edge1's first apply is the one-time root bootstrap and then the gated pull; db1's
+  waits on the gated pull. ANS-17 describes the only approved path. The trigger is
+  `roles/pull_trigger`, and its reusable workflow is in `branchLeft/github-workflows`;
+  nothing in this repo calls that workflow yet.
 - **Reuse by other repositories.** The harness is code another repository may
   one day run. It is not to be copied between repositories (ANS-13). The
   reusable CI work in the github-workflows repository is where it will be

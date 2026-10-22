@@ -118,6 +118,7 @@ jobs:
             hetzner/provision/branchleft-nat.service
             hetzner/provision/branchleft-db-tunnel.service
             hetzner/provision/node-exporter.service
+            hetzner/provision/test_compose_unit_contract.py
             hetzner/provision/fixtures/docker-apt-key.asc
             hetzner/provision/test_compose_unit_contract.py
             hetzner/monitoring/stack/
