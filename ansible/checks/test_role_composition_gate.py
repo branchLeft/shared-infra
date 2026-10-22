@@ -340,6 +340,34 @@ class CompositionTest(unittest.TestCase):
             problems_of(Pair(call=text)),
         )
 
+    def test_each_required_input_is_reported_by_name_when_it_is_left_out(self) -> None:
+        # Two required inputs of different names, left out one at a time and both: the report
+        # names exactly those left out, so a constant list or a first-name-only report fails.
+        specs = SPECS + "      cap_second:\n        type: str\n        required: true\n"
+        given = {
+            "cap_items": "cap_items: [x]",
+            "cap_second": "cap_second: y",
+        }
+        cases: tuple[tuple[tuple[str, ...], list[str]], ...] = (
+            (("cap_items",), ["cap_second"]),
+            (("cap_second",), ["cap_items"]),
+            ((), ["cap_items", "cap_second"]),
+            (("cap_items", "cap_second"), []),
+        )
+        for gave, left_out in cases:
+            lines = "".join(f"\n    {given[name]}" for name in gave) or "\n    cap_extra: y"
+            text = CALL.replace("  vars:\n    cap_items: [x]\n", f"  vars:{lines}\n")
+            expected = (
+                [
+                    "roles/caller (tasks/main.yml): "
+                    f"the call does not give required input(s) {left_out}"
+                ]
+                if left_out
+                else []
+            )
+            with self.subTest(gave=gave):
+                self.assertEqual(expected, problems_of(Pair(call=text, specs=specs)))
+
     def test_a_call_that_gives_an_input_the_entry_point_does_not_declare_is_reported(self) -> None:
         text = CALL.replace("cap_items: [x]", "cap_items: [x]\n    not_declared_anywhere: 1")
         self.assertEqual(
