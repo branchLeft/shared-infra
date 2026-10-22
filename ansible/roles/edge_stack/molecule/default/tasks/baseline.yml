@@ -17,6 +17,7 @@
     - /run/standin.lapi.down
     - /run/standin.stale.caddy
     - /run/standin.pin.change
+    - /run/standin.compose.edit
     - /run/edge-unit.fail
     - /var/lib/branchleft/edge.candidate
 

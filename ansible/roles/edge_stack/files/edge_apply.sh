@@ -1,42 +1,8 @@
 #!/bin/sh
-# The part of the edge_stack role that runs under the deploy lock. The role runs
-#
-#   flock -E 75 -w <seconds> /etc/branchleft/edge.deploy.lock /bin/sh -ec "<this file>" edge_apply <mode>
-#
-# so the lock is held from the read of edge.image.env to the last action, and the
-# same kernel lock branchleft-deploy takes (flock(1) and flock(2) are one lock).
-# This file is read by the role and handed to sh as text; it is never installed on
-# the host. It holds no value of a secret and does not open edge.env itself: no
-# redirect, cat or source of it appears here. It hands the path to Docker Compose
-# (--env-file, in dcf below) in every Compose call, in both modes, and Compose, run
-# as root, opens and parses the file. The values stay inside that Compose process
-# and this script prints none. The Caddy validation does not use the file at all.
-# Compose's own error text, if it fails, is passed on as Compose wrote it.
-#
-# Two modes, run in this order by the role:
-#   validate  the candidates, before any file is placed: the candidate Caddyfile in
-#             the pinned image, the candidate Compose file with `docker compose config -q`.
-#             It prints "EDGE_PIN <ref>", the reference it read from the pin file. The
-#             role runs it whenever it will run apply, even with no candidate.
-#   apply     after the files are placed: write the Caddyfile in place, restart the
-#             unit, restart CrowdSec, reload Caddy, and read each back. The role gives
-#             it the reference validate printed in EDGE_VALIDATED_PIN, and it acts only
-#             if the pin file still holds exactly that reference.
-#
-# It prints a marker line "EDGE_APPLY <name>" for each thing that was done and read
-# back, and the role stamps exactly those. Exit codes (75 is the lock's, never ours):
-#   64 the pin file is not exactly one IMAGE=<ref>@sha256:<64 hex> line
-#   65 the candidate Caddyfile is not valid
-#   66 the Caddyfile could not be written in place, or was not written whole
-#   67 the candidate Compose file does not parse
-#   68 the unit restart failed
-#   69 the unit is not active after the restart, or a service is not running
-#   70 the CrowdSec restart failed
-#   71 CrowdSec's read-back failed (its API did not answer, or a file differs inside it)
-#   72 the Caddy reload failed
-#   73 the Caddyfile inside the container is not the one on the host
-#   74 apply was given no validated pin, or the pin file no longer holds the one validate
-#      read: a deploy moved the pin between the two sections, and nothing was done
+# The part of the edge_stack role that runs under the deploy lock, in two modes
+# (validate, apply). It opens no secrets file itself and prints one marker line
+# "EDGE_APPLY <name>" per thing done and read back. Exit codes 64 to 74; 75 is the
+# lock's, never ours. README.md, "The locked script", says what each one means.
 set -eu
 
 mode=$1

@@ -1,21 +1,7 @@
 #!/bin/sh
 # Test stand-in for docker, installed by prepare.yml. It is not a Docker and proves
-# nothing about the real one (README, "Named limits"). It does what the role's tests
-# rely on:
-#   - appends every call to /var/log/docker-standin.calls, so a test can count and
-#     order what the role did;
-#   - checks the arguments the real Compose needs and the role must pass: the
-#     project directory and both env files, and refuses a call that lacks them;
-#   - answers `run ... caddy validate` and `compose config` by looking for a marker
-#     in the file it is given, so a test can make a candidate invalid;
-#   - models the container's view of a single-file bind mount as a hard link in
-#     /var/lib/standin-mount, so a file replaced by rename leaves the view on the
-#     old bytes, as a real container's mount would be, and a write in place does not;
-#   - fails, or lies, where a flag file in /run asks (standin.fail.crowdsec,
-#     standin.fail.reload, standin.lapi.down, standin.stale.caddy), and reports the
-#     services listed in /run/standin.running as running;
-#   - moves the pin to another valid digest while it validates a Caddyfile, once, when
-#     /run/standin.pin.change is there (a deploy between the two locked sections).
+# nothing about the real one. What it does, and the flag files in /run that make it
+# fail or lie, is in README.md, "How to test it".
 echo "docker $*" >> /var/log/docker-standin.calls
 
 project=/opt/branchleft/edge
@@ -88,7 +74,12 @@ case $1 in
     shift
     case $sub in
       config)
+        if [ -e /run/standin.compose.edit ]; then
+          rm -f /run/standin.compose.edit
+          echo "# case: the candidate carries a line the repository's file lacks" >> "$file"
+        fi
         grep -q BROKEN-COMPOSE "$file" && exit 1
+        echo "VALIDATED-COMPOSE sha=$(sha256sum < "$file" | cut -d ' ' -f 1)" >> /var/log/docker-standin.calls
         exit 0
         ;;
       ps)

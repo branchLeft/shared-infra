@@ -1,24 +1,6 @@
-"""One home for the edge stack's files and for the restart of its unit.
+"""Fails when a role other than edge_stack delivers the edge stack or restarts its unit.
 
-The edge_stack role is the only role that delivers the files in /opt/branchleft/edge
-and the only role that restarts branchleft-compose@edge.service. Two homes for a file,
-or two roles that restart one unit, make the restart depend on which role ran last and
-when: that is the defect the stamps of edge_stack exist to remove.
-
-These tests read the roles' code (tasks, handlers, vars and defaults) and fail when
-another role
-
-- names the project directory /opt/branchleft/edge, or a file of the stack by its path
-  under it, or delivers from the stack directory hetzner/edge/stack, or
-- names the edge unit (a restart, a start or a reload of it).
-
-The one thing another role may name is the directory of drop-ins of the unit,
-``branchleft-compose@edge.service.d``: a drop-in changes how the unit starts and
-restarts nothing.
-
-The files of the stack are read from the stack directory itself, and the test that the
-owner puts each of them in a class is here too, so there is no second list to keep in
-step.
+The rule and what it allows are in ansible/roles/edge_stack/README.md, "How to test it".
 """
 
 from __future__ import annotations

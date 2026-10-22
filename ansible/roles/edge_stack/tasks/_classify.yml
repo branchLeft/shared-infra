@@ -49,10 +49,11 @@
       links ({{ edge_stack_link_entries }}), or lacks a named file ({{ edge_stack_absent }}). Add the file to a class in
       the role's vars, or remove it, before any file is delivered.
 
-# What is delivered by `copy`, in the order the README gives: the Compose file, then
-# CrowdSec's. The Caddyfile is not in this list: it is written in place under the lock.
+# What is delivered by `copy` from the repository: CrowdSec's files. The Compose file is
+# placed from its validated candidate and the Caddyfile is written in place under the
+# lock, so neither is in this list.
 - name: Name the files that are delivered by copy and the files that are hashed
   ansible.builtin.set_fact:
-    edge_stack_deliver: '{{ [edge_stack_compose_file] + edge_stack_crowdsec_files + edge_stack_acquis_files }}'
+    edge_stack_deliver: '{{ edge_stack_crowdsec_files + edge_stack_acquis_files }}'
     edge_stack_crowdsec_all: '{{ edge_stack_crowdsec_files + edge_stack_acquis_files }}'
     edge_stack_hashed: '{{ [edge_stack_caddy_file, edge_stack_compose_file] + edge_stack_crowdsec_files + edge_stack_acquis_files }}'

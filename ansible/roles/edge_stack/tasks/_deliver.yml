@@ -39,8 +39,9 @@
         edge_stack_validated_pin: ''
 
     # The candidates of the classes that will change are put in a directory closed to
-    # root, so the validation reads exactly the bytes that will be placed. Nothing is
-    # put there in check mode, and nothing is put there when no file differs.
+    # root, so the validation reads exactly the bytes that will be placed: the locked
+    # script writes the Caddyfile from its candidate, and the Compose file is copied from
+    # its candidate below. Nothing is put there in check mode, and nothing when no file differs.
     - name: Create the candidate directory closed to root
       ansible.builtin.file:
         path: '{{ edge_stack_candidate_dir }}'
@@ -146,7 +147,31 @@
     # copy puts a file in place by rename, which is right for these: the Compose file
     # is not bind-mounted, the CrowdSec files are read again at the restart below, and
     # the acquisition directory is a directory mount, which sees renamed entries.
-    - name: Deliver the Compose file and the CrowdSec files
+    # The Compose file is placed from the candidate that was validated, not read from
+    # the repository a second time: a checkout that changes between the two reads must
+    # not put a file on the host that no validation saw.
+    - name: Deliver the Compose file from the candidate that was validated
+      ansible.builtin.copy:
+        src: '{{ edge_stack_candidate_dir }}/compose.yml'
+        remote_src: true
+        dest: '{{ edge_stack_project_dir }}/{{ edge_stack_compose_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when: edge_stack_compose_drift | bool and not ansible_check_mode
+
+    # In check mode there is no candidate, so the repository's file is compared with the
+    # host's and the diff is shown.
+    - name: Show in check mode what the Compose file would change
+      ansible.builtin.copy:
+        src: '{{ edge_stack_source_dir }}/{{ edge_stack_compose_file }}'
+        dest: '{{ edge_stack_project_dir }}/{{ edge_stack_compose_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when: ansible_check_mode
+
+    - name: Deliver the CrowdSec files
       ansible.builtin.copy:
         src: '{{ edge_stack_source_dir }}/{{ item }}'
         dest: '{{ edge_stack_project_dir }}/{{ item }}'

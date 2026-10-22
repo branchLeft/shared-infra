@@ -1,22 +1,7 @@
-"""One home for the stamps of a restart-by-fingerprint role.
+"""Fails when a role other than restart_stamp reads, writes or decides from a stamp.
 
-The restart_stamp role is the only code that reads a stamp (``/var/lib/branchleft/*.applied``),
-decides from one, or writes one. A second copy of those steps in another role is the defect the
-role exists to remove: the copies drift, and a fix to one leaves the other restarting on the
-wrong day. These tests read the roles' code and fail when
-
-- a role other than restart_stamp has a task that reads, writes, tests or runs a command on a
-  stamp (a file module whose arguments name a stamp file, or a copy whose content is the
-  ``pending`` mark), or names a stamp file in a script or in any task argument;
-- restart_stamp itself uses a module that can act on anything but a stamp and the facts.
-
-A role may name its stamp files in ``vars/`` or ``defaults/``, which are data, and hand them to
-restart_stamp by ``include_role``; that call, ``set_fact``, ``assert`` and ``debug`` are the only
-tasks of another role that may mention a stamp. The directory of the stamps is not a stamp: a role
-may create it.
-
-The tests that follow the scan prove it can fail: each way a role could keep a copy is built in a
-throwaway role and must be reported, and so must the real edge_stack with a stamp write put back.
+What it reports and what it allows is in ansible/roles/restart_stamp/README.md,
+"The single-home check". The tests after the scan prove it can fail.
 """
 
 from __future__ import annotations
@@ -25,10 +10,9 @@ import re
 import shutil
 import tempfile
 import unittest
-from collections.abc import Iterator, Mapping
 from pathlib import Path
 
-from ruamel.yaml import YAML
+from role_tasks import parsed_tasks, short_name
 
 ROOT = Path(__file__).resolve().parents[2]
 ROLE_DIRS = (ROOT / "ansible" / "roles", ROOT / "ansible" / "patterns")
@@ -37,7 +21,18 @@ EDGE = "edge_stack"
 
 # A stamp is named by its file name, or by the variable a role keeps its stamp paths in.
 STAMP_FILE = re.compile(r"\.applied(?![\w-])")
-STAMP_VARIABLE = re.compile(r"_stamp_files?(?![\w])")
+STAMP_VARIABLE = re.compile(r"(?:_stamp_files?|_stamps)(?![\w])")
+CONDITION_KEYS = (
+    "loop",
+    "with_items",
+    "with_dict",
+    "with_list",
+    "until",
+    "when",
+    "changed_when",
+    "failed_when",
+    "register",
+)
 PENDING_MARK = re.compile(r"(?<![\w-])pending(?![\w-])")
 
 # Modules that act on a file, a command or a service. Another role may not point one at a stamp.
@@ -72,41 +67,6 @@ WRITING = frozenset({"blockinfile", "copy", "lineinfile", "replace", "template"}
 # Modules restart_stamp may use: they read or write a file it is given, or work on facts.
 OWNER_MODULES = frozenset({"assert", "copy", "include_tasks", "set_fact", "slurp", "stat"})
 
-CODE_AREAS = ("tasks", "handlers")
-BLOCK_KEYS = ("block", "rescue", "always")
-
-YAML_LOADER = YAML(typ="safe")
-
-
-def short_name(key: str) -> str:
-    """Return the module name of a task key: ``ansible.builtin.copy`` is ``copy``."""
-    return key.rsplit(".", 1)[-1]
-
-
-def tasks_in(items: object) -> Iterator[Mapping[str, object]]:
-    """Yield every task of a parsed task list, going into blocks, rescues and always sections."""
-    if not isinstance(items, list):
-        return
-    for item in items:
-        if not isinstance(item, Mapping):
-            continue
-        yield item
-        for key in BLOCK_KEYS:
-            yield from tasks_in(item.get(key))
-
-
-def parsed_tasks(role: Path) -> Iterator[tuple[str, Mapping[str, object]]]:
-    """Yield the file name and each task of a role's task and handler files."""
-    for area in CODE_AREAS:
-        base = role / area
-        if not base.is_dir():
-            continue
-        for path in sorted(base.rglob("*")):
-            if path.is_file() and path.suffix in {".yml", ".yaml"}:
-                name = path.relative_to(role).as_posix()
-                for task in tasks_in(YAML_LOADER.load(path.read_text(encoding="utf-8"))):
-                    yield name, task
-
 
 def text_of(value: object) -> str:
     """Return a task's arguments as one text, so a pattern can be searched in all of them."""
@@ -123,16 +83,23 @@ def violations(role: Path) -> list[str]:
                 continue
             arguments = text_of(value)
             label = f"{name}: {module}"
-            if STAMP_FILE.search(arguments) or STAMP_VARIABLE.search(arguments):
+            # Every key of a task that acts, not only the module's arguments: the stamp may
+            # be reached through the task's vars or its loop.
+            around = text_of({k: v for k, v in task.items() if k != "name"})
+            if STAMP_FILE.search(around) or STAMP_VARIABLE.search(around):
                 found.append(f"{label} is given a stamp")
             if module in WRITING and PENDING_MARK.search(arguments):
                 found.append(f"{label} writes the pending mark")
-        # A stamp named in a task that is not a module call of another kind is data in the
-        # call to restart_stamp, or a fact, and is allowed; a stamp file named anywhere else in
-        # a task (a loop, a conditional) is a read or write in the making.
-        for key in ("loop", "with_items", "when", "changed_when", "failed_when", "register"):
-            if key in task and STAMP_FILE.search(text_of(task[key])):
+        # A stamp named in a task that does not act is data in the call to restart_stamp, or a
+        # fact, and is allowed; a stamp named in a loop or a condition is a read or write in
+        # the making, whatever the task is.
+        for key in CONDITION_KEYS:
+            if key not in task:
+                continue
+            if STAMP_FILE.search(text_of(task[key])):
                 found.append(f"{name}: {key} names a stamp file")
+            if STAMP_VARIABLE.search(text_of(task[key])):
+                found.append(f"{name}: {key} names a stamp variable")
     for path in sorted(role.rglob("*")):
         if not path.is_file() or path.suffix in {".yml", ".yaml", ".md"}:
             continue
@@ -267,6 +234,39 @@ class RestartStampSingleHomeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             role = make_role(Path(tmp), "other", text)
             self.assertEqual(["tasks/main.yml: when names a stamp file"], violations(role))
+
+    def test_a_copy_looped_over_the_stamp_variable_is_reported(self) -> None:
+        # The module arguments name no stamp: the destination is the loop item. The loop is
+        # where the stamps are named.
+        text = (
+            "---\n- name: Record\n  ansible.builtin.copy:\n"
+            "    content: \"{{ item.value }}\\n\"\n    dest: '{{ item.key }}'\n"
+            '  loop: "{{ other_stamp_files | dict2items }}"\n'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            role = make_role(Path(tmp), "other", text)
+            problems = violations(role)
+            self.assertIn("tasks/main.yml: loop names a stamp variable", problems)
+            self.assertIn("tasks/main.yml: copy is given a stamp", problems)
+
+    def test_a_loop_over_a_stamp_variable_of_another_name_is_reported(self) -> None:
+        text = (
+            "---\n- name: Look\n  ansible.builtin.debug:\n    msg: x\n"
+            '  with_dict: "{{ other_stamps }}"\n'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            role = make_role(Path(tmp), "other", text)
+            self.assertEqual(["tasks/main.yml: with_dict names a stamp variable"], violations(role))
+
+    def test_a_stamp_variable_named_in_the_vars_of_a_file_task_is_reported(self) -> None:
+        text = (
+            "---\n- name: Record\n  ansible.builtin.copy:\n"
+            "    content: x\n    dest: '{{ target }}'\n"
+            "  vars:\n    target: '{{ other_stamps.caddy }}'\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            role = make_role(Path(tmp), "other", text)
+            self.assertEqual(["tasks/main.yml: copy is given a stamp"], violations(role))
 
     def test_a_script_that_names_a_stamp_file_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

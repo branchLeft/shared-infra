@@ -1726,6 +1726,79 @@
               The apply mode did not refuse a missing or a different validated pin with exit code 74, or refused the pin
               that is there. It said {{ edge_stack_verify_script }}.
 
+    # ----- p27: the Compose file that arrives is the one the validation read -----
+    # The stand-in adds a line to the candidate as it validates it, so the file the
+    # validation read is not the repository's. The file on the host must be that one: a
+    # role that read the repository's file a second time would put an unvalidated file in
+    # place. The second run is the control, with nothing added: the three are one file.
+    - name: Case p27, the Compose file placed is the candidate that was validated
+      tags: [p27]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make a variant whose Compose file differs
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: composeval
+            edge_stack_verify_variant_edits:
+              - { path: compose.yml, append: "\n# case compose validated\n" }
+
+        - name: Ask the stand-in to add a line to the candidate Compose file as it validates it
+          ansible.builtin.copy:
+            content: ''
+            dest: /run/standin.compose.edit
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p27edit
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.composeval.path }}'
+
+        - name: Return to the converged host, with nothing added by the stand-in
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p27plain
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.composeval.path }}'
+
+        - name: Assert the file on the host is the file the validation read, and not the repository's
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p27edit.failed
+              - edge_stack_verify_p27_edit_validated == [edge_stack_verify_runs.p27edit.after.compose_sha]
+              - edge_stack_verify_runs.p27edit.after.compose_sha != edge_stack_verify_variants.composeval.compose
+              - edge_stack_verify_runs.p27edit.after.candidate_exists == false
+            quiet: true
+            fail_msg: >-
+              The Compose file on the host is not the one the validation read. The validation read
+              {{ edge_stack_verify_p27_edit_validated }}, the host holds {{ edge_stack_verify_runs.p27edit.after.compose_sha }}
+              and the repository's file is {{ edge_stack_verify_variants.composeval.compose }}.
+          vars:
+            edge_stack_verify_p27_edit_validated: >-
+              {{ edge_stack_verify_runs.p27edit.new | select('match', '^VALIDATED-COMPOSE sha=')
+              | map('regex_replace', '^VALIDATED-COMPOSE sha=', '') | list }}
+
+        - name: Assert that with nothing added the validated file, the placed file and the repository's are one
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p27plain.failed
+              - edge_stack_verify_p27_plain_validated == [edge_stack_verify_variants.composeval.compose]
+              - edge_stack_verify_runs.p27plain.after.compose_sha == edge_stack_verify_variants.composeval.compose
+            quiet: true
+            fail_msg: >-
+              With nothing added to the candidate, the file on the host is not the repository's. The validation read
+              {{ edge_stack_verify_p27_plain_validated }} and the host holds {{ edge_stack_verify_runs.p27plain.after.compose_sha }}.
+          vars:
+            edge_stack_verify_p27_plain_validated: >-
+              {{ edge_stack_verify_runs.p27plain.new | select('match', '^VALIDATED-COMPOSE sha=')
+              | map('regex_replace', '^VALIDATED-COMPOSE sha=', '') | list }}
+
     # ----- p25: the restore, and the log -----
     - name: Case p25, put the host back, and scan the log for the values
       tags: [p25]

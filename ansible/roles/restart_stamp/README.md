@@ -83,7 +83,21 @@ A role that calls this one composes two roles, and ANS-12 carries a named limit 
 4. It is named by a path built from the caller's own `role_path` (`{{ role_path | realpath | dirname }}/restart_stamp`), not by a bare name. The host trigger starts in `ansible/`, the lint at the repository root and Molecule in a role directory, and a bare name is found by a search path they do not share. `realpath` is there because Molecule links the caller under its namespace, and the path must be that of the real directory.
 5. Only this role is included by another role. A second one needs its own review against the clause.
 
-**Gate.** The pull request that adds this role does not merge until that amendment is merged in the standards repository and cited in the pull request. The text proposed there is in the pull request description.
+**Gate.** The pull request that adds this role does not merge until that amendment is merged in the standards repository and cited. A check holds the gate: `ansible/checks/test_role_composition_gate.py` fails while any role has a task that includes or imports another role and `ansible/checks/ans12_composition_citation.txt` does not hold one line of the form `https://github.com/branchLeft/standards/pull/<number> merged <40-hex merge commit>`. Until the amendment is merged that file does not exist, and the check is red on purpose. The text proposed for the amendment is in the pull request description. The citation proves a merge was recorded, not what the amendment says; the reviewer reads the merged text against the five conditions above.
+
+### The single-home check
+
+`ansible/checks/test_restart_stamp_single_home.py` is the only code that holds the stamps to one home. The role is the only code that reads a stamp (`/var/lib/branchleft/*.applied`), decides from one, or writes one; a second copy of those steps in another role is the defect the role exists to remove, because the copies drift and a fix to one leaves the other restarting on the wrong day. The check reads the tasks and handlers of every role and fails when:
+
+- a role other than this one has a task of a module that acts (a file, command, service or similar module) and any key of that task, not only the module's arguments, names a stamp file or a stamp variable (a name ending in `_stamp_file`, `_stamp_files` or `_stamps`); the destination can be the loop item, with the stamps named only in the loop or in the task's `vars`;
+- such a task is a copy that writes the `pending` mark, whatever the destination;
+- a `loop`, `with_items`, `with_dict`, `with_list`, `until`, `when`, `changed_when`, `failed_when` or `register` of any task names a stamp file or a stamp variable;
+- a script or other non-YAML file of a role names a stamp file;
+- this role uses a module that can act on anything but a stamp and the facts.
+
+A role may name its stamp files in `vars/` or `defaults/`, which are data, and hand them to this role by `include_role`; that call, `set_fact`, `assert` and `debug` are the only tasks of another role that may carry a stamp in their arguments. The directory of the stamps is not a stamp: a role may create it. Named limit: a stamp variable with a name outside those three endings is not seen; the check reads names, not what a variable holds.
+
+The tests that follow the scan prove it can fail: each way a role could keep a copy is built in a throwaway role and must be reported, and so must the real `edge_stack` with a stamp write put back.
 
 ## How to test it
 
