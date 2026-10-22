@@ -612,15 +612,19 @@ bot sees it.
   tracker, which the pull request names; each is closed there by a literal
   allowlist with a recorded sabotage row, or kept here with its reason.
 - The project-directory check stops a second compose project only when it is named
-  in the role's own files. It does not see the environment that the stack's unit
-  loads from elsewhere. That is `/etc/branchleft/db.env`, a drop-in under
-  `branchleft-compose@db.service.d`, a replaced unit file, `Environment=` lines, and
-  the `DOCKER_*`, `COMPOSE_PATH_SEPARATOR` and `COMPOSE_ENV_FILES` variables. Any of
-  these can set `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME`, `COMPOSE_PROFILES` or
-  `ExecStart`, and the deploy program checks none of them. The owner writes those
-  files; the role reads none of them, because `db.env` holds secrets. The one
-  environment file the role reads is `/etc/branchleft/db.image.env`. The follow-up
-  is filed as an item on the tracker, which the pull request names.
+  in the role's own files. It does not see what the stack's unit definition and
+  environment set. Those sources are `/etc/branchleft/db.env`, `Environment=` lines in
+  the unit, a template drop-in under `/etc/systemd/system/branchleft-compose@.service.d/`
+  (it applies to every instance, `db` included), and a replaced unit file. The
+  environment sources can set `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME` and
+  `COMPOSE_PROFILES`; `COMPOSE_ENV_FILES` names further env files Compose reads, and
+  `COMPOSE_PATH_SEPARATOR` sets how a `COMPOSE_FILE` list is split. Only a drop-in or
+  a replaced unit file can set `ExecStart`. The `DOCKER_HOST` and `DOCKER_CONTEXT`
+  variables redirect the daemon rather than name a compose file. The deploy program
+  checks none of these. The owner writes those files; the role reads none of them,
+  because `db.env` holds secrets. The one environment file the role reads is
+  `/etc/branchleft/db.image.env`. The tracker item for this vector does not yet
+  record this gap; until it does, this README is the only record of it.
 - MySQL 8.0 reaches the end of its vendor support at a date this README does not
   state, because it was not checked here; the database's own ticket owns that.
 
