@@ -1,11 +1,8 @@
-"""Hold the default a capability role runs with to the default its argument_specs declares.
+"""Hold the default a role runs with to the default its argument_specs declares.
 
-ANS-12 leaves this equality to review: Ansible does not apply the ``default`` of an
-``argument_specs`` entry, so the value an omitted option takes at run time is a second copy,
-and for an option of a list element it is an inline ``| default(...)`` in the tasks of the
-entry point. A gate that reads the spec and the call cannot see which value runs. This check
-reads both copies for one role, ``restart_stamp``, and fails when they differ, so a change to
-one copy that leaves the other is stopped here and not found by a rerun on a host.
+Ansible does not apply a spec's ``default``, so the running one is a second copy: for an option
+of a list element, an inline ``| default(...)`` in the tasks of the entry point. The README of
+restart_stamp, "Composition (ANS-12)", says what is read and what is not.
 """
 
 from __future__ import annotations

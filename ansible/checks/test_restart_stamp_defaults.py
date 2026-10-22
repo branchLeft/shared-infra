@@ -1,9 +1,7 @@
 """Fails while restart_stamp runs with a default other than the one its spec declares.
 
-ANS-12 leaves the equality to review because Ansible does not apply the default of an
-argument_specs entry. For this role the second copy is the inline ``| default(...)`` of each
-optional option of a class in tasks/decide.yml, and this check holds the two together. See
-restart_stamp/README.md, "Composition (ANS-12)".
+The two copies are held together here for this role. See restart_stamp/README.md,
+"Composition (ANS-12)".
 """
 
 from __future__ import annotations
