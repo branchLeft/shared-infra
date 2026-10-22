@@ -97,8 +97,12 @@ class RoleCase(unittest.TestCase):
         min_version: str = "2.21.5",
         with_tasks: bool = True,
         scenario: str | None = SCENARIO,
+        also: Sequence[str] = (),
     ) -> Path:
-        """Create a minimal role directory and return its path."""
+        """Create a minimal role directory and return its path.
+
+        ``also`` names more scenarios, each with a valid scenario file.
+        """
         base = Path(tempfile.mkdtemp(prefix="harness-test-"))
         self.addCleanup(shutil.rmtree, base, True)
         role = base / "demo_role"
@@ -112,6 +116,9 @@ class RoleCase(unittest.TestCase):
         if scenario is not None:
             (role / "molecule" / "default").mkdir(parents=True)
             (role / "molecule" / "default" / "molecule.yml").write_text(scenario, encoding="utf-8")
+        for name in also:
+            (role / "molecule" / name).mkdir(parents=True)
+            (role / "molecule" / name / "molecule.yml").write_text(SCENARIO, encoding="utf-8")
         return role
 
 
@@ -158,7 +165,7 @@ class RunHarnessTests(RoleCase):
         for later in ("verify", "check-configured", "molecule-check"):
             self.assertEqual(outcomes[later], run_harness.SKIP)
         self.assertEqual(outcomes["destroy"], run_harness.OK)
-        self.assertIn(("/tools/molecule", "destroy"), calls)
+        self.assertIn(("/tools/molecule", "destroy", "-s", "default"), calls)
 
     def test_a_failed_lint_does_not_stop_the_container_steps(self) -> None:
         outcomes = self.outcomes(failing=["ansible-lint"])
@@ -169,8 +176,8 @@ class RunHarnessTests(RoleCase):
     def test_the_fresh_check_runs_before_any_real_converge(self) -> None:
         run, calls = fake_runner()
         run_harness.run_role(self.make_role(), TOOLS, run, ENV)
-        check = ("/tools/molecule", "converge", "--", "--check", "--diff")
-        real = ("/tools/molecule", "converge")
+        check = ("/tools/molecule", "converge", "-s", "default", "--", "--check", "--diff")
+        real = ("/tools/molecule", "converge", "-s", "default")
         self.assertLess(calls.index(check), calls.index(real))
         self.assertGreater(calls.index(check, calls.index(real)), calls.index(real))
 
@@ -180,7 +187,7 @@ class RunHarnessTests(RoleCase):
         self.assertEqual(outcomes["check-fresh"], run_harness.FAIL)
         for later in ("converge", "idempotence", "verify", "check-configured", "molecule-check"):
             self.assertEqual(outcomes[later], run_harness.SKIP)
-        self.assertNotIn(("/tools/molecule", "converge"), calls)
+        self.assertNotIn(("/tools/molecule", "converge", "-s", "default"), calls)
         self.assertEqual(outcomes["destroy"], run_harness.OK)
 
     def test_changes_reported_by_the_fresh_check_are_expected_and_pass(self) -> None:
@@ -207,14 +214,14 @@ class RunHarnessTests(RoleCase):
     def test_both_check_steps_run_the_converge_playbook_with_check_and_diff(self) -> None:
         run, calls = fake_runner()
         run_harness.run_role(self.make_role(), TOOLS, run, ENV)
-        check = ("/tools/molecule", "converge", "--", "--check", "--diff")
+        check = ("/tools/molecule", "converge", "-s", "default", "--", "--check", "--diff")
         self.assertEqual(calls.count(check), 2)
 
     def test_an_interrupt_still_destroys_the_instance_and_propagates(self) -> None:
         run, calls = fake_runner(interrupt_at="converge")
         with self.assertRaises(KeyboardInterrupt):
             run_harness.run_role(self.make_role(), TOOLS, run, ENV)
-        self.assertEqual(calls[-1], ("/tools/molecule", "destroy"))
+        self.assertEqual(calls[-1], ("/tools/molecule", "destroy", "-s", "default"))
 
     def test_missing_argument_specs_fails_the_interface_check(self) -> None:
         self.assertEqual(self.outcomes(specs="{}")["argument-specs"], run_harness.FAIL)
@@ -282,7 +289,7 @@ class RunHarnessTests(RoleCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             run_harness.main([str(self.make_role())], ENV, run, TOOLS)
-        summary = out.getvalue().split("== demo_role ==")[1]
+        summary = out.getvalue().split("== demo_role (default) ==")[1]
         self.assertIn("FAIL argument-specs\n    meta/argument_specs.yml is missing", summary)
 
 
@@ -363,6 +370,28 @@ class ScenarioLimitTests(RoleCase):
         )
         self.assertEqual(self.problems(reasoned), [])
 
+    def test_a_second_privileged_platform_needs_a_reason_of_its_own(self) -> None:
+        # One platform with two commented keys has two comments in the file. They
+        # explain that platform, and must not stand in for a bare second one.
+        first = (
+            "    # The role under test starts a service manager.\n    privileged: true\n"
+            "    # It also needs a capability.\n    capabilities:\n      - SYS_TIME\n"
+        )
+        second = (
+            f"  - name: second\n    image: python:3.12-slim@{DIGEST}\n"
+            "    pre_build_image: true\n    privileged: true\n"
+        )
+        self.assert_refused(scenario(platform=first + second), "without a comment")
+
+    def test_two_privileged_platforms_each_with_a_reason_pass(self) -> None:
+        first = "    # The first starts a service manager.\n    privileged: true\n"
+        second = (
+            f"  - name: second\n    image: python:3.12-slim@{DIGEST}\n"
+            "    pre_build_image: true\n"
+            "    # The second starts a service manager too.\n    privileged: true\n"
+        )
+        self.assertEqual(self.problems(scenario(platform=first + second)), [])
+
     def test_privileged_false_needs_no_reason(self) -> None:
         self.assertEqual(self.problems(scenario(platform="    privileged: false\n")), [])
 
@@ -396,6 +425,260 @@ class ScenarioLimitTests(RoleCase):
         for name in MOLECULE_STEPS:
             self.assertEqual(outcomes[name], run_harness.SKIP)
         self.assertEqual([call for call in calls if call[0] == "/tools/molecule"], [])
+
+
+class SecondScenarioTests(RoleCase):
+    """A role's other scenarios run, each in its own run of the harness, and cannot pass unrun."""
+
+    def molecule_calls(self, calls: Sequence[tuple[str, ...]]) -> list[tuple[str, ...]]:
+        """Return only the Molecule commands among the calls."""
+        return [call for call in calls if call[0] == "/tools/molecule"]
+
+    def test_every_molecule_command_names_the_scenario_being_run(self) -> None:
+        run, calls = fake_runner()
+        role = self.make_role(also=["refusals"])
+        run_harness.run_role(role, TOOLS, run, ENV, scenario="refusals")
+        molecule = self.molecule_calls(calls)
+        self.assertEqual(len(molecule), len(MOLECULE_STEPS))
+        for call in molecule:
+            self.assertEqual(call[2:4], ("-s", "refusals"), call)
+
+    def test_the_default_scenario_is_named_too_so_it_never_depends_on_a_default(self) -> None:
+        run, calls = fake_runner()
+        run_harness.run_role(self.make_role(also=["refusals"]), TOOLS, run, ENV)
+        for call in self.molecule_calls(calls):
+            self.assertEqual(call[2:4], ("-s", "default"), call)
+
+    def test_destroy_names_the_second_scenario_and_still_runs_after_a_failure(self) -> None:
+        run, calls = fake_runner(failing=["converge"])
+        role = self.make_role(also=["refusals"])
+        outcomes = dict(run_harness.run_role(role, TOOLS, run, ENV, scenario="refusals"))
+        self.assertEqual(outcomes["converge"], run_harness.FAIL)
+        self.assertEqual(outcomes["destroy"], run_harness.OK)
+        self.assertEqual(calls[-1], ("/tools/molecule", "destroy", "-s", "refusals"))
+
+    def test_a_failing_second_scenario_fails_its_own_run(self) -> None:
+        run, _ = fake_runner(failing=["converge"])
+        role = self.make_role(also=["refusals"])
+        self.assertEqual(
+            run_harness.main([str(role), "--scenario", "refusals"], ENV, run, TOOLS), 1
+        )
+
+    def test_a_passing_second_scenario_passes_its_own_run(self) -> None:
+        run, _ = fake_runner()
+        role = self.make_role(also=["refusals"])
+        self.assertEqual(
+            run_harness.main([str(role), "--scenario", "refusals"], ENV, run, TOOLS), 0
+        )
+
+    def test_the_summary_names_the_scenario(self) -> None:
+        run, _ = fake_runner()
+        role = self.make_role(also=["refusals"])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            run_harness.main([str(role), "--scenario", "refusals"], ENV, run, TOOLS)
+        self.assertIn("== demo_role (refusals) ==", out.getvalue())
+
+    def test_a_scenario_that_does_not_exist_fails_and_runs_no_container_step(self) -> None:
+        run, calls = fake_runner()
+        role = self.make_role()
+        outcomes = dict(run_harness.run_role(role, TOOLS, run, ENV, scenario="refusals"))
+        self.assertEqual(outcomes["scenario-limits"], run_harness.FAIL)
+        for name in MOLECULE_STEPS:
+            self.assertEqual(outcomes[name], run_harness.SKIP)
+        self.assertEqual(self.molecule_calls(calls), [])
+
+    def test_the_reason_names_the_missing_scenario(self) -> None:
+        self.assertEqual(
+            run_harness.check_scenarios(self.make_role(), "refusals"),
+            ["molecule/refusals/molecule.yml is missing"],
+        )
+
+    def test_a_role_with_no_molecule_directory_still_fails_at_scenario_limits(self) -> None:
+        run, calls = fake_runner()
+        role = self.make_role(scenario=None)
+        outcomes = dict(run_harness.run_role(role, TOOLS, run, ENV))
+        self.assertEqual(outcomes["scenario-limits"], run_harness.FAIL)
+        for name in MOLECULE_STEPS:
+            self.assertEqual(outcomes[name], run_harness.SKIP)
+        self.assertEqual(self.molecule_calls(calls), [])
+
+    def test_a_role_with_only_a_second_scenario_fails_for_the_missing_default(self) -> None:
+        role = self.make_role(scenario=None, also=["refusals"])
+        self.assertEqual(
+            run_harness.check_scenarios(role, "refusals"),
+            ["molecule/default/molecule.yml is missing"],
+        )
+
+    def test_a_privileged_second_scenario_needs_a_stated_reason_in_any_run(self) -> None:
+        role = self.make_role(also=["refusals"])
+        bare = scenario(platform="    privileged: true\n")
+        (role / "molecule" / "refusals" / "molecule.yml").write_text(bare, encoding="utf-8")
+        for name in ("default", "refusals"):
+            found = run_harness.check_scenarios(role, name)
+            self.assertEqual(len(found), 1, found)
+            self.assertTrue(found[0].startswith("molecule/refusals/molecule.yml: "), found)
+            self.assertIn("without a comment", found[0])
+
+    def test_a_second_scenario_that_links_to_the_default_file_is_read_through_the_link(
+        self,
+    ) -> None:
+        role = self.make_role()
+        (role / "molecule" / "refusals").mkdir()
+        (role / "molecule" / "refusals" / "molecule.yml").symlink_to("../default/molecule.yml")
+        self.assertEqual(run_harness.check_scenarios(role, "refusals"), [])
+        default_file = role / "molecule" / "default" / "molecule.yml"
+        default_file.write_text(SCENARIO.replace(f"@{DIGEST}", ""), encoding="utf-8")
+        found = run_harness.check_scenarios(role, "refusals")
+        self.assertEqual(len(found), 2, found)
+        self.assertTrue(any(problem.startswith("molecule/refusals/") for problem in found), found)
+
+    def test_a_broken_link_is_a_missing_scenario(self) -> None:
+        role = self.make_role()
+        (role / "molecule" / "refusals").mkdir()
+        (role / "molecule" / "refusals" / "molecule.yml").symlink_to("../nowhere/molecule.yml")
+        self.assertIn(
+            "molecule/refusals/molecule.yml is missing",
+            run_harness.check_scenarios(role, "refusals"),
+        )
+
+    def test_a_scenario_name_that_is_not_a_plain_directory_name_is_refused(self) -> None:
+        run, calls = fake_runner()
+        role = self.make_role()
+        for bad in ("../default", "a b", "", "x;y", "a/b", "_x"):
+            self.assertEqual(
+                run_harness.main([str(role), "--scenario", bad], ENV, run, TOOLS), 2, bad
+            )
+        self.assertEqual(calls, [])
+
+    def test_the_scenario_option_defaults_to_the_default_scenario(self) -> None:
+        run, calls = fake_runner()
+        self.assertEqual(run_harness.main([str(self.make_role())], ENV, run, TOOLS), 0)
+        self.assertIn(("/tools/molecule", "create", "-s", "default"), calls)
+
+
+class LeftOutStepTests(RoleCase):
+    """A scenario can leave steps out, and a role cannot leave one out of every scenario."""
+
+    CHECKS = ("check-fresh", "check-configured", "molecule-check")
+
+    def write_skips(self, role: Path, scenario_name: str, skips: Sequence[str]) -> None:
+        """Write a scenario's step list, with a comment and a blank line before the names."""
+        text = "# the steps this scenario leaves out\n\n" + "".join(f"{name}\n" for name in skips)
+        (role / "molecule" / scenario_name / run_harness.SKIP_FILE).write_text(
+            text, encoding="utf-8"
+        )
+
+    def split_role(self) -> Path:
+        """Return a role whose default leaves out the check steps and whose plan runs only them."""
+        role = self.make_role(also=["plan"])
+        self.write_skips(role, "default", self.CHECKS)
+        self.write_skips(role, "plan", ["idempotence", "verify"])
+        return role
+
+    def run_scenario(
+        self, role: Path, scenario_name: str, failing: Sequence[str] = ()
+    ) -> tuple[dict[str, str], list[tuple[str, ...]]]:
+        """Run one scenario of the role with the fake runner; return outcomes and the calls."""
+        run, calls = fake_runner(failing=failing)
+        outcomes = dict(run_harness.run_role(role, TOOLS, run, ENV, scenario=scenario_name))
+        return outcomes, [call for call in calls if call[0] == "/tools/molecule"]
+
+    def test_the_steps_a_scenario_leaves_out_are_reported_as_skipped_and_not_run(self) -> None:
+        outcomes, calls = self.run_scenario(self.split_role(), "default")
+        for name in self.CHECKS:
+            self.assertEqual(outcomes[name], run_harness.SKIP, name)
+        for name in ("create", "prepare", "converge", "idempotence", "verify", "destroy"):
+            self.assertEqual(outcomes[name], run_harness.OK, name)
+        self.assertFalse([call for call in calls if "--check" in call or call[1] == "check"], calls)
+
+    def test_the_other_scenario_runs_the_steps_the_first_left_out(self) -> None:
+        outcomes, calls = self.run_scenario(self.split_role(), "plan")
+        for name in ("idempotence", "verify"):
+            self.assertEqual(outcomes[name], run_harness.SKIP, name)
+        for name in ("create", "prepare", "check-fresh", "converge", "check-configured"):
+            self.assertEqual(outcomes[name], run_harness.OK, name)
+        self.assertEqual(outcomes["molecule-check"], run_harness.OK)
+        self.assertEqual(outcomes["destroy"], run_harness.OK)
+        self.assertNotIn(("/tools/molecule", "idempotence", "-s", "plan"), calls)
+        self.assertNotIn(("/tools/molecule", "verify", "-s", "plan"), calls)
+
+    def test_the_two_scenarios_together_run_every_step(self) -> None:
+        role = self.split_role()
+        ran: set[str] = set()
+        for name in ("default", "plan"):
+            outcomes, _ = self.run_scenario(role, name)
+            ran |= {step for step, status in outcomes.items() if status == run_harness.OK}
+        self.assertTrue(set(MOLECULE_STEPS) <= ran, set(MOLECULE_STEPS) - ran)
+
+    def test_a_role_with_no_step_list_runs_every_step(self) -> None:
+        outcomes, calls = self.run_scenario(self.make_role(), "default")
+        self.assertEqual([name for name in MOLECULE_STEPS if name not in outcomes], [])
+        self.assertEqual(len(calls), len(MOLECULE_STEPS))
+
+    def test_a_failure_after_a_left_out_step_still_skips_the_rest_and_destroys(self) -> None:
+        outcomes, calls = self.run_scenario(self.split_role(), "default", failing=["verify"])
+        self.assertEqual(outcomes["verify"], run_harness.FAIL)
+        self.assertEqual(outcomes["destroy"], run_harness.OK)
+        self.assertEqual(calls[-1], ("/tools/molecule", "destroy", "-s", "default"))
+
+    def test_a_step_that_no_scenario_runs_is_refused_and_no_container_step_runs(self) -> None:
+        role = self.make_role()
+        self.write_skips(role, "default", ["verify"])
+        found = run_harness.check_scenarios(role)
+        self.assertEqual(
+            found, ["verify runs in no scenario: every scenario's skip-steps.txt leaves it out"]
+        )
+        outcomes, calls = self.run_scenario(role, "default")
+        self.assertEqual(outcomes["scenario-limits"], run_harness.FAIL)
+        for name in MOLECULE_STEPS:
+            self.assertEqual(outcomes[name], run_harness.SKIP, name)
+        self.assertEqual(calls, [])
+
+    def test_a_step_that_another_scenario_runs_is_not_refused(self) -> None:
+        self.assertEqual(run_harness.check_scenarios(self.split_role()), [])
+
+    def test_the_refusal_is_found_from_any_scenarios_run(self) -> None:
+        role = self.split_role()
+        self.write_skips(role, "plan", ["idempotence", "verify", "check-fresh"])
+        for name in ("default", "plan"):
+            found = run_harness.check_scenarios(role, name)
+            self.assertEqual(len(found), 1, found)
+            self.assertIn("check-fresh runs in no scenario", found[0])
+
+    def test_steps_every_run_needs_cannot_be_left_out(self) -> None:
+        for name in ("create", "prepare", "converge", "destroy", "nonsense"):
+            role = self.make_role(also=["plan"])
+            self.write_skips(role, "plan", [name])
+            found = run_harness.check_scenarios(role)
+            self.assertEqual(len(found), 1, (name, found))
+            self.assertTrue(found[0].startswith("molecule/plan/skip-steps.txt: cannot leave out "))
+            self.assertIn(name, found[0])
+
+    def test_a_line_that_is_not_one_step_name_is_refused_and_leaves_nothing_out(self) -> None:
+        bad_texts = (
+            "skip: [verify]\n",
+            "verify please\n",
+            "- verify\n",
+            "verify, idempotence\n",
+            "verify # not at the start of the line\n",
+        )
+        for text in bad_texts:
+            role = self.make_role(also=["plan"])
+            (role / "molecule" / "plan" / run_harness.SKIP_FILE).write_text(text, encoding="utf-8")
+            found = run_harness.check_scenarios(role)
+            self.assertEqual(len(found), 1, (text, found))
+            self.assertTrue(found[0].startswith("molecule/plan/skip-steps.txt: "), found)
+            self.assertEqual(run_harness.read_skips(role / "molecule" / "plan")[0], [], text)
+            outcomes, calls = self.run_scenario(role, "plan")
+            self.assertEqual(outcomes["scenario-limits"], run_harness.FAIL, text)
+            self.assertEqual(calls, [], text)
+
+    def test_the_same_step_listed_twice_is_one_step(self) -> None:
+        role = self.make_role(also=["plan"])
+        self.write_skips(role, "plan", ["verify", "verify"])
+        self.assertEqual(run_harness.read_skips(role / "molecule" / "plan"), (["verify"], []))
+        self.assertEqual(run_harness.check_scenarios(role), [])
 
 
 if __name__ == "__main__":

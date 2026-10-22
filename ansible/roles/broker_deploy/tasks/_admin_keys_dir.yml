@@ -1,0 +1,35 @@
+---
+# Internal to the role. The directory of the slot admin keys, closed to everyone
+# but the broker. The broker owns the slots directory above it, so the broker can
+# replace this directory with a link. A file task that follows a link applies its
+# owner and mode to the target, and root runs this role: a link to
+# /etc/sudoers.d would be chowned to the broker with mode 0700, and an
+# unprivileged account would own the directory root reads its sudoers rules from.
+# So the path is not followed. It is read here without following a link and
+# refused when it is a link or anything but a directory, in a plan as well as an
+# apply; and the file task sets follow: false, so the module itself refuses to
+# turn a link into a directory in the moment between this read and the write.
+- name: Look at the directory of the slot admin keys, without following a link
+  ansible.builtin.stat:
+    path: '{{ broker_deploy_admin_keys_dir }}'
+    follow: false
+  register: broker_deploy_admin_keys_stat
+
+- name: Refuse a directory of slot admin keys that is a link or is not a directory
+  ansible.builtin.assert:
+    that:
+      - not broker_deploy_admin_keys_stat.stat.exists or broker_deploy_admin_keys_stat.stat.isdir
+    quiet: true
+    fail_msg: >-
+      {{ broker_deploy_admin_keys_dir }} is a link or is not a directory. The role declares it as a
+      directory and never follows a link: the broker owns the directory above it and could point it at
+      a directory root relies on, and the role would change that directory's owner and mode.
+
+- name: Create the directory of the slot admin keys, closed to everyone but the broker
+  ansible.builtin.file:
+    path: '{{ broker_deploy_admin_keys_dir }}'
+    state: directory
+    owner: '{{ broker_deploy_user }}'
+    group: '{{ broker_deploy_user }}'
+    mode: '0700'
+    follow: false

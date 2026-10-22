@@ -1,0 +1,207 @@
+---
+# Internal to the role. The uid register and the router's account, in the order
+# the host build needs: the claims are recorded before any account exists at the
+# claimed uid, because the pinned program refuses to claim a uid that /etc/passwd
+# already assigns.
+#
+# The register is written by the pinned program only (it locks the directory and
+# writes each claim crash-safely). That program has no dry-run flag, so it is not
+# run in check mode (ANS-10); the reads below decide whether it is needed, and in
+# a plan they say what a real run would record and list any uid that is taken.
+
+- name: Look at the uid register
+  ansible.builtin.stat:
+    path: '{{ demo1_build_uid_register_dir }}'
+    follow: false
+  register: demo1_build_register_stat
+
+# Whoever can write the register can delete or forge a claim, so a directory of
+# any other shape is refused, not corrected under existing claims.
+- name: Refuse a uid register that is not a real directory, root-owned, mode 0700
+  ansible.builtin.assert:
+    that:
+      - demo1_build_register_stat.stat.isdir
+      - not demo1_build_register_stat.stat.islnk
+      - demo1_build_register_stat.stat.pw_name == 'root'
+      - demo1_build_register_stat.stat.mode == '0700'
+    quiet: true
+    fail_msg: >-
+      {{ demo1_build_uid_register_dir }} is not a directory owned by root with mode 0700.
+      Someone else could write a claim into it, so the role does not touch it.
+  when: demo1_build_register_stat.stat.exists
+
+- name: Read each claim of the register
+  ansible.builtin.slurp:
+    src: '{{ demo1_build_uid_register_dir }}/{{ item.slug }}'
+  loop: '{{ demo1_build_wanted_claims }}'
+  loop_control:
+    label: '{{ item.slug }}'
+  register: demo1_build_claim_reads
+  failed_when: false
+
+- name: Refuse a claim in the register that is not this demo's claim at its uid
+  ansible.builtin.assert:
+    that:
+      - item.content is not defined or (item.content | b64decode) == 'slug=' ~ item.item.slug ~ '\nuid=' ~ item.item.uid ~ '\n'
+    quiet: true
+    fail_msg: >-
+      The register holds a claim for {{ item.item.slug }} that is not uid {{ item.item.uid }}.
+      Changing a claimed uid is a migration, not an update, and the role does not do it.
+  loop: '{{ demo1_build_claim_reads.results }}'
+  loop_control:
+    label: '{{ item.item.slug }}'
+
+- name: Work out which claims the register lacks
+  ansible.builtin.set_fact:
+    demo1_build_claims_missing: >-
+      {{ demo1_build_claim_reads.results | rejectattr('content', 'defined') | map(attribute='item') | list }}
+
+# A uid is only ever claimed over an account-free number. This is the cross-check
+# the pinned program runs when it claims, repeated here as a read so that a plan
+# lists a collision instead of the apply meeting it.
+- name: Read the host's account database
+  ansible.builtin.slurp:
+    src: /etc/passwd
+  register: demo1_build_passwd_raw
+
+- name: Work out which uids the accounts already use
+  ansible.builtin.set_fact:
+    demo1_build_passwd_uids: >-
+      {{ (demo1_build_passwd_raw.content | b64decode).splitlines()
+      | select('match', '^[^#:][^:]*:[^:]*:[0-9]+:')
+      | map('split', ':') | map(attribute='2') | map('int') | list }}
+
+# The list is what the collision check below compares against, so a parse that
+# silently yields nothing would make that check pass for every uid. Root is on
+# every host, and every account line must give one uid.
+- name: Refuse an account database that did not parse into one uid per account
+  ansible.builtin.assert:
+    that:
+      - 0 in demo1_build_passwd_uids
+      - demo1_build_passwd_uids | length == (demo1_build_passwd_raw.content | b64decode).splitlines() | select('match', '^[^#:][^:]*:') | list | length
+    quiet: true
+    fail_msg: The account database did not parse into one uid per account, so the collision check below would prove nothing.
+
+- name: Refuse a new claim over a uid that an account on this host already has
+  ansible.builtin.assert:
+    that:
+      - item.uid not in demo1_build_passwd_uids
+    quiet: true
+    fail_msg: >-
+      uid {{ item.uid }} for {{ item.slug }} already belongs to an account on this host and the register has no
+      claim for it. Claiming it would hand that account's uid to a slot. Nothing is written.
+  loop: '{{ demo1_build_claims_missing }}'
+  loop_control:
+    label: '{{ item.slug }}'
+
+- name: Say which claims a real run would record
+  ansible.builtin.debug:
+    msg: "A real run records {{ demo1_build_claims_missing | map(attribute='slug') | join(', ') }} in the register, with the pinned program."
+  when:
+    - demo1_build_claims_missing | length > 0
+    - ansible_check_mode
+
+# Skipped in check mode for a reason of the program: it has no dry-run flag and
+# writes the register. The read-only checks above run in both modes. A host whose
+# register already holds every claim does not reach this task at all.
+- name: Record the missing claims with the pinned program
+  ansible.builtin.command:
+    argv: "{{ [demo1_build_python] + demo1_build_python_flags + [demo1_build_provision_dir ~ '/demo_uid_claims.py'] }}"
+  register: demo1_build_claim_run
+  changed_when: "'recorded 0 new claim' not in demo1_build_claim_run.stdout"
+  when:
+    - demo1_build_claims_missing | length > 0
+    - not ansible_check_mode
+
+- name: Read the register back after the program ran
+  ansible.builtin.stat:
+    path: '{{ demo1_build_uid_register_dir }}/{{ item.slug }}'
+    follow: false
+  loop: '{{ demo1_build_wanted_claims }}'
+  loop_control:
+    label: '{{ item.slug }}'
+  register: demo1_build_claim_after
+  when: not ansible_check_mode
+
+- name: Refuse to go on if a claim is still missing from the register
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.mode == '0600'
+    quiet: true
+    fail_msg: The claim for {{ item.item.slug }} is not in the register as a plain file with mode 0600 after the program ran.
+  loop: '{{ demo1_build_claim_after.results }}'
+  loop_control:
+    label: '{{ item.item.slug }}'
+  when: not ansible_check_mode
+
+# The router's account. It is created when it is absent and otherwise only
+# checked: an account that exists at another uid or gid is a host built by an
+# earlier text of the runbook, and its repair moves files between groups and
+# stays with the owner. The role never changes a live account.
+- name: Look for the router's account and group
+  ansible.builtin.getent:
+    database: '{{ item.database }}'
+    key: '{{ item.key }}'
+    fail_key: false
+  loop:
+    - { database: passwd, key: '{{ demo1_build_router_user }}' }
+    - { database: group, key: '{{ demo1_build_router_user }}' }
+    - { database: group, key: '{{ demo1_build_router_gid }}' }
+  loop_control:
+    label: '{{ item.database }} {{ item.key }}'
+  register: demo1_build_router_lookup
+
+- name: Take what the lookups found
+  ansible.builtin.set_fact:
+    demo1_build_router_passwd: >-
+      {{ demo1_build_router_lookup.results[0].ansible_facts.getent_passwd[demo1_build_router_user] }}
+    demo1_build_router_group_named: >-
+      {{ demo1_build_router_lookup.results[1].ansible_facts.getent_group[demo1_build_router_user] }}
+    demo1_build_router_group_at_gid: >-
+      {{ demo1_build_router_lookup.results[2].ansible_facts.getent_group
+      | dict2items | rejectattr('value', 'none') | map(attribute='key') | list }}
+
+- name: Refuse a router account that exists at another uid, gid or shell
+  ansible.builtin.assert:
+    that:
+      - demo1_build_router_passwd[1] | int == demo1_build_router_uid | int
+      - demo1_build_router_passwd[2] | int == demo1_build_router_gid | int
+      - demo1_build_router_passwd[5] == '/usr/sbin/nologin'
+      - demo1_build_router_group_at_gid == [demo1_build_router_user]
+    quiet: true
+    fail_msg: >-
+      The {{ demo1_build_router_user }} account exists but is not uid {{ demo1_build_router_uid }}, gid
+      {{ demo1_build_router_gid }} with the group {{ demo1_build_router_user }} at that gid and
+      /usr/sbin/nologin. The role does not repair a live account; the runbook's repair is the owner's.
+  when: demo1_build_router_passwd is not none
+
+- name: Refuse a router group or gid that another group already holds
+  ansible.builtin.assert:
+    that:
+      - demo1_build_router_group_named is none
+      - demo1_build_router_group_at_gid | length == 0
+    quiet: true
+    fail_msg: >-
+      The account {{ demo1_build_router_user }} is absent, but a group of that name, or a group at gid
+      {{ demo1_build_router_gid }}, already exists. Creating the account would join or move it. Nothing is written.
+  when: demo1_build_router_passwd is none
+
+- name: Create the router's group at its claimed gid
+  ansible.builtin.group:
+    name: '{{ demo1_build_router_user }}'
+    gid: '{{ demo1_build_router_gid }}'
+    state: present
+  when: demo1_build_router_passwd is none
+
+- name: Create the router's account at its claimed uid
+  ansible.builtin.user:
+    name: '{{ demo1_build_router_user }}'
+    uid: '{{ demo1_build_router_uid }}'
+    group: '{{ demo1_build_router_user }}'
+    shell: /usr/sbin/nologin
+    create_home: false
+    system: false
+    state: present
+  when: demo1_build_router_passwd is none

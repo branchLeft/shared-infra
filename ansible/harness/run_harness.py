@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.error import YAMLError
 
 ANSIBLE_DIR = Path(__file__).resolve().parent.parent
@@ -44,7 +45,32 @@ CONNECTION_KEYS = frozenset(
 INVENTORY_HOST_KEYS = frozenset({"hosts", "links"})
 IMAGE_DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 ENGINE_SOCKET = re.compile(r"(docker|podman)\.sock")
-PRIVILEGE_LINE = re.compile(r"^(privileged|capabilities):\s*(.*)$")
+PRIVILEGE_KEYS = ("privileged", "capabilities")
+
+# A role has a scenario called default, and may have more (a directory under
+# molecule/). One run of the harness runs one scenario, named by --scenario, so
+# each scenario can be its own shard with its own time limit. The name is a
+# directory name that is passed to Molecule, so it is a plain one.
+DEFAULT_SCENARIO = "default"
+SCENARIO_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+# A scenario may leave out some of the Molecule steps, so that a role whose steps do
+# not fit one shard's time limit can share them out between its scenarios. The file
+# is skip-steps.txt, beside the scenario's molecule.yml: one step name per line, and a
+# line that starts with # is a comment. It is not YAML, because ansible-lint takes any
+# YAML file in a scenario directory for a playbook. A scenario with no such file runs
+# every step. Only these steps may be left out: create, prepare, converge and destroy
+# are what any run needs, and a step that no scenario of the role runs would be a check
+# that never happens, so that is refused.
+SKIP_FILE = "skip-steps.txt"
+SKIPPABLE_STEPS = (
+    "check-fresh",
+    "idempotence",
+    "verify",
+    "check-configured",
+    "molecule-check",
+)
 
 
 @dataclass(frozen=True)
@@ -56,6 +82,7 @@ class Step:
     cwd: Path
     always: bool = False
     no_changes: bool = False
+    skipped: bool = False
 
 
 Runner = Callable[[Sequence[str], Path, Mapping[str, str]], "subprocess.CompletedProcess[str]"]
@@ -150,19 +177,6 @@ def walk_keys(node: object) -> Iterator[tuple[str, object]]:
             yield from walk_keys(item)
 
 
-def explained_privilege_lines(text: str) -> int:
-    """Count privilege keys in ``text`` that have a comment on the line above them."""
-    lines = [line.strip() for line in text.splitlines()]
-    explained = 0
-    for index, line in enumerate(lines):
-        match = PRIVILEGE_LINE.match(line)
-        if match is None or match.group(2) in ("false", "False", "[]"):
-            continue
-        before = next((prior for prior in reversed(lines[:index]) if prior), "")
-        explained += before.startswith("#")
-    return explained
-
-
 def platform_problems(platform: Mapping[str, object]) -> list[str]:
     """Return how one scenario platform breaks the limits on what a test may reach."""
     problems: list[str] = []
@@ -179,14 +193,40 @@ def platform_problems(platform: Mapping[str, object]) -> list[str]:
     return problems
 
 
-def privileged_platforms(platforms: Sequence[object]) -> int:
-    """Count platforms that ask for privilege or added capabilities."""
-    return sum(
-        1
-        for platform in platforms
-        if isinstance(platform, Mapping)
-        and (platform.get("privileged") is True or bool(platform.get("capabilities")))
-    )
+def asks_for_privilege(platform: Mapping[str, object], key: str) -> bool:
+    """Return whether a platform sets ``privileged`` to true or lists any ``capabilities``."""
+    value = platform.get(key)
+    return value is True if key == "privileged" else bool(value)
+
+
+def comment_above(lines: Sequence[str], index: int) -> bool:
+    """Return whether the nearest non-blank line before ``lines[index]`` is a comment."""
+    before = next((prior for prior in reversed(lines[:index]) if prior), "")
+    return before.startswith("#")
+
+
+def unexplained_privileged_platforms(text: str, platforms: Sequence[object]) -> int:
+    """Count platforms that ask for privilege with no comment above any of their own keys.
+
+    Each platform is judged by the lines of its own privilege keys, read from the
+    round-trip parse of ``text``. A comment above one platform's key never explains
+    another platform, so one platform with two commented keys cannot cover a second,
+    bare one. A platform whose key positions cannot be read is counted as unexplained.
+    """
+    lines = [line.strip() for line in text.splitlines()]
+    unexplained = 0
+    for platform in platforms:
+        if not isinstance(platform, Mapping):
+            continue
+        asked = [key for key in PRIVILEGE_KEYS if asks_for_privilege(platform, key)]
+        if not asked:
+            continue
+        if not isinstance(platform, CommentedMap) or not all(key in platform for key in asked):
+            unexplained += 1
+            continue
+        if not any(comment_above(lines, platform.lc.key(key)[0]) for key in asked):
+            unexplained += 1
+    return unexplained
 
 
 def scenario_problems(scenario: Path) -> list[str]:
@@ -223,7 +263,7 @@ def scenario_problems(scenario: Path) -> list[str]:
         if isinstance(platform, Mapping):
             name = platform.get("name", "?")
             problems.extend(f"platform {name}: {found}" for found in platform_problems(platform))
-    if privileged_platforms(platforms) > explained_privilege_lines(text):
+    if unexplained_privileged_platforms(text, YAML().load(text).get("platforms", [])):
         problems.append(
             "a platform asks for privileged or capabilities without a comment above the key "
             "saying why"
@@ -231,16 +271,68 @@ def scenario_problems(scenario: Path) -> list[str]:
     return sorted(set(problems))
 
 
-def check_scenarios(role: Path) -> list[str]:
-    """Return every way the role's Molecule scenarios break the limits of ANS-15."""
-    problems = (
-        []
-        if (role / "molecule" / "default" / "molecule.yml").is_file()
-        else ["molecule/default/molecule.yml is missing"]
-    )
+def read_skips(directory: Path) -> tuple[list[str], list[str]]:
+    """Return the steps a scenario leaves out, and what is wrong with the file that says so.
+
+    The file is ``skip-steps.txt`` in the scenario's directory. No file leaves nothing
+    out. A file with a problem leaves nothing out either, and the problem is returned
+    for ``scenario-limits`` to fail on.
+    """
+    path = directory / SKIP_FILE
+    if not path.is_file():
+        return [], []
+    label = f"molecule/{directory.name}/{SKIP_FILE}"
+    lines = (line.strip() for line in path.read_text(encoding="utf-8").splitlines())
+    names = list(dict.fromkeys(line for line in lines if line and not line.startswith("#")))
+    refused = [name for name in names if name not in SKIPPABLE_STEPS]
+    if refused:
+        allowed = ", ".join(SKIPPABLE_STEPS)
+        return [], [f"{label}: cannot leave out {', '.join(refused)} (only {allowed} may be)"]
+    return names, []
+
+
+def skip_problems(role: Path) -> list[str]:
+    """Return what is wrong with the scenarios' step lists, read for every scenario of the role.
+
+    Each file must be well formed, and every step that may be left out must run in at
+    least one scenario: a role may share its steps between scenarios but not drop one.
+    """
+    problems: list[str] = []
+    left_out: list[set[str]] = []
+    for path in sorted((role / "molecule").glob("*/molecule.yml")):
+        names, found = read_skips(path.parent)
+        problems.extend(found)
+        left_out.append(set(names))
+    if left_out:
+        problems.extend(
+            f"{step} runs in no scenario: every scenario's {SKIP_FILE} leaves it out"
+            for step in SKIPPABLE_STEPS
+            if all(step in names for names in left_out)
+        )
+    return problems
+
+
+def check_scenarios(role: Path, scenario: str = DEFAULT_SCENARIO) -> list[str]:
+    """Return every way the role's Molecule scenarios break the limits of ANS-15.
+
+    Every scenario file of the role is read, whichever one this run executes. The
+    default scenario and the one being run must exist: a shard for a scenario that
+    is not there fails here and is not skipped. The step lists are read the same way
+    (``skip_problems``).
+    """
+    problems = [
+        f"molecule/{name}/molecule.yml is missing"
+        for name in dict.fromkeys((DEFAULT_SCENARIO, scenario))
+        if not (role / "molecule" / name / "molecule.yml").is_file()
+    ]
     for path in sorted((role / "molecule").glob("*/molecule.yml")):
         relative = path.relative_to(role)
+        if not path.is_file():
+            # A link to nothing: reported, not read, so a broken link cannot crash the run.
+            problems.append(f"{relative}: is not a readable file (a link to nothing?)")
+            continue
         problems.extend(f"{relative}: {found}" for found in scenario_problems(path))
+    problems.extend(skip_problems(role))
     return problems
 
 
@@ -273,28 +365,41 @@ def static_steps(role: Path, tools: Path) -> list[Step]:
     ]
 
 
-def molecule_steps(role: Path, tools: Path) -> list[Step]:
-    """Return the Molecule steps for a role, in the order they run.
+def molecule_steps(role: Path, tools: Path, scenario: str = DEFAULT_SCENARIO) -> list[Step]:
+    """Return the Molecule steps for one scenario of a role, in the order they run.
 
-    ``check-fresh`` precedes any real converge; ``molecule-check`` is Molecule's own action.
+    Every command names the scenario with ``-s``: Molecule runs ``default`` when it is
+    not told, so a second scenario that was not named would never run and its shard
+    would pass on the first. ``check-fresh`` precedes any real converge;
+    ``molecule-check`` is Molecule's own action; ``destroy`` names the scenario too.
+    A step the scenario's ``skip-steps.txt`` leaves out stays in the list, marked skipped,
+    so the summary shows it as SKIP and not as missing.
     """
     molecule = str(tools / "molecule")
-    in_check_mode = ("converge", "--", "--check", "--diff")
+    left_out = read_skips(role / "molecule" / scenario)[0]
+    named = ("-s", scenario)
+    in_check_mode = ("converge", *named, "--", "--check", "--diff")
     commands: list[tuple[str, tuple[str, ...]]] = [
-        ("create", ("create",)),
-        ("prepare", ("prepare",)),
+        ("create", ("create", *named)),
+        ("prepare", ("prepare", *named)),
         ("check-fresh", in_check_mode),
-        ("converge", ("converge",)),
-        ("idempotence", ("idempotence",)),
-        ("verify", ("verify",)),
+        ("converge", ("converge", *named)),
+        ("idempotence", ("idempotence", *named)),
+        ("verify", ("verify", *named)),
         ("check-configured", in_check_mode),
-        ("molecule-check", ("check",)),
+        ("molecule-check", ("check", *named)),
     ]
     steps = [
-        Step(name, (molecule, *args), role, no_changes=name == "check-configured")
+        Step(
+            name,
+            (molecule, *args),
+            role,
+            no_changes=name == "check-configured",
+            skipped=name in left_out,
+        )
         for name, args in commands
     ]
-    steps.append(Step("destroy", (molecule, "destroy"), role, always=True))
+    steps.append(Step("destroy", (molecule, "destroy", *named), role, always=True))
     return steps
 
 
@@ -344,7 +449,7 @@ def run_molecule(
     finished = False
     try:
         for step in steps:
-            if broken and not step.always:
+            if step.skipped or (broken and not step.always):
                 outcomes.append((step.name, SKIP))
                 continue
             status = report(step, run(step.argv, step.cwd, env))
@@ -365,8 +470,13 @@ def run_role(
     run: Runner,
     env: Mapping[str, str],
     reasons: dict[str, str] | None = None,
+    scenario: str = DEFAULT_SCENARIO,
 ) -> list[tuple[str, str]]:
-    """Run every step for one role; ``reasons`` receives why each failed check failed."""
+    """Run every step for one scenario of a role.
+
+    ``reasons`` receives why each failed check failed. The static checks read the whole
+    role and run in every scenario's run; the Molecule steps run the one scenario.
+    """
     outcomes: list[tuple[str, str]] = []
     reasons = {} if reasons is None else reasons
     pinned = pinned_version(REQUIREMENTS, "ansible-core")
@@ -382,17 +492,17 @@ def run_role(
     outcomes.append(("argument-specs", FAIL if problem else OK))
     if problem:
         reasons["argument-specs"] = problem
-    scenario = check_scenarios(role)
-    outcomes.append(("scenario-limits", FAIL if scenario else OK))
-    if scenario:
-        reasons["scenario-limits"] = "; ".join(scenario)
+    limits = check_scenarios(role, scenario)
+    outcomes.append(("scenario-limits", FAIL if limits else OK))
+    if limits:
+        reasons["scenario-limits"] = "; ".join(limits)
     for name in ("min-version", "argument-specs", "scenario-limits"):
         if name in reasons:
             print(f"{name} FAIL: {reasons[name]}")
     for step in static_steps(role, tools):
         outcomes.append((step.name, report(step, run(step.argv, step.cwd, env))))
-    steps = molecule_steps(role, tools)
-    if scenario:
+    steps = molecule_steps(role, tools, scenario)
+    if limits:
         outcomes.extend((step.name, SKIP) for step in steps)
     else:
         outcomes.extend(run_molecule(steps, run, env))
@@ -424,7 +534,15 @@ def main(
     """Run the harness over the roles named in argv; return the exit status."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n", maxsplit=1)[0])
     parser.add_argument("roles", nargs="+", type=Path, help="role directories to test")
+    parser.add_argument(
+        "--scenario",
+        default=DEFAULT_SCENARIO,
+        help="the Molecule scenario to run, a directory under molecule/ (default: %(default)s)",
+    )
     args = parser.parse_args(argv)
+    if SCENARIO_NAME.fullmatch(args.scenario) is None:
+        print(f"refused: {args.scenario!r} is not a scenario name")
+        return 2
     environment = dict(os.environ if base_env is None else base_env)
     refusal = refuse_remote_engine(environment)
     if refusal:
@@ -446,8 +564,8 @@ def main(
         for role in roles:
             run_env = role_environment(environment, work, tools_dir, uuid.uuid4().hex[:12])
             reasons: dict[str, str] = {}
-            outcomes = run_role(role, tools_dir, run, run_env, reasons)
-            print(f"== {role.name} ==")
+            outcomes = run_role(role, tools_dir, run, run_env, reasons, args.scenario)
+            print(f"== {role.name} ({args.scenario}) ==")
             for name, status in outcomes:
                 print(f"{status} {name}")
                 if status == FAIL and name in reasons:

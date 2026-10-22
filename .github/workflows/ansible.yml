@@ -11,10 +11,10 @@ name: Ansible
 # changed, and the rest run only when they did. Where nothing changed the job
 # passes after a checkout and one diff.
 #
-# Three kinds of job. `discover` lists the roles and patterns and the fresh
-# role skeleton from the repository tree. `lint` runs the static checks once.
-# `shard` runs the harness once per entry `discover` listed, so a new pattern
-# needs no edit here. The gate job, named `Lint and test the Ansible roles`,
+# Three kinds of job. `discover` lists the roles and patterns, each with every
+# Molecule scenario it has, and the fresh role skeleton from the repository tree.
+# `lint` runs the static checks once. `shard` runs the harness once per entry
+# `discover` listed, so a new pattern or a new scenario needs no edit here. The gate job, named `Lint and test the Ansible roles`,
 # is the one check the ruleset requires; it needs every other job and fails
 # unless each of them succeeded.
 #
@@ -132,32 +132,20 @@ jobs:
             echo "ansible=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Every directory directly under ansible/roles or ansible/patterns is one
-      # shard, whether or not it holds a molecule/ directory: a directory with no
-      # scenario fails its own shard at the scenario-limits step, so it cannot
-      # pass untested. The fresh-role skeleton is one more shard. An empty list
-      # fails the step: an empty matrix would make the shard job skip silently,
-      # and the gate must catch that rather than pass.
+      # Every directory directly under ansible/roles or ansible/patterns is a
+      # shard for its default scenario, whether or not it holds a molecule/
+      # directory: a directory with no scenario fails its own shard at the
+      # scenario-limits step, so it cannot pass untested. Every other directory
+      # under its molecule/ is one more shard, so each scenario has its own time
+      # limit. The fresh-role skeleton is one more shard. The list comes from the
+      # tree, by ansible/harness/list_shards.py, which fails on an empty list: an
+      # empty matrix would make the shard job skip silently, and the gate must
+      # catch that rather than pass.
       - name: List the shards from the repository tree
         id: shards
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          found=()
-          for dir in ansible/roles/*/ ansible/patterns/*/; do
-            found+=("${dir%/}")
-          done
-          if [ "${#found[@]}" -eq 0 ]; then
-            echo "No role or pattern with a molecule/ directory was found, so nothing would be tested."
-            exit 1
-          fi
-          echo "The harness runs over ${#found[@]} role(s) and pattern(s), and the fresh-role skeleton:"
-          printf '  %s\n' "${found[@]}"
-          matrix=$(printf '%s\n' "${found[@]}" | jq -R -s -c '
-            split("\n") | map(select(length > 0))
-            | map({name: ., path: ., kind: "role"})
-            + [{name: "fresh role from the skeleton", path: "ansible/role_skeleton", kind: "skeleton"}]
-            | {include: .}')
+          matrix=$(python3 ansible/harness/list_shards.py)
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   lint:
@@ -289,11 +277,12 @@ jobs:
           "$RUNNER_TEMP/ansible-venv/bin/pip" check
           "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" collection list
 
-      - name: Run the harness over this role or pattern
+      - name: Run the harness over this role or pattern, for this scenario
         if: matrix.kind == 'role'
         env:
           SHARD_PATH: ${{ matrix.path }}
-        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py "$SHARD_PATH"'
+          SHARD_SCENARIO: ${{ matrix.scenario }}
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py "$SHARD_PATH" --scenario "$SHARD_SCENARIO"'
 
       - name: Create a role from the skeleton
         if: matrix.kind == 'skeleton'

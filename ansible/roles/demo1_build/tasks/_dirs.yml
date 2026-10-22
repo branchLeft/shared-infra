@@ -1,0 +1,264 @@
+---
+# Internal to the role. The directories the pinned provisioning programs used to
+# create at host build: the router's socket tree and the broker's drain-flag
+# directory. They are declared with modules instead of run as programs, so a plan
+# reports each exactly (ANS-9, ANS-10). The slot table that names them is the
+# role's one table, compared with the generator's before this file runs.
+#
+# The state root (/var/lib/branchleft) and the broker's slots directory belong
+# to broker_deploy and are only read, in the preconditions.
+
+# The broker owns /var/lib/branchleft-broker and the router owns each slot
+# directory, so either can swap a directory below it for a link. A file task
+# that follows a link applies its owner and mode to the target, and root runs
+# this role: a link to /etc/systemd/system would be chowned to the broker or the
+# router and an unprivileged account would own a directory root reads units from.
+# So no path below is followed. Each is read here without following a link and
+# refused when it is a link or anything but a directory, in a plan as well as an
+# apply, before the first of them is created; and each file task below sets
+# follow: false, so the module itself refuses to turn a link into a directory in
+# the moment between this read and the write.
+- name: Look at each directory this file declares, without following a link
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+  loop: '{{ [demo1_build_socket_root] + demo1_build_socket_dirs + [demo1_build_broker_state_dir, demo1_build_flag_dir] }}'
+  register: demo1_build_dirs_stat
+
+# One assertion over the whole list, not one per item: a failed item in a loop
+# reports "One or more items failed", and the refusal must name the path.
+- name: Refuse a declared directory that is a link or is not a directory
+  ansible.builtin.assert:
+    that:
+      - demo1_build_dirs_not_plain | length == 0
+    quiet: true
+    fail_msg: >-
+      {{ demo1_build_dirs_not_plain }} is a link or is not a directory. The role declares these as
+      directories and never follows a link: whoever owns a parent could point it at a directory root
+      relies on, and the role would change that directory's owner and mode.
+  vars:
+    demo1_build_dirs_not_plain: >-
+      {{ demo1_build_dirs_stat.results | selectattr('stat.exists') | rejectattr('stat.isdir') | map(attribute='item') | list }}
+
+# Read before anything is created: whether this run is the one that makes the
+# drain-flag directory. A flag is the sign that a colour is drained, and the broker
+# deletes it when a colour goes live, so a flag that is absent later is a colour
+# that went live. Putting it back would drain a live colour, which is why the flags
+# are seeded once and never by a later run. They are seeded only when this run
+# makes the directory: a directory that was already there was made by the pinned
+# programs or by an earlier run, and what is in it is the broker's to manage. "Once"
+# for a later run is a marker in root's configuration directory, which the broker
+# cannot reach, and not the flags themselves: a host where every colour has gone
+# live holds no flag at all and must not be seeded again.
+- name: Look at the drain-flag directory before it is declared
+  ansible.builtin.stat:
+    path: '{{ demo1_build_flag_dir }}'
+    follow: false
+  register: demo1_build_flag_dir_stat
+
+- name: Look for the marker that says the drain flags were preseeded
+  ansible.builtin.stat:
+    path: '{{ demo1_build_preseed_marker }}'
+    follow: false
+  register: demo1_build_preseed_marker_stat
+
+- name: Look for drain flags already in it
+  ansible.builtin.find:
+    paths: '{{ demo1_build_flag_dir }}'
+    patterns: '*.drain'
+    file_type: file
+  register: demo1_build_flags_found
+  when: demo1_build_flag_dir_stat.stat.exists
+
+# A directory that exists, holds no flag and has no marker is one of two hosts the
+# role cannot tell apart: one built by the pinned programs where every colour has
+# gone live (seeding it would drain every colour that is serving traffic), and one
+# where an earlier run died after making the directory and before filling it
+# (leaving it empty would start every colour live). So it fails closed, in a plan
+# as well as an apply and before anything is created, and the owner chooses.
+- name: Refuse a drain-flag directory that exists, is empty and has no marker
+  ansible.builtin.assert:
+    that:
+      - >-
+        not demo1_build_flag_dir_stat.stat.exists
+        or demo1_build_preseed_marker_stat.stat.exists
+        or (demo1_build_flags_found.matched | default(0)) > 0
+    quiet: true
+    fail_msg: >-
+      {{ demo1_build_flag_dir }} exists, holds no drain flag and there is no marker
+      {{ demo1_build_preseed_marker }}, so the role cannot tell whether every colour has gone live or a
+      run died before filling it. To keep the colours as they are, place the marker (as root:
+      install -m 0644 -o root -g root /dev/null {{ demo1_build_preseed_marker }}). To start every
+      colour drained, seed the directory: remove the empty directory (rmdir {{ demo1_build_flag_dir }})
+      and run the role again, which creates and seeds it.
+
+# The staged move below is one rename(2), and a rename cannot cross filesystems. When
+# the staging directory and the broker's state directory are on different ones, GNU mv
+# does not fail: it falls back to copying the tree and removing the source. The copy
+# makes the directory in the broker's tree first and writes each flag through that
+# name, which is the write through a name the broker owns that the staged move exists
+# to prevent, and neither the order check nor the staging check in the refusals
+# scenario would see it. So the premise, one filesystem, is asserted here, before
+# anything is created and in a plan as well as an apply, only where the move will run.
+# The two sides are the parent of the staging directory (the state root) and the
+# broker's state directory, or its parent where it does not exist yet. A staging
+# directory a dead run left is read too. The device number is the check; a bind mount
+# of the same filesystem shares it, which is a named limit in the README.
+- name: Check that the staged move stays on one filesystem
+  when:
+    - not demo1_build_flag_dir_stat.stat.exists
+    - not demo1_build_preseed_marker_stat.stat.exists
+  block:
+    - name: Look at the filesystems on both sides of the move, without following a link
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - '{{ demo1_build_flag_staging_dir | dirname }}'
+        - '{{ demo1_build_flag_staging_dir }}'
+        - '{{ demo1_build_broker_state_dir }}'
+        - '{{ demo1_build_broker_state_dir | dirname }}'
+      register: demo1_build_move_stat
+
+    - name: Refuse a move between two filesystems
+      ansible.builtin.assert:
+        that:
+          - demo1_build_move_devs | unique | length == 1
+        quiet: true
+        fail_msg: >-
+          The drain flags are written in {{ demo1_build_flag_staging_dir }} and that directory is moved to
+          {{ demo1_build_flag_dir }}, and a rename cannot cross filesystems: mv would copy the tree into the
+          broker's directory and write each flag through a name the broker owns. The staging parent and the
+          broker's state directory (or its parent) are on devices {{ demo1_build_move_devs }}, which must be one.
+      vars:
+        demo1_build_move_results: '{{ demo1_build_move_stat.results }}'
+        demo1_build_move_devs: >-
+          {{ [demo1_build_move_results[0].stat.dev]
+          + ([demo1_build_move_results[1].stat.dev] if demo1_build_move_results[1].stat.exists else [])
+          + [(demo1_build_move_results[2].stat if demo1_build_move_results[2].stat.exists
+          else demo1_build_move_results[3].stat).dev] }}
+
+# The root of the router's sockets is root's and closed to everyone else:
+# whoever can write it can rename the router's whole tree. Below it every slot
+# and colour directory is private to the router, by number, because the account
+# may not exist yet in a plan.
+- name: Create the root of the router's socket tree
+  ansible.builtin.file:
+    path: '{{ demo1_build_socket_root }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+    follow: false
+
+- name: Create the socket directory of each slot and colour, private to the router
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: '{{ demo1_build_router_uid }}'
+    group: '{{ demo1_build_router_gid }}'
+    mode: '0700'
+    follow: false
+  loop: '{{ demo1_build_socket_dirs }}'
+
+# The broker's own state directory is the one systemd's StateDirectory re-applies
+# at every broker start with this owner and mode; it is declared the same here so
+# the two never disagree.
+- name: Create the broker's state directory
+  ansible.builtin.file:
+    path: '{{ demo1_build_broker_state_dir }}'
+    state: directory
+    owner: '{{ demo1_build_broker_user }}'
+    group: '{{ demo1_build_broker_group }}'
+    mode: '0750'
+    follow: false
+
+# Seeded only by the run that makes the directory, and never where the marker is: a
+# directory that was already there is the broker's to manage, whatever it holds (an
+# empty one with no marker was refused above). Skipped in check mode, which writes
+# nothing; the plan shows the directory by the declaration below.
+#
+# The flags are written in a staging directory and the directory is moved into place
+# whole, because the broker owns the state directory the flag directory lives in. The
+# broker can rename a directory in its own tree and put a link of the same name in its
+# place, and a root task that writes a path through that name follows the link, so the
+# flags would land in whatever directory the link names. The link check above cannot
+# close that, and neither can making the directory root's first: the name is still
+# resolved in the broker's directory at every write. The staging directory is under
+# the state root, which only root can write, so nothing the broker owns is resolved
+# while root writes. The move is one rename of the directory itself, which holds only
+# where the staging directory and the broker's state directory are on one filesystem
+# (asserted before anything is created, above): rename does not
+# follow a link at the name it replaces, and it refuses to put a directory over a
+# link or over a directory that holds anything, so a link or a full directory the
+# broker put there in the meantime stops the run and nothing is written through it.
+# The staging directory stays root's until the declaration below hands the moved
+# directory to the broker.
+- name: Seed the drain flags in a staging directory the broker cannot reach, then move it into place
+  when:
+    - not ansible_check_mode
+    - not demo1_build_flag_dir_stat.stat.exists
+    - not demo1_build_preseed_marker_stat.stat.exists
+  block:
+    - name: Create the staging directory, root's and closed to everyone else
+      ansible.builtin.file:
+        path: '{{ demo1_build_flag_staging_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+        follow: false
+
+    - name: Preseed one flag per slot and colour, so a new colour boots drained
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ demo1_build_flag_staging_dir }}/{{ item }}'
+        owner: root
+        group: root
+        mode: '0644'
+        force: false
+      loop: '{{ demo1_build_flag_files }}'
+
+    # No module renames a directory (ANS-9). -T makes the destination the name itself
+    # and never a directory to move into, so a link or a directory the broker put
+    # there is an error and not a place to move the staging directory into.
+    - name: Move the staging directory to the drain-flag directory's name
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/mv
+          - -T
+          - '--'
+          - '{{ demo1_build_flag_staging_dir }}'
+          - '{{ demo1_build_flag_dir }}'
+      changed_when: true
+
+# Declared on every run, after the move. On the run that moved the directory it is
+# root's, and this hands it to the broker; on every later run it is the broker's
+# already and nothing changes. The root-owned directory is never created in place or
+# changed back, so a live broker-owned directory is not touched. follow: false makes
+# the module refuse a link at this name, which is the last component of the path.
+- name: Create the drain-flag directory, the broker's and readable by the sidecar
+  ansible.builtin.file:
+    path: '{{ demo1_build_flag_dir }}'
+    state: directory
+    owner: '{{ demo1_build_broker_user }}'
+    group: '{{ demo1_build_broker_group }}'
+    mode: '0755'
+    follow: false
+
+# Written after the flags. A run that dies while seeding them leaves the directory
+# with some flags and no marker: the next run writes the marker without seeding, so
+# the flags that are missing are a step for the owner (README, Drain flags). A run
+# that dies before the first flag leaves it empty, which the refusal above stops.
+# On a host that already holds flags (built before the marker existed) it is
+# written without seeding anything. A marker stays once written: every colour live,
+# and so no flag, is a state to keep.
+- name: Record that the drain flags have been preseeded, in a file the broker cannot remove
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ demo1_build_preseed_marker }}'
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  when: not ansible_check_mode
