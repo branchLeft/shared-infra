@@ -1,8 +1,6 @@
 """Hold the default a role runs with to the default its argument_specs declares.
 
-Ansible does not apply a spec's ``default``, so the running one is a second copy: for an option
-of a list element, a ``| default(...)`` on the element in a task file its entry point reaches.
-The README of restart_stamp, "Composition (ANS-12)", says what is read and what is not.
+What is read and what is not: restart_stamp/README.md, "Composition (ANS-12)".
 """
 
 from __future__ import annotations
@@ -171,8 +169,7 @@ def copy_problems(
 ) -> list[str]:
     """Return what is wrong with each ``default`` for an option, in every file the role holds.
 
-    ``reached`` is the files the entry point reaches. ``held`` is the files some entry point
-    that declares this option reaches: a copy there is held to that entry point's declaration.
+    ``held`` is the files any entry point that declares this option reaches: held to that one.
     """
     spelled = ".".join(option.attributes)
     found: list[str] = []
@@ -214,10 +211,7 @@ def copy_problems(
 def running_default_problems(role: Path) -> list[str]:
     """Return each option whose running default is not the one its spec declares.
 
-    Every option with a ``default`` must be an option of a list element. In the task files its
-    entry point reaches, each ``<element>.<option> | default(<literal>)`` must be that literal,
-    and there must be one. A copy on anything else, in a file the entry point does not reach, or
-    in a template this reading cannot parse is reported: the check fails closed.
+    What is read, and what is reported instead of passed, is in the README of restart_stamp.
     """
     declared = declared_defaults(role)
     if not declared:

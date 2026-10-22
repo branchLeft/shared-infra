@@ -1,7 +1,6 @@
 """Fails while restart_stamp runs with a default other than the one its spec declares.
 
-The two copies are held together here for this role. See restart_stamp/README.md,
-"Composition (ANS-12)".
+See restart_stamp/README.md, "Composition (ANS-12)".
 """
 
 from __future__ import annotations
@@ -81,15 +80,9 @@ def not_reached(name: str) -> list[str]:
 
 
 def expression(text: str) -> nodes.Node:
-    """The Jinja node of an expression, as the check reads it.
-
-    Raises:
-        TypeError: when the text does not parse as one output.
-    """
-    output = role_defaults.JINJA.parse("{{ " + text + " }}").body[0]
-    if not isinstance(output, nodes.Output):
-        raise TypeError(text)
-    return output.nodes[0]
+    """The Jinja node of an expression, as the check reads it."""
+    template = role_defaults.JINJA.parse("{{ " + text + " }}")
+    return next(iter(template.find_all(nodes.Output))).nodes[0]
 
 
 class RealTreeTest(unittest.TestCase):

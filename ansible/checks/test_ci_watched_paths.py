@@ -9,6 +9,7 @@ when one is not named.
 from __future__ import annotations
 
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -138,6 +139,22 @@ class WatchedPathsTest(unittest.TestCase):
         self.assertIn("hetzner/provision/branchleft-db-tunnel.service", self.reads)
         # Read through a symlink in files/, not through a path in molecule/ or tests/.
         self.assertIn("hetzner/control-plane/stack", self.reads)
+
+    def test_a_read_in_a_file_that_is_not_yaml_is_found(self) -> None:
+        # A verify script or a test in Python names the file it reads as a YAML file does.
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("molecule/check.sh", "tests/test_it.py"):
+                path = Path(tmp) / "other" / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("cat hetzner/provision/" + path.name + ".service\n")
+            reads = role_reads(Path(tmp))
+        self.assertEqual(
+            {
+                "hetzner/provision/check.sh.service": {"other"},
+                "hetzner/provision/test_it.py.service": {"other"},
+            },
+            reads,
+        )
 
     def test_a_read_with_no_entry_is_reported(self) -> None:
         watched = ["ansible", "hetzner/provision/branchleft_deploy.py"]
