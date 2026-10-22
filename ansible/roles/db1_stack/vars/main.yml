@@ -118,8 +118,12 @@ db1_stack_systemd_running_path: /run/systemd/system
 # stack's unit runs `docker compose up` there with no -f, and the deploy program
 # checks only compose.yml. A base file of another name would be read by Compose
 # in place of compose.yml. An override file would be merged into compose.yml, and
-# could swap the image, publish a port or add a service. Neither is seen by the
-# deploy program's check, so the role refuses to run while one exists.
+# could swap the image, publish a port or add a service. A .env file is read by
+# Compose from the project directory too, and can set COMPOSE_FILE (naming any
+# file, or a second one to merge), COMPOSE_PROJECT_NAME (another project, so
+# another set of containers) or COMPOSE_PROFILES (starting profile services). None
+# of these is seen by the deploy program's check, so the role refuses to run while
+# one exists. The role writes none of them.
 db1_stack_other_compose_names:
   - compose.yaml
   - docker-compose.yml
@@ -128,6 +132,7 @@ db1_stack_other_compose_names:
   - compose.override.yaml
   - docker-compose.override.yml
   - docker-compose.override.yaml
+  - .env
 
 # The pin file the deploy program writes (CONFIG_DIR/db.image.env). The role
 # reads it and never writes it: branchleft-deploy owns the database image pin.

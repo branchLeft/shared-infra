@@ -37,8 +37,8 @@ It does not start, stop, restart or recreate any container, does not run
 `docker compose`, removes no volume and no data, and creates no user. A
 restart of the database is an owner's step, not this role's.
 
-It refuses to run, before it changes anything, when a second compose file or a
-compose override file sits beside `compose.yml`. It refuses when the database image pin that
+It refuses to run, before it changes anything, when a second compose file, a
+compose override file or a `.env` file sits beside `compose.yml`. It refuses when the database image pin that
 `branchleft-deploy` writes is absent or is not the one line that program writes,
 but that check runs after the compose file is rendered and before the unit is
 enabled (see "The database image pin" for why, and for the bootstrap order).
@@ -217,15 +217,21 @@ recreated or started is not.
 is the name the deploy program checks, and the one the systemd template runs with
 `WorkingDirectory=/opt/branchleft/db`. The unit runs `docker compose up` there with
 no `-f`, so Compose reads whatever default file names it finds, and the deploy
-program checks only `compose.yml`. The role refuses to run while any of seven
+program checks only `compose.yml`. The role refuses to run while any of eight
 other names sits in the same directory. Three are base files that Compose would
 read in place of `compose.yml`: `compose.yaml`, `docker-compose.yml` and
 `docker-compose.yaml`. Four are override files that Compose would merge into
 `compose.yml`, where they could swap the image, publish a port or add a service
 without the deploy program's check seeing it: `compose.override.yml`,
 `compose.override.yaml`, `docker-compose.override.yml` and
-`docker-compose.override.yaml`. The `compose_stack` pattern refuses the same
-override names, for the same reason.
+`docker-compose.override.yaml`. The eighth is `.env`: Compose reads it from the
+project directory, and a `COMPOSE_FILE` line in it names the files Compose reads
+(any file, or a second one to merge), a `COMPOSE_PROJECT_NAME` line makes it act
+on another project and its containers, and a `COMPOSE_PROFILES` line starts
+profile services, none of which the deploy program's check sees. The role writes
+none of the eight. The `compose_stack` pattern refuses the same override names,
+for the same reason; it does not refuse `.env`, and its own README names that as
+a limit.
 
 - The database image is `image: ${IMAGE}`. `branchleft-deploy` writes the digest
   into `/etc/branchleft/db.image.env`, and the stack's unit reads it as its
@@ -401,8 +407,9 @@ showed only the test files); and verify passed again. How the rows were run:
   added in the fourth review cycle and run against that head. The override rows
   were run on a converged instance as the play header of `verify.yml` followed by
   `verify_refusals.yml` alone: six cases for the image pin, then one case for each
-  of the seven file names. The row names the case that failed, counted in that
-  order. The rows for the paths a removal holds need no instance: the file reads
+  of the eight file names. The row names the case that failed, counted in that
+  order. The `.env` row was added in the fifth review cycle and run the same way,
+  against that head. The rows for the paths a removal holds need no instance: the file reads
   only the role's own files, so they were run on the controller as the role
   directory and its file list followed by `verify_role_source.yml`. In a full
   verify, the pins assertion in `verify.yml` compares the legacy file list with its
@@ -421,11 +428,12 @@ showed only the test files); and verify passed again. How the rows were run:
 | Control                                                           | Removed by                                                                                                                 | The harness then fails at                                                                                                                                                                |
 | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The database image pin is one line of the writer's form           | the pattern accepts a tag with no digest (`(@sha256:HEX64)?`)                                                              | verify, the tag-only case: "Expected the role to stop at ... it stopped at 'NOTHING: the role accepted the input'"                                                                       |
-| A second compose file beside `compose.yml` is refused             | `compose.yaml` removed from `db1_stack_other_compose_names`                                                                | verify, the first of the seven file cases: "Expected the role to stop at 'Refuse a second compose file in the database directory'; it stopped at 'NOTHING: the role accepted the input'" |
-| An override file beside `compose.yml` is refused (1 of 4)         | `compose.override.yml` removed from `db1_stack_other_compose_names`                                                        | verify, the fourth of the seven file cases: the same message                                                                                                                             |
-| An override file beside `compose.yml` is refused (2 of 4)         | `compose.override.yaml` removed from `db1_stack_other_compose_names`                                                       | verify, the fifth of the seven file cases: the same message                                                                                                                              |
-| An override file beside `compose.yml` is refused (3 of 4)         | `docker-compose.override.yml` removed from `db1_stack_other_compose_names`                                                 | verify, the sixth of the seven file cases: the same message                                                                                                                              |
-| An override file beside `compose.yml` is refused (4 of 4)         | `docker-compose.override.yaml` removed from `db1_stack_other_compose_names`                                                | verify, the seventh of the seven file cases: the same message                                                                                                                            |
+| A second compose file beside `compose.yml` is refused             | `compose.yaml` removed from `db1_stack_other_compose_names`                                                                | verify, the first of the eight file cases: "Expected the role to stop at 'Refuse a second compose file in the database directory'; it stopped at 'NOTHING: the role accepted the input'" |
+| An override file beside `compose.yml` is refused (1 of 4)         | `compose.override.yml` removed from `db1_stack_other_compose_names`                                                        | verify, the fourth of the eight file cases: the same message                                                                                                                             |
+| An override file beside `compose.yml` is refused (2 of 4)         | `compose.override.yaml` removed from `db1_stack_other_compose_names`                                                       | verify, the fifth of the eight file cases: the same message                                                                                                                              |
+| An override file beside `compose.yml` is refused (3 of 4)         | `docker-compose.override.yml` removed from `db1_stack_other_compose_names`                                                 | verify, the sixth of the eight file cases: the same message                                                                                                                              |
+| An override file beside `compose.yml` is refused (4 of 4)         | `docker-compose.override.yaml` removed from `db1_stack_other_compose_names`                                                | verify, the seventh of the eight file cases: the same message                                                                                                                            |
+| A `.env` file beside `compose.yml` is refused                     | `.env` removed from `db1_stack_other_compose_names`                                                                        | verify, the eighth of the eight file cases: the same message                                                                                                                             |
 | The mysql image is read from `${IMAGE}`                           | `image: ${IMAGE}` changed to `image: mysql:8.0.43` in `compose.yml.j2`                                                     | "The compose file does not read the mysql image from ${IMAGE}."                                                                                                                          |
 | The exporter image is the pinned digest                           | `abed8dac` changed to `abed8dad` in `db1_stack_exporter_image` in `vars/main.yml`                                          | "The exporter image in the compose file is not the pinned digest."                                                                                                                       |
 | The exporter's healthcheck is the `mysql_up 1` gate               | `grep -qx "mysql_up 1"` changed to `grep -q mysql_up` in `compose.yml.j2`                                                  | "The compose file does not gate the exporter on mysql_up 1 and a healthy database."                                                                                                      |

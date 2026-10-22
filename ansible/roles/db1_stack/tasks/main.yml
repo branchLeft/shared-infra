@@ -118,8 +118,9 @@
 # database image pin".
 
 # The compose file is the one the deploy program reads. Compose would read a
-# second file of another name first, and would merge an override file into it,
-# so the role refuses to run beside either.
+# second file of another name first, would merge an override file into it, and
+# would read a .env file that can name another file or another project, so the
+# role refuses to run beside any of them.
 - name: Look for a second compose file in the database directory
   ansible.builtin.stat:
     path: '{{ db1_stack_db_directory }}/{{ item }}'
@@ -135,8 +136,9 @@
       - not item.stat.exists
     fail_msg: >-
       {{ item.item }} exists in {{ db1_stack_db_directory }}. Compose would read it
-      in place of compose.yml, or merge it into compose.yml, and the deploy program
-      checks only compose.yml. Move it aside, then run the role again.
+      in place of compose.yml, merge it into compose.yml, or take from it the
+      name of another file or project, and the deploy program checks only
+      compose.yml. Move it aside, then run the role again.
     quiet: true
   loop: '{{ db1_stack_other_compose.results }}'
   loop_control:
