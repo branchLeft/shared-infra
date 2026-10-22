@@ -83,19 +83,20 @@ A role that calls this one composes two roles, and ANS-12 carries a named limit 
 
 1. It is included with `include_role`, never `import_role`.
 2. It is named by a path built from the caller's own `role_path`, not by a bare name.
-3. It declares every input in `meta/argument_specs.yml`, and the call gives every required input of the entry point it names.
+3. It declares its inputs in `meta/argument_specs.yml`, and the call gives every required input of the entry point it names and no input that entry point does not declare.
 4. It includes no role itself, and no role's `meta/main.yml` carries `dependencies`.
 5. Its README names the roles that call it.
-6. A role's `include_tasks` and `import_tasks` name a file inside their own role, as a literal path.
+6. A role's `include_tasks` and `import_tasks` name a YAML file under their own role's `tasks/` or `handlers/`, as a literal path.
 
 <!-- /gate-conditions -->
 
-**Held by review only** (nothing in a task file shows either):
+**Held by review only** (nothing in a task file shows any of them):
 
 <!-- review-conditions -->
 
 1. It is a cross-cutting capability with one reason to change, not a service: it configures no service and owns no host state.
 2. It computes and records only.
+3. Every variable its tasks read is an input it declares: the gate reads what a call gives, not what a task reads.
 
 <!-- /review-conditions -->
 
@@ -133,7 +134,7 @@ The lookup is the workflow's own `GITHUB_TOKEN` against the public API, so it is
 - a script or other non-YAML file of a role names a stamp file;
 - this role uses any module that is not one of `assert`, `copy`, `include_tasks`, `set_fact`, `slurp` and `stat`. Every module key of every task is read, not only those on a list.
 
-The three tasks of another role that may carry a stamp in their arguments are `include_role` of this role (found by the same resolution as the composition gate), a fact, an assertion or a message (`set_fact`, `assert`, `debug`), and `include_tasks` of the role's own files. A role may name its stamp files in `vars/` or `defaults/`, which are data, and hand them to this role by `include_role`. The directory of the stamps is not a stamp: a role may create it. Named limit: a stamp variable with a name outside those three endings is not seen; the check reads names, not what a variable holds.
+The three tasks of another role that may carry a stamp in their arguments are `include_role` of this role (found by the same resolution as the composition gate), a fact, an assertion or a message (`set_fact`, `assert`, `debug`), and `include_tasks` of the role's own files, meaning a literal YAML file under `tasks/` or `handlers/`, the only places the check reads: an include of a file anywhere else in the role (`vars/`, `files/`) is not an own file, is reported by the composition gate, and may carry no stamp. A role may name its stamp files in `vars/` or `defaults/`, which are data, and hand them to this role by `include_role`. The directory of the stamps is not a stamp: a role may create it. Named limit: a stamp variable with a name outside those three endings is not seen; the check reads names, not what a variable holds.
 
 The tests that follow the scan prove it can fail: each way a role could keep a copy is built in a throwaway role and must be reported, and so must the real `edge_stack` with a stamp write put back.
 

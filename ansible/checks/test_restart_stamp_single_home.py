@@ -10,6 +10,7 @@ import re
 import shutil
 import tempfile
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 
 from role_tasks import (
@@ -62,7 +63,7 @@ def does_not_act(role: Path, module: str, arguments: object) -> bool:
         target = included_role(role, role_call(arguments)[0])
         return target is not None and target.name == OWNER
     if module == "include_tasks":
-        return own_file(arguments)
+        return own_file(role, arguments)
     return module in NON_ACTING
 
 
@@ -124,11 +125,15 @@ def make_role(
     tasks_text: str,
     script_text: str | None = None,
     vars_text: str | None = None,
+    extra_files: Mapping[str, str] | None = None,
 ) -> Path:
-    """Write a throwaway role with one task file and, when asked, a script and a vars file."""
+    """Write a throwaway role with one task file and, when asked, a script, a vars file and more."""
     role = base / name
     (role / "tasks").mkdir(parents=True)
     (role / "tasks" / "main.yml").write_text(tasks_text, encoding="utf-8")
+    for relative, text in (extra_files or {}).items():
+        (role / relative).parent.mkdir(parents=True, exist_ok=True)
+        (role / relative).write_text(text, encoding="utf-8")
     if script_text is not None:
         (role / "files").mkdir()
         (role / "files" / "apply.sh").write_text(script_text, encoding="utf-8")
@@ -149,9 +154,17 @@ WRITE_BACK = """\
 
 
 class RestartStampSingleHomeTest(unittest.TestCase):
-    def reported(self, tasks_text: str, vars_text: str | None = None) -> list[str]:
+    def reported(
+        self,
+        tasks_text: str,
+        vars_text: str | None = None,
+        extra_files: Mapping[str, str] | None = None,
+    ) -> list[str]:
         with tempfile.TemporaryDirectory() as tmp:
-            return violations(make_role(Path(tmp), "other", tasks_text, vars_text=vars_text))
+            role = make_role(
+                Path(tmp), "other", tasks_text, vars_text=vars_text, extra_files=extra_files
+            )
+            return violations(role)
 
     def test_no_other_role_reads_writes_or_decides_from_a_stamp(self) -> None:
         found: dict[str, list[str]] = {}
@@ -387,6 +400,34 @@ class RestartStampSingleHomeTest(unittest.TestCase):
         )
         self.assertEqual([], self.reported(own))
         self.assertEqual(["tasks/main.yml: include_tasks is given a stamp"], self.reported(outside))
+
+    def test_an_include_of_a_file_the_scan_does_not_read_may_carry_no_stamp(self) -> None:
+        # The scan reads tasks/ and handlers/ only, so a file anywhere else in the role is not
+        # an own file, even when the path stays inside the role: what it does is never seen.
+        # The first path in each pair is the one the scan reads, the control of the second.
+        stamp_var = "  vars:\n    next_stamp_file: '{{ other_stamp_files.caddy }}'\n"
+        for path, extra in (
+            ("'{{ role_path }}/tasks/more.yml'", {}),
+            ("'{{ role_path }}/handlers/more.yml'", {}),
+            ("_more.yml", {"tasks/_more.yml": "---\n[]\n"}),
+        ):
+            text = f"---\n- name: Go on\n  ansible.builtin.include_tasks: {path}\n{stamp_var}"
+            with self.subTest(path=path):
+                self.assertEqual([], self.reported(text, extra_files=extra))
+        for path, extra in (
+            ("'{{ role_path }}/vars/more.yml'", {"vars/more.yml": "---\n[]\n"}),
+            ("'{{ role_path }}/files/more.yml'", {"files/more.yml": "---\n[]\n"}),
+            ("files/more.yml", {"files/more.yml": "---\n[]\n"}),
+            # A bare name that is also a file at the root of the role: Ansible may find it there.
+            ("more.yml", {"tasks/more.yml": "---\n[]\n", "more.yml": "---\n[]\n"}),
+            ("'{{ role_path }}/tasks/more.txt'", {"tasks/more.txt": "---\n[]\n"}),
+        ):
+            text = f"---\n- name: Go on\n  ansible.builtin.include_tasks: {path}\n{stamp_var}"
+            with self.subTest(path=path):
+                self.assertEqual(
+                    ["tasks/main.yml: include_tasks is given a stamp"],
+                    self.reported(text, extra_files=extra),
+                )
 
     def test_stamp_files_named_in_vars_and_the_stamp_directory_are_not_reported(self) -> None:
         text = (

@@ -14,6 +14,7 @@ from pathlib import Path
 from ruamel.yaml import YAML
 
 CODE_AREAS = ("tasks", "handlers")
+YAML_SUFFIXES = frozenset({".yml", ".yaml"})
 BLOCK_KEYS = ("block", "rescue", "always")
 
 YAML_LOADER = YAML(typ="safe")
@@ -76,7 +77,9 @@ SIBLING_BY_PATH = re.compile(
 )
 WHOLE_VARIABLE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 BARE_ROLE_NAME = re.compile(r"[a-z][a-z0-9_]*")
-OWN_FILE_PATH = re.compile(r"(?:\{\{\s*role_path\s*\}\}/)?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*")
+OWN_FILE_PATH = re.compile(
+    r"(?P<rooted>\{\{\s*role_path\s*\}\}/)?(?P<path>[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)"
+)
 KEY_VALUE = re.compile(r"(?:^|\s)(\w+)=(\S+)")
 MAX_VARIABLE_HOPS = 5
 
@@ -113,7 +116,7 @@ def parsed_tasks(role: Path) -> Iterator[tuple[str, Mapping[str, object]]]:
         if not base.is_dir():
             continue
         for path in sorted(base.rglob("*")):
-            if path.is_file() and path.suffix in {".yml", ".yaml"}:
+            if path.is_file() and path.suffix in YAML_SUFFIXES:
                 name = path.relative_to(role).as_posix()
                 for task in tasks_in(YAML_LOADER.load(path.read_text(encoding="utf-8"))):
                     yield name, task
@@ -148,15 +151,24 @@ def text_of(value: object) -> str:
     return repr(value)
 
 
+def mapping_at(path: Path, *keys: str) -> Mapping[str, object]:
+    """Return the mapping found by following keys in a YAML file, or an empty one.
+
+    The one reader of a role's YAML file as a mapping: it is empty when the file is absent or
+    holds anything but a mapping at the end of the keys.
+    """
+    value: object = YAML_LOADER.load(path.read_text(encoding="utf-8")) if path.is_file() else None
+    for key in keys:
+        value = value.get(key) if isinstance(value, Mapping) else None
+    return value if isinstance(value, Mapping) else {}
+
+
 def role_vars(role: Path) -> Mapping[str, object]:
     """Return the variables a role sets in ``vars/main.yml`` and ``defaults/main.yml``."""
     merged: dict[str, object] = {}
     for area in ("defaults", "vars"):
-        path = role / area / "main.yml"
-        if path.is_file():
-            loaded = YAML_LOADER.load(path.read_text(encoding="utf-8"))
-            if isinstance(loaded, Mapping):
-                merged.update({str(key): value for key, value in loaded.items()})
+        loaded = mapping_at(role / area / "main.yml")
+        merged.update({str(key): value for key, value in loaded.items()})
     return merged
 
 
@@ -190,18 +202,32 @@ def role_call(arguments: object) -> tuple[object, str]:
     return given.get("name"), str(given.get("tasks_from", "main")).removesuffix(".yml")
 
 
-def own_file(arguments: object) -> bool:
-    """Say whether an include_tasks or import_tasks names a literal file inside its own role.
+def own_file(role: Path, arguments: object) -> bool:
+    """Say whether an include_tasks or import_tasks names a literal file the scan reads.
 
-    The path is relative and has no ``..``, or is ``{{ role_path }}/`` and then the same. A
-    computed path cannot be shown to stay inside the role, so it is not an own file.
+    The path is a YAML file, relative and with no ``..``, or ``{{ role_path }}/`` and then the
+    same. The scan reads only ``tasks/`` and ``handlers/`` (``CODE_AREAS``), so the file must
+    be there: a rooted path must start with one of them, and a relative path must not also
+    name a file anywhere else in the role, where Ansible might find it instead. A computed
+    path cannot be shown to stay inside the role, so it is not an own file.
     """
     path = arguments
     if isinstance(arguments, Mapping):
         path = arguments.get("file", arguments.get("_raw_params"))
     if not isinstance(path, str):
         return False
-    text = path.strip()
-    if not OWN_FILE_PATH.fullmatch(text):
+    match = OWN_FILE_PATH.fullmatch(path.strip())
+    if not match:
         return False
-    return ".." not in text.split("/")
+    relative = match.group("path")
+    parts = relative.split("/")
+    if ".." in parts or Path(relative).suffix not in YAML_SUFFIXES:
+        return False
+    if match.group("rooted"):
+        return parts[0] in CODE_AREAS
+    candidates = [role / area / relative for area in CODE_AREAS] + [role / relative]
+    return all(
+        candidate.relative_to(role).parts[0] in CODE_AREAS
+        for candidate in candidates
+        if candidate.is_file()
+    )

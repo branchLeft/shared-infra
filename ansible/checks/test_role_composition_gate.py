@@ -7,6 +7,7 @@ until committed) are kept apart. See restart_stamp/README.md, "Composition (ANS-
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import os
 import sys
@@ -16,6 +17,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+import role_composition
+import role_tasks
 from amendment_citation import (
     HttpStandardsApi,
     Response,
@@ -168,6 +171,7 @@ class Pair:
     readme: str = "Called by `caller`.\n"
     callee_tasks: str = "---\n- name: Say\n  ansible.builtin.debug:\n    msg: x\n"
     caller_meta: str | None = None
+    caller_files: tuple[tuple[str, str], ...] = ()
 
 
 def make_pair(base: Path, pair: Pair) -> tuple[Path, ...]:
@@ -176,8 +180,11 @@ def make_pair(base: Path, pair: Pair) -> tuple[Path, ...]:
     for role in (caller, callee):
         (role / "tasks").mkdir(parents=True)
         (role / "meta").mkdir()
+    for relative, text in pair.caller_files:
+        (caller / relative).parent.mkdir(parents=True, exist_ok=True)
+        (caller / relative).write_text(text, encoding="utf-8")
     (caller / "tasks" / "main.yml").write_text(pair.call, encoding="utf-8")
-    (caller / "vars").mkdir()
+    (caller / "vars").mkdir(exist_ok=True)
     (caller / "vars" / "main.yml").write_text("---\n" + pair.caller_vars, encoding="utf-8")
     (callee / "tasks" / "read.yml").write_text(pair.callee_tasks, encoding="utf-8")
     (callee / "README.md").write_text(pair.readme, encoding="utf-8")
@@ -299,6 +306,35 @@ class CompositionTest(unittest.TestCase):
             problems_of(Pair(call=text)),
         )
 
+    def test_a_call_that_gives_an_input_the_entry_point_does_not_declare_is_reported(self) -> None:
+        text = CALL.replace("cap_items: [x]", "cap_items: [x]\n    not_declared_anywhere: 1")
+        self.assertEqual(
+            [
+                "roles/caller (tasks/main.yml): the call gives input(s) ['not_declared_anywhere'] "
+                "that the entry point read of capability does not declare"
+            ],
+            problems_of(Pair(call=text)),
+        )
+
+    def test_a_call_that_gives_an_optional_input_the_entry_point_declares_is_not_reported(
+        self,
+    ) -> None:
+        # The control of the case above: the optional input cap_extra is declared.
+        text = CALL.replace("cap_items: [x]", "cap_items: [x]\n    cap_extra: y")
+        self.assertEqual([], problems_of(Pair(call=text)))
+
+    def test_a_call_to_an_entry_point_that_declares_no_inputs_is_reported(self) -> None:
+        # The entry point exists in argument_specs.yml but has no options at all: every input
+        # the call gives is one the callee does not declare.
+        specs = "---\nargument_specs:\n  read:\n    short_description: Read\n"
+        self.assertEqual(
+            [
+                "roles/caller (tasks/main.yml): the call gives input(s) ['cap_items'] "
+                "that the entry point read of capability does not declare"
+            ],
+            problems_of(Pair(specs=specs)),
+        )
+
     def test_a_callee_that_includes_a_role_itself_is_reported(self) -> None:
         problems = problems_of(Pair(callee_tasks=THIRD))
         self.assertIn(
@@ -351,10 +387,53 @@ class CompositionTest(unittest.TestCase):
         self.assertIn("import_tasks names a file that is not a literal path", problems[0])
 
     def test_an_include_of_the_roles_own_files_is_not_reported(self) -> None:
-        for path in ("_check.yml", "'{{ role_path }}/sub/_check.yml'", "sub/_check.yml"):
+        for path in (
+            "_check.yml",
+            "'{{ role_path }}/tasks/sub/_check.yml'",
+            "'{{ role_path }}/handlers/_check.yml'",
+            "sub/_check.yml",
+        ):
             text = CALL + f"- name: Own\n  ansible.builtin.include_tasks: {path}\n"
             with self.subTest(path=path):
                 self.assertEqual([], problems_of(Pair(call=text)))
+
+    def test_an_include_of_a_file_the_scan_does_not_read_is_reported(self) -> None:
+        # The scan reads tasks/ and handlers/ only. A file anywhere else in the role, though
+        # the path stays inside it, would hold tasks that no check sees: a second copy of the
+        # stamp steps, or an import of another role. Each file here holds that import.
+        hidden = "---\n- name: Hide\n  ansible.builtin.import_role:\n    name: third\n"
+        for path, where in (
+            ("'{{ role_path }}/vars/more.yml'", "vars/more.yml"),
+            ("'{{ role_path }}/files/more.yml'", "files/more.yml"),
+            ("files/more.yml", "files/more.yml"),
+            ("'{{ role_path }}/tasks/more.txt'", "tasks/more.txt"),
+        ):
+            text = CALL + f"- name: Borrow\n  ansible.builtin.include_tasks: {path}\n"
+            with self.subTest(path=path):
+                problems = problems_of(Pair(call=text, caller_files=((where, hidden),)))
+                self.assertEqual(1, len(problems), problems)
+                self.assertIn("include_tasks names a file that is not a literal path", problems[0])
+
+    def test_a_bare_name_that_is_also_a_file_elsewhere_in_the_role_is_reported(self) -> None:
+        # Ansible may find the name at the root of the role instead of under tasks/, and the
+        # scan would not have read that file.
+        hidden = "---\n- name: Hide\n  ansible.builtin.import_role:\n    name: third\n"
+        text = CALL + "- name: Borrow\n  ansible.builtin.include_tasks: more.yml\n"
+        files = (("tasks/more.yml", "---\n[]\n"), ("more.yml", hidden))
+        problems = problems_of(Pair(call=text, caller_files=files))
+        self.assertEqual(1, len(problems), problems)
+        self.assertIn("include_tasks names a file that is not a literal path", problems[0])
+
+    def test_an_own_file_the_scan_reads_is_read_for_what_it_holds(self) -> None:
+        # The control of the two tests above: the same import, in a file under tasks/, is
+        # found by the scan, so a clean result for the other paths is the refusal and not a
+        # scan that sees nothing.
+        hidden = "---\n- name: Hide\n  ansible.builtin.import_role:\n    name: third\n"
+        text = CALL + "- name: Borrow\n  ansible.builtin.include_tasks: more.yml\n"
+        problems = problems_of(Pair(call=text, caller_files=(("tasks/more.yml", hidden),)))
+        self.assertEqual(
+            ["roles/caller (tasks/more.yml): import_role is never used to compose roles"], problems
+        )
 
     def test_the_legacy_spellings_of_an_include_are_seen(self) -> None:
         # The module word of action and local_action, and the key=value form of the include.
@@ -390,6 +469,20 @@ class CompositionTest(unittest.TestCase):
             roles = make_pair(Path(tmp), Pair(call=text))
             self.assertEqual([], composition_problems(roles))
             self.assertEqual({}, including_roles(roles))
+
+
+class OneReaderTest(unittest.TestCase):
+    def test_a_role_yaml_file_is_read_as_a_mapping_in_one_place(self) -> None:
+        # The step is written once, in role_tasks, and the other checks call it: a second
+        # copy drifts, and a duplicate blocks a merge (ws#2439).
+        self.assertIs(role_tasks.mapping_at, vars(role_composition)["mapping_at"])
+        self.assertIn("mapping_at(", inspect.getsource(role_tasks.role_vars))
+        checks = Path(__file__).resolve().parent
+        for module in ("role_composition.py", "amendment_citation.py"):
+            source = (checks / module).read_text(encoding="utf-8")
+            with self.subTest(module=module):
+                self.assertNotIn("YAML_LOADER", source)
+                self.assertNotIn("YAML(", source)
 
 
 class CitationTest(unittest.TestCase):

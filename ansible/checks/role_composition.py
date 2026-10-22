@@ -14,8 +14,8 @@ from amendment_citation import StandardsApi, StandardsReadError, citation_proble
 from role_tasks import (
     ROLE_MODULES,
     TASK_FILE_MODULES,
-    YAML_LOADER,
     included_role,
+    mapping_at,
     own_file,
     parsed_tasks,
     role_call,
@@ -26,18 +26,20 @@ from role_tasks import (
 CONDITIONS = (
     "It is included with `include_role`, never `import_role`.",
     "It is named by a path built from the caller's own `role_path`, not by a bare name.",
-    "It declares every input in `meta/argument_specs.yml`, and the call gives every "
-    "required input of the entry point it names.",
+    "It declares its inputs in `meta/argument_specs.yml`, and the call gives every "
+    "required input of the entry point it names and no input that entry point does not declare.",
     "It includes no role itself, and no role's `meta/main.yml` carries `dependencies`.",
     "Its README names the roles that call it.",
-    "A role's `include_tasks` and `import_tasks` name a file inside their own role, "
-    "as a literal path.",
+    "A role's `include_tasks` and `import_tasks` name a YAML file under their own role's "
+    "`tasks/` or `handlers/`, as a literal path.",
 )
-# Held by review only: nothing in a task file shows either one.
+# Held by review only: nothing in a task file shows any of them.
 REVIEW_ONLY = (
     "It is a cross-cutting capability with one reason to change, not a service: "
     "it configures no service and owns no host state.",
     "It computes and records only.",
+    "Every variable its tasks read is an input it declares: the gate reads what a call gives, "
+    "not what a task reads.",
 )
 
 NO_CITATION = (
@@ -74,14 +76,6 @@ def role_dirs(base: Path) -> list[Path]:
     return sorted(path for path in base.iterdir() if path.is_dir()) if base.is_dir() else []
 
 
-def mapping_at(path: Path, *keys: str) -> Mapping[str, object]:
-    """Return the mapping found by following keys in a YAML file, or an empty one."""
-    value: object = YAML_LOADER.load(path.read_text(encoding="utf-8")) if path.is_file() else None
-    for key in keys:
-        value = value.get(key) if isinstance(value, Mapping) else None
-    return value if isinstance(value, Mapping) else {}
-
-
 def call_problems(
     role: Path, where: str, task: Mapping[str, object], arguments: object
 ) -> list[str]:
@@ -103,15 +97,25 @@ def call_problems(
     if not options:
         found.append(f"{where}: {target.name} has no argument_specs for its entry point {entry}")
     inputs = options.get("options")
+    declared = {str(key) for key in (inputs if isinstance(inputs, Mapping) else [])}
     required = {
         str(key)
         for key, spec in (inputs.items() if isinstance(inputs, Mapping) else [])
         if isinstance(spec, Mapping) and spec.get("required") is True
     }
-    given = task.get("vars")
-    missing = required - {str(key) for key in (given if isinstance(given, Mapping) else {})}
+    given_vars = task.get("vars")
+    given = {str(key) for key in (given_vars if isinstance(given_vars, Mapping) else {})}
+    missing = required - given
     if missing:
         found.append(f"{where}: the call does not give required input(s) {sorted(missing)}")
+    # An entry with no argument_specs at all is reported above; here the entry exists and the
+    # call passes something it does not declare, whether it declares other inputs or none.
+    undeclared = given - declared
+    if options and undeclared:
+        found.append(
+            f"{where}: the call gives input(s) {sorted(undeclared)} that the entry point "
+            f"{entry} of {target.name} does not declare"
+        )
     if including_files(callee):
         found.append(f"{where}: {target.name} includes a role itself")
     readme = callee / "README.md"
@@ -135,7 +139,7 @@ def composition_problems(bases: tuple[Path, ...]) -> list[str]:
             for name, task in parsed_tasks(role):
                 where = f"{label} ({name})"
                 for module, arguments in task_modules(task):
-                    if module in TASK_FILE_MODULES and not own_file(arguments):
+                    if module in TASK_FILE_MODULES and not own_file(role, arguments):
                         found.append(
                             f"{where}: {module} names a file that is not a literal path "
                             "in this role"
