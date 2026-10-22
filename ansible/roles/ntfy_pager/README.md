@@ -65,19 +65,27 @@ playbooks):
 ## Interface
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the variables and
-[`defaults/main.yml`](defaults/main.yml) holds the two paths:
+[`defaults/main.yml`](defaults/main.yml) holds the project directory:
 
-| Variable                           | Default                          | Meaning                                              |
-| ---------------------------------- | -------------------------------- | ---------------------------------------------------- |
-| `ntfy_pager_project_dir`           | `/opt/branchleft/monitoring`     | The stack's project directory                        |
-| `ntfy_pager_env_file`              | `/etc/branchleft/monitoring.env` | The monitoring secrets file                          |
-| `ntfy_pager_pager_token`           | none, required                   | The value of `NTFY_PAGER_TOKEN` (`no_log`)           |
-| `ntfy_pager_watcher_token`         | none, required                   | The value of `NTFY_WATCHER_TOKEN` (`no_log`)         |
-| `ntfy_pager_owner_password_hash`   | none, required                   | The value of `NTFY_OWNER_PASSWORD_HASH` (`no_log`)   |
-| `ntfy_pager_machine_password_hash` | none, required                   | The value of `NTFY_MACHINE_PASSWORD_HASH` (`no_log`) |
+| Variable                           | Default                      | Meaning                                              |
+| ---------------------------------- | ---------------------------- | ---------------------------------------------------- |
+| `ntfy_pager_project_dir`           | `/opt/branchleft/monitoring` | The stack's project directory                        |
+| `ntfy_pager_pager_token`           | none, required               | The value of `NTFY_PAGER_TOKEN` (`no_log`)           |
+| `ntfy_pager_watcher_token`         | none, required               | The value of `NTFY_WATCHER_TOKEN` (`no_log`)         |
+| `ntfy_pager_owner_password_hash`   | none, required               | The value of `NTFY_OWNER_PASSWORD_HASH` (`no_log`)   |
+| `ntfy_pager_machine_password_hash` | none, required               | The value of `NTFY_MACHINE_PASSWORD_HASH` (`no_log`) |
 
-`vars/main.yml` holds the constants: the one file the role delivers and the four
-key names. They are not inputs.
+`vars/main.yml` holds the constants: the one file the role delivers, the four
+key names, and the path of the monitoring secrets file
+(`ntfy_pager_env_file`, `/etc/branchleft/monitoring.env`). They are not inputs.
+The path is a constant because the unit reads the file `monitoring_stack`
+fingerprints: a caller that moved this role's copy would send rotated credentials
+to a file no restart looks at. The `monitoring_stack` scenario asserts the two
+constants are equal.
+
+Each of the four values must be a non-empty single line. The role checks that
+before it writes anything, and refuses an empty value, a value of spaces only, or
+one with a line break, naming the key and never the value.
 
 ### Where the four values come from
 
@@ -180,7 +188,11 @@ What each part of the scenario does:
   role's link, the source read on the controller; the project directory holds
   exactly the one renderer, a literal list in the test (it is not derived from
   `ntfy_pager_files`, so a file added to that list is noticed); the log holds the
-  canary and the role's task name, and holds none of the four sentinel values. The
+  canary and the role's task name, and holds none of the four sentinel values. Four
+  sets of inputs, each with one bad value in a different input (an empty pager
+  token, a watcher token of spaces, an owner hash and a machine hash with a second
+  line), are each refused with the file still holding the converge's four lines
+  and no second line in it. The
   log scan is the proof that `no_log` is on the tasks that handle a value:
   removing it from the task that writes the lines makes the scan fail.
 - `check-fresh`, `check-configured` and `molecule-check` run the role under
@@ -202,10 +214,10 @@ project directory holds the renderer and nothing else". The seam with
 - **Other `NTFY_` keys are not removed.** The runbook removed every `NTFY_` line;
   this role removes none. A key of another name left in the file by an earlier
   release stays until someone removes it.
-- **The values are not checked for shape here.** The role writes what it is given.
-  A value with a newline would break the file, so the caller must give one line
-  per value. `monitoring_stack` checks its own seven inputs; this role's four are
-  not checked by it.
+- **The values are checked for emptiness and line breaks, not for content.** Each
+  must be a non-empty single line; beyond that the role writes what it is given.
+  The shell-quoting characters of a raw value are not checked (accepted, as in
+  `monitoring_stack`).
 - **A silent skip passes.** The line task is skipped in check mode when the file
   does not exist yet, because there is nothing to edit; the harness does not see
   that, and review does.

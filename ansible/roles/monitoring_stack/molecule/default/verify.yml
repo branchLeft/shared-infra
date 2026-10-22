@@ -231,7 +231,6 @@
     verify_renderer: /opt/branchleft/monitoring/render_alertmanager_config.py
     verify_dropin_repo: '{{ verify_repo }}/hetzner/monitoring/systemd/monitoring.override.conf'
     verify_ntfy_vars: '{{ verify_repo }}/ansible/roles/ntfy_pager/vars/main.yml'
-    verify_ntfy_defaults: '{{ verify_repo }}/ansible/roles/ntfy_pager/defaults/main.yml'
     verify_role_vars: '{{ verify_repo }}/ansible/roles/monitoring_stack/vars/main.yml'
     verify_env_keys:
       - SMTP_USERNAME
@@ -319,24 +318,23 @@
         fail_msg: The renderer's path differs between the monitoring drop-in, ntfy_pager's file list and the role's constant.
 
     # The secrets file's path is also held in three places: this role's constant,
-    # ntfy_pager's default and the monitoring drop-in's EnvironmentFile. ntfy_pager
-    # writes the NTFY_ lines into its copy and this role hashes its own, so a drift
+    # ntfy_pager's constant and the monitoring drop-in's EnvironmentFile. Both
+    # roles hold it in vars/, so no caller can move one copy: ntfy_pager writes
+    # the NTFY_ lines into its copy and this role hashes its own, so a drift
     # between them would stop a rotated credential restarting the unit while the
-    # rest of the scenario stayed green. The message names all three paths.
-    - name: Read ntfy_pager's default for the secrets file's path
-      ansible.builtin.set_fact:
-        monitoring_stack_verify_ntfy_defaults: "{{ lookup('ansible.builtin.file', verify_ntfy_defaults) | ansible.builtin.from_yaml }}"
-
+    # rest of the scenario stayed green. A path moved back to defaults/ or
+    # dropped from ntfy_pager's vars/ leaves the key undefined here and fails.
+    # The message names all three paths.
     - name: Assert the three places agree on the secrets file's path
       ansible.builtin.assert:
         that:
           - monitoring_stack_verify_role.monitoring_stack_env_file == verify_env_file
-          - monitoring_stack_verify_ntfy_defaults.ntfy_pager_env_file == verify_env_file
+          - monitoring_stack_verify_ntfy.ntfy_pager_env_file == verify_env_file
           - ('EnvironmentFile=-' ~ verify_env_file) in monitoring_stack_verify_dropin_text
         quiet: true
         fail_msg: >-
           The secrets file's path differs between this role's constant ({{ monitoring_stack_verify_role.monitoring_stack_env_file }}),
-          ntfy_pager's default ({{ monitoring_stack_verify_ntfy_defaults.ntfy_pager_env_file }}) and the monitoring drop-in's
+          ntfy_pager's constant ({{ monitoring_stack_verify_ntfy.ntfy_pager_env_file | default('not in its vars/main.yml') }}) and the monitoring drop-in's
           EnvironmentFile, which must name {{ verify_env_file }}.
 
 # The restart decision. Everything above looked at the converged host; here each
@@ -358,6 +356,7 @@
     verify_rot_e: test-sentinel-rotated-smtp-0014
     verify_rot_f: test-sentinel-rotated-smtp-0015
     verify_rot_g: test-sentinel-rotated-smtp-0016
+    verify_rot_h: test-sentinel-rotated-smtp-0022
     verify_rot_snds: https://test.invalid/snds/test-sentinel-rotated-0009
     verify_ntfy_pager_1: test-sentinel-ntfy-pager-0010
     verify_ntfy_pager_2: test-sentinel-ntfy-pager-0018
@@ -929,6 +928,103 @@
         quiet: true
         fail_msg: The rerun after a failed restart did not restart the failed unit and stamp the fingerprint.
 
+    # ----- A bad change that fails, then a revert to the stamped inputs -----
+    # The stamp holds the inputs of the last good restart (verify_rot_d, just
+    # stamped). A bad change (verify_rot_h) is applied and its restart fails, so
+    # the unit is failed and the stamp stays. The change is then reverted: the
+    # inputs, and so the fingerprint, are exactly what the stamp holds. The
+    # fingerprint cannot say the unit is down; only the unit's own state can. The
+    # stand-in works again before the revert, so what is under test is the
+    # decision and not a repair of the environment.
+    - name: Make the docker stand-in fail again
+      ansible.builtin.file:
+        path: '{{ verify_fail_flag }}'
+        state: touch
+        mode: '0644'
+
+    - name: Snapshot before the bad change
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: revert_before
+
+    - name: Apply the role with a bad change, the restart failing
+      block:
+        - name: Apply the role with a changed key while the stand-in fails
+          ansible.builtin.include_role:
+            name: branchleft.monitoring_stack
+          vars:
+            monitoring_stack_smtp_password: '{{ verify_rot_h }}'
+        - name: Note that the role did not fail
+          ansible.builtin.set_fact:
+            monitoring_stack_verify_failed_run: false
+      rescue:
+        - name: Note that the role failed
+          ansible.builtin.set_fact:
+            monitoring_stack_verify_failed_run: true
+
+    - name: Snapshot after the bad change failed
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: revert_bad
+
+    - name: Assert the bad change failed, left the unit failed, and left the stamp at the last good restart
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_failed_run
+          - monitoring_stack_verify_snaps.revert_bad.calls == monitoring_stack_verify_snaps.revert_before.calls + 1
+          - monitoring_stack_verify_snaps.revert_bad.active == 'failed'
+          - monitoring_stack_verify_snaps.revert_bad.stamp == monitoring_stack_verify_snaps.revert_before.stamp
+        quiet: true
+        fail_msg: >-
+          The bad change did not fail the role, or did not leave the unit failed, or moved the stamp
+          (unit {{ monitoring_stack_verify_snaps.revert_bad.active }}).
+
+    - name: Make the docker stand-in work again
+      ansible.builtin.file:
+        path: '{{ verify_fail_flag }}'
+        state: absent
+
+    - name: Revert to the inputs the stamp holds
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+      vars:
+        monitoring_stack_smtp_password: '{{ verify_rot_d }}'
+
+    - name: Snapshot after the revert
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: revert_after
+
+    - name: Assert the revert restarted the failed unit, once, and left the stamp as it was
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_snaps.revert_after.calls == monitoring_stack_verify_snaps.revert_bad.calls + 1
+          - monitoring_stack_verify_snaps.revert_after.active == 'active'
+          - monitoring_stack_verify_snaps.revert_after.stamp == monitoring_stack_verify_snaps.revert_before.stamp
+        quiet: true
+        fail_msg: >-
+          A revert to the stamped inputs did not restart the failed unit
+          (unit {{ monitoring_stack_verify_snaps.revert_after.active }}), or moved the stamp.
+
+    - name: Apply the role again with the same inputs
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+      vars:
+        monitoring_stack_smtp_password: '{{ verify_rot_d }}'
+
+    - name: Snapshot after the rerun of the revert
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: revert_rerun
+
+    - name: Assert the unit, now active, is not restarted again
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_snaps.revert_rerun.calls == monitoring_stack_verify_snaps.revert_after.calls
+          - monitoring_stack_verify_snaps.revert_rerun.active == 'active'
+        quiet: true
+        fail_msg: A unit that is active with the stamped inputs was restarted again.
+
     # ----- A restart that succeeds and leaves the unit not active is not stamped -----
     # Without RemainAfterExit a oneshot unit is inactive as soon as its command has
     # exited, so the restart returns 0 and the read-back sees the unit not active.
@@ -1185,6 +1281,7 @@
       - test-sentinel-rotated-smtp-0014
       - test-sentinel-rotated-smtp-0015
       - test-sentinel-rotated-smtp-0016
+      - test-sentinel-rotated-smtp-0022
   tasks:
     - name: Read the log of this scenario's Ansible runs
       ansible.builtin.set_fact:

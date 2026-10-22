@@ -3,11 +3,13 @@ argument_specs:
   main:
     short_description: Write the ntfy pager credentials and deliver the Alertmanager renderer
     description: >-
-      Creates the monitoring secrets file closed to root when it is absent, writes
+      Creates the monitoring secrets file (/etc/branchleft/monitoring.env, a
+      constant of the role, not an input) closed to root when it is absent, writes
       the four NTFY_ credential lines into it, each under its own key and the
       others left in place, and copies the Alertmanager renderer into the project
-      directory. The four credentials arrive as values from the caller; the role
-      never reads or generates one. It restarts nothing, delivers none of the
+      directory. The four credentials arrive as values from the caller, each a
+      non-empty single line (the role refuses an empty, blank or multi-line value
+      before it writes anything); the role never reads or generates one. It restarts nothing, delivers none of the
       stack's eight other files and removes nothing from the host: the
       monitoring_stack role, which runs after this one, restarts the monitoring
       unit when this role's file or credentials changed.
@@ -20,13 +22,6 @@ argument_specs:
           WorkingDirectory the shared Compose unit template derives from the
           instance name, which is /opt/branchleft/monitoring.
         default: /opt/branchleft/monitoring
-      ntfy_pager_env_file:
-        type: str
-        description: >-
-          Absolute path of the monitoring secrets file. The role creates it, closed
-          to root:root 0600, when it is absent, and adds or replaces the NTFY_ lines
-          in it. monitoring_stack creates the same file the same way.
-        default: /etc/branchleft/monitoring.env
       ntfy_pager_pager_token:
         type: str
         required: true
