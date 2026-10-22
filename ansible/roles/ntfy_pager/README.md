@@ -178,12 +178,20 @@ What each part of the scenario does:
   (the file is read under `no_log` and no value is printed); the file is `root:root`
   `0600`; the renderer is `root:root` `0644` and equal to its source through the
   role's link, the source read on the controller; the project directory holds
-  exactly the files of `ntfy_pager_files` and nothing else; the log holds the
+  exactly the one renderer, a literal list in the test (it is not derived from
+  `ntfy_pager_files`, so a file added to that list is noticed); the log holds the
   canary and the role's task name, and holds none of the four sentinel values. The
   log scan is the proof that `no_log` is on the tasks that handle a value:
   removing it from the task that writes the lines makes the scan fail.
 - `check-fresh`, `check-configured` and `molecule-check` run the role under
   `--check --diff` against the fresh and the configured container.
+
+Two sabotage rows were run for this scenario, each in a fresh container with the
+edit reverted afterwards: the secrets-file task given mode `0644` fails `verify` at
+"Assert the secrets file is owned by root and closed to everyone else", and a second
+stack file (`compose.yml`) added to `ntfy_pager_files` fails `verify` at "Assert the
+project directory holds the renderer and nothing else". The seam with
+`monitoring_stack` is tested in that role's scenario, which runs this role.
 
 ## Named limits
 
