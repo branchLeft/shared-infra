@@ -1,0 +1,33 @@
+# Rendered by the db1_stack role of branchLeft/shared-infra from the same content as
+# db/stack/conf.d/branchleft.cnf in ghost-platform (see the README, "Two homes until
+# cutover"). A change made on the host is overwritten by the next run.
+#
+# db1 is a cx23 (4 GB RAM), shared with mysqld-exporter and the OS, so the sizing
+# below leaves headroom rather than assuming the whole host.
+[mysqld]
+bind-address = {{ db1_stack_private_address }}
+
+# TLS is required for every TCP connection. Only tenant accounts are reachable
+# over TCP. Unix-socket connections are exempt by MySQL's documented behaviour, and
+# root, exporter, backup and replicator all connect that way exclusively.
+require_secure_transport = ON
+
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+
+# Doc 14 section 7.2's 7-day PITR window.
+log_bin = mysql-bin
+binlog_expire_logs_seconds = 604800
+server-id = 1
+sync_binlog = 1
+# Per-tenant replay filters row events by table database. STATEMENT format filters
+# by session USE and loses or leaks writes across tenants.
+binlog_format = ROW
+
+max_connections = 100
+innodb_buffer_pool_size = 1G
+innodb_redo_log_capacity = 268435456
+innodb_flush_log_at_trx_commit = 1
+
+# mysqld-exporter's collectors read from here.
+performance_schema = ON

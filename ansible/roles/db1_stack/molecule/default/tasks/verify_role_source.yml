@@ -1,0 +1,396 @@
+---
+# The checks of the role's source, imported by verify.yml after verify_part_two.yml.
+# The role starts, stops, restarts and recreates nothing, and removes no data, and a
+# test cannot run docker compose here, so the source is read instead. The control is
+# a closed set at three levels:
+#
+# - the files: the role holds the directories and task files listed below and no
+#   others, so there is no handlers directory, no second tasks file, and no
+#   dependency that this check does not read;
+# - the tasks: every task names one module on an allowlist, and each module takes
+#   only the options the role uses, written as a mapping, never as a string;
+# - the values: a systemd task cannot start or restart, a file task can remove only
+#   through four variables, each of which vars/main.yml sets to the one path this
+#   test names for it, and no lookup runs a command.
+#
+# What the values check does not cover is in the README's named limits: where a
+# copy, a template or a file task that does not remove writes, what a copy or a
+# template reads, which packages apt installs, and what a playbook that applies
+# the role passes in.
+#
+# It needs db1_stack_verify_role_files, the list of the role directory that
+# verify.yml registers before part two. It runs on the controller's copy of the
+# role, not the copy Molecule links.
+
+- name: Assert the file list of the role directory was read
+  ansible.builtin.assert:
+    that:
+      - verify_role_dir | length > 0
+      - db1_stack_verify_role_files is defined
+      - db1_stack_verify_role_files.files | length > 0
+    fail_msg: The list of the role directory is missing, so the closed set of files cannot be checked.
+    quiet: true
+
+# ----- The files: the set the checks below read is all the role has -----
+
+- name: Name the role's files relative to the role directory
+  ansible.builtin.set_fact:
+    db1_stack_verify_role_paths: >-
+      {{ db1_stack_verify_role_files.files | map(attribute='path')
+         | map('regex_replace', '^' ~ ((verify_role_dir ~ '/') | regex_escape), '') | sort | list }}
+
+# A directory the role does not name is a place for code the checks below do not
+# read: a handlers directory runs on notify, library and the plugin directories add
+# modules and filters. Any path outside these top-level names fails.
+- name: Assert the role holds only the directories and the README these checks read
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_role_paths | reject('match', verify_allowed_top) | list | length == 0
+    fail_msg: >-
+      The role holds a path outside README.md, defaults, files, meta, molecule, tasks,
+      templates and vars, which the source checks do not read:
+      {{ db1_stack_verify_role_paths | reject('match', verify_allowed_top) | list }}
+    quiet: true
+  vars:
+    verify_allowed_top: '^(README[.]md$|(defaults|files|meta|molecule|tasks|templates|vars)(/|$))'
+
+- name: Assert the tasks directory holds the three task files the checks parse and no other
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_role_paths | select('match', '^tasks/') | sort | list == ['tasks/_compose.yml', 'tasks/_unit.yml', 'tasks/main.yml']
+    fail_msg: >-
+      The tasks directory holds a path other than main.yml, _compose.yml and _unit.yml:
+      {{ db1_stack_verify_role_paths | select('match', '^tasks/') | sort | list }}
+    quiet: true
+
+- name: Assert the metadata, defaults, vars and files directories hold only the files the role reads
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_role_paths | select('match', '^meta/') | sort | list == ['meta/argument_specs.yml', 'meta/main.yml']
+      - db1_stack_verify_role_paths | select('match', '^(defaults|vars)/') | sort | list == ['defaults/main.yml', 'vars/main.yml']
+      - db1_stack_verify_role_paths | select('match', '^files/') | sort | list == ['files/mysql-repo-keys.asc']
+    fail_msg: The meta, defaults, vars or files directory holds a file the role does not read.
+    quiet: true
+
+# A role dependency runs another role's tasks before this one's, and those are not
+# in the set the checks below parse.
+- name: Assert the role's metadata names no dependency
+  ansible.builtin.assert:
+    that:
+      - (lookup('ansible.builtin.file', verify_role_dir ~ '/meta/main.yml') | from_yaml).dependencies | default([]) | length == 0
+    fail_msg: meta/main.yml names a role dependency, whose tasks these checks do not read.
+    quiet: true
+
+# ----- The text of every file the role renders or runs -----
+
+- name: Read the source of the task files the role runs
+  ansible.builtin.set_fact:
+    db1_stack_verify_main_source: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/tasks/main.yml') }}"
+    db1_stack_verify_compose_source: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/tasks/_compose.yml') }}"
+    db1_stack_verify_unit_source: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/tasks/_unit.yml') }}"
+
+# Templates are rendered on the controller, so a lookup in one runs there as the
+# tasks' own would. They, the defaults and the vars are read with the task files.
+- name: Read the source of the templates, defaults and vars the role renders or loads
+  ansible.builtin.set_fact:
+    db1_stack_verify_render_sources: "{{ lookup('ansible.builtin.file', *db1_stack_verify_render_paths, wantlist=True) }}"
+  vars:
+    db1_stack_verify_render_paths: >-
+      {{ db1_stack_verify_role_paths | select('match', '^(templates|defaults|vars)/')
+         | map('regex_replace', '^', verify_role_dir ~ '/') | list }}
+
+# A lookup runs a command (pipe), reads a URL, or reads the controller's
+# environment. The one the role uses is the file lookup, in main.yml. Every other
+# plugin name fails; so does a call whose name is not a quoted literal, because the
+# name could then be built at run time. The first line is the control: the scan has
+# to see the file lookup it knows is there, or it proves nothing.
+- name: Assert the role calls no lookup but the file lookup, and names it as a literal
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_lookup_calls | length > 0
+      - db1_stack_verify_lookup_names | difference(['ansible.builtin.file']) | length == 0
+      - db1_stack_verify_lookup_calls | length == db1_stack_verify_lookup_names | length
+    fail_msg: >-
+      The role calls a lookup other than ansible.builtin.file, or names one without a
+      quoted literal. Lookups named: {{ db1_stack_verify_lookup_names }}
+    quiet: true
+  vars:
+    db1_stack_verify_all_source: >-
+      {{ ([db1_stack_verify_main_source, db1_stack_verify_compose_source, db1_stack_verify_unit_source]
+         + db1_stack_verify_render_sources) | join(' ') }}
+    db1_stack_verify_lookup_calls: >-
+      {{ db1_stack_verify_all_source | regex_findall('(?<![A-Za-z0-9_.])(?:lookup|query|q)\s*\(') }}
+    db1_stack_verify_lookup_names: >-
+      {{ db1_stack_verify_all_source
+         | regex_findall('(?<![A-Za-z0-9_.])(?:lookup|query|q)\s*\(\s*[\x27"]([^\x27"]+)[\x27"]') }}
+
+# The text scan is over every task file the role runs. It is a second check beside
+# the allowlist below, which is the control: the allowlist reads each task's module
+# and options from the parsed YAML. This scan adds the compose verbs and the
+# state and started/restarted/stopped keys in block or flow style, quoted or not.
+# A removal (state: absent) is allowed in the paths the allowlist names, and refused
+# by this scan in _compose.yml, the included file that handles the stack.
+- name: Assert the role runs no compose command, no docker module, and starts, stops or restarts nothing
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_main_source is not search('(?i)compose\s+(up|down|restart|start|stop|rm|kill|run|create|pull)')
+      - db1_stack_verify_compose_source is not search('(?i)compose\s+(up|down|restart|start|stop|rm|kill|run|create|pull)')
+      - db1_stack_verify_unit_source is not search('(?i)compose\s+(up|down|restart|start|stop|rm|kill|run|create|pull)')
+      - db1_stack_verify_main_source is not search('(?i)docker_|community[.]docker|docker\s+(restart|start|stop|rm|kill|run)')
+      - db1_stack_verify_compose_source is not search('(?i)docker_|community[.]docker|docker\s+(restart|start|stop|rm|kill|run)')
+      - db1_stack_verify_unit_source is not search('(?i)docker_|community[.]docker|docker\s+(restart|start|stop|rm|kill|run)')
+      - db1_stack_verify_main_source is not search('(?i)(state|restarted|started|stopped)\s*:\s*[\x27"]?\s*(started|restarted|stopped)')
+      - db1_stack_verify_compose_source is not search('(?i)(state|restarted|started|stopped)\s*:\s*[\x27"]?\s*(started|restarted|stopped)')
+      - db1_stack_verify_unit_source is not search('(?i)(state|restarted|started|stopped)\s*:\s*[\x27"]?\s*(started|restarted|stopped)')
+      - db1_stack_verify_compose_source is not search('(?i)state\s*:\s*[\x27"]?\s*absent')
+      - db1_stack_verify_compose_source is not search('(?i)compose\s+down')
+    fail_msg: The role's task files start, stop, restart, recreate or remove something, which this role must not do.
+    quiet: true
+
+# ----- The tasks: one module each, on an allowlist, with only the options used -----
+
+# The module of every task is read from the parsed YAML, not matched in text. The
+# keywords are the task options Ansible reads, not modules, and the list is exactly
+# the ones the role's tasks use: notify, args, block, environment, delegate_to and
+# the rest are not on it, so a task that carries one names a second "module" and
+# fails the count. A module not on the allowlist (command, shell, raw, script, a
+# docker or compose module, anything new) fails whatever its arguments say.
+- name: Read the task files the role runs as YAML
+  ansible.builtin.set_fact:
+    db1_stack_verify_tasks_parsed: >-
+      {{ (db1_stack_verify_main_source | from_yaml)
+         + (db1_stack_verify_compose_source | from_yaml)
+         + (db1_stack_verify_unit_source | from_yaml) }}
+    db1_stack_verify_task_keywords:
+      - name
+      - when
+      - register
+      - loop
+      - loop_control
+      - no_log
+      - diff
+    db1_stack_verify_allowed_modules:
+      - ansible.builtin.file
+      - ansible.builtin.stat
+      - ansible.builtin.template
+      - ansible.builtin.copy
+      - ansible.builtin.slurp
+      - ansible.builtin.assert
+      - ansible.builtin.set_fact
+      - ansible.builtin.get_url
+      - ansible.builtin.apt
+      - ansible.builtin.package_facts
+      - ansible.builtin.find
+      - ansible.builtin.include_tasks
+      - ansible.builtin.systemd_service
+    # The options each module takes in the role, and no others. A module whose
+    # options are not here (include_tasks and systemd_service) has its own check
+    # below. validate, remote_src, recurse, backup on copy, args and the rest of a
+    # module's reach are therefore refused where the role does not use them.
+    db1_stack_verify_module_options:
+      ansible.builtin.file: [path, state, owner, group, mode, follow]
+      ansible.builtin.stat: [path, follow, get_checksum, get_mime, get_attributes]
+      ansible.builtin.template: [src, dest, owner, group, mode, backup]
+      ansible.builtin.copy: [content, src, dest, owner, group, mode, force]
+      ansible.builtin.slurp: [src]
+      ansible.builtin.assert: [that, fail_msg, quiet]
+      ansible.builtin.set_fact: [db1_stack_password_problems]
+      ansible.builtin.get_url: [url, dest, checksum, owner, group, mode]
+      ansible.builtin.apt: [update_cache, deb, state, name, cache_valid_time]
+      ansible.builtin.package_facts: [manager]
+      ansible.builtin.find: [paths, file_type, hidden]
+    # The task files an include may name, as the plain string the role writes.
+    db1_stack_verify_include_targets:
+      - main.yml
+      - _compose.yml
+      - _unit.yml
+    # The file states the role uses, and the variables whose paths it removes. The
+    # item entry is the repository-files loop, whose loop must be the legacy list.
+    db1_stack_verify_file_states: [absent, directory, file, touch]
+    db1_stack_verify_removal_names:
+      - item
+      - db1_stack_exporter_cnf_path
+      - db1_stack_legacy_drop_in
+      - db1_stack_reload_marker
+  no_log: true
+
+- name: Assert every module on the allowlist has its options listed or its own check
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_allowed_modules | difference(db1_stack_verify_module_options.keys() | list) | sort == verify_own_checks
+    fail_msg: A module was added to the allowlist without a list of the options it may take.
+    quiet: true
+  vars:
+    verify_own_checks: [ansible.builtin.include_tasks, ansible.builtin.systemd_service]
+
+- name: Assert every task the role runs names one module, and that module is on the allowlist
+  ansible.builtin.assert:
+    that:
+      - item.keys() | list | difference(db1_stack_verify_task_keywords) | length == 1
+      - item.keys() | list | difference(db1_stack_verify_task_keywords) | first in db1_stack_verify_allowed_modules
+    fail_msg: 'A task runs a module the role does not allow, or carries a keyword it does not use: {{ item.name | default("(no name)") }}'
+    quiet: true
+  loop: '{{ db1_stack_verify_tasks_parsed }}'
+  loop_control:
+    label: '{{ item.name | default("(no name)") }}'
+  no_log: true
+
+# An include runs another file of tasks, so its target must be one of the three the
+# files check above holds. Only the plain string the role writes passes: a
+# templated target, a mapping with a file key or an apply keyword does not.
+- name: Assert every include names one of the role's own task files as a plain string
+  ansible.builtin.assert:
+    that:
+      - item['ansible.builtin.include_tasks'] is string
+      - item['ansible.builtin.include_tasks'] in db1_stack_verify_include_targets
+    fail_msg: 'An include names a task file outside main.yml, _compose.yml and _unit.yml, or a templated target: {{ item.name | default("(no name)") }}'
+    quiet: true
+  loop: '{{ db1_stack_verify_tasks_parsed }}'
+  when: item['ansible.builtin.include_tasks'] is defined
+  loop_control:
+    label: '{{ item.name | default("(no name)") }}'
+  no_log: true
+
+- name: Assert the one systemd task takes only the options that enable or reload
+  ansible.builtin.assert:
+    that:
+      - item['ansible.builtin.systemd_service'].keys() | list | difference(['name', 'enabled', 'daemon_reload']) | length == 0
+    fail_msg: 'A systemd task takes an option other than name, enabled or daemon_reload: {{ item.name | default("(no name)") }}'
+    quiet: true
+  loop: '{{ db1_stack_verify_tasks_parsed }}'
+  when: item['ansible.builtin.systemd_service'] is defined
+  loop_control:
+    label: '{{ item.name | default("(no name)") }}'
+  no_log: true
+
+# A module's arguments written as one string (free-form: "path=... state=absent")
+# are not parsed into options by this check, so a string value is refused outright
+# for every module that has an option list.
+- name: Assert no module takes its arguments as a free-form string
+  ansible.builtin.assert:
+    that:
+      - item[verify_module] is mapping
+    fail_msg: 'A task gives a module its arguments as a string, which the option check cannot read: {{ item.name | default("(no name)") }}'
+    quiet: true
+  vars:
+    verify_module: '{{ item.keys() | list | difference(db1_stack_verify_task_keywords) | first }}'
+  loop: '{{ db1_stack_verify_tasks_parsed }}'
+  when: verify_module in db1_stack_verify_module_options
+  loop_control:
+    label: '{{ item.name | default("(no name)") }}'
+  no_log: true
+
+- name: Assert each module takes only the options the role uses
+  ansible.builtin.assert:
+    that:
+      - item[verify_module].keys() | list | difference(db1_stack_verify_module_options[verify_module]) | length == 0
+    fail_msg: 'A task gives a module an option the role does not use, such as validate: {{ item.name | default("(no name)") }}'
+    quiet: true
+  vars:
+    verify_module: '{{ item.keys() | list | difference(db1_stack_verify_task_keywords) | first }}'
+  loop: '{{ db1_stack_verify_tasks_parsed }}'
+  when:
+    - verify_module in db1_stack_verify_module_options
+    - item[verify_module] is mapping
+  loop_control:
+    label: '{{ item.name | default("(no name)") }}'
+  no_log: true
+
+# ----- The values: states, removals and installs -----
+
+# The state is read as the literal word, so a templated value that resolves to
+# absent at run time ("{{ 'absent' }}") is not one of the four words and fails.
+- name: Assert a file task's state is one of the plain words the role uses
+  ansible.builtin.assert:
+    that:
+      - item['ansible.builtin.file'].state is string
+      - item['ansible.builtin.file'].state in db1_stack_verify_file_states
+    fail_msg: 'A file task has a state that is not a plain word the role uses: {{ item.name | default("(no name)") }}'
+    quiet: true
+  loop: '{{ db1_stack_verify_tasks_parsed }}'
+  when:
+    - item['ansible.builtin.file'] is defined
+    - item['ansible.builtin.file'] is mapping
+    - item['ansible.builtin.file'].state is defined
+  loop_control:
+    label: '{{ item.name | default("(no name)") }}'
+  no_log: true
+
+# A removal names the variable of a path the role removes, as {{ name }} and
+# nothing else: the host's legacy files (through the loop over the legacy list),
+# the exporter file path, the legacy drop-in and the reload marker. A literal path,
+# a path under the docker volumes, or any other expression does not reduce to one of
+# those names and fails.
+- name: Assert a removal names one of the paths the role removes and no other
+  ansible.builtin.assert:
+    that:
+      - verify_removal_name in db1_stack_verify_removal_names
+      - verify_removal_name != 'item' or verify_loop_name == 'db1_stack_legacy_files'
+    fail_msg: 'A file task removes a path the role does not remove: {{ item.name | default("(no name)") }}'
+    quiet: true
+  vars:
+    verify_removal_name: >-
+      {{ item['ansible.builtin.file'].path | string | regex_replace('^[{][{]\s*|\s*[}][}]$', '') }}
+    verify_loop_name: >-
+      {{ item.loop | default('') | string | regex_replace('^[{][{]\s*|\s*[}][}]$', '') }}
+  loop: '{{ db1_stack_verify_tasks_parsed }}'
+  when:
+    - item['ansible.builtin.file'] is defined
+    - item['ansible.builtin.file'] is mapping
+    - item['ansible.builtin.file'].state | default('') == 'absent'
+  loop_control:
+    label: '{{ item.name | default("(no name)") }}'
+  no_log: true
+
+# The assertion above binds a removal to the name of a variable. These bind each
+# name to the path it holds, read as written from vars/main.yml, so a one-line
+# change of a value, to the database's data or its secrets file, fails here. The
+# paths are written out in this test, not read from the role. The list of names
+# must be the names the removal check allows, so a name cannot be allowed there
+# without a path here. These tasks handle no secret.
+- name: Read the role's vars file as written, and name the path each removal variable may hold
+  ansible.builtin.set_fact:
+    db1_stack_verify_role_vars: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/vars/main.yml') | from_yaml }}"
+    db1_stack_verify_removal_values:
+      db1_stack_legacy_files:
+        - /etc/apt/sources.list.d/mysql-community.list
+        - /usr/share/keyrings/mysql.gpg
+      db1_stack_exporter_cnf_path: /etc/branchleft/db-exporter.my.cnf
+      db1_stack_legacy_drop_in: /etc/systemd/system/branchleft-compose@db.service.d/override.conf
+      db1_stack_reload_marker: /var/cache/db1-stack/legacy-drop-in-reloaded
+
+- name: Assert the variables a removal may name are the ones this test names a path for
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_role_vars is mapping
+      - (db1_stack_verify_removal_names | difference(['item']) + ['db1_stack_legacy_files']) | sort == db1_stack_verify_removal_values.keys() | list | sort
+    fail_msg: The removal check allows a variable that this test names no path for, or the reverse.
+    quiet: true
+
+- name: Assert each variable a removal names holds the path this test names for it
+  ansible.builtin.assert:
+    that:
+      - item.key in db1_stack_verify_role_vars
+      - db1_stack_verify_role_vars[item.key] == item.value
+    fail_msg: >-
+      vars/main.yml sets {{ item.key }} to a value other than the path a removal may
+      reach. Expected {{ item.value }}; found {{ db1_stack_verify_role_vars[item.key] | default('nothing') }}.
+    quiet: true
+  loop: '{{ db1_stack_verify_removal_values | dict2items }}'
+  loop_control:
+    label: '{{ item.key }}'
+
+- name: Assert an apt task only installs
+  ansible.builtin.assert:
+    that:
+      - item['ansible.builtin.apt'].state == 'present'
+    fail_msg: 'An apt task has a state other than present: {{ item.name | default("(no name)") }}'
+    quiet: true
+  loop: '{{ db1_stack_verify_tasks_parsed }}'
+  when:
+    - item['ansible.builtin.apt'] is defined
+    - item['ansible.builtin.apt'] is mapping
+    - item['ansible.builtin.apt'].state is defined
+  loop_control:
+    label: '{{ item.name | default("(no name)") }}'
+  no_log: true
