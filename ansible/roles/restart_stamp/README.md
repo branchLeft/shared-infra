@@ -45,7 +45,7 @@ The inputs, their types and defaults are in `meta/argument_specs.yml`; Ansible c
 
 The caller passes a class's stamp to `decide` from `restart_stamp_found`, and the `mark`, `adopt` and `due` of a class to the later entry points from `restart_stamp_decisions`. Nothing is read from a fact by name inside the role, so what each call sees is on its own line in the caller.
 
-**Flags that default off.** `drift` and `adoptable` default to false and `gate` to true, so a caller that has no host-side comparison and does not adopt (the `monitoring_stack` shape) passes none of them and gets a missing stamp as plain `due`. A caller that does not need the pending mark never calls `mark_pending`; one that does not adopt never calls `adopt`.
+**Flags that default off.** `drift` and `adoptable` default to false and `gate` to true (declared in `meta/argument_specs.yml`; the value that runs is the inline default of `tasks/decide.yml`, held equal to it by a check, see "Composition (ANS-12)"), so a caller that has no host-side comparison and does not adopt (the `monitoring_stack` shape) passes none of them and gets a missing stamp as plain `due`. A caller that does not need the pending mark never calls `mark_pending`; one that does not adopt never calls `adopt`.
 
 ### What each caller gets
 
@@ -83,10 +83,11 @@ A role that calls this one composes two roles, and ANS-12 carries a named limit 
 
 1. It is included with `include_role`, never `import_role`.
 2. It is named by a path built from the caller's own `role_path`, not by a bare name.
-3. It declares its inputs in `meta/argument_specs.yml`, and the call gives every required input of the entry point it names and no input that entry point does not declare.
-4. It includes no role itself, and no role's `meta/main.yml` carries `dependencies`.
-5. Its README names the roles that call it.
-6. A role's `include_tasks` and `import_tasks` name a YAML file that exists under their own role's `tasks/` or `handlers/` (with links followed), as a literal path.
+3. It declares its inputs in `meta/argument_specs.yml`, and the call gives every top-level required input of the entry point it names and no input that entry point does not declare.
+4. Every option of the entry point it names, an option of a list element or of a dictionary included, is `required: true` or has a `default` key in `meta/argument_specs.yml`: the key counts whatever its value, null included, and a default found only in `defaults/main.yml`, in group vars or in the caller's vars does not.
+5. It includes no role itself, and no role's `meta/main.yml` carries `dependencies`.
+6. Its README names the roles that call it.
+7. A role's `include_tasks` and `import_tasks` name a YAML file that exists under their own role's `tasks/` or `handlers/` (with links followed), as a literal path.
 
 <!-- /gate-conditions -->
 
@@ -97,19 +98,27 @@ A role that calls this one composes two roles, and ANS-12 carries a named limit 
 1. It is a cross-cutting capability with one reason to change, not a service: it configures no service and owns no host state.
 2. It computes and records only.
 3. Every variable its tasks read is an input it declares: the gate reads what a call gives, not what a task reads.
+4. The value an omitted optional input takes when the role runs (in `defaults/main.yml`, or in the role's tasks for an option of a list element) equals the `default` its `argument_specs` entry declares: Ansible does not apply the declared default, and the gate reads the spec and the call.
+5. Each list element a call passes gives the required options of its element: the gate reads the names of the vars a call sets, not what is inside the list.
 
 <!-- /review-conditions -->
 
-For this role the second review-only condition is also held by code: the single-home check below fails when this role uses a module that can act on anything but a stamp and the facts.
+For this role the second review-only condition is also held by code: the single-home check below fails when this role uses a module that can act on anything but a stamp and the facts. The fourth is held by code for this role alone, by the defaults check below; for any other capability role it is review only.
 
 The path of condition 2 (`{{ role_path | realpath | dirname }}/restart_stamp`, kept in `edge_stack_stamp_role`) is there because the host trigger starts in `ansible/`, the lint at the repository root and Molecule in a role directory, and a bare name is found by a search path they do not share. `realpath` is there because Molecule links the caller under its namespace, and the path must be that of the real directory. The gate resolves that name through the including role's own `vars/` and `defaults/` with one function that the single-home check also calls, so the two checks agree on what is included; a name it cannot resolve is reported by both.
 
-"Every required input" is the wording, not "every input". The optional fields of an entry point (`drift`, `adoptable` and `gate` of `decide`) default so that a caller with no host-side comparison, such as `monitoring_stack`, passes none of them and keeps its behaviour. The gate checks the required ones are given; it cannot check that an optional one is passed on purpose, and does not try. What a call "gives" is every var that reaches it: the call's own `vars`, the `vars` of each block round it, and the `vars` of each `include_tasks` or `import_tasks` that names its file, however many levels up. An input given through any of them counts as given, and one the entry point does not declare is reported wherever it came from.
+**What a call must give, and what an option must declare.** "Every required input" is the wording, not "every input". A call passes every required input of the entry point it names, at the top level, and no input the entry point does not declare. An optional input (the clause's word for one that is not `required: true`) may be left out, and a caller with no host-side comparison, such as `monitoring_stack`, passes none of the optional fields of `decide` (`drift`, `adoptable` and `gate`) and keeps its behaviour. The gate checks the required ones are given; it cannot check that an optional one is passed on purpose, and does not try. What a call "gives" is every var that reaches it: the call's own `vars`, the `vars` of each block round it, and the `vars` of each `include_tasks` or `import_tasks` that names its file, however many levels up. An input given through any of them counts as given, and one the entry point does not declare is reported wherever it came from.
+
+What an omitted optional input becomes is stated once, in `meta/argument_specs.yml`, and the gate fails when it is not. Every option of the entry point that is not `required: true` must have a `default` key there, at any depth: the options of a list element and of a dictionary are inputs too, so `restart_stamp_classes[].gate` is the option `gate` of each class. The key is what counts, not its value: `default: false` (as `drift` and `adoptable` have), `default: 0` and `default: null` all pass, and `default: null` is how an input with no sensible default says so. A default found only in `defaults/main.yml`, in group vars or in the caller's own vars does not count, because it is not declared in the one file a reader of the interface reads. The report names each option by its path.
+
+**The declared default is not the one that runs.** Ansible does not apply the default of an `argument_specs` entry to a role. The value an omitted `drift`, `adoptable` or `gate` takes is the inline `| default(...)` of `tasks/decide.yml`, and the spec states the same value so that a reader learns what an omission becomes. These are two copies, and the composition gate reads the spec and the call, so it cannot see which one runs. For this role `ansible/checks/test_restart_stamp_defaults.py` holds them equal: it fails when the literal of any `<option> | default(...)` in `tasks/decide.yml` is not the declared default (compared with its type, so `0` is not `false`), when an option has no such copy, and when a literal it cannot read is there, so a change to one copy that leaves the other is stopped before it merges. It reads only the options of a list element and only the tasks file of their entry point; a default declared anywhere else makes it fail until it is extended. The molecule table row `r2` also decides on the defaults, but not on all three: a flipped `drift` default changes no decision there (an absent stamp is due either way), which is why the equality is held by code and not left to `r2`. For any other capability role the equality is review only.
+
+**What the gate reports.** The default report is one more among those the gate kept: an undeclared input, a bare name, `import_role`, a callee that includes a role, a caller the README of the callee does not name, `dependencies`, and an `include_tasks` or `import_tasks` that leaves the role. Its limits: it reads the entry point a call names, so another entry point of the same capability role, never called, is not checked, and a call whose target cannot be resolved is reported by that resolution and not read for defaults; and it does not look inside the list a call passes, so the required options of each element are review only.
 
 **Gate.** The pull request that adds this role does not merge until the amendment is merged in the standards repository and cited. Two checks in `ansible/checks/test_role_composition_gate.py` hold it, kept apart so each can fail alone:
 
-- The structure of every composition (the six conditions above that the gate holds) is checked on the real tree. It is green now and stays green.
-- The citation. While any role has a task that includes or imports another role, `ansible/checks/ans12_composition_citation.txt` must hold one line, `https://github.com/branchLeft/standards/pull/<number> merged <40-hex merge commit>`. The check reads that pull request from the standards repository and fails unless it is merged, into `main`, with exactly that merge commit, and unless `docs/stacks/ansible.md` at that commit has an ANS-12 section that no longer carries the named limit and states the capability-role rule. A merged pull request that is not the amendment is refused. Until the amendment is merged the file does not exist, and this one test is red on purpose with the message "citation.txt is missing"; every other test and check of the pull request is green. A second test shows the missing citation is the only problem the tree has.
+- The structure of every composition (the seven conditions above that the gate holds) is checked on the real tree. It is green now and stays green.
+- The citation. While any role has a task that includes or imports another role, `ansible/checks/ans12_composition_citation.txt` must hold one line, `https://github.com/branchLeft/standards/pull/<number> merged <40-hex merge commit>`. The check reads that pull request from the standards repository and fails unless it is merged, into `main`, with exactly that merge commit, and unless `docs/stacks/ansible.md` at that commit has an ANS-12 section that no longer carries the named limit and states the capability-role rule. A merged pull request that is not the amendment is refused. Until the amendment is merged the file does not exist, and this one test is red on purpose with the message "citation.txt is missing", and so is the required check `Lint and test the Ansible roles`, which needs the job that runs it; every other test in `ansible/checks` is green. The lint job stops at its first failed step, so the steps after "Test the checks" do not run in CI while it is red and are run locally instead. A second test shows the missing citation is the only problem the tree has.
 
 The lookup is the workflow's own `GITHUB_TOKEN` against the public API, so it is not rate-limited as an anonymous caller on a shared runner would be. In CI a lookup that fails (a transport error or a 5xx is tried again once; a refusal is not) is red and is never skipped. Outside CI it is skipped with the reason printed, so a maintainer with no network is told the citation was not checked and is not told it passed.
 
@@ -117,7 +126,7 @@ The lookup is the workflow's own `GITHUB_TOKEN` against the public API, so it is
 
 **Unblocking, step by step.** The orchestrator owns it, and the trigger is the merge of the amendment's pull request in the standards repository.
 
-1. Read the merged clause against the two lists above. If its wording differs from them, change the list in `role_composition.py` and in this README to match before anything else. The citation check compares only that the named limit is gone and the rule is named.
+1. Read the merged clause against the two lists above. They were written against ANS-12 as it stands in standards pull request 162 at a755162; if the clause has changed since, or its wording differs from them, change the list in `role_composition.py` and in this README to match before anything else. The clause is the source, not the decision that preceded it. The citation check compares only that the named limit is gone and the rule is named.
 2. Commit the one line of `ans12_composition_citation.txt` to the pull request's branch. That commit is the only change.
 3. The commit changes the head, so the last review no longer covers it. One narrow re-check of that one-file diff follows, and the approving review is of the new head.
 
@@ -168,7 +177,7 @@ A role reaches a host only through the gated workflow (ANS-17), never by running
 
 ## How to change it safely
 
-1. Change the tasks, `meta/argument_specs.yml` and this README together. A new field of a class is added to the entry points that need it, with a default that leaves every caller's behaviour as it was.
+1. Change the tasks, `meta/argument_specs.yml` and this README together. A new field of a class is added to the entry points that need it, with a `default` in `meta/argument_specs.yml` (the gate fails an optional option without one) and the same literal inline in `tasks/decide.yml` (`ansible/checks/test_restart_stamp_defaults.py` fails when the two differ), so that every caller's behaviour is as it was.
 2. Keep every entry point read-only or limited to a stamp file. A task that acts on anything else belongs to the caller, and the single-home check fails the pull request that adds one here.
 3. Every change to a rule in `decide` needs a row in `r2` that goes red without it. Prove it by sabotage: break the rule, see the row go red, restore, see it green.
 4. Run the command under "How to test it", and the checks in `ansible/checks`, before opening a pull request.

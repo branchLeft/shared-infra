@@ -159,6 +159,21 @@ SPECS = (
     "      cap_extra:\n        type: str\n        default: x\n"
 )
 THIRD = "---\n- name: Pass on\n  ansible.builtin.include_role:\n    name: third\n"
+SPEC_HEAD = "---\nargument_specs:\n  read:\n    short_description: Read\n    options:\n"
+ITEMS = "      cap_items:\n        type: list\n        required: true\n"
+# The required list of the pair, now with elements that have options of their own.
+ELEMENT_ITEMS = (
+    "      cap_items:\n        type: list\n        elements: dict\n        required: true\n"
+    "        options:\n          name:\n            type: str\n            required: true\n"
+)
+
+
+def no_default(*paths: str) -> list[str]:
+    """The one problem the pair reports when these options have no default."""
+    return [
+        "roles/caller (tasks/main.yml): the entry point read of capability declares optional "
+        f"input(s) {list(paths)} with no `default` in its meta/argument_specs.yml"
+    ]
 
 
 def blocked(key: str, section: str = "block") -> str:
@@ -187,6 +202,7 @@ class Pair:
     callee_tasks: str = "---\n- name: Say\n  ansible.builtin.debug:\n    msg: x\n"
     caller_meta: str | None = None
     caller_files: tuple[tuple[str, str], ...] = ()
+    callee_files: tuple[tuple[str, str], ...] = ()
 
 
 def make_pair(base: Path, pair: Pair) -> tuple[Path, ...]:
@@ -198,6 +214,9 @@ def make_pair(base: Path, pair: Pair) -> tuple[Path, ...]:
     for relative, text in pair.caller_files:
         (caller / relative).parent.mkdir(parents=True, exist_ok=True)
         (caller / relative).write_text(text, encoding="utf-8")
+    for relative, text in pair.callee_files:
+        (callee / relative).parent.mkdir(parents=True, exist_ok=True)
+        (callee / relative).write_text(text, encoding="utf-8")
     (caller / "tasks" / "main.yml").write_text(pair.call, encoding="utf-8")
     (caller / "vars").mkdir(exist_ok=True)
     (caller / "vars" / "main.yml").write_text("---\n" + pair.caller_vars, encoding="utf-8")
@@ -594,6 +613,224 @@ class CompositionTest(unittest.TestCase):
             roles = make_pair(Path(tmp), Pair(call=text))
             self.assertEqual([], composition_problems(roles))
             self.assertEqual({}, including_roles(roles))
+
+
+class OptionalDefaultTest(unittest.TestCase):
+    """ANS-12: every option that is not ``required: true`` has a ``default`` in the spec.
+
+    An input includes an option of a list element or of a dictionary, at any depth. A
+    ``default`` key counts whatever its value.
+    """
+
+    def test_an_option_with_no_default_is_reported_wherever_it_is(self) -> None:
+        # One option without a default in each case, at a different depth and with a different
+        # name, so a report that finds only one place or one name cannot pass them all.
+        cases = {
+            "top level": (
+                SPEC_HEAD + ITEMS + "      cap_extra:\n        type: str\n",
+                ["cap_extra"],
+            ),
+            "another name": (
+                SPEC_HEAD + ITEMS + "      cap_other:\n        type: bool\n",
+                ["cap_other"],
+            ),
+            "required false": (
+                SPEC_HEAD
+                + ITEMS
+                + "      cap_extra:\n        type: str\n        required: false\n",
+                ["cap_extra"],
+            ),
+            "list element": (
+                SPEC_HEAD + ELEMENT_ITEMS + "          mode:\n            type: str\n",
+                ["cap_items[].mode"],
+            ),
+            "list element, another name": (
+                SPEC_HEAD
+                + ELEMENT_ITEMS
+                + "          mode:\n            type: str\n            default: x\n"
+                + "          flag:\n            type: bool\n",
+                ["cap_items[].flag"],
+            ),
+            "dictionary": (
+                SPEC_HEAD
+                + ITEMS
+                + "      cap_group:\n        type: dict\n        default: {}\n        options:\n"
+                + "          mode:\n            type: str\n",
+                ["cap_group.mode"],
+            ),
+            "dictionary in a list element": (
+                SPEC_HEAD
+                + ELEMENT_ITEMS
+                + "          extra:\n            type: dict\n            default: {}\n"
+                + "            options:\n              level:\n                type: int\n",
+                ["cap_items[].extra.level"],
+            ),
+            "an option that is not a mapping": (
+                SPEC_HEAD + ITEMS + "      cap_extra:\n",
+                ["cap_extra"],
+            ),
+        }
+        for label, (specs, paths) in cases.items():
+            with self.subTest(label=label):
+                self.assertEqual(no_default(*paths), problems_of(Pair(specs=specs)))
+
+    def test_every_option_without_a_default_is_named_in_the_order_of_the_spec(self) -> None:
+        specs = (
+            SPEC_HEAD
+            + ELEMENT_ITEMS
+            + "          mode:\n            type: str\n"
+            + "      cap_extra:\n        type: str\n"
+        )
+        self.assertEqual(
+            no_default("cap_items[].mode", "cap_extra"), problems_of(Pair(specs=specs))
+        )
+
+    def test_a_default_only_in_the_roles_defaults_does_not_count(self) -> None:
+        # The case ANS-12 names: the role runs with cap_extra = x, and the spec does not say so.
+        specs = SPEC_HEAD + ITEMS + "      cap_extra:\n        type: str\n"
+        files = (("defaults/main.yml", "---\ncap_extra: x\n"),)
+        self.assertEqual(
+            no_default("cap_extra"), problems_of(Pair(specs=specs, callee_files=files))
+        )
+
+    def test_a_default_in_the_callers_vars_or_in_the_call_does_not_count(self) -> None:
+        # The caller giving the option is a different thing: it is passed on, and the spec
+        # still declares no default for a caller who leaves it out.
+        specs = SPEC_HEAD + ITEMS + "      cap_extra:\n        type: str\n"
+        text = CALL.replace("cap_items: [x]", "cap_items: [x]\n    cap_extra: y")
+        self.assertEqual(
+            no_default("cap_extra"),
+            problems_of(Pair(call=text, specs=specs, caller_vars=CALLER_VARS + "cap_extra: z\n")),
+        )
+
+    def test_a_default_key_counts_whatever_its_value(self) -> None:
+        # false, 0, an empty string, an empty mapping and null are all declared defaults. A test
+        # of the value for truth reports the first four, and a test of the key's value being
+        # not None reports the last.
+        for value in ("false", "0", "''", "{}", "null", "~"):
+            specs = (
+                SPEC_HEAD
+                + ITEMS
+                + f"      cap_extra:\n        type: str\n        default: {value}\n"
+            )
+            with self.subTest(value=value):
+                self.assertEqual([], problems_of(Pair(specs=specs)))
+
+    def test_a_default_that_is_an_empty_key_is_a_declared_null(self) -> None:
+        specs = SPEC_HEAD + ITEMS + "      cap_extra:\n        type: str\n        default:\n"
+        self.assertEqual([], problems_of(Pair(specs=specs)))
+
+    def test_a_default_key_counts_in_a_list_element_and_a_dictionary(self) -> None:
+        elements = (
+            SPEC_HEAD
+            + ELEMENT_ITEMS
+            + "          mode:\n            type: str\n            default: null\n"
+            + "          flag:\n            type: bool\n            default: false\n"
+            + "          extra:\n            type: dict\n            default: {}\n"
+            + "            options:\n              level:\n                type: int\n"
+            + "                default: 0\n"
+        )
+        self.assertEqual([], problems_of(Pair(specs=elements)))
+
+    def test_a_required_option_needs_no_default_at_any_depth(self) -> None:
+        specs = (
+            SPEC_HEAD
+            + ELEMENT_ITEMS
+            + "          extra:\n            type: dict\n            required: true\n"
+            + "            options:\n              level:\n                type: int\n"
+            + "                required: true\n"
+        )
+        self.assertEqual([], problems_of(Pair(specs=specs)))
+
+    def test_only_the_entry_point_the_call_names_is_read(self) -> None:
+        # The limit the README names: another entry point of the same role, never called, is
+        # not checked.
+        other = "  other:\n    short_description: Other\n    options:\n"
+        self.assertEqual(
+            [], problems_of(Pair(specs=SPECS + other + "      cap_x:\n        type: str\n"))
+        )
+
+    def test_the_optional_options_of_the_real_restart_stamp_are_seen_and_all_have_a_default(
+        self,
+    ) -> None:
+        # The control of the real-tree test above: a clean result means something only if the
+        # walk finds the options that are there. They are the three flags of a class of
+        # `decide`, all inside a list element, and `drift` and `adoptable` default to false.
+        file = ROOT / "ansible" / "roles" / "restart_stamp" / "meta" / "argument_specs.yml"
+        entries = list(role_tasks.mapping_at(file, "argument_specs"))
+        options_of = {
+            entry: role_tasks.mapping_at(file, "argument_specs", str(entry), "options")
+            for entry in entries
+        }
+        optional = {
+            entry: [
+                path
+                for path, spec in role_tasks.option_specs(options)
+                if isinstance(spec, Mapping) and spec.get("required") is not True
+            ]
+            for entry, options in options_of.items()
+        }
+        self.assertEqual(
+            {
+                "read": [],
+                "decide": [
+                    "restart_stamp_classes[].drift",
+                    "restart_stamp_classes[].adoptable",
+                    "restart_stamp_classes[].gate",
+                ],
+                "mark_pending": [],
+                "adopt": [],
+                "record": [],
+            },
+            optional,
+        )
+        for entry, options in options_of.items():
+            with self.subTest(entry=entry):
+                self.assertEqual([], role_tasks.options_without_default(options))
+
+
+class OptionPredicateTest(unittest.TestCase):
+    """The words of ANS-12 as one function in role_tasks: the walk and the default."""
+
+    def test_the_walk_names_a_list_element_and_a_dictionary_differently(self) -> None:
+        options = {
+            "a": {"type": "list", "options": {"b": {"type": "dict", "options": {"c": {}}}}},
+            "d": {"type": "dict", "options": {"e": {"type": "list", "options": {"f": {}}}}},
+        }
+        self.assertEqual(
+            ["a", "a[].b", "a[].b.c", "d", "d.e", "d.e[].f"],
+            [path for path, _ in role_tasks.option_specs(options)],
+        )
+
+    def test_the_walk_of_something_that_is_not_options_yields_nothing(self) -> None:
+        not_options: tuple[object, ...] = (None, [], "x", 3)
+        for options in not_options:
+            with self.subTest(options=options):
+                self.assertEqual([], list(role_tasks.option_specs(options)))
+                self.assertEqual([], role_tasks.options_without_default(options))
+
+    def test_a_default_key_is_a_default_whatever_it_holds(self) -> None:
+        values: tuple[object, ...] = (False, 0, "", None, [], {}, True, 1)
+        for value in values:
+            options = {"a": {"type": "str", "default": value}}
+            with self.subTest(value=value):
+                self.assertEqual([], role_tasks.options_without_default(options))
+
+    def test_an_option_with_neither_required_nor_default_is_reported(self) -> None:
+        options: dict[str, object] = {
+            "a": {"type": "str"},
+            "b": {"type": "str", "required": False},
+            "c": {"type": "str", "required": "true"},
+            "d": {"type": "str", "required": True},
+            "e": {"type": "str", "default": None},
+            "f": None,
+            "g": {"type": "dict", "default": {}, "options": {"h": {"type": "str"}}},
+        }
+        self.assertEqual(["a", "b", "c", "f", "g.h"], role_tasks.options_without_default(options))
+
+    def test_a_required_parent_does_not_excuse_its_optional_children(self) -> None:
+        options = {"a": {"type": "list", "required": True, "options": {"b": {"type": "str"}}}}
+        self.assertEqual(["a[].b"], role_tasks.options_without_default(options))
 
 
 class OneReaderTest(unittest.TestCase):

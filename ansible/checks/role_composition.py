@@ -16,6 +16,7 @@ from role_tasks import (
     TASK_FILE_MODULES,
     included_role,
     mapping_at,
+    options_without_default,
     own_file,
     parsed_tasks,
     parsed_tasks_with_inputs,
@@ -29,7 +30,12 @@ CONDITIONS = (
     "It is included with `include_role`, never `import_role`.",
     "It is named by a path built from the caller's own `role_path`, not by a bare name.",
     "It declares its inputs in `meta/argument_specs.yml`, and the call gives every "
-    "required input of the entry point it names and no input that entry point does not declare.",
+    "top-level required input of the entry point it names and no input that entry point does "
+    "not declare.",
+    "Every option of the entry point it names, an option of a list element or of a dictionary "
+    "included, is `required: true` or has a `default` key in `meta/argument_specs.yml`: the key "
+    "counts whatever its value, null included, and a default found only in `defaults/main.yml`, "
+    "in group vars or in the caller's vars does not.",
     "It includes no role itself, and no role's `meta/main.yml` carries `dependencies`.",
     "Its README names the roles that call it.",
     "A role's `include_tasks` and `import_tasks` name a YAML file that exists under their own "
@@ -42,6 +48,12 @@ REVIEW_ONLY = (
     "It computes and records only.",
     "Every variable its tasks read is an input it declares: the gate reads what a call gives, "
     "not what a task reads.",
+    "The value an omitted optional input takes when the role runs (in `defaults/main.yml`, or "
+    "in the role's tasks for an option of a list element) equals the `default` its "
+    "`argument_specs` entry declares: Ansible does not apply the declared default, and the gate "
+    "reads the spec and the call.",
+    "Each list element a call passes gives the required options of its element: the gate reads "
+    "the names of the vars a call sets, not what is inside the list.",
 )
 
 NO_CITATION = (
@@ -117,6 +129,14 @@ def call_problems(
     missing = required - given
     if missing:
         found.append(f"{where}: the call does not give required input(s) {sorted(missing)}")
+    # Only the entry point the call names is read: another entry point of the same role, never
+    # called, is not (README, "Composition (ANS-12)").
+    undefaulted = options_without_default(inputs)
+    if undefaulted:
+        found.append(
+            f"{where}: the entry point {entry} of {target.name} declares optional input(s) "
+            f"{undefaulted} with no `default` in its meta/argument_specs.yml"
+        )
     # An entry with no argument_specs at all is reported above; here the entry exists and the
     # call passes something it does not declare, whether it declares other inputs or none.
     undeclared = given - declared

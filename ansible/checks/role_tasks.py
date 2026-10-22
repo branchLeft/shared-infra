@@ -218,6 +218,40 @@ def mapping_at(path: Path, *keys: str) -> Mapping[str, object]:
     return value if isinstance(value, Mapping) else {}
 
 
+def option_specs(options: object, prefix: str = "") -> Iterator[tuple[str, object]]:
+    """Yield the path and spec of every option of an ``argument_specs`` entry, at any depth.
+
+    An option of a list element or of a dictionary is an input like any other (ANS-12), so the
+    walk goes into every ``options`` it finds. A path names the way down: ``classes[].gate`` is
+    the option ``gate`` of each element of the list ``classes``, ``group.mode`` an option of
+    the dictionary ``group``.
+    """
+    if not isinstance(options, Mapping):
+        return
+    for key, spec in options.items():
+        path = f"{prefix}{key}"
+        yield path, spec
+        if isinstance(spec, Mapping):
+            joint = "[]." if spec.get("type") == "list" else "."
+            yield from option_specs(spec.get("options"), f"{path}{joint}")
+
+
+def options_without_default(options: object) -> list[str]:
+    """Return the path of every option that is neither ``required: true`` nor has a default.
+
+    The words are those of ANS-12. An option is optional when it is not ``required: true``. It
+    has a default when its spec has a ``default`` key, whatever the value: ``false``, ``0`` and
+    ``null`` count, and a default that is only in ``defaults/main.yml``, in group vars or in the
+    caller's vars does not, because it is not in the spec. A spec that is not a mapping states
+    neither, so its option is reported.
+    """
+    return [
+        path
+        for path, spec in option_specs(options)
+        if not (isinstance(spec, Mapping) and (spec.get("required") is True or "default" in spec))
+    ]
+
+
 def role_vars(role: Path) -> Mapping[str, object]:
     """Return the variables a role sets in ``vars/main.yml`` and ``defaults/main.yml``."""
     merged: dict[str, object] = {}
