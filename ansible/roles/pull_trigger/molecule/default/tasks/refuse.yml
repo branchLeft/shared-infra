@@ -35,6 +35,22 @@
     fail_msg: 'wrong answer for {{ case.name }}: rc={{ pull_trigger_request_result.rc }} stdout={{ pull_trigger_request_result.stdout }}'
     success_msg: 'refused as expected: {{ case.name }}'
 
+- name: 'The summary names the step the allow-list found, or none, and never what the caller typed: {{ case.name }}'
+  ansible.builtin.assert:
+    that:
+      - pull_trigger_request_result.stdout is search(' step=' ~ (case.shown_step | default('-')) ~ '$')
+    fail_msg: 'the step field is wrong for {{ case.name }}: {{ pull_trigger_request_result.stdout }}'
+    success_msg: 'the step field is as expected: {{ case.name }}'
+  when: case.mode | default('apply') == 'step' and case.shown_mode is not defined
+
+- name: 'A request that is not a step request has no step field, so its line is what it was before steps: {{ case.name }}'
+  ansible.builtin.assert:
+    that:
+      - "' step=' not in pull_trigger_request_result.stdout"
+    fail_msg: 'a line that is not a step request names a step: {{ pull_trigger_request_result.stdout }}'
+    success_msg: 'no step field: {{ case.name }}'
+  when: case.mode | default('apply') != 'step'
+
 - name: 'Refused by the guard the case names: {{ case.name }}'
   ansible.builtin.assert:
     that:

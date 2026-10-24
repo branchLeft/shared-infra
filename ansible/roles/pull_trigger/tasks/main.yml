@@ -30,8 +30,9 @@
     group: root
     mode: '0755'
 
-# No secret reaches this file: the signers are public keys. The diff is left on
-# because an approver must see a key added to the allowlist.
+# No secret reaches this file: the signers are public keys and the step words are
+# typing guards in a public inventory file. The diff is left on because an approver
+# must see a key or a step added to an allowlist.
 - name: Write the configuration
   ansible.builtin.copy:
     content: "{{ pull_trigger_config | ansible.builtin.to_nice_json }}\n"
@@ -50,6 +51,7 @@
       log_dir: '{{ pull_trigger_log_dir }}'
       timeout_seconds: '{{ pull_trigger_timeout_seconds | int }}'
       keep_runs: '{{ pull_trigger_keep_runs | int }}'
+      steps: '{{ pull_trigger_steps }}'
 
 - name: Create the state directory
   ansible.builtin.file:

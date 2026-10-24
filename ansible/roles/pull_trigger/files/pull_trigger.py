@@ -2,8 +2,9 @@
 """Apply one exact, verified commit of main to this host.
 
 The role installs this file as one root-owned program, the only thing the CI key
-can run. The caller supplies one commit id of 40 lowercase hex digits; every
-other value comes from a root-owned configuration file.
+can run. The caller supplies one commit id of 40 lowercase hex digits, or, for a
+step request on the separate step key, that commit and one step id and one typed
+confirmation word; every other value comes from a root-owned configuration file.
 
 The steps, their order and the exit codes are in the role README. ``Exit`` names
 the exit statuses.
@@ -76,6 +77,31 @@ CONFIG_KEYS: Final = frozenset(
         "keep_runs",
     },
 )
+# Optional, and its absence means no step may be requested, which is the safe direction.
+OPTIONAL_CONFIG_KEYS: Final = frozenset({"steps"})
+
+# The closed list of steps this program will ever run. A step is a routine, named task of a
+# role that its playbook keeps behind the ``never`` tag. This is the only home of the list: the
+# configuration may name a subset of it and can add nothing to it, and the tag that decides
+# which tasks a step runs is fixed by the id (``STEP_TAG_PREFIX`` plus the id), so a way into
+# a host that is not a routine step (break-glass access above all) cannot be put on the
+# allow-list by editing the configuration, whether by a new id or by pointing a listed id at
+# another step's tasks. A new step is a change to this root program, reviewed by the owner.
+# Every name is checked by ``parse_config`` and none is checked by being on a list of names
+# to refuse.
+STEP_IDS: Final = frozenset({"migrate", "identity", "provision"})
+STEP_ID_PATTERN: Final = re.compile(r"[a-z][a-z0-9_]{0,31}")
+# A typing guard held in a public file, not a secret. The protection is the protected
+# environment whose only reviewer is the owner.
+WORD_PATTERN: Final = re.compile(r"[A-Z0-9-]{4,32}")
+# Ansible's ``--tags`` takes a comma list and the specials ``all``, ``always``, ``never``,
+# ``tagged`` and ``untagged``. The tag of a step is this prefix and the step's id, and
+# nothing else is accepted: an id comes from the closed list above and is one plain name, so
+# none of those specials can match, and one step's id cannot select another step's tasks.
+STEP_TAG_PREFIX: Final = "control_plane_db_"
+# The extra variable the program sets to the validated step id. It is a constant here.
+STEP_VARIABLE: Final = "control_plane_db_step"
+STEP_FIELDS: Final = frozenset({"id", "tag", "word"})
 
 Clock = Callable[[], datetime]
 
@@ -115,6 +141,7 @@ class Mode(enum.Enum):
 
     APPLY = "apply"
     CHECK = "check"
+    STEP = "step"
 
 
 class Why(enum.Enum):
@@ -127,11 +154,17 @@ class Why(enum.Enum):
     OPTION_UNKNOWN = "unknown option"
     MODE_MISSING = "--mode is required"
     OPTION_REPEATED = "an option was given twice"
-    MODE_UNKNOWN = "--mode must be apply or check"
+    MODE_UNKNOWN = "--mode must be apply, check or step"
     CONFIG_OPTION_RELATIVE = "--config must be an absolute path"
     COMMIT_REPEATED = "the commit was given twice"
     COMMIT_COUNT = "exactly one commit is required"
     COMMIT_SHAPE = "the commit must be exactly 40 lowercase hex digits"
+    REQUEST_WORDS = "a request is a commit, or a commit, a step id and a confirmation word"
+    STEP_WORDS_SHAPE = "the step id or the confirmation word is malformed"
+    STEP_REQUEST_SHAPE = "a step request is a commit, a step id and a confirmation word"
+    STEP_MODE_ONLY = "a step is requested only with --mode step"
+    STEP_NOT_LISTED = "the step is not on this host's allow-list"
+    STEP_WORD_WRONG = "the confirmation word is not the one on the allow-list"
     COMMIT_UNKNOWN = "the commit is not in the history of main"
     COMMIT_NOT_ANCESTOR = "the commit is not an ancestor of the tip of main"
     COMMIT_OLDER = "the commit is older than the last one applied here"
@@ -153,6 +186,12 @@ class Why(enum.Enum):
     CONFIG_NO_SIGNERS = "signers must be a non-empty list"
     CONFIG_NO_PLAYBOOKS = "playbooks must be a non-empty list"
     CONFIG_PLAYBOOK_PATH = "every allowlisted playbook must be a plain path under ansible/playbooks"
+    CONFIG_STEPS_LIST = "steps must be a list"
+    CONFIG_STEP_FIELDS = "a step needs exactly an id, a tag and a word, all text"
+    CONFIG_STEP_UNKNOWN = "a step id is not one of the steps this program can run"
+    CONFIG_STEP_TAG = "a step tag must be control_plane_db_ followed by the step id"
+    CONFIG_STEP_WORD = "a step confirmation word must be 4 to 32 of A-Z, 0-9 and hyphen"
+    CONFIG_STEP_DUPLICATE = "two steps share an id"
     CONFIG_NOT_TEXT = "must be text"
     CONFIG_NOT_NUMBER = "must be a whole number in its range"
     CONFIG_NOT_PATH = "must be an absolute normalised path"
@@ -204,6 +243,24 @@ class BadRequestError(RefusedError):
     """The caller's input is not exactly a mode and one 40-digit lowercase hex commit."""
 
     reason = "bad-request"
+
+
+class StepModeOnlyError(RefusedError):
+    """A step was asked for with a mode that is not ``--mode step``."""
+
+    reason = "step-mode-only"
+
+
+class StepNotAllowedError(RefusedError):
+    """The step is not on this host's allow-list, which may be empty."""
+
+    reason = "step-not-allowed"
+
+
+class ConfirmMismatchError(RefusedError):
+    """The confirmation word is not the one on the allow-list for that step."""
+
+    reason = "confirm-mismatch"
 
 
 class BusyError(RefusedError):
@@ -306,6 +363,15 @@ class Signer:
 
 
 @dataclasses.dataclass(frozen=True)
+class Step:
+    """One entry of the step allow-list: a step id, the tag that selects its tasks and its word."""
+
+    step_id: str
+    tag: str
+    word: str
+
+
+@dataclasses.dataclass(frozen=True)
 class Config:
     """The root-owned configuration. The caller can change none of it."""
 
@@ -318,6 +384,7 @@ class Config:
     log_dir: Path
     timeout_seconds: int
     keep_runs: int
+    steps: tuple[Step, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -327,6 +394,19 @@ class Arguments:
     mode: Mode
     config_path: Path
     positional: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class Request:
+    """What the caller asked for: a commit, and for a step request a step id and a word.
+
+    The step id and the word are caller text that matched a pattern. Neither is logged
+    or printed until the step id has been found on the allow-list.
+    """
+
+    commit: str
+    step: str | None = None
+    word: str | None = None
 
 
 def utc_now() -> datetime:
@@ -342,7 +422,7 @@ def stamp(moment: datetime) -> str:
 def parse_arguments(argv: Sequence[str]) -> Arguments:
     """Read the options that root put on the command line.
 
-    Only ``--mode apply|check`` (required, once) and ``--config PATH`` (once) are
+    Only ``--mode apply|check|step`` (required, once) and ``--config PATH`` (once) are
     options. The caller cannot add to this line. Any other option is refused.
 
     Raises:
@@ -394,28 +474,70 @@ def _config_path_from(value: str | None) -> Path:
     return Path(value)
 
 
-def resolve_commit(arguments: Arguments, environ: Mapping[str, str]) -> str:
-    """Return the one commit the caller asked for, or refuse.
+def resolve_request(arguments: Arguments, environ: Mapping[str, str]) -> Request:
+    """Return what the caller asked for, or refuse.
 
-    The commit comes from ``SSH_ORIGINAL_COMMAND``, or, run by hand, from the one
-    positional word; both, or neither, is refused. Anything but 40 lowercase hex
-    digits is refused.
+    The words come from ``SSH_ORIGINAL_COMMAND``, or, run by hand, from the positional
+    words; both, or neither, is refused. The mode (set by root on the command line,
+    never by the caller) decides which request is acceptable: ``--mode apply`` and
+    ``--mode check`` take one commit of 40 lowercase hex digits and nothing else, and
+    ``--mode step`` takes that commit, one step id and one confirmation word, separated by
+    single spaces. The word and the step id are only matched against their patterns here;
+    whether the step is on the allow-list and the word is its word is decided later.
 
     Raises:
-        BadRequestError: The input is not exactly one 40-digit lowercase hex commit.
+        BadRequestError: The input does not have the shape the mode accepts.
+        StepModeOnlyError: A well-formed step request arrived with a mode that is not ``step``.
     """
     original = environ.get("SSH_ORIGINAL_COMMAND")
     if original is not None:
         if arguments.positional:
             raise BadRequestError(Why.COMMIT_REPEATED)
-        candidate = original
+        words = original.split(" ")
     else:
-        if len(arguments.positional) != 1:
-            raise BadRequestError(Why.COMMIT_COUNT)
-        candidate = arguments.positional[0]
-    if COMMIT_PATTERN.fullmatch(candidate) is None:
+        words = list(arguments.positional)
+        wanted = 3 if arguments.mode is Mode.STEP else 1
+        if len(words) != wanted:
+            raise BadRequestError(
+                Why.STEP_REQUEST_SHAPE if arguments.mode is Mode.STEP else Why.COMMIT_COUNT
+            )
+    request = _request_from(words)
+    require_mode_fits(arguments.mode, request)
+    return request
+
+
+def _request_from(words: Sequence[str]) -> Request:
+    """Return the request the words make, matching each against its pattern.
+
+    Raises:
+        BadRequestError: There are not one or three words, or a word is malformed.
+    """
+    if len(words) not in (1, 3):
+        raise BadRequestError(Why.REQUEST_WORDS)
+    if COMMIT_PATTERN.fullmatch(words[0]) is None:
         raise BadRequestError(Why.COMMIT_SHAPE)
-    return candidate
+    if len(words) == 1:
+        return Request(words[0])
+    if STEP_ID_PATTERN.fullmatch(words[1]) is None or WORD_PATTERN.fullmatch(words[2]) is None:
+        raise BadRequestError(Why.STEP_WORDS_SHAPE)
+    return Request(words[0], words[1], words[2])
+
+
+def require_mode_fits(mode: Mode, request: Request) -> None:
+    """Refuse a step with a mode that is not ``step``, and a ``step`` mode with no step.
+
+    This is what keeps the plain apply key and the check key from ever running a step:
+    their forced commands fix the mode, and a step request under either is refused here.
+    It is the one place the mode and the request are compared.
+
+    Raises:
+        StepModeOnlyError: The request names a step and the mode is not ``step``.
+        BadRequestError: The mode is ``step`` and the request names no step.
+    """
+    if request.step is not None and mode is not Mode.STEP:
+        raise StepModeOnlyError(Why.STEP_MODE_ONLY)
+    if request.step is None and mode is Mode.STEP:
+        raise BadRequestError(Why.STEP_REQUEST_SHAPE)
 
 
 def canonical_playbook(path: str) -> str | None:
@@ -464,6 +586,51 @@ def _signer_from(value: object) -> Signer:
     raise ConfigError(Why.SIGNER_FORMAT)
 
 
+def _step_from(value: object) -> Step:
+    """Validate one entry of the step allow-list.
+
+    The id must be one of ``STEP_IDS``, which is closed: an id that is not in it is refused
+    whatever it is called, so a surface that was never built cannot be added by a name
+    this program has not heard of. The tag decides which tasks the step runs, so it is not
+    a free choice either: it must be the step's own, ``STEP_TAG_PREFIX`` plus the id, and
+    an entry that pairs an id with any other tag is refused, whether that is another
+    step's tag, a name no task carries or a special such as ``all``.
+
+    Raises:
+        ConfigError: The entry has other fields than an id, a tag and a word, an id that is
+            not one of the program's steps, a tag that is not that id's own, or a word of
+            the wrong shape.
+    """
+    if not isinstance(value, dict) or set(value) != STEP_FIELDS:
+        raise ConfigError(Why.CONFIG_STEP_FIELDS)
+    step_id, tag, word = value["id"], value["tag"], value["word"]
+    if not (isinstance(step_id, str) and isinstance(tag, str) and isinstance(word, str)):
+        raise ConfigError(Why.CONFIG_STEP_FIELDS)
+    if step_id not in STEP_IDS:
+        raise ConfigError(Why.CONFIG_STEP_UNKNOWN)
+    if tag != STEP_TAG_PREFIX + step_id:
+        raise ConfigError(Why.CONFIG_STEP_TAG)
+    if WORD_PATTERN.fullmatch(word) is None:
+        raise ConfigError(Why.CONFIG_STEP_WORD)
+    return Step(step_id, tag, word)
+
+
+def _steps_from(data: Mapping[str, object]) -> tuple[Step, ...]:
+    """Return the validated step allow-list; an absent ``steps`` key is an empty one.
+
+    Raises:
+        ConfigError: ``steps`` is not a list, an entry is invalid, or two share an id (and so,
+            as a tag follows its id, a tag).
+    """
+    value = data.get("steps", [])
+    if not isinstance(value, list):
+        raise ConfigError(Why.CONFIG_STEPS_LIST)
+    steps = tuple(_step_from(entry) for entry in value)
+    if len({step.step_id for step in steps}) != len(steps):
+        raise ConfigError(Why.CONFIG_STEP_DUPLICATE)
+    return steps
+
+
 def _text(data: Mapping[str, object], key: str) -> str:
     """Return a text value of the configuration.
 
@@ -507,7 +674,8 @@ def parse_config(text: str) -> Config:
 
     The allowlist entries must be well-formed playbook paths. The playbook the
     host runs is not checked here: whether it is on the allowlist is a refusal
-    of the request, not a fault in the file.
+    of the request, not a fault in the file. The step allow-list is checked
+    entry by entry (see ``_step_from``).
 
     Raises:
         ConfigError: The text is not valid JSON, has unknown or missing keys, or a bad value.
@@ -516,7 +684,11 @@ def parse_config(text: str) -> Config:
         data = json.loads(text)
     except (ValueError, RecursionError):
         raise ConfigError(Why.CONFIG_JSON) from None
-    if not isinstance(data, dict) or set(data) != CONFIG_KEYS:
+    if (
+        not isinstance(data, dict)
+        or not CONFIG_KEYS <= set(data)
+        or not set(data) <= CONFIG_KEYS | OPTIONAL_CONFIG_KEYS
+    ):
         raise ConfigError(Why.CONFIG_KEY_SET)
     url = _text(data, "remote_url")
     if HTTPS_URL.fullmatch(url) is None and (
@@ -543,6 +715,7 @@ def parse_config(text: str) -> Config:
         log_dir=_absolute(data, "log_dir"),
         timeout_seconds=_whole(data, "timeout_seconds", 1, 86_400),
         keep_runs=_whole(data, "keep_runs", 1, 1_000),
+        steps=_steps_from(data),
     )
 
 
@@ -1062,17 +1235,22 @@ class Workspace:
             shutil.rmtree(previous, ignore_errors=True)
 
 
-def describe(verdict: Verdict, mode: str, commit: str, playbook: str) -> str:
+def describe(verdict: Verdict, mode: str, commit: str, playbook: str, step: str = "-") -> str:
     """Return the fields the log line and the summary share.
 
     Every value is a word this program made or a validated commit and path;
-    nothing the caller typed is copied, so a line cannot be forged.
+    nothing the caller typed is copied, so a line cannot be forged. A step id is
+    shown only after it has been found on the root-owned allow-list, and then it is
+    the allow-list's own text. The ``step`` field is added for ``mode=step`` and for no
+    other mode, so the line of an apply and of a check is byte for byte what it was
+    before steps existed, which the workflow that reads it still expects.
     """
     changed = "-" if verdict.changed is None else str(verdict.changed)
-    return (
+    fields = (
         f"verdict={verdict.name} exit={int(verdict.exit_code)} reason={verdict.reason} "
         f"mode={mode} commit={commit} playbook={playbook} changed={changed}"
     )
+    return f"{fields} step={step}" if mode == Mode.STEP.value else fields
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1085,6 +1263,7 @@ class Entry:
     playbook: str
     started: datetime
     finished: datetime
+    step: str = "-"
 
 
 class Journal:
@@ -1117,7 +1296,7 @@ class Journal:
         Every value is a word this program made or a validated commit and path;
         nothing the caller typed is copied, so a line cannot be forged.
         """
-        fields = describe(entry.verdict, entry.mode, entry.commit, entry.playbook)
+        fields = describe(entry.verdict, entry.mode, entry.commit, entry.playbook, entry.step)
         line = f"{fields} started={stamp(entry.started)} finished={stamp(entry.finished)}"
         descriptor = os.open(
             self._dir / "pull-trigger.log",
@@ -1152,12 +1331,21 @@ class PlaybookRunner:
         self._caller_gone = False
 
     def run(
-        self, checkout: Path, playbook: str, mode: Mode, log_path: Path, timeout: int
+        self,
+        checkout: Path,
+        playbook: str,
+        mode: Mode,
+        log_path: Path,
+        timeout: int,
+        step: Step | None = None,
     ) -> PlaybookResult:
         """Run the playbook in the checkout and wait for it, killing it at the limit.
 
         The playbook's output is written to ``log_path`` (mode 0600) and relayed to
         the caller as it appears. A caller that disconnects does not stop the run.
+        For a step, the program itself adds ``--tags`` with the allow-list's tag and one
+        extra variable with the validated step id; nothing from the caller's request
+        reaches ansible except that id, and a run with no step gets neither.
 
         Returns:
             How the run ended.
@@ -1165,6 +1353,8 @@ class PlaybookRunner:
         argv = [str(self._program), "-i", "localhost,", "--connection", "local"]
         if mode is Mode.CHECK:
             argv += ["--check", "--diff"]
+        if step is not None:
+            argv += ["--tags", step.tag, "-e", f"{STEP_VARIABLE}={step.step_id}"]
         argv.append(str(checkout / playbook))
         environment = {
             "PATH": SEARCH_PATH,
@@ -1297,13 +1487,23 @@ class Trigger:
         self._clock = clock
         self._workspace = Workspace(config.state_dir)
         self._journal = Journal(config.log_dir, config.keep_runs)
+        self._step_label = "-"
 
     @property
     def playbook_label(self) -> str:
         """The playbook as the log and the summary name it: only a well-formed path."""
         return self._config.playbook if canonical_playbook(self._config.playbook) else "-"
 
-    def execute(self, mode: Mode, request: str | TriggerError) -> Verdict:
+    @property
+    def step_label(self) -> str:
+        """The step as the log and the summary name it.
+
+        It is ``-`` until the request's step id has been found on the allow-list, and then it
+        is the allow-list's own text, so nothing the caller typed can reach a line.
+        """
+        return self._step_label
+
+    def execute(self, mode: Mode, request: Request | TriggerError) -> Verdict:
         """Run the request and record the outcome.
 
         Every failure ends as a verdict with a named reason: an expected one
@@ -1314,7 +1514,7 @@ class Trigger:
             The verdict.
         """
         started = self._clock()
-        commit = request if isinstance(request, str) else "-"
+        commit = request.commit if isinstance(request, Request) else "-"
         try:
             self._workspace.prepare()
             self._journal.prepare()
@@ -1329,26 +1529,62 @@ class Trigger:
             sys.stderr.write(f"pull-trigger: io-error: {error.strerror}\n")
         try:
             self._journal.record(
-                Entry(verdict, mode.value, commit, self.playbook_label, started, self._clock()),
+                Entry(
+                    verdict,
+                    mode.value,
+                    commit,
+                    self.playbook_label,
+                    started,
+                    self._clock(),
+                    self.step_label,
+                ),
             )
         except OSError as error:
             sys.stderr.write(f"pull-trigger: the log could not be written: {error.strerror}\n")
         return verdict
 
-    def _guarded(self, mode: Mode, commit: str) -> Verdict:
-        """Check the playbook allowlist, take the lock and run.
+    def _guarded(self, mode: Mode, request: Request) -> Verdict:
+        """Check the playbook allowlist and the step, take the lock and run.
+
+        The step checks come before the lock, the fetch, the rollback floor and the
+        checkout, so a refused step touches nothing and gives an attacker no timing
+        on any of them.
 
         Raises:
             PlaybookNotAllowedError: the host's playbook is not on the allowlist.
+            StepNotAllowedError: the step is not on the allow-list.
+            ConfirmMismatchError: the confirmation word is not that step's word.
         """
         if self._config.playbook not in self._config.playbooks:
             raise PlaybookNotAllowedError(Why.PLAYBOOK_NOT_LISTED)
+        step = self._admit_step(request)
         with single_flight(self._workspace.lock):
             self._workspace.sweep()
-            return self._admitted(mode, commit)
+            return self._admitted(mode, request.commit, step)
 
-    def _admitted(self, mode: Mode, commit: str) -> Verdict:
+    def _admit_step(self, request: Request) -> Step | None:
+        """Return the allow-list entry the request names, or None for a request with no step.
+
+        Raises:
+            StepNotAllowedError: the step is not on the allow-list, which may be empty.
+            ConfirmMismatchError: the confirmation word is not the one for that step.
+        """
+        if request.step is None:
+            return None
+        entry = next((item for item in self._config.steps if item.step_id == request.step), None)
+        if entry is None:
+            raise StepNotAllowedError(Why.STEP_NOT_LISTED)
+        self._step_label = entry.step_id
+        if request.word != entry.word:
+            raise ConfirmMismatchError(Why.STEP_WORD_WRONG)
+        return entry
+
+    def _admitted(self, mode: Mode, commit: str, step: Step | None) -> Verdict:
         """Fetch, verify, check out and run, under the lock.
+
+        The rollback floor is the same one a plain apply uses, for a step too: a step on a
+        commit older than the floor is refused, and a step that has started raises the floor
+        to its commit as an apply does (the README states what follows from that).
 
         Raises:
             RollbackError: the commit is older than the last one applied here.
@@ -1369,7 +1605,7 @@ class Trigger:
             raise PlaybookNotAllowedError(Why.PLAYBOOK_NOT_REGULAR)
         checkout = self._workspace.new_checkout(git, commit)
         try:
-            return self._run(mode, commit, checkout)
+            return self._run(mode, commit, checkout, step)
         finally:
             # Only an apply that got as far as running keeps its checkout (as
             # ``current``); a check, a refusal and a failure before that leave nothing behind.
@@ -1392,7 +1628,7 @@ class Trigger:
             if not (program.is_file() and os.access(program, os.X_OK)):
                 raise ToolMissingError(Why.TOOL_MISSING, program.name)
 
-    def _run(self, mode: Mode, commit: str, checkout: Path) -> Verdict:
+    def _run(self, mode: Mode, commit: str, checkout: Path, step: Step | None) -> Verdict:
         """Run the playbook in the checkout and turn its end into a verdict.
 
         Raises:
@@ -1401,7 +1637,7 @@ class Trigger:
         require_playbook_in_checkout(checkout, self._config.playbook)
         if self._stop.is_set():
             return Verdict(Exit.FAILED, "interrupted")
-        if mode is Mode.APPLY:
+        if mode is not Mode.CHECK:
             self._workspace.record_applied(commit)
             self._workspace.promote(checkout)
         started = self._clock()
@@ -1410,7 +1646,7 @@ class Trigger:
             self._config.ansible_playbook, self._workspace.home, self._caller, self._stop
         )
         result = runner.run(
-            checkout, self._config.playbook, mode, log_path, self._config.timeout_seconds
+            checkout, self._config.playbook, mode, log_path, self._config.timeout_seconds, step
         )
         self._journal.prune()
         if result.timed_out:
@@ -1424,12 +1660,12 @@ class Trigger:
             return Verdict(Exit.FAILED, "no-recap")
         if changed == 0:
             return Verdict(Exit.UNCHANGED, "ok", 0)
-        return Verdict(Exit.APPLIED if mode is Mode.APPLY else Exit.WOULD_CHANGE, "ok", changed)
+        return Verdict(Exit.WOULD_CHANGE if mode is Mode.CHECK else Exit.APPLIED, "ok", changed)
 
 
-def summary(verdict: Verdict, mode: str, commit: str, playbook: str) -> str:
+def summary(verdict: Verdict, mode: str, commit: str, playbook: str, step: str = "-") -> str:
     """Return the one line printed on stdout for the caller."""
-    return f"pull-trigger {describe(verdict, mode, commit, playbook)}"
+    return f"pull-trigger {describe(verdict, mode, commit, playbook, step)}"
 
 
 def main(
@@ -1454,9 +1690,9 @@ def main(
         sys.stderr.write(f"pull-trigger: {error.reason}: {error.detail}\n")
         out.write(summary(Verdict(error.exit_code, error.reason), "-", "-", "-") + "\n")
         return int(error.exit_code)
-    request: str | TriggerError
+    request: Request | TriggerError
     try:
-        request = resolve_commit(arguments, environ)
+        request = resolve_request(arguments, environ)
     except TriggerError as error:
         request = error
     trigger = Trigger(config, tools or Tools(), relay, stop)
@@ -1466,8 +1702,11 @@ def main(
         # Only the class name is printed: a message could carry text from a failed command.
         sys.stderr.write(f"pull-trigger: internal-error: {type(error).__name__}\n")
         verdict = Verdict(Exit.ERROR, "internal-error")
-    commit = request if isinstance(request, str) else "-"
-    out.write(summary(verdict, arguments.mode.value, commit, trigger.playbook_label) + "\n")
+    commit = request.commit if isinstance(request, Request) else "-"
+    out.write(
+        summary(verdict, arguments.mode.value, commit, trigger.playbook_label, trigger.step_label)
+        + "\n"
+    )
     out.flush()
     return int(verdict.exit_code)
 
