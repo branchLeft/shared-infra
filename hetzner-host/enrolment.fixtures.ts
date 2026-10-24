@@ -17,29 +17,18 @@ export const CHECK_KEY =
   'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICHECKCHECKCHECKCHECKCHECKCHECKCHEC check@edge2';
 
 /**
- * GitHub's public signing key for commits it makes, read from the production group variables
- * that hold it, so the tests check the key the first boot will really be given and not a copy.
+ * GitHub's public signing key for commits it makes, read from edge1's trust file, the one place
+ * the signer allowlist lives, so the tests check the key the first boot will really be given
+ * and not a copy.
  */
 function productionSignerKey(): string {
-  const variables = readFileSync(
-    join(
-      __dirname,
-      '..',
-      'ansible',
-      'inventories',
-      'production',
-      'group_vars',
-      'edge',
-      'pull_trigger.yml'
-    ),
-    'utf8'
-  );
+  const variables = readFileSync(join(__dirname, '..', 'ansible', 'trust', 'edge1.yml'), 'utf8');
   const found =
     /^( +)-----BEGIN PGP PUBLIC KEY BLOCK-----$[\s\S]*?^ +-----END PGP PUBLIC KEY BLOCK-----$/m.exec(
       variables
     );
   if (found === null) {
-    throw new Error('The production group variables hold no signer key block.');
+    throw new Error("edge1's trust file holds no signer key block.");
   }
   const indent = found[1]!;
   return (

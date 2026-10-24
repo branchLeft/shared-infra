@@ -347,9 +347,9 @@ Pulumi itself, and a library (openpgp.js) would put a large parser and a lock ch
 of a production Pulumi program. `gpg --show-keys` is not an option here: this runs inside the
 Pulumi program, where a subprocess and a gpg binary cannot be assumed. The walker reads only
 packet headers and lengths, accepts a short allowlist, and refuses everything it cannot account
-for. It is the only check on the block today. The key comes from the reviewed group variables on
-main, so a publish-time `gpg --show-keys` over those variables, run by the Python tool, would be a
-maintained check ahead of it; it is not built.
+for. It is the only check on the block today. The key comes from edge1's trust file
+(`ansible/trust/edge1.yml`) on main, so a publish-time `gpg --show-keys` over that file, run by the
+Python tool, would be a maintained check ahead of it; it is not built.
 
 The enrolment `runcmd` script (the shell that brings a host under the pull): it is one `sh -c`
 entry of `runcmd`, and it is the last one.
