@@ -133,7 +133,8 @@ class ConfigTexts:
     tasks = read(tool.TASKS_PATH)
     defaults = read(tool.DEFAULTS_PATH)
     variables = read(tool.VARS_PATH)
-    group = read(tool.GROUP_VARS_PATH)
+    common = read(tool.COMMON_PATH)
+    trust = read(tool.TRUST_PATH)
 
 
 def render(
@@ -141,13 +142,15 @@ def render(
     tasks: str | None = None,
     defaults: str | None = None,
     variables: str | None = None,
-    group: str | None = None,
+    common: str | None = None,
+    trust: str | None = None,
 ) -> str:
     return tool.render_config(
         ConfigTexts.tasks if tasks is None else tasks,
         ConfigTexts.defaults if defaults is None else defaults,
         ConfigTexts.variables if variables is None else variables,
-        ConfigTexts.group if group is None else group,
+        ConfigTexts.common if common is None else common,
+        ConfigTexts.trust if trust is None else trust,
     )
 
 
@@ -190,9 +193,12 @@ class RecordTest(RepoCase):
             self.record()
 
     def test_an_uncommitted_change_to_a_configuration_input_is_refused(self) -> None:
-        self.repo.edit(tool.GROUP_VARS_PATH, lambda text: text + "# not committed\n")
-        with self.assertRaisesRegex(tool.BootstrapError, "not committed"):
-            self.record()
+        for path in (tool.COMMON_PATH, tool.TRUST_PATH):
+            with self.subTest(path=path):
+                self.repo.edit(path, lambda text: text + "# not committed\n")
+                with self.assertRaisesRegex(tool.BootstrapError, "not committed"):
+                    self.record()
+                self.repo.run("checkout", "--", path)
 
 
 class VerifyTest(RepoCase):
@@ -508,49 +514,97 @@ class ConfigRefusalTest(unittest.TestCase):
         self.assertEqual([tool.PLAYBOOK_PATH], config["playbooks"])
         self.assertEqual(3600, config["timeout_seconds"])
 
+    def test_the_playbook_and_its_allowlist_are_filled_from_the_host_name(self) -> None:
+        # A control for the refusals below: the shared include holds a template, not the path.
+        self.assertIn("{{ enrolled_host }}", ConfigTexts.common)
+        self.assertNotIn(tool.PLAYBOOK_PATH, ConfigTexts.common)
+        self.assertEqual(tool.PLAYBOOK_PATH, json.loads(render())["playbook"])
+
+    def test_the_signers_are_those_of_the_trust_file(self) -> None:
+        signers = tool.mapping(YAML(typ="safe").load(ConfigTexts.trust), tool.TRUST_PATH)
+        self.assertEqual(signers["pull_trigger_signers"], json.loads(render())["signers"])
+
     def test_a_missing_playbook_key_is_refused(self) -> None:
-        group = re.sub(r"^pull_trigger_playbook: .*\n", "", ConfigTexts.group, flags=re.MULTILINE)
-        self.refuses("pull_trigger_playbook, which no variable file sets", group=group)
+        common = re.sub(r"^pull_trigger_playbook: .*\n", "", ConfigTexts.common, flags=re.MULTILINE)
+        self.assertNotEqual(common, ConfigTexts.common)
+        self.refuses("pull_trigger_playbook, which no variable file sets", common=common)
 
     def test_a_playbook_that_is_not_on_the_allowlist_is_refused(self) -> None:
-        group = ConfigTexts.group.replace(
-            "pull_trigger_playbook: ansible/playbooks/edge1.yml",
-            "pull_trigger_playbook: ansible/playbooks/db1.yml",
+        common = ConfigTexts.common.replace(
+            "  - '{{ pull_trigger_playbook }}'", "  - ansible/playbooks/db1.yml"
         )
-        self.refuses("not on the playbook allowlist", group=group)
+        self.assertNotEqual(common, ConfigTexts.common)
+        self.refuses("not on the playbook allowlist", common=common)
 
     def test_a_playbook_that_is_not_edge1_is_refused_even_when_allowlisted(self) -> None:
-        group = ConfigTexts.group.replace("edge1.yml", "db1.yml")
-        self.refuses("only ansible/playbooks/edge1.yml is allowed", group=group)
+        common = ConfigTexts.common.replace("{{ enrolled_host }}", "db1")
+        self.assertNotEqual(common, ConfigTexts.common)
+        self.refuses("only ansible/playbooks/edge1.yml is allowed", common=common)
 
     def test_a_second_allowlisted_playbook_is_refused(self) -> None:
-        group = ConfigTexts.group.replace(
-            "pull_trigger_playbooks:\n  - ansible/playbooks/edge1.yml",
-            "pull_trigger_playbooks:\n  - ansible/playbooks/edge1.yml"
-            "\n  - ansible/playbooks/db1.yml",
-        )
-        self.refuses("only ansible/playbooks/edge1.yml is allowed", group=group)
+        common = ConfigTexts.common + "  - ansible/playbooks/db1.yml\n"
+        self.refuses("only ansible/playbooks/edge1.yml is allowed", common=common)
 
     def test_another_remote_is_refused(self) -> None:
-        group = ConfigTexts.group.replace(tool.REMOTE_URL, "https://example.invalid/x.git")
-        self.assertNotEqual(group, ConfigTexts.group)
-        self.refuses("the remote is not", group=group)
+        common = ConfigTexts.common.replace(tool.REMOTE_URL, "https://example.invalid/x.git")
+        self.assertNotEqual(common, ConfigTexts.common)
+        self.refuses("the remote is not", common=common)
 
     def test_an_empty_signer_list_is_refused(self) -> None:
-        group = (
-            ConfigTexts.group[: ConfigTexts.group.index("pull_trigger_signers:")]
+        trust = (
+            ConfigTexts.trust[: ConfigTexts.trust.index("pull_trigger_signers:")]
             + "pull_trigger_signers: []\n"
         )
-        self.refuses("signer allowlist is empty", group=group)
+        self.refuses("signer allowlist is empty", trust=trust)
 
     def test_malformed_yaml_is_refused(self) -> None:
-        for name in ("group", "defaults", "variables", "tasks"):
+        for name in ("common", "trust", "defaults", "variables", "tasks"):
             with self.subTest(name=name):
                 self.refuses("is not valid YAML", **{name: "key: [unclosed\n  - x: : :\n"})
 
     def test_a_variable_set_in_two_files_is_refused(self) -> None:
-        group = ConfigTexts.group + "pull_trigger_keep_runs: 5\n"
-        self.refuses("pull_trigger_keep_runs is set in", group=group)
+        trust = ConfigTexts.trust + "pull_trigger_keep_runs: 5\n"
+        self.refuses("pull_trigger_keep_runs is set in", trust=trust)
+
+    def test_the_host_name_set_in_a_variable_file_is_refused(self) -> None:
+        common = ConfigTexts.common + "enrolled_host: db1\n"
+        self.refuses("enrolled_host is set in", common=common)
+
+    def test_a_template_that_is_not_a_plain_variable_is_refused(self) -> None:
+        for template in (
+            "{{ enrolled_host | upper }}",
+            "{{ enrolled_host }}{{ enrolled_host | upper }}",
+            "{% if true %}x{% endif %}",
+            "{# a comment #}",
+        ):
+            with self.subTest(template=template):
+                common = ConfigTexts.common.replace(
+                    "{{ enrolled_host }}", "ansible/playbooks/edge1" + template
+                )
+                self.refuses("holds a template that is not a plain variable", common=common)
+
+    def test_a_template_inside_a_signer_is_refused(self) -> None:
+        trust = ConfigTexts.trust.replace(
+            "format: openpgp", "format: '{{ enrolled_host | upper }}'"
+        )
+        self.assertNotEqual(trust, ConfigTexts.trust)
+        self.refuses("holds a template that is not a plain variable", trust=trust)
+
+    def test_a_reference_to_an_unset_variable_is_refused(self) -> None:
+        common = ConfigTexts.common.replace("{{ enrolled_host }}", "{{ some_other_host }}")
+        self.refuses("some_other_host, which no variable file sets", common=common)
+
+    def test_a_reference_to_a_variable_that_is_not_text_is_refused(self) -> None:
+        common = ConfigTexts.common.replace("{{ enrolled_host }}", "{{ pull_trigger_keep_runs }}")
+        self.refuses("which is not text", common=common)
+
+    def test_references_that_lead_to_one_another_without_end_are_refused(self) -> None:
+        common = ConfigTexts.common.replace(
+            "pull_trigger_remote_url: https://github.com/branchLeft/shared-infra.git",
+            "pull_trigger_remote_url: '{{ pull_trigger_remote_url }}'",
+        )
+        self.assertNotEqual(common, ConfigTexts.common)
+        self.refuses("holds a template that is not a plain variable", common=common)
 
     def test_a_task_that_no_longer_writes_to_nice_json_of_one_variable_is_refused(self) -> None:
         tasks = ConfigTexts.tasks.replace("ansible.builtin.to_nice_json", "ansible.builtin.to_json")
@@ -582,35 +636,60 @@ class ConfigRefusalTest(unittest.TestCase):
         two = ConfigTexts.tasks + ConfigTexts.tasks.split("---\n", 1)[1]
         self.refuses("has 2 tasks", tasks=two)
 
-    def test_a_playbook_that_does_not_load_the_group_variables_is_refused(self) -> None:
+    def test_a_playbook_that_does_not_load_the_variable_files_is_refused(self) -> None:
         with self.assertRaisesRegex(tool.BootstrapError, "does not load"):
             tool.check_playbook("- hosts: all\n  roles: []\n")
         tool.check_playbook(read(tool.PLAYBOOK_PATH))
 
-    def test_a_playbook_that_loads_another_file_of_the_same_name_is_refused(self) -> None:
-        # The tail of the path matches, so a check on the tail alone passes it; the playbook
-        # would then load a file the record's configuration was not read from.
-        entry = "{{ playbook_dir }}/../inventories/production/group_vars/edge/pull_trigger.yml"
+    def test_a_playbook_that_loads_only_one_of_the_two_files_is_refused(self) -> None:
         playbook = read(tool.PLAYBOOK_PATH)
-        self.assertIn(entry, playbook)
-        tail = "inventories/production/group_vars/edge/pull_trigger.yml"
-        for other in (
-            "{{ playbook_dir }}/../../other/" + tail,
-            "/srv/x/" + tail,
-            "{{ playbook_dir }}/../inventories/staging/../production/group_vars/edge/"
-            "pull_trigger.yml",
-            "{{ playbook_dir }}/../" + tail + " ",
-        ):
-            with self.subTest(other=other):
-                changed = playbook.replace(entry, other)
+        for entry in tool.PLAYBOOK_VARS_ENTRIES:
+            with self.subTest(entry=entry):
+                changed = playbook.replace(f"    - '{entry}'\n", "")
                 self.assertNotEqual(playbook, changed)
                 with self.assertRaisesRegex(tool.BootstrapError, "does not load"):
                     tool.check_playbook(changed)
 
-    def test_the_entry_the_playbook_is_checked_for_is_the_one_it_uses_today(self) -> None:
+    def test_a_playbook_that_loads_another_file_of_the_same_name_is_refused(self) -> None:
+        # The tail of the path matches, so a check on the tail alone passes it; the playbook
+        # would then load a file the record's configuration was not read from.
+        playbook = read(tool.PLAYBOOK_PATH)
+        for entry, tail in zip(
+            tool.PLAYBOOK_VARS_ENTRIES,
+            ("includes/pull_trigger_common.yml", "trust/edge1.yml"),
+            strict=True,
+        ):
+            self.assertIn(entry, playbook)
+            for other in (
+                "{{ playbook_dir }}/../other/" + tail,
+                "/srv/x/" + tail,
+                "{{ playbook_dir }}/staging/../" + tail,
+                entry + " ",
+            ):
+                with self.subTest(other=other):
+                    changed = playbook.replace(entry, other)
+                    self.assertNotEqual(playbook, changed)
+                    with self.assertRaisesRegex(tool.BootstrapError, "does not load"):
+                        tool.check_playbook(changed)
+
+    def test_a_playbook_that_sets_another_host_name_is_refused(self) -> None:
+        playbook = read(tool.PLAYBOOK_PATH)
+        self.assertIn("enrolled_host: edge1", playbook)
+        for changed in (
+            playbook.replace("enrolled_host: edge1", "enrolled_host: db1"),
+            playbook.replace("    enrolled_host: edge1\n", ""),
+        ):
+            self.assertNotEqual(playbook, changed)
+            with self.assertRaisesRegex(tool.BootstrapError, "does not load"):
+                tool.check_playbook(changed)
+
+    def test_the_entries_the_playbook_is_checked_for_are_the_ones_it_uses_today(self) -> None:
         self.assertEqual(
-            "{{ playbook_dir }}/../inventories/production/group_vars/edge/pull_trigger.yml",
-            tool.PLAYBOOK_VARS_ENTRY,
+            (
+                "{{ playbook_dir }}/includes/pull_trigger_common.yml",
+                "{{ playbook_dir }}/../trust/edge1.yml",
+            ),
+            tool.PLAYBOOK_VARS_ENTRIES,
         )
 
 
@@ -620,7 +699,7 @@ class ParityTest(unittest.TestCase):
     def ansible_playbook(self) -> Path:
         return Path(sys.executable).parent / "ansible-playbook"
 
-    def role_writes(self, group_text: str) -> str:
+    def role_writes(self, trust_text: str) -> str:
         """Run the role's configuration task under ansible-playbook and return the file it wrote."""
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
@@ -628,7 +707,8 @@ class ParityTest(unittest.TestCase):
             for name, text in (
                 ("defaults.yml", ConfigTexts.defaults),
                 ("vars.yml", ConfigTexts.variables),
-                ("group.yml", group_text),
+                ("common.yml", ConfigTexts.common),
+                ("trust.yml", trust_text),
             ):
                 (work / name).write_text(text, encoding="utf-8")
                 variable_files.append(str(work / name))
@@ -645,6 +725,7 @@ class ParityTest(unittest.TestCase):
                     "name": "Run the role's configuration task",
                     "hosts": "localhost",
                     "gather_facts": False,
+                    "vars": {"enrolled_host": tool.ENROLLED_HOST},
                     "vars_files": variable_files,
                     "tasks": [task],
                 }
@@ -670,16 +751,16 @@ class ParityTest(unittest.TestCase):
             return written.read_text(encoding="utf-8")
 
     def test_the_production_values_are_written_byte_for_byte(self) -> None:
-        self.assertEqual(self.role_writes(ConfigTexts.group), render())
+        self.assertEqual(self.role_writes(ConfigTexts.trust), render())
 
     def test_a_non_ascii_character_and_a_multi_line_key_are_written_byte_for_byte(self) -> None:
-        group = ConfigTexts.group.replace(
+        trust = ConfigTexts.trust.replace(
             "mQINBGWmxXYBEACyN+4viFQM6QQoKr0A2W0rGdMobTJwOZso2QPpewbyBsuL3rNW",
             "mQINBGWmxXYBEACyN café — “quoted” 漢字 \U0001f512",
         )
-        self.assertNotEqual(group, ConfigTexts.group)
-        written = self.role_writes(group)
-        self.assertEqual(written, render(group=group))
+        self.assertNotEqual(trust, ConfigTexts.trust)
+        written = self.role_writes(trust)
+        self.assertEqual(written, render(trust=trust))
         self.assertIn("\\u00e9", written)
         self.assertIn("\\ud83d\\udd12", written)
 

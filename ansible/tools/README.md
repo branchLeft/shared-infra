@@ -25,8 +25,14 @@ never accepted. `origin` is taken to be `branchLeft/shared-infra`: the tool runs
 it.
 
 The configuration is not written a second time here. Its keys are read from the role's own task,
-its values from the role's own variable files, and it is serialised the way Ansible's
-`to_nice_json` does; `test_pull_bootstrap` runs the role's own task and compares the bytes.
+its values from the role's own variable files, the shared include
+`playbooks/includes/pull_trigger_common.yml` and edge1's trust file `trust/edge1.yml` (the
+signer allowlist), and it is serialised the way Ansible's `to_nice_json` does;
+`test_pull_bootstrap` runs the role's own task and compares the bytes. The shared include
+derives the playbook from `enrolled_host`: the tool fills only plain `{{ name }}` references,
+from the variable files and from `enrolled_host` set to the stem of the one playbook, and
+refuses any other template. It refuses a playbook that does not load exactly those two files and
+set `enrolled_host` to that stem, so the files it reads are the files the host will run.
 
 Usage:
 

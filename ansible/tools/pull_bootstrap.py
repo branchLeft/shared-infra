@@ -102,15 +102,28 @@ REQUIRED_CONFIG_KEYS: Final = fixed_names(_FIXED, "requiredConfigKeys")
 DEFAULTS_PATH: Final = "ansible/roles/pull_trigger/defaults/main.yml"
 VARS_PATH: Final = "ansible/roles/pull_trigger/vars/main.yml"
 TASKS_PATH: Final = "ansible/roles/pull_trigger/tasks/main.yml"
-GROUP_VARS_PATH: Final = "ansible/inventories/production/group_vars/edge/pull_trigger.yml"
-INPUTS: Final = (DEFAULTS_PATH, VARS_PATH, TASKS_PATH, GROUP_VARS_PATH, PLAYBOOK_PATH)
-# How the playbook, which lives in ansible/playbooks/, names the group variables above.
-PLAYBOOK_VARS_ENTRY: Final = "{{ playbook_dir }}/../" + GROUP_VARS_PATH.removeprefix("ansible/")
+# The host's name is the stem of its one playbook. The playbook sets enrolled_host to it, and
+# the shared include derives the host's playbook path from it.
+ENROLLED_HOST: Final = Path(PLAYBOOK_PATH).stem
+# The values every host under the pull shares, and the host's own signer allowlist.
+COMMON_PATH: Final = "ansible/playbooks/includes/pull_trigger_common.yml"
+TRUST_PATH: Final = f"ansible/trust/{ENROLLED_HOST}.yml"
+INPUTS: Final = (DEFAULTS_PATH, VARS_PATH, TASKS_PATH, COMMON_PATH, TRUST_PATH, PLAYBOOK_PATH)
+# How the playbook, which lives in ansible/playbooks/, names the two files above.
+PLAYBOOK_VARS_ENTRIES: Final = (
+    "{{ playbook_dir }}/" + COMMON_PATH.removeprefix("ansible/playbooks/"),
+    "{{ playbook_dir }}/../" + TRUST_PATH.removeprefix("ansible/"),
+)
 
 CONFIG_TASK_NAME: Final = "Write the configuration"
 CONFIG_CONTENT: Final = "{{ pull_trigger_config | ansible.builtin.to_nice_json }}\n"
 CONFIG_VARIABLE: Final = "pull_trigger_config"
 VALUE_EXPRESSION: Final = re.compile(r"\{\{ (?P<name>pull_trigger_[a-z_]+)(?P<int> \| int)? \}\}")
+REFERENCE: Final = re.compile(r"\{\{ (?P<name>[a-z_]+) \}\}")
+# Any text Ansible would template: an expression, a statement or a comment.
+TEMPLATE_MARK: Final = re.compile(r"\{[{%#]")
+# How many references may lead to one another (a list names the playbook, which names the host).
+FILL_DEPTH: Final = 3
 COMMIT: Final = re.compile(r"[0-9a-f]{40}")
 SHA256: Final = re.compile(r"[0-9a-f]{64}")
 
@@ -210,7 +223,9 @@ def config_task(tasks: object) -> dict[str, object]:
     return mapping(found[0], CONFIG_TASK_NAME)
 
 
-def render_config(tasks_text: str, defaults_text: str, vars_text: str, group_vars_text: str) -> str:
+def render_config(
+    tasks_text: str, defaults_text: str, vars_text: str, common_text: str, trust_text: str
+) -> str:
     """Return the text of the pull program's configuration file.
 
     Raises:
@@ -227,13 +242,62 @@ def render_config(tasks_text: str, defaults_text: str, vars_text: str, group_var
     variables = merge_variables(
         (DEFAULTS_PATH, mapping(parse_yaml(defaults_text, DEFAULTS_PATH), DEFAULTS_PATH)),
         (VARS_PATH, mapping(parse_yaml(vars_text, VARS_PATH), VARS_PATH)),
-        (GROUP_VARS_PATH, mapping(parse_yaml(group_vars_text, GROUP_VARS_PATH), GROUP_VARS_PATH)),
+        (COMMON_PATH, mapping(parse_yaml(common_text, COMMON_PATH), COMMON_PATH)),
+        (TRUST_PATH, mapping(parse_yaml(trust_text, TRUST_PATH), TRUST_PATH)),
+        (PLAYBOOK_PATH, {"enrolled_host": ENROLLED_HOST}),
     )
     config: dict[str, object] = {}
     for key, expression in declared.items():
         config[key] = resolve(key, expression, variables)
     check_config(config)
     return json.dumps(config, indent=4, sort_keys=True, separators=(",", ": ")) + "\n"
+
+
+def fill(key: str, value: object, variables: Mapping[str, object]) -> object:
+    """Return a variable's value with the plain ``{{ name }}`` references inside it filled.
+
+    A shared include derives the host's playbook from ``enrolled_host``, and lists it by naming
+    that variable, so a value can name another that names a third. Anything else that Ansible
+    would template (a filter, a statement, a comment, a name no file sets) is refused, not
+    passed on as text.
+
+    Raises:
+        BootstrapError: A reference names no variable, or a template remains after filling.
+    """
+    if isinstance(value, list):
+        return [fill(key, item, variables) for item in value]
+    if isinstance(value, dict):
+        return {str(name): fill(key, item, variables) for name, item in value.items()}
+    if not isinstance(value, str):
+        return value
+    text = value
+    for _ in range(FILL_DEPTH):
+        if TEMPLATE_MARK.search(text) is None:
+            return text
+        filled = REFERENCE.sub(lambda found: named(key, found.group("name"), variables), text)
+        if filled == text:
+            break
+        text = filled
+    if TEMPLATE_MARK.search(text) is not None:
+        message = f"the configuration key {key} holds a template that is not a plain variable"
+        raise BootstrapError(message)
+    return text
+
+
+def named(key: str, name: str, variables: Mapping[str, object]) -> str:
+    """Return the text of the variable a reference names.
+
+    Raises:
+        BootstrapError: No variable file sets the name, or its value is not text.
+    """
+    if name not in variables:
+        message = f"the configuration key {key} names {name}, which no variable file sets"
+        raise BootstrapError(message)
+    value = variables[name]
+    if not isinstance(value, str):
+        message = f"the configuration key {key} names {name}, which is not text"
+        raise BootstrapError(message)
+    return value
 
 
 def resolve(key: str, expression: object, variables: Mapping[str, object]) -> object:
@@ -250,7 +314,7 @@ def resolve(key: str, expression: object, variables: Mapping[str, object]) -> ob
     if name not in variables:
         message = f"the configuration key {key} names {name}, which no variable file sets"
         raise BootstrapError(message)
-    value = variables[name]
+    value = fill(key, variables[name], variables)
     if matched.group("int") is None:
         return value
     if isinstance(value, bool) or not isinstance(value, (int, str)):
@@ -291,20 +355,28 @@ def check_config(config: Mapping[str, object]) -> None:
 
 
 def check_playbook(playbook_text: str) -> None:
-    """Refuse an edge1 playbook that does not load the group variables this tool reads.
+    """Refuse an edge1 playbook that does not load the variable files this tool reads.
 
-    The playbook must name that file by exactly the entry it uses today, not by any path that
-    ends the same way, so the file it loads is the one the record's configuration came from.
+    The playbook must name each file by exactly the entry it uses today, not by any path that
+    ends the same way, so the files it loads are the ones the record's configuration came from.
+    The same play must set ``enrolled_host`` to the host's name, the value this tool fills in.
 
     Raises:
-        BootstrapError: The playbook has no play that loads them.
+        BootstrapError: The playbook has no play that loads them as that host.
     """
     plays = sequence(parse_yaml(playbook_text, PLAYBOOK_PATH), PLAYBOOK_PATH)
     for play in plays:
-        files = mapping(play, "a play").get("vars_files")
-        if isinstance(files, list) and PLAYBOOK_VARS_ENTRY in files:
+        body = mapping(play, "a play")
+        files = body.get("vars_files")
+        declared = body.get("vars")
+        if (
+            isinstance(files, list)
+            and all(entry in files for entry in PLAYBOOK_VARS_ENTRIES)
+            and isinstance(declared, dict)
+            and declared.get("enrolled_host") == ENROLLED_HOST
+        ):
             return
-    message = f"{PLAYBOOK_PATH} does not load {GROUP_VARS_PATH}"
+    message = f"{PLAYBOOK_PATH} does not load {COMMON_PATH} and {TRUST_PATH} as {ENROLLED_HOST}"
     raise BootstrapError(message)
 
 
@@ -416,7 +488,11 @@ def repository_config(repo: Path) -> str:
     inputs = read_inputs(repo)
     check_playbook(inputs[PLAYBOOK_PATH])
     return render_config(
-        inputs[TASKS_PATH], inputs[DEFAULTS_PATH], inputs[VARS_PATH], inputs[GROUP_VARS_PATH]
+        inputs[TASKS_PATH],
+        inputs[DEFAULTS_PATH],
+        inputs[VARS_PATH],
+        inputs[COMMON_PATH],
+        inputs[TRUST_PATH],
     )
 
 
