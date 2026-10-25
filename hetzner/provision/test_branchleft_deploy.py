@@ -158,10 +158,9 @@ class ReadCurrentImageTests(unittest.TestCase):
 
 class PinnedImageIsUpTests(unittest.TestCase):
     """The discriminator that decides whether a restart failure implicates
-    the image this call just pinned, as opposed to some other service in the
-    same stack. This is the fact the MySQL data-dictionary-downgrade case
-    turns on: mysqld starting cleanly on the new image while an unrelated
-    exporter fails its healthcheck must read as "the image is fine.\""""
+
+    See test_branchleft_deploy.md, "PinnedImageIsUpTests".
+    """
 
     def test_a_healthy_container_reads_as_up(self):
         run = FakeRun([(0, "Up 5 seconds (healthy)")])
