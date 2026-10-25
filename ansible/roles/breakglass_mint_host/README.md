@@ -131,38 +131,27 @@ for the tool and the image stay as the fallback.
   tasks file or a library cannot add a route to the key that those checks do not
   read.
 - **Every stat asks for metadata only, under any name.** The test reads the parsed
-  tasks of this role and of every play in `playbooks/ops1.yml`, in all four task
-  lists of each play (`pre_tasks`, `tasks`, `post_tasks` and `handlers`). It
+  tasks of this role. It
   requires `get_checksum`, `get_mime` and `get_attributes` to be false on every
-  `stat` whatever its name or path. So no task in this role or in that playbook
+  `stat` whatever its name or path. So no task in this role
   reads a file's content or checksum through `stat`.
-- **The playbook guard, one home, shared with the grant role.** The rules that
-  hold `playbooks/ops1.yml` to its shape live in one file,
-  `ansible/harness/tasks/playbook_guard.yml`. This test and the grant role's test both
+- **The role guard, one home, shared with the grant role.** The rules that
+  hold this role's tasks live in one file,
+  `ansible/harness/tasks/role_guard.yml`. This test and the grant role's test both
   include it, with their own inputs, so the rule cannot drift between them. The
-  guard requires every entry of the file to be a play (an `import_playbook` entry
-  has no `hosts` and fails); the keys of every play to be on an allow-list
-  (`name`, `hosts`, `gather_facts`, `pre_tasks`, `roles`, `tasks`, `post_tasks`,
-  `handlers`); the `roles` list to be exactly this role; every task of all four lists
-  of the playbook, and of this role, to call a module on the allow-list; and the text
-  of the playbook and of this role's tasks and variable files to hold no `lookup`,
-  `query`, `q` or `pipe`, since those run on the controller. A key outside the list
-  is refused rather than judged: `vars_files` makes the controller (the host itself
-  under `ansible-pull`) read a file with no lookup word for the text scan to see.
-- **The roles entry is held whole.** Each entry of the `roles` list may carry only
-  `role`. An entry's `vars`, `tasks_from` or `vars_from` are role parameters, and
-  they outrank the role's own `vars/main.yml`, so they would change the image, the
-  files, the base URL or the key path that ops1 runs while this test still read the
-  role's own values. The other things that outrank a role's `vars/main.yml` are a
-  `set_fact` and an `include_vars` in a task, and extra vars on the pull command
-  line. A task of the first two kinds calls a module that the allow-list does not
-  name, so the guard refuses it. Extra vars on the pull command are not read by
-  this test and sit outside it; ws#2483 is where that pull path is examined. Play
-  `vars` and `vars_files` are refused as keys even though play-level vars rank below
-  a role's `vars/main.yml` and cannot change its constants: the rule is an allow-list
-  of keys, and it stays one, so that no later edit reads a play key as harmless.
-  A second role in the list fails the test, so its author extends the test and does
-  not slip past it unread. Any other role has its own test. What the test cannot prove is that
+  guard requires every task of this role to call a module on the allow-list, every
+  command to be one of the exact Docker shapes, and the text
+  of this role's tasks and variable files to hold no `lookup`,
+  `query`, `q` or `pipe`, since those run on the controller. A `set_fact` and an
+  `include_vars` in a task, which would outrank the role's `vars/main.yml`, call
+  modules that the allow-list does not name, so the guard refuses them. Extra vars
+  on the pull command are not read by this test and sit outside it; ws#2483 is where
+  that pull path is examined.
+- **The playbook is not tested here.** The shape of the playbook that applies the
+  role (its play keys, its `roles` entry and its tasks, including an entry's `vars`,
+  `tasks_from` or `vars_from`, which outrank the role's `vars/main.yml`) is held by
+  the per-host role list check, which holds each playbook to the roles it lists. Any
+  other role has its own test. What the test cannot prove is that
   a deliberate edit does not read the key: every role is root code, so a check on its
   text cannot stop one. The control for that is review plus the deployment approval
   of the gated workflow that applies the role to the host; ws#2483 is where the
@@ -219,16 +208,14 @@ checks:
 - the role directory holds no handlers file and no second tasks file;
 - the placeholder key is unchanged and the log scan above.
 
-The playbook `ansible/playbooks/ops1.yml` is a host-guarded playbook that lists
-this role. The test runs it against a host name that is not `ops1` and requires
-it to refuse, and lists its tasks for `ops1`.
+The test reads the role and runs it. It does not read or run any playbook.
 
 ## How it is delivered
 
 A role reaches a host only through the gated pull (ANS-17), never by running
-`ansible-playbook` by hand. `playbooks/ops1.yml` is the playbook for the control
-host. It is applied once the host is enrolled in the gated pull; until then a
-merge of this role changes no host.
+`ansible-playbook` by hand. No playbook applies this role yet: it reaches the
+control host through the per-host role list, in a later wiring change. Until
+then a merge of this role changes no host.
 
 ## How to change it safely
 

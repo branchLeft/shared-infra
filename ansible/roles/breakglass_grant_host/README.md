@@ -57,15 +57,15 @@ sha256 of each file, the download base, the paths and the Docker socket are
 constants in `vars/main.yml` too. No variable is a secret.
 
 Neither an inventory value nor a playbook value may change those constants. The
-check that enforces it is the playbook guard, `ansible/harness/tasks/playbook_guard.yml`,
-which the role's test includes for `playbooks/app1.yml`. It requires the play keys
-to be on an allow-list, the `roles` entry to be exactly this role with no other key,
-and every task of the playbook to call a module on the allow-list (so a `set_fact`
-or an `include_vars` that sets a constant is refused), and it scans the playbook's
-text for `lookup`, `query`, `q` and `pipe`. Play-level `vars` and `vars_files` are
-refused as keys, and a task of the playbook that sets its own `vars` is refused too.
-Every command of the role and of the playbook must be one of the three Docker
-commands in their exact shapes, word for word. Extra vars on the pull command line are not read by this check
+role's own side of that is the role guard, `ansible/harness/tasks/role_guard.yml`,
+which the role's test includes. It requires every task and handler of the role to
+call a module on the allow-list (so a `set_fact` or an `include_vars` that sets a
+constant is refused), and it scans the text of every file of the role that Ansible
+evaluates for `lookup`, `query`, `q` and `pipe`. Every command of the role must be
+one of the three Docker commands in their exact shapes, word for word. The shape of
+the playbook that applies the role (its play keys, its `roles` entry, its tasks) is
+not tested here: the per-host role list check holds each playbook to the roles it
+lists. Extra vars on the pull command line are not read by this check
 and are outside it: they are held by the gated pull's approval (ws#2483).
 
 ## Requirements
@@ -174,15 +174,13 @@ refusal state first and then the role once. `verify.yml` checks:
 - the wrapper's recorded `docker` command and the unit's, as in "Named limits";
 - the timer is enabled and active, and still is after the wrapper and unit runs.
 
-The playbook `ansible/playbooks/app1.yml` is a host-guarded playbook that lists
-this role. The test runs it against a host name that is not `app1` and requires
-it to refuse, and lists its tasks for `app1`.
+The test reads the role and runs it. It does not read or run any playbook.
 
 ## How it is delivered
 
 A role reaches a host only through the gated pull (ANS-17), never by running
-`ansible-playbook` by hand. `playbooks/app1.yml` is the playbook for the
-application host. It is applied once the host is enrolled in the gated pull; until
+`ansible-playbook` by hand. No playbook applies this role yet: it reaches the
+application host through the per-host role list, in a later wiring change. Until
 then a merge of this role changes no host.
 
 ## How to change it safely

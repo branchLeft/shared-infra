@@ -22,7 +22,7 @@
       {{ verify_role_vars.breakglass_grant_host_source_base_url
       | regex_replace('[{][{] *breakglass_grant_host_source_commit *[}][}]', verify_commit) }}
     verify_url_prefix: https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ verify_commit }}/adapters/sso/scripts
-    # The only modules the role's tasks and app1.yml's tasks may call. A module not on this list,
+    # The only modules the role's tasks and handlers may call. A module not on this list,
     # whatever its spelling or its siblings, fails the structure check below.
     verify_allowed_modules:
       - ansible.builtin.assert
@@ -33,7 +33,7 @@
       - ansible.builtin.stat
       - ansible.builtin.systemd_service
     # The raw text of every file of the role that Ansible evaluates, held to the
-    # controller-side scan with app1.yml's text by the playbook guard below.
+    # controller-side scan by the role guard below.
     verify_role_texts:
       - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') }}"
       - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../handlers/main.yml') }}"
@@ -53,7 +53,7 @@
       - vars
     # The exact Docker commands the role may run, one regular expression per word,
     # with the image held by its template's name and not its value. The shared
-    # guard holds every command of the role and of app1.yml to these shapes.
+    # guard holds every command of the role to these shapes.
     verify_docker_shapes:
       - ['^/usr/bin/docker$', '^--version$']
       - ['^/usr/bin/docker$', '^pull$', '^-q$', '^[{][{] breakglass_grant_host_node_image [}][}]$']
@@ -190,27 +190,15 @@
         label: '{{ item.path }}'
 
     # ----- the structure of the tasks: an allow-list, not a deny-list -----
-    # ----- the playbook that applies this role: one guard, shared with the mint role -----
-    # app1.yml is held to the same guard as ops1.yml (ansible/harness/tasks/playbook_guard.yml,
-    # the one home of the rule, ws#2367): its play keys, its roles entry, the modules
-    # of its tasks and of the role's, and the controller-side reads in its text. A
-    # pre_task that sets an image or includes vars is a module off the list, so it is
-    # refused here, and so is an entry's vars, tasks_from or vars_from.
-    - name: Hold app1.yml and the role's own tasks to the playbook guard
-      ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../../harness/tasks/playbook_guard.yml'
+    # ----- the role's own tasks: one guard, shared with the mint role -----
+    # The role's tasks and handlers are held to the module allow-list and the exact
+    # Docker shapes, and the text of every file of the role to the controller-side
+    # scan, by ansible/harness/tasks/role_guard.yml, the one home of the rule
+    # (ws#2367). The playbook that applies the role is not read here: its shape is
+    # held by the per-host role list check, not by this test of the role.
+    - name: Hold the role's own tasks to the role guard
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../../harness/tasks/role_guard.yml'
       vars:
-        guard_playbook: '{{ playbook_dir }}/../../../../playbooks/app1.yml'
-        guard_expected_roles:
-          - role: ../roles/breakglass_grant_host
-        guard_play_keys:
-          - name
-          - hosts
-          - gather_facts
-          - pre_tasks
-          - roles
-          - tasks
-          - post_tasks
-          - handlers
         guard_allowed_modules: '{{ verify_allowed_modules }}'
         guard_tasks: '{{ verify_tasks + (verify_handlers | default([])) }}'
         guard_scan_texts: '{{ verify_role_texts }}'
@@ -267,7 +255,7 @@
           - item['ansible.builtin.file'].state == 'directory'
         fail_msg: 'A file task does something other than make a directory: {{ item.name }}.'
         quiet: true
-      loop: "{{ (verify_tasks + (verify_handlers | default([])) + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.file') | list }}"
+      loop: "{{ (verify_tasks + (verify_handlers | default([]))) | select('contains', 'ansible.builtin.file') | list }}"
       loop_control:
         label: '{{ item.name }}'
 
@@ -277,7 +265,7 @@
           - item['ansible.builtin.get_url'].url is match('^[{][{] breakglass_grant_host_source_base_url [}][}]/')
         fail_msg: 'A download does not start from the pinned base URL: {{ item.name }}.'
         quiet: true
-      loop: "{{ (verify_tasks + (verify_handlers | default([])) + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.get_url') | list }}"
+      loop: "{{ (verify_tasks + (verify_handlers | default([]))) | select('contains', 'ansible.builtin.get_url') | list }}"
       loop_control:
         label: '{{ item.name }}'
 
@@ -529,63 +517,4 @@
       ansible.builtin.assert:
         that:
           - breakglass_grant_host_v_timer_again.stdout == 'active'
-        quiet: true
-
-# ----- the playbook that applies this role: its host guard and its role list -----
-# Runs on the controller. The playbook is applied in check mode to a host of the
-# wrong name, over a local connection, so nothing is changed anywhere; the guard
-# must stop it before the role's first task.
-- name: Verify the playbook
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  vars:
-    verify_playbook: '{{ playbook_dir }}/../../../../playbooks/app1.yml'
-    verify_ansible_playbook: '{{ ansible_playbook_python | dirname }}/ansible-playbook'
-  tasks:
-    - name: Apply the playbook, in check mode, to a host that is not its own
-      ansible.builtin.command:
-        argv:
-          [
-            '{{ verify_ansible_playbook }}',
-            '{{ verify_playbook }}',
-            -i,
-            'wronghost,',
-            -c,
-            local,
-            --check,
-          ]
-      register: breakglass_grant_host_v_wrong_host
-      changed_when: false
-      failed_when: false
-      environment:
-        ANSIBLE_LOG_PATH: ''
-        ANSIBLE_VERBOSITY: '0'
-
-    - name: Assert the guard stopped it before any task of the role
-      ansible.builtin.assert:
-        that:
-          - breakglass_grant_host_v_wrong_host.rc != 0
-          - "'This playbook is app1' in breakglass_grant_host_v_wrong_host.stdout ~ breakglass_grant_host_v_wrong_host.stderr"
-          - "'Look for Docker' not in breakglass_grant_host_v_wrong_host.stdout"
-        fail_msg: >-
-          The playbook did not refuse a host that is not app1. Output: {{ breakglass_grant_host_v_wrong_host.stdout }}
-        quiet: true
-
-    - name: List the tasks the playbook runs for its own host
-      ansible.builtin.command:
-        argv: ['{{ verify_ansible_playbook }}', '{{ verify_playbook }}', -i, 'app1,', --list-tasks]
-      register: breakglass_grant_host_v_own_host
-      changed_when: false
-      environment:
-        ANSIBLE_LOG_PATH: ''
-        ANSIBLE_VERBOSITY: '0'
-
-    - name: Assert it applies this role and not the control host's
-      ansible.builtin.assert:
-        that:
-          - "'Enable and start the timer that closes grants' in breakglass_grant_host_v_own_host.stdout"
-          - "'Download the minter' not in breakglass_grant_host_v_own_host.stdout"
-          - "'signing key' not in breakglass_grant_host_v_own_host.stdout"
-        fail_msg: The playbook for the app host does not apply the grant role alone.
         quiet: true

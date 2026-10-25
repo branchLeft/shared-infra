@@ -12,7 +12,7 @@
     verify_grant_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_grant_host/vars/main.yml') | from_yaml }}"
     verify_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') | from_yaml }}"
     # The raw text of every file of the role that Ansible evaluates, held to the
-    # controller-side scan with ops1.yml's text by the playbook guard below.
+    # controller-side scan by the role guard below.
     verify_role_texts:
       - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') }}"
       - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') }}"
@@ -39,7 +39,7 @@
       {{ verify_role_vars.breakglass_mint_host_source_base_url
       | regex_replace('[{][{] *breakglass_mint_host_source_commit *[}][}]', verify_commit) }}
     verify_url_prefix: https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ verify_commit }}/adapters/sso/scripts
-    # The only modules the role's tasks and ops1.yml's tasks may call. A module not
+    # The only modules the role's tasks may call. A module not
     # on this list, whatever its spelling or its siblings (slurp, fetch, copy with
     # remote_src, lineinfile, assemble, a command that cats), fails the guard below.
     verify_allowed_modules:
@@ -50,7 +50,7 @@
       - ansible.builtin.stat
     # The exact Docker commands the role may run, one regular expression per word,
     # with the image held by its template's name and not its value. The shared
-    # guard holds every command of the role and of ops1.yml to these shapes.
+    # guard holds every command of the role to these shapes.
     verify_docker_shapes:
       - ['^/usr/bin/docker$', '^--version$']
       - ['^/usr/bin/docker$', '^pull$', '^-q$', '^[{][{] breakglass_mint_host_node_image [}][}]$']
@@ -175,27 +175,15 @@
       loop_control:
         label: '{{ item.path }}'
 
-    # ----- the playbook that applies this role: one guard, shared with the grant role -----
-    # The guard reads every play of ops1.yml and every task of its four lists: its
-    # play keys, its roles entry, the modules its tasks and the role's call, and the
-    # controller-side reads in the text of the playbook and of the role's files. It is
-    # one file, ansible/harness/tasks/playbook_guard.yml, included by both role tests so
-    # the rule cannot drift (ws#2367).
-    - name: Hold ops1.yml and the role's own tasks to the playbook guard
-      ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../../harness/tasks/playbook_guard.yml'
+    # ----- the role's own tasks: one guard, shared with the grant role -----
+    # The role's tasks are held to the module allow-list and the exact Docker shapes,
+    # and the text of every file of the role to the controller-side scan, by
+    # ansible/harness/tasks/role_guard.yml, included by both role tests so the rule
+    # cannot drift. The playbook that applies the role is not read here: its shape is
+    # held by the per-host role list check, not by this test of the role.
+    - name: Hold the role's own tasks to the role guard
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../../harness/tasks/role_guard.yml'
       vars:
-        guard_playbook: '{{ playbook_dir }}/../../../../playbooks/ops1.yml'
-        guard_expected_roles:
-          - role: ../roles/breakglass_mint_host
-        guard_play_keys:
-          - name
-          - hosts
-          - gather_facts
-          - pre_tasks
-          - roles
-          - tasks
-          - post_tasks
-          - handlers
         guard_allowed_modules: '{{ verify_allowed_modules }}'
         guard_tasks: '{{ verify_tasks }}'
         guard_scan_texts: '{{ verify_role_texts }}'
@@ -237,7 +225,7 @@
           - item['ansible.builtin.file'].state == 'directory'
         fail_msg: 'A file task does something other than make a directory: {{ item.name }}.'
         quiet: true
-      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.file') | list }}"
+      loop: "{{ verify_tasks | select('contains', 'ansible.builtin.file') | list }}"
       loop_control:
         label: '{{ item.name }}'
 
@@ -247,7 +235,7 @@
           - item['ansible.builtin.get_url'].url is match('^[{][{] breakglass_mint_host_source_base_url [}][}]/')
         fail_msg: 'A download does not start from the pinned base URL: {{ item.name }}.'
         quiet: true
-      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.get_url') | list }}"
+      loop: "{{ verify_tasks | select('contains', 'ansible.builtin.get_url') | list }}"
       loop_control:
         label: '{{ item.name }}'
 
@@ -259,7 +247,7 @@
       ansible.builtin.set_fact:
         breakglass_mint_host_v_key_tasks: >-
           {% set out = [] %}
-          {% for t in (verify_tasks + playbook_guard_v_tasks) if 'breakglass_mint_host_key_path' in (t | to_json) %}{% set _ = out.append(t.name) %}{% endfor %}
+          {% for t in verify_tasks if 'breakglass_mint_host_key_path' in (t | to_json) %}{% set _ = out.append(t.name) %}{% endfor %}
           {{ out | to_json }}
 
     - name: Assert only the stat and its assertion name the key path, and nothing spells the real path
@@ -269,7 +257,7 @@
             breakglass_mint_host_v_key_tasks | from_json ==
             ['Look at the signing key and its directory without reading either',
             'Refuse a host whose signing key is missing or not private to root']
-          - "'/etc/branchleft' not in ((verify_tasks + playbook_guard_v_tasks) | to_json)"
+          - "'/etc/branchleft' not in (verify_tasks | to_json)"
         fail_msg: 'The key path is named by tasks other than the one stat and its assertion: {{ breakglass_mint_host_v_key_tasks }}.'
         quiet: true
 
@@ -286,23 +274,22 @@
       loop_control:
         label: '{{ item.name }}'
 
-    # Every stat of the role and of ops1.yml (every play; pre_tasks, tasks,
-    # post_tasks and handlers) asks for metadata only, under whatever name or path
+    # Every stat of the role asks for metadata only, under whatever name or path
     # it has. The check reads the parsed tasks, not the names, so a stat with the
     # default arguments (a checksum, a MIME guess) fails here even when it is named
     # nothing like the key's. A deliberate edit that reads the key is stopped by
     # review and by the deployment approval of the gated workflow that applies the
     # role (ws#2483 is where that approval's trust is examined); this check catches
     # an accident.
-    - name: Assert every stat of the role and of ops1 asks for metadata only, under any name
+    - name: Assert every stat of the role asks for metadata only, under any name
       ansible.builtin.assert:
         that:
           - item['ansible.builtin.stat'].get_checksum | default(true) is false
           - item['ansible.builtin.stat'].get_mime | default(true) is false
           - item['ansible.builtin.stat'].get_attributes | default(true) is false
-        fail_msg: 'A stat of the role or of ops1 may read a checksum, a MIME type or attributes of its file: {{ item.name }}.'
+        fail_msg: 'A stat of the role may read a checksum, a MIME type or attributes of its file: {{ item.name }}.'
         quiet: true
-      loop: "{{ (verify_tasks + playbook_guard_v_tasks) | select('contains', 'ansible.builtin.stat') | list }}"
+      loop: "{{ verify_tasks | select('contains', 'ansible.builtin.stat') | list }}"
       loop_control:
         label: '{{ item.name }}'
 
@@ -481,62 +468,3 @@
         fail_msg: The log holds the placeholder key, or its SHA-1, MD5 or base64. The role read the key.
         quiet: true
       no_log: true
-
-# ----- the playbook that applies this role: its host guard and its role list -----
-# Runs on the controller. The playbook is applied in check mode to a host of the
-# wrong name, over a local connection, so nothing is changed anywhere; the guard
-# must stop it before the role's first task.
-- name: Verify the playbook
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  vars:
-    verify_playbook: '{{ playbook_dir }}/../../../../playbooks/ops1.yml'
-    verify_ansible_playbook: '{{ ansible_playbook_python | dirname }}/ansible-playbook'
-  tasks:
-    - name: Apply the playbook, in check mode, to a host that is not its own
-      ansible.builtin.command:
-        argv:
-          [
-            '{{ verify_ansible_playbook }}',
-            '{{ verify_playbook }}',
-            -i,
-            'wronghost,',
-            -c,
-            local,
-            --check,
-          ]
-      register: breakglass_mint_host_v_wrong_host
-      changed_when: false
-      failed_when: false
-      environment:
-        ANSIBLE_LOG_PATH: ''
-        ANSIBLE_VERBOSITY: '0'
-
-    - name: Assert the guard stopped it before any task of the role
-      ansible.builtin.assert:
-        that:
-          - breakglass_mint_host_v_wrong_host.rc != 0
-          - "'This playbook is ops1' in breakglass_mint_host_v_wrong_host.stdout ~ breakglass_mint_host_v_wrong_host.stderr"
-          - "'Look for Docker' not in breakglass_mint_host_v_wrong_host.stdout"
-        fail_msg: >-
-          The playbook did not refuse a host that is not ops1. Output: {{ breakglass_mint_host_v_wrong_host.stdout }}
-        quiet: true
-
-    - name: List the tasks the playbook runs for its own host
-      ansible.builtin.command:
-        argv: ['{{ verify_ansible_playbook }}', '{{ verify_playbook }}', -i, 'ops1,', --list-tasks]
-      register: breakglass_mint_host_v_own_host
-      changed_when: false
-      environment:
-        ANSIBLE_LOG_PATH: ''
-        ANSIBLE_VERBOSITY: '0'
-
-    - name: Assert it applies this role and not the app host's
-      ansible.builtin.assert:
-        that:
-          - "'Look at the signing key and its directory' in breakglass_mint_host_v_own_host.stdout"
-          - "'Enable and start the timer' not in breakglass_mint_host_v_own_host.stdout"
-          - "'Docker socket' not in breakglass_mint_host_v_own_host.stdout"
-        fail_msg: The playbook for the control host does not apply the mint role alone.
-        quiet: true
