@@ -1,0 +1,13 @@
+---
+# Runs the role once. run_class is the host class and run_variant the policy
+# variant (the role's own default, not applicable, when a case passes none);
+# run_check true runs the role in check mode. A case that needs the role told
+# something else has its own file beside this one.
+- name: Apply the role
+  ansible.builtin.include_role:
+    name: branchleft.deploy_tooling
+    apply:
+      check_mode: '{{ run_check | default(false) }}'
+  vars:
+    deploy_tooling_host_class: '{{ run_class }}'
+    deploy_tooling_policy_variant: '{{ run_variant | default("not_applicable") }}'

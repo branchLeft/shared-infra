@@ -176,14 +176,23 @@ STACK_NAME_FRAGMENT = bd.STACK_NAME.pattern.removeprefix(r"\A").removesuffix(r"\
 # `%i`, `<stack>`, `${stack}`, and the template's own `@.service` -- are
 # excluded by the character class rather than by a stop list, because none of
 # them begins with a lowercase letter.
-STACK_MENTIONS = (
-    re.compile(rf"branchleft-compose@({STACK_NAME_FRAGMENT})"),
-    re.compile(rf"/opt/branchleft/({STACK_NAME_FRAGMENT})"),
-    # The `.env` suffix is required so `/etc/branchleft/deploy-slots`, which is
-    # the slot register's directory and not a stack, is not read as one.
-    re.compile(rf"/etc/branchleft/({STACK_NAME_FRAGMENT})(?:\.image)?\.env"),
-    re.compile(rf"branchleft-slot:({STACK_NAME_FRAGMENT})"),
-)
+#
+# The shapes are built by a function of the name class, so that a check elsewhere
+# which reads the same shapes with a wider class (ansible/checks/
+# test_deploy_tooling_probe_name.py) takes them from here and holds no copy.
+def stack_mention_shapes(name_class: str) -> tuple[re.Pattern[str], ...]:
+    """Return each written shape that names one instance, its name matched by ``name_class``."""
+    return (
+        re.compile(rf"branchleft-compose@({name_class})"),
+        re.compile(rf"/opt/branchleft/({name_class})"),
+        # The `.env` suffix is required so `/etc/branchleft/deploy-slots`, which is
+        # the slot register's directory and not a stack, is not read as one.
+        re.compile(rf"/etc/branchleft/({name_class})(?:\.image)?\.env"),
+        re.compile(rf"branchleft-slot:({name_class})"),
+    )
+
+
+STACK_MENTIONS = stack_mention_shapes(STACK_NAME_FRAGMENT)
 
 REPOSITORY = HETZNER.parent
 

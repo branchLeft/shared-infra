@@ -1,0 +1,11 @@
+---
+# Runs the role for an app host expecting the sudoers grant run_sudoers_line
+# rather than its own, to show the visudo check refuses a drop-in that is the
+# expected text but not valid sudoers syntax.
+- name: Apply the role with another expected grant
+  ansible.builtin.include_role:
+    name: branchleft.deploy_tooling
+  vars:
+    deploy_tooling_host_class: app
+    deploy_tooling_policy_variant: standard
+    deploy_tooling_sudoers_line: '{{ run_sudoers_line }}'

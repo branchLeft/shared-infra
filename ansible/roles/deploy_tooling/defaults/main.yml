@@ -1,0 +1,8 @@
+---
+# deploy_tooling_host_class has no default (ANS-7): a host that is not told its
+# class is not guessed, and the interface check fails the run when it is absent.
+# Nothing here is a secret (ANS-16).
+
+# Only a host of class app names a variant, and the role refuses this value
+# there. A host of class gateway has none to name.
+deploy_tooling_policy_variant: not_applicable

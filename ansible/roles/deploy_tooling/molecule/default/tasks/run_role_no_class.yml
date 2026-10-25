@@ -1,0 +1,8 @@
+---
+# Runs the role without telling it the host's class, which is how a play that
+# forgot the variable runs it.
+- name: Apply the role with no host class
+  ansible.builtin.include_role:
+    name: branchleft.deploy_tooling
+  vars:
+    deploy_tooling_policy_variant: standard

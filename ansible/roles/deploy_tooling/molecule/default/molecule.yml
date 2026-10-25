@@ -1,0 +1,65 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container. Molecule's interpolation
+# has no "required variable" form, so when the variable is unset the name
+# falls back to one the Docker daemon rejects: the run fails at create, loudly,
+# instead of sharing a container name with another run.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party systemd test base on Debian 13, the release every production
+    # host runs, trusted by digest. The digest is the pin; the tag is
+    # informational and moves weekly. The image runs systemd as PID 1, which this
+    # scenario needs for the policy unit, the compose template instance and the
+    # stub of docker.service the policy unit is part of.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # Destroy removes the container's anonymous volumes. This scenario's cgroup
+    # bind mount means none is created; the key guards against one if the mount
+    # is ever dropped.
+    keep_volumes: false
+    # The host cgroup namespace is a stated exception (ANS-15): on a cgroup v2
+    # host such as a native Linux runner, a private namespace over the
+    # read-write cgroup mount below makes systemd exit at once. The host
+    # namespace is the least privilege that works. It shares the host's cgroup
+    # view and, with the read-write mount, write access to the host cgroup tree,
+    # which is why the test image is trusted by digest and the job holds no
+    # credentials.
+    cgroupns_mode: host
+    # The cgroup tree systemd manages, mounted read-write: without it the
+    # container exits at start.
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    # systemd's runtime and lock directories are tmpfs in a real boot: without
+    # them the container exits at start.
+    tmpfs:
+      - /run
+      - /run/lock
+    # Start systemd as the init process, the image's own CMD.
+    command: /lib/systemd/systemd
+    # NET_ADMIN is the one added capability: the netlink right iptables and
+    # ip6tables need to read and write the container's own filter tables, which
+    # is the whole of what the policy program does. It reaches the container's
+    # network namespace only, never the runner's.
+    capabilities:
+      - NET_ADMIN
+    # The run's label, so the harness can check that a destroy removed only
+    # this run's container.
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # The verify play calls the role's own module (deploy_tooling_chain) to read
+    # the chains back, outside the role's tasks, so the role's library is on the
+    # module path.
+    ANSIBLE_LIBRARY: '${MOLECULE_PROJECT_DIRECTORY}/library'
+verifier:
+  name: ansible

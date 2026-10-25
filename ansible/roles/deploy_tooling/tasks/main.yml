@@ -1,0 +1,334 @@
+---
+# Order matters. The inputs and every directory on the path to a target (named by
+# its path, up to the root of the filesystem; each is read as itself and a link in
+# the path is refused, never followed; the directories are root's, carry no ACL and
+# are not group- or other-writable; each target carries no ACL) are read first, and
+# nothing is written until they pass; the directories exist before the files go into
+# them; every target is then
+# checked (owner, group, mode, kind) before anything is run from it, because the
+# policy program runs as root; and on a host of class app the program is run, by
+# the handler, only after those checks and before the firewall chains are read back.
+#
+# Check mode (ANS-10). The role runs to completion under --check --diff on a
+# host in either state. A task that reads and changes nothing (stat, slurp, the
+# sudoers syntax check, the firewall read-back) runs in check mode too, so the
+# plan shows what it found. A check of a file the role writes is skipped in check
+# mode, with the reason beside it, because check mode did not write the file. The
+# firewall read-back is skipped only while the program, its unit or the unit's
+# enabled state would change (the handler that applies them has not run), and
+# runs, and fails, when none of them would: a host whose files are right and
+# whose chains are wrong is drift the plan has to show.
+#
+# Nothing here is a secret (ANS-16).
+
+# ----- The inputs -----
+
+# First, so that an omitted variant is refused here, in these words. The
+# interface check has already refused an omitted or unknown host class.
+- name: Refuse a host class the role cannot act on, or an app host with no policy variant
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_host_class in ['app', 'gateway']
+      - deploy_tooling_host_class == 'gateway' or deploy_tooling_policy_variant in ['standard', 'protected_no_db']
+    fail_msg: >-
+      A host of class app must name its policy variant: deploy_tooling_policy_variant is
+      standard or protected_no_db, and is {{ deploy_tooling_policy_variant }} here.
+    quiet: true
+
+- name: Work out which files this host class gets
+  ansible.builtin.set_fact:
+    deploy_tooling_file_targets: >-
+      {{ deploy_tooling_common_file_targets
+         + (deploy_tooling_app_file_targets if deploy_tooling_host_class == 'app' else []) }}
+
+# ----- The directories above the targets -----
+
+# A target that is root's alone is still replaceable by an account that can write to the
+# directory it sits in, or to any directory above that one (it can rename the lower
+# directory aside and put its own in its place), and the wrapper and the policy program are
+# run as root. So every directory on the path to every target, and to the sudoers drop-in,
+# up to the root of the filesystem, is checked, by the strict shape in _path_checks.yml
+# (root's, no ACL, not writable by any group or other account, not a link), and every target
+# and the drop-in is checked for an ACL there too. This is first, before the role writes a
+# file, because a run that refuses a directory has to have written nothing into it. Read
+# only, so it runs in check mode: a host whose directory is wrong is drift the plan has to
+# show.
+- name: Work out every directory on the path to a target
+  ansible.builtin.set_fact:
+    deploy_tooling_parent_paths: >-
+      {%- set ns = namespace(found=['/']) -%}
+      {%- for target in deploy_tooling_directory_targets + deploy_tooling_file_targets
+          + [{'path': deploy_tooling_sudoers_path}] -%}
+      {%- set parts = target.path.split('/')[1:-1] -%}
+      {%- for count in range(1, parts | length + 1) -%}
+      {%- set ns.found = ns.found + ['/' ~ parts[:count] | join('/')] -%}
+      {%- endfor -%}
+      {%- endfor -%}
+      {{ ns.found | unique | sort | list }}
+
+# The ACL of a target is read here, before any write, because the copy that follows would
+# replace a file and its ACL with it, and the refusal has to come first. A target that does
+# not exist yet has no ACL to read.
+- name: Work out every path whose ACL is read
+  ansible.builtin.set_fact:
+    deploy_tooling_acl_paths: >-
+      {{ (deploy_tooling_parent_paths
+          + (deploy_tooling_directory_targets + deploy_tooling_file_targets
+             + [{'path': deploy_tooling_sudoers_path}]) | map(attribute='path') | list)
+         | unique | sort | list }}
+
+- name: Check each directory on the path to a target, and each target, before anything is written
+  ansible.builtin.include_tasks: _path_checks.yml
+
+# ----- The directories and the files -----
+
+- name: Create the directories both hand-run scripts create
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: directory
+    follow: false
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop: '{{ deploy_tooling_directory_targets }}'
+  loop_control:
+    label: '{{ item.path }}'
+
+# A link at a file target is replaced, never followed: the programs run as root,
+# and a write through a link would change the file it points at. A directory is
+# removed only when it is empty; one with anything in it is somebody's data.
+- name: Look at each file target before it is written
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ deploy_tooling_file_targets }}'
+  loop_control:
+    label: '{{ item.path }}'
+  register: deploy_tooling_file_targets_before
+  check_mode: false
+
+- name: List what a directory at a file target holds
+  ansible.builtin.find:
+    paths: '{{ item.item.path }}'
+    file_type: any
+    hidden: true
+  loop: '{{ deploy_tooling_file_targets_before.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+  when: item.stat.isdir | default(false)
+  register: deploy_tooling_file_targets_listing
+  check_mode: false
+
+- name: Refuse to remove a directory at a file target that holds anything
+  ansible.builtin.assert:
+    that:
+      - item.matched == 0
+    fail_msg: >-
+      {{ item.item.item.path }} is a directory that holds files, where a file belongs. It is not
+      removed. Inspect it, then remove it and run the role again.
+    quiet: true
+  loop: '{{ deploy_tooling_file_targets_listing.results }}'
+  loop_control:
+    label: '{{ item.item.item.path }}'
+  when: not (item.skipped | default(false))
+
+- name: Remove a link or an empty directory left at a file target
+  ansible.builtin.file:
+    path: '{{ item.item.path }}'
+    state: absent
+  loop: '{{ deploy_tooling_file_targets_before.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+  when: (item.stat.islnk | default(false)) or (item.stat.isdir | default(false))
+
+# The programs are read from hetzner/provision/, so the bytes installed are the bytes
+# of the one copy there and the role holds none. The template unit is copied and never
+# enabled or restarted: a restart of an instance redeploys a tenant's stack, and
+# only the deploy wrapper does that.
+- name: Install the deploy wrapper and the compose template unit
+  ansible.builtin.copy:
+    src: '{{ deploy_tooling_programs_dir }}/{{ item.program }}'
+    dest: '{{ item.path }}'
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop: '{{ deploy_tooling_common_file_targets }}'
+  loop_control:
+    label: '{{ item.path }}'
+  notify: Reload systemd manager
+
+- name: Install the policy program and its unit
+  ansible.builtin.copy:
+    src: '{{ deploy_tooling_programs_dir }}/{{ item.program }}'
+    dest: '{{ item.path }}'
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop: '{{ deploy_tooling_app_file_targets }}'
+  loop_control:
+    label: '{{ item.path }}'
+  register: deploy_tooling_app_files_written
+  notify:
+    - Reload systemd manager
+    - Restart the policy unit
+  when: deploy_tooling_host_class == 'app'
+
+# ----- What the targets are now -----
+
+- name: Look at every target after it is written
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ deploy_tooling_directory_targets + deploy_tooling_file_targets }}'
+  loop_control:
+    label: '{{ item.path }}'
+  register: deploy_tooling_targets_after
+  check_mode: false
+
+# Skipped in check mode with a stated reason (ANS-10): the writes above are only
+# simulated there, so the stat sees the state from before them and an assertion
+# would fail on the very drift the plan is meant to show. The plan shows the
+# change instead, in the diff of the task that would make it.
+- name: Refuse a target that is a link, or not the kind of thing it should be
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - not item.stat.islnk
+      - (item.item.kind == 'directory' and item.stat.isdir) or (item.item.kind == 'file' and item.stat.isreg)
+    fail_msg: '{{ item.item.path }} ({{ item.item.label }}) is missing, is a link, or is not a {{ item.item.kind }}.'
+    quiet: true
+  loop: '{{ deploy_tooling_targets_after.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+  when: not ansible_check_mode
+
+- name: Refuse a target that is not owned by root
+  ansible.builtin.assert:
+    that:
+      - item.stat.pw_name == 'root'
+    fail_msg: '{{ item.item.path }} ({{ item.item.label }}): owner is {{ item.stat.pw_name }}, expected root.'
+    quiet: true
+  loop: '{{ deploy_tooling_targets_after.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+  when: not ansible_check_mode
+
+- name: Refuse a target whose group is not root
+  ansible.builtin.assert:
+    that:
+      - item.stat.gr_name == 'root'
+    fail_msg: '{{ item.item.path }} ({{ item.item.label }}): group is {{ item.stat.gr_name }}, expected root.'
+    quiet: true
+  loop: '{{ deploy_tooling_targets_after.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+  when: not ansible_check_mode
+
+- name: Refuse a target whose mode is not the one it is installed with
+  ansible.builtin.assert:
+    that:
+      - item.stat.mode == item.item.mode
+    fail_msg: '{{ item.item.path }} ({{ item.item.label }}): mode is {{ item.stat.mode }}, expected {{ item.item.mode }}.'
+    quiet: true
+  loop: '{{ deploy_tooling_targets_after.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+  when: not ansible_check_mode
+
+# ----- The sudoers drop-in: verified, never written -----
+
+# The host's first-boot configuration writes this file, and a sudoers file that
+# is wrong locks every account out of sudo, so the role only reads it. These
+# tasks run in check mode: they read and change nothing, and the plan log shows
+# what they found before an approver clicks. The role holds no hostnames and the
+# file holds no secret, so nothing here is hidden from the log.
+- name: Look at the sudoers drop-in
+  ansible.builtin.stat:
+    path: '{{ deploy_tooling_sudoers_path }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: deploy_tooling_sudoers_stat
+  check_mode: false
+
+- name: Refuse a host with no sudoers drop-in, or one that is a link or not a file
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_sudoers_stat.stat.exists
+      - not deploy_tooling_sudoers_stat.stat.islnk
+      - deploy_tooling_sudoers_stat.stat.isreg
+    fail_msg: >-
+      {{ deploy_tooling_sudoers_path }} is missing, is a link, or is not a regular file. The
+      host was not created from the platform's first-boot configuration. The role does not write it.
+    quiet: true
+
+- name: Refuse a sudoers drop-in that is not owned by root
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_sudoers_stat.stat.pw_name == 'root'
+    fail_msg: >-
+      {{ deploy_tooling_sudoers_path }}: owner is {{ deploy_tooling_sudoers_stat.stat.pw_name }}, expected root.
+      The role does not repair it.
+    quiet: true
+
+- name: Refuse a sudoers drop-in whose group is not root
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_sudoers_stat.stat.gr_name == 'root'
+    fail_msg: >-
+      {{ deploy_tooling_sudoers_path }}: group is {{ deploy_tooling_sudoers_stat.stat.gr_name }}, expected root.
+      The role does not repair it.
+    quiet: true
+
+- name: Refuse a sudoers drop-in whose mode is not the one sudo requires
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_sudoers_stat.stat.mode == deploy_tooling_sudoers_mode
+    fail_msg: >-
+      {{ deploy_tooling_sudoers_path }}: mode is {{ deploy_tooling_sudoers_stat.stat.mode }}, expected
+      {{ deploy_tooling_sudoers_mode }}. The role does not repair it.
+    quiet: true
+
+# A syntax error in a sudoers file locks every account out of sudo, and visudo
+# is the only safe way to find out. It runs before the content is compared, so
+# a drop-in that is wrong in syntax is named as that.
+- name: Check the sudoers drop-in with visudo
+  ansible.builtin.command:
+    argv:
+      - visudo
+      - -c
+      - -f
+      - '{{ deploy_tooling_sudoers_path }}'
+  changed_when: false
+  check_mode: false
+
+- name: Read the sudoers drop-in
+  ansible.builtin.slurp:
+    src: '{{ deploy_tooling_sudoers_path }}'
+  register: deploy_tooling_sudoers_content
+  check_mode: false
+
+# The whole file, byte for byte: one line, newline-terminated. Anything else in
+# it (a second grant, an include, a continuation line, a widened comment) is a
+# file this role has not verified, so it is refused rather than parsed.
+- name: Refuse a sudoers drop-in that is anything but the one grant
+  ansible.builtin.assert:
+    that:
+      - (deploy_tooling_sudoers_content.content | b64decode) == (deploy_tooling_sudoers_line ~ '\n')
+    fail_msg: >-
+      {{ deploy_tooling_sudoers_path }} does not match the one grant the role expects, byte for byte:
+      {{ deploy_tooling_sudoers_line }}. The role does not repair it.
+    quiet: true
+
+# ----- The app-host isolation -----
+
+- name: Apply the isolation policy and read the firewall chains back
+  ansible.builtin.include_tasks: _isolation.yml
+  when: deploy_tooling_host_class == 'app'

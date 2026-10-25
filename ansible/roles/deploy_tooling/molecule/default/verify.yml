@@ -1,0 +1,49 @@
+---
+# The phases, in this order. Each one starts from the state the last one left, so
+# the order is part of the test, and a teardown or a restore that fails is a
+# build stop. The final phase leaves the instance applied as the converge step
+# did, with an ordinary ip, which is what the second converge and the check-mode
+# run that follow verify see.
+#
+#   i     class app, standard variant, ordinary ip: assertions, then every control
+#         that needs a configured host, each restoring what it changed
+#   ii    teardown
+#   iii   class gateway: the wrapper and the template only
+#   iv    teardown
+#   v     class app, protected_no_db variant, the ip stand-in printing the
+#         control-plane host's address
+#   vi    teardown
+#   vii   class app, the ip stand-in printing the gateway's address: the policy
+#         program refuses and the role fails
+#   viii  teardown, then class app, standard variant, ordinary ip
+- name: Verify
+  hosts: all
+  gather_facts: false
+  # The role's own fixed values, so the cases are built from the same constants
+  # the role installs.
+  vars_files:
+    - ../../vars/main.yml
+  tasks:
+    - name: Phase i, a host of class app with the standard variant
+      ansible.builtin.include_tasks: tasks/phase_standard.yml
+
+    - name: Phase ii, teardown
+      ansible.builtin.include_tasks: tasks/teardown.yml
+
+    - name: Phase iii, a host of class gateway
+      ansible.builtin.include_tasks: tasks/phase_gateway.yml
+
+    - name: Phase iv, teardown
+      ansible.builtin.include_tasks: tasks/teardown.yml
+
+    - name: Phase v, the control-plane host's variant
+      ansible.builtin.include_tasks: tasks/phase_protected.yml
+
+    - name: Phase vi, teardown
+      ansible.builtin.include_tasks: tasks/teardown.yml
+
+    - name: Phase vii, a host that holds the gateway's address
+      ansible.builtin.include_tasks: tasks/phase_refusal.yml
+
+    - name: Phase viii, teardown and the final state
+      ansible.builtin.include_tasks: tasks/phase_final.yml

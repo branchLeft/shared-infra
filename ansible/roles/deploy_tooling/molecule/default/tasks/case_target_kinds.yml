@@ -1,0 +1,116 @@
+---
+# A link where a file belongs is replaced and never followed; an empty directory
+# there is removed; a directory that holds anything is refused and left alone.
+- name: Put a link where the wrapper belongs, pointing at a file the test owns
+  ansible.builtin.copy:
+    content: "UNTOUCHED{{ '\n' }}"
+    dest: /tmp/molecule-link-target
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Replace the wrapper with the link
+  ansible.builtin.file:
+    src: /tmp/molecule-link-target
+    dest: '{{ deploy_tooling_wrapper_path }}'
+    state: link
+    force: true
+
+- name: Apply the role
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+- name: Read the file the link pointed at
+  ansible.builtin.slurp:
+    src: /tmp/molecule-link-target
+  register: deploy_tooling_scenario_link_target
+
+- name: Assert the link was replaced and nothing was written through it
+  ansible.builtin.assert:
+    that:
+      - (deploy_tooling_scenario_link_target.content | b64decode) == 'UNTOUCHED\n'
+    fail_msg: The role wrote through a link at a file target.
+    quiet: true
+
+- name: Assert the host is as the role leaves it
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: standard
+
+- name: Replace the wrapper with an empty directory
+  ansible.builtin.file:
+    path: '{{ deploy_tooling_wrapper_path }}'
+    state: absent
+
+- name: Make the empty directory
+  ansible.builtin.file:
+    path: '{{ deploy_tooling_wrapper_path }}'
+    state: directory
+    mode: '0755'
+
+- name: Apply the role over the empty directory
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+- name: Assert the empty directory was replaced by the file
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: standard
+
+- name: Replace the wrapper with a directory that holds a file
+  ansible.builtin.file:
+    path: '{{ deploy_tooling_wrapper_path }}'
+    state: absent
+
+- name: Make the directory
+  ansible.builtin.file:
+    path: '{{ deploy_tooling_wrapper_path }}'
+    state: directory
+    mode: '0755'
+
+- name: Put somebody's file in it
+  ansible.builtin.copy:
+    content: "KEEP{{ '\n' }}"
+    dest: '{{ deploy_tooling_wrapper_path }}/keep'
+    mode: '0644'
+
+- name: Apply the role over the directory that holds a file
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: a directory that holds a file where the wrapper belongs
+    expect_msg: 'is a directory that holds files'
+    expect_task: '^Refuse to remove a directory at a file target'
+    run_class: app
+    run_variant: standard
+
+- name: Look at what the role left
+  ansible.builtin.stat:
+    path: '{{ deploy_tooling_wrapper_path }}/keep'
+  register: deploy_tooling_scenario_kept
+
+- name: Assert the file in the directory was kept
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_kept.stat.exists
+    fail_msg: The role removed a directory that held a file.
+    quiet: true
+
+- name: Remove the directory the case made
+  ansible.builtin.file:
+    path: '{{ deploy_tooling_wrapper_path }}'
+    state: absent
+
+- name: Apply the role to restore the wrapper
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+- name: Assert the host is as the role leaves it
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: standard
