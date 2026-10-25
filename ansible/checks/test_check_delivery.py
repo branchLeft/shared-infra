@@ -403,7 +403,7 @@ class EnvironmentTests(unittest.TestCase):
         self.assertEqual([], self.judge(environment()))
 
     def test_the_branchleft_admin_team_is_the_expected_reviewer(self) -> None:
-        # Rob ruled (t1-approver A): the environment's reviewer is the branchleft-admin team.
+        # The environment's reviewer is the branchleft-admin team.
         described = environment(reviewers=[reviewer("Team", "branchleft-admin")])
         self.assertEqual([], self.judge(described))
 
