@@ -338,7 +338,9 @@ Each is proven by sabotage; the commands and results are in the pull request.
   hidden, a rotated token reports `changed` with a `diff` whose two sides are
   equal.
 - **The `no_log` declaration is checked for presence, not for truth.** The test
-  proves each field declared `no_log` as true or false. A field named like a
+  proves each field declared `no_log` as true or false, and
+  `test_every_spec_no_log_agrees_with_the_field_declaration` proves the
+  generated `argument_spec` follows that declaration. A field named like a
   secret but declared false is still caught only by the name-word test
   (`test_every_secret_named_option_is_no_log`).
 
