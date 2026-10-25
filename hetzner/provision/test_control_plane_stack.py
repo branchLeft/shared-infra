@@ -7,7 +7,10 @@ See test_control_plane_stack.md.
 import pathlib
 import re
 import sys
+import textwrap
 import unittest
+
+import yaml
 
 if sys.version_info < (3, 10):
     raise RuntimeError(
@@ -121,6 +124,81 @@ def hba_rules() -> list[list[str]]:
 
 
 PORTAL_LOGINS = {"portal_tenant_login", "portal_owner_login"}
+
+# Each row is one service's YAML fragment, with the sentinel value that must never be echoed.
+MASTER_KEY_ENVIRONMENT_ROWS = (
+    ("mapping", "environment:\n  ZITADEL_MASTERKEY: NEVERECHO\n", "ZITADEL_MASTERKEY"),
+    ("block list", "environment:\n  - ZITADEL_MASTERKEY=NEVERECHO\n", "ZITADEL_MASTERKEY"),
+    ("bare list entry", "environment:\n  - ZITADEL_MASTERKEY\n", "ZITADEL_MASTERKEY"),
+    ("quoted list entry", "environment:\n  - 'ZITADEL_MASTERKEY=NEVERECHO'\n", "ZITADEL_MASTERKEY"),
+    ("flow list", "environment: [ZITADEL_MASTERKEY=NEVERECHO]\n", "ZITADEL_MASTERKEY"),
+    ("flow mapping", "environment: {ZITADEL_MASTERKEY: NEVERECHO}\n", "ZITADEL_MASTERKEY"),
+    ("lower case", "environment:\n  - zitadel_masterkey=NEVERECHO\n", "zitadel_masterkey"),
+    ("other name", "environment:\n  - SOME_MASTERKEY_FILE_X=NEVERECHO\n", "SOME_MASTERKEY_FILE_X"),
+    (
+        "master key not first",
+        "environment:\n  - TZ=UTC\n  - ZITADEL_MASTERKEY=NEVERECHO\n",
+        "ZITADEL_MASTERKEY",
+    ),
+)
+
+MASTER_KEY_COMMAND_ROWS = (
+    ("string", "command: 'start-from-setup --masterkey NEVERECHO'\n", "--masterkey"),
+    ("string joined value", "command: '--masterkey=NEVERECHO'\n", "--masterkey=NEVERECHO"),
+    ("string FromEnv", "command: 'start --masterkeyFromEnv'\n", "--masterkeyFromEnv"),
+    (
+        "string joined file path",
+        "command: 'start --masterkeyFile=/run/secrets/zitadel-masterkey'\n",
+        "--masterkeyFile=/run/secrets/zitadel-masterkey",
+    ),
+    ("string bare file flag", "command: 'start --masterkeyFile'\n", "--masterkeyFile"),
+    ("string other path", "command: 'start --masterkeyFile /somewhere/else'\n", "--masterkeyFile"),
+    ("string capitals", "command: 'start --MASTERKEY NEVERECHO'\n", "--MASTERKEY"),
+    ("flow list", 'command: ["start", "--masterkey", "NEVERECHO"]\n', "--masterkey"),
+    ("flow list joined value", 'command: ["start", "--masterkey=NEVERECHO"]\n', "--masterkey=NEVERECHO"),
+    ("flow list FromEnv", 'command: ["start", "--masterkeyFromEnv"]\n', "--masterkeyFromEnv"),
+    (
+        "flow list joined file path",
+        'command: ["start", "--masterkeyFile=/run/secrets/zitadel-masterkey"]\n',
+        "--masterkeyFile=/run/secrets/zitadel-masterkey",
+    ),
+    ("flow list bare file flag", 'command: ["start", "--masterkeyFile"]\n', "--masterkeyFile"),
+    ("flow list other path", 'command: ["--masterkeyFile", "/somewhere/else"]\n', "--masterkeyFile"),
+    (
+        "block list",
+        "command:\n  - start\n  - --masterkey\n  - NEVERECHO\n",
+        "--masterkey",
+    ),
+)
+
+SECRET_FILE_WIRING_ROWS = (
+    ("string command", "command: 'start-from-setup --masterkeyFile /run/secrets/zitadel-masterkey --tlsMode external'\n"),
+    (
+        "flow list command",
+        'command: ["start-from-setup", "--masterkeyFile", "/run/secrets/zitadel-masterkey", "--tlsMode", "external"]\n',
+    ),
+    ("environment mapping", "environment:\n  TZ: UTC\n"),
+    ("environment list", "environment:\n  - TZ=UTC\n"),
+    ("secrets list", "secrets:\n  - zitadel-masterkey\n"),
+)
+
+
+def stack_document(name: str, body: str) -> object:
+    """A one-service stack file, parsed in memory; body holds the service's keys, unindented."""
+    document: object = yaml.safe_load(f"services:\n  {name}:\n    image: example\n{textwrap.indent(body, '    ')}")
+    return document
+
+
+def assert_refused(test: unittest.TestCase, document: object, service: str, *expected: str) -> list[str]:
+    """Some problem must name the service and contain every expected substring."""
+    problems = stack_keys_check.violations(document, "case")
+    named = [
+        problem
+        for problem in problems
+        if f"service '{service}'" in problem and all(text in problem for text in expected)
+    ]
+    test.assertTrue(named, f"no problem names service '{service}' and {expected}: {problems}")
+    return problems
 
 
 class ControlPlaneStackTests(unittest.TestCase):
@@ -356,6 +434,35 @@ class ControlPlaneStackTests(unittest.TestCase):
             any("'env_file' pulls another file in" in problem for problem in problems),
             f"the quoted-key fixture was not rejected: {problems}",
         )
+
+    def test_the_checker_refuses_the_master_key_in_every_environment_spelling(self):
+        for service in ("zitadel", "portal"):
+            for spelling, body, expected in MASTER_KEY_ENVIRONMENT_ROWS:
+                with self.subTest(service=service, spelling=spelling):
+                    problems = assert_refused(self, stack_document(service, body), service, expected)
+                    for problem in problems:
+                        self.assertNotIn("NEVERECHO", problem)
+
+    def test_the_checker_refuses_every_master_key_command_spelling(self):
+        for service in ("zitadel", "portal"):
+            for spelling, body, expected in MASTER_KEY_COMMAND_ROWS:
+                with self.subTest(service=service, spelling=spelling):
+                    assert_refused(self, stack_document(service, body), service, expected)
+
+    def test_the_checker_accepts_the_secret_file_wiring(self):
+        for service in ("zitadel", "portal"):
+            for spelling, body in SECRET_FILE_WIRING_ROWS:
+                with self.subTest(service=service, spelling=spelling):
+                    self.assertEqual(stack_keys_check.violations(stack_document(service, body), "case"), [])
+        for path in (COMPOSE, INIT_OVERLAY):
+            with self.subTest(file=path.name):
+                self.assertEqual(stack_keys_check.check_file(path), [])
+
+    def test_the_checker_refuses_a_command_it_cannot_split(self):
+        for service in ("zitadel", "portal"):
+            with self.subTest(service=service):
+                document = stack_document(service, "command: 'start \"--masterkeyFile'\n")
+                assert_refused(self, document, service, "command", "cannot be split")
 
     def test_the_runtime_command_runs_the_setup_phase_and_never_the_init_phase(self):
         block = service_blocks(compose_text())["zitadel"]
