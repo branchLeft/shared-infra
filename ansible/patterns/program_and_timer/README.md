@@ -98,8 +98,8 @@ owner and the unit's user the same by construction.
 
 - ansible-core as pinned in `ansible/requirements.txt`, and `min_ansible_version`
   in `meta/main.yml` equal to it.
-- No collection beyond `ansible.builtin`. The test uses `community.docker`, pinned
-  in `ansible/requirements.yml`.
+- No collection beyond `ansible.builtin`. The test uses `community.docker`, from the
+  `ansible` package pinned in `ansible/requirements.txt`.
 - Target: a systemd host with `/bin/sh` and `python3`. The validator is the program
   itself, run by `/bin/sh` with `--check`.
 
