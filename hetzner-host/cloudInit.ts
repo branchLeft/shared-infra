@@ -98,16 +98,12 @@ const AUTHORIZED_KEY_OPTIONS = 'restrict';
 const DEPLOY_SUDOERS = 'deploy ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-deploy';
 
 /**
- * OpenSSH public key, one line: type, base64 blob, optional comment.
- *
- * The type list is closed rather than `[a-z0-9-]+` because this value is
- * substituted into a `#cloud-config` document, so what is being validated is
- * not really "is this a key" but "can this end the line it is on". Anchored
- * with `\A`/`\z`-equivalents (`^`/`$` without `m`) so a trailing newline is a
- * rejection: in JavaScript, without `m`, `$` matches only at the very end of
- * the input (unlike Python and Perl, whose `$` also accepts a newline just
- * before the end), and `[^\n\r]*` cannot consume a newline, so a value ending
- * in `\n` fails the match.
+ * OpenSSH public key, one line: type, base64 blob, optional comment. The type list is closed
+ * rather than `[a-z0-9-]+` because the value is substituted into a `#cloud-config` document,
+ * so the real check is whether it can end its line. Anchored with `^`/`$` without `m` (the
+ * `\A`/`\z` equivalents): in JavaScript `$` matches only at the very end of the input, unlike
+ * Python and Perl, whose `$` also accepts a newline just before the end. `[^\n\r]*` cannot
+ * consume a newline, so a value ending in `\n` fails the match.
  */
 const OPENSSH_PUBLIC_KEY =
   /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/]+={0,3}( [^\n\r]*)?$/;
