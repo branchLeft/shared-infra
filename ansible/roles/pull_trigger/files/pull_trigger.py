@@ -585,17 +585,12 @@ def _signer_from(value: object) -> Signer:
 def _step_from(value: object) -> Step:
     """Validate one entry of the step allow-list.
 
-    The id must be one of ``STEP_IDS``, which is closed: an id that is not in it is refused
-    whatever it is called, so a surface that was never built cannot be added by a name
-    this program has not heard of. The tag decides which tasks the step runs, so it is not
-    a free choice either: it must be the step's own, ``STEP_TAG_PREFIX`` plus the id, and
-    an entry that pairs an id with any other tag is refused, whether that is another
-    step's tag, a name no task carries or a special such as ``all``.
+    The id must be in the closed ``STEP_IDS`` set. The tag must be ``STEP_TAG_PREFIX``
+    plus that id, so an entry pairing an id with any other tag is refused.
 
     Raises:
-        ConfigError: The entry has other fields than an id, a tag and a word, an id that is
-            not one of the program's steps, a tag that is not that id's own, or a word of
-            the wrong shape.
+        ConfigError: The entry has other fields than id, tag and word, an unknown id,
+            a tag that is not the id's own, or a word of the wrong shape.
     """
     if not isinstance(value, dict) or set(value) != STEP_FIELDS:
         raise ConfigError(Why.CONFIG_STEP_FIELDS)
@@ -1337,11 +1332,10 @@ class PlaybookRunner:
     ) -> PlaybookResult:
         """Run the playbook in the checkout and wait for it, killing it at the limit.
 
-        The playbook's output is written to ``log_path`` (mode 0600) and relayed to
-        the caller as it appears. A caller that disconnects does not stop the run.
-        For a step, the program itself adds ``--tags`` with the allow-list's tag and one
-        extra variable with the validated step id; nothing from the caller's request
-        reaches ansible except that id, and a run with no step gets neither.
+        Output goes to ``log_path`` (mode 0600) and is relayed as it appears. A caller
+        that disconnects does not stop the run. For a step, the program adds ``--tags``
+        and one variable from the validated step id; nothing else from the request
+        reaches ansible.
 
         Returns:
             How the run ended.
@@ -1542,9 +1536,7 @@ class Trigger:
     def _guarded(self, mode: Mode, request: Request) -> Verdict:
         """Check the playbook allowlist and the step, take the lock and run.
 
-        The step checks come before the lock, the fetch, the rollback floor and the
-        checkout, so a refused step touches nothing and gives an attacker no timing
-        on any of them.
+        The step checks run before the lock, so a refused step touches nothing.
 
         Raises:
             PlaybookNotAllowedError: the host's playbook is not on the allowlist.
