@@ -1,0 +1,29 @@
+---
+# The cases are shared out between scenarios (vars/cases.yml). A case that no scenario
+# runs would be a refusal nobody checks, and it would pass silently, so this fails
+# first: every case names a listed part, the run is itself a listed part, and each
+# listed part is a scenario directory beside this one that has a verify.yml and does
+# not leave the verify step out. The files are read on the controller.
+- name: Assert every case names a listed part, and this run is one
+  ansible.builtin.assert:
+    that:
+      - db1_grants_verify_cases | rejectattr('part', 'defined') | list | length == 0
+      - db1_grants_verify_cases | map(attribute='part') | unique | difference(db1_grants_verify_parts) | length == 0
+      - db1_grants_verify_part in db1_grants_verify_parts
+    fail_msg: >-
+      A case has no part, or names one that vanishes from db1_grants_verify_parts, or this scenario
+      ({{ db1_grants_verify_part }}) is not one of the listed parts: {{ db1_grants_verify_parts }}.
+    quiet: true
+
+- name: Assert each listed part is a scenario that runs verify
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.fileglob', db1_grants_verify_scenarios_dir ~ '/' ~ item ~ '/verify.yml', wantlist=true) | length == 1
+      - >-
+        not (lookup('ansible.builtin.file', db1_grants_verify_scenarios_dir ~ '/' ~ item ~ '/skip-steps.txt', errors='ignore')
+        | default('', true) | string | regex_search('(?m)^verify\s*$'))
+    fail_msg: 'The part {{ item }} has no molecule/{{ item }}/verify.yml, or that scenario leaves the verify step out.'
+    quiet: true
+  loop: '{{ db1_grants_verify_parts }}'
+  vars:
+    db1_grants_verify_scenarios_dir: '{{ playbook_dir }}/..'
