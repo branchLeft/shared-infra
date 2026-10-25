@@ -1,0 +1,3 @@
+---
+# This comment is a throwaway that is far too long on purpose so that the yamllint line-length rule reports an error and the lint job goes red in a few minutes with no shard started at all.
+probe: true
