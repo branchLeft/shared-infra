@@ -90,9 +90,7 @@ monitoring_stack_renderer: /opt/branchleft/monitoring/render_alertmanager_config
 
 # What the fingerprint hashes, besides the secrets file: the eight stack files,
 # the monitoring drop-in, the renderer and the pager's secrets file (all of it:
-# unlike monitoring.env it has no key that is left out). The edge drop-in is
-# deliberately not here (README, "Restart"): it binds branchleft-compose@edge,
-# which this role never restarts.
+# unlike monitoring.env it has no key that is left out).
 monitoring_stack_fingerprint_files: >-
   {{ monitoring_stack_files | map('regex_replace', '^', monitoring_stack_project_dir ~ '/') | list
   + [monitoring_stack_dropin_dest, monitoring_stack_renderer, monitoring_stack_ntfy_env_file] }}
@@ -104,15 +102,8 @@ monitoring_stack_fingerprint_files: >-
 monitoring_stack_stamp_dir: /var/lib/branchleft
 monitoring_stack_stamp_file: /var/lib/branchleft/monitoring.applied
 
-# The edge stack's drop-in directory, named after the edge instance by the shared
-# Compose unit template. The file is files/edge.override.conf.
-monitoring_stack_edge_dropin_dir: /etc/systemd/system/branchleft-compose@edge.service.d
-
 # The unit of the monitoring stack, the one the restart step restarts.
 monitoring_stack_unit: branchleft-compose@monitoring.service
-
-# The edge instance: read for NeedDaemonReload only, never restarted here.
-monitoring_stack_edge_unit: branchleft-compose@edge.service
 
 # The ActiveStates that make a restart due even when the fingerprint equals the
 # stamp: the unit is down. An unreadable state counts as active, so the

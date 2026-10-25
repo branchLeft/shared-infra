@@ -72,11 +72,54 @@
         label: '{{ item.name }}'
       when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
 
+    # An earlier release of the unit's drop-in: 1024M, where the role's file is 1536M, so a
+    # missing install or reload reads as 1024M below. systemd is made to hold it, and the
+    # instance is started so that systemd keeps it loaded (an inactive unit that nothing
+    # refers to is unloaded, and would then read the new file from disk with no reload).
+    - name: Create the drop-in directory for an earlier release
+      ansible.builtin.file:
+        path: /etc/systemd/system/branchleft-compose@edge.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Install an earlier release of the drop-in
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          MemoryMax=1024M
+        dest: /etc/systemd/system/branchleft-compose@edge.service.d/override.conf
+        owner: root
+        group: root
+        mode: '0644'
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Make systemd read the earlier release
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
     - name: Enable and start the instance, as on a host that is already running
       ansible.builtin.systemd_service:
         name: branchleft-compose@edge.service
         enabled: true
         state: started
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Ask systemd for the instance so that the test sees what it holds
+      ansible.builtin.systemd_service:
+        name: branchleft-compose@edge.service
+      register: edge_stack_converge_earlier
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Assert systemd holds the earlier release of the drop-in
+      ansible.builtin.assert:
+        that:
+          - edge_stack_converge_earlier.status.MemoryMax == '1073741824'
+        quiet: true
+        fail_msg: The test could not put the earlier drop-in in front of systemd.
       when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
 
     - name: Empty the log of the stand-in's calls, so it holds only what the role does
@@ -100,6 +143,26 @@
         # Molecule links the role under its namespace and name, the namespace
         # from galaxy_info in meta/main.yml.
         name: branchleft.edge_stack
+
+    # Asked of systemd straight after the role, before the end of the play, so a reload
+    # that is missing or left to the end of the play fails here. A check-mode run writes
+    # no drop-in, so there is nothing to ask.
+    - name: Ask systemd for the instance as soon as the role has run
+      ansible.builtin.systemd_service:
+        name: branchleft-compose@edge.service
+      register: edge_stack_converge_loaded
+      when: not ansible_check_mode
+
+    - name: Assert systemd has loaded the drop-in the role installed
+      ansible.builtin.assert:
+        that:
+          - edge_stack_converge_loaded.status.MemoryMax == '1610612736'
+        quiet: true
+        fail_msg: >-
+          systemd does not hold the drop-in the role installed (edge MemoryMax
+          {{ edge_stack_converge_loaded.status.MemoryMax }}): the role did not install it, or
+          returned before the manager reloaded.
+      when: not ansible_check_mode
 
     - name: Hash the repository's files, on the machine that runs the test
       ansible.builtin.stat:
