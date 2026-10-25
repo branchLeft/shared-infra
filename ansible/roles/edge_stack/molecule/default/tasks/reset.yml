@@ -87,3 +87,17 @@
     - { src: /opt/branchleft/edge/crowdsec/config.yaml.local, name: config.yaml.local }
   loop_control:
     label: '{{ item.name }}'
+
+# The unit's drop-in is the repository's and systemd holds it, so a case that changed it
+# (p29, p30) does not leak into the next.
+- name: Put the unit's drop-in back
+  ansible.builtin.copy:
+    src: '{{ edge_stack_verify_dropin_source }}'
+    dest: /etc/systemd/system/branchleft-compose@edge.service.d/override.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Make systemd read it
+  ansible.builtin.systemd_service:
+    daemon_reload: true

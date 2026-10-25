@@ -118,26 +118,6 @@
     mode: '0644'
   register: monitoring_stack_dropin_copy
 
-# The edge drop-in is installed here because no edge role exists yet (see the
-# README). Its unit is restarted by runbook step 6, not by this role, and a
-# change to it is not part of the fingerprint.
-- name: Create the drop-in directory of the edge instance
-  ansible.builtin.file:
-    path: '{{ monitoring_stack_edge_dropin_dir }}'
-    state: directory
-    owner: root
-    group: root
-    mode: '0755'
-
-- name: Install the drop-in of the edge instance
-  ansible.builtin.copy:
-    src: edge.override.conf
-    dest: '{{ monitoring_stack_edge_dropin_dir }}/override.conf'
-    owner: root
-    group: root
-    mode: '0644'
-  register: monitoring_stack_edge_dropin_copy
-
 # ---- Restart by fingerprint, not by handler ----
 #
 # A handler loses its restart when a run fails between the write and the flush,
@@ -160,15 +140,6 @@
   ansible.builtin.systemd_service:
     name: '{{ monitoring_stack_unit }}'
   register: monitoring_stack_unit_status
-  check_mode: false
-
-# The edge instance is read too, only for NeedDaemonReload: its drop-in is not in
-# the fingerprint, so a reload that a failed run did not do is found by asking
-# systemd whether the drop-in on disk is newer than the one it holds.
-- name: Read the edge instance's unit
-  ansible.builtin.systemd_service:
-    name: '{{ monitoring_stack_edge_unit }}'
-  register: monitoring_stack_edge_unit_status
   check_mode: false
 
 # sha256 of each file the unit runs from: the eight stack files, the monitoring
@@ -247,21 +218,19 @@
       the first start. The role has nothing recorded as applied until it has restarted the unit.
   when: not (monitoring_stack_unit_enabled | bool)
 
-# Before the restart, so the restart runs the drop-ins this role installed. A
+# Before the restart, so the restart runs the drop-in this role installed. A
 # "changed" flag lasts one run, so it cannot carry a reload across a run that
 # failed after the copy: the rerun finds the file unchanged. So the reload is
-# also made whenever systemd says a unit's files on disk are newer than what it
-# holds (NeedDaemonReload), which covers the edge drop-in, outside the
-# fingerprint, and a monitoring drop-in on a unit that is not enabled. A reload
-# does not report a change.
-- name: Make systemd read the drop-ins before any restart
+# also made whenever systemd says the unit's files on disk are newer than what it
+# holds (NeedDaemonReload), which covers a monitoring drop-in on a unit that is
+# not enabled. A reload does not report a change.
+- name: Make systemd read the drop-in before any restart
   ansible.builtin.systemd_service:
     daemon_reload: true
   when: >-
-    monitoring_stack_dropin_copy.changed or monitoring_stack_edge_dropin_copy.changed
+    monitoring_stack_dropin_copy.changed
     or monitoring_stack_restart_due | bool
     or (monitoring_stack_unit_status.status.NeedDaemonReload | default('no')) == 'yes'
-    or (monitoring_stack_edge_unit_status.status.NeedDaemonReload | default('no')) == 'yes'
 
 # The renderer is the unit's ExecStartPre, so a restart is the only thing that
 # runs it. The check comes before the restart: after it, it would be moot, and a

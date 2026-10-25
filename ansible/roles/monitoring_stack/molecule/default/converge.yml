@@ -43,34 +43,7 @@
         mode: '0644'
       when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
 
-    # The edge drop-in is probed the same way. Its earlier release is 1024M, the
-    # role's file is 1536M, so a missing install or reload reads as 1024M here.
-    - name: Read whether the edge drop-in is already on the instance
-      ansible.builtin.stat:
-        path: /etc/systemd/system/branchleft-compose@edge.service.d/override.conf
-      register: monitoring_stack_converge_existing_edge_dropin
-
-    - name: Create the edge drop-in directory for an earlier release
-      ansible.builtin.file:
-        path: /etc/systemd/system/branchleft-compose@edge.service.d
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
-      when: not monitoring_stack_converge_existing_edge_dropin.stat.exists and not ansible_check_mode
-
-    - name: Install an earlier release of the edge drop-in
-      ansible.builtin.copy:
-        content: |
-          [Service]
-          MemoryMax=1024M
-        dest: /etc/systemd/system/branchleft-compose@edge.service.d/override.conf
-        owner: root
-        group: root
-        mode: '0644'
-      when: not monitoring_stack_converge_existing_edge_dropin.stat.exists and not ansible_check_mode
-
-    - name: Make systemd read the earlier releases
+    - name: Make systemd read the earlier release
       ansible.builtin.systemd_service:
         daemon_reload: true
       when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
@@ -80,14 +53,11 @@
     # could not tell a missing reload from a present one. The unit here is the
     # placeholder from prepare.yml, a oneshot that runs /bin/true. The monitoring
     # instance is also enabled, because the role restarts a unit only when it is
-    # enabled (the edge instance is not restarted by the role at all).
-    - name: Start the instances so that systemd keeps the earlier releases loaded
+    # enabled.
+    - name: Start the instance so that systemd keeps the earlier release loaded
       ansible.builtin.systemd_service:
-        name: '{{ item }}'
+        name: branchleft-compose@monitoring.service
         state: started
-      loop:
-        - branchleft-compose@monitoring.service
-        - branchleft-compose@edge.service
       when: not monitoring_stack_converge_existing_dropin.stat.exists and not ansible_check_mode
 
     - name: Enable the monitoring instance, as it is on a host that is already running
@@ -121,26 +91,21 @@
     # Asked of systemd straight after the role, before the end of the play, so
     # a reload that is missing or left to the end of the play fails here. A
     # check-mode run writes no drop-in, so there is nothing to ask.
-    - name: Ask systemd for the instances as soon as the role has run
+    - name: Ask systemd for the instance as soon as the role has run
       ansible.builtin.systemd_service:
-        name: '{{ item }}'
-      loop:
-        - branchleft-compose@monitoring.service
-        - branchleft-compose@edge.service
+        name: branchleft-compose@monitoring.service
       register: monitoring_stack_converge_loaded
       when: not ansible_check_mode
 
-    - name: Assert systemd has loaded the drop-ins the role installed
+    - name: Assert systemd has loaded the drop-in the role installed
       ansible.builtin.assert:
         that:
-          - monitoring_stack_converge_loaded.results[0].status.MemoryMax == '2147483648'
-          - monitoring_stack_converge_loaded.results[1].status.MemoryMax == '1610612736'
+          - monitoring_stack_converge_loaded.status.MemoryMax == '2147483648'
         quiet: true
         fail_msg: >-
-          systemd does not hold the drop-ins the role installed (monitoring MemoryMax
-          {{ monitoring_stack_converge_loaded.results[0].status.MemoryMax }}, edge MemoryMax
-          {{ monitoring_stack_converge_loaded.results[1].status.MemoryMax }}): the role did not install
-          them, or returned before the manager reloaded.
+          systemd does not hold the drop-in the role installed (monitoring MemoryMax
+          {{ monitoring_stack_converge_loaded.status.MemoryMax }}): the role did not install
+          it, or returned before the manager reloaded.
       when: not ansible_check_mode
 
     # The first converge restarts the running unit exactly once, under the drop-in

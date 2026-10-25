@@ -7,7 +7,7 @@ argument_specs:
       and the other keys left in place, closes that file to root before any value is
       written, copies the eight files of the monitoring stack into the project
       directory (/opt/branchleft/monitoring, a constant of the role, not an input:
-      it is the unit's WorkingDirectory), installs the monitoring and edge systemd drop-ins, and restarts the
+      it is the unit's WorkingDirectory), installs the monitoring systemd drop-in, and restarts the
       monitoring stack unit when the fingerprint of what the unit runs from differs
       from the stamp of the last restart that was read back as active. The
       fingerprint covers the eight stack files, the monitoring drop-in, the renderer,
