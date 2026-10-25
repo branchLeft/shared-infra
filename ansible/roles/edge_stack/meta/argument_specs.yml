@@ -9,7 +9,9 @@ argument_specs:
       by sha256 inside the container. The Compose file is applied by restarting
       branchleft-compose@edge, the only path that runs docker compose up. The
       CrowdSec files are applied by restarting the CrowdSec container once and
-      reading them back inside it. Every action runs under the deploy lock of the
+      reading them back inside it. The role also installs the edge unit's systemd
+      drop-in and reloads systemd to read it, without restarting the unit for it.
+      Every action runs under the deploy lock of the
       stack. The role reads /etc/branchleft/edge.image.env and never writes it, and
       asserts that /etc/branchleft/edge.env exists, is owned by root and is mode 0600,
       without bringing its content into the run (only its sha256 comes back). It

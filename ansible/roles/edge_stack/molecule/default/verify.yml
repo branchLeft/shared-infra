@@ -11,6 +11,8 @@
   vars:
     edge_stack_verify_real_stack: '{{ playbook_dir }}/../../files/stack'
     edge_stack_verify_dir: /opt/branchleft/edge
+    # Read directly from the repository, not through the role's link, as the stack is.
+    edge_stack_verify_dropin_source: '{{ playbook_dir }}/../../../../../hetzner/monitoring/systemd/edge.override.conf'
     edge_stack_verify_pin_good: IMAGE=ghcr.io/branchleft/edge-caddy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     edge_stack_verify_hex64: '^[0-9a-f]{64}$'
     edge_stack_verify_pin_other: ghcr.io/branchleft/edge-caddy@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
@@ -1798,6 +1800,186 @@
             edge_stack_verify_p27_plain_validated: >-
               {{ edge_stack_verify_runs.p27plain.new | select('match', '^VALIDATED-COMPOSE sha=')
               | map('regex_replace', '^VALIDATED-COMPOSE sha=', '') | list }}
+
+    # ----- p28, p29, p30: the unit's drop-in -----
+    # The drop-in is in no fingerprint, so none of these cases may see an action: it takes
+    # effect through the reload, and the unit is restarted only for the Compose class.
+    - name: Case p28, a host with no drop-in gets it, root's and mode 0644, and systemd reads it
+      tags: [p28]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Take the drop-in away, and make systemd forget it
+          ansible.builtin.file:
+            path: /etc/systemd/system/branchleft-compose@edge.service.d
+            state: absent
+
+        - name: Make systemd read that
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p28
+
+        - name: Read the drop-in and its directory on the host, and its source in the repository
+          ansible.builtin.stat:
+            path: '{{ item }}'
+            checksum_algorithm: sha256
+          loop:
+            - /etc/systemd/system/branchleft-compose@edge.service.d
+            - /etc/systemd/system/branchleft-compose@edge.service.d/override.conf
+          register: edge_stack_verify_p28_stats
+
+        - name: Read the source of the drop-in, on the machine that runs the test
+          ansible.builtin.stat:
+            path: '{{ edge_stack_verify_dropin_source }}'
+            checksum_algorithm: sha256
+          register: edge_stack_verify_p28_source
+          delegate_to: localhost
+
+        - name: Ask systemd for the edge unit
+          ansible.builtin.systemd_service:
+            name: branchleft-compose@edge.service
+          register: edge_stack_verify_p28_unit
+
+        - name: Assert the drop-in is root's, mode 0644, byte for byte its source, read by systemd, and nothing was acted on
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p28.failed
+              - edge_stack_verify_p28_stats.results[0].stat.isdir
+              - edge_stack_verify_p28_stats.results[0].stat.pw_name == 'root'
+              - edge_stack_verify_p28_stats.results[0].stat.mode == '0755'
+              - edge_stack_verify_p28_stats.results[1].stat.isreg
+              - edge_stack_verify_p28_stats.results[1].stat.pw_name == 'root'
+              - edge_stack_verify_p28_stats.results[1].stat.gr_name == 'root'
+              - edge_stack_verify_p28_stats.results[1].stat.mode == '0644'
+              - edge_stack_verify_p28_stats.results[1].stat.checksum == edge_stack_verify_p28_source.stat.checksum
+              - edge_stack_verify_p28_unit.status.MemoryMax == '1610612736'
+              - edge_stack_verify_runs.p28.kinds == []
+              - edge_stack_verify_runs.p28.after.stamps == edge_stack_verify_runs.p28.before.stamps
+            quiet: true
+            fail_msg: >-
+              The drop-in was not installed as root's 0644 file equal to its source, or systemd does not hold it
+              (edge MemoryMax {{ edge_stack_verify_p28_unit.status.MemoryMax }}), or the run acted on a class
+              ({{ edge_stack_verify_runs.p28.kinds }}).
+
+    - name: Case p29, a changed drop-in is put back and read by systemd, and the unit is not restarted
+      tags: [p29]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Put an earlier release of the drop-in on the host
+          ansible.builtin.copy:
+            content: |
+              [Service]
+              MemoryMax=1024M
+            dest: /etc/systemd/system/branchleft-compose@edge.service.d/override.conf
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Make systemd read the earlier release, so that it holds 1024M
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p29
+
+        - name: Ask systemd for the edge unit
+          ansible.builtin.systemd_service:
+            name: branchleft-compose@edge.service
+          register: edge_stack_verify_p29_unit
+
+        - name: Assert the drop-in was put back and read by systemd, and no class was acted on
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p29.failed
+              - edge_stack_verify_p29_unit.status.MemoryMax == '1610612736'
+              - edge_stack_verify_runs.p29.kinds == []
+              - edge_stack_verify_runs.p29.after.stamps == edge_stack_verify_runs.p29.before.stamps
+            quiet: true
+            fail_msg: >-
+              A change to the drop-in was not put back and read by systemd (edge MemoryMax
+              {{ edge_stack_verify_p29_unit.status.MemoryMax }}), or it made the role act ({{ edge_stack_verify_runs.p29.kinds }}).
+
+    # A "changed" flag lasts one run. The run that dies after the copy and before the reload
+    # (tasks/crash_run.yml makes the acquisition prune fail, which is between the two) leaves
+    # the earlier release loaded; the rerun finds the file unchanged, so only systemd saying
+    # the file on disk is newer than what it holds can bring the reload back.
+    - name: Case p30, a reload that a run which died did not make is made by the next run
+      tags: [p30]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Put an earlier release of the drop-in on the host
+          ansible.builtin.copy:
+            content: |
+              [Service]
+              MemoryMax=1024M
+            dest: /etc/systemd/system/branchleft-compose@edge.service.d/override.conf
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Make systemd read the earlier release, so that it holds 1024M
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+
+        - name: Apply the role in a run that dies after the drop-in is placed
+          ansible.builtin.include_tasks: tasks/crash_run.yml
+          vars:
+            edge_stack_verify_crash_source: '{{ edge_stack_verify_real_stack }}'
+
+        - name: Ask systemd for the edge unit after the run that died
+          ansible.builtin.systemd_service:
+            name: branchleft-compose@edge.service
+          register: edge_stack_verify_p30_died
+
+        - name: Read the drop-in on the host after the run that died
+          ansible.builtin.stat:
+            path: /etc/systemd/system/branchleft-compose@edge.service.d/override.conf
+            checksum_algorithm: sha256
+          register: edge_stack_verify_p30_file
+
+        - name: Read the source of the drop-in, on the machine that runs the test
+          ansible.builtin.stat:
+            path: '{{ edge_stack_verify_dropin_source }}'
+            checksum_algorithm: sha256
+          register: edge_stack_verify_p30_source
+          delegate_to: localhost
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p30
+
+        - name: Ask systemd for the edge unit after the rerun
+          ansible.builtin.systemd_service:
+            name: branchleft-compose@edge.service
+          register: edge_stack_verify_p30_rerun
+
+        - name: Assert the run that died left the earlier release loaded, and the rerun made systemd read the new one with no unit start
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_crash.rc != 0
+              - edge_stack_verify_p30_file.stat.checksum == edge_stack_verify_p30_source.stat.checksum
+              - edge_stack_verify_p30_died.status.MemoryMax == '1073741824'
+              - not edge_stack_verify_runs.p30.failed
+              - edge_stack_verify_p30_rerun.status.MemoryMax == '1610612736'
+              - "'unit-start' not in edge_stack_verify_runs.p30.kinds"
+            quiet: true
+            fail_msg: >-
+              The run that was made to die did not die (exit {{ edge_stack_verify_crash.rc }}), or did not place the
+              drop-in, or did not leave the earlier one loaded (edge MemoryMax {{ edge_stack_verify_p30_died.status.MemoryMax }}),
+              or the rerun did not make systemd read the new one (edge MemoryMax {{ edge_stack_verify_p30_rerun.status.MemoryMax }})
+              without a restart of the unit (the rerun called {{ edge_stack_verify_runs.p30.kinds }}).
 
     # ----- p25: the restore, and the log -----
     - name: Case p25, put the host back, and scan the log for the values
