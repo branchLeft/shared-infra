@@ -232,7 +232,7 @@ export async function ensureImage(
   const engine = await probeEngine(ctx, limits.inspectMs);
   if (!engine.up) {
     throw new DockerFailure(
-      `No Docker engine is reachable: ${firstLine(have.stderr)}. No container was started. ` +
+      `No Docker engine is reachable: ${engine.reason}. No container was started. ` +
         'Start Docker and re-run, or leave it stopped to skip this check locally.'
     );
   }
