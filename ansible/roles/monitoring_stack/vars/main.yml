@@ -49,10 +49,18 @@ monitoring_stack_dropin_dest: /etc/systemd/system/branchleft-compose@monitoring.
 monitoring_stack_env_dir: /etc/branchleft
 monitoring_stack_env_file: /etc/branchleft/monitoring.env
 
+# The pager's secrets file. ntfy_pager is its only writer (one writer per file,
+# ansible/checks/check_role_paths.py); this role only reads it, to put its hash in
+# the fingerprint, so a rotated NTFY_ credential restarts the unit. The monitoring
+# drop-in loads it after monitoring.env, with a leading dash because the pager
+# credentials are optional to the stack. A constant, as ntfy_pager's copy is; the
+# Molecule scenario asserts the two and the drop-in agree.
+monitoring_stack_ntfy_env_file: /etc/branchleft/ntfy-pager.env
+
 # The seven keys this role writes, each mapped to the input that carries its
 # value. The key names are fixed here so no caller can rename a key the stack
-# reads. Keys written by ntfy_pager (the NTFY_ lines) and the STALWART line are
-# not in this map: see the README.
+# reads. Keys written by ntfy_pager (the NTFY_ lines, in its own file) and the
+# STALWART line are not in this map: see the README.
 monitoring_stack_env_keys:
   - key: SMTP_USERNAME
     value: '{{ monitoring_stack_smtp_username }}'
@@ -81,12 +89,13 @@ monitoring_stack_fingerprint_skipped_key: SNDS_DATA_URL
 monitoring_stack_renderer: /opt/branchleft/monitoring/render_alertmanager_config.py
 
 # What the fingerprint hashes, besides the secrets file: the eight stack files,
-# the monitoring drop-in and the renderer. The edge drop-in is deliberately not
-# here (README, "Restart"): it binds branchleft-compose@edge, which this role
-# never restarts.
+# the monitoring drop-in, the renderer and the pager's secrets file (all of it:
+# unlike monitoring.env it has no key that is left out). The edge drop-in is
+# deliberately not here (README, "Restart"): it binds branchleft-compose@edge,
+# which this role never restarts.
 monitoring_stack_fingerprint_files: >-
   {{ monitoring_stack_files | map('regex_replace', '^', monitoring_stack_project_dir ~ '/') | list
-  + [monitoring_stack_dropin_dest, monitoring_stack_renderer] }}
+  + [monitoring_stack_dropin_dest, monitoring_stack_renderer, monitoring_stack_ntfy_env_file] }}
 
 # The stamp: one sha256 and a newline, written only after a restart was read
 # back as active. The directory is shared with broker_deploy, which sets it to

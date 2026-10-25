@@ -3,8 +3,10 @@ argument_specs:
   main:
     short_description: Write the ntfy pager credentials and deliver the Alertmanager renderer
     description: >-
-      Creates the monitoring secrets file (/etc/branchleft/monitoring.env, a
-      constant of the role, not an input) closed to root when it is absent, writes
+      Creates the pager secrets file (/etc/branchleft/ntfy-pager.env, a
+      constant of the role, not an input; monitoring_stack owns
+      /etc/branchleft/monitoring.env and this role never writes it) closed to
+      root when it is absent, writes
       the four NTFY_ credential lines into it, each under its own key and the
       others left in place, and copies the Alertmanager renderer into the project
       directory (/opt/branchleft/monitoring, also a constant, not an input: it

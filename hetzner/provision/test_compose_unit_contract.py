@@ -164,6 +164,14 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "template, and nothing here sees whether that repository declares a "
         "health signal for it."
     ),
+    "ntfy-pager": (
+        "Not an instance of the template: `/etc/branchleft/ntfy-pager.env` is the "
+        "secrets file of the ntfy pager, written by the ansible/roles/ntfy_pager "
+        "role of branchLeft/shared-infra and loaded by the monitoring instance's "
+        "drop-in (the monitoring_stack role writes monitoring.env, and no two roles "
+        "write one path). It is registered because the scan reads the path as a "
+        "stack name. No Compose file exists for it anywhere."
+    ),
 }
 
 # The stack-name rule the deploy wrapper actually applies, reused rather than

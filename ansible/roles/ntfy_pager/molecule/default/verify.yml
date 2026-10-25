@@ -48,9 +48,9 @@
 
     # The file is read under no_log, and the assertions below name no value. A
     # failure prints only the key or the file.
-    - name: Read the monitoring secrets file
+    - name: Read the pager secrets file
       ansible.builtin.slurp:
-        src: /etc/branchleft/monitoring.env
+        src: /etc/branchleft/ntfy-pager.env
       register: ntfy_pager_verify_env
       no_log: true
 
@@ -62,9 +62,9 @@
           - "'NTFY_OWNER_PASSWORD_HASH=test-sentinel-owner-hash-0003' in ntfy_pager_verify_lines"
           - "'NTFY_MACHINE_PASSWORD_HASH=test-sentinel-machine-hash-0004' in ntfy_pager_verify_lines"
           - "ntfy_pager_verify_lines | select('match', 'NTFY_PAGER_TOKEN=') | list | length == 1"
-          - "'GRAFANA_ADMIN_PASSWORD=test-keep-me' in ntfy_pager_verify_lines"
+          - "'UNOWNED_KEY=test-keep-me' in ntfy_pager_verify_lines"
         quiet: true
-        fail_msg: The monitoring secrets file does not hold the four NTFY_ lines once each, or lost a key the role does not own.
+        fail_msg: The pager secrets file does not hold the four NTFY_ lines once each, or lost a key the role does not own.
       vars:
         ntfy_pager_verify_lines: '{{ (ntfy_pager_verify_env.content | b64decode).splitlines() }}'
       no_log: true
@@ -74,9 +74,9 @@
         ntfy_pager_verify_env: {}
       no_log: true
 
-    - name: Look at the monitoring secrets file
+    - name: Look at the pager secrets file
       ansible.builtin.stat:
-        path: /etc/branchleft/monitoring.env
+        path: /etc/branchleft/ntfy-pager.env
       register: ntfy_pager_verify_env_stat
 
     - name: Assert the secrets file is owned by root and closed to everyone else
@@ -86,7 +86,40 @@
           - ntfy_pager_verify_env_stat.stat.gr_name == 'root'
           - ntfy_pager_verify_env_stat.stat.mode == '0600'
         quiet: true
-        fail_msg: The monitoring secrets file is not root:root mode 0600.
+        fail_msg: The pager secrets file is not root:root mode 0600.
+
+    # One writer per file: the file monitoring_stack owns is not this role's to
+    # write. prepare.yml left it in mode 0644 with an old NTFY_ line, so a role
+    # that wrote a NTFY_ line into it, or touched it (which would set 0600), fails
+    # here. The content is read under no_log and the assertions name no value.
+    - name: Read the monitoring secrets file that monitoring_stack owns
+      ansible.builtin.slurp:
+        src: /etc/branchleft/monitoring.env
+      register: ntfy_pager_verify_other
+      no_log: true
+
+    - name: Look at the monitoring secrets file that monitoring_stack owns
+      ansible.builtin.stat:
+        path: /etc/branchleft/monitoring.env
+      register: ntfy_pager_verify_other_stat
+
+    - name: Assert the role left the file of monitoring_stack as it was
+      ansible.builtin.assert:
+        that:
+          - ntfy_pager_verify_other_stat.stat.mode == '0644'
+          - ntfy_pager_verify_other_lines == ['GRAFANA_ADMIN_PASSWORD=test-keep-me', 'NTFY_PAGER_TOKEN=test-earlier-value-in-the-other-file']
+        quiet: true
+        fail_msg: >-
+          /etc/branchleft/monitoring.env was changed (its mode or its lines). The file is monitoring_stack's alone;
+          this role writes /etc/branchleft/ntfy-pager.env.
+      vars:
+        ntfy_pager_verify_other_lines: '{{ (ntfy_pager_verify_other.content | b64decode).splitlines() }}'
+      no_log: true
+
+    - name: Forget the content of the other file
+      ansible.builtin.set_fact:
+        ntfy_pager_verify_other: {}
+      no_log: true
 
     - name: Look at each file of the stack on the instance
       ansible.builtin.stat:
@@ -207,7 +240,7 @@
       ansible.builtin.assert:
         that:
           - "'NTFY_PAGER_LOG_CANARY' in ntfy_pager_verify_log"
-          - "'Write the four NTFY_ lines into the monitoring secrets file' in ntfy_pager_verify_log"
+          - "'Write the four NTFY_ lines into the pager secrets file' in ntfy_pager_verify_log"
         quiet: true
         fail_msg: The log lacks the canary or the role's task name, so an empty scan would prove nothing.
       no_log: true

@@ -10,8 +10,9 @@ argument_specs:
       it is the unit's WorkingDirectory), installs the monitoring and edge systemd drop-ins, and restarts the
       monitoring stack unit when the fingerprint of what the unit runs from differs
       from the stamp of the last restart that was read back as active. The
-      fingerprint covers the eight stack files, the monitoring drop-in, the renderer
-      and the secrets file without its SNDS_DATA_URL line. The restart happens only
+      fingerprint covers the eight stack files, the monitoring drop-in, the renderer,
+      the secrets file without its SNDS_DATA_URL line, and the pager's secrets file
+      (/etc/branchleft/ntfy-pager.env, written by ntfy_pager and only read here). The restart happens only
       when the unit is enabled, whatever state it is in; a unit that is not enabled
       is left alone for runbook step 7a. The role sets one fact for its caller,
       monitoring_stack_restart_due. The seven values arrive from the caller; the role

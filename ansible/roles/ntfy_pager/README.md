@@ -1,7 +1,7 @@
 # ntfy_pager
 
 This role is the part of the ntfy pager install that runs on the edge host: it
-writes the four ntfy credential lines into the monitoring secrets file and
+writes the four ntfy credential lines into its own secrets file and
 delivers the Alertmanager renderer that the monitoring stack's unit runs before
 it starts. It restarts nothing. It ports sections 2 and 3 of the install
 runbook, `ntfy-pager-install-runbook.md` in the private docs repository, into a
@@ -14,11 +14,15 @@ follows the order the standard sets for a role README (ANS-14).
 
 ## What the role does, and what it does not
 
-1. It creates `/etc/branchleft` and `/etc/branchleft/monitoring.env` when they
+1. It creates `/etc/branchleft` and `/etc/branchleft/ntfy-pager.env` when they
    are absent, closed to `root:root` mode `0600` before any value is written,
    and then writes one line per key, `NTFY_PAGER_TOKEN`, `NTFY_WATCHER_TOKEN`,
    `NTFY_OWNER_PASSWORD_HASH` and `NTFY_MACHINE_PASSWORD_HASH`, with the values
-   the caller gives. Any other line in the file is left in place.
+   the caller gives. Any other line in the file is left in place. The file is
+   this role's alone: `/etc/branchleft/monitoring.env` is written by
+   `monitoring_stack`, and no two roles write one path
+   (`ansible/checks/check_role_paths.py`). The monitoring unit's drop-in loads
+   both files.
 2. It creates the project directory `/opt/branchleft/monitoring` and copies one
    file into it, `render_alertmanager_config.py`, owned by root with mode `0644`.
    The unit's drop-in runs that renderer before the stack starts, and this role
@@ -35,14 +39,14 @@ template, delete a file, change the network, or restart or start anything.
 repository runs either role yet, so the order is written here and held by the
 pair of tests below, not by a playbook.
 
-- This role creates the secrets file when it is absent. `monitoring_stack`
-  creates it with the same owner, group and mode, so whichever runs first
-  creates it and the second changes nothing. The order is therefore not needed
-  to get the file; it is needed so that the file `monitoring_stack` hashes
-  already holds the four `NTFY_` lines, and so that the renderer is on the host
-  before a restart.
-- `monitoring_stack` decides every restart of the monitoring unit. It hashes the
-  secrets file (without its `SNDS_DATA_URL` line) and the renderer this role
+- This role creates its secrets file when it is absent. `monitoring_stack`
+  creates the directory with the same owner, group and mode, so whichever runs
+  first creates it and the second changes nothing; the file is this role's alone.
+  The order is therefore not needed to get the file; it is needed so that the
+  file `monitoring_stack` hashes already holds the four `NTFY_` lines, and so that
+  the renderer is on the host before a restart.
+- `monitoring_stack` decides every restart of the monitoring unit. It hashes this
+  role's secrets file (read only, never written by it) and the renderer this role
   delivers, so a changed `NTFY_` line or a changed renderer restarts the unit on
   that role's next run. This role has no handler and no restart task.
 
@@ -76,8 +80,8 @@ role has four inputs and no default:
 
 `vars/main.yml` holds the constants: the one file the role delivers, the project
 directory it goes into (`ntfy_pager_project_dir`, `/opt/branchleft/monitoring`),
-the four key names, and the path of the monitoring secrets file
-(`ntfy_pager_env_file`, `/etc/branchleft/monitoring.env`). They are not inputs.
+the four key names, and the path of the pager's secrets file
+(`ntfy_pager_env_file`, `/etc/branchleft/ntfy-pager.env`). They are not inputs.
 Both paths are constants because the unit reads what `monitoring_stack`
 fingerprints. A caller that moved the secrets file would send rotated credentials
 to a file no restart looks at. A caller that moved the project directory would put
@@ -113,7 +117,7 @@ must not be given one by a default.
 
 ## What it changes on a host
 
-- `/etc/branchleft` (`root:root`, mode `0755`) and `/etc/branchleft/monitoring.env`,
+- `/etc/branchleft` (`root:root`, mode `0755`) and `/etc/branchleft/ntfy-pager.env`,
   created if absent (`root:root`, mode `0600`, with the access and modification
   times preserved so a second run changes nothing). The four `NTFY_` lines are
   replaced in place or added at the end; every other line is kept.
@@ -179,9 +183,10 @@ container when it finishes and never touches a host.
 
 What each part of the scenario does:
 
-- `prepare.yml` writes an earlier monitoring secrets file (an old
-  `NTFY_PAGER_TOKEN` and a `GRAFANA_` key the role must keep, in mode `0644`) and
-  creates the project directory. It installs no unit: this role touches none.
+- `prepare.yml` writes an earlier pager secrets file (an old `NTFY_PAGER_TOKEN`
+  and an `UNOWNED_KEY` line the role must keep, in mode `0644`), writes
+  `monitoring.env` as `monitoring_stack` leaves it (mode `0644`, with an old
+  `NTFY_` line the role must not touch) and creates the project directory. It installs no unit: this role touches none.
 - `converge.yml` applies the role with four literal sentinel values. They are test
   strings, not credentials, and are literals so a second converge writes the same
   lines.
@@ -192,7 +197,8 @@ What each part of the scenario does:
   verbosity 3, so a task's arguments are in it.
 - `verify.yml`: each `NTFY_` key holds its sentinel once, the other key is kept
   (the file is read under `no_log` and no value is printed); the file is `root:root`
-  `0600`; the renderer is `root:root` `0644` and equal to its source through the
+  `0600`; `monitoring.env` is exactly as `prepare.yml` left it (mode and lines);
+  the renderer is `root:root` `0644` and equal to its source through the
   role's link, the source read on the controller; the project directory holds
   exactly the one renderer, a literal list in the test (it is not derived from
   `ntfy_pager_files`, so a file added to that list is noticed); the log holds the

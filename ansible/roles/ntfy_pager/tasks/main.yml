@@ -16,17 +16,18 @@
     label: '{{ item.key }}'
   no_log: true
 
-# Section 2 of the runbook: the four NTFY_ lines go into the monitoring secrets
-# file. The runbook wrote them with grep -v and a mv of a temporary file; here
-# each key is one lineinfile, so the other keys in the file are left in place.
-# The file is closed to root before any value is written, so the write never
-# happens in a wider mode.
+# Section 2 of the runbook: the four NTFY_ lines go into this role's own secrets
+# file, /etc/branchleft/ntfy-pager.env. The runbook wrote them into the
+# monitoring file with grep -v and a mv of a temporary file; here each key is one
+# lineinfile, so the other keys in the file are left in place. The file is closed
+# to root before any value is written, so the write never happens in a wider
+# mode. One writer per file: this role writes no path monitoring_stack writes,
+# and the monitoring unit's drop-in loads both files.
 #
-# This role runs before monitoring_stack (see the README, "Order"), so on a fresh
-# host it is the one that creates the directory and the file. monitoring_stack
-# creates them with the same owner, group and mode, so the second role to run
-# finds them and changes nothing.
-- name: Create the directory of the monitoring secrets file
+# The directory is made by both roles (a directory is not a write for
+# check_role_paths.py), with the same owner, group and mode, so the second role
+# to run finds it and changes nothing. The file is this role's alone.
+- name: Create the directory of the pager secrets file
   ansible.builtin.file:
     path: '{{ ntfy_pager_env_file | dirname }}'
     state: directory
@@ -34,14 +35,14 @@
     group: root
     mode: '0755'
 
-- name: Look at the monitoring secrets file
+- name: Look at the pager secrets file
   ansible.builtin.stat:
     path: '{{ ntfy_pager_env_file }}'
   register: ntfy_pager_env_stat
 
 # The file's owner and mode are set in the same task that creates it (ANS-16),
 # and the times are preserved, so a second run changes nothing.
-- name: Create the monitoring secrets file closed to root before any value is written
+- name: Create the pager secrets file closed to root before any value is written
   ansible.builtin.file:
     path: '{{ ntfy_pager_env_file }}'
     state: touch
@@ -59,7 +60,7 @@
 # file, on its next run.
 #
 # In check mode the file is not created, so the task runs only when it exists.
-- name: Write the four NTFY_ lines into the monitoring secrets file
+- name: Write the four NTFY_ lines into the pager secrets file
   ansible.builtin.lineinfile:
     path: '{{ ntfy_pager_env_file }}'
     regexp: '^{{ item.key }}='

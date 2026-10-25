@@ -25,7 +25,7 @@
 
 - name: Read the secrets file after the value
   ansible.builtin.slurp:
-    src: /etc/branchleft/monitoring.env
+    src: /etc/branchleft/ntfy-pager.env
   register: ntfy_pager_verify_value_env
   no_log: true
 

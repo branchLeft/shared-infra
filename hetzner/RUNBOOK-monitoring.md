@@ -306,14 +306,18 @@ The owner supplies each value from the password manager. Nothing generates
 one. `GRAFANA_ADMIN_PASSWORD` is read by Grafana only when it first creates its
 database, so changing it later rewrites this file and restarts the stack, but
 does not change the live Grafana password. The four `NTFY_` keys are written by
-the `ntfy_pager` role, which runs before `monitoring_stack`, and
+the `ntfy_pager` role, which runs before `monitoring_stack`, into their own file,
+`/etc/branchleft/ntfy-pager.env` (one path has one writer; the unit's drop-in
+loads that file after `monitoring.env`, and a `NTFY_` line in both takes the
+value from the later one), and
 `STALWART_PROMETHEUS_SECRET` is not written by either role: it keeps its own
 hand step below. The gated run that applies the role is an owner step, not a
 command an agent runs.
 
 **How the role restarts the stack.** It compares a fingerprint of everything
 the unit runs from (the eight stack files, the monitoring drop-in, the
-renderer, and this file without its `SNDS_DATA_URL` line) with a stamp it
+renderer, the pager's `ntfy-pager.env`, and this file without its
+`SNDS_DATA_URL` line) with a stamp it
 writes only after a restart was read back as active. When they differ and the
 unit is enabled, it restarts the unit, whatever state the unit is in. A unit
 that is not enabled is left alone: step 7a is its first start. A run that

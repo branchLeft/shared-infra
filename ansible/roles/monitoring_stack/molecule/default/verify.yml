@@ -262,6 +262,7 @@
   vars:
     verify_repo: '{{ playbook_dir }}/../../../../..'
     verify_env_file: /etc/branchleft/monitoring.env
+    verify_ntfy_env_file: /etc/branchleft/ntfy-pager.env
     verify_edge_source: '{{ verify_repo }}/hetzner/monitoring/systemd/edge.override.conf'
     verify_edge_dir: /etc/systemd/system/branchleft-compose@edge.service.d
     verify_renderer: /opt/branchleft/monitoring/render_alertmanager_config.py
@@ -355,25 +356,34 @@
         quiet: true
         fail_msg: The renderer's path differs between the monitoring drop-in, ntfy_pager's file list and the role's constant.
 
-    # The secrets file's path is also held in three places: this role's constant,
-    # ntfy_pager's constant and the monitoring drop-in's EnvironmentFile. Both
-    # roles hold it in vars/, so no caller can move one copy: ntfy_pager writes
-    # the NTFY_ lines into its copy and this role hashes its own, so a drift
-    # between them would stop a rotated credential restarting the unit while the
-    # rest of the scenario stayed green. A path moved back to defaults/ or
-    # dropped from ntfy_pager's vars/ reads as absent here and fails. The message
-    # names all three paths.
-    - name: Assert the three places agree on the secrets file's path
+    # There are two secrets files, one writer each: monitoring_stack writes
+    # monitoring.env and ntfy_pager writes ntfy-pager.env (check_role_paths.py
+    # fails if two roles write one path). The unit reads both, so each path is held
+    # in several places that must agree. monitoring.env: this role's constant and
+    # the drop-in's first EnvironmentFile. ntfy-pager.env: ntfy_pager's constant,
+    # this role's read-only copy of it (which puts its hash in the fingerprint) and
+    # the drop-in's second EnvironmentFile. The roles hold their paths in vars/, so
+    # no caller can move one copy: ntfy_pager writes the NTFY_ lines into its copy
+    # and this role hashes its own, so a drift between them would stop a rotated
+    # credential restarting the unit while the rest of the scenario stayed green. A
+    # path moved back to defaults/ or dropped from vars/ reads as absent here and
+    # fails. The message names every path.
+    - name: Assert the places agree on the paths of the two secrets files
       ansible.builtin.assert:
         that:
           - monitoring_stack_verify_role.monitoring_stack_env_file == verify_env_file
-          - (monitoring_stack_verify_ntfy.ntfy_pager_env_file | default('absent')) == verify_env_file
+          - (monitoring_stack_verify_ntfy.ntfy_pager_env_file | default('absent')) == verify_ntfy_env_file
+          - (monitoring_stack_verify_role.monitoring_stack_ntfy_env_file | default('absent')) == verify_ntfy_env_file
+          - verify_env_file != verify_ntfy_env_file
           - ('EnvironmentFile=-' ~ verify_env_file) in monitoring_stack_verify_dropin_text
+          - ('EnvironmentFile=-' ~ verify_ntfy_env_file) in monitoring_stack_verify_dropin_text
         quiet: true
         fail_msg: >-
-          The secrets file's path differs between this role's constant ({{ monitoring_stack_verify_role.monitoring_stack_env_file }}),
-          ntfy_pager's constant ({{ monitoring_stack_verify_ntfy.ntfy_pager_env_file | default('not in its vars/main.yml') }}) and the monitoring drop-in's
-          EnvironmentFile, which must name {{ verify_env_file }}.
+          The secrets files' paths differ. This role writes {{ monitoring_stack_verify_role.monitoring_stack_env_file }}
+          (must be {{ verify_env_file }}). ntfy_pager writes
+          {{ monitoring_stack_verify_ntfy.ntfy_pager_env_file | default('nothing: not in its vars/main.yml') }} and this role hashes
+          {{ monitoring_stack_verify_role.monitoring_stack_ntfy_env_file | default('nothing: not in its vars/main.yml') }}
+          (both must be {{ verify_ntfy_env_file }}). The monitoring drop-in must name both files in an EnvironmentFile=- line.
 
     # The project directory is held in three places as well: this role's constant,
     # ntfy_pager's constant and the WorkingDirectory the shared unit template
@@ -414,6 +424,8 @@
   hosts: all
   gather_facts: false
   vars:
+    verify_env_file: /etc/branchleft/monitoring.env
+    verify_ntfy_env_file: /etc/branchleft/ntfy-pager.env
     verify_rot_a: test-sentinel-rotated-smtp-0008
     verify_rot_b: test-sentinel-rotated-smtp-0011
     verify_rot_c: test-sentinel-rotated-smtp-0012
@@ -479,16 +491,17 @@
         monitoring_stack_verify_fp_definition: >-
           {{ monitoring_stack_verify_vars_text.split("monitoring_stack_fingerprint_files: >-")[1].split("monitoring_stack_stamp_dir:")[0] }}
 
-    - name: Assert the fingerprint hashes the eight stack files, the monitoring drop-in and the renderer, and not the edge drop-in
+    - name: Assert the fingerprint hashes the eight stack files, the monitoring drop-in, the renderer and the pager's secrets file, and not the edge drop-in
       ansible.builtin.assert:
         that:
           - "'monitoring_stack_files' in monitoring_stack_verify_fp_definition"
           - "'monitoring_stack_dropin_dest' in monitoring_stack_verify_fp_definition"
           - "'monitoring_stack_renderer' in monitoring_stack_verify_fp_definition"
+          - "'monitoring_stack_ntfy_env_file' in monitoring_stack_verify_fp_definition"
           - "'monitoring_stack_edge' not in monitoring_stack_verify_fp_definition"
         quiet: true
         fail_msg: >-
-          The list of files the fingerprint hashes is not the stack files, the monitoring drop-in and the renderer:
+          The list of files the fingerprint hashes is not the stack files, the monitoring drop-in, the renderer and the pager's secrets file:
           {{ monitoring_stack_verify_fp_definition }}.
 
     # ----- No change, no restart -----
@@ -727,6 +740,49 @@
           - monitoring_stack_verify_snaps.ntfy_first.stamp != monitoring_stack_verify_snaps.snds_after.stamp
         quiet: true
         fail_msg: The values and renderer that ntfy_pager wrote did not restart the unit exactly once on the next run of this role.
+
+    # One writer per file, on the host: the four NTFY_ lines are in the pager's
+    # file, a root-only regular file, and in no line of monitoring.env. Both files
+    # are read under no_log and the assertions name no value.
+    - name: Read the pager's secrets file and the monitoring secrets file
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ verify_ntfy_env_file }}'
+        - '{{ verify_env_file }}'
+      register: monitoring_stack_verify_two_files
+      no_log: true
+
+    - name: Look at the pager's secrets file
+      ansible.builtin.stat:
+        path: '{{ verify_ntfy_env_file }}'
+      register: monitoring_stack_verify_ntfy_stat
+
+    - name: Assert the NTFY_ lines are in the pager's file alone, which is root-only
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_ntfy_stat.stat.isreg
+          - monitoring_stack_verify_ntfy_stat.stat.pw_name == 'root'
+          - monitoring_stack_verify_ntfy_stat.stat.gr_name == 'root'
+          - monitoring_stack_verify_ntfy_stat.stat.mode == '0600'
+          - ('NTFY_PAGER_TOKEN=' ~ verify_ntfy_pager_1) in monitoring_stack_verify_pager_lines
+          - ('NTFY_WATCHER_TOKEN=' ~ verify_ntfy_watcher) in monitoring_stack_verify_pager_lines
+          - ('NTFY_OWNER_PASSWORD_HASH=' ~ verify_ntfy_owner) in monitoring_stack_verify_pager_lines
+          - ('NTFY_MACHINE_PASSWORD_HASH=' ~ verify_ntfy_machine) in monitoring_stack_verify_pager_lines
+          - monitoring_stack_verify_monitoring_lines | select('match', 'NTFY_') | list | length == 0
+        quiet: true
+        fail_msg: >-
+          The four NTFY_ lines are not all in {{ verify_ntfy_env_file }} (root:root, 0600), or one of them is in
+          {{ verify_env_file }}, which is monitoring_stack's alone.
+      vars:
+        monitoring_stack_verify_pager_lines: '{{ (monitoring_stack_verify_two_files.results[0].content | b64decode).splitlines() }}'
+        monitoring_stack_verify_monitoring_lines: '{{ (monitoring_stack_verify_two_files.results[1].content | b64decode).splitlines() }}'
+      no_log: true
+
+    - name: Forget the content of both files
+      ansible.builtin.set_fact:
+        monitoring_stack_verify_two_files: {}
+      no_log: true
 
     - name: Apply ntfy_pager with the pager token rotated and nothing else changed
       ansible.builtin.include_role:
@@ -1605,7 +1661,7 @@
         that:
           - "'MONITORING_STACK_LOG_CANARY' in monitoring_stack_verify_log"
           - "'Write the keys into the monitoring secrets file' in monitoring_stack_verify_log"
-          - "'Write the four NTFY_ lines into the monitoring secrets file' in monitoring_stack_verify_log"
+          - "'Write the four NTFY_ lines into the pager secrets file' in monitoring_stack_verify_log"
         quiet: true
         fail_msg: The log lacks the canary or the task name of either role, so an empty scan would prove nothing.
       no_log: true

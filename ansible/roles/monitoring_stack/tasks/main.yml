@@ -16,12 +16,13 @@
     label: '{{ item.key }}'
   no_log: true
 
-# The directory and the file are created here and by ntfy_pager, which runs
-# first (see the README, "Order"): whichever runs first creates them, with the
-# same owner, group and mode, so the second finds them and changes nothing. The
-# file is touched with its owner, group and mode in the same task, so it never
-# exists in a wider mode. The times are preserved, so a second run changes
-# nothing.
+# The directory is made here and by ntfy_pager, which runs first (see the README,
+# "Order"), with the same owner, group and mode, so the second finds it and
+# changes nothing. The file is this role's alone: ntfy_pager writes its NTFY_
+# lines into /etc/branchleft/ntfy-pager.env, and this role only reads that file
+# (see the hash below). The file is touched with its owner, group and mode in the
+# same task, so it never exists in a wider mode. The times are preserved, so a
+# second run changes nothing.
 - name: Create the directory of the monitoring secrets file
   ansible.builtin.file:
     path: '{{ monitoring_stack_env_dir }}'
@@ -171,7 +172,8 @@
   check_mode: false
 
 # sha256 of each file the unit runs from: the eight stack files, the monitoring
-# drop-in and the renderer. A file that is missing hashes as absent.
+# drop-in, the renderer and the pager's secrets file (read here, written by
+# ntfy_pager). A file that is missing hashes as absent.
 - name: Hash the files the unit runs from
   ansible.builtin.stat:
     path: '{{ item }}'
