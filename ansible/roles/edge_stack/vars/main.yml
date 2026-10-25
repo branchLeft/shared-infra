@@ -10,6 +10,10 @@ edge_stack_image_env_file: /etc/branchleft/edge.image.env
 edge_stack_lock_file: /etc/branchleft/edge.deploy.lock
 edge_stack_unit: branchleft-compose@edge.service
 
+# The instance's drop-in, bounding the edge unit's process tree on the colocated host
+# (README, "The unit's drop-in"). The file is files/edge.override.conf.
+edge_stack_dropin_dir: /etc/systemd/system/branchleft-compose@edge.service.d
+
 # The unit file states that count as enabled.
 edge_stack_enabled_states:
   - enabled
