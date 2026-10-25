@@ -22,7 +22,11 @@ LIST_SHARDS = ROOT / "ansible" / "harness" / "list_shards.py"
 
 
 def real_shards() -> list[dict[str, str]]:
-    """Return the shards of the real tree, listed by the program the workflow runs."""
+    """Return the shards of the real tree, listed by the program the workflow runs.
+
+    Raises:
+        AssertionError: list_shards.py cannot be loaded.
+    """
     spec = importlib.util.spec_from_file_location("list_shards_under_test", LIST_SHARDS)
     if spec is None or spec.loader is None:
         message = "list_shards.py cannot be loaded"
@@ -54,9 +58,7 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(self.shards, ci_select.select("merge_group", [], self.shards, ROOT))
 
     def test_a_push_to_main_runs_no_shard(self) -> None:
-        self.assertEqual(
-            [], ci_select.select("push", ["ansible/harness/x.py"], self.shards, ROOT)
-        )
+        self.assertEqual([], ci_select.select("push", ["ansible/harness/x.py"], self.shards, ROOT))
 
     def test_a_pull_request_that_cannot_say_what_changed_runs_every_shard(self) -> None:
         self.assertEqual(self.shards, ci_select.select("pull_request", None, self.shards, ROOT))
@@ -189,7 +191,12 @@ class TreeFixtureTest(unittest.TestCase):
         self.write("hetzner/x/y.conf", "x\n")
         self.write("hetzner/x/z.conf", "x\n")
         self.shards = [
-            {"name": "reader", "path": "ansible/roles/reader", "scenario": "default", "kind": "role"},
+            {
+                "name": "reader",
+                "path": "ansible/roles/reader",
+                "scenario": "default",
+                "kind": "role",
+            },
             {"name": "user", "path": "ansible/roles/user", "scenario": "default", "kind": "role"},
             {"name": "loner", "path": "ansible/roles/loner", "scenario": "default", "kind": "role"},
             {"name": "pat", "path": "ansible/patterns/pat", "scenario": "default", "kind": "role"},

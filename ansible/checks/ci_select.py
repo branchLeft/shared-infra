@@ -82,7 +82,9 @@ NO_SHARD = {"name": "none", "path": "", "scenario": "", "kind": "none"}
 
 def inside(path: str, entries: Sequence[str]) -> bool:
     """Return whether ``path`` is one of ``entries`` or under one that ends in a slash."""
-    return any(path.startswith(entry) if entry.endswith("/") else path == entry for entry in entries)
+    return any(
+        path.startswith(entry) if entry.endswith("/") else path == entry for entry in entries
+    )
 
 
 def outside_reads(text: str) -> set[str]:
@@ -194,7 +196,9 @@ def references(root: Path) -> dict[str, set[str]]:
     named_by: dict[str, set[str]] = {path: set() for path in paths}
     for target in paths:
         name = re.escape(target.rsplit("/", 1)[1])
-        pattern = re.compile(r"(?:branchleft\.|\.\./|roles/|patterns/)" + name + r"(?![A-Za-z0-9_])")
+        pattern = re.compile(
+            r"(?:branchleft\.|\.\./|roles/|patterns/)" + name + r"(?![A-Za-z0-9_])"
+        )
         for other, text in texts.items():
             if other != target and pattern.search(text) is not None:
                 named_by[target].add(other)
@@ -296,7 +300,9 @@ def main(argv: Sequence[str]) -> int:
     args = parser.parse_args(argv)
     every = parse_matrix(args.matrix_file.read_text(encoding="utf-8"))
     if every is None:
-        print("The shard matrix is empty or malformed, so nothing can be selected.", file=sys.stderr)
+        print(
+            "The shard matrix is empty or malformed, so nothing can be selected.", file=sys.stderr
+        )
         return 1
     chosen = select(args.event, read_changed(args.changed_file), every, args.root)
     print(f"{args.event}: {len(chosen)} of {len(every)} shard(s) selected.", file=sys.stderr)
