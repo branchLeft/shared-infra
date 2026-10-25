@@ -1,9 +1,11 @@
 """Tests for the Ansible path filter.
 
-The filter in .github/workflows/ansible.yml decides whether the Ansible shards run. A role
-test that reads a file outside ansible/ must run when that file changes, so every such
-path has to be named in the filter. These tests find the paths the roles read and fail
-when one is not named.
+The filter in .github/workflows/ansible.yml decides whether the Ansible lint job runs, and
+ci_select.py decides which shards run. A role test that reads a file outside ansible/ must
+run when that file changes, so every such path has to be inside what the filter watches. The
+scan that finds those paths is ci_select.reads_by_path, the one the shard choice uses, so the
+filter and the choice cannot disagree about what a role reads. These tests fail when a path
+a role reads is outside the filter.
 """
 
 from __future__ import annotations
@@ -12,18 +14,13 @@ import re
 import unittest
 from pathlib import Path
 
+import ci_select
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ansible.yml"
-ROLES = ROOT / "ansible" / "roles"
-
-# The repository directories a role test reads outside ansible/.
-OUTSIDE = r"(?:hetzner-host|hetzner)"
-# A literal path in a file, such as '{{ verify_repo }}/hetzner/provision/x.service'.
-LITERAL = re.compile(r"(?<![\w.-])(" + OUTSIDE + r"/[A-Za-z0-9_./@-]+)")
-# A path built in Python, such as REPO / "hetzner" / "provision".
-JOINED = re.compile(r'"(' + OUTSIDE + r')"((?:\s*/\s*"[^"]+")+)')
-PART = re.compile(r'"([^"]+)"')
 FILTER = re.compile(r"watched=\(\n(.*?)\n\s*\)", re.DOTALL)
+# The directories watched whole, whatever they hold now or later.
+WHOLE = ("ansible/", "hetzner/")
 
 
 def parse_watched(workflow_text: str) -> list[str]:
@@ -32,75 +29,6 @@ def parse_watched(workflow_text: str) -> list[str]:
     if match is None:
         return []
     return [line.strip() for line in match.group(1).splitlines() if line.strip()]
-
-
-def outside_reads(text: str) -> set[str]:
-    """Return the paths outside ansible/ that a file names, with no trailing slash or dot."""
-    found: set[str] = set()
-    for match in LITERAL.finditer(text):
-        found.add(match.group(1).rstrip("/."))
-    for match in JOINED.finditer(text):
-        parts = [match.group(1), *PART.findall(match.group(2))]
-        found.add("/".join(parts).rstrip("/."))
-    return found
-
-
-def outside_links(role: Path) -> set[str]:
-    """Return the paths outside ansible/ that a role's symlinks point at.
-
-    A role ships a file or directory by linking to it, so the link's target is read
-    whenever the role is applied.
-    """
-    found: set[str] = set()
-    for path in role.rglob("*"):
-        if not path.is_symlink():
-            continue
-        target = (path.parent / path.readlink()).resolve()
-        try:
-            relative = target.relative_to(ROOT)
-        except ValueError:
-            continue
-        if relative.parts and relative.parts[0] != "ansible":
-            found.add(relative.as_posix())
-    return found
-
-
-def role_text(role: Path, areas: tuple[str, ...]) -> str:
-    """Return the text of every file in the named areas of a role."""
-    chunks = []
-    for area in areas:
-        base = role / area
-        if base.is_dir():
-            for path in sorted(base.rglob("*")):
-                if path.is_file():
-                    chunks.append(path.read_text(encoding="utf-8", errors="ignore"))
-    return "\n".join(chunks)
-
-
-def role_reads(roles: Path) -> dict[str, set[str]]:
-    """Map each outside path that a role reads to the roles that read it.
-
-    A role reads a file either by its full path (found in molecule/ and tests/) or by its
-    name inside a directory outside ansible/ that the role names, such as the four
-    reconciler sources the egress_nat verify reads from hetzner/provision. Those names
-    are looked for in the role's molecule/, tests/, vars/ and defaults/ text.
-    """
-    reads: dict[str, set[str]] = {}
-    for role in sorted(roles.iterdir()):
-        if not role.is_dir():
-            continue
-        tokens = outside_reads(role_text(role, ("molecule", "tests")))
-        tokens |= outside_links(role)
-        everything = role_text(role, ("molecule", "tests", "vars", "defaults"))
-        for token in list(tokens):
-            directory = ROOT / token
-            if directory.is_dir():
-                for child in directory.iterdir():
-                    if child.is_file() and child.name in everything:
-                        tokens.add(f"{token}/{child.name}")
-        for token in tokens:
-            reads.setdefault(token, set()).add(role.name)
-    return reads
 
 
 def uncovered(reads: set[str], watched: list[str]) -> list[str]:
@@ -126,13 +54,37 @@ def uncovered(reads: set[str], watched: list[str]) -> list[str]:
 class WatchedPathsTest(unittest.TestCase):
     def setUp(self) -> None:
         self.watched = parse_watched(WORKFLOW.read_text(encoding="utf-8"))
-        self.reads = role_reads(ROLES)
+        self.reads = ci_select.reads_by_path(ROOT)
 
     def test_every_outside_path_a_role_reads_is_watched(self) -> None:
         self.assertTrue(self.watched, "the workflow has no watched=( ... ) array")
         missing = uncovered(set(self.reads), self.watched)
         detail = [f"{path} (read by {', '.join(sorted(self.reads[path]))})" for path in missing]
         self.assertEqual([], detail, "these paths are read by role tests but not in the filter")
+
+    def test_ansible_and_hetzner_are_watched_whole(self) -> None:
+        # A file named one by one is a file the next edit forgets to name.
+        for directory in WHOLE:
+            with self.subTest(directory=directory):
+                self.assertIn(directory, self.watched)
+
+    def test_the_lint_files_and_the_two_files_the_tools_read_are_watched(self) -> None:
+        for path in (
+            ".ansible-lint",
+            ".yamllint",
+            ".github/workflows/ansible.yml",
+            ".github/workflows/ansible-delivery.yml",
+            "hetzner-host/cloudInit.ts",
+            "hetzner-host/pullBootstrapFixed.json",
+        ):
+            with self.subTest(path=path):
+                self.assertIn(path, self.watched)
+                self.assertTrue((ROOT / path).is_file(), path)
+
+    def test_everything_that_runs_every_shard_is_watched(self) -> None:
+        # A change the shard choice treats as deciding every role must start the workflow's
+        # work at all, or it would pass in silence.
+        self.assertEqual([], uncovered(set(ci_select.EVERY_SHARD), self.watched))
 
     def test_scanner_finds_known_reads(self) -> None:
         # A control: the scan must see the reads it is meant to find, or a clean result
@@ -144,7 +96,7 @@ class WatchedPathsTest(unittest.TestCase):
         self.assertIn("hetzner/control-plane/stack", self.reads)
 
     def test_a_read_with_no_entry_is_reported(self) -> None:
-        watched = ["ansible", "hetzner/provision/branchleft_deploy.py"]
+        watched = ["ansible/", "hetzner-host/cloudInit.ts"]
         self.assertEqual(
             ["hetzner/provision/branchleft-nat.service"],
             uncovered({"hetzner/provision/branchleft-nat.service"}, watched),

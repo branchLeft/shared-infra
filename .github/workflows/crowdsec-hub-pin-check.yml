@@ -3,7 +3,8 @@ name: crowdsec-hub-pin-check
 # Detects when hetzner/edge/stack/compose.yml's pinned CrowdSec image is no
 # longer upstream's newest release -- the point at which config.yaml.local's
 # `cscli.hub_branch: master` pin stops being what an unpinned agent would
-# choose, and instead starts pulling hub content built for a newer one.
+# choose, and instead starts pulling hub content built for a newer one -- and
+# then opens a pull request that moves the pin to that release.
 #
 # Scheduled rather than a pull-request gate: the trigger is an upstream
 # release, an event no pull request against this repository can depend on,
@@ -11,12 +12,26 @@ name: crowdsec-hub-pin-check
 # reachable -- that is the exact dependency the pin this checks exists to
 # remove from the container's own start path.
 #
-# Failure mode: this job goes red in the public Actions tab (visible to
-# anyone -- this repository is public) and GitHub emails the account that
-# owns the workflow's schedule (by default whoever last edited the `cron`
-# line) that a scheduled run failed. It is not a required check and cannot
-# block anything; a red run here means "go bump the crowdsec image digest",
-# not "something merged is broken".
+# What a run does, by the script's exit status:
+#   0  the pin is current: nothing happens;
+#   1  the pin is stale: a pull request with the new tag and digest is opened
+#      (once per release: a branch, or a pull request open, merged or closed,
+#      for the same release ends the run green with nothing new). The run is
+#      green, because the finding is now a pull request the owner can merge,
+#      not a failure to read about;
+#   2  the check itself could not run (the pin or upstream's answer could not
+#      be read): the run goes red in the public Actions tab and GitHub emails
+#      the account that owns the workflow's schedule (by default whoever last
+#      edited the `cron` line).
+# It is not a required check and cannot block anything.
+#
+# The pull request is opened with the workflow's own token (`contents: write` to
+# make the branch and the commit through the API, which GitHub signs, and
+# `pull-requests: write`); no personal token and no App key is involved. A pull
+# request opened by that token does not start the pull-request workflows, so its
+# required checks are not reported until a person closes and reopens it; merging
+# it restarts the edge container and briefly interrupts TLS for branchleft.co.uk,
+# so the merge stays the owner's decision.
 
 on:
   schedule:
@@ -33,13 +48,99 @@ jobs:
     name: Compare the pinned crowdsec image against upstream latest
     runs-on: ubuntu-latest
     # Observed 0.07-0.12min over the last 5 successful runs (p95 0.12min) --
-    # small sample (daily schedule), but very consistent.
+    # small sample (daily schedule), but very consistent. The pull request
+    # path adds three short API calls.
     timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # Exit 0 and 1 are answers; anything else is the check failing to run, and
+      # keeps its own status so the log says which one happened.
       - name: Check the hub pin
-        run: python3 hetzner/scripts/check-crowdsec-hub-pin.py
+        id: check
+        run: |
+          set -uo pipefail
+          status=0
+          python3 hetzner/scripts/check-crowdsec-hub-pin.py || status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          if [ "$status" -gt 1 ]; then
+            exit "$status"
+          fi
+
+      # Only a stale pin gets here. The new tag is upstream's latest release, the
+      # digest is the registry's own answer for that tag (the same index digest the
+      # current pin holds), and the commit is made through the contents API on a
+      # branch named for the release, so a second run for the same release finds it.
+      - name: Open a pull request with the new pin
+        if: steps.check.outputs.status == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          compose=hetzner/edge/stack/compose.yml
+          agent='branchleft-shared-infra-crowdsec-hub-pin-check'
+
+          latest=$(curl --fail --silent --show-error --max-time 20 -H "User-Agent: $agent" https://version.crowdsec.net/latest | jq -r '.name')
+          if ! [[ "$latest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Upstream's latest release name '$latest' is not a plain vX.Y.Z tag, so no pin was proposed."
+            exit 1
+          fi
+          branch="crowdsec-pin-$latest"
+
+          seen=$(gh pr list --repo "$REPOSITORY" --head "$branch" --state all --json number --jq '.[0].number // empty')
+          if [ -n "$seen" ]; then
+            echo "Pull request #$seen already proposes $latest (open, merged or closed), so nothing new is opened."
+            exit 0
+          fi
+
+          token=$(curl --fail --silent --show-error --max-time 20 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:crowdsecurity/crowdsec:pull' | jq -r '.token')
+          accept='application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json'
+          digest=$(curl --fail --silent --show-error --head --max-time 20 -H "Authorization: Bearer $token" -H "Accept: $accept" "https://registry-1.docker.io/v2/crowdsecurity/crowdsec/manifests/$latest" | tr -d '\r' | awk -F': ' 'tolower($1) == "docker-content-digest" { print $2 }')
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::The registry gave no digest for crowdsecurity/crowdsec:$latest ('$digest'), so no pin was proposed."
+            exit 1
+          fi
+
+          pattern='image: docker\.io/crowdsecurity/crowdsec:v[0-9][^@[:space:]]*@sha256:[0-9a-f]{64}'
+          if [ "$(grep -cE "$pattern" "$compose")" -ne 1 ]; then
+            echo "::error::$compose must hold exactly one crowdsec image pin; refusing to guess which to move."
+            exit 1
+          fi
+          sed -E "s#(image: docker\.io/crowdsecurity/crowdsec:)v[0-9][^@[:space:]]*@sha256:[0-9a-f]{64}#\1${latest}@${digest}#" "$compose" > "$RUNNER_TEMP/compose.yml"
+          if cmp -s "$compose" "$RUNNER_TEMP/compose.yml"; then
+            echo "::error::The new pin is the same as the old one; refusing to open an empty pull request."
+            exit 1
+          fi
+
+          if ! gh api "repos/$REPOSITORY/git/ref/heads/$branch" > /dev/null 2>&1; then
+            gh api --method POST "repos/$REPOSITORY/git/refs" -f "ref=refs/heads/$branch" -f "sha=$(git rev-parse HEAD)" > /dev/null
+          fi
+          blob=$(gh api "repos/$REPOSITORY/contents/$compose?ref=$branch" --jq '.sha')
+          gh api --method PUT "repos/$REPOSITORY/contents/$compose" \
+            -f "message=Move the CrowdSec image pin to $latest" \
+            -f "content=$(base64 --wrap=0 "$RUNNER_TEMP/compose.yml")" \
+            -f "sha=$blob" \
+            -f "branch=$branch" > /dev/null
+
+          {
+            echo "The pinned CrowdSec image in \`$compose\` is behind upstream's newest release, \`$latest\`."
+            echo
+            echo "While it is behind, \`cscli.hub_branch: master\` in \`crowdsec/config.yaml.local\` is no longer what an unpinned agent would choose: the pinned agent pulls hub content built for a newer release. Moving the image to \`$latest\` makes that pin correct again."
+            echo
+            echo "- tag: \`$latest\`"
+            echo "- index digest, from the registry: \`$digest\`"
+            echo
+            echo "Merging restarts the edge container and briefly interrupts TLS for branchleft.co.uk, so read the release notes first and merge deliberately."
+            echo
+            echo "Opened by the \`crowdsec-hub-pin-check\` workflow with its own token. A pull request opened that way does not start the pull-request checks: close and reopen it to run them."
+          } > "$RUNNER_TEMP/body.md"
+          gh pr create --repo "$REPOSITORY" --base main --head "$branch" \
+            --title "Move the CrowdSec image pin to $latest" \
+            --body-file "$RUNNER_TEMP/body.md"
