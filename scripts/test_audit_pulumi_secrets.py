@@ -525,7 +525,7 @@ class ProviderSelectionSiteTests(unittest.TestCase):
         # sites any more: it creates a new per-tenant *state bucket*, never a
         # secrets-provider selection, and the earlier inventory carrying it
         # here was a miscategorisation. It is tracked as its own item
-        # (branchLeft/workspace#105) rather than folded into this gate.
+        # rather than folded into this gate; that is tracked separately.
         inventory = audit.load_inventory(audit.DEFAULT_INVENTORY)
         sites = audit.audit_provider_selection_sites(inventory, None)
         self.assertTrue(sites, "the tenant-provisioning minting sites must stay enumerated")
