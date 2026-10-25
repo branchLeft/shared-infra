@@ -302,8 +302,8 @@ afterwards.
 ## `protectionChain`: handler evaluation order
 
 The handler chain, in evaluation order: throttle runs **before** the WAF, which is the
-one place this edge deliberately reorders the Cloud Armor baseline (whose WAF rules sat
-at priority 1000–1003, ahead of the throttle at 2000). Cloud Armor evaluated on Google's
-edge fleet; this evaluates on two vCPUs, so a flood that reached the WAF first would
+one place this edge deliberately reorders the rules the retired edge ran (its WAF sat
+at priority 1000–1003, ahead of the throttle at 2000). The retired edge evaluated on a
+shared fleet; this one evaluates on two vCPUs, so a flood that reached the WAF first would
 spend exactly the capacity the throttle exists to protect. The observable difference is
 confined to a client that is both flooding and attacking: it is answered 429 rather than 403.
