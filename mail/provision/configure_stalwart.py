@@ -5,8 +5,10 @@ Reasoning: see configure_stalwart.md, "Module overview".
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
+import socket
 import subprocess
 import sys
 import urllib.error
@@ -601,9 +603,55 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+# The failures that mean the server gave no answer. HTTPError is a URLError
+# too, so describe_failure checks for it first; IncompleteRead is not an
+# OSError, hence HTTPException by name.
+NO_ANSWER_ERRORS = (
+    urllib.error.URLError,
+    ConnectionError,
+    TimeoutError,
+    socket.timeout,
+    socket.gaierror,
+    http.client.HTTPException,
+)
+
+
+def describe_failure(exc: Exception) -> str:
+    """One line for a failure of main(), by what it says about the server:
+    an HTTP error status (it answered), no answer at all (a restart is the
+    likely cause), or anything else an OSError can be (a local file or
+    binary, never blamed on the server). Never includes the request headers
+    or the response body.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        line = (
+            f"configure_stalwart: the Stalwart API at {BASE_URL} answered HTTP {exc.code} "
+            f"{exc.reason}; the server is up, so check the request and the credential"
+        )
+    elif isinstance(exc, NO_ANSWER_ERRORS):
+        cause = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+        cause_class = type(cause) if isinstance(cause, BaseException) else type(exc)
+        line = (
+            f"configure_stalwart: no answer from the Stalwart API at {BASE_URL}: "
+            f"{cause_class.__name__}: {cause}; the container may still be restarting; "
+            "wait a few seconds and run it again"
+        )
+    else:
+        line = f"configure_stalwart: {type(exc).__name__}: {exc}"
+    return " ".join(line.split())
+
+
+def run() -> int:
+    """Runs main(). Returns 1 after printing one stderr line for an HTTP
+    error status, a missing answer from the server or any other OSError;
+    every other exception propagates unchanged.
+    """
     try:
-        sys.exit(main())
-    except urllib.error.URLError as exc:
-        print(f"configure_stalwart: could not reach the Stalwart API at {BASE_URL}: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return main()
+    except (OSError, http.client.HTTPException) as exc:
+        print(describe_failure(exc), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(run())

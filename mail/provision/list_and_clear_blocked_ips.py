@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import json
 import os
+import socket
 import sys
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -124,10 +127,79 @@ def main() -> int:
     # BlockedIp is enforced from an in-memory cache separate from the
     # registry object -- destroying the object alone leaves the live block
     # in place until this reload runs too.
-    _jmap_call(auth, "x:Action/set", {"create": {"a1": {"@type": "ReloadBlockedIps"}}})
+    try:
+        _jmap_call(auth, "x:Action/set", {"create": {"a1": {"@type": "ReloadBlockedIps"}}})
+    except (OSError, http.client.HTTPException) as exc:
+        message = (
+            f"list_and_clear_blocked_ips: {describe_cause(exc)} while reloading the block list; "
+            "the selected entries were already deleted from the registry but the live block list "
+            "was not reloaded, so those IPs may still be blocked, and running --ip again will "
+            "report them as not blocked; check the server before relying on the clear"
+        )
+        print(" ".join(message.split()), file=sys.stderr)
+        return 1
     print(f"cleared {len(ids)} blocked IP(s)")
     return 0
 
 
+# The failures that mean the server gave no answer. HTTPError is a URLError
+# too, so describe_failure checks for it first; IncompleteRead is not an
+# OSError, hence HTTPException by name.
+NO_ANSWER_ERRORS = (
+    urllib.error.URLError,
+    ConnectionError,
+    TimeoutError,
+    socket.timeout,
+    socket.gaierror,
+    http.client.HTTPException,
+)
+
+
+def describe_cause(exc: Exception) -> str:
+    """The exception class and message of a failed API call; a URLError is
+    described by the failure it wraps. Never includes the request headers or
+    the response body.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"{type(exc).__name__}: HTTP {exc.code} {exc.reason}"
+    cause = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    cause_class = type(cause) if isinstance(cause, BaseException) else type(exc)
+    return f"{cause_class.__name__}: {cause}"
+
+
+def describe_failure(exc: Exception) -> str:
+    """One line for a failure of main(), by what it says about the server:
+    an HTTP error status (it answered), no answer at all (a restart is the
+    likely cause), or anything else an OSError can be (a local file or
+    binary, never blamed on the server).
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        line = (
+            f"list_and_clear_blocked_ips: the Stalwart API at {BASE_URL} answered HTTP {exc.code} "
+            f"{exc.reason}; the server is up, so check the request and the credential"
+        )
+    elif isinstance(exc, NO_ANSWER_ERRORS):
+        line = (
+            f"list_and_clear_blocked_ips: no answer from the Stalwart API at {BASE_URL}: "
+            f"{describe_cause(exc)}; the container may still be restarting; "
+            "wait a few seconds and run it again"
+        )
+    else:
+        line = f"list_and_clear_blocked_ips: {type(exc).__name__}: {exc}"
+    return " ".join(line.split())
+
+
+def run() -> int:
+    """Runs main(). Returns 1 after printing one stderr line for an HTTP
+    error status, a missing answer from the server or any other OSError;
+    every other exception propagates unchanged.
+    """
+    try:
+        return main()
+    except (OSError, http.client.HTTPException) as exc:
+        print(describe_failure(exc), file=sys.stderr)
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())
