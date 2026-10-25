@@ -464,6 +464,24 @@ class ControlPlaneStackTests(unittest.TestCase):
                 document = stack_document(service, "command: 'start \"--masterkeyFile'\n")
                 assert_refused(self, document, service, "command", "cannot be split")
 
+    def test_the_checker_refuses_a_command_or_environment_it_cannot_read(self):
+        rows = (
+            ("environment", "environment:\n  - {ZITADEL_MASTERKEY: NEVERECHO}\n"),
+            ("environment", "environment: 5\n"),
+            ("environment", "environment:\n  - 5\n"),
+            ("command", "command: 5\n"),
+            ("command", "command: {a: b}\n"),
+            ("command", 'command: ["start", 5]\n'),
+            ("command", 'command: ["start", ["nested"]]\n'),
+        )
+        for service in ("zitadel", "portal"):
+            for field, body in rows:
+                with self.subTest(service=service, body=body):
+                    problems = assert_refused(self, stack_document(service, body), service, field, "unsupported shape")
+                    for problem in problems:
+                        self.assertNotIn("NEVERECHO", problem)
+                        self.assertNotIn("ZITADEL_MASTERKEY", problem)
+
     def test_the_runtime_command_runs_the_setup_phase_and_never_the_init_phase(self):
         block = service_blocks(compose_text())["zitadel"]
         commands = [line for line in block if line.startswith("    command:")]

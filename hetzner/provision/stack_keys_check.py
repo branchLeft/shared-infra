@@ -48,12 +48,26 @@ ALLOWED_SERVICE_KEYS = {
 }
 
 
+def is_list_of_strings(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def environment_is_readable(environment: object) -> bool:
+    """An unset environment, a mapping, or a list of strings. Anything else is refused."""
+    return environment is None or isinstance(environment, dict) or is_list_of_strings(environment)
+
+
+def command_is_readable(command: object) -> bool:
+    """An unset command, a string, or a list of strings. Anything else is refused."""
+    return command is None or isinstance(command, str) or is_list_of_strings(command)
+
+
 def environment_names(environment: object) -> list[str]:
     """The variable names an environment value sets: mapping keys, or list entries before '='."""
     if isinstance(environment, dict):
         return [str(key) for key in environment]
     if isinstance(environment, list):
-        return [str(entry).split("=", 1)[0] for entry in environment]
+        return [entry.split("=", 1)[0] for entry in environment]
     return []
 
 
@@ -62,8 +76,16 @@ def command_tokens(command: object) -> list[str]:
     if isinstance(command, str):
         return shlex.split(command)
     if isinstance(command, list):
-        return [str(item) for item in command]
+        return list(command)
     return []
+
+
+def unsupported_shape_problem(name: str, field: str, label: str) -> str:
+    """Refusal for a field whose value is neither unset nor a shape the checker reads."""
+    return (
+        f"{label}: service '{name}' {field} has an unsupported shape; "
+        "the master key cannot be checked"
+    )
 
 
 def is_allowed_master_key_flag(tokens: list[str], index: int) -> bool:
@@ -74,6 +96,8 @@ def is_allowed_master_key_flag(tokens: list[str], index: int) -> bool:
 
 def environment_problems(name: str, service: dict[str, object], label: str) -> list[str]:
     """Master-key variables named in the environment. The value is never echoed."""
+    if not environment_is_readable(service.get("environment")):
+        return [unsupported_shape_problem(name, "environment", label)]
     return [
         (
             f"{label}: service '{name}' environment names '{variable}'; "
@@ -86,6 +110,8 @@ def environment_problems(name: str, service: dict[str, object], label: str) -> l
 
 def command_problems(name: str, service: dict[str, object], label: str) -> list[str]:
     """Master-key flags in the command, failing closed when a string cannot be split."""
+    if not command_is_readable(service.get("command")):
+        return [unsupported_shape_problem(name, "command", label)]
     try:
         tokens = command_tokens(service.get("command"))
     except ValueError:
