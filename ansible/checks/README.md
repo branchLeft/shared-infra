@@ -78,15 +78,15 @@ a role edit is not gated by anything here. The control on a role edit is the own
 deploy approval of the gated apply, which is not yet wired. Which files the reviewer App
 may merge alone is not yet decided by the owner.
 
-Limits of R2. It pins the values of `vars.enrolled_host`, `vars_files`, `roles` and
-`pre_tasks`, and refuses any play key outside `name`, `hosts`, `gather_facts`, `vars`,
+Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` (no other variable: a
+templated `lookup`, an `ansible_*` setting or an override of a role's defaults is refused),
+and pins `vars_files`, `roles` and `pre_tasks`, and refuses any play key outside `name`, `hosts`, `gather_facts`, `vars`,
 `vars_files`, `pre_tasks` and `roles`. So a `tasks`, `post_tasks`, `handlers`,
 `environment`, `module_defaults`, `collections`, `strategy`, `become`, `import_playbook`
 or `include_vars` key, or any key it does not know, is refused by name, and no role can be
 applied to a host by a path other than its `roles` list. A listed role is trusted by
 name: the list does not say what the role does as root, and a role's own edit is still not
-gated here. The `vars` value is checked only for `enrolled_host`. A playbook is a place a
-literal can hide as well as a role.
+gated here. A playbook is a place a literal can hide as well as a role.
 
 Limits of the loader rule. It reads literal mapping keys. It names the loaders listed in
 `ROLE_LOADERS`, `TASK_FILE_LOADERS` and `INCLUDE_VARS`, in their bare, `ansible.builtin.`
@@ -125,7 +125,7 @@ is not loaded there.
   runs only the derived `.yml` path, and `ansible-playbook` would run any other name, so
   R6 must read every file in the tree. Each enrolled `HOST.yml` has one play, with no key
   but `name`, `hosts`, `gather_facts`, `vars`, `vars_files`, `pre_tasks` and `roles`, on
-  `hosts: all`, `vars.enrolled_host` equal to `HOST`, `vars_files` exactly the shared
+  `hosts: all`, `vars` exactly `enrolled_host: HOST` and nothing else, `vars_files` exactly the shared
   include and `../trust/HOST.yml`, `roles` the runtime entry then the bare trigger as the
   first two entries and nothing attached to either, then only plain entries from that
   host's list in `host_roles.yml` (R9), and `pre_tasks` exactly the refusal include then

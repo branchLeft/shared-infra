@@ -228,9 +228,9 @@ def _check_enrolled(
         findings.append(f"{label}: play key {key} is not allowed, only {sorted(PLAY_KEYS)}")
     if play.get("hosts") != "all":
         findings.append(f"{label}: hosts must be all")
-    variables = _mapping(play.get("vars"))
-    if variables.get(HOST_KEY) != stem:
-        findings.append(f"{label}: vars.{HOST_KEY} must be {stem}")
+    expected_vars = {HOST_KEY: stem}
+    if play.get("vars") != expected_vars:
+        findings.append(f"{label}: vars must be exactly {expected_vars}")
     expected_files = [COMMON_INCLUDE, f"{{{{ playbook_dir }}}}/../trust/{stem}.yml"]
     if play.get("vars_files") != expected_files:
         findings.append(f"{label}: vars_files must be exactly {expected_files}")

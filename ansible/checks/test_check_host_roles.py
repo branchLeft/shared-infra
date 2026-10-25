@@ -223,6 +223,37 @@ class HostRoleLists(unittest.TestCase):
                     self._playbook(host, text)
                     self._assert_refused(host, f"play key {key} is not allowed")
 
+    # Rule: the play's `vars` is exactly `enrolled_host: HOST`. Another variable is refused whether
+    # it is plain, a templated lookup that runs a command on the controller, an `ansible_*`
+    # setting, or an override of a listed role's variable.
+    def test_a_variable_in_the_play_vars_is_refused(self) -> None:
+        lookup = "\"{{ lookup('ansible.builtin.pipe', 'id') }}\""
+        extras = {
+            "plain": "    harmless: 1\n",
+            "templated lookup": f"    ansible_python_interpreter: {lookup}\n",
+            "ansible setting": "    ansible_connection: local\n",
+            "role variable": "    ansible_runtime_requirements_src: /tmp/other.txt\n",
+        }
+        for host in ENROLLED:
+            for kind, extra in extras.items():
+                with self.subTest(host=host, kind=kind):
+                    line = f"    enrolled_host: {host}\n"
+                    self._replace_in(host, line, line + extra)
+                    self._assert_refused(host, "vars must be exactly")
+
+    # Rule: `vars` must also still hold the host name, and nothing else when it is empty or absent.
+    def test_vars_without_the_host_name_is_refused(self) -> None:
+        for host in ENROLLED:
+            line = f"  vars:\n    enrolled_host: {host}\n"
+            for kind, new in (
+                ("absent", ""),
+                ("empty", "  vars: {}\n"),
+                ("other", "  vars:\n    enrolled_host: x\n"),
+            ):
+                with self.subTest(host=host, kind=kind):
+                    self._replace_in(host, line, new)
+                    self._assert_refused(host, "vars must be exactly")
+
     # Rule: every refused key in the play gets its own finding.
     def test_each_refused_play_key_gets_its_own_finding(self) -> None:
         self._playbook("edge1", EXTRA_PLAY_KEYS["tasks"] + EXTRA_PLAY_KEYS["post_tasks"])
