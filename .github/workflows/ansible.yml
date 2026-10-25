@@ -26,13 +26,22 @@ name: Ansible
 #     those that name them, and of those that read a changed file outside ansible/). A
 #     change to the harness, the checks, the lock, the lint config or this file runs
 #     every shard;
-#   - the merge queue: lint and every shard, whatever changed;
-#   - a push to `main`: lint only. The delivery workflow runs the harness before it
-#     applies anything.
+#   - the merge queue: the same choice, made from the queue entry's own diff
+#     (base_sha..head_sha of the merge_group event), by the same rules. The entry is
+#     tested on the tree it will merge into, so this is the last check before `main`;
+#   - the weekly schedule (and a manual run): lint and every shard, whatever changed. It
+#     is what catches drift in the external images and collections that no diff shows,
+#     and it saves the tool environment's cache on `main`, where every other run can
+#     restore it;
+#   - a push to `main`: nothing. The pushed tree is the tree the merge queue tested, so
+#     a lint here would repeat the one that just passed. Delivery still runs its own.
 #
 # The tools and the `ansible` package, which carries the collections, install
 # from ansible/requirements.txt at exact versions, each file checked against its
-# recorded hash (ANS-4).
+# recorded hash (ANS-4). The installed environment is cached by the hash of the
+# two lock files, the runner and the Python, so a run restores what the lock already
+# built and installs only when the lock changed; the pip check and the collection
+# list run on a restore too.
 # DOCKER_HOST is deliberately left unset (ANS-15).
 
 on:
@@ -41,13 +50,21 @@ on:
     branches: [main]
   # The merge queue tests a queued pull request on a gh-readonly-queue/main/...
   # ref, and only this event reports checks there. No `paths:` filter (merge_group
-  # supports none, and this workflow has none). Under it the first job decides
-  # the Ansible inputs changed without diffing anything, and ci_select.py keeps
-  # every shard, so the lint and every shard run in full: a queued entry is the
-  # last check before main, and a diff base wrong in either direction would pass
-  # the gate without running it.
+  # supports none, and this workflow has none). Under it the first job diffs the
+  # entry's base_sha against its head_sha, and ci_select.py keeps the shards that diff
+  # calls for, by the rules a pull request has: a shared file runs every shard. A
+  # base or head the runner cannot resolve runs everything.
   merge_group:
     types: [checks_requested]
+  # The full sweep. Nothing in a diff shows an external image or a collection that
+  # moved, so once a week every shard runs on `main` as it stands. Only the default
+  # branch is scheduled, so this is also the run whose cache every other run can read.
+  # The minute is off the hour so it does not queue with every other job that starts
+  # on it.
+  schedule:
+    - cron: '23 3 * * 1'
+  # The same sweep by hand, to seed the cache or to check a drift report.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -102,20 +119,36 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           PULL_REQUEST_BASE: ${{ github.event.pull_request.base.sha }}
-          PUSH_BEFORE: ${{ github.event.before }}
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          MERGE_GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "merge_group" ]; then
-            echo "A merge-queue run always runs every check, so nothing is diffed."
-            echo "ansible=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          base="$PUSH_BEFORE"
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            base="$PULL_REQUEST_BASE"
-          fi
-          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-            echo "The base commit is unknown, so every check runs."
+          # Which two commits to compare. A push to main has none: main takes only what the
+          # merge queue tested, so the lint that passed there is not repeated here. Anything
+          # that is not a pull request or a queue entry (the weekly sweep, a manual run, an
+          # event nobody planned for) runs every check and diffs nothing.
+          case "$EVENT_NAME" in
+            push)
+              echo "A push to main is the tree the merge queue already tested, so there is nothing to run."
+              echo "ansible=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+            pull_request)
+              base="$PULL_REQUEST_BASE"
+              head=HEAD
+              ;;
+            merge_group)
+              base="$MERGE_GROUP_BASE"
+              head="$MERGE_GROUP_HEAD"
+              ;;
+            *)
+              echo "A $EVENT_NAME run always runs every check, so nothing is diffed."
+              echo "ansible=true" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null || ! git cat-file -e "${head}^{commit}" 2>/dev/null; then
+            echo "The base or head commit is unknown, so every check runs."
             echo "ansible=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -129,9 +162,9 @@ jobs:
             hetzner-host/cloudInit.ts
             hetzner-host/pullBootstrapFixed.json
           )
-          git diff --name-only -z --no-renames "$base" HEAD > "$RUNNER_TEMP/changed-files.z"
+          git diff --name-only -z --no-renames "$base" "$head" > "$RUNNER_TEMP/changed-files.z"
           echo "changed=$RUNNER_TEMP/changed-files.z" >> "$GITHUB_OUTPUT"
-          files=$(git diff --name-only --no-renames "$base" HEAD -- "${watched[@]}")
+          files=$(git diff --name-only --no-renames "$base" "$head" -- "${watched[@]}")
           if [ -n "$files" ]; then
             echo "The Ansible inputs changed:"
             echo "$files"
@@ -183,15 +216,37 @@ jobs:
         with:
           persist-credentials: false
 
+      # The environment below is the same for the lint and for every shard, and it
+      # costs a minute or more to install, 36 times in a full run. It is restored from the
+      # cache, keyed on the hash of the two lock files, the runner and the exact Python the
+      # image holds (a venv links to the image's interpreter, so a new Python must not
+      # restore an old environment). The install steps run only on a miss; every file in
+      # the lock was checked against its recorded hash when the entry was made, and a
+      # changed lock changes the key. A pull request's cache is read from its own ref and
+      # from `main`'s, and written to its own ref only; the weekly sweep writes `main`'s.
+      - name: Name the Python the tool environment is built with
+        id: python
+        run: echo "version=$(python3 --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the tool environment
+        id: venv
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ansible-venv
+          key: ansible-venv-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.version }}-${{ hashFiles('ansible/requirements.txt', 'ansible/checks/pip-requirements.txt') }}
+
       - name: Create the tool environment
+        if: steps.venv.outputs.cache-hit != 'true'
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
 
       # The pip the parity oracle reads is pinned by hash before the lock, so the oracle
       # does not depend on the runner image's ensurepip (ansible/checks/README.md).
       - name: Install the pinned pip
+        if: steps.venv.outputs.cache-hit != 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt'
 
       - name: Install the pinned tools
+        if: steps.venv.outputs.cache-hit != 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt'
 
       # --require-hashes makes pip refuse any package without a recorded hash, so
@@ -356,15 +411,37 @@ jobs:
         with:
           persist-credentials: false
 
+      # The environment below is the same for the lint and for every shard, and it
+      # costs a minute or more to install, 36 times in a full run. It is restored from the
+      # cache, keyed on the hash of the two lock files, the runner and the exact Python the
+      # image holds (a venv links to the image's interpreter, so a new Python must not
+      # restore an old environment). The install steps run only on a miss; every file in
+      # the lock was checked against its recorded hash when the entry was made, and a
+      # changed lock changes the key. A pull request's cache is read from its own ref and
+      # from `main`'s, and written to its own ref only; the weekly sweep writes `main`'s.
+      - name: Name the Python the tool environment is built with
+        id: python
+        run: echo "version=$(python3 --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the tool environment
+        id: venv
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ansible-venv
+          key: ansible-venv-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.version }}-${{ hashFiles('ansible/requirements.txt', 'ansible/checks/pip-requirements.txt') }}
+
       - name: Create the tool environment
+        if: steps.venv.outputs.cache-hit != 'true'
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
 
       # The pip the parity oracle reads is pinned by hash before the lock, so the oracle
       # does not depend on the runner image's ensurepip (ansible/checks/README.md).
       - name: Install the pinned pip
+        if: steps.venv.outputs.cache-hit != 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt'
 
       - name: Install the pinned tools
+        if: steps.venv.outputs.cache-hit != 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt'
 
       # --require-hashes makes pip refuse any package without a recorded hash, so
@@ -402,9 +479,9 @@ jobs:
   # exactly `Lint and test the Ansible roles`; a matrix job would rename its
   # checks, so this one job stays. It runs even when a needed job failed or was
   # skipped, and it fails unless each needed job succeeded. When discover found
-  # no Ansible input change, the other two jobs are skipped on purpose and the
-  # gate passes. When it found inputs but no shard to run (a push to main, or a
-  # pull request that changed only files no shard reads), the lint must pass and the
+  # no Ansible input change (or a push to main), the other two jobs are skipped on purpose and the
+  # gate passes. When it found inputs but no shard to run (a
+  # pull request or queue entry that changed only files no shard reads), the lint must pass and the
   # shard job is skipped on purpose. A shard job that is skipped when discover
   # chose shards, because the lint failed or for any other reason, fails the gate.
   roles:
@@ -428,7 +505,7 @@ jobs:
             exit 1
           fi
           if [ "$ANSIBLE" = "false" ]; then
-            echo "No Ansible input changed, so the lint and shard jobs were not needed."
+            echo "No Ansible input changed, or this is a push to main that the merge queue tested, so the lint and shard jobs were not needed."
             exit 0
           fi
           if [ "$ANSIBLE" != "true" ]; then
