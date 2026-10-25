@@ -1450,7 +1450,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # main at the spend gate's merge; no tag carries it yet
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # v1.0.12
         with:
           preview-json: preview.json
           working-directory: hetzner
@@ -1653,7 +1653,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # main at the spend gate's merge; no tag carries it yet
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # v1.0.12
         with:
           preview-json: preview.json
           working-directory: hetzner
@@ -1859,7 +1859,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # main at the spend gate's merge; no tag carries it yet
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # v1.0.12
         with:
           preview-json: preview.json
           working-directory: hetzner/estate
@@ -2048,7 +2048,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # main at the spend gate's merge; no tag carries it yet
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # v1.0.12
         with:
           preview-json: preview.json
           working-directory: hetzner/estate
