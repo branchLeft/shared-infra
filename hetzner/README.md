@@ -347,9 +347,8 @@ any pattern-based restriction into argument injection.
 host running ten.** The unscoped form lets the caller name the stack, so on a
 bin-packed app host every repository holding that key can pin an arbitrary
 image into every other tenant's Compose slot and restart it. That is complete
-takeover of a co-tenant's site by a credential meant only to redeploy its own,
-and it is the primitive the move off per-service Cloud Run identities
-introduces. Slot keys are the replacement.
+takeover of a co-tenant's site by a credential meant only to redeploy its own.
+Slot keys are the replacement.
 
 ### Slot keys
 
@@ -580,15 +579,14 @@ python3 -m unittest discover -s scripts -p 'test_*.py'
 ## The edge stack
 
 `edge/` is the first per-role service stack: Caddy terminating TLS in front of
-CrowdSec, replacing the GCP load balancer's Cloud Armor policy and rate limit.
-It is not a Pulumi project — nothing in it is a cloud resource. It is a
+CrowdSec. It is not a Pulumi project — nothing in it is a cloud resource. It is a
 renderer, its tests, and the directory those tests produce.
 
 - `edge/render.ts` derives the Caddy configuration and the CrowdSec acquisition
   files from the hostname registry in the repository root's `sites.ts`. The
   registry is the only hostname list; a hostname written directly into a Caddy
-  configuration is one the retiring GCP edge does not know about, which is the
-  class of stray record a cutover has to hunt for.
+  configuration is one the renderer does not know about, which is the class of
+  stray record a cutover has to hunt for.
 - `edge/posture.ts` is the one place enforcement changes. Both switches start
   non-enforcing, and each is flipped by a pull request: the rendered files are
   committed, so a flip is a diff in the exact configuration the host will run,

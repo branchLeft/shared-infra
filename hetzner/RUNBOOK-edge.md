@@ -44,7 +44,7 @@ Expect `active` then `provisioned`. Anything else: run
 that. The rendered Caddy configuration contains a site block only for a site
 whose registry entry carries a `privateUpstream`, and no site does today, so
 Caddy binds no public port and requests no certificate. That is deliberate: a
-hostname whose DNS still points at the GCP edge would fail HTTP-01 validation
+hostname whose DNS still points anywhere but edge1 would fail HTTP-01 validation
 in a loop and spend the Let's Encrypt failure budget for the whole account.
 Everything below is verified through the loopback probe listener instead.
 
@@ -520,7 +520,7 @@ lock an author out.
 ### 10a. The general page-serving throttle
 
 **Do not flip this on the inherited threshold.** `RATE_LIMIT_EVENTS` is 200 per
-60 seconds because the captured Cloud Armor policy says so, and that rule has
+60 seconds, a number carried over from the retired edge, and that rule has
 never enforced anything — it is live at `preview: true`, so 200/60s is a number
 no traffic on either edge has ever been measured against. `edge1` averages well
 under 1 req/s but has 1-minute bursts two orders of magnitude above that, and
@@ -633,15 +633,15 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 ```
 
 Expect `403`. `/.env` trips an in-band virtual-patching rule, so it is refused
-before the request proceeds — the behaviour the retiring Cloud Armor policy
-declared for its `lfi` ruleset.
+before the request proceeds — the behaviour the retired edge declared for its
+`lfi` ruleset.
 
 **A block is not where it ends.** In-band blocks feed
 `crowdsecurity/appsec-vpatch`, a leaky bucket at `capacity: 1` counting distinct
 rule names per address, so a **second** distinct in-band rule match from the same
 address inside 60 seconds becomes a ban across every hostname on the edge for
 the profile's duration. Out-of-band matches do the same at `capacity: 5`. The
-Cloud Armor rules being replaced answered 403 and never touched the address.
+retired edge's rules answered 403 and never touched the address.
 This is the difference the parity artifact records, and it is the reason the
 detect-only review in step 9 is about false positives rather than about counts.
 
