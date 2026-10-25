@@ -245,3 +245,13 @@ Every other expression stays a finding: another operator, a branch that is not a
 branch, a different literal in the test and the result, the `github`, `inputs` or `vars` context,
 string concatenation, a function such as `format()`, a nested `${{ }}`, or any text before or
 after the expression.
+
+## test_no_new_hand_installers.py: the hand installers stay frozen
+
+A hand installer is a bash script under any `provision/` directory, or under `hetzner/scripts`.
+Each one is listed in `hand_installers.yml` with a reason: `stays-as-code`, or `pending-role`
+naming the role that will replace it. The test walks the tree and fails on a script that is not
+listed, and on an entry whose script is gone. The list is the baseline as it stood when the guard
+was added, so a new installer needs a reviewed entry, which is an owner merge under CODEOWNERS.
+The test reads the role name and does not check that the role exists, as `host_roles.yml` does.
+It does not stop a runbook that edits a host by hand; that half is not covered here.
