@@ -361,6 +361,28 @@ describe.skipIf(!hasCli)(
       expect((failure as Error).message).not.toContain('could not be pulled');
     }, 20_000);
 
+    // The classifier must not depend on docker's wording: Docker 27 printed "Cannot
+    // connect to the Docker daemon at ...", Docker 29 prints "failed to connect to the
+    // docker API at ...". Each shim stands in for a stopped engine with that client's
+    // exact stderr (the Docker 29 line is what 29.8.2 printed for
+    // DOCKER_HOST=unix:///nonexistent), and both must read as an unreachable engine.
+    const STOPPED_ENGINE_STDERR = {
+      'Docker 27':
+        'Cannot connect to the Docker daemon at unix:///nonexistent. Is the docker daemon running?',
+      'Docker 29':
+        'failed to connect to the docker API at unix:///nonexistent; check if the path is correct and if the daemon is running: dial unix /nonexistent: connect: no such file or directory',
+    };
+    for (const [client, stderr] of Object.entries(STOPPED_ENGINE_STDERR)) {
+      it(`reports a stopped engine as unreachable with ${client}'s error text`, async () => {
+        const dir = shim(`echo '${stderr}' >&2\nexit 1`);
+        const env = { ...process.env, PATH: `${dir}:${process.env.PATH}` };
+        const failure = await ensureImage(IMAGE, { env }).catch((e: unknown) => e);
+        expect(failure).toBeInstanceOf(DockerFailure);
+        expect((failure as Error).message).toContain('No Docker engine is reachable');
+        expect((failure as Error).message).not.toContain('could not be pulled');
+      }, 20_000);
+    }
+
     it('treats a missing socket as no engine in both probes', async () => {
       const env = { ...process.env, DOCKER_HOST: `unix://${join(tmpdir(), 'bl-no-such.sock')}` };
       const lazy = await probeEngine({ env }, 5_000);

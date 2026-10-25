@@ -1,0 +1,16 @@
+---
+# The state the second converge and the check-mode run see: applied as an app
+# host of the standard variant, with the real ip.
+- name: Tear down the refusal
+  ansible.builtin.include_tasks: teardown.yml
+
+- name: Apply the role to a host of class app, standard variant
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+- name: Assert the host is as the role leaves it
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: standard

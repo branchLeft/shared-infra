@@ -1,0 +1,78 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs. Each destination
+# is also written by a hand-run script until the live run retires it
+# (hetzner/provision/30-install-deploy-tooling.sh and app-host-isolation.sh), and
+# ansible/checks/test_deploy_tooling_links.py fails when a path or mode here
+# differs from the one the script installs, so the two writers cannot drift.
+
+# ----- The wrapper and its sudoers grant -----
+
+deploy_tooling_wrapper_path: /usr/local/sbin/branchleft-deploy
+deploy_tooling_compose_unit_path: /etc/systemd/system/branchleft-compose@.service
+
+# Written by the host's first-boot configuration, never by this role: a broken
+# sudoers file locks every account out of sudo. The role checks it. The line is
+# the constant DEPLOY_SUDOERS of hetzner-host/cloudInit.ts, built here from the
+# wrapper path; ansible/checks/test_deploy_tooling_sudoers_seam.py compares the
+# two, so a change to either one alone fails a test.
+deploy_tooling_sudoers_path: /etc/sudoers.d/50-branchleft-deploy
+deploy_tooling_sudoers_line: 'deploy ALL=(root) NOPASSWD: {{ deploy_tooling_wrapper_path }}'
+deploy_tooling_sudoers_mode: '0440'
+
+# ----- The app-host isolation policy -----
+
+deploy_tooling_reconciler_path: /usr/local/sbin/branchleft-docker-user-policy
+deploy_tooling_policy_unit_name: branchleft-docker-user-policy.service
+deploy_tooling_policy_unit_path: /etc/systemd/system/branchleft-docker-user-policy.service
+
+# Chains other tools own and may put rules into above the policy's own, such as a
+# brute-force blocker's. A rule above the policy's last drop that is not a drop
+# with a match is refused unless it only jumps to one of these chains. Empty
+# until the chains a real app host carries are captured (the README says how);
+# nothing here has been exercised against one.
+deploy_tooling_foreign_chain_allowlist: []
+
+# ----- What the role makes true -----
+
+# The directories both writers create, root-owned and closed to everyone else.
+deploy_tooling_directory_targets:
+  - label: configuration directory
+    path: /etc/branchleft
+    mode: '0755'
+    kind: directory
+  - label: stack directory
+    path: /opt/branchleft
+    mode: '0755'
+    kind: directory
+
+# Where the programs are read from: hetzner/provision/ of the checkout the playbook
+# runs from, the single home of each program. The role holds no copy and no link of
+# them (a copy would be a second home that could drift). role_path is this role's own
+# directory, three levels below the repository root.
+deploy_tooling_programs_dir: '{{ role_path }}/../../../hetzner/provision'
+
+# The files every host gets. program is the name of the file under that directory.
+deploy_tooling_common_file_targets:
+  - label: deploy wrapper
+    program: branchleft_deploy.py
+    path: '{{ deploy_tooling_wrapper_path }}'
+    mode: '0755'
+    kind: file
+  - label: compose template unit
+    program: branchleft-compose@.service
+    path: '{{ deploy_tooling_compose_unit_path }}'
+    mode: '0644'
+    kind: file
+
+# The files only a host of class app gets.
+deploy_tooling_app_file_targets:
+  - label: policy program
+    program: branchleft_docker_user_policy.sh
+    path: '{{ deploy_tooling_reconciler_path }}'
+    mode: '0755'
+    kind: file
+  - label: policy unit
+    program: branchleft-docker-user-policy.service
+    path: '{{ deploy_tooling_policy_unit_path }}'
+    mode: '0644'
+    kind: file

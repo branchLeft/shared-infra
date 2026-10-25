@@ -54,6 +54,37 @@ argument_specs:
         type: int
         description: How many runs' output files to keep in the log directory, from 1 to 1000.
         default: 50
+      pull_trigger_steps:
+        type: list
+        elements: dict
+        description: >-
+          Allow-list of the routine steps this host may be asked to run on a step request, each a
+          step id, the one tag that selects its tasks in the host playbook and its confirmation
+          word. Empty means no step may be requested. The ids are a closed list in the program
+          (migrate, identity, provision); the program refuses any other id and any tag that is
+          not control_plane_db_ followed by that entry's own id. The word is a guard against a typing
+          slip in a public file, not a secret: never put a secret here.
+        default: []
+        options:
+          id:
+            type: str
+            required: true
+            choices: [migrate, identity, provision]
+            description: The step, one of the program's closed list.
+          tag:
+            type: str
+            required: true
+            description: >-
+              The tag that selects the step's tasks. It must be control_plane_db_ followed by the
+              id of this entry (control_plane_db_migrate for migrate) and nothing else; the
+              program refuses any other tag, including another step's, a comma list and the tags
+              all, always, never, tagged and untagged.
+          word:
+            type: str
+            required: true
+            description: >-
+              The word the person dispatching the step types to confirm it, 4 to 32 of A-Z, 0-9
+              and hyphen. Public, and not a secret.
   packages:
     short_description: Install the programs the trigger runs
     description: >-

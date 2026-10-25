@@ -1,0 +1,520 @@
+---
+# Facts and registers made by tasks carry the role's name as a prefix, as the
+# lint rule for roles asks: breakglass_grant_host_v_ marks this play's.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') | from_yaml }}"
+    verify_spec: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../meta/argument_specs.yml') | from_yaml }}"
+    verify_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') | from_yaml }}"
+    verify_mint_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_mint_host/defaults/main.yml') | from_yaml }}"
+    verify_mint_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../breakglass_mint_host/vars/main.yml') | from_yaml }}"
+    verify_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') | from_yaml }}"
+    verify_handlers: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../handlers/main.yml') | from_yaml }}"
+    verify_role_dir: '{{ playbook_dir }}/../..'
+    # An inventory value wins over a default, as it does in the role.
+    verify_commit: '{{ breakglass_grant_host_source_commit | default(verify_defaults.breakglass_grant_host_source_commit) }}'
+    # The image is a constant of the role (vars/main.yml), never an input.
+    verify_image: '{{ verify_role_vars.breakglass_grant_host_node_image }}'
+    # The role's base URL with its own placeholder filled by the commit it ran with.
+    verify_base_url: >-
+      {{ verify_role_vars.breakglass_grant_host_source_base_url
+      | regex_replace('[{][{] *breakglass_grant_host_source_commit *[}][}]', verify_commit) }}
+    verify_url_prefix: https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ verify_commit }}/adapters/sso/scripts
+    # The only modules the role's tasks and handlers may call. A module not on this list,
+    # whatever its spelling or its siblings, fails the structure check below.
+    verify_allowed_modules:
+      - ansible.builtin.assert
+      - ansible.builtin.command
+      - ansible.builtin.file
+      - ansible.builtin.get_url
+      - ansible.builtin.meta
+      - ansible.builtin.stat
+      - ansible.builtin.systemd_service
+    # The raw text of every file of the role that Ansible evaluates, held to the
+    # controller-side scan by the role guard below.
+    verify_role_texts:
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../tasks/main.yml') }}"
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../handlers/main.yml') }}"
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') }}"
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') }}"
+    # The role directory may hold these entries and no others. A handlers file is
+    # allowed, and the guard reads it (its notifies run Docker and shell too); a
+    # library, a template, a second tasks file or a plugin would run tasks the
+    # checks never see.
+    verify_allowed_role_entries:
+      - README.md
+      - defaults
+      - handlers
+      - meta
+      - molecule
+      - tasks
+      - vars
+    # The exact Docker commands the role may run, one regular expression per word,
+    # with the image held by its template's name and not its value. The shared
+    # guard holds every command of the role to these shapes.
+    verify_docker_shapes:
+      - ['^/usr/bin/docker$', '^--version$']
+      - ['^/usr/bin/docker$', '^pull$', '^-q$', '^[{][{] breakglass_grant_host_node_image [}][}]$']
+      - - '^/usr/bin/docker$'
+        - '^image$'
+        - '^inspect$'
+        - '^--format$'
+        - '^[{]% raw [%][}][{][{][.]RepoDigests[}][}][{]% endraw [%][}]$'
+        - '^[{][{] breakglass_grant_host_node_image [}][}]$'
+    # What a file or directory must be, written here from the intent and not read
+    # from the role: a mode changed in the role's constants is a mode this table
+    # refuses. Owner and group are root for every path.
+    verify_expected_modes:
+      - path: /usr/local/lib/branchleft
+        kind: dir
+        mode: '0755'
+      - path: /usr/local/lib/branchleft/break-glass
+        kind: dir
+        mode: '0755'
+      - path: /var/lib/branchleft
+        kind: dir
+        mode: '0755'
+      - path: /var/lib/branchleft/break-glass-grants
+        kind: dir
+        mode: '0700'
+      - path: /var/log/branchleft
+        kind: dir
+        mode: '0700'
+      - path: /usr/local/lib/branchleft/break-glass/break-glass-grant.mjs
+        kind: file
+        mode: '0644'
+      - path: /usr/local/lib/branchleft/break-glass/docker-engine.mjs
+        kind: file
+        mode: '0644'
+      - path: /usr/local/lib/branchleft/break-glass/provision-support-account.mjs
+        kind: file
+        mode: '0644'
+      - path: /usr/local/sbin/branchleft-break-glass
+        kind: file
+        mode: '0700'
+      - path: /etc/systemd/system/branchleft-break-glass-expire.service
+        kind: file
+        mode: '0644'
+      - path: /etc/systemd/system/branchleft-break-glass-expire.timer
+        kind: file
+        mode: '0644'
+    # Every argument the tool is started with, from `run` up to the image, in
+    # order, written out here from the intent and not read from the role or the
+    # shipped files. It is compared whole, so an argument added to the wrapper
+    # or the unit (--privileged, -v, --device, --add-host, a second
+    # --security-opt, a fifth mount) fails the comparison, and so does a flag
+    # removed or changed. The four mounts are the tool's own code read-only,
+    # its state, its log, and the Docker socket.
+    verify_expected_run_options:
+      - run
+      - --rm
+      - --pull
+      - never
+      - --network
+      - none
+      - --read-only
+      - --cap-drop
+      - ALL
+      - --security-opt
+      - no-new-privileges
+      - --pids-limit
+      - '64'
+      - --memory
+      - 256m
+      - --user
+      - '0:0'
+      - --label
+      - branchleft.component=break-glass-tool
+      - --mount
+      - type=bind,source=/usr/local/lib/branchleft/break-glass,target=/usr/local/lib/branchleft/break-glass,readonly
+      - --mount
+      - type=bind,source=/var/lib/branchleft/break-glass-grants,target=/var/lib/branchleft/break-glass-grants
+      - --mount
+      - type=bind,source=/var/log/branchleft,target=/var/log/branchleft
+      - --mount
+      - type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock
+    verify_tool: /usr/local/lib/branchleft/break-glass/break-glass-grant.mjs
+    verify_timer: branchleft-break-glass-expire.timer
+    verify_service: branchleft-break-glass-expire.service
+    verify_wrapper: /usr/local/sbin/branchleft-break-glass
+    verify_path: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  tasks:
+    # The role's constants, so that the file list and its destinations are the
+    # ones the role used. The URL base is checked from the raw text above, since
+    # it needs the commit the role ran with.
+    - name: Read the role's constants
+      ansible.builtin.include_vars:
+        file: '{{ playbook_dir }}/../../vars/main.yml'
+
+    # ----- the two roles agree on the pin and on the image -----
+    # The pin is held as an input in both roles' defaults and the image as a
+    # constant in both roles' vars. Nothing else makes them agree, and a role
+    # that lags runs different code on its host. The image is read from vars,
+    # where it lives: it is not an input, so no inventory value can differ from
+    # the digest the shipped wrapper and unit carry (they are run below with
+    # this value and must start exactly it).
+    - name: Assert the mint role's pin and image equal this role's
+      ansible.builtin.assert:
+        that:
+          - verify_mint_defaults.breakglass_mint_host_source_commit == verify_defaults.breakglass_grant_host_source_commit
+          - verify_mint_role_vars.breakglass_mint_host_node_image == verify_role_vars.breakglass_grant_host_node_image
+        fail_msg: >-
+          The two roles hold different pins or different images. breakglass_mint_host has
+          commit {{ verify_mint_defaults.breakglass_mint_host_source_commit }} and image
+          {{ verify_mint_role_vars.breakglass_mint_host_node_image }}; breakglass_grant_host has commit
+          {{ verify_defaults.breakglass_grant_host_source_commit }} and image
+          {{ verify_role_vars.breakglass_grant_host_node_image }}. Change both together.
+        quiet: true
+
+    - name: Assert the spec and the defaults agree and hold exactly the one input, with the image a constant
+      ansible.builtin.assert:
+        that:
+          - verify_defaults.keys() | sort | list == ['breakglass_grant_host_source_commit']
+          - verify_spec.argument_specs.main.options.keys() | sort | list == ['breakglass_grant_host_source_commit']
+          - verify_spec.argument_specs.main.options.breakglass_grant_host_source_commit.default == verify_defaults.breakglass_grant_host_source_commit
+          - verify_role_vars.breakglass_grant_host_node_image is match('^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$')
+        quiet: true
+
+    # ----- the pin is in every URL: the commit, never a branch -----
+    - name: Assert every download URL carries the pinned commit and every file a sha256
+      ansible.builtin.assert:
+        that:
+          - (verify_base_url ~ '/' ~ item.path).startswith(verify_url_prefix ~ '/')
+          - item.sha256 is match('^[0-9a-f]{64}$')
+        fail_msg: 'The URL for {{ item.path }} does not carry the pinned commit, or the file has no sha256.'
+        quiet: true
+      loop: '{{ breakglass_grant_host_files }}'
+      loop_control:
+        label: '{{ item.path }}'
+
+    # ----- the structure of the tasks: an allow-list, not a deny-list -----
+    # ----- the role's own tasks: one guard, shared with the mint role -----
+    # The role's tasks and handlers are held to the module allow-list and the exact
+    # Docker shapes, and the text of every file of the role to the controller-side
+    # scan, by ansible/harness/tasks/role_guard.yml, the one home of the rule
+    # (ws#2367). The playbook that applies the role is not read here: its shape is
+    # held by the per-host role list check, not by this test of the role.
+    - name: Hold the role's own tasks to the role guard
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../../harness/tasks/role_guard.yml'
+      vars:
+        guard_allowed_modules: '{{ verify_allowed_modules }}'
+        guard_tasks: '{{ verify_tasks + (verify_handlers | default([])) }}'
+        guard_scan_texts: '{{ verify_role_texts }}'
+        guard_docker_shapes: '{{ verify_docker_shapes }}'
+
+    # ----- the role holds no second route to the key or to Docker -----
+    # The checks below read tasks/main.yml and the guard reads handlers/main.yml. A
+    # second tasks file, a library, a template, a plugin or a meta dependency would
+    # run tasks none of those reads see, so the role directory is held to the
+    # entries it has, the tasks directory to one file, and the meta file to no
+    # dependencies.
+    - name: List the role directory and its tasks directory
+      ansible.builtin.find:
+        paths: '{{ item }}'
+        hidden: true
+        file_type: any
+        patterns: '*'
+      delegate_to: localhost
+      become: false
+      loop:
+        - '{{ verify_role_dir }}'
+        - '{{ verify_role_dir }}/tasks'
+      register: breakglass_grant_host_v_role_entries
+
+    - name: Assert the role holds only its own entries, one tasks file and no meta dependency
+      ansible.builtin.assert:
+        that:
+          - breakglass_grant_host_v_role_entries.results[0].files | map(attribute='path') | map('basename') | sort | list == verify_allowed_role_entries | sort
+          - breakglass_grant_host_v_role_entries.results[1].files | map(attribute='path') | map('basename') | sort | list == ['main.yml']
+          - (lookup('ansible.builtin.file', verify_role_dir ~ '/meta/main.yml') | from_yaml).dependencies | default([]) | length == 0
+        fail_msg: >-
+          The role has an entry the checks do not read: a second tasks file, a library, a template,
+          a plugin or a dependency. Role entries:
+          {{ breakglass_grant_host_v_role_entries.results[0].files | map(attribute='path') | map('basename') | sort | list }};
+          tasks entries:
+          {{ breakglass_grant_host_v_role_entries.results[1].files | map(attribute='path') | map('basename') | sort | list }}.
+        quiet: true
+
+    # A loop over an empty list skips quietly, so the checks below would pass
+    # against a tasks file they could not read. Require that they have work.
+    - name: Assert the structure checks below have tasks to check
+      ansible.builtin.assert:
+        that:
+          - verify_tasks | select('contains', 'ansible.builtin.command') | list | length == 4
+          - verify_tasks | select('contains', 'ansible.builtin.file') | list | length == 1
+          - verify_tasks | select('contains', 'ansible.builtin.get_url') | list | length == 1
+        fail_msg: The tasks file has a different number of command, file or download tasks than the checks below were written for.
+        quiet: true
+
+    # The command shapes are held by the shared guard above, to the same tasks.
+    - name: Assert every file task makes a directory
+      ansible.builtin.assert:
+        that:
+          - item['ansible.builtin.file'].state == 'directory'
+        fail_msg: 'A file task does something other than make a directory: {{ item.name }}.'
+        quiet: true
+      loop: "{{ (verify_tasks + (verify_handlers | default([]))) | select('contains', 'ansible.builtin.file') | list }}"
+      loop_control:
+        label: '{{ item.name }}'
+
+    - name: Assert every download takes its URL from the pinned base
+      ansible.builtin.assert:
+        that:
+          - item['ansible.builtin.get_url'].url is match('^[{][{] breakglass_grant_host_source_base_url [}][}]/')
+        fail_msg: 'A download does not start from the pinned base URL: {{ item.name }}.'
+        quiet: true
+      loop: "{{ (verify_tasks + (verify_handlers | default([]))) | select('contains', 'ansible.builtin.get_url') | list }}"
+      loop_control:
+        label: '{{ item.name }}'
+
+    # ----- owners and modes -----
+    - name: Read the owner, group and mode of every path the role makes
+      ansible.builtin.stat:
+        path: '{{ item.path }}'
+        follow: false
+      loop: '{{ verify_expected_modes }}'
+      loop_control:
+        label: '{{ item.path }}'
+      register: breakglass_grant_host_v_stats
+
+    - name: Assert each path has its kind, its mode and root as owner and group
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir if item.item.kind == 'dir' else item.stat.isreg
+          - item.stat.mode == item.item.mode
+          - item.stat.uid == 0
+          - item.stat.gid == 0
+        fail_msg: '{{ item.item.path }} is not a {{ item.item.kind }} owned by root:root in mode {{ item.item.mode }}.'
+        quiet: true
+      loop: '{{ breakglass_grant_host_v_stats.results }}'
+      loop_control:
+        label: '{{ item.item.path }}'
+
+    # ----- the bytes are the pinned bytes -----
+    - name: Hash the installed files
+      ansible.builtin.stat:
+        path: '{{ item.dest }}'
+        checksum_algorithm: sha256
+        follow: false
+      loop: '{{ breakglass_grant_host_files }}'
+      loop_control:
+        label: '{{ item.path }}'
+      register: breakglass_grant_host_v_hashes
+
+    - name: Assert each installed file has the pinned sha256
+      ansible.builtin.assert:
+        that:
+          - item.stat.checksum == item.item.sha256
+        fail_msg: '{{ item.item.dest }} does not have the pinned sha256.'
+        quiet: true
+      loop: '{{ breakglass_grant_host_v_hashes.results }}'
+      loop_control:
+        label: '{{ item.item.path }}'
+
+    # ----- the wrong-host case: nothing of the minter or the key is here -----
+    - name: Look for what belongs to the control host, not this one
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /usr/local/lib/branchleft/break-glass/break-glass-mint.mjs
+        - /usr/local/lib/branchleft/break-glass/provision-owner.mjs
+        - /etc/branchleft/break-glass
+      register: breakglass_grant_host_v_foreign
+
+    - name: Assert none of it is on this host
+      ansible.builtin.assert:
+        that:
+          - breakglass_grant_host_v_foreign.results | map(attribute='stat.exists') | select | list | length == 0
+        fail_msg: A file of the control host's role, or the key directory, is on an app host.
+        quiet: true
+
+    - name: List the tool directory
+      ansible.builtin.find:
+        paths: /usr/local/lib/branchleft/break-glass
+        hidden: true
+        file_type: any
+        patterns: '*'
+      register: breakglass_grant_host_v_tool_dir
+
+    - name: Assert the tool directory holds exactly the three programs
+      ansible.builtin.assert:
+        that:
+          - >-
+            breakglass_grant_host_v_tool_dir.files | map(attribute='path') | map('basename') | sort | list
+            == ['break-glass-grant.mjs', 'docker-engine.mjs', 'provision-support-account.mjs']
+        quiet: true
+
+    # ----- the timer is enabled and active -----
+    - name: Ask systemd whether the timer is active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, '{{ verify_timer }}']
+      register: breakglass_grant_host_v_timer_active
+      changed_when: false
+      failed_when: false
+
+    - name: Ask systemd whether the timer is enabled
+      ansible.builtin.command:
+        argv: [systemctl, is-enabled, '{{ verify_timer }}']
+      register: breakglass_grant_host_v_timer_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the timer is active and enabled
+      ansible.builtin.assert:
+        that:
+          - breakglass_grant_host_v_timer_active.stdout == 'active'
+          - breakglass_grant_host_v_timer_enabled.stdout == 'enabled'
+        fail_msg: The expire timer is not active and enabled, so no grant would ever close.
+        quiet: true
+
+    # ----- what the role asked Docker to do -----
+    - name: Read the stand-in's record
+      ansible.builtin.slurp:
+        src: '{{ scenario_calls_log }}'
+      register: breakglass_grant_host_v_calls_raw
+
+    - name: Split the record into calls and pick out the pulls
+      ansible.builtin.set_fact:
+        breakglass_grant_host_v_calls: '{{ (breakglass_grant_host_v_calls_raw.content | b64decode).splitlines() | map("split", "|||") | list }}'
+        breakglass_grant_host_v_pulls: >-
+          {{ (breakglass_grant_host_v_calls_raw.content | b64decode).splitlines() | map("split", "|||") | list | selectattr("1", "equalto", "pull") | list }}
+
+    - name: Assert the role pulled exactly once, by digest, with the pinned reference
+      ansible.builtin.assert:
+        that:
+          - breakglass_grant_host_v_pulls | length == 1
+          - breakglass_grant_host_v_pulls[0][1:] == ['pull', '-q', verify_image]
+          - breakglass_grant_host_v_pulls[0][-1] is search('@sha256:[0-9a-f]{64}$')
+        fail_msg: >-
+          Expected exactly one `docker pull -q <image by digest>` over two applies (the second must find
+          the image and not pull). Saw {{ breakglass_grant_host_v_pulls | length }} pulls: {{ breakglass_grant_host_v_pulls }}.
+        quiet: true
+
+    - name: Assert the role asked Docker whether the image was there, and asked nothing else unknown
+      ansible.builtin.assert:
+        that:
+          - breakglass_grant_host_v_calls | selectattr("1", "equalto", "image") | selectattr("2", "equalto", "inspect") | list | length >= 2
+          - >-
+            breakglass_grant_host_v_calls | map(attribute="1") | select('in', ['--version', 'image', 'pull', 'run']) | list | length
+            == breakglass_grant_host_v_calls | length
+        fail_msg: The role did not probe the image, or called a Docker command the stand-in does not know.
+        quiet: true
+
+    # ----- the shipped wrapper and the shipped unit, run against the stand-in -----
+    # The timer would start the unit every minute. It is stopped so that every
+    # record from /usr/bin/docker after the mark is the unit run below and
+    # nothing else, and it is started again at the end.
+    - name: Stop the timer for the runs below
+      ansible.builtin.systemd_service:
+        name: '{{ verify_timer }}'
+        state: stopped
+
+    - name: Count the stand-in's calls before the wrapper runs
+      ansible.builtin.slurp:
+        src: '{{ scenario_calls_log }}'
+      register: breakglass_grant_host_v_mark_raw
+
+    - name: Run the wrapper's status command
+      ansible.builtin.command:
+        argv: ['{{ verify_wrapper }}', status]
+      environment:
+        PATH: '{{ verify_path }}'
+      register: breakglass_grant_host_v_wrapper_run
+      changed_when: false
+
+    - name: Read the record after the wrapper ran
+      ansible.builtin.slurp:
+        src: '{{ scenario_calls_log }}'
+      register: breakglass_grant_host_v_after_wrapper_raw
+
+    - name: Take the wrapper's call out of the record
+      ansible.builtin.set_fact:
+        breakglass_grant_host_v_lines: '{{ (breakglass_grant_host_v_after_wrapper_raw.content | b64decode).splitlines() }}'
+        breakglass_grant_host_v_before: '{{ (breakglass_grant_host_v_mark_raw.content | b64decode).splitlines() | length }}'
+
+    - name: Split the wrapper's call into its arguments
+      ansible.builtin.set_fact:
+        breakglass_grant_host_v_wrapper_call: '{{ breakglass_grant_host_v_lines[breakglass_grant_host_v_before | int :] | map("split", "|||") | list }}'
+
+    # The whole argument list is compared, not a list of flags that must be
+    # present. The timer is stopped above, so the one value that varies with the
+    # host, the timer state, is 'inactive' here.
+    - name: Assert the wrapper made one docker call, found through its path, with exactly the expected arguments
+      ansible.builtin.assert:
+        that:
+          - breakglass_grant_host_v_wrapper_run.stdout == '[]'
+          - breakglass_grant_host_v_wrapper_call | length == 1
+          - breakglass_grant_host_v_wrapper_call[0][0] == '/usr/local/bin/docker'
+          - >-
+            breakglass_grant_host_v_wrapper_call[0][1:] ==
+            verify_expected_run_options
+            + ['-e', 'BL_EXPIRE_TIMER_STATE=inactive', verify_image, 'node', verify_tool, 'status']
+        fail_msg: >-
+          The wrapper's docker arguments are not exactly the expected list (the pinned image with --pull never,
+          --network none, a read-only root, all capabilities dropped, no-new-privileges, the resource limits, the
+          label, the four mounts and the timer state it read from systemd, and nothing else).
+          It called: {{ breakglass_grant_host_v_wrapper_call }}.
+        quiet: true
+
+    - name: Start the expire unit once, as the timer would
+      ansible.builtin.systemd_service:
+        name: '{{ verify_service }}'
+        state: started
+
+    - name: Ask systemd how that run ended
+      ansible.builtin.command:
+        argv: [systemctl, show, -p, Result, --value, '{{ verify_service }}']
+      register: breakglass_grant_host_v_unit_result
+      changed_when: false
+
+    - name: Read the record after the unit ran
+      ansible.builtin.slurp:
+        src: '{{ scenario_calls_log }}'
+      register: breakglass_grant_host_v_after_unit_raw
+
+    - name: Take the unit's call out of the record
+      ansible.builtin.set_fact:
+        breakglass_grant_host_v_lines: '{{ (breakglass_grant_host_v_after_unit_raw.content | b64decode).splitlines() }}'
+        breakglass_grant_host_v_before: '{{ breakglass_grant_host_v_wrapper_call | length + breakglass_grant_host_v_before | int }}'
+
+    - name: Split the unit's call into its arguments
+      ansible.builtin.set_fact:
+        breakglass_grant_host_v_unit_call: '{{ breakglass_grant_host_v_lines[breakglass_grant_host_v_before | int :] | map("split", "|||") | list }}'
+
+    - name: Assert the unit ran once, as /usr/bin/docker, with the wrapper's image and options
+      ansible.builtin.assert:
+        that:
+          - breakglass_grant_host_v_unit_result.stdout == 'success'
+          - breakglass_grant_host_v_unit_call | length == 1
+          - breakglass_grant_host_v_unit_call[0][0] == '/usr/bin/docker'
+          - >-
+            breakglass_grant_host_v_unit_call[0][1:] ==
+            verify_expected_run_options
+            + [verify_image, 'node', verify_tool, 'expire']
+          - >-
+            breakglass_grant_host_v_unit_call[0][1:-1]
+            == breakglass_grant_host_v_wrapper_call[0][1:-1] | reject('match', '^(-e|BL_EXPIRE_TIMER_STATE=.*)$') | list
+        fail_msg: >-
+          The unit and the wrapper start different things. The wrapper called {{ breakglass_grant_host_v_wrapper_call }};
+          the unit called {{ breakglass_grant_host_v_unit_call }}.
+        quiet: true
+
+    - name: Start the timer again
+      ansible.builtin.systemd_service:
+        name: '{{ verify_timer }}'
+        state: started
+
+    - name: Ask systemd whether the timer is active again
+      ansible.builtin.command:
+        argv: [systemctl, is-active, '{{ verify_timer }}']
+      register: breakglass_grant_host_v_timer_again
+      changed_when: false
+
+    - name: Assert the timer is active again
+      ansible.builtin.assert:
+        that:
+          - breakglass_grant_host_v_timer_again.stdout == 'active'
+        quiet: true

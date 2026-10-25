@@ -1,0 +1,118 @@
+---
+# The guard on a break-glass role's own tasks. It is the one home of that
+# rule: each role's molecule verify includes this file, so the two roles cannot
+# drift apart. The includer passes its inputs as the include's vars.
+#
+# It tests the role itself and reads no playbook. Which playbook applies the role,
+# and the shape of that playbook, belong to the per-host role list check
+# (ansible/checks/host_roles.yml), which holds every playbook to the roles it
+# lists. A playbook-shape rule is not repeated here.
+#
+# Inputs, set by the includer:
+#   guard_allowed_modules  the modules a task may call (the includer's own list)
+#   guard_tasks            the role's own tasks and handlers, held to those modules
+#   guard_scan_texts       the raw text of every file of the role that Ansible evaluates
+#   guard_docker_shapes    the exact Docker commands, one regex per word
+#
+# Every rule is an allow-list. A task that calls a module off the list, a command
+# that is not one of guard_docker_shapes, and a lookup, query, q or pipe in the
+# text of any scanned file all fail the run before any later check.
+#
+# Not read here, and named by the includers: the stat rule and the key-path
+# rules, which belong to the mint role alone. A deliberate edit is for review and
+# the deployment approval of the gated workflow.
+
+# An empty list would pass every rule below and prove nothing.
+- name: Assert the guard was given tasks to read and texts to scan
+  ansible.builtin.assert:
+    that:
+      - guard_tasks | length >= 1
+      - guard_scan_texts | length >= 1
+      - guard_allowed_modules | length >= 1
+      - guard_docker_shapes | length >= 1
+    fail_msg: The guard was given no tasks, no texts, no module list or no Docker shapes, so a clean result would prove nothing.
+    quiet: true
+
+# The modules of the role's tasks, read from the parsed list. The keywords are the
+# task keys that are not module names.
+- name: List the module each task the guard reads calls
+  ansible.builtin.set_fact:
+    role_guard_v_modules: >-
+      {% set keywords = ['name', 'when', 'register', 'loop', 'loop_control', 'changed_when',
+         'failed_when', 'check_mode', 'notify', 'tags', 'vars', 'no_log', 'diff'] %}
+      {% set out = [] %}
+      {% for t in guard_tasks %}{% for k in t.keys() if k not in keywords %}{% set _ = out.append(k) %}{% endfor %}{% endfor %}
+      {{ out | to_json }}
+
+- name: Assert the tasks call only the modules on the allow-list
+  ansible.builtin.assert:
+    that:
+      - role_guard_v_modules | from_json | difference(guard_allowed_modules) | length == 0
+    fail_msg: >-
+      The role calls modules that are not on the allow-list:
+      {{ role_guard_v_modules | from_json | difference(guard_allowed_modules) }}.
+    quiet: true
+
+# Each command task of the role runs one of the includer's exact shapes. A shape is
+# a list of regular expressions, one per word; a command matches only with the same
+# number of words and each word matching its expression in full. The set_fact
+# collects the names of the command tasks that match no shape, in the order the
+# tasks were read, and the assert below refuses any.
+- name: Hold each command task to one of the exact Docker shapes the includer lists
+  ansible.builtin.set_fact:
+    role_guard_v_docker_bad: >-
+      {% set bad = [] %}
+      {% for t in guard_tasks if 'ansible.builtin.command' in t %}
+      {% set argv = t['ansible.builtin.command'].argv | default([]) %}
+      {% set found = namespace(v=false) %}
+      {% for shape in guard_docker_shapes if argv | length == shape | length %}
+      {% set ok = namespace(v=true) %}
+      {% for i in range(shape | length) if not (argv[i] | string is match(shape[i])) %}{% set ok.v = false %}{% endfor %}
+      {% if ok.v %}{% set found.v = true %}{% endif %}
+      {% endfor %}
+      {% if not found.v %}{% set _ = bad.append(t.name | default('unnamed task')) %}{% endif %}
+      {% endfor %}
+      {{ bad | to_json }}
+
+- name: Assert every command task runs one of the Docker commands the role may run, in their exact shapes
+  ansible.builtin.assert:
+    that:
+      - role_guard_v_docker_bad | from_json | length == 0
+    fail_msg: >-
+      A command task runs something other than the Docker commands the role may run, in their
+      exact shapes: {{ role_guard_v_docker_bad | from_json }}.
+    quiet: true
+
+# The words that run something on the controller: lookup, query, q and pipe, in any
+# case and any spacing. The patterns are data, so the backslashes reach the regular
+# expression as written.
+- name: Hold the controller-side pattern and the spellings it must catch
+  ansible.builtin.set_fact:
+    role_guard_v_pattern: '(?i)\b(lookup|query|pipe)\b|\bq\s*\('
+    # Spellings the pattern must catch, so that a pattern that matched nothing could
+    # not pass the role's own text. None holds a template marker.
+    role_guard_v_samples:
+      - "lookup('ansible.builtin.file', '/etc/' ~ 'branchleft/x')"
+      - "lookup ('ansible.builtin.pipe', 'cat x')"
+      - "Lookup('file', 'x')"
+      - "query('file', 'x')"
+      - "q('file', 'x')"
+      - 'ansible.builtin.pipe'
+
+- name: Assert the pattern for a controller-side read can see each spelling of one
+  ansible.builtin.assert:
+    that:
+      - role_guard_v_samples | map('regex_search', role_guard_v_pattern) | select | list | length == role_guard_v_samples | length
+    fail_msg: The pattern that forbids lookup, query, q and pipe does not match one of its own samples, so a clean result would prove nothing.
+    quiet: true
+
+- name: Assert the scanned texts hold no lookup, query, q or pipe
+  ansible.builtin.assert:
+    that:
+      - guard_scan_texts | map('length') | select('equalto', 0) | list | length == 0
+      - guard_scan_texts | map('regex_search', role_guard_v_pattern) | select | list | length == 0
+    fail_msg: >-
+      A text the role checks holds a lookup, query, q or pipe. That runs on the
+      controller, which under ansible-pull is the host, and can read the signing key without a
+      module the checks would see.
+    quiet: true

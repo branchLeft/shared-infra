@@ -1,0 +1,53 @@
+---
+# Included from converge.yml only when the play runs under --check and the host
+# already holds the policy program. The magic variable ansible_check_mode is set
+# by that flag alone (the check_mode keyword on a task or a play does not set it),
+# so this is the one place the role's check-mode rules run for real against a
+# configured host whose chain is wrong: the plan has to fail on it, because a host
+# whose files are right and whose chains are wrong is drift (ANS-10). The chain is
+# put right again at the end, and the role then runs in check mode once more and
+# has to pass, so the next step starts from the configured host.
+- name: Take the established-traffic rule out of DOCKER-USER
+  ansible.builtin.command:
+    argv:
+      [iptables, -w, -D, DOCKER-USER, -m, conntrack, --ctstate, 'ESTABLISHED,RELATED', -j, ACCEPT]
+  changed_when: false
+  check_mode: false
+
+- name: Run the role in check mode against that chain, expecting the read-back to fail
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.deploy_tooling
+      vars:
+        deploy_tooling_host_class: app
+        deploy_tooling_policy_variant: standard
+
+    - name: Fail because the plan did not fail
+      ansible.builtin.fail:
+        msg: 'EXPECTED A FAILURE, GOT NONE: check mode on a configured host with a rule missing'
+  rescue:
+    - name: Check that the failure is the read-back's
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name == 'Read the chains back again'
+          - ansible_failed_result.msg is search('established accept is missing')
+        fail_msg: >-
+          WRONG FAILURE for check mode on a configured host: task {{ ansible_failed_task.name }},
+          message {{ ansible_failed_result.msg | default("") }}
+        quiet: true
+  always:
+    # The unit's program adds back the rule that is missing, which is what the
+    # handler does in a real run.
+    - name: Put the rule back by restarting the policy unit
+      ansible.builtin.command:
+        argv: [systemctl, restart, '{{ deploy_tooling_policy_unit_name }}']
+      changed_when: false
+      check_mode: false
+
+- name: Run the role in check mode against the chain as it was
+  ansible.builtin.include_role:
+    name: branchleft.deploy_tooling
+  vars:
+    deploy_tooling_host_class: app
+    deploy_tooling_policy_variant: standard

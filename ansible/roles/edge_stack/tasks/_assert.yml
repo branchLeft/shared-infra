@@ -1,0 +1,67 @@
+---
+# Read only, so every task here runs in check mode too. A failed assert here
+# changes nothing on the host.
+
+# The pin is written by branchleft-deploy and by nothing else; the role reads it.
+# It is not a secret. The locked script reads it again inside the lock.
+- name: Read the image pin
+  ansible.builtin.slurp:
+    src: '{{ edge_stack_image_env_file }}'
+  register: edge_stack_pin
+  failed_when: false
+
+- name: Refuse a pin that is not exactly one IMAGE line holding a digest
+  ansible.builtin.assert:
+    that:
+      - edge_stack_pin.content is defined
+      - (edge_stack_pin.content | b64decode).splitlines() | length == 1
+      - (edge_stack_pin.content | b64decode).splitlines()[0] is match(edge_stack_image_pin_pattern)
+    quiet: true
+    fail_msg: >-
+      {{ edge_stack_image_env_file }} must be exactly one line, IMAGE=<reference>@sha256:<64 hex digits>,
+      written by branchleft-deploy. A tag, a second line or anything after the digest is refused.
+
+# The owner places this file (RUNBOOK-edge step 3). The role asserts what it must be
+# and no value of it comes into the run. Four things on the host read the file, and
+# none returns its content: this stat, Docker Compose, systemd and the containers
+# (README, "Environment semantics"). This stat hashes it (the module reads the whole
+# file, as root, on the host) and only the sha256 comes back, for the fingerprint of
+# the Compose class; no_log keeps even that out of the log. Docker Compose opens it
+# through --env-file in every Compose call of the locked script; systemd opens it as
+# the unit's EnvironmentFile= when the unit is restarted; the containers receive the
+# values it holds.
+- name: Look at the secrets file
+  ansible.builtin.stat:
+    path: '{{ edge_stack_env_file }}'
+    checksum_algorithm: sha256
+  register: edge_stack_env_stat
+  no_log: true
+
+- name: Refuse a secrets file that is missing, not a plain file, not root's or not mode 0600
+  ansible.builtin.assert:
+    that:
+      - edge_stack_env_stat.stat.exists
+      - edge_stack_env_stat.stat.isreg
+      - not edge_stack_env_stat.stat.islnk
+      - edge_stack_env_stat.stat.pw_name == 'root'
+      - edge_stack_env_stat.stat.gr_name == 'root'
+      - edge_stack_env_stat.stat.mode == '0600'
+    quiet: true
+    fail_msg: >-
+      {{ edge_stack_env_file }} must be a regular file owned by root:root with mode 0600. The owner
+      places it (RUNBOOK-edge step 3) and nothing automated writes it.
+
+# A Caddyfile that is there is written through in place, as root. A link or a
+# directory there would send that write somewhere else.
+- name: Look at the Caddyfile on the host
+  ansible.builtin.stat:
+    path: '{{ edge_stack_project_dir }}/{{ edge_stack_caddy_file }}'
+    get_checksum: false
+  register: edge_stack_caddyfile_stat
+
+- name: Refuse a Caddyfile on the host that is not a plain file
+  ansible.builtin.assert:
+    that:
+      - not edge_stack_caddyfile_stat.stat.exists or (edge_stack_caddyfile_stat.stat.isreg and not edge_stack_caddyfile_stat.stat.islnk)
+    quiet: true
+    fail_msg: '{{ edge_stack_project_dir }}/{{ edge_stack_caddy_file }} exists and is not a regular file, so the role will not write through it.'

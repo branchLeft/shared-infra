@@ -1,0 +1,87 @@
+---
+# A restart of an instance of the compose template redeploys a tenant's stack, so
+# the role must never restart or enable one. A probe instance is started (the
+# stub docker.service and the docker stand-in let it start in the container), the
+# installed template unit is changed so that the role has to write it again, the
+# role runs, and the instance is still the same invocation.
+- name: Start the probe instance of the compose unit
+  ansible.builtin.systemd_service:
+    name: branchleft-compose@Molecule-Probe.service
+    state: started
+
+- name: Read the probe instance
+  ansible.builtin.command:
+    argv:
+      [
+        systemctl,
+        show,
+        branchleft-compose@Molecule-Probe.service,
+        '--property=InvocationID,ActiveState',
+      ]
+  register: deploy_tooling_scenario_probe_before
+  changed_when: false
+
+# An empty invocation id would make "unchanged" true whether or not a restart
+# happened, so the case requires a real one and an active unit.
+- name: Assert the probe instance is running under an invocation
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_probe_before.stdout_lines | select('match', '^InvocationID=[0-9a-f]{32}$') | list | length == 1
+      - "'ActiveState=active' in deploy_tooling_scenario_probe_before.stdout_lines"
+    fail_msg: 'The probe instance did not start: {{ deploy_tooling_scenario_probe_before.stdout_lines }}'
+    quiet: true
+
+- name: Change the installed template unit so the role has to write it again
+  ansible.builtin.lineinfile:
+    path: '{{ deploy_tooling_compose_unit_path }}'
+    line: '# changed by the test'
+    insertafter: EOF
+
+- name: Apply the role
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+- name: Read the probe instance again
+  ansible.builtin.command:
+    argv:
+      [
+        systemctl,
+        show,
+        branchleft-compose@Molecule-Probe.service,
+        '--property=InvocationID,ActiveState',
+      ]
+  register: deploy_tooling_scenario_probe_after
+  changed_when: false
+
+- name: Assert the role wrote the unit and left the instance alone
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_probe_after.stdout_lines == deploy_tooling_scenario_probe_before.stdout_lines
+    fail_msg: >-
+      The role restarted a compose instance: {{ deploy_tooling_scenario_probe_before.stdout_lines }} then
+      {{ deploy_tooling_scenario_probe_after.stdout_lines }}
+    quiet: true
+
+- name: Read the template unit the role wrote
+  ansible.builtin.slurp:
+    src: '{{ deploy_tooling_compose_unit_path }}'
+  register: deploy_tooling_scenario_compose_unit
+
+- name: Assert the template unit is the repository's again
+  ansible.builtin.assert:
+    that:
+      - "'changed by the test' not in (deploy_tooling_scenario_compose_unit.content | b64decode)"
+    fail_msg: The role did not rewrite the changed template unit.
+    quiet: true
+
+- name: Assert the host is as the role leaves it, with no compose unit enabled
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: standard
+
+- name: Stop the probe instance
+  ansible.builtin.systemd_service:
+    name: branchleft-compose@Molecule-Probe.service
+    state: stopped

@@ -1,0 +1,27 @@
+---
+# One wrong-content drop-in: written, refused by the role, put right. The caller
+# loops over deploy_tooling_scenario_dropin (a label and the content to write).
+- name: Write the drop-in with {{ deploy_tooling_scenario_dropin.label }}
+  ansible.builtin.copy:
+    content: '{{ deploy_tooling_scenario_dropin.content }}'
+    dest: '{{ deploy_tooling_sudoers_path }}'
+    owner: root
+    group: root
+    mode: '0440'
+
+- name: Run the role against the drop-in with {{ deploy_tooling_scenario_dropin.label }}
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: 'sudoers drop-in with {{ deploy_tooling_scenario_dropin.label }}'
+    expect_msg: 'does not match the one grant'
+    expect_task: '^Refuse a sudoers drop-in that is anything but the one grant$'
+    run_class: app
+    run_variant: standard
+
+- name: Put the correct drop-in back
+  ansible.builtin.copy:
+    content: "{{ deploy_tooling_sudoers_line }}\n"
+    dest: '{{ deploy_tooling_sudoers_path }}'
+    owner: root
+    group: root
+    mode: '0440'

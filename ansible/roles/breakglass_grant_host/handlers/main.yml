@@ -1,0 +1,6 @@
+---
+# Queued by the two unit files. The play flushes handlers before the timer task,
+# so the timer is enabled with the unit files as they now are on disk.
+- name: Reload systemd manager
+  ansible.builtin.systemd_service:
+    daemon_reload: true

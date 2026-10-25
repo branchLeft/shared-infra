@@ -1,0 +1,13 @@
+-P INPUT ACCEPT
+-P FORWARD ACCEPT
+-P OUTPUT ACCEPT
+-N DOCKER-USER
+-A INPUT -i br-mailspool -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A INPUT -i br-mailspool -j DROP
+-A FORWARD -j DOCKER-USER
+-A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A DOCKER-USER -i br-mailspool ! -o br-mailspool -j DROP
+-A DOCKER-USER -d 10.20.1.20/32 -p tcp -m tcp --dport 3306 -j ACCEPT
+-A DOCKER-USER -d 10.20.1.0/24 -j DROP
+-A DOCKER-USER -d 169.254.169.254/32 -j DROP
+-A DOCKER-USER -j RETURN

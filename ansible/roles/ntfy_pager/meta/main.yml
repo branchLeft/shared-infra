@@ -5,6 +5,6 @@ galaxy_info:
   # Molecule derives a fully qualified role name from the namespace, or from
   # the author when there is none, and refuses an upper-case author.
   namespace: branchleft
-  description: Writes the ntfy pager's four credential lines and delivers the monitoring stack, then restarts it.
+  description: Writes the ntfy pager's four credential lines and delivers the Alertmanager renderer. It restarts nothing.
   license: PolyForm-Shield-1.0.0
   min_ansible_version: '2.21.5'

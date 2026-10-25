@@ -1,0 +1,6 @@
+---
+# None of the role's inputs is a secret. The README says what each is for.
+edge_stack_source_dir: '{{ role_path }}/files/stack'
+edge_stack_lock_timeout: 600
+edge_stack_crowdsec_wait_tries: 24
+edge_stack_crowdsec_wait_interval: 5

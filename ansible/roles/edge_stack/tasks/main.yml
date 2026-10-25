@@ -1,0 +1,16 @@
+---
+# The order is the README's "Order": read and refuse first, work out what is due,
+# validate every candidate, place every file, then act, then record. Nothing in
+# the files below notifies a handler: the restart shape is the fingerprint and the
+# stamp (README, "Restart shape").
+- name: Check the pin, the secrets file and the Caddyfile on the host before anything is written
+  ansible.builtin.include_tasks: _assert.yml
+
+- name: Classify every file of the stack and refuse one that is in no class
+  ansible.builtin.include_tasks: _classify.yml
+
+- name: Work out what is due
+  ansible.builtin.include_tasks: _decide.yml
+
+- name: Validate, deliver, apply and record
+  ansible.builtin.include_tasks: _deliver.yml

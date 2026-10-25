@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path("/var/tmp/ptt")  # noqa: S108 - short on purpose: gpg's agent socket lives beneath it
 PLAYBOOK = "ansible/playbooks/host.yml"
 MARKER_FILE = ROOT / "applied-marker"
+STEP_MARKER_PREFIX = f"{ROOT}/step-"
 ENVIRONMENT = {
     **os.environ,
     "GIT_AUTHOR_NAME": "TEST_AUTHOR",
@@ -38,8 +39,27 @@ def run(argv: list[str], cwd: Path | None = None, extra: dict[str, str] | None =
     return done.stdout.strip()
 
 
+def step_tasks() -> str:
+    """Return one placeholder task per step, each behind the never tag and its own tag.
+
+    A plain apply or check must never run them. A step request runs only the one whose tag it
+    names, and the task writes the extra variable the program set, so the test sees both.
+    """
+    text = ""
+    for step in ("migrate", "identity", "provision"):
+        text += (
+            f"    - name: Record that the {step} step ran\n"
+            "      ansible.builtin.copy:\n"
+            '        content: "{{ control_plane_db_step }} step ran\\n"\n'
+            f"        dest: {STEP_MARKER_PREFIX}{step}\n"
+            "        owner: root\n        group: root\n        mode: '0644'\n"
+            f"      tags: [never, control_plane_db_{step}]\n"
+        )
+    return text
+
+
 def playbook(marker: str, fail: bool = False) -> str:
-    """Return a placeholder playbook that records a marker, or fails."""
+    """Return a placeholder playbook that records a marker, or fails, and holds the steps."""
     task = (
         "    - name: Fail on purpose\n"
         "      ansible.builtin.fail:\n"
@@ -51,7 +71,8 @@ def playbook(marker: str, fail: bool = False) -> str:
         f"        dest: {MARKER_FILE}\n"
         "        owner: root\n        group: root\n        mode: '0644'\n"
     )
-    return f"- name: Placeholder play\n  hosts: all\n  gather_facts: false\n  tasks:\n{task}"
+    header = "- name: Placeholder play\n  hosts: all\n  gather_facts: false\n  tasks:\n"
+    return f"{header}{task}{step_tasks()}"
 
 
 class Signer:

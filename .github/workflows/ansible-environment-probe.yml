@@ -1,0 +1,73 @@
+name: Ansible environment probe
+
+# Reads the protection of the `ansible-hosts` deployment environment every day and fails
+# red when it is weaker than the delivery assumes (ANS-17). The reusable workflow that
+# applies the roles cannot read the environment's protection itself, and a missing
+# environment is created unprotected by the first run that names it, so this is the one
+# place that notices a reviewer rule, the branch policy or the administrator bypass
+# changing. It judges with `ansible/checks/check_delivery.py environment`, from the
+# answers of two read-only GitHub calls (the environment and its deployment branch
+# policies).
+#
+# Scheduled rather than a pull-request gate: the environment is a repository setting, not
+# a file, so no pull request changes it and no pull request can be made to wait for it.
+# It is not a required check and cannot block a merge; a red run here means the
+# environment was changed, not that anything merged is broken. A green run says only that
+# the settings read are as ruled.
+#
+# Named limits:
+#   - the workflow's token cannot list environment secrets, so `ssh_apply_key` is not
+#     checked here (the command prints a note saying so);
+#   - the check that no other workflow uses the environment stays in `check_delivery.py
+#     caller`, which the Ansible workflow's lint job runs.
+
+on:
+  schedule:
+    # Daily, off the top of the hour where GitHub's own scheduling guidance says queued
+    # jobs are most congested.
+    - cron: '41 5 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  probe:
+    name: Probe the ansible-hosts environment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Read first, so a refused read is red before anything is installed. `gh api` fails on
+      # a 404, so a missing environment or an unreadable one is a red run, never a green one.
+      - name: Read the environment and its branch policies
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPOSITORY/environments/ansible-hosts" > "$RUNNER_TEMP/environment.json"
+          gh api "repos/$REPOSITORY/environments/ansible-hosts/deployment-branch-policies" > "$RUNNER_TEMP/policies.json"
+
+      - name: Create the tool environment
+        run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
+
+      # The same install as the Ansible workflow's tool jobs: the pinned pip, then the lock,
+      # each checked against its recorded hash (ANS-4). check_delivery.py reads YAML with
+      # the lock's ruamel.yaml.
+      - name: Install the pinned pip
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt'
+
+      - name: Install the pinned tools
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt'
+
+      - name: Judge the environment
+        run: >-
+          "$RUNNER_TEMP/ansible-venv/bin/python" ansible/checks/check_delivery.py environment
+          --environment "$RUNNER_TEMP/environment.json"
+          --policies "$RUNNER_TEMP/policies.json"

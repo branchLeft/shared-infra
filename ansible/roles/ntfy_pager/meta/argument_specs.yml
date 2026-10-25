@@ -1,30 +1,23 @@
 ---
 argument_specs:
   main:
-    short_description: Write the ntfy pager credentials and deliver and restart the monitoring stack
+    short_description: Write the ntfy pager credentials and deliver the Alertmanager renderer
     description: >-
-      Writes the four NTFY_ credential lines into the monitoring secrets file,
-      each under its own key and the others left in place, closes that file to
-      root, copies the monitoring stack's committed files into the project
-      directory, and restarts the monitoring stack unit when either changed. The
-      four credentials arrive as values from the caller; the role never reads or
-      generates one. It removes nothing from the host.
+      Creates the pager secrets file (/etc/branchleft/ntfy-pager.env, a
+      constant of the role, not an input; monitoring_stack owns
+      /etc/branchleft/monitoring.env and this role never writes it) closed to
+      root when it is absent, writes
+      the four NTFY_ credential lines into it, each under its own key and the
+      others left in place, and copies the Alertmanager renderer into the project
+      directory (/opt/branchleft/monitoring, also a constant, not an input: it
+      is the unit's WorkingDirectory). The four credentials arrive as values from the caller, each a
+      non-empty single line (the role refuses an empty, blank or multi-line value
+      before it writes anything); the role never reads or generates one. It restarts nothing, delivers none of the
+      stack's eight other files and removes nothing from the host: the
+      monitoring_stack role, which runs after this one, restarts the monitoring
+      unit when this role's file or credentials changed.
     author: branchLeft
     options:
-      ntfy_pager_project_dir:
-        type: str
-        description: >-
-          Absolute path of the stack's project directory. It must equal the
-          WorkingDirectory the shared Compose unit template derives from the
-          instance name, which is /opt/branchleft/monitoring.
-        default: /opt/branchleft/monitoring
-      ntfy_pager_env_file:
-        type: str
-        description: >-
-          Absolute path of the monitoring secrets file. It must already exist and
-          be non-empty; the role adds or replaces the NTFY_ lines in it and does
-          not create it.
-        default: /etc/branchleft/monitoring.env
       ntfy_pager_pager_token:
         type: str
         required: true

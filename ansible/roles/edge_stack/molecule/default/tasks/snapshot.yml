@@ -1,0 +1,71 @@
+---
+# Records what a decision of the role can be told by, into the fact edge_stack_verify_snap:
+# the stand-in's calls, the three stamps, the files on the host, the inode of the
+# Caddyfile and the sha of the container's view of it, the unit's state, the
+# acquisition directory and whether the candidate directory is there. The stamps
+# are hashes of files that may hold a key, so they are read under no_log and no
+# value is printed.
+- name: Read the log of the stand-in's calls
+  ansible.builtin.slurp:
+    src: /var/log/docker-standin.calls
+  register: edge_stack_verify_snap_calls
+
+- name: Read the stamps, if there are any
+  ansible.builtin.slurp:
+    src: '{{ item }}'
+  loop:
+    - /var/lib/branchleft/edge.caddy.applied
+    - /var/lib/branchleft/edge.compose.applied
+    - /var/lib/branchleft/edge.crowdsec.applied
+  register: edge_stack_verify_snap_stamps
+  failed_when: false
+  no_log: true
+
+- name: Hash the files on the host and look at the candidate directory
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop:
+    - /opt/branchleft/edge/Caddyfile
+    - /opt/branchleft/edge/compose.yml
+    - /opt/branchleft/edge/crowdsec/config.yaml.local
+    - /var/lib/standin-mount/Caddyfile
+    - /var/lib/branchleft/edge.candidate
+  register: edge_stack_verify_snap_stats
+
+- name: Ask systemd for the edge unit
+  ansible.builtin.systemd_service:
+    name: branchleft-compose@edge.service
+  register: edge_stack_verify_snap_unit
+
+- name: List the acquisition directory
+  ansible.builtin.find:
+    paths: /opt/branchleft/edge/crowdsec/acquis.d
+    file_type: any
+    hidden: true
+  register: edge_stack_verify_snap_acquis
+
+- name: Keep the snapshot
+  ansible.builtin.set_fact:
+    edge_stack_verify_snap:
+      lines: '{{ (edge_stack_verify_snap_calls.content | b64decode).splitlines() }}'
+      stamps:
+        caddy: >-
+          {{ (edge_stack_verify_snap_stamps.results[0].content | b64decode | trim)
+          if edge_stack_verify_snap_stamps.results[0].content is defined else 'none' }}
+        compose: >-
+          {{ (edge_stack_verify_snap_stamps.results[1].content | b64decode | trim)
+          if edge_stack_verify_snap_stamps.results[1].content is defined else 'none' }}
+        crowdsec: >-
+          {{ (edge_stack_verify_snap_stamps.results[2].content | b64decode | trim)
+          if edge_stack_verify_snap_stamps.results[2].content is defined else 'none' }}
+      caddy_sha: '{{ edge_stack_verify_snap_stats.results[0].stat.checksum | default("absent") }}'
+      caddy_inode: '{{ edge_stack_verify_snap_stats.results[0].stat.inode | default(0) }}'
+      compose_sha: '{{ edge_stack_verify_snap_stats.results[1].stat.checksum | default("absent") }}'
+      config_sha: '{{ edge_stack_verify_snap_stats.results[2].stat.checksum | default("absent") }}'
+      view_sha: '{{ edge_stack_verify_snap_stats.results[3].stat.checksum | default("absent") }}'
+      candidate_exists: '{{ edge_stack_verify_snap_stats.results[4].stat.exists }}'
+      unit_active: '{{ edge_stack_verify_snap_unit.status.ActiveState }}'
+      unit_enabled: '{{ edge_stack_verify_snap_unit.status.UnitFileState }}'
+      acquis: '{{ edge_stack_verify_snap_acquis.files | map(attribute="path") | map("basename") | sort | list }}'
+  no_log: true

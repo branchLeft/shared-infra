@@ -1,0 +1,70 @@
+---
+# What the role expects to find on a host before it runs: a docker command that
+# answers, and the placeholder key the owner would have made by hand. Nothing
+# here is the role's own work. The stand-in is the one program of this test that
+# stands in for a real component (molecule.yml).
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  vars:
+    prepare_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') | from_yaml }}"
+  tasks:
+    - name: Create the directory the stand-in keeps its state in
+      ansible.builtin.file:
+        path: '{{ scenario_state_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install the docker stand-in where the role finds it
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../../../breakglass_grant_host/molecule/default/files/docker_standin.sh'
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    # What a registry would resolve a bare tag to, so a pull by tag stores the
+    # pinned digest and a test of the pull's arguments is not masked by a failed
+    # read-back.
+    - name: Tell the stand-in which digest a bare tag resolves to
+      ansible.builtin.copy:
+        content: "{{ prepare_role_vars.breakglass_mint_host_node_image.split('@') | last }}\n"
+        dest: '{{ scenario_state_dir }}/registry_digest'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create the directory above the placeholder key and the digest control
+      ansible.builtin.file:
+        path: '{{ scenario_key_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    # The placeholder is what the owner's hand-made key would be to the role: a
+    # root-only file in a root-only directory. It is not a key and signs nothing.
+    - name: Put the placeholder key where the scenario says the key is
+      ansible.builtin.copy:
+        content: '{{ scenario_key_file_text }}'
+        dest: '{{ scenario_key_path }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    # A file the test asks stat to hash with the default arguments, so that its
+    # SHA-1 reaches the log. The scan in verify must find it there, which shows
+    # the scan can see a digest at all.
+    - name: Put the digest control file in place
+      ansible.builtin.copy:
+        content: '{{ scenario_digest_control_file_text }}'
+        dest: '{{ scenario_digest_control_path }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false

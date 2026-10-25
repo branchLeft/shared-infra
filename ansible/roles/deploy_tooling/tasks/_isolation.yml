@@ -1,0 +1,80 @@
+---
+# Included from main.yml for a host of class app only. The files are already in
+# place and checked. This file enables the unit, applies it through the handler,
+# and reads the firewall chains back (the read-back is deploy_tooling_chain, a
+# module of this role: the chains are command output that must be parsed, and
+# ANS-9 makes that a typed, tested module).
+
+# Cleared first so that a value from an earlier run of the role in the same play
+# cannot be read as this run's.
+- name: Clear the repair marker
+  ansible.builtin.set_fact:
+    deploy_tooling_read_back_repaired: false
+
+# Skipped with a stated reason (ANS-10) when the unit file is one that check mode
+# did not write: systemd has no such unit to enable.
+- name: Enable the policy unit at boot
+  ansible.builtin.systemd_service:
+    name: '{{ deploy_tooling_policy_unit_name }}'
+    enabled: true
+  register: deploy_tooling_policy_unit_enabled
+  when: not (ansible_check_mode and deploy_tooling_app_files_written.changed)
+
+# The apply is the handler's restart, which runs the policy program. In check mode
+# no handler runs, so while the program, the unit or its enabled state would
+# change, the chains cannot be what the new program would make them and a
+# read-back would fail every first plan of a host. Otherwise the read-back runs.
+- name: Decide whether the firewall read-back must wait for the apply
+  ansible.builtin.set_fact:
+    deploy_tooling_apply_pending: >-
+      {{ ansible_check_mode and (deploy_tooling_app_files_written.changed
+         or (deploy_tooling_policy_unit_enabled.changed | default(false))) }}
+
+- name: Say why the firewall read-back is skipped
+  ansible.builtin.debug:
+    msg: >-
+      Firewall read-back skipped in check mode: the policy program, its unit or the unit's enabled
+      state would change, and the handler that applies them does not run in check mode. The next
+      run reads the chains back.
+  when: deploy_tooling_apply_pending
+
+# The restart handler runs the policy program, so a handler that fails (the program
+# refused the host, say) stops the run here with the handler's own failure.
+- name: Apply the changed files
+  ansible.builtin.meta: flush_handlers
+
+# A chain that is not the one the policy builds fails the run. Docker rebuilds
+# DOCKER-USER when it restarts, and the unit's PartOf follows that restart, but a
+# chain flushed by anything else is rebuilt here: the unit is restarted (the same
+# path as the handler, so the unit's state matches the chain afterwards) and the
+# chains are read back again. A second failure fails the run. A chain that holds
+# the right rules in the wrong order is not reordered by a restart, because the
+# program only adds what is missing; it fails with the module's message.
+- name: Read the firewall chains back, and repair a flushed chain once
+  when: not deploy_tooling_apply_pending
+  block:
+    - name: Read the chains back and compare them with the policy
+      deploy_tooling_chain:
+        reconciler_path: '{{ deploy_tooling_reconciler_path }}'
+        variant: '{{ deploy_tooling_policy_variant }}'
+        foreign_chain_allowlist: '{{ deploy_tooling_foreign_chain_allowlist }}'
+      check_mode: false
+  rescue:
+    # Skipped in check mode with a stated reason (ANS-10): a restart cannot be
+    # simulated, so the second read-back sees the same chains and fails the plan.
+    - name: Restart the policy unit after a failed read-back
+      ansible.builtin.systemd_service:
+        name: '{{ deploy_tooling_policy_unit_name }}'
+        state: restarted
+      when: not ansible_check_mode
+
+    - name: Record that the read-back needed a repair
+      ansible.builtin.set_fact:
+        deploy_tooling_read_back_repaired: true
+
+    - name: Read the chains back again
+      deploy_tooling_chain:
+        reconciler_path: '{{ deploy_tooling_reconciler_path }}'
+        variant: '{{ deploy_tooling_policy_variant }}'
+        foreign_chain_allowlist: '{{ deploy_tooling_foreign_chain_allowlist }}'
+      check_mode: false

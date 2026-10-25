@@ -599,6 +599,333 @@
         fail_msg: 'the newer apply was wrong: rc={{ pull_trigger_request_result.rc }} {{ pull_trigger_request_result.stdout }}'
         success_msg: the newer commit applied and the old checkout was removed
 
+    # ------------------------------------------------------- step requests
+    - name: Look for a marker of any step after the plain checks and applies above
+      ansible.builtin.stat:
+        path: '/var/tmp/ptt/step-{{ item }}'
+      loop: [migrate, identity, provision]
+      register: pull_trigger_steps_before
+
+    - name: Every apply and check so far ran no step, because every step is behind the never tag
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        fail_msg: 'a plain request ran the {{ item.item }} step'
+        success_msg: 'no plain request ran the {{ item.item }} step'
+      loop: '{{ pull_trigger_steps_before.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Write a configuration whose step allow-list is empty
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: no-steps
+        scene_fresh: false
+        scene_overrides:
+          state_dir: '{{ verify_state }}'
+          log_dir: '{{ verify_logs }}'
+          steps: []
+
+    - name: Write a configuration that names a step the program cannot run, as break-glass access would be named
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: break-glass
+        scene_fresh: false
+        scene_overrides:
+          state_dir: '{{ verify_state }}'
+          log_dir: '{{ verify_logs }}'
+          steps:
+            - id: break_glass
+              tag: control_plane_db_break_glass
+              word: BREAK-GLASS-1
+
+    - name: Write a configuration whose step tag would select the whole playbook
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: tag-all
+        scene_fresh: false
+        scene_overrides:
+          state_dir: '{{ verify_state }}'
+          log_dir: '{{ verify_logs }}'
+          steps:
+            - id: migrate
+              tag: all
+              word: MIGRATE-WORD
+
+    - name: Write a configuration that pairs the migrate id with the identity step's tag
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: tag-swap
+        scene_fresh: false
+        scene_overrides:
+          state_dir: '{{ verify_state }}'
+          log_dir: '{{ verify_logs }}'
+          steps:
+            - id: migrate
+              tag: control_plane_db_identity
+              word: MIGRATE-WORD
+
+    - name: Remove the marker of the plain play, so that a step which ran an untagged task would show
+      ansible.builtin.file:
+        path: '{{ verify_marker }}'
+        state: absent
+
+    - name: Ask for the migrate step of the newest commit, as the step key's forced command would
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: the migrate step
+        request_mode: step
+        request_text: '{{ pull_trigger_commits.tip }} migrate MIGRATE-WORD'
+
+    - name: Look at what the step left
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_marker }}'
+        - /var/tmp/ptt/step-migrate
+        - /var/tmp/ptt/step-identity
+        - /var/tmp/ptt/step-provision
+      register: pull_trigger_after_step
+
+    - name: Read the step marker and the rollback floor
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /var/tmp/ptt/step-migrate
+        - '{{ verify_state }}/last-applied'
+      register: pull_trigger_step_files
+
+    - name: A step request runs only the tagged task, with the id the program validated, and names the step
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_request_result.rc == 10
+          - "('verdict=applied exit=10 reason=ok mode=step commit=' ~ pull_trigger_commits.tip ~ ' ') in pull_trigger_request_result.stdout"
+          - pull_trigger_request_result.stdout is search(' changed=1 step=migrate$')
+          - not pull_trigger_after_step.results[0].stat.exists
+          - pull_trigger_after_step.results[1].stat.exists
+          - not pull_trigger_after_step.results[2].stat.exists
+          - not pull_trigger_after_step.results[3].stat.exists
+          - (pull_trigger_step_files.results[0].content | ansible.builtin.b64decode) == 'migrate step ran\n'
+          - (pull_trigger_step_files.results[1].content | ansible.builtin.b64decode) == pull_trigger_commits.tip ~ '\n'
+        fail_msg: 'the step request was wrong: rc={{ pull_trigger_request_result.rc }} {{ pull_trigger_request_result.stdout }}'
+        success_msg: the step ran alone, with the validated id
+
+    - name: Ask for the same step again
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: the migrate step again
+        request_mode: step
+        request_text: '{{ pull_trigger_commits.tip }} migrate MIGRATE-WORD'
+
+    - name: The second request of a step is a clean second run that reports no change
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_request_result.rc == 0
+          - "('verdict=unchanged exit=0 reason=ok mode=step commit=' ~ pull_trigger_commits.tip ~ ' ') in pull_trigger_request_result.stdout"
+          - pull_trigger_request_result.stdout is search(' changed=0 step=migrate$')
+        fail_msg: 'the second step request was not clean: rc={{ pull_trigger_request_result.rc }} {{ pull_trigger_request_result.stdout }}'
+        success_msg: the second request of the step changed nothing
+
+    - name: Ask for the other two steps, each with its own word
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: 'the {{ item.step }} step'
+        request_mode: step
+        request_text: '{{ pull_trigger_commits.tip }} {{ item.step }} {{ item.word }}'
+      loop:
+        - step: identity
+          word: IDENTITY-WORD
+        - step: provision
+          word: PROVISION-WORD
+      loop_control:
+        label: '{{ item.step }}'
+
+    - name: Look for the markers of the three steps
+      ansible.builtin.slurp:
+        src: '/var/tmp/ptt/step-{{ item }}'
+      loop: [migrate, identity, provision]
+      register: pull_trigger_step_markers
+
+    - name: Each of the three steps ran on its own request
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_request_result.rc == 10
+          - (pull_trigger_step_markers.results[0].content | ansible.builtin.b64decode) == 'migrate step ran\n'
+          - (pull_trigger_step_markers.results[1].content | ansible.builtin.b64decode) == 'identity step ran\n'
+          - (pull_trigger_step_markers.results[2].content | ansible.builtin.b64decode) == 'provision step ran\n'
+        fail_msg: a step did not run, or ran under another step's id
+        success_msg: each step ran under its own id
+
+    - name: Refuse every step request that must not run, each leaving the host and the step markers as they were
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      loop:
+        - name: a step that is not on the allow-list
+          mode: step
+          text: '{{ pull_trigger_commits.tip }} nosuchstep MIGRATE-WORD'
+          rc: 20
+          reason: step-not-allowed
+          commit: '{{ pull_trigger_commits.tip }}'
+          shown_step: '-'
+        - name: a step when the allow-list is empty
+          mode: step
+          text: '{{ pull_trigger_commits.tip }} migrate MIGRATE-WORD'
+          rc: 20
+          reason: step-not-allowed
+          commit: '{{ pull_trigger_commits.tip }}'
+          config: /var/tmp/ptt/cfg/no-steps.json
+          shown_step: '-'
+        - name: a wrong confirmation word
+          mode: step
+          text: '{{ pull_trigger_commits.tip }} migrate WRONG-WORD'
+          rc: 20
+          reason: confirm-mismatch
+          commit: '{{ pull_trigger_commits.tip }}'
+          shown_step: migrate
+        - name: the confirmation word of another step
+          mode: step
+          text: '{{ pull_trigger_commits.tip }} migrate IDENTITY-WORD'
+          rc: 20
+          reason: confirm-mismatch
+          commit: '{{ pull_trigger_commits.tip }}'
+          shown_step: migrate
+        - name: a step with the apply mode, which the plain apply key's forced command fixes
+          mode: apply
+          text: '{{ pull_trigger_commits.tip }} migrate MIGRATE-WORD'
+          rc: 20
+          reason: step-mode-only
+        - name: a step with the check mode, which the plan key's forced command fixes
+          mode: check
+          text: '{{ pull_trigger_commits.tip }} migrate MIGRATE-WORD'
+          rc: 20
+          reason: step-mode-only
+        - name: the step mode with a bare commit, which must not run as a plain apply
+          mode: step
+          text: '{{ pull_trigger_commits.tip }}'
+          rc: 20
+          reason: bad-request
+        - name: a step on a commit older than the one last applied
+          mode: step
+          text: '{{ pull_trigger_commits.good }} migrate MIGRATE-WORD'
+          rc: 20
+          reason: rollback
+          commit: '{{ pull_trigger_commits.good }}'
+          shown_step: migrate
+        - name: a step on a commit that is only on another branch
+          mode: step
+          text: '{{ pull_trigger_commits.side }} migrate MIGRATE-WORD'
+          rc: 20
+          reason: not-on-main
+          commit: '{{ pull_trigger_commits.side }}'
+          shown_step: migrate
+        - name: a step request with a trailing token
+          mode: step
+          text: '{{ pull_trigger_commits.tip }} migrate MIGRATE-WORD touch /var/tmp/ptt/pwned'
+          rc: 20
+          reason: bad-request
+        - name: a step request with a lowercase word
+          mode: step
+          text: '{{ pull_trigger_commits.tip }} migrate migrate-word'
+          rc: 20
+          reason: bad-request
+        - name: a step request with a line break in the word
+          mode: step
+          text: "{{ pull_trigger_commits.tip }} migrate MIGRATE\nWORD"
+          rc: 20
+          reason: bad-request
+        - name: a step request with an uppercase step id
+          mode: step
+          text: '{{ pull_trigger_commits.tip }} MIGRATE MIGRATE-WORD'
+          rc: 20
+          reason: bad-request
+        - name: a step request with a step id that is an option
+          mode: step
+          text: '{{ pull_trigger_commits.tip }} --tags MIGRATE-WORD'
+          rc: 20
+          reason: bad-request
+        - name: a configuration that names a step the program cannot run
+          mode: step
+          text: '{{ pull_trigger_commits.tip }} break_glass BREAK-GLASS-1'
+          rc: 40
+          reason: config-invalid
+          shown_mode: '-'
+          config: /var/tmp/ptt/cfg/break-glass.json
+        - name: a configuration whose step tag is all
+          mode: step
+          text: '{{ pull_trigger_commits.tip }} migrate MIGRATE-WORD'
+          rc: 40
+          reason: config-invalid
+          shown_mode: '-'
+          config: /var/tmp/ptt/cfg/tag-all.json
+        - name: a configuration that pairs one step's id with another step's tag
+          mode: step
+          text: '{{ pull_trigger_commits.tip }} migrate MIGRATE-WORD'
+          rc: 40
+          reason: config-invalid
+          shown_mode: '-'
+          config: /var/tmp/ptt/cfg/tag-swap.json
+      loop_control:
+        loop_var: case
+        label: '{{ case.name }}'
+
+    - name: Write a configuration with a state directory of its own, for the checks that come before the floor is read
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: step-fresh
+
+    - name: Make that state directory with a check, which raises no floor
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: a check that makes the state directory of the fresh scene
+        request_mode: check
+        request_text: '{{ pull_trigger_commits.tip }}'
+        request_config: /var/tmp/ptt/cfg/step-fresh.json
+
+    - name: Refuse a step on a commit whose signature the host does not accept, on a host with no floor
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      loop:
+        - name: a step on an unsigned commit
+          mode: step
+          text: '{{ pull_trigger_commits.unsigned }} migrate MIGRATE-WORD'
+          rc: 20
+          reason: unsigned
+          commit: '{{ pull_trigger_commits.unsigned }}'
+          shown_step: migrate
+          config: /var/tmp/ptt/cfg/step-fresh.json
+          state: /var/tmp/ptt/st-step-fresh
+        - name: a step on a commit signed by an SSH key that is not on the allowlist
+          mode: step
+          text: '{{ pull_trigger_commits.other_ssh }} migrate MIGRATE-WORD'
+          rc: 20
+          reason: signer-not-allowed
+          commit: '{{ pull_trigger_commits.other_ssh }}'
+          shown_step: migrate
+          config: /var/tmp/ptt/cfg/step-fresh.json
+          state: /var/tmp/ptt/st-step-fresh
+        - name: a step on a commit whose message was changed after it was signed
+          mode: step
+          text: '{{ pull_trigger_commits.tampered }} migrate MIGRATE-WORD'
+          rc: 20
+          reason: bad-signature
+          commit: '{{ pull_trigger_commits.tampered }}'
+          shown_step: migrate
+          config: /var/tmp/ptt/cfg/step-fresh.json
+          state: /var/tmp/ptt/st-step-fresh
+      loop_control:
+        loop_var: case
+        label: '{{ case.name }}'
+
+    - name: Look for anything a malformed step request could have run
+      ansible.builtin.stat:
+        path: /var/tmp/ptt/pwned
+      register: pull_trigger_step_pwned
+
+    - name: No text from a step request was ever run
+      ansible.builtin.assert:
+        that:
+          - not pull_trigger_step_pwned.stat.exists
+        fail_msg: the text of a step request was run
+        success_msg: no step request text was run
+
     # ----------------------------------------------- main moved away
     - name: Write a configuration for the main-moved-away scene
       ansible.builtin.include_tasks: tasks/scene.yml
@@ -919,6 +1246,93 @@
           {{ pull_trigger_through_sudo_default.stdout }} {{ pull_trigger_through_sudo_default.stderr }}
         success_msg: the sudo route works with the variable kept, refuses other arguments, and fails closed without the variable
 
+    # ------------------------------ the step key's route, a third argument list
+    - name: Make the account the step key's forced command would log in as
+      ansible.builtin.user:
+        name: ptt-step
+        shell: /bin/sh
+        create_home: true
+
+    - name: Let that account run the program as root with the one step argument list, and no other
+      ansible.builtin.copy:
+        content: |
+          Defaults!/usr/local/sbin/pull-trigger env_keep += "SSH_ORIGINAL_COMMAND"
+          ptt-step ALL=(root) NOPASSWD: /usr/local/sbin/pull-trigger --mode step
+        dest: /etc/sudoers.d/ptt-step
+        owner: root
+        group: root
+        mode: '0440'
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Ask for a step through sudo as the step account, the way its forced command would
+      ansible.builtin.command:
+        argv:
+          - sudo
+          - -n
+          - -u
+          - ptt-step
+          - env
+          - 'SSH_ORIGINAL_COMMAND={{ pull_trigger_commits.tip }} migrate MIGRATE-WORD'
+          - sudo
+          - -n
+          - '{{ verify_program }}'
+          - --mode
+          - step
+      register: pull_trigger_step_through_sudo
+      changed_when: false
+      failed_when: false
+
+    - name: Ask for the same step through sudo as the plain apply account, which has no such argument list
+      ansible.builtin.command:
+        argv:
+          - sudo
+          - -n
+          - -u
+          - ptt-ci
+          - env
+          - 'SSH_ORIGINAL_COMMAND={{ pull_trigger_commits.tip }} migrate MIGRATE-WORD'
+          - sudo
+          - -n
+          - '{{ verify_program }}'
+          - --mode
+          - step
+      register: pull_trigger_plain_account_step
+      changed_when: false
+      failed_when: false
+
+    - name: Ask through sudo as the step account for an apply, a check and another configuration
+      ansible.builtin.command:
+        argv: >-
+          {{ ['sudo', '-n', '-u', 'ptt-step', 'env', 'SSH_ORIGINAL_COMMAND=' ~ pull_trigger_commits.tip,
+          'sudo', '-n', verify_program] + item }}
+      loop:
+        - [--mode, apply]
+        - [--mode, check]
+        - [--mode, step, --config, /var/tmp/ptt/cfg/writable.json]
+      loop_control:
+        label: '{{ item | join(" ") }}'
+      register: pull_trigger_step_account_other
+      changed_when: false
+      failed_when: false
+
+    - name: Only the step account may request a step, and only through the one argument list
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_step_through_sudo.rc == 0
+          - "('verdict=unchanged exit=0 reason=ok mode=step commit=' ~ pull_trigger_commits.tip ~ ' ') in pull_trigger_step_through_sudo.stdout"
+          - pull_trigger_step_through_sudo.stdout is search(' step=migrate$')
+          - pull_trigger_plain_account_step.rc == 1
+          - pull_trigger_plain_account_step.stdout == ''
+          - "'sudo: ' in pull_trigger_plain_account_step.stderr"
+          - pull_trigger_step_account_other.results | map(attribute='rc') | list == [1, 1, 1]
+          - pull_trigger_step_account_other.results | map(attribute='stdout') | list == ['', '', '']
+        fail_msg: >-
+          the step route is not as the README says:
+          {{ pull_trigger_step_through_sudo.stdout }} {{ pull_trigger_step_through_sudo.stderr }} /
+          {{ pull_trigger_plain_account_step.stdout }} {{ pull_trigger_plain_account_step.stderr }} /
+          {{ pull_trigger_step_account_other.results | map(attribute='stderr') | list }}
+        success_msg: the step account runs a step through its one argument list, and the plain account cannot
+
     # ------------------------------------------- the unit tests, on Debian
     - name: Make a directory for the unit tests
       ansible.builtin.file:
@@ -932,8 +1346,9 @@
         - /var/tmp/ptt-unit/files
         - /var/tmp/ptt-unit/tests
         - /var/tmp/ptt-unit/tests/unit
+        - /var/tmp/ptt-unit/meta
 
-    - name: Copy the program and its unit tests into the container
+    - name: Copy the program, its argument spec and its unit tests into the container
       ansible.builtin.copy:
         src: '{{ item.src }}'
         dest: '{{ item.dest }}'
@@ -943,6 +1358,8 @@
       loop:
         - src: '{{ verify_role_directory }}/files/pull_trigger.py'
           dest: /var/tmp/ptt-unit/files/pull_trigger.py
+        - src: '{{ verify_role_directory }}/meta/argument_specs.yml'
+          dest: /var/tmp/ptt-unit/meta/argument_specs.yml
         - src: '{{ verify_role_directory }}/tests/unit/test_pull_trigger.py'
           dest: /var/tmp/ptt-unit/tests/unit/test_pull_trigger.py
       loop_control:

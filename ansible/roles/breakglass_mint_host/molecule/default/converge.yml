@@ -1,0 +1,138 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars:
+    converge_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../defaults/main.yml') | from_yaml }}"
+    # The image is a constant of the role, not an input with a default.
+    converge_role_vars: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../vars/main.yml') | from_yaml }}"
+    # What a role that stopped before its directories must not have left behind.
+    converge_untouched_paths:
+      - /usr/local/lib/branchleft
+      - /var/log/branchleft
+    # Every input and precondition the role must refuse before it writes
+    # anything, with the task it must stop at. A case changes only what it lists.
+    converge_refusals:
+      - case: commit that is a branch name
+        commit: main
+        expect: Refuse an input that is not a full commit or an image pinned by digest
+      - case: image named by tag alone
+        image: node:26.5.0-bookworm-slim
+        expect: Refuse an input that is not a full commit or an image pinned by digest
+      - case: no docker command
+        setup: docker_missing
+        expect: Refuse a host with no working Docker
+    # The signing key in each way it can be wrong. The role goes through every
+    # step before the key check, so these refuse at the last task with the host
+    # otherwise converged. Each is undone before the next.
+    converge_key_refusals:
+      - case: key readable by its group
+        key_state: file
+        key_mode: '0640'
+      - case: key readable by everyone
+        key_state: file
+        key_mode: '0644'
+      - case: key not writable by its owner
+        key_state: file
+        key_mode: '0400'
+      - case: key owned by someone else
+        key_state: file
+        key_owner: nobody
+      - case: key is a link to a file
+        key_state: link
+      - case: key is a directory
+        key_state: directory
+      - case: key is missing
+        key_state: absent
+      - case: key directory open to its group
+        key_state: file
+        dir_mode: '0750'
+      - case: key directory open to everyone
+        key_state: file
+        dir_mode: '0755'
+  tasks:
+    - name: Read whether the minter is already installed
+      ansible.builtin.stat:
+        path: /usr/local/lib/branchleft/break-glass/break-glass-mint.mjs
+      register: breakglass_mint_host_c_before
+
+    # The canary shows that the log verify reads is the log of these runs.
+    - name: Put a canary in the log
+      ansible.builtin.debug:
+        msg: SCENARIO_LOG_CANARY
+
+    # stat with its default arguments hashes the file and prints the SHA-1 at the
+    # scenario's verbosity. This is the one place the test asks for that on
+    # purpose, for a file that is not the key, so the scan in verify can be shown
+    # to find a digest.
+    - name: Look at the digest control file with stat's default arguments
+      ansible.builtin.stat:
+        path: '{{ scenario_digest_control_path }}'
+      register: breakglass_mint_host_c_control
+
+    # slurp prints a file's content in base64 at this verbosity. This is the one
+    # place the test asks for that on purpose, for a file that is not the key,
+    # so the scan in verify can be shown to find the base64 form of a file's
+    # text, which is how a role that slurped the key would print it.
+    - name: Read the digest control file with slurp
+      ansible.builtin.slurp:
+        src: '{{ scenario_digest_control_path }}'
+      register: breakglass_mint_host_c_control_slurp
+
+    # Refusals come first, on a host where nothing is installed: a refused
+    # input must leave no trace. Check mode writes nothing and a refusal is a
+    # fact of the real run, so these are skipped in check mode (ANS-10).
+    - name: Apply the role with each input or host it must refuse
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/refusal_case.yml'
+      loop: '{{ converge_refusals }}'
+      loop_control:
+        loop_var: refused
+        label: '{{ refused.case }}'
+      when:
+        - not ansible_check_mode
+        - not breakglass_mint_host_c_before.stat.exists
+
+    - name: Apply the role with the signing key wrong in each way
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/key_case.yml'
+      loop: '{{ converge_key_refusals }}'
+      loop_control:
+        loop_var: refused
+        label: '{{ refused.case }}'
+      when:
+        - not ansible_check_mode
+        - not breakglass_mint_host_c_before.stat.exists
+
+    # The refusal cases called the stand-in too. Clear its record so that the
+    # verify play counts only the calls of the real applies.
+    - name: Clear the stand-in's record of the refusal cases
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ scenario_calls_log }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when:
+        - not ansible_check_mode
+        - not breakglass_mint_host_c_before.stat.exists
+
+    # The pull the key cases made is in the stand-in's image list, so the real
+    # apply would find the image and not pull. The list is cleared too, so the
+    # first real apply pulls and the second finds the image.
+    - name: Clear the stand-in's list of pulled images
+      ansible.builtin.file:
+        path: '{{ scenario_state_dir }}/images'
+        state: absent
+      when:
+        - not ansible_check_mode
+        - not breakglass_mint_host_c_before.stat.exists
+
+    - name: Apply the role
+      ansible.builtin.include_role:
+        # Molecule links the role under its namespace and name, the namespace
+        # from galaxy_info in meta/main.yml.
+        name: branchleft.breakglass_mint_host
+      vars:
+        # The role's key path is a constant that no inventory value can change.
+        # A play can pass its own as a role parameter, which is what the test
+        # does so that the real path is never touched.
+        breakglass_mint_host_key_path: '{{ scenario_key_path }}'

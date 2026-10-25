@@ -1,0 +1,180 @@
+---
+# What this role does is plain, repeatable state: directories, one program
+# fetched at a pinned commit and held to its sha256, and one image pulled by
+# digest. It never runs the minter, never creates, reads or copies the signing
+# key, and sets no run-time secret. The only task that names the key's path is
+# the last one, and it is a stat with no checksum.
+#
+# Order: inputs, Docker, directories, image (probe, pull, read back), the
+# program, and last the key check. The key check is last so that a host whose
+# key is missing, or mid-rotation, still converges everything else and then
+# stops: a stop, not a repair.
+- name: Refuse an input that is not a full commit or an image pinned by digest
+  ansible.builtin.assert:
+    that:
+      - breakglass_mint_host_source_commit is string
+      - breakglass_mint_host_source_commit is match(breakglass_mint_host_sha_pattern)
+      - breakglass_mint_host_node_image is string
+      - breakglass_mint_host_node_image is match(breakglass_mint_host_image_pattern)
+      - >-
+        breakglass_mint_host_files | map(attribute='sha256') | select('match', breakglass_mint_host_checksum_pattern) | list | length
+        == breakglass_mint_host_files | length
+    quiet: true
+    fail_msg: >-
+      The source needs a full 40-character commit, the image needs a name, a tag
+      and an @sha256: digest, and every file needs a 64-character sha256.
+
+# Every Docker command of this role names /usr/bin/docker, the binary the
+# application hosts' grant role also names, so a docker elsewhere on the PATH
+# cannot answer for it. The probe changes nothing, so it runs in check mode too
+# (ANS-10). A missing program is a failed probe, not a failed task, so the
+# assertion below can say what is missing.
+- name: Look for Docker
+  ansible.builtin.command:
+    argv: [/usr/bin/docker, --version]
+  register: breakglass_mint_host_docker
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse a host with no working Docker
+  ansible.builtin.assert:
+    that:
+      - breakglass_mint_host_docker.rc == 0
+    quiet: true
+    fail_msg: >-
+      Docker is not installed on this host, or `docker --version` fails. The minter
+      runs in a Docker image, so this role stops here.
+
+# Owner and mode are stated for every directory, parents included, because
+# other roles share them and the run's umask must not decide.
+- name: Create the directories above the minter and the log
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop: '{{ breakglass_mint_host_directories }}'
+  loop_control:
+    label: '{{ item.path }}'
+
+# Probe, then act. `docker pull` as a command always reports a change and always
+# contacts the registry, so it runs only when the host lacks the digest. The
+# probe is read-only and runs in check mode (ANS-10). A command is used because
+# the Docker modules need the Docker API library on the host, which no host
+# here carries (ANS-9).
+- name: Look for the Node image under its digest
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - image
+      - inspect
+      - --format
+      - '{% raw %}{{.RepoDigests}}{% endraw %}'
+      - '{{ breakglass_mint_host_node_image }}'
+  register: breakglass_mint_host_image_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Pull the Node image by digest when the host lacks it
+  ansible.builtin.command:
+    argv: [/usr/bin/docker, pull, -q, '{{ breakglass_mint_host_node_image }}']
+  changed_when: true
+  when: >-
+    not (breakglass_mint_host_image_probe.rc == 0
+    and breakglass_mint_host_image_digest in breakglass_mint_host_image_probe.stdout)
+
+# An exit status of 0 from the pull is a claim. The effect is the digest listed
+# on the host, so it is read back. Check mode pulls nothing, so on a fresh host
+# the image is not there to read: skipped there, for that reason (ANS-10).
+- name: Read the Node image back
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - image
+      - inspect
+      - --format
+      - '{% raw %}{{.RepoDigests}}{% endraw %}'
+      - '{{ breakglass_mint_host_node_image }}'
+  register: breakglass_mint_host_image_readback
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Refuse a host where the image is not present under the pinned digest
+  ansible.builtin.assert:
+    that:
+      - breakglass_mint_host_image_readback.rc == 0
+      - breakglass_mint_host_image_digest in breakglass_mint_host_image_readback.stdout
+    quiet: true
+    fail_msg: >-
+      The pinned Node image is not on this host under its digest after the pull,
+      so the minter cannot run.
+  when: not ansible_check_mode
+
+# In check mode on a fresh host the directory above is not made, and get_url
+# refuses a destination whose directory is missing, so the download is skipped
+# there and only there (ANS-10). A real run always has the directory. Every stat
+# of this role asks for metadata only (the three arguments below), so a stat that
+# hashed or sniffed a file could not reach the log, whatever it is named.
+- name: Look at the directory the minter is installed into
+  ansible.builtin.stat:
+    path: '{{ breakglass_mint_host_tool_dir }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: breakglass_mint_host_tool_dir_stat
+
+- name: Download the minter and hold it to its checksum
+  ansible.builtin.get_url:
+    url: '{{ breakglass_mint_host_source_base_url }}/{{ item.path }}'
+    dest: '{{ item.dest }}'
+    checksum: 'sha256:{{ item.sha256 }}'
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop: '{{ breakglass_mint_host_files }}'
+  loop_control:
+    label: '{{ item.path }}'
+  when: breakglass_mint_host_tool_dir_stat.stat.exists
+
+# The signing key is made by hand and escrowed by hand. This is the only task
+# that names its path, and it asks stat for metadata only: the three arguments
+# below turn off the SHA-1 of the file, the MIME guess that opens it and the
+# attribute read. With the defaults, stat would hash the key and print the
+# digest in the log. Nothing is registered but the metadata.
+- name: Look at the signing key and its directory without reading either
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop:
+    - '{{ breakglass_mint_host_key_path }}'
+    - '{{ breakglass_mint_host_key_path | dirname }}'
+  loop_control:
+    label: '{{ item | basename }}'
+  register: breakglass_mint_host_key_stat
+
+# The message names the path and no field of the stat result.
+- name: Refuse a host whose signing key is missing or not private to root
+  ansible.builtin.assert:
+    that:
+      - breakglass_mint_host_key_stat.results[0].stat.exists
+      - breakglass_mint_host_key_stat.results[0].stat.isreg | default(false)
+      - breakglass_mint_host_key_stat.results[0].stat.uid | default(-1) == 0
+      - breakglass_mint_host_key_stat.results[0].stat.mode | default('') == '0600'
+      - breakglass_mint_host_key_stat.results[1].stat.exists
+      - breakglass_mint_host_key_stat.results[1].stat.isdir | default(false)
+      - breakglass_mint_host_key_stat.results[1].stat.uid | default(-1) == 0
+      - breakglass_mint_host_key_stat.results[1].stat.mode | default('') == '0700'
+    quiet: true
+    fail_msg: >-
+      The break-glass signing key {{ breakglass_mint_host_key_path }} is missing, is
+      not a plain file owned by root in mode 0600, or its directory is not owned by
+      root in mode 0700. The owner makes the key by hand before the first apply
+      (runbook Part A, steps 4 and 5). This role never creates, reads or changes it.
