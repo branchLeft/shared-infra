@@ -104,8 +104,10 @@ const DEPLOY_SUDOERS = 'deploy ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-d
  * substituted into a `#cloud-config` document, so what is being validated is
  * not really "is this a key" but "can this end the line it is on". Anchored
  * with `\A`/`\z`-equivalents (`^`/`$` without `m`) so a trailing newline is a
- * rejection: in JavaScript `$` matches before a final `\n` unless the pattern
- * says otherwise, which is exactly the character that matters here.
+ * rejection: in JavaScript, without `m`, `$` matches only at the very end of
+ * the input (unlike Python and Perl, whose `$` also accepts a newline just
+ * before the end), and `[^\n\r]*` cannot consume a newline, so a value ending
+ * in `\n` fails the match.
  */
 const OPENSSH_PUBLIC_KEY =
   /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/]+={0,3}( [^\n\r]*)?$/;
