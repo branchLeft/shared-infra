@@ -12,11 +12,23 @@ name: Ansible
 # passes after a checkout and one diff.
 #
 # Three kinds of job. `discover` lists the roles and patterns, each with every
-# Molecule scenario it has, and the fresh role skeleton from the repository tree.
+# Molecule scenario it has, and the fresh role skeleton from the repository tree,
+# and then narrows that list to what this run needs (ansible/checks/ci_select.py).
 # `lint` runs the static checks once. `shard` runs the harness once per entry
-# `discover` listed, so a new pattern or a new scenario needs no edit here. The gate job, named `Lint and test the Ansible roles`,
+# `discover` kept, and only after `lint` has passed, so a lint error is red in
+# minutes and costs no container time. A new pattern or a new scenario needs no
+# edit here. The gate job, named `Lint and test the Ansible roles`,
 # is the one check the ruleset requires; it needs every other job and fails
 # unless each of them succeeded.
+#
+# What runs, by event:
+#   - a pull request: lint, and the shards of the roles and patterns it changed (and of
+#     those that name them, and of those that read a changed file outside ansible/). A
+#     change to the harness, the checks, the lock, the lint config or this file runs
+#     every shard;
+#   - the merge queue: lint and every shard, whatever changed;
+#   - a push to `main`: lint only. The delivery workflow runs the harness before it
+#     applies anything.
 #
 # The tools and the `ansible` package, which carries the collections, install
 # from ansible/requirements.txt at exact versions, each file checked against its
@@ -30,9 +42,10 @@ on:
   # The merge queue tests a queued pull request on a gh-readonly-queue/main/...
   # ref, and only this event reports checks there. No `paths:` filter (merge_group
   # supports none, and this workflow has none). Under it the first job decides
-  # the Ansible inputs changed without diffing anything, so the lint and every
-  # shard run in full: a queued entry is the last check before main, and a diff
-  # base wrong in either direction would pass the gate without running it.
+  # the Ansible inputs changed without diffing anything, and ci_select.py keeps
+  # every shard, so the lint and every shard run in full: a queued entry is the
+  # last check before main, and a diff base wrong in either direction would pass
+  # the gate without running it.
   merge_group:
     types: [checks_requested]
 
@@ -52,6 +65,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       ansible: ${{ steps.changes.outputs.ansible }}
+      shards: ${{ steps.shards.outputs.shards }}
       matrix: ${{ steps.shards.outputs.matrix }}
     steps:
       # Full history, so the base commit of the diff below exists on the runner.
@@ -71,14 +85,18 @@ jobs:
       # the address plan. The other roles' molecule verify files copy the files
       # they compare against from hetzner/provision, hetzner/monitoring and
       # hetzner/nextcloud1, and the egress_nat and tunnel_account roles read their
-      # own unit files there. A change to one of those files alone must still run
-      # the tests that read it. A directory is named only where a verify step copies
-      # the whole directory (monitoring_stack, nextcloud_stack); everywhere else the
-      # list names the files, so a change to any other file under hetzner/ does not
-      # run every shard. ansible/checks/test_ci_watched_paths.py fails when a role
-      # reads a path outside ansible/ that this list does not name. The delivery
-      # caller is named too: ansible/checks/test_check_delivery.py reads it, so an
-      # edit to that file alone must run the checks and not pass unread.
+      # own unit files there. A change to one of those files must still run the
+      # tests that read it, and a file named one by one is a file the next edit
+      # forgets, so ansible/ and hetzner/ are watched whole. Watching decides only
+      # whether the lint runs; which shards run is ci_select.py's choice, from the
+      # files the roles read. ansible/checks/test_ci_watched_paths.py fails when a
+      # role reads a path outside ansible/ that this list does not cover. The
+      # delivery caller is named too: ansible/checks/test_check_delivery.py reads
+      # it, so an edit to that file alone must run the checks and not pass unread.
+      # The two hetzner-host files are the ones the tools' tests read.
+      #
+      # The full list of changed files is kept for ci_select.py, NUL-separated and with
+      # renames shown as a delete and an add, so a moved role names both places.
       - name: Decide whether the Ansible inputs changed
         id: changes
         env:
@@ -102,39 +120,18 @@ jobs:
             exit 0
           fi
           watched=(
-            ansible
+            ansible/
+            hetzner/
             .ansible-lint
             .yamllint
             .github/workflows/ansible.yml
             .github/workflows/ansible-delivery.yml
-            hetzner/provision/branchleft_deploy.py
-            hetzner/provision/branchleft_docker_user_policy.sh
-            hetzner/provision/branchleft-compose@.service
-            hetzner/provision/branchleft-docker-user-policy.service
-            hetzner/provision/30-install-deploy-tooling.sh
-            hetzner/provision/app-host-isolation.sh
             hetzner-host/cloudInit.ts
             hetzner-host/pullBootstrapFixed.json
-            hetzner/scripts/check-address-plan-drift.py
-            hetzner/provision/branchleft_host_egress.sh
-            hetzner/provision/branchleft-host-egress.service
-            hetzner/provision/branchleft_nat.sh
-            hetzner/provision/branchleft-nat.service
-            hetzner/provision/branchleft-db-tunnel.service
-            hetzner/provision/node-exporter.service
-            hetzner/provision/test_compose_unit_contract.py
-            hetzner/provision/fixtures/docker-apt-key.asc
-            hetzner/provision/test_compose_unit_contract.py
-            hetzner/monitoring/stack/
-            hetzner/monitoring/systemd/monitoring.override.conf
-            hetzner/monitoring/systemd/snds-collector.service
-            hetzner/monitoring/systemd/snds-collector.timer
-            hetzner/nextcloud1/stack/
-            hetzner/nextcloud1/systemd/nextcloud1.override.conf
-            hetzner/control-plane/stack/
-            hetzner/edge/stack/
           )
-          files=$(git diff --name-only "$base" HEAD -- "${watched[@]}")
+          git diff --name-only -z --no-renames "$base" HEAD > "$RUNNER_TEMP/changed-files.z"
+          echo "changed=$RUNNER_TEMP/changed-files.z" >> "$GITHUB_OUTPUT"
+          files=$(git diff --name-only --no-renames "$base" HEAD -- "${watched[@]}")
           if [ -n "$files" ]; then
             echo "The Ansible inputs changed:"
             echo "$files"
@@ -153,12 +150,25 @@ jobs:
       # tree, by ansible/harness/list_shards.py, which fails on an empty list: an
       # empty matrix would make the shard job skip silently, and the gate must
       # catch that rather than pass.
+      #
+      # ansible/checks/ci_select.py then keeps the shards this run needs, from the event and
+      # the changed files (its rules are in ansible/checks/README.md). It prints `shards=false` and a
+      # one-entry matrix that the shard job refuses when nothing is needed, because GitHub
+      # rejects an empty matrix. A pull request with no changed-files list, because the base
+      # commit was unknown, keeps every shard.
       - name: List the shards from the repository tree
         id: shards
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CHANGED_FILES: ${{ steps.changes.outputs.changed }}
         run: |
           set -euo pipefail
-          matrix=$(python3 ansible/harness/list_shards.py)
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          python3 ansible/harness/list_shards.py > "$RUNNER_TEMP/all-shards.json"
+          args=(--event "$EVENT_NAME" --matrix-file "$RUNNER_TEMP/all-shards.json")
+          if [ -n "$CHANGED_FILES" ]; then
+            args+=(--changed-file "$CHANGED_FILES")
+          fi
+          python3 ansible/checks/ci_select.py "${args[@]}" >> "$GITHUB_OUTPUT"
 
   lint:
     name: Lint the Ansible inputs
@@ -314,8 +324,11 @@ jobs:
 
   shard:
     name: 'Harness: ${{ matrix.name }}'
-    needs: [discover]
-    if: needs.discover.outputs.ansible == 'true'
+    # Only after the lint has passed: a lint error ends the run in minutes and starts no
+    # container. A failed or skipped lint skips every shard, and the gate job fails on the
+    # lint result.
+    needs: [discover, lint]
+    if: needs.discover.outputs.ansible == 'true' && needs.discover.outputs.shards == 'true'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
@@ -327,6 +340,17 @@ jobs:
     # nearly double its slowest passing run; a shard that hangs is still ended at 45.
     timeout-minutes: 45
     steps:
+      # The matrix has one entry that stands for "no shard", because GitHub refuses an empty
+      # one. It is never run: the job's condition is false then. If it ever is, this step
+      # fails the shard, so an empty selection cannot pass by running nothing.
+      - name: Refuse the entry that stands for no shard
+        if: matrix.kind != 'role' && matrix.kind != 'skeleton'
+        env:
+          SHARD_NAME: ${{ matrix.name }}
+        run: |
+          echo "The matrix entry '$SHARD_NAME' is not a role, a pattern or the skeleton."
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -379,7 +403,10 @@ jobs:
   # checks, so this one job stays. It runs even when a needed job failed or was
   # skipped, and it fails unless each needed job succeeded. When discover found
   # no Ansible input change, the other two jobs are skipped on purpose and the
-  # gate passes.
+  # gate passes. When it found inputs but no shard to run (a push to main, or a
+  # pull request that changed only files no shard reads), the lint must pass and the
+  # shard job is skipped on purpose. A shard job that is skipped when discover
+  # chose shards, because the lint failed or for any other reason, fails the gate.
   roles:
     name: Lint and test the Ansible roles
     needs: [discover, lint, shard]
@@ -391,6 +418,7 @@ jobs:
         env:
           DISCOVER: ${{ needs.discover.result }}
           ANSIBLE: ${{ needs.discover.outputs.ansible }}
+          SHARDS: ${{ needs.discover.outputs.shards }}
           LINT: ${{ needs.lint.result }}
           SHARD: ${{ needs.shard.result }}
         run: |
@@ -407,10 +435,22 @@ jobs:
             echo "The discover job did not report whether the Ansible inputs changed: '$ANSIBLE'"
             exit 1
           fi
-          if [ "$LINT" != "success" ] || [ "$SHARD" != "success" ]; then
+          if [ "$LINT" != "success" ]; then
             echo "The lint job reported: $LINT"
-            echo "The shard job reported: $SHARD"
-            echo "Every job must report success."
+            echo "The lint must succeed, and the shards wait for it."
             exit 1
           fi
-          echo "Every job succeeded: discover, lint and every shard."
+          if [ "$SHARDS" = "false" ]; then
+            echo "The lint passed and no shard was needed, so the shard job was skipped on purpose."
+            exit 0
+          fi
+          if [ "$SHARDS" != "true" ]; then
+            echo "The discover job did not report whether shards are needed: '$SHARDS'"
+            exit 1
+          fi
+          if [ "$SHARD" != "success" ]; then
+            echo "The shard job reported: $SHARD"
+            echo "Every chosen shard must report success."
+            exit 1
+          fi
+          echo "Every job succeeded: discover, lint and every chosen shard."

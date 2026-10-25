@@ -165,3 +165,40 @@ ANS-7). It prints how many paths it compared and how many stayed templated, beca
 loop item or a filter is not compared. A directory two roles both make is not a write. It
 replaces the per-role tests that each asserted one home for one role's files; it does not check
 that a role holds no copy of a program (the DB-1 gate of the standards flags that).
+
+## ci_select.py: which shards a run executes
+
+`ci_select.py` narrows the shard list from `ansible/harness/list_shards.py` to the shards a
+run needs, from the event and the files it changed. The rules, in the order they apply:
+
+- a merge-queue run executes every shard: it is the last check before `main`;
+- a push to `main` executes none: the lint job runs, and the delivery workflow runs the
+  harness before it applies anything;
+- a pull request whose base commit is unknown, or whose changed files are not listed,
+  executes every shard;
+- a changed file that is part of the harness, the checks, the lock or the lint config
+  executes every shard, because it decides what every role is held to;
+- a changed file under `ansible/` that nothing here recognises executes every shard,
+  because a new kind of file must be named in the program before it may skip a shard;
+- a changed file in a role or pattern executes that role's or pattern's shards, and the
+  shards of every role or pattern that names it;
+- a changed file outside `ansible/` executes the shards of every role or pattern that
+  reads it.
+
+A shard that is wrongly left out is a gate that passes without running, so every rule
+above errs towards running more.
+
+## test_ci_gate_order.py: the workflow order and gate
+
+These tests hold the CI workflows to what `ci_select.py` assumes:
+
+- the shard job waits for the lint job, so a lint error starts no container;
+- the shard job runs only when discover chose shards, and refuses the entry that stands
+  for none;
+- the gate job (the check the ruleset requires) fails unless the lint passed, and fails
+  when shards were chosen and did not all pass;
+- the merge queue still triggers the workflow, so "merge_group runs everything" can happen;
+- the CrowdSec pin check opens a pull request on a stale pin and still fails when it cannot
+  run;
+- the ansible-hosts environment probe is scheduled and judges the environment;
+- Dependabot runs monthly and grouped.
