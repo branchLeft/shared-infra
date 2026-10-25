@@ -1,3 +1,5 @@
+**Bias for action.** Delivering something and failing fast leads to better progress and informed decision making. Do not agonise theoretically over the exact behaviour of a system which you can observe the behaviour of: run it in the cheapest real place (a test, a check-mode run, the live API, a pre-live host) and decide from what it does. The workspace `AUTHORISATIONS.md` and never-list still apply.
+
 # CLAUDE.md — branchLeft Shared Infra
 
 `mail/`, the self-hosted mail delivery host, and `hetzner/`, the network, host and edge (Caddy + CrowdSec) modules the estate now runs on. Also `sites.ts`/`siteTypes.ts` at the repository root — the hostname registry the Hetzner edge's Caddy renderer (`hetzner/edge/render.ts`) reads; onboarding a site is one entry there.
