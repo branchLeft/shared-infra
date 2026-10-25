@@ -96,6 +96,7 @@ EXPECTED_ROLES = [
     },
     {"role": "../roles/pull_trigger"},
 ]
+PLAY_KEYS = frozenset(("name", "hosts", "gather_facts", "vars", "vars_files", "pre_tasks", "roles"))
 HOST_ROLES_FILE = "checks/host_roles.yml"
 ROLE_PATH = "../roles/"
 ROLE_NAME = re.compile(r"[a-z][a-z0-9_]*")
@@ -223,6 +224,8 @@ def _check_enrolled(
         findings.append(f"{label}: expected one play, found {len(plays)}")
         return
     play = plays[0]
+    for key in sorted(set(play) - PLAY_KEYS):
+        findings.append(f"{label}: play key {key} is not allowed, only {sorted(PLAY_KEYS)}")
     if play.get("hosts") != "all":
         findings.append(f"{label}: hosts must be all")
     variables = _mapping(play.get("vars"))

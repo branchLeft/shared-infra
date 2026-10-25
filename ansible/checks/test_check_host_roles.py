@@ -15,10 +15,43 @@ import unittest
 from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
-from check_enrolment import HOST_ROLES_FILE, ROOT, check
+from check_enrolment import HOST_ROLES_FILE, PLAY_KEYS, ROOT, check
 
 ENROLLED = ("edge1", "ops1", "app1")
 SECOND_PLAY = "- name: Second play\n  hosts: all\n  roles:\n    - role: ../roles/host_baseline\n"
+# Each text is one more key of the play, at the play's indent, appended after `roles`.
+EXTRA_PLAY_KEYS = {
+    "tasks": (
+        "  tasks:\n    - name: Apply\n      ansible.builtin.include_role:\n        name: made_up\n"
+    ),
+    "post_tasks": (
+        "  post_tasks:\n    - name: Apply\n      ansible.builtin.import_role:\n"
+        "        name: made_up\n"
+    ),
+    "handlers": (
+        "  handlers:\n    - name: Apply\n      ansible.builtin.include_role:\n"
+        "        name: made_up\n"
+    ),
+    "environment": "  environment:\n    HARMLESS: '1'\n",
+    "module_defaults": "  module_defaults:\n    ansible.builtin.debug:\n      msg: hello\n",
+    "collections": "  collections:\n    - ansible.posix\n",
+    "strategy": "  strategy: free\n",
+    "become": "  become: true\n",
+    "become_user": "  become_user: root\n",
+    "import_playbook": "  import_playbook: other.yml\n",
+    "include_vars": "  include_vars: other.yml\n",
+    "vars_prompt": "  vars_prompt:\n    - name: answer\n      prompt: Answer\n",
+}
+# The four loaders a pre_tasks entry could use to run something else, with the text after the
+# colon. A role loader takes a name on the next line, a task-file loader a file on the same line.
+LOADERS = {
+    "include_role": "\n        name: made_up\n",
+    "import_role": "\n        name: made_up\n",
+    "include_tasks": " other.yml\n",
+    "import_tasks": " other.yml\n",
+}
+REFUSE_LINE = "      ansible.builtin.include_tasks: includes/refuse_other_hosts.yml\n"
+SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml\n"
 
 
 def _entry(name: str, extra: str = "") -> str:
@@ -44,6 +77,14 @@ class HostRoleLists(unittest.TestCase):
         for name, text in self.original.items():
             added = extra if name == host else ""
             (self.ansible / "playbooks" / f"{name}.yml").write_text(text + added, encoding="utf-8")
+
+    def _replace_in(self, host: str, old: str, new: str) -> None:
+        """Put every enrolled playbook back as it is on main, then change one text in one."""
+        self._playbook(host, "")
+        path = self.ansible / "playbooks" / f"{host}.yml"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn(old, text, f"the sabotage matched nothing in {host}.yml")
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
     def _list_file(self, text: str) -> None:
         (self.ansible / HOST_ROLES_FILE).write_text(text, encoding="utf-8")
@@ -166,6 +207,45 @@ class HostRoleLists(unittest.TestCase):
                 self._assert_refused(host, "expected one play, found 2")
         self._playbook("edge1", "- name: Third\n  hosts: all\n  tasks: []\n" + SECOND_PLAY)
         self._assert_refused("edge1", "expected one play, found 3")
+
+    # Rule: a play holds only the allowed keys. Every other key is refused by name, on each host,
+    # because `tasks`, `post_tasks` and `handlers` can apply any role as root, and the rest can
+    # change how the pinned play runs. The role in the snippets is on no host's list.
+    def test_a_play_key_outside_the_allowed_set_is_refused(self) -> None:
+        self.assertEqual(
+            PLAY_KEYS,
+            {"name", "hosts", "gather_facts", "vars", "vars_files", "pre_tasks", "roles"},
+        )
+        for host in ENROLLED:
+            for key, text in EXTRA_PLAY_KEYS.items():
+                with self.subTest(host=host, key=key):
+                    self.assertNotIn(key, PLAY_KEYS, "the case is an allowed key")
+                    self._playbook(host, text)
+                    self._assert_refused(host, f"play key {key} is not allowed")
+
+    # Rule: every refused key in the play gets its own finding.
+    def test_each_refused_play_key_gets_its_own_finding(self) -> None:
+        self._playbook("edge1", EXTRA_PLAY_KEYS["tasks"] + EXTRA_PLAY_KEYS["post_tasks"])
+        findings = self._findings("R2 edge1.yml")
+        for key in ("tasks", "post_tasks"):
+            self.assertTrue(
+                any(f"play key {key} is not allowed" in finding for finding in findings),
+                findings,
+            )
+
+    # Rule: pre_tasks is exactly the refusal include then the signer include. No role loader or
+    # task-file loader is added after them or put in place of either.
+    def test_pre_tasks_cannot_carry_a_loader(self) -> None:
+        for host in ENROLLED:
+            for loader, body in LOADERS.items():
+                with self.subTest(host=host, loader=loader, where="appended"):
+                    extra = f"    - name: Extra\n      ansible.builtin.{loader}:{body}"
+                    self._replace_in(host, SIGNER_LINE, SIGNER_LINE + extra)
+                    self._assert_refused(host, "pre_tasks must be exactly")
+                for old in (REFUSE_LINE, SIGNER_LINE):
+                    with self.subTest(host=host, loader=loader, where="replacing", old=old):
+                        self._replace_in(host, old, f"      ansible.builtin.{loader}:{body}")
+                        self._assert_refused(host, "pre_tasks must be exactly")
 
     # Rule: a role on another host's list is refused. host_baseline is on several lists, so each
     # case uses a role that is on no list of the host it is added to.

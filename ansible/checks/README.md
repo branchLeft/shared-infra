@@ -79,10 +79,14 @@ deploy approval of the gated apply, which is not yet wired. Which files the revi
 may merge alone is not yet decided by the owner.
 
 Limits of R2. It pins the values of `vars.enrolled_host`, `vars_files`, `roles` and
-`pre_tasks`. A listed role is trusted by name: the list does not say what the role does as
-root, and a role's own edit is still not gated here. It does not pin the other keys of that play, so a `post_tasks`,
-`tasks`, `handlers`, `environment` or `module_defaults` copy that writes a literal
-signer config is not seen. A playbook is a place a literal can hide as well as a role.
+`pre_tasks`, and refuses any play key outside `name`, `hosts`, `gather_facts`, `vars`,
+`vars_files`, `pre_tasks` and `roles`. So a `tasks`, `post_tasks`, `handlers`,
+`environment`, `module_defaults`, `collections`, `strategy`, `become`, `import_playbook`
+or `include_vars` key, or any key it does not know, is refused by name, and no role can be
+applied to a host by a path other than its `roles` list. A listed role is trusted by
+name: the list does not say what the role does as root, and a role's own edit is still not
+gated here. The `vars` value is checked only for `enrolled_host`. A playbook is a place a
+literal can hide as well as a role.
 
 Limits of the loader rule. It reads literal mapping keys. It names the loaders listed in
 `ROLE_LOADERS`, `TASK_FILE_LOADERS` and `INCLUDE_VARS`, in their bare, `ansible.builtin.`
@@ -119,7 +123,8 @@ is not loaded there.
 - **R2** The name rule (above) refuses every entry under `playbooks/` that is not an exact
   `.yml` at the top of `playbooks/` or in `playbooks/includes/`, at any depth. The pull
   runs only the derived `.yml` path, and `ansible-playbook` would run any other name, so
-  R6 must read every file in the tree. Each enrolled `HOST.yml` has one play on
+  R6 must read every file in the tree. Each enrolled `HOST.yml` has one play, with no key
+  but `name`, `hosts`, `gather_facts`, `vars`, `vars_files`, `pre_tasks` and `roles`, on
   `hosts: all`, `vars.enrolled_host` equal to `HOST`, `vars_files` exactly the shared
   include and `../trust/HOST.yml`, `roles` the runtime entry then the bare trigger as the
   first two entries and nothing attached to either, then only plain entries from that
