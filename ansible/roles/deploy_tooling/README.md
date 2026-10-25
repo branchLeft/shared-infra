@@ -119,8 +119,6 @@ From the repository root, with the pinned tools installed as `ansible/README.md`
 describes:
 
 ```text
-python3 -m venv .venv
-.venv/bin/pip install -r ansible/requirements.txt
 .venv/bin/python ansible/harness/run_harness.py ansible/roles/deploy_tooling
 ```
 
@@ -146,8 +144,8 @@ image does not have.
 Delivery to a host is the gated workflow only (ANS-17): a plan job in check mode, the
 approval of the protected environment, a pull of that exact commit on the host, and a
 second run that must report zero changes. Nothing in this repository applies the role by
-hand, and an author's local run is the container test. The gateway's playbook carries the
-role with class `gateway`. No app host has the role yet: wiring them, with their class
+hand, and an author's local run is the container test. No host plays the role yet: the
+per-host role list will carry it, with each host's class
 and variant, is a follow-up, and capturing the real `iptables -S INPUT` and
 `iptables -S DOCKER-USER` (and the IPv6 pair) from a real app host is a precondition of
 it (see "Named limits").
@@ -305,7 +303,6 @@ leaves every step green is not claimed.
 | ... and a link in the path is refused, never followed                                 | the link assertion taken out of the directory check             | verify, parent directories: `EXPECTED A FAILURE, GOT NONE: directory that holds the wrapper is a link to a directory that is root's own`                                    |
 | `/etc/sudoers.d` is on the path of the drop-in, and no group can write to it          | the sudoers term taken out of the path list in `tasks/main.yml` | verify, parent directories: `EXPECTED A FAILURE, GOT NONE: sudoers drop-in directory owned by root:staff and writable by the group`                                         |
 | `/etc/systemd/system` is on the path of the policy unit, and no group can write to it | the group-write assertion taken out                             | verify, parent directories: `EXPECTED A FAILURE, GOT NONE: unit directory writable by its group`                                                                            |
-| The gateway host states its class                                                     | the gateway playbook's class changed to app                     | the repository checks: `test_the_real_playbook_states_the_gateway_class`                                                                                                    |
 
 Two limits of this table. The check-mode rows run the role under the real `--check` flag:
 the magic variable `ansible_check_mode` is set by that flag alone, so a case that runs the
