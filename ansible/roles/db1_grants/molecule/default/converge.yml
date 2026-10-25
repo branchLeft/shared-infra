@@ -1,4 +1,29 @@
 ---
+# The plan comes first, so that a run of this scenario by itself (`molecule test`,
+# which is how the delivery workflow runs it) proves a plan on the fresh host sent
+# no change, and does not rest on a step only the harness takes. A keyword cannot
+# make this play a check-mode one: the role's own tasks read ansible_check_mode,
+# which only the command line's --check sets. So the controller runs this same
+# playbook with --check, against the same inventory, and the nested run skips this
+# play because it is in check mode. The harness adds a check-mode converge of its
+# own before this one, which verify's count allows. A plan on a host the apply has
+# already configured reports no change, so the idempotence step still sees none.
+- name: Plan
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Run this playbook in check mode against the same instance
+      ansible.builtin.command:
+        argv:
+          - '{{ ansible_playbook_python | dirname }}/ansible-playbook'
+          - --check
+          - --diff
+          - --inventory
+          - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+          - '{{ playbook_dir }}/converge.yml'
+      changed_when: false
+      when: not ansible_check_mode
+
 - name: Converge
   hosts: all
   gather_facts: false
