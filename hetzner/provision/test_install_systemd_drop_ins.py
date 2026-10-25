@@ -1,25 +1,10 @@
 #!/usr/bin/env python3
 """Unit tests for install-systemd-drop-ins.sh.
 
-`test_compose_unit_contract.py`'s `drop_in_for()` proves a committed drop-in
-is internally consistent -- the right EnvironmentFile reset, the right
-secrets file re-added -- but never that it reaches a host. It also globs
-`*/systemd/*.override.conf` anywhere under hetzner/, so a drop-in committed
-in a directory no script or runbook references would still satisfy it.
-
-This closes that gap from the other side: `committed_drop_ins()` below walks
-the identical tree, and the tests prove that running
-install-systemd-drop-ins.sh actually copies every one of them to its
-instance's `.service.d` directory. If a future drop-in landed somewhere
-`drop_in_for()` cannot see, both this file and that one would go blind
-together -- but neither can drift ahead of the other on its own, because
-they search exactly the same path.
-
-The script itself talks to a real `ssh`/`scp` to a real host, neither of
-which a test process may do. Both are replaced by fakes earlier on `PATH`
-that record their own argv instead of connecting anywhere -- the same
-technique test_00_harden_ssh.py and test_branchleft_nat.py use for `sshd`,
-`systemctl`, `ip` and `iptables`.
+The script must copy every committed drop-in to its instance's `.service.d`
+directory. `drop_in_for()` in test_compose_unit_contract.py checks each drop-in's
+content, not that it reaches a host. `committed_drop_ins()` walks the same tree.
+ssh and scp are replaced by fakes on PATH that record their argv.
 """
 
 import os
@@ -246,9 +231,25 @@ class RunbookInvokesTheScriptTests(unittest.TestCase):
         end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("## 6. "))
         return "\n".join(lines[start:end])
 
-    def test_step_5_invokes_install_systemd_drop_ins(self):
+    def test_step_5_names_the_role_and_keeps_the_script_as_the_runnable_path(self):
+        """Since workspace#2343 part 2, step 5 names the monitoring_stack role, which
+        installs both drop-ins. The role is not yet wired to a host, so the script
+        stays as step 5's only runnable path until the first gated converge. Its
+        fenced command is the only fence in the step: no other command may be
+        added to it, and no fence may hide one."""
         body = self._step_5_body()
-        self.assertIn("hetzner/provision/install-systemd-drop-ins.sh", body)
+        self.assertIn("monitoring_stack", body)
+        fences = [line for line in body.splitlines() if line.startswith("```")]
+        self.assertEqual(
+            fences,
+            ["```bash", "```"],
+            "step 5 must carry exactly one fenced block, and it must be the script call",
+        )
+        self.assertEqual(
+            body.count("hetzner/provision/install-systemd-drop-ins.sh root@"),
+            1,
+            "step 5 must call the script exactly once, in its fenced block",
+        )
 
     def test_step_5_no_longer_hardcodes_a_scp_per_drop_in(self):
         """The old step scp'd each of the two files by name in its own

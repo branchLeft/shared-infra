@@ -1,4 +1,43 @@
 ---
+# The project directory is a constant of the role, not an input. A play variable
+# of the same name is below a value in vars/ in Ansible's order, as an inventory
+# variable is, so applying the role with one must move nothing. The play sits
+# first so that a role which obeyed the variable would leave the other directory
+# behind for the checks of the next play to find. The four values are the
+# converge's, so on a converged instance nothing else changes.
+- name: Verify a play variable does not move the project directory
+  hosts: all
+  gather_facts: false
+  vars:
+    ntfy_pager_project_dir: /opt/elsewhere
+    ntfy_pager_pager_token: test-sentinel-pager-token-0001
+    ntfy_pager_watcher_token: test-sentinel-watcher-token-0002
+    ntfy_pager_owner_password_hash: test-sentinel-owner-hash-0003
+    ntfy_pager_machine_password_hash: test-sentinel-machine-hash-0004
+  tasks:
+    - name: Apply the role with a play variable that names another project directory
+      ansible.builtin.include_role:
+        name: branchleft.ntfy_pager
+
+    - name: Look at the other directory and at the renderer where the unit runs it
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /opt/elsewhere
+        - /opt/branchleft/monitoring/render_alertmanager_config.py
+      register: ntfy_pager_verify_moved
+
+    - name: Assert a play variable did not move the project directory
+      ansible.builtin.assert:
+        that:
+          - not ntfy_pager_verify_moved.results[0].stat.exists
+          - ntfy_pager_verify_moved.results[1].stat.exists
+          - ntfy_pager_verify_moved.results[1].stat.isreg
+        quiet: true
+        fail_msg: >-
+          A play variable moved the project directory: /opt/elsewhere exists, or the renderer is no longer in
+          /opt/branchleft/monitoring. The path is a constant of the role.
+
 - name: Verify
   hosts: all
   gather_facts: false
@@ -9,9 +48,9 @@
 
     # The file is read under no_log, and the assertions below name no value. A
     # failure prints only the key or the file.
-    - name: Read the monitoring secrets file
+    - name: Read the pager secrets file
       ansible.builtin.slurp:
-        src: /etc/branchleft/monitoring.env
+        src: /etc/branchleft/ntfy-pager.env
       register: ntfy_pager_verify_env
       no_log: true
 
@@ -23,9 +62,9 @@
           - "'NTFY_OWNER_PASSWORD_HASH=test-sentinel-owner-hash-0003' in ntfy_pager_verify_lines"
           - "'NTFY_MACHINE_PASSWORD_HASH=test-sentinel-machine-hash-0004' in ntfy_pager_verify_lines"
           - "ntfy_pager_verify_lines | select('match', 'NTFY_PAGER_TOKEN=') | list | length == 1"
-          - "'GRAFANA_ADMIN_PASSWORD=test-keep-me' in ntfy_pager_verify_lines"
+          - "'UNOWNED_KEY=test-keep-me' in ntfy_pager_verify_lines"
         quiet: true
-        fail_msg: The monitoring secrets file does not hold the four NTFY_ lines once each, or lost a key the role does not own.
+        fail_msg: The pager secrets file does not hold the four NTFY_ lines once each, or lost a key the role does not own.
       vars:
         ntfy_pager_verify_lines: '{{ (ntfy_pager_verify_env.content | b64decode).splitlines() }}'
       no_log: true
@@ -35,9 +74,9 @@
         ntfy_pager_verify_env: {}
       no_log: true
 
-    - name: Look at the monitoring secrets file
+    - name: Look at the pager secrets file
       ansible.builtin.stat:
-        path: /etc/branchleft/monitoring.env
+        path: /etc/branchleft/ntfy-pager.env
       register: ntfy_pager_verify_env_stat
 
     - name: Assert the secrets file is owned by root and closed to everyone else
@@ -47,7 +86,40 @@
           - ntfy_pager_verify_env_stat.stat.gr_name == 'root'
           - ntfy_pager_verify_env_stat.stat.mode == '0600'
         quiet: true
-        fail_msg: The monitoring secrets file is not root:root mode 0600.
+        fail_msg: The pager secrets file is not root:root mode 0600.
+
+    # One writer per file: the file monitoring_stack owns is not this role's to
+    # write. prepare.yml left it in mode 0644 with an old NTFY_ line, so a role
+    # that wrote a NTFY_ line into it, or touched it (which would set 0600), fails
+    # here. The content is read under no_log and the assertions name no value.
+    - name: Read the monitoring secrets file that monitoring_stack owns
+      ansible.builtin.slurp:
+        src: /etc/branchleft/monitoring.env
+      register: ntfy_pager_verify_other
+      no_log: true
+
+    - name: Look at the monitoring secrets file that monitoring_stack owns
+      ansible.builtin.stat:
+        path: /etc/branchleft/monitoring.env
+      register: ntfy_pager_verify_other_stat
+
+    - name: Assert the role left the file of monitoring_stack as it was
+      ansible.builtin.assert:
+        that:
+          - ntfy_pager_verify_other_stat.stat.mode == '0644'
+          - ntfy_pager_verify_other_lines == ['GRAFANA_ADMIN_PASSWORD=test-keep-me', 'NTFY_PAGER_TOKEN=test-earlier-value-in-the-other-file']
+        quiet: true
+        fail_msg: >-
+          /etc/branchleft/monitoring.env was changed (its mode or its lines). The file is monitoring_stack's alone;
+          this role writes /etc/branchleft/ntfy-pager.env.
+      vars:
+        ntfy_pager_verify_other_lines: '{{ (ntfy_pager_verify_other.content | b64decode).splitlines() }}'
+      no_log: true
+
+    - name: Forget the content of the other file
+      ansible.builtin.set_fact:
+        ntfy_pager_verify_other: {}
+      no_log: true
 
     - name: Look at each file of the stack on the instance
       ansible.builtin.stat:
@@ -86,17 +158,72 @@
       loop_control:
         label: '{{ item.0.item }}'
 
-    - name: Ask systemd for the monitoring stack unit
-      ansible.builtin.systemd_service:
-        name: '{{ ntfy_pager_unit }}'
-      register: ntfy_pager_verify_unit
+    # The role delivers the renderer and nothing else of the stack: the eight
+    # other files and the subdirectories are monitoring_stack's alone, and the
+    # role restarts nothing. The project directory is the one place both roles
+    # create, with the same owner and mode. The expected list is written out here
+    # and not read from ntfy_pager_files: a list read from the role would move
+    # with a file added to it, and the assertion could not notice.
+    - name: Look at the project directory and at what is in it
+      ansible.builtin.find:
+        paths: /opt/branchleft/monitoring
+        recurse: true
+        file_type: any
+        hidden: true
+      register: ntfy_pager_verify_project
 
-    - name: Assert the unit was restarted by the role and is active
+    - name: Look at the project directory itself
+      ansible.builtin.stat:
+        path: /opt/branchleft/monitoring
+      register: ntfy_pager_verify_project_dir
+
+    - name: Assert the project directory holds the renderer and nothing else
       ansible.builtin.assert:
         that:
-          - ntfy_pager_verify_unit.status.ActiveState == 'active'
+          - ntfy_pager_verify_project_dir.stat.isdir
+          - ntfy_pager_verify_project_dir.stat.pw_name == 'root'
+          - ntfy_pager_verify_project_dir.stat.gr_name == 'root'
+          - ntfy_pager_verify_project_dir.stat.mode == '0755'
+          - ntfy_pager_verify_found == ntfy_pager_verify_expected
         quiet: true
-        fail_msg: The monitoring stack unit is not active after the role ran.
+        fail_msg: >-
+          The project directory is not a root-owned directory with mode 0755 holding exactly
+          the renderer: this role delivers the renderer and no other file of the stack.
+          Found: {{ ntfy_pager_verify_found }}.
+      vars:
+        ntfy_pager_verify_found: "{{ ntfy_pager_verify_project.files | map(attribute='path') | sort | list }}"
+        ntfy_pager_verify_expected:
+          - /opt/branchleft/monitoring/render_alertmanager_config.py
+
+    # ----- The value check refuses an empty value, spaces and a second line, before anything is written -----
+    # Each set of inputs holds one bad value, in a different one of the four
+    # inputs, so a check that covered only the first of the four would be noticed.
+    - name: Give the role each value that the check must refuse
+      ansible.builtin.include_tasks: tasks/refuse_value.yml
+      loop:
+        - name: an empty pager token
+          pager_token: ''
+          watcher_token: test-sentinel-watcher-token-0002
+          owner_password_hash: test-sentinel-owner-hash-0003
+          machine_password_hash: test-sentinel-machine-hash-0004
+        - name: a watcher token of only spaces
+          pager_token: test-sentinel-pager-token-0001
+          watcher_token: '   '
+          owner_password_hash: test-sentinel-owner-hash-0003
+          machine_password_hash: test-sentinel-machine-hash-0004
+        - name: an owner hash with a second line
+          pager_token: test-sentinel-pager-token-0001
+          watcher_token: test-sentinel-watcher-token-0002
+          owner_password_hash: "test-sentinel-owner-hash-0003\nNTFY_PAGER_TOKEN=test-sentinel-newline-0005"
+          machine_password_hash: test-sentinel-machine-hash-0004
+        - name: a machine hash with a second line
+          pager_token: test-sentinel-pager-token-0001
+          watcher_token: test-sentinel-watcher-token-0002
+          owner_password_hash: test-sentinel-owner-hash-0003
+          machine_password_hash: "test-sentinel-machine-hash-0004\r\nNTFY_PAGER_TOKEN=test-sentinel-newline-0005"
+      loop_control:
+        loop_var: ntfy_pager_verify_try
+        label: '{{ ntfy_pager_verify_try.name }}'
 
     # ----- The log of this scenario's Ansible runs -----
     # The four values are given to the role as sentinels. A task that handles one
@@ -113,7 +240,7 @@
       ansible.builtin.assert:
         that:
           - "'NTFY_PAGER_LOG_CANARY' in ntfy_pager_verify_log"
-          - "'Write the four NTFY_ lines into the monitoring secrets file' in ntfy_pager_verify_log"
+          - "'Write the four NTFY_ lines into the pager secrets file' in ntfy_pager_verify_log"
         quiet: true
         fail_msg: The log lacks the canary or the role's task name, so an empty scan would prove nothing.
       no_log: true
@@ -125,6 +252,7 @@
           - "'test-sentinel-watcher-token-0002' not in ntfy_pager_verify_log"
           - "'test-sentinel-owner-hash-0003' not in ntfy_pager_verify_log"
           - "'test-sentinel-machine-hash-0004' not in ntfy_pager_verify_log"
+          - "'test-sentinel-newline-0005' not in ntfy_pager_verify_log"
         quiet: true
         fail_msg: A sentinel value of the NTFY_ lines is in the Ansible log, so a task that handles it lacks no_log.
       no_log: true

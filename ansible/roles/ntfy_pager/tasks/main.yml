@@ -1,62 +1,82 @@
 ---
-# Section 2 of the runbook: the four NTFY_ lines go into the monitoring secrets
-# file. The runbook wrote them with grep -v and a mv of a temporary file; here
-# each key is one lineinfile, so the other keys in the file are left in place.
-# The file is closed to root before any value is written, so the write never
-# happens in a wider mode.
-- name: Look at the monitoring secrets file
+# Every input is a secret. Each must be a non-empty single line before anything
+# is written, as in monitoring_stack: a blank value would be written as an empty
+# credential, and a value with a newline would write a second line, possibly
+# another KEY=, into the file the unit reads. The assert names the key only,
+# never the value, and no_log hides the task.
+- name: Check that each credential input is a non-empty single line
+  ansible.builtin.assert:
+    that:
+      - item.value | string | trim | length > 0
+      - item.value | string is not search('[\r\n]')
+    quiet: true
+    fail_msg: '{{ item.key }} must be a non-empty single line.'
+  loop: '{{ ntfy_pager_env_lines }}'
+  loop_control:
+    label: '{{ item.key }}'
+  no_log: true
+
+# Section 2 of the runbook: the four NTFY_ lines go into this role's own secrets
+# file, /etc/branchleft/ntfy-pager.env. The runbook wrote them into the
+# monitoring file with grep -v and a mv of a temporary file; here each key is one
+# lineinfile, so the other keys in the file are left in place. The file is closed
+# to root before any value is written, so the write never happens in a wider
+# mode. One writer per file: this role writes no path monitoring_stack writes,
+# and the monitoring unit's drop-in loads both files.
+#
+# The directory is made by both roles (a directory is not a write for
+# check_role_paths.py), with the same owner, group and mode, so the second role
+# to run finds it and changes nothing. The file is this role's alone.
+- name: Create the directory of the pager secrets file
+  ansible.builtin.file:
+    path: '{{ ntfy_pager_env_file | dirname }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Look at the pager secrets file
   ansible.builtin.stat:
     path: '{{ ntfy_pager_env_file }}'
   register: ntfy_pager_env_stat
 
-- name: Refuse to write the credentials into a missing or empty secrets file
-  ansible.builtin.assert:
-    that:
-      - ntfy_pager_env_stat.stat.exists
-      - ntfy_pager_env_stat.stat.size | default(0) > 0
-    quiet: true
-    fail_msg: >-
-      The monitoring secrets file must already exist and be non-empty. The role
-      adds the NTFY_ lines to it and does not create it.
-
-# The file's owner and mode are set before any value is written (ANS-16). The
-# runbook's test -s and ls -l check is the assert above and the mode here.
-- name: Close the monitoring secrets file to root
+# The file's owner and mode are set in the same task that creates it (ANS-16),
+# and the times are preserved, so a second run changes nothing.
+- name: Create the pager secrets file closed to root before any value is written
   ansible.builtin.file:
     path: '{{ ntfy_pager_env_file }}'
+    state: touch
     owner: root
     group: root
     mode: '0600'
+    access_time: preserve
+    modification_time: preserve
 
 # One lineinfile per key. The regexp matches the key at the start of a line, so
 # a second run finds the line it wrote and changes nothing. The line is built
 # from the key and the caller's value, and both are secrets, so no_log hides the
-# task from the log, and diff is off so no value is shown.
-- name: Write the four NTFY_ lines into the monitoring secrets file
+# task from the log, and diff is off so no value is shown. Nothing here notifies
+# a restart: monitoring_stack decides that, from a fingerprint that covers this
+# file, on its next run.
+#
+# In check mode the file is not created, so the task runs only when it exists.
+- name: Write the four NTFY_ lines into the pager secrets file
   ansible.builtin.lineinfile:
     path: '{{ ntfy_pager_env_file }}'
     regexp: '^{{ item.key }}='
     line: '{{ item.key }}={{ item.value }}'
     create: false
-  loop:
-    - key: '{{ ntfy_pager_env_names.pager_token }}'
-      value: '{{ ntfy_pager_pager_token }}'
-    - key: '{{ ntfy_pager_env_names.watcher_token }}'
-      value: '{{ ntfy_pager_watcher_token }}'
-    - key: '{{ ntfy_pager_env_names.owner_password_hash }}'
-      value: '{{ ntfy_pager_owner_password_hash }}'
-    - key: '{{ ntfy_pager_env_names.machine_password_hash }}'
-      value: '{{ ntfy_pager_machine_password_hash }}'
+  loop: '{{ ntfy_pager_env_lines }}'
   loop_control:
     label: '{{ item.key }}'
   no_log: true
   diff: false
-  notify: Restart the monitoring stack unit
+  when: not ansible_check_mode or ntfy_pager_env_stat.stat.exists
 
-# Section 3 of the runbook: the stack's files go into the project directory. The
-# runbook ran rsync with --no-owner --no-group --chmod=u=rwX,go=rX and then
-# chown -R root:root. Each directory and file is set here with its owner, group
-# and mode, which is what that rsync and chown produced (see the README).
+# Section 3 of the runbook, reduced to the one file this role owns. The project
+# directory is also created by monitoring_stack, with the same owner, group and
+# mode. The stack's subdirectories and its eight other files are
+# monitoring_stack's alone.
 - name: Create the project directory
   ansible.builtin.file:
     path: '{{ ntfy_pager_project_dir }}'
@@ -65,18 +85,10 @@
     group: root
     mode: '0755'
 
-- name: Create the directories of the stack
-  ansible.builtin.file:
-    path: '{{ ntfy_pager_project_dir }}/{{ item }}'
-    state: directory
-    owner: root
-    group: root
-    mode: '0755'
-  loop: '{{ ntfy_pager_dirs }}'
-
-# Copied, not templated: the Compose file holds ${...} and $$ for Compose, and the
-# .tmpl files hold placeholders a later step fills, so none may pass through Jinja.
-- name: Deliver the stack's files
+# Copied, not templated. The renderer is read by the unit's ExecStartPre, so a
+# changed renderer reaches the unit when monitoring_stack next restarts it: the
+# renderer is part of that role's fingerprint.
+- name: Deliver the renderer
   ansible.builtin.copy:
     src: 'stack/{{ item }}'
     dest: '{{ ntfy_pager_project_dir }}/{{ item }}'
@@ -84,11 +96,3 @@
     group: root
     mode: '0644'
   loop: '{{ ntfy_pager_files }}'
-  notify: Restart the monitoring stack unit
-
-# The runbook restarted the unit on every run. This role restarts it when the
-# secrets file or a stack file changed, so a second run reports no change. The
-# restart reruns the renderer, which reads the file, so a changed credential or
-# a changed stack file takes effect when the unit restarts.
-- name: Run the restart now, so the role returns with the stack restarted
-  ansible.builtin.meta: flush_handlers

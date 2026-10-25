@@ -1,0 +1,48 @@
+---
+# One set of four inputs, given in ntfy_pager_verify_try, in which one value is
+# one the role's input check must refuse. The role must fail, and the secrets
+# file must still hold the four lines of the converge, with nothing added. The
+# three good values are the converge's sentinels, so the file is unchanged if the
+# check refuses before the first write.
+- name: Apply the role with one value that must be refused
+  no_log: true
+  block:
+    - name: Apply the role with the values
+      ansible.builtin.include_role:
+        name: branchleft.ntfy_pager
+      vars:
+        ntfy_pager_pager_token: '{{ ntfy_pager_verify_try.pager_token }}'
+        ntfy_pager_watcher_token: '{{ ntfy_pager_verify_try.watcher_token }}'
+        ntfy_pager_owner_password_hash: '{{ ntfy_pager_verify_try.owner_password_hash }}'
+        ntfy_pager_machine_password_hash: '{{ ntfy_pager_verify_try.machine_password_hash }}'
+    - name: Note that the role did not refuse the value
+      ansible.builtin.set_fact:
+        ntfy_pager_verify_value_refused: false
+  rescue:
+    - name: Note that the role refused the value
+      ansible.builtin.set_fact:
+        ntfy_pager_verify_value_refused: true
+
+- name: Read the secrets file after the value
+  ansible.builtin.slurp:
+    src: /etc/branchleft/ntfy-pager.env
+  register: ntfy_pager_verify_value_env
+  no_log: true
+
+- name: Assert the value check refused the value and the file holds the converge's four lines
+  ansible.builtin.assert:
+    that:
+      - ntfy_pager_verify_value_refused
+      - "'NTFY_PAGER_TOKEN=test-sentinel-pager-token-0001' in ntfy_pager_verify_value_lines"
+      - "'NTFY_WATCHER_TOKEN=test-sentinel-watcher-token-0002' in ntfy_pager_verify_value_lines"
+      - "'NTFY_OWNER_PASSWORD_HASH=test-sentinel-owner-hash-0003' in ntfy_pager_verify_value_lines"
+      - "'NTFY_MACHINE_PASSWORD_HASH=test-sentinel-machine-hash-0004' in ntfy_pager_verify_value_lines"
+      - "ntfy_pager_verify_value_lines | select('match', 'NTFY_') | list | length == 4"
+      - "'test-sentinel-newline-0005' not in (ntfy_pager_verify_value_env.content | b64decode)"
+    quiet: true
+    fail_msg: >-
+      The value check did not refuse {{ ntfy_pager_verify_try.name }}, or the file no longer holds the four
+      lines of the converge, or a second line reached it.
+  vars:
+    ntfy_pager_verify_value_lines: '{{ (ntfy_pager_verify_value_env.content | b64decode).splitlines() }}'
+  no_log: true

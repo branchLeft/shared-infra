@@ -225,7 +225,12 @@ export async function ensureImage(
         `${loadedEngineNote(limits.inspectMs)} Otherwise report the engine as wedged.`
     );
   }
-  if (/Cannot connect to the Docker daemon/i.test(have.stderr)) {
+  // A failed inspect is an absent image or an engine that is not there. Which one is
+  // asked of the engine (`docker info`), not read from the client's wording: Docker 27
+  // said "Cannot connect to the Docker daemon", Docker 29 says "failed to connect to the
+  // docker API", and a pull attempted against a stopped engine reports the wrong fault.
+  const engine = await probeEngine(ctx, limits.inspectMs);
+  if (!engine.up) {
     throw new DockerFailure(
       `No Docker engine is reachable: ${firstLine(have.stderr)}. No container was started. ` +
         'Start Docker and re-run, or leave it stopped to skip this check locally.'

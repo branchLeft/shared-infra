@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Writes the monitoring stack's secret-bearing files from
-`/etc/branchleft/monitoring.env`: `alertmanager.yml`, `ntfy/server.yml` and
-`prometheus/mx1-metrics-password`. Why it is a plain string replace, and why its
+`/etc/branchleft/monitoring.env` and `/etc/branchleft/ntfy-pager.env` (the unit's
+drop-in loads both; the second holds the four `NTFY_` keys): `alertmanager.yml`,
+`ntfy/server.yml` and `prometheus/mx1-metrics-password`. Why it is a plain string replace, and why its
 name is wider than its remit, is in `render_alertmanager_config.md`.
 """
 
