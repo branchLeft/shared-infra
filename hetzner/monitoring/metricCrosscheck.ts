@@ -253,20 +253,18 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   queue_rescheduled: "Stalwart's own Prometheus exporter, on mx1",
   alertmanager_notifications_failed_total: 'built into Alertmanager itself',
   backup_worker_last_success_timestamp_seconds:
-    "the tenant backup worker's own textfile-collector export, branchLeft/ghost-platform " +
+    "the tenant backup worker's own textfile-collector export, backup_worker.py in branchLeft/ghost-platform, on ops1 " +
     '(no source under this root to check against -- this repo only renders the rule).',
-  // branchLeft/ghost-platform's infra/provisioning/scripts/backup_worker.py
-  // (called from nightly_dump_loop.py), a node_exporter textfile collector
-  // in org/control -- not a collector this repository owns or can scan, per
-  // this module's own limitation above. Which host in org/control is still
-  // open (LLD-9 names only the project, never a host); nothing here assumes
-  // one.
+  // Writers, in branchLeft/ghost-platform: infra/provisioning/scripts/backup_worker.py and
+  // infra/provisioning/scripts/state_copy.py, both on ops1 (the control host); db/provision/dump_nightly.py,
+  // on db1 (lock gauges under tenant="db1-all-databases", and its own status gauges). None is a collector
+  // this repo can scan; render.md, "The `backup` rule group", gives the hosts.
   state_copy_last_success_timestamp_seconds: 'state_copy.py, in branchLeft/ghost-platform, on ops1',
   state_copy_bucket_configured: 'state_copy.py, in branchLeft/ghost-platform, on ops1',
   backup_worker_lock_wait_seconds:
-    'backup_worker.py, in branchLeft/ghost-platform, in org/control; dump_nightly.py, on db1',
+    'backup_worker.py, in branchLeft/ghost-platform, on ops1; dump_nightly.py, on db1',
   backup_worker_lock_aborts_total:
-    'backup_worker.py, in branchLeft/ghost-platform, in org/control; dump_nightly.py, on db1',
+    'backup_worker.py, in branchLeft/ghost-platform, on ops1; dump_nightly.py, on db1',
   // db1's own dump and binlog shipper, written by the two scripts named
   // here to the textfile directory db1's node_exporter reads. The source
   // is branchLeft/ghost-platform's db/provision, not scannable from here.
