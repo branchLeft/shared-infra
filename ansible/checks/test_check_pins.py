@@ -298,6 +298,17 @@ class LockTests(PinCase):
         self.put_lock(lock_text().replace("molecule-plugins", "Molecule_Plugins"))
         self.assertEqual(self.findings(), [])
 
+    def test_normalise_alone_sets_the_name_form(self) -> None:
+        """normalise() is the one name rule: dash, dot and underscore runs become a dash."""
+        self.assertEqual(check_pins.normalise("Molecule_Plugins"), "molecule-plugins")
+        self.assertEqual(check_pins.normalise("ruamel.yaml"), "ruamel-yaml")
+        self.assertEqual(check_pins.normalise("a__b..C-d"), "a-b-c-d")
+
+    def test_the_name_regex_is_written_once(self) -> None:
+        """One home: locked_packages calls normalise(), so the substitution is written once."""
+        source = Path(check_pins.__file__).read_text(encoding="utf-8")
+        self.assertEqual(source.count('re.sub(r"[-_.]+", "-"'), 1)
+
     def test_missing_lock_is_refused(self) -> None:
         """Without the file there is nothing to install from."""
         (self.ansible / "requirements.txt").unlink()

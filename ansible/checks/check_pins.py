@@ -135,7 +135,7 @@ def locked_packages(requirements: Path) -> tuple[dict[str, str], list[str]]:
         if match is None:
             findings.append(f"{requirements.name} line {number} is not name==version: {line!r}")
             continue
-        name = re.sub(r"[-_.]+", "-", match["name"]).lower()
+        name = normalise(match["name"])
         if not HASH.search(match["hashes"]):
             findings.append(f"{requirements.name} line {number} pins {name} with no --hash")
         if name in REQUIRED_TOOLS and match["marker"]:
