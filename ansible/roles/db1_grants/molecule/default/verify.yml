@@ -1,4 +1,17 @@
 ---
+# One verify.yml for every scenario of the role. The role's cases are shared out
+# between scenarios so that no shard comes near its time limit (ansible/README.md,
+# "Sharing steps between scenarios"). Each scenario applies the role, then runs this
+# file, which runs the part of the cases that carries the scenario's own name:
+#
+#   default            the positive cases (the stray module, the repairs, the rotation)
+#   refusals_inputs    the refusal cases whose `part` is refusals_inputs, and so on
+#
+# The other scenarios' verify.yml import this file, and the part is read from the
+# name Molecule gives the scenario it runs. The baseline, the assertions on the whole
+# run's record and log, and the leftovers check run in every scenario, each over that
+# scenario's own run. tasks/assert_parts.yml fails the run when a case belongs to a
+# part no scenario runs, so a case cannot be dropped by adding it without one.
 - name: Verify
   hosts: all
   gather_facts: false
@@ -10,9 +23,13 @@
     # A maintainer sets it in the environment to run the cases one change touches
     # (`DB1_GRANTS_VERIFY_ONLY=unescaped molecule verify`); the positive cases are
     # skipped then unless DB1_GRANTS_VERIFY_POSITIVE is true, and the whole
-    # scenario still runs in the harness, which sets neither.
+    # scenario still runs in the harness, which sets neither. With it set, the cases
+    # of every part are searched, whichever scenario is run.
     db1_grants_verify_only: "{{ lookup('ansible.builtin.env', 'DB1_GRANTS_VERIFY_ONLY') }}"
     db1_grants_verify_positive: "{{ lookup('ansible.builtin.env', 'DB1_GRANTS_VERIFY_POSITIVE') | bool }}"
+    # The part this run is: the scenario's name.
+    db1_grants_verify_part: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_NAME') }}"
+    db1_grants_verify_scope: '{{ db1_grants_verify_parts if db1_grants_verify_only | length > 0 else [db1_grants_verify_part] }}'
     # Every text the log and the client's recorded arguments must not hold. The
     # sentinels are letters and digits, so they need no escaping.
     db1_grants_verify_sentinels:
@@ -20,6 +37,10 @@
       - '{{ db1_grants_scenario_ops1_password }}'
       - '{{ db1_grants_scenario_ops1_password_rotated }}'
   tasks:
+    # ----- That every case has a scenario that runs it -----
+    - name: Assert every case is in a part, and every part is a scenario that runs verify
+      ansible.builtin.include_tasks: tasks/assert_parts.yml
+
     # ----- The state the converge left -----
     - name: Assert the database and the host's files are as the role should leave them
       ansible.builtin.include_tasks: tasks/assert_baseline.yml
@@ -37,7 +58,9 @@
     # ----- The refusals, each one a control with a sabotage (README) -----
     - name: Run each refusal case
       ansible.builtin.include_tasks: tasks/run_case.yml
-      loop: "{{ db1_grants_verify_cases | selectattr('name', 'search', db1_grants_verify_only) | list }}"
+      loop: >-
+        {{ db1_grants_verify_cases | selectattr('part', 'in', db1_grants_verify_scope)
+        | selectattr('name', 'search', db1_grants_verify_only) | list }}
       loop_control:
         loop_var: case
         label: '{{ case.name }}'
@@ -51,7 +74,7 @@
         - case_rotation
       loop_control:
         label: '{{ item }}'
-      when: db1_grants_verify_only | length == 0 or db1_grants_verify_positive | bool
+      when: (db1_grants_verify_only | length == 0 and db1_grants_verify_part == 'default') or db1_grants_verify_positive | bool
 
     # ----- What the whole run must not have done -----
     - name: Assert the client's recorded calls held no password and no statement on a command line
