@@ -9,6 +9,10 @@ strict = true
 python_version = "3.13"
 # The module is a single file in library/, imported by the tests by its own name.
 mypy_path = "$MYPY_CONFIG_FILE_DIR/library"
+# The symbolic link in molecule/ is the module itself, checked once in library/.
+exclude = ["(^|/)molecule/"]
+# Matches ansible/pyproject.toml. The module's code needed no change to pass it.
+disallow_any_explicit = true
 
 # ANS-2: Ansible's own imports are untyped, so the override names the ansible.*
 # modules and nothing else. A blanket ignore_missing_imports is not the override.
