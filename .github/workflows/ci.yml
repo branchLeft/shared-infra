@@ -108,6 +108,9 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
+      - name: Format check
+        run: npm run format:check
+
   mail-typecheck:
     name: Type check (mail)
     runs-on: ubuntu-latest

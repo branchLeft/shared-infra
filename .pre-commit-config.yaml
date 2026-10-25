@@ -94,6 +94,16 @@ repos:
         files: ^hetzner/scripts/.*\.py$
         pass_filenames: false
 
+      # The Alertmanager config renderer, the runbook job-name check and the SNDS
+      # collector have unit tests that gate the commit rather than only the
+      # pull request.
+      - id: hetzner-monitoring-tests
+        name: hetzner monitoring unit tests
+        entry: sh -c "python3 -m unittest discover -s hetzner/monitoring -p 'test_*.py'"
+        language: system
+        files: ^hetzner/monitoring/.*\.py$
+        pass_filenames: false
+
       # zone.json is an input too: its checked-in-zone tests pin the mail
       # records, so an edit dropping MX, SPF or DMARC fails at the commit.
       - id: hetzner-dns-tests
