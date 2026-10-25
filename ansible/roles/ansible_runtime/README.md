@@ -308,6 +308,16 @@ reads UTF-8. A lock with either could show this program a comment and pip an opt
 `# -*- coding: utf-7 -*-` lock does. Both are refused whatever encoding they name; the
 repository's lock has neither.
 
+### check_lock_options
+
+Refuses an option on any physical line of the lock other than an exact `--hash=sha256:<64 hex>`
+token. It runs first and on the raw lines, as `str.splitlines` gives them and before anything is
+joined: a token that starts with `-` is an option to pip, so no reading of continuations, comments
+or odd line breaks can carry one past it. A comment-only line is skipped, as pip skips it (the
+lock's `# via -r requirements.in` lines are comments). It is stricter than pip on purpose: a
+`--hash` with a backslash stuck to it, or an option after a `#` on a requirement line, is refused.
+The refusal is `LOCK_UNHASHED` and its detail is the token.
+
 ### check_lock_is_hashed
 
 pip's own hash checking is the control that matters, and it stays on. This refuses first, before

@@ -21,7 +21,7 @@ the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
 | `requirements.in`     | The seven tools chosen on purpose, exact pins (ANS-4).                 |
 | `requirements.txt`    | The hash-locked toolchain compiled from it, collections included.      |
 | `requirements.yml`    | Empty by design: no collection is fetched outside the lock (ANS-4).    |
-| `checks/`             | The pin check, the enrolment check and their unit tests.               |
+| `checks/`             | The pin, enrolment, delivery, role and path checks, with tests.        |
 | `tools/`              | The record a new host's first boot is built from, and its tests.       |
 | `inventories/`        | The inventory and group-variable trees. `production` holds edge1, db1. |
 | `playbooks/`          | One playbook per host: selects hosts and lists roles (ANS-13).         |

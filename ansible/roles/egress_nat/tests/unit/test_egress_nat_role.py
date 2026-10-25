@@ -90,18 +90,8 @@ def position(tasks: list[dict[str, object]], start: str) -> int:
     return tasks.index(named(tasks, start))
 
 
-class OneHomeTests(unittest.TestCase):
-    """Every delivered file is read from hetzner/provision, never copied into the role."""
-
-    def test_the_role_holds_no_copy_of_any_source(self) -> None:
-        self.assertFalse((ROLE / "files").exists(), "the role must not keep a files/ directory")
-
-    def test_each_copy_reads_its_source_from_hetzner_provision(self) -> None:
-        tasks, block, _ = reconciler_tasks()
-        for start in ("Install the reconciler", "Install the unit"):
-            src = str(as_dict(named(block, start)["ansible.builtin.copy"])["src"])
-            with self.subTest(task=start):
-                self.assertTrue(src.startswith("{{ role_path }}/../../../hetzner/provision/"), src)
+class SourceTests(unittest.TestCase):
+    """Every file the role delivers exists in hetzner/provision, under the name the vars give."""
 
     def test_the_role_path_reaches_the_repository_provision_directory(self) -> None:
         self.assertEqual((ROLE / "../../../hetzner/provision").resolve(), PROVISION.resolve())

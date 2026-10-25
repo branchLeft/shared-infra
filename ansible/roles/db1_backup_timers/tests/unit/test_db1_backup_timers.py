@@ -102,9 +102,6 @@ class DeliveryTests(unittest.TestCase):
         for name, digest in digests.items():
             self.assertRegex(digest, r"^[0-9a-f]{64}$", name)
 
-    def test_no_program_is_copied_into_the_role(self) -> None:
-        self.assertEqual(list(FILES.rglob("*.py")), [])
-
 
 class PinTests(unittest.TestCase):
     def test_the_commit_is_a_full_forty_character_sha(self) -> None:
