@@ -1,6 +1,6 @@
 """Check the host playbooks under the gated pull.
 
-Rules R0 to R8, and what each one does not see, are in ansible/checks/README.md. A
+Rules R0 to R9, and what each one does not see, are in ansible/checks/README.md. A
 failure names the rule and the file. This check catches a protected key set outside
 its one file. It does not judge a role edit: nothing here gates one (see checks/README.md).
 """
@@ -96,6 +96,12 @@ EXPECTED_ROLES = [
     },
     {"role": "../roles/pull_trigger"},
 ]
+PLAY_KEYS = frozenset(("name", "hosts", "gather_facts", "vars", "vars_files", "pre_tasks", "roles"))
+HOST_ROLES_FILE = "checks/host_roles.yml"
+ROLE_PATH = "../roles/"
+ROLE_NAME = re.compile(r"[a-z][a-z0-9_]*")
+HOST_NAME = re.compile(r"[a-z][a-z0-9]*")
+PULL_ROLES = frozenset(("ansible_runtime", "pull_trigger"))
 EXPECTED_COMMON = {
     REMOTE_KEY: REMOTE_URL,
     PLAYBOOK_KEY: DERIVED_PLAYBOOK,
@@ -178,22 +184,57 @@ def _exact_include(task: object, target: str) -> bool:
     return False
 
 
-def _check_enrolled(stem: str, plays: list[dict[str, object]], findings: list[str]) -> None:
+def _plain_role(entry: object) -> str | None:
+    """The role name of an entry that is exactly `role: ../roles/NAME` and no other key."""
+    if not isinstance(entry, dict) or set(entry) != {"role"}:
+        return None
+    path = entry["role"]
+    if not isinstance(path, str) or not path.startswith(ROLE_PATH):
+        return None
+    name = path[len(ROLE_PATH) :]
+    return name if ROLE_NAME.fullmatch(name) else None
+
+
+def _check_roles(label: str, stem: str, roles: object, listed: list[str], out: list[str]) -> None:
+    """The two pull roles first, as pinned, then only plain entries from the host's own list."""
+    pinned = len(EXPECTED_ROLES)
+    if not isinstance(roles, list) or roles[:pinned] != EXPECTED_ROLES:
+        out.append(f"{label}: roles must start with the runtime entry, then the bare trigger")
+        return
+    seen: list[str] = []
+    for entry in roles[pinned:]:
+        name = _plain_role(entry)
+        if name is None:
+            out.append(
+                f"{label}: a role entry after the pull roles must be only `role: ../roles/NAME`"
+            )
+        elif name not in listed:
+            out.append(f"{label}: role {name} is not on {stem}'s list in {HOST_ROLES_FILE}")
+        elif name in seen:
+            out.append(f"{label}: role {name} is applied twice")
+        else:
+            seen.append(name)
+
+
+def _check_enrolled(
+    stem: str, plays: list[dict[str, object]], listed: list[str], findings: list[str]
+) -> None:
     label = f"R2 {stem}.yml"
     if len(plays) != 1:
         findings.append(f"{label}: expected one play, found {len(plays)}")
         return
     play = plays[0]
+    for key in sorted(set(play) - PLAY_KEYS):
+        findings.append(f"{label}: play key {key} is not allowed, only {sorted(PLAY_KEYS)}")
     if play.get("hosts") != "all":
         findings.append(f"{label}: hosts must be all")
-    variables = _mapping(play.get("vars"))
-    if variables.get(HOST_KEY) != stem:
-        findings.append(f"{label}: vars.{HOST_KEY} must be {stem}")
+    expected_vars = {HOST_KEY: stem}
+    if play.get("vars") != expected_vars:
+        findings.append(f"{label}: vars must be exactly {expected_vars}")
     expected_files = [COMMON_INCLUDE, f"{{{{ playbook_dir }}}}/../trust/{stem}.yml"]
     if play.get("vars_files") != expected_files:
         findings.append(f"{label}: vars_files must be exactly {expected_files}")
-    if play.get("roles") != EXPECTED_ROLES:
-        findings.append(f"{label}: roles must be exactly the runtime entry, then the bare trigger")
+    _check_roles(label, stem, play.get("roles"), listed, findings)
     pre_tasks = play.get("pre_tasks")
     expected_pre = [REFUSE_TASKS, SIGNER_TASKS]
     if not (
@@ -205,6 +246,38 @@ def _check_enrolled(stem: str, plays: list[dict[str, object]], findings: list[st
         )
     ):
         findings.append(f"{label}: pre_tasks must be exactly {REFUSE_TASKS}, then {SIGNER_TASKS}")
+
+
+def _read_host_roles(ansible: Path, findings: list[str]) -> dict[str, list[str]]:
+    """R9: the owner's list of roles per host. A missing or unreadable file, or a host whose
+    entry is not a clean list of role names, gives that host no roles beyond the pull roles."""
+    label = f"R9 {HOST_ROLES_FILE}"
+    path = ansible / HOST_ROLES_FILE
+    if not path.is_file():
+        findings.append(f"{label}: is missing")
+        return {}
+    doc = _load(path, findings, label)
+    if not isinstance(doc, dict):
+        findings.append(f"{label}: must be a mapping of host to a list of role names")
+        return {}
+    lists: dict[str, list[str]] = {}
+    for host, roles in doc.items():
+        clean = (
+            isinstance(host, str)
+            and HOST_NAME.fullmatch(host) is not None
+            and isinstance(roles, list)
+            and all(isinstance(role, str) and ROLE_NAME.fullmatch(role) for role in roles)
+            and not PULL_ROLES.intersection(roles)
+            and len(set(roles)) == len(roles)
+        )
+        if clean:
+            lists[host] = list(roles)
+        else:
+            findings.append(
+                f"{label}: {host!r} must be a host name with a list of distinct role names, "
+                f"without {sorted(PULL_ROLES)}"
+            )
+    return lists
 
 
 def _check_gate(path: Path, that: list[str], findings: list[str]) -> None:
@@ -549,8 +622,9 @@ def check(root: Path) -> list[str]:
 
     if not enrolled:
         findings.append("R1 no top-level playbook applies the pull_trigger role")
+    host_roles = _read_host_roles(ansible, findings)
     for stem, plays in sorted(enrolled.items()):
-        _check_enrolled(stem, plays, findings)
+        _check_enrolled(stem, plays, host_roles.get(stem, []), findings)
     _check_derivation(includes, findings)
 
     trust_files = _yml_files(trust)

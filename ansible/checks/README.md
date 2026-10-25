@@ -78,10 +78,15 @@ a role edit is not gated by anything here. The control on a role edit is the own
 deploy approval of the gated apply, which is not yet wired. Which files the reviewer App
 may merge alone is not yet decided by the owner.
 
-Limits of R2. It pins the values of `vars.enrolled_host`, `vars_files`, `roles` and
-`pre_tasks`. It does not pin the other keys of that play, so a `post_tasks`,
-`tasks`, `handlers`, `environment` or `module_defaults` copy that writes a literal
-signer config is not seen. A playbook is a place a literal can hide as well as a role.
+Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` (no other variable: a
+templated `lookup`, an `ansible_*` setting or an override of a role's defaults is refused),
+and pins `vars_files`, `roles` and `pre_tasks`, and refuses any play key outside `name`, `hosts`, `gather_facts`, `vars`,
+`vars_files`, `pre_tasks` and `roles`. So a `tasks`, `post_tasks`, `handlers`,
+`environment`, `module_defaults`, `collections`, `strategy`, `become`, `import_playbook`
+or `include_vars` key, or any key it does not know, is refused by name, and no role can be
+applied to a host by a path other than its `roles` list. A listed role is trusted by
+name: the list does not say what the role does as root, and a role's own edit is still not
+gated here. A playbook is a place a literal can hide as well as a role.
 
 Limits of the loader rule. It reads literal mapping keys. It names the loaders listed in
 `ROLE_LOADERS`, `TASK_FILE_LOADERS` and `INCLUDE_VARS`, in their bare, `ansible.builtin.`
@@ -118,12 +123,17 @@ is not loaded there.
 - **R2** The name rule (above) refuses every entry under `playbooks/` that is not an exact
   `.yml` at the top of `playbooks/` or in `playbooks/includes/`, at any depth. The pull
   runs only the derived `.yml` path, and `ansible-playbook` would run any other name, so
-  R6 must read every file in the tree. Each enrolled `HOST.yml` has one play on
-  `hosts: all`, `vars.enrolled_host` equal to `HOST`, `vars_files` exactly the shared
-  include and `../trust/HOST.yml`, `roles` exactly the runtime entry then the bare trigger,
-  and `pre_tasks` exactly the refusal include then the signer include, each a task of only
-  its name and include. An enrolled playbook is read only at the top of `playbooks/`; the
-  pull runs only that path.
+  R6 must read every file in the tree. Each enrolled `HOST.yml` has one play, with no key
+  but `name`, `hosts`, `gather_facts`, `vars`, `vars_files`, `pre_tasks` and `roles`, on
+  `hosts: all`, `vars` exactly `enrolled_host: HOST` and nothing else, `vars_files` exactly the shared
+  include and `../trust/HOST.yml`, `roles` the runtime entry then the bare trigger as the
+  first two entries and nothing attached to either, then only plain entries from that
+  host's list in `host_roles.yml` (R9), and `pre_tasks` exactly the refusal include then
+  the signer include, each a task of only its name and include. A plain entry is a mapping
+  of one key, `role: ../roles/NAME`: no `vars`, `tags`, `when` or other key. A role is
+  applied once, may be on its own host's list only, and is refused on any other host. A
+  host with no list may apply the two pull roles and nothing else. An enrolled playbook is
+  read only at the top of `playbooks/`; the pull runs only that path.
 - **R3** The shared include holds exactly the remote literal and the playbook derivation
   from `enrolled_host`, and no other key.
 - **R4** The trust files are exactly the enrolled playbooks, one file each. `trust/` is
@@ -142,6 +152,14 @@ is not loaded there.
   the pinned config path, and its `signers` and `remote_url` are the pinned variables,
   not literals. Zero writers, or two, is a failure. A config path spelled as a literal
   is not seen.
+
+- **R9** `host_roles.yml` exists and maps each host name to a list of distinct role names
+  (`[a-z][a-z0-9_]*`), never `ansible_runtime` or `pull_trigger`. A host whose entry is
+  malformed gets no listed roles, so its playbook may apply the two pull roles only. The
+  file is in `ansible/checks/`, which CODEOWNERS gives to the owner, so adding a role to a
+  host is the owner's merge. The check reads names, not directories: a role may be listed
+  before its directory merges, and until then it runs nothing. Order after the pull roles
+  is free, and a listed role need not be applied.
 
 The refusal's host test is not a host control. Under the trigger `inventory_hostname` is
 `localhost`, and the root-owned pull config is the control on the host.
