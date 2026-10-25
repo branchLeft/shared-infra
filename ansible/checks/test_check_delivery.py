@@ -359,7 +359,7 @@ def environment(
             "id": 1,
             "type": "required_reviewers",
             "prevent_self_review": prevent_self_review,
-            "reviewers": [reviewer("User", "Rob-branchLeft")] if reviewers is None else reviewers,
+            "reviewers": [reviewer("Team", "branchleft-admin")] if reviewers is None else reviewers,
         }
     ]
     policy: dict[str, object] | None = None
@@ -402,10 +402,14 @@ class EnvironmentTests(unittest.TestCase):
     def test_a_protected_environment_is_ready(self) -> None:
         self.assertEqual([], self.judge(environment()))
 
-    def test_the_owner_team_may_not_review_instead_of_the_owner(self) -> None:
-        # Only the owner may approve, and the probe does not read a team's members.
+    def test_the_branchleft_admin_team_is_the_expected_reviewer(self) -> None:
+        # The environment's reviewer is the branchleft-admin team.
         described = environment(reviewers=[reviewer("Team", "branchleft-admin")])
-        self.assert_names(self.judge(described), "Team branchleft-admin approve")
+        self.assertEqual([], self.judge(described))
+
+    def test_the_owner_user_alone_is_not_the_expected_reviewer(self) -> None:
+        described = environment(reviewers=[reviewer("User", "Rob-branchLeft")])
+        self.assert_names(self.judge(described), "User Rob-branchLeft approve")
 
     def test_a_missing_environment_is_not_ready(self) -> None:
         self.assert_names(self.judge(NOT_FOUND, NOT_FOUND, None), "was not returned")
@@ -492,7 +496,9 @@ class EnvironmentTests(unittest.TestCase):
 
     def test_a_reviewer_who_is_not_the_owner_is_not_ready(self) -> None:
         for who in (reviewer("User", "someone-else"), reviewer("Team", "other-team")):
-            self.assert_names(self.judge(environment(reviewers=[who])), "only the owner may")
+            self.assert_names(
+                self.judge(environment(reviewers=[who])), "only the branchleft-admin team may"
+            )
         both = environment(reviewers=[reviewer("User", "Rob-branchLeft"), reviewer("User", "x")])
         self.assert_names(self.judge(both), "User x approve")
 

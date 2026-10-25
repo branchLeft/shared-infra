@@ -56,10 +56,10 @@ WHY = {
     "permissions": "the token is set once, for the whole workflow",
 }
 
-# Who may approve the apply: the owner alone. No other user, team or app is an approver of this
-# environment, the owner-only team included: the probe does not read a team's members, so a team
-# entry would stay green after anyone joined it.
-OWNER_REVIEWERS = frozenset({("User", "Rob-branchLeft")})
+# Who may approve the apply: the branchleft-admin team alone. No other user, team or app is an
+# approver of this environment. The probe does not read a team's members, so membership of the
+# team is not checked here.
+OWNER_REVIEWERS = frozenset({("Team", "branchleft-admin")})
 BRANCH = "main"
 
 
@@ -298,7 +298,8 @@ def environment_findings(
             who = reviewer_identity(entry)
             if who not in OWNER_REVIEWERS:
                 findings.append(
-                    f"environment {name} lets {who[0]} {who[1]} approve: only the owner may"
+                    f"environment {name} lets {who[0]} {who[1]} approve: only the branchleft-admin "
+                    "team may"
                 )
     policy = as_mapping(described.get("deployment_branch_policy"))
     if policy is None or policy.get("custom_branch_policies") is not True:
