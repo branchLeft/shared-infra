@@ -13,6 +13,8 @@ import subprocess
 import tempfile
 import unittest
 
+import test_workflow_concurrency as concurrency_rules
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CI_YML = ROOT / ".github" / "workflows" / "ci.yml"
 
@@ -385,13 +387,14 @@ class CancelStepStructureTests(unittest.TestCase):
                 r"    permissions:\n      contents: read\n      packages: read\n      actions: write\n",
             )
 
-    def test_no_workflow_concurrency_group(self):
-        # A run paused for approval counts as in progress, so a workflow-level
-        # group would queue newer runs behind it (and cancel-in-progress
-        # would cancel an apply that had started). Job-level groups on the
-        # applies are a different thing and stay.
-        header = self.text.split("\njobs:\n", 1)[0]
-        self.assertNotRegex(header, r"(?m)^concurrency:")
+    def test_workflow_concurrency_is_keyed_per_run_and_cancels_only_pull_requests(self):
+        # A run paused for approval counts as in progress. A workflow-level
+        # group that push runs share would queue a newer apply behind it, and
+        # a cancel on a non-PR run would cancel an apply that had started. The
+        # rule lives in one place, the parsed checker in
+        # test_workflow_concurrency.py, and this calls it on ci.yml: no second
+        # copy of the rule, so no two pins that can disagree.
+        self.assertEqual(concurrency_rules.violations("ci.yml", self.text), [])
 
 
 class CancelStepOrderTests(unittest.TestCase):

@@ -622,11 +622,11 @@ built here.
 
 ## How it is delivered
 
-A role reaches a host only through the gated workflow (ANS-17), never by running
+A role is meant to reach a host only through the gated workflow (ANS-17), never by running
 `ansible-playbook` by hand. The program is the host's half of that: the workflow
-holds a key that can run only this command, the deployment gate approves a merge
-commit, and the host verifies the commit again by itself. `edge1` is the first host: its
-bootstrap and its playbook are `playbooks/edge1.yml`, and the signer it trusts is the one in `inventories/production/group_vars/edge/pull_trigger.yml`.
+holds a key that can run only this command, the deployment gate (ANS-17) is the planned approval of a merge
+commit: its reusable workflow exists in `branchLeft/github-workflows`, but nothing in this repo calls it yet, and the host verifies the commit again by itself. `edge1` is the first host: its
+bootstrap and its playbook are `playbooks/edge1.yml`, and the signer it trusts is the one in `trust/edge1.yml`, loaded by that playbook through `vars_files`. The remote and the playbook derivation are in `playbooks/includes/pull_trigger_common.yml`.
 
 ### The controls of a step request, and how each is shown to fail
 

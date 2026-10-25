@@ -5,15 +5,13 @@ updates:
   - package-ecosystem: 'npm'
     directory: '/'
     schedule:
-      interval: 'weekly'
-      day: 'monday'
+      interval: 'monthly'
     open-pull-requests-limit: 5
     groups:
-      npm-minor-and-patch:
+      npm-all:
         applies-to: version-updates
-        update-types:
-          - 'minor'
-          - 'patch'
+        patterns:
+          - '*'
     labels:
       - 'dependencies'
 
@@ -21,15 +19,13 @@ updates:
   - package-ecosystem: 'npm'
     directory: '/hetzner'
     schedule:
-      interval: 'weekly'
-      day: 'monday'
+      interval: 'monthly'
     open-pull-requests-limit: 5
     groups:
-      npm-minor-and-patch:
+      npm-all:
         applies-to: version-updates
-        update-types:
-          - 'minor'
-          - 'patch'
+        patterns:
+          - '*'
     labels:
       - 'dependencies'
 
@@ -37,15 +33,13 @@ updates:
   - package-ecosystem: 'npm'
     directory: '/hetzner-host'
     schedule:
-      interval: 'weekly'
-      day: 'monday'
+      interval: 'monthly'
     open-pull-requests-limit: 5
     groups:
-      npm-minor-and-patch:
+      npm-all:
         applies-to: version-updates
-        update-types:
-          - 'minor'
-          - 'patch'
+        patterns:
+          - '*'
     labels:
       - 'dependencies'
 
@@ -53,15 +47,13 @@ updates:
   - package-ecosystem: 'npm'
     directory: '/mail'
     schedule:
-      interval: 'weekly'
-      day: 'monday'
+      interval: 'monthly'
     open-pull-requests-limit: 5
     groups:
-      npm-minor-and-patch:
+      npm-all:
         applies-to: version-updates
-        update-types:
-          - 'minor'
-          - 'patch'
+        patterns:
+          - '*'
     labels:
       - 'dependencies'
 
@@ -76,8 +68,7 @@ updates:
   - package-ecosystem: 'docker-compose'
     directory: '/hetzner/edge/stack'
     schedule:
-      interval: 'weekly'
-      day: 'monday'
+      interval: 'monthly'
     open-pull-requests-limit: 5
     allow:
       - dependency-name: 'crowdsecurity/crowdsec'
@@ -94,15 +85,26 @@ updates:
   - package-ecosystem: 'uv'
     directory: '/ansible'
     schedule:
-      interval: 'weekly'
-      day: 'monday'
+      interval: 'monthly'
     open-pull-requests-limit: 5
     groups:
       ansible-toolchain:
         applies-to: version-updates
-        update-types:
-          - 'minor'
-          - 'patch'
+        patterns:
+          - '*'
+    labels:
+      - 'dependencies'
+
+  # The one pip the lock-reader parity test asks (ansible/checks/pip-requirements.txt:
+  # a single hashed pin, installed before the lock in the CI tool environments).
+  # A bump is its own pull request on purpose: the parity table is re-checked
+  # against the new pip's req_file before it merges (ansible/checks/README.md).
+  # ansible/checks/check_pins.py fails if this entry goes.
+  - package-ecosystem: 'pip'
+    directory: '/ansible/checks'
+    schedule:
+      interval: 'monthly'
+    open-pull-requests-limit: 1
     labels:
       - 'dependencies'
 
@@ -110,15 +112,13 @@ updates:
   - package-ecosystem: 'github-actions'
     directory: '/'
     schedule:
-      interval: 'weekly'
-      day: 'monday'
+      interval: 'monthly'
     open-pull-requests-limit: 5
     groups:
-      github-actions-minor-and-patch:
+      github-actions-all:
         applies-to: version-updates
-        update-types:
-          - 'minor'
-          - 'patch'
+        patterns:
+          - '*'
     labels:
       - 'dependencies'
       - 'github-actions'

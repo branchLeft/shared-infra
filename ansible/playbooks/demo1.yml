@@ -1,0 +1,26 @@
+---
+# demo1: the demo host's build. One role. The broker's own install (the
+# broker_deploy role) comes first on the host and is not applied from here: its
+# inputs are the owner's built bundle and public key, which have no home in a
+# pulled commit yet, and applying it from this playbook would repoint a broker
+# the owner installed by hand. demo1_build checks, read-only, that broker_deploy
+# has run, and refuses the host when it has not.
+#
+# The role has no secret and no required input, so this playbook loads no
+# variables file. The inventory entry for the host, the trigger that pulls this
+# playbook and the nightly drift check are the host's enrolment, which is not in
+# this file.
+- name: Build demo1's slots
+  hosts: all
+  gather_facts: false
+  pre_tasks:
+    - name: Refuse any host but demo1
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in ['demo1', 'localhost']
+        fail_msg: This playbook is demo1's. Limit the run to demo1.
+        quiet: true
+  # The roles live in ansible/roles/ (ANS-13), one level above this directory, and a
+  # playbook finds roles only beside itself unless a path is given. One suppression per line.
+  roles:
+    - role: ../roles/demo1_build # noqa: role-name[path]

@@ -1,0 +1,94 @@
+---
+argument_specs:
+  main:
+    short_description: Build the demo host's slots on top of the broker, from pinned programs, without opening the demo
+    description: >-
+      Stages the pinned ghost-platform demo-host programs under a root-owned
+      release directory, installs the slot wrapper, the drain sidecar and the
+      health router where the sudoers grant and the units expect them, claims
+      the slot uids in the uid register, creates the demo-router account when
+      it is absent, declares the router's socket directories and the broker's
+      drain-flag directory, and writes the per-colour systemd drop-ins and the
+      health router's template unit from the pinned renderers' output. It
+      checks, read-only, that the broker account, the state directories and the
+      sudoers grant that broker_deploy installs are what the pinned generator
+      renders. It never writes the sudoers file, never runs a slot reset, never
+      runs the go-live step, never writes the live edge, and starts nothing.
+    author: branchLeft
+    options:
+      demo1_build_source_sha:
+        type: str
+        description: >-
+          The full 40-character ghost-platform commit the programs are
+          downloaded from. Bump it together with every checksum in
+          demo1_build_release_files. It must be at or after the commit that
+          moved the drain flags to /var/lib/branchleft-broker/drain-flags.
+        default: 5e52f78427cab104438057164e4baa16b329875c
+      demo1_build_source_base_url:
+        type: str
+        description: >-
+          The URL prefix each release file is appended to. The default is the
+          raw URL at the pinned commit; the container test points it at a
+          local copy only when it needs to.
+        default: 'https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ demo1_build_source_sha }}'
+      demo1_build_release_files:
+        type: list
+        elements: dict
+        description: >-
+          Every program fetched, each with its path from the repository root
+          and its sha256. The download fails unless the file has that sha256.
+          The list must name the ten programs the role runs, installs or
+          stages.
+        options:
+          path:
+            type: str
+            required: true
+            description: The file's path from the repository root, under demo-host/provision/.
+          sha256:
+            type: str
+            required: true
+            description: The 64-character lower-case sha256 of the file at the pinned commit.
+        default:
+          - path: demo-host/provision/branchleft_slot.py
+            sha256: 2e2279f0067d91296e1b309f6cbe71a3d276d7ccdbbd58aa4f99f81ce85ba80b
+          - path: demo-host/provision/demo_go_live.py
+            sha256: 21da8cc0b1e8fb69cd3f116187fee42cf1fbea8fd3c1466c5fb25ebc3a38bed5
+          - path: demo-host/provision/demo_sidecar.py
+            sha256: f3d0373bd80d4ef7f58b60d3c555825b39283f272eb71d26dcb91610cfa7ae66
+          - path: demo-host/provision/demo_uid_claims.py
+            sha256: 2d2536eb516ed5fab1e743cd1fa974ac6339c9334b529db7d94c47cc19152230
+          - path: demo-host/provision/health_router.py
+            sha256: 5eac21b7ab44ad0b1a308f0ac8b7da0d1d2db9dfb2cd1e4dcd034d5223036a15
+          - path: demo-host/provision/render_colour_units.py
+            sha256: 64e33649290e3501f291e31921c7ff94e4b4de511b06bea7bf9b7c11335d2a81
+          - path: demo-host/provision/render_demo_edge.py
+            sha256: 7391e93adda924e863f33610490581da050e73153882cc471945d5b38a848ad8
+          - path: demo-host/provision/render_demo_site.py
+            sha256: a34c5dec7d174fed868fc5fc73b2ef61773cf5dc4aa708fd57295486e9460cba
+          - path: demo-host/provision/render_router_unit.py
+            sha256: 3a0f71cc61e45e416f983ef86c02f1b419565a6c34511d1a60f35092454dab3a
+          - path: demo-host/provision/render_slot_sudoers.py
+            sha256: 80bd64fccb1f56260a7dc1824e783548a80a14a691942060cfff1aba9a058319
+      demo1_build_slot_names:
+        type: list
+        elements: str
+        description: >-
+          The demo slots, each a string of digits and nothing else. Follows
+          broker_deploy_slot_names when the host's variables set it. The role
+          refuses to run when this list differs from the slot table inside the
+          pinned sudoers generator, or when the installed sudoers grant differs
+          from that generator's output.
+        default: ['0', '1', '2', '3', '4', '5', '6']
+      demo1_build_wrapper_path:
+        type: path
+        description: >-
+          Absolute path the slot wrapper is installed at, which the sudoers
+          grant names. Follows broker_deploy_wrapper_path when the host's
+          variables set it. The role refuses to run, before it installs anything,
+          unless every rule of the installed sudoers grant runs exactly this path,
+          and it refuses a path with a dot segment, a doubled slash or a trailing
+          slash. The pinned generator hard-codes /usr/local/sbin/branchleft-slot,
+          and the installed grant must equal the generator's output, so this input
+          has exactly one value that can pass on an apply; any other value is
+          refused by the comparison or by the path check, whichever comes first.
+        default: /usr/local/sbin/branchleft-slot

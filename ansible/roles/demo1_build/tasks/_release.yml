@@ -1,0 +1,89 @@
+---
+# Internal to the role. Stages the pinned programs: one directory per commit,
+# root-owned and writable by nobody else, because the programs import one
+# another from it and root runs them. Each file is fetched on its own from the
+# one home of the programs and held to its pinned sha256; a digit flipped in a
+# pin, or a file changed at the commit, stops the role at the download.
+- name: Create the directories of the release
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - /opt/branchleft
+    - '{{ demo1_build_base_dir }}'
+    - '{{ demo1_build_releases_dir }}'
+    - '{{ demo1_build_release_dir }}'
+    - '{{ demo1_build_release_dir }}/demo-host'
+    - '{{ demo1_build_provision_dir }}'
+
+# In check mode the directories above do not exist yet on a host that has not
+# had the release, and get_url refuses a destination whose directory is missing,
+# so the download is skipped there and the plan shows the directories alone. On
+# a host that already has this release the download runs in check mode and
+# reports nothing to do.
+- name: Look at the release directory
+  ansible.builtin.stat:
+    path: '{{ demo1_build_provision_dir }}'
+    follow: false
+  register: demo1_build_release_dir_stat
+
+- name: Download each program and hold it to its checksum
+  ansible.builtin.get_url:
+    url: '{{ demo1_build_source_base_url }}/{{ item.path }}'
+    dest: '{{ demo1_build_release_dir }}/{{ item.path }}'
+    checksum: 'sha256:{{ item.sha256 }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ demo1_build_release_files }}'
+  loop_control:
+    label: '{{ item.path }}'
+  when: demo1_build_release_dir_stat.stat.exists
+
+- name: Point current at this release
+  ansible.builtin.file:
+    path: '{{ demo1_build_current_link }}'
+    src: '{{ demo1_build_release_dir }}'
+    state: link
+    owner: root
+    group: root
+  when: demo1_build_release_dir_stat.stat.exists
+
+# What is on the disk now, read back rather than assumed from the download.
+- name: Read back each program of the release
+  ansible.builtin.stat:
+    path: '{{ demo1_build_release_dir }}/{{ item.path }}'
+    follow: false
+    checksum_algorithm: sha256
+  loop: '{{ demo1_build_release_files }}'
+  loop_control:
+    label: '{{ item.path }}'
+  register: demo1_build_release_stats
+
+# Every task that runs a program reads this. In check mode on a host that has
+# not had the release it is false, and those tasks are skipped with the reason
+# stated at each; in a real run the download above has made it true or failed.
+- name: Decide whether the whole release is staged and unchanged
+  ansible.builtin.set_fact:
+    demo1_build_release_ready: |-
+      {%- set ns = namespace(ok=true) -%}
+      {%- for r in demo1_build_release_stats.results -%}
+      {%- if not (r.stat.isreg | default(false)) or (r.stat.checksum | default('')) != r.item.sha256 or (r.stat.pw_name | default('')) != 'root' -%}
+      {%- set ns.ok = false -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ ns.ok }}
+
+# A real run never goes on with a release that is not whole: the skips above are
+# for the plan only (ANS-10), and a program that silently did not run would look
+# like a host that needed nothing.
+- name: Refuse to go on with a release that is missing a file or differs from its pin
+  ansible.builtin.assert:
+    that:
+      - demo1_build_release_ready | bool
+    quiet: true
+    fail_msg: A program of the release is missing, is not a plain file owned by root, or does not have its pinned sha256.
+  when: not ansible_check_mode

@@ -27,7 +27,7 @@ is still true immediately before starting — this is the gate, not a formality:
 dig +short branchleft.co.uk www.branchleft.co.uk blog.branchleft.co.uk blog2.branchleft.co.uk A
 ```
 
-Expected: the first three answer `34.149.131.244` (the GCP load balancer) and
+Expected: the first three answer `34.149.131.244` and
 `blog2` answers nothing. **If any of them answers `46.225.95.167`, stop** — the
 edge is serving live traffic, and this runbook would take it down for the
 length of a rebuild plus a re-provision with no DNS undo. The zone is manual

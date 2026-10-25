@@ -75,5 +75,10 @@ provisioner:
         scenario_libaio_name: libaio1_0.0.0-1_all.deb
         scenario_libaio_path: /var/cache/db1-stack/libaio1_0.0.0-1_all.deb
         scenario_cnf_path: /etc/branchleft/db-exporter.my.cnf
+        # The digest in the database image pin the prepare step writes. It is a
+        # made-up digest for this test: no image is pulled in the container. The
+        # pin file has the form branchleft-deploy writes (IMAGE=<ref> and a line
+        # break; write_image_env in hetzner/provision/branchleft_deploy.py).
+        scenario_image_digest: d3f1d3f1d3f1d3f1d3f1d3f1d3f1d3f1d3f1d3f1d3f1d3f1d3f1d3f1d3f1d3f1
 verifier:
   name: ansible

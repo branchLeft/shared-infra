@@ -113,6 +113,27 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "demo-host/provision and never committed as a Compose file at all, so "
         "there is no file here for any static check to read."
     ),
+    "demo-0-a": (
+        "One named instance of the same demo family, slot 0 colour a, which the "
+        "ansible/roles/demo1_build role's test watches by path. Provisioned by "
+        "branchLeft/ghost-platform's demo-host/provision like every other demo "
+        "slot; it is written out here because a test fixture names it, and no "
+        "Compose file for it exists in this repository."
+    ),
+    "demo-host": (
+        "Not an instance of the template: `/opt/branchleft/demo-host` is the "
+        "directory the ansible/roles/demo1_build role stages the pinned programs "
+        "of branchLeft/ghost-platform's demo-host/provision into. It is "
+        "registered because the scan reads the path as a stack name. No Compose "
+        "file exists for it anywhere."
+    ),
+    "demo-sidecar": (
+        "Not an instance of the template: `/etc/branchleft/demo-sidecar.image.env` "
+        "is the image pin the drain sidecar of branchLeft/ghost-platform's "
+        "demo-host/provision reads, named in the ansible/roles/demo1_build "
+        "documentation. It is registered because the scan reads the path as a "
+        "stack name. No Compose file exists for it anywhere."
+    ),
     "broker": (
         "Not an instance of the template: `/opt/branchleft/broker` is the path of "
         "the broker program, which runs under its own unit installed by the "
@@ -182,6 +203,7 @@ SCANNED_SUFFIXES = frozenset(
         ".authoring",
         ".conf",
         ".enforcing",
+        ".golden",
         ".gotmpl",
         ".in",
         ".j2",

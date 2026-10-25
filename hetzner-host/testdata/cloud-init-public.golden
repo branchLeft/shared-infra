@@ -1,0 +1,59 @@
+#cloud-config
+hostname: db1
+preserve_hostname: false
+fqdn: db1
+
+disable_root: false
+
+users:
+  # The default entry comes first, always. A users block that omits it
+  # replaces the image's default account rather than adding to it, and the
+  # keys Hetzner injects through the datasource follow that default account.
+  # Omitting it produces a host with the deploy key installed and no owner
+  # access at all.
+  - default
+  - name: deploy
+    gecos: CI deploy account
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: false
+    ssh_authorized_keys:
+      - restrict ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLE deploy@db1
+
+write_files:
+  - path: /etc/sudoers.d/50-branchleft-deploy
+    owner: root:root
+    permissions: '0440'
+    content: |
+      deploy ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-deploy
+  # Duplicated by provision/00-harden-ssh.sh on purpose, not by oversight.
+  # This copy closes the password-auth window during first boot, before the
+  # host has ever been reachable for a provisioning run; the script is what
+  # keeps the file true afterwards.
+  #
+  # The 01- prefix is load-bearing. OpenSSH keeps the first value it obtains
+  # for a keyword and the Include glob expands in sort order, so the
+  # lowest-sorting drop-in wins -- including over the 50-cloud-init.conf
+  # cloud-init writes for itself whenever ssh_pwauth is set.
+  - path: /etc/ssh/sshd_config.d/01-branchleft-hardening.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin prohibit-password
+      PubkeyAuthentication yes
+
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+
+runcmd:
+  - [ install, -d, -m, '0755', -o, root, -g, root, /etc/branchleft ]
+  - [ install, -d, -m, '0755', -o, root, -g, root, /opt/branchleft ]
+  # Absolute path: runcmd's exec form does not go through a login shell, and
+  # sbin is not on the PATH cloud-init runs with on Debian.
+  - [ /usr/sbin/sshd, -t ]
+  - [ systemctl, reload, ssh ]

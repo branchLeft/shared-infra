@@ -1,0 +1,12 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is
+# a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# The default scenario applies the role and checks the result: converge, the
+# idempotence step and verify. The three steps that only plan (check-fresh,
+# check-configured and Molecule's own check) are the plan scenario's. Molecule's check
+# alone recreates the container and applies the role again, and with all eight steps
+# this shard came within seconds of the 25-minute limit. The README's time bar says
+# how each shard is measured.
+check-fresh
+check-configured
+molecule-check

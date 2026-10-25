@@ -1,10 +1,12 @@
+**Bias for action.** Delivering something and failing fast leads to better progress and informed decision making. Do not agonise theoretically over the exact behaviour of a system which you can observe the behaviour of: run it in the cheapest real place (a test, a check-mode run, the live API, a pre-live host) and decide from what it does. The workspace `AUTHORISATIONS.md` and never-list still apply.
+
 # CLAUDE.md — branchLeft Shared Infra
 
 `mail/`, the self-hosted mail delivery host, and `hetzner/`, the network, host and edge (Caddy + CrowdSec) modules the estate now runs on. Also `sites.ts`/`siteTypes.ts` at the repository root — the hostname registry the Hetzner edge's Caddy renderer (`hetzner/edge/render.ts`) reads; onboarding a site is one entry there.
 
 **DNS: `hetzner/dns/`.** The `branchleft.co.uk` zone is declared record for record in `hetzner/dns/zone.json` and created at Hetzner DNS by the `branchleft-hetzner-dns` stack. Until `hetzner/dns/RUNBOOK-dns-cutover.md` has been run, the registrar still serves the zone and its panel is the copy that answers; `hetzner/dns/zonecheck.py compare` says whether the two agree. That stack has no CI apply yet: its applies are hand-gated, per the runbook.
 
-**GCP edge removed.** The repository root used to hold a second Pulumi program — a GCP global load balancer, Cloud Armor policy and certificate map (`edge.ts` and friends). The GCP estate was destroyed 2026-09-13 and that program, its CI apply jobs and `CLOUD-ARMOR-BASELINE.md` were deleted 2026-09-17 in the GCP wind-down (branchLeft/workspace#1000). `RUNBOOK-edge-state-move.md` is kept as the historical record of that program's one state move; nothing in it is actionable any more.
+**Edge program removed.** The repository root no longer holds a second Pulumi program: the old edge program and its CI apply jobs were deleted (branchLeft/workspace#1000). `RUNBOOK-edge-state-move.md` is kept as the historical record of that program's one state move; nothing in it is actionable any more.
 
 ## Hard operational rules
 

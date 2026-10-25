@@ -347,9 +347,8 @@ any pattern-based restriction into argument injection.
 host running ten.** The unscoped form lets the caller name the stack, so on a
 bin-packed app host every repository holding that key can pin an arbitrary
 image into every other tenant's Compose slot and restart it. That is complete
-takeover of a co-tenant's site by a credential meant only to redeploy its own,
-and it is the primitive the move off per-service Cloud Run identities
-introduces. Slot keys are the replacement.
+takeover of a co-tenant's site by a credential meant only to redeploy its own.
+Slot keys are the replacement.
 
 ### Slot keys
 
@@ -532,6 +531,9 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | `branchleft-compose@db`                                    | `branchLeft/ghost-platform`, `db/stack/compose.yml`                                                      | no                |
 | `branchleft-compose@blog`, and one per further tenant slug | nowhere: rendered by `branchLeft/ghost-platform`'s `infra/tenant/compose.ts`                             | no                |
 | `branchleft-compose@demo-`, the prefix of each demo slot   | nowhere: provisioned by `branchLeft/ghost-platform`'s `demo-host/provision`                              | no                |
+| `branchleft-compose@demo-0-a`, one named demo instance     | nowhere: provisioned by `branchLeft/ghost-platform`'s `demo-host/provision`                              | no                |
+| `branchleft-compose@demo-host`, which is not an instance   | nowhere: the directory the `demo1_build` role stages `branchLeft/ghost-platform`'s demo programs into    | no                |
+| `branchleft-compose@demo-sidecar`, which is no instance    | nowhere: the sidecar's image pin file, read by `branchLeft/ghost-platform`'s `demo-host/provision`       | no                |
 | `branchleft-compose@broker`, which is not an instance      | nowhere: the broker program has its own unit, built from `branchLeft/ghost-platform`'s `services/broker` | no                |
 | `branchleft-compose@backup-worker`                         | nowhere: a systemd unit, not a Compose stack                                                             | no                |
 | `branchleft-compose@state-copy`                            | nowhere: a systemd unit, not a Compose stack                                                             | no                |
@@ -577,15 +579,14 @@ python3 -m unittest discover -s scripts -p 'test_*.py'
 ## The edge stack
 
 `edge/` is the first per-role service stack: Caddy terminating TLS in front of
-CrowdSec, replacing the GCP load balancer's Cloud Armor policy and rate limit.
-It is not a Pulumi project — nothing in it is a cloud resource. It is a
+CrowdSec. It is not a Pulumi project — nothing in it is a cloud resource. It is a
 renderer, its tests, and the directory those tests produce.
 
 - `edge/render.ts` derives the Caddy configuration and the CrowdSec acquisition
   files from the hostname registry in the repository root's `sites.ts`. The
   registry is the only hostname list; a hostname written directly into a Caddy
-  configuration is one the retiring GCP edge does not know about, which is the
-  class of stray record a cutover has to hunt for.
+  configuration is one the renderer does not know about, which is the class of
+  stray record a cutover has to hunt for.
 - `edge/posture.ts` is the one place enforcement changes. Both switches start
   non-enforcing, and each is flipped by a pull request: the rendered files are
   committed, so a flip is a diff in the exact configuration the host will run,

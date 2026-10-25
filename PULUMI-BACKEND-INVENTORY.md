@@ -24,11 +24,9 @@ disk — that runbook lives under `hetzner/`.
 
 ## 1. Every Pulumi stack in the estate
 
-**Eight stacks today, not nine.** `branchleft-shared-infra/production` — the
-GCP edge stack that used to be the first row of this table — was deleted
-2026-09-17 in the GCP wind-down (branchLeft/workspace#1000): the GCP estate
-was destroyed 2026-09-13, and the program (`edge.ts` and friends) went with
-it, not merely migrated, so it carries no migration state to attest and
+**Eight stacks today, not nine.** The retired edge stack that used to be the
+first row of this table was deleted with its program (branchLeft/workspace#1000),
+so it carries no migration state to attest and
 `scripts/pulumi-stack-inventory.json` no longer has an entry for it.
 `branchleft-ghost-platform-hosts`, previously missing from the inventory
 JSON, was added there since (branchLeft/shared-infra#173, closed) and is

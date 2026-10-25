@@ -115,8 +115,8 @@ rule and two forwarding rules. The role does not touch those.
 The role holds no copy of the files it delivers. Each copy task's `src` is the same-named
 file in `hetzner/provision`, built from `role_path` (`{{ role_path }}/../../../hetzner/provision/`),
 so a change to a reconciler or a unit in its own directory is what the next apply delivers,
-and the role cannot drift from it. The unit tests fail if the role keeps a `files/` directory
-or a copy task reads from anywhere else.
+and the role cannot drift from it. `ansible/checks/check_role_paths.py` fails if another
+role writes a path this role writes.
 
 ## The revert guard
 
@@ -145,7 +145,7 @@ From the repository root, with the tools installed as `ansible/README.md` descri
 
 ```text
 python3 -m venv .venv
-.venv/bin/pip install --require-virtualenv --require-hashes -r ansible/requirements.txt
+# Install the lock with the one recipe: ansible/README.md, "Install, and install with no network".
 .venv/bin/python ansible/harness/run_harness.py ansible/roles/egress_nat
 ```
 

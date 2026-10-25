@@ -152,13 +152,10 @@
     group: '{{ broker_deploy_user }}'
     mode: '0755'
 
+# Inside the broker's own directory, so read without following a link and
+# refused when it is one (the file explains why).
 - name: Create the directory of the slot admin keys, closed to everyone but the broker
-  ansible.builtin.file:
-    path: '{{ broker_deploy_admin_keys_dir }}'
-    state: directory
-    owner: '{{ broker_deploy_user }}'
-    group: '{{ broker_deploy_user }}'
-    mode: '0700'
+  ansible.builtin.include_tasks: _admin_keys_dir.yml
 
 - name: Create the releases directory
   ansible.builtin.file:

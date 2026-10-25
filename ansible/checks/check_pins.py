@@ -6,15 +6,49 @@ It fails on anything ansible/README.md lists under "How a check proves the lock"
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from types import ModuleType
 
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# install_runtime.py is the one home of the lock reader and of the marker set. It runs alone on
+# the host under python3 -I, with nothing installed, so it cannot be imported from here. This
+# file loads it by path and keeps no copy, so a change to the reader is the change this checks.
+RUNTIME_PROGRAM = (
+    REPO_ROOT / "ansible" / "roles" / "ansible_runtime" / "files" / "install_runtime.py"
+)
+
+
+def load_runtime_program() -> ModuleType:
+    """Load install_runtime.py by path under its own name and return the module.
+
+    Raises:
+        ImportError: The file cannot be loaded as a module.
+    """
+    spec = importlib.util.spec_from_file_location("install_runtime", RUNTIME_PROGRAM)
+    if spec is None or spec.loader is None:
+        raise ImportError(RUNTIME_PROGRAM.name)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+RUNTIME: ModuleType = load_runtime_program()
+# These three come from the program and are not copied: the reader that joins the lock's lines,
+# the encoding check that runs before it, and the set of characters a marker may hold. The
+# patterns below (REQUIREMENT, VERSION, HASH) are this check's own: the program's patterns say
+# what it will install, these say what the lock must also be (a pin of a named tool).
+logical_lines = RUNTIME.logical_lines
+check_lock_encoding = RUNTIME.check_lock_encoding
+MARKER_CHARS: str = RUNTIME.MARKER_CHARS
 
 # The community package carries the collections, so it is pinned like a tool.
 # The others are the tools ANS-4 names and yamllint, which the harness runs
@@ -38,7 +72,7 @@ REQUIRED_TOOLS = frozenset(
 VERSION = r"\d+(?:\.\d+)*(?:(?:a|b|rc)\d+)?(?:\.post\d+)?"
 REQUIREMENT = re.compile(
     rf"(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[A-Za-z0-9._,-]+\])?==(?P<version>{VERSION})"
-    r"(?: ?; ?[A-Za-z0-9_.'\" =!<>()]+?)?"
+    rf"(?: ?; ?{MARKER_CHARS}+?)?"
     r"(?P<hashes>(?: +--hash=sha256:[0-9a-f]{64})*)",
     re.ASCII,
 )
@@ -65,36 +99,17 @@ HEADER_FACTS = (
     ("--python-version", r"--python-version \d+\.\d+"),
 )
 
+# The pip the lock-reader parity test asks: one hashed line in its own file, outside the lock.
+PIP_PIN_FILE = Path("checks") / "pip-requirements.txt"
+PIP_PIN = re.compile(rf"pip==(?P<version>{VERSION}) +--hash=sha256:[0-9a-f]{{64}}", re.ASCII)
+
 LINT_REPOSITORY = "https://github.com/ansible/ansible-lint"
-# Where Dependabot must watch the lock: it is the only thing that raises a bump
-# of the package that carries the collections. The `uv` ecosystem is the one that
-# recompiles a `uv pip compile` lock from requirements.in; `pip` would run
-# pip-compile, which cannot write a universal lock.
-UPDATE_ECOSYSTEM = "uv"
-UPDATE_DIRECTORY = "/ansible"
+# Where Dependabot must watch: it is the only thing that raises a bump. The `uv` ecosystem
+# recompiles the `uv pip compile` lock from requirements.in (`pip` would run pip-compile, which
+# cannot write a universal lock); the `pip` ecosystem reads the one-line pip pin.
+UPDATE_ROUTES = (("uv", "/ansible"), ("pip", "/ansible/checks"))
 # Anything that makes a copy of a collection live in git hides it from the lock.
 COPY_SUFFIXES = (".tar.gz", ".tgz", ".tar")
-
-
-def logical_lines(text: str) -> list[tuple[int, str]]:
-    """Return the requirement lines of a pip file, with backslash continuations joined."""
-    joined: list[tuple[int, str]] = []
-    pending = ""
-    start = 0
-    for number, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
-        if not pending and (not line or line.startswith("#")):
-            continue
-        if not pending:
-            start = number
-        if line.endswith("\\"):
-            pending += line[:-1].rstrip() + " "
-            continue
-        joined.append((start, (pending + line).strip()))
-        pending = ""
-    if pending:
-        joined.append((start, pending.strip()))
-    return joined
 
 
 def locked_packages(requirements: Path) -> tuple[dict[str, str], list[str]]:
@@ -102,9 +117,17 @@ def locked_packages(requirements: Path) -> tuple[dict[str, str], list[str]]:
     findings: list[str] = []
     pins: dict[str, str] = {}
     try:
-        text = requirements.read_text(encoding="utf-8")
+        data = requirements.read_bytes()
     except OSError as error:
         return pins, [f"{requirements.name} cannot be read: {type(error).__name__}"]
+    try:
+        check_lock_encoding(data)
+    except RUNTIME.Refusal as refusal:
+        return pins, [f"{requirements.name} {refusal.reason.value} ({refusal.detail})"]
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return pins, [f"{requirements.name} is not UTF-8 text"]
     for number, line in logical_lines(text):
         match = REQUIREMENT.fullmatch(line)
         if match is None:
@@ -190,7 +213,7 @@ def check_provenance(ansible_dir: Path, pins: dict[str, str]) -> list[str]:
     chosen, findings = read_input(ansible_dir / INPUT_FILE)
     try:
         text = (ansible_dir / "requirements.txt").read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return findings
     findings.extend(check_header(text))
     direct: set[str] = set()
@@ -245,22 +268,52 @@ def check_no_copies(ansible_dir: Path) -> list[str]:
     return [f"{name} is a copy of third-party code; the lock carries collections" for name in found]
 
 
+def read_pip_pin(path: Path) -> tuple[str | None, list[str]]:
+    """Return the pip version a pin file pins, and a finding for each way it is not that alone.
+
+    The file is exactly one requirement, `pip==X.Y.Z` with one sha256, and comments. The lock
+    reader of the install program reads it, so a continuation or a second hash is read as pip does.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        return None, [f"{path.name} cannot be read: {type(error).__name__}"]
+    try:
+        check_lock_encoding(data)
+    except RUNTIME.Refusal as refusal:
+        return None, [f"{path.name} {refusal.reason.value} ({refusal.detail})"]
+    try:
+        lines = logical_lines(data.decode("utf-8"))
+    except UnicodeDecodeError:
+        return None, [f"{path.name} is not UTF-8 text"]
+    if len(lines) != 1:
+        return None, [f"{path.name} must hold exactly one requirement line, it holds {len(lines)}"]
+    number, line = lines[0]
+    match = PIP_PIN.fullmatch(line)
+    if match is None:
+        return None, [f"{path.name} line {number} is not pip==version with one sha256: {line!r}"]
+    return match["version"], []
+
+
 def check_dependabot(config: Path) -> list[str]:
-    """Check Dependabot is set to watch the lock, so an upstream release raises a pull request."""
+    """Check Dependabot watches the lock and the pip pin, so a new release raises a pull request."""
     document, problem = load_yaml(config)
     if problem is not None:
         return [problem]
     updates = document.get("updates") if isinstance(document, dict) else None
-    entries = updates if isinstance(updates, list) else []
-    for entry in entries:
-        if (
-            isinstance(entry, dict)
-            and entry.get("package-ecosystem") == UPDATE_ECOSYSTEM
-            and entry.get("directory") == UPDATE_DIRECTORY
+    entries = (
+        [entry for entry in updates if isinstance(entry, dict)] if isinstance(updates, list) else []
+    )
+    return [
+        f"{config.name} has no scheduled {ecosystem} update for {directory}"
+        for ecosystem, directory in UPDATE_ROUTES
+        if not any(
+            entry.get("package-ecosystem") == ecosystem
+            and entry.get("directory") == directory
             and isinstance(entry.get("schedule"), dict)
-        ):
-            return []
-    return [f"{config.name} has no scheduled {UPDATE_ECOSYSTEM} update for {UPDATE_DIRECTORY}"]
+            for entry in entries
+        )
+    ]
 
 
 def lint_hook_revs(config: Path) -> tuple[list[str], list[str]]:
@@ -325,6 +378,7 @@ def run_checks(root: Path) -> tuple[list[str], list[str]]:
     findings.extend(check_provenance(ansible_dir, pins))
     findings.extend(check_no_galaxy_collections(ansible_dir / "requirements.yml"))
     findings.extend(check_no_copies(ansible_dir))
+    findings.extend(read_pip_pin(ansible_dir / PIP_PIN_FILE)[1])
     findings.extend(check_dependabot(root / ".github" / "dependabot.yml"))
     scenario_findings, scenarios = check_scenarios(ansible_dir)
     findings.extend(scenario_findings)

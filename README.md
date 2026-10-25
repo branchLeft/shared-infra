@@ -6,8 +6,8 @@ registry they share:
 - **`mail/`** — the self-hosted mail delivery host (`mx1`), its own Pulumi
   project.
 - **`hetzner/`** — the estate's network and host modules, and the edge VM
-  (`edge1`) running Caddy and CrowdSec, replacing what used to be a GCP
-  load balancer. See [`hetzner/README.md`](hetzner/README.md).
+  (`edge1`) running Caddy and CrowdSec. See
+  [`hetzner/README.md`](hetzner/README.md).
 - **`sites.ts`** / **`siteTypes.ts`** at the repository root — the hostname
   registry `hetzner/edge/render.ts` and `hetzner/monitoring/render.ts` read.
   Adding a site is one entry here; see that file's own docstring.
@@ -19,26 +19,6 @@ registry they share:
 > `encryptionsalt`: an operator supplies each of those out of band. A tenant
 > who prefers not to be named is served from a hostname that does not name
 > them, in their own infrastructure repository, and never appears here.
-
-## History: the GCP edge
-
-A GCP global load balancer, Cloud Armor policy and certificate map used to
-front every branchLeft hostname from this repo's root (`edge.ts` and its
-`deploy-plan`/`deploy-apply` CI jobs). Extracted from `website/infra/edge.ts`
-2026-08-04/05 via a Pulumi state move — [`RUNBOOK-edge-state-move.md`](RUNBOOK-edge-state-move.md)
-is the record of that move, including appendix A's live-vs-checkpoint Cloud
-Armor drift incident.
-
-It was wound down in favour of the Hetzner edge above over August–September
-2026, the GCP estate was destroyed 2026-09-13, and the program itself —
-`edge.ts`, `serviceAccounts.ts`, `workloadIdentity.ts`, `config.ts`,
-`index.ts`, its CI jobs, `CLOUD-ARMOR-BASELINE.md` and `RUNBOOK-ci-bootstrap.md`
-— was deleted 2026-09-17 in the GCP wind-down (branchLeft/workspace#1000).
-`sites.ts`/`siteTypes.ts` outlived it: they were never GCP-specific, and the
-Hetzner edge reads them still. A `cloudRunService`/`region` pair on an
-existing site entry is what `edge.ts` used to read and is now vestigial —
-nothing reads it — kept rather than stripped as a side effect of that
-deletion.
 
 ## Mail delivery host (`mail/`)
 
@@ -85,9 +65,9 @@ npx tsc --noEmit                              # what CI type-checks with
 
 ## Related documents
 
-- [`RUNBOOK-edge-state-move.md`](RUNBOOK-edge-state-move.md) — history: the
-  now-deleted GCP edge's one state move and its Cloud Armor drift incident
-  (appendix A). Nothing in it is actionable any more.
+- [`RUNBOOK-edge-state-move.md`](RUNBOOK-edge-state-move.md) — history: one
+  past Pulumi state move and its policy drift incident (appendix A). Nothing
+  in it is actionable any more.
 - [`hetzner/RUNBOOK-existing-stack-migration.md`](hetzner/RUNBOOK-existing-stack-migration.md)
   — moving every stack in the estate off the shared GCP KMS secrets provider
   and off `gs://` state.

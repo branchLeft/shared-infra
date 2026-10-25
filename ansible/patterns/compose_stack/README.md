@@ -302,7 +302,7 @@ From the repository root, with Docker running locally and Python 3.12 or later.
 
 ```text
 python3 -m venv .venv
-.venv/bin/pip install -r ansible/requirements.txt
+# Install the lock with the one recipe: ansible/README.md, "Install, and install with no network".
 .venv/bin/python ansible/harness/run_harness.py ansible/patterns/compose_stack
 ```
 

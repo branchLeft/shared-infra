@@ -134,7 +134,7 @@ describes:
 
 ```text
 python3 -m venv .venv
-.venv/bin/pip install -r ansible/requirements.txt
+# Install the lock with the one recipe: ansible/README.md, "Install, and install with no network".
 .venv/bin/python ansible/harness/run_harness.py ansible/roles/db1_grants
 .venv/bin/python -m unittest discover -b -s ansible/roles/db1_grants/tests/unit -p "test_*.py"
 ```
@@ -150,9 +150,8 @@ fetches the three pinned programs from ghost-platform on the controller, so the
 harness needs the network too; the container is given the fetched bytes.
 
 **Where the programs live.** The programs are ghost-platform's own code and that
-repository is their one home. This role holds no copy of any of them (the unit test
-`test_no_program_is_copied_into_the_role` keeps it that way, as it does for
-`db1_backup_timers`). The commit and the digests are in `vars/main.yml`; the scenario
+repository is their one home. This role holds no copy of any of them (the DB-1 gate of
+the standards flags a copy, as it does for `db1_backup_timers`). The commit and the digests are in `vars/main.yml`; the scenario
 and the unit tests fetch each program from `db1_grants_source_raw_base` at that
 commit and refuse bytes that are not the pinned ones.
 
