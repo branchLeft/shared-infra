@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 """Structural check of the control-plane stack files, on their parsed YAML.
-
-The check reads keys, not spellings. Quoting, flow style, anchors and merge
-keys all parse to the key they name, and Compose reads them the same way, so
-none of them can slip past a check that matches text.
-
-The checker refuses the Zitadel master key in any environment entry, whatever
-its spelling, and in any --masterkey* command flag except the exact pair
---masterkeyFile /run/secrets/zitadel-masterkey.
-
+Reads keys, not spellings: quoting, flow style, anchors and merge keys all
+parse to the key they name, as Compose reads them, so none can slip past a
+check that matches text. Refuses the Zitadel master key in any environment
+entry, whatever its spelling, and in any --masterkey* command flag except the
+exact pair --masterkeyFile /run/secrets/zitadel-masterkey.
 Usage: stack_keys_check.py FILE...
 Exit 0: clean. Exit 1: at least one violation, printed one per line.
 Exit 2: a file could not be read or parsed.
