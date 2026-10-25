@@ -1,0 +1,13 @@
+---
+# The role as a run that applies for real, started by verify as its own
+# ansible-playbook (cases p11c and p11d, tasks/crash_run.yml) so that a failure in the
+# middle ends that run and not verify. It is not one of Molecule's own steps.
+# The role is included, not listed under `roles:`, so that ansible-lint's syntax check
+# does not look for it by name outside the scenario, where Molecule alone links it.
+- name: Apply
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.edge_stack

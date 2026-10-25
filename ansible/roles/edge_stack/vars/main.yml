@@ -1,0 +1,60 @@
+---
+# What the role carries. These are constants of the stack, not inputs, so they
+# live here and not in defaults/: a caller cannot override them.
+
+# The directory the shared Compose unit template derives from the instance name
+# `edge`, and the files the unit and the deploy wrapper read.
+edge_stack_project_dir: /opt/branchleft/edge
+edge_stack_env_file: /etc/branchleft/edge.env
+edge_stack_image_env_file: /etc/branchleft/edge.image.env
+edge_stack_lock_file: /etc/branchleft/edge.deploy.lock
+edge_stack_unit: branchleft-compose@edge.service
+
+# The unit file states that count as enabled.
+edge_stack_enabled_states:
+  - enabled
+  - enabled-runtime
+
+# The pin: exactly one line, IMAGE= and a digest-pinned reference, nothing after
+# it. One pattern for both readers (Python's and grep -E), so it is written in the
+# subset they share, and the locked script re-checks the file with it inside the
+# lock.
+edge_stack_image_pin_pattern: '^IMAGE=[a-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$'
+
+# One stamp per class of file. Each holds a sha256 and a newline, or `pending`
+# while an action is under way, root only (README, "Restart shape"). The _stamp_*.yml
+# task files are the one place in this role that reads or writes a stamp.
+edge_stack_stamp_dir: /var/lib/branchleft
+edge_stack_stamp_files:
+  caddy: /var/lib/branchleft/edge.caddy.applied
+  compose: /var/lib/branchleft/edge.compose.applied
+  crowdsec: /var/lib/branchleft/edge.crowdsec.applied
+
+# What a stamp holds when it is not a fingerprint. `absent` is what a read reports for a
+# stamp that is not there; `pending` is what the mark writes. A fingerprint is always a
+# sha256 computed in _decide.yml, so `pending` is never taken for one.
+edge_stack_stamp_absent: absent
+edge_stack_stamp_pending: pending
+
+# The candidates (a Caddyfile and a Compose file that have not been validated yet)
+# wait here, closed to root, and the directory is removed at the end of every run.
+edge_stack_candidate_dir: /var/lib/branchleft/edge.candidate
+
+# The classes. A file in the stack directory that is in none of them is
+# refused. Paths are relative to the stack directory.
+edge_stack_caddy_file: Caddyfile
+edge_stack_compose_file: compose.yml
+edge_stack_crowdsec_files:
+  - crowdsec/config.yaml.local
+# Every regular file directly in this directory is CrowdSec's. It is the one
+# directory the role prunes.
+edge_stack_acquis_dir: crowdsec/acquis.d
+
+# The directories of the stack; the project directory is created before them.
+edge_stack_dirs:
+  - crowdsec
+  - crowdsec/acquis.d
+
+# Exit codes of the locked script. 75 is the lock's own (flock -E 75): the script
+# never exits with it, so a timeout cannot be taken for a failed action.
+edge_stack_lock_exit_code: 75

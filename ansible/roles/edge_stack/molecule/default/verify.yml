@@ -1,0 +1,1852 @@
+---
+# Each case is a block with its own tag (p0, p1, ...), starts from the converged host
+# with the repository's stack (tasks/reset.yml), makes one change, applies the role and
+# asserts on the stand-ins' calls, the stamps and the files. Cases never rely on one
+# another, so one can be run alone (`molecule verify -- --tags p7`). What must be on
+# the host is derived from the repository (the real stack directory), not from the
+# role, so a file the role stopped carrying fails here.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  vars:
+    edge_stack_verify_real_stack: '{{ playbook_dir }}/../../files/stack'
+    edge_stack_verify_dir: /opt/branchleft/edge
+    edge_stack_verify_pin_good: IMAGE=ghcr.io/branchleft/edge-caddy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    edge_stack_verify_hex64: '^[0-9a-f]{64}$'
+    edge_stack_verify_pin_other: ghcr.io/branchleft/edge-caddy@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+    # What the role gives the locked script, for the case that runs the script by itself. Every
+    # action is off, so only the pin can stop it.
+    edge_stack_verify_script_env:
+      EDGE_PROJECT_DIR: /opt/branchleft/edge
+      EDGE_IMAGE_ENV: /etc/branchleft/edge.image.env
+      EDGE_ENV_FILE: /etc/branchleft/edge.env
+      EDGE_IMAGE_PATTERN: '^IMAGE=[a-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$'
+      EDGE_UNIT: branchleft-compose@edge.service
+      EDGE_CADDY_CANDIDATE: /nonexistent/Caddyfile
+      EDGE_CADDY_WRITE: '0'
+      EDGE_CADDY_RELOAD: '0'
+      EDGE_COMPOSE_RESTART: '0'
+      EDGE_CROWDSEC_RESTART: '0'
+      EDGE_WAIT_TRIES: '1'
+      EDGE_WAIT_INTERVAL: '1'
+  tasks:
+    - name: Make a directory for the variants of the stack, on the machine that runs the test
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: edge-stack-verify-
+      register: edge_stack_verify_tmp_dir
+      delegate_to: localhost
+      tags: [always]
+
+    - name: Keep the path of that directory
+      ansible.builtin.set_fact:
+        edge_stack_verify_tmp: '{{ edge_stack_verify_tmp_dir.path }}'
+      tags: [always]
+
+    - name: Hash the repository's files, on the machine that runs the test
+      ansible.builtin.stat:
+        path: '{{ edge_stack_verify_real_stack }}/{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - Caddyfile
+        - compose.yml
+        - crowdsec/config.yaml.local
+      register: edge_stack_verify_real_stats
+      delegate_to: localhost
+      tags: [always]
+
+    - name: Keep those hashes
+      ansible.builtin.set_fact:
+        edge_stack_verify_real_sha:
+          caddy: '{{ edge_stack_verify_real_stats.results[0].stat.checksum }}'
+          compose: '{{ edge_stack_verify_real_stats.results[1].stat.checksum }}'
+          config: '{{ edge_stack_verify_real_stats.results[2].stat.checksum }}'
+      tags: [always]
+
+    - name: Work out every file that must be on the host
+      ansible.builtin.find:
+        paths: '{{ edge_stack_verify_real_stack }}'
+        recurse: true
+        file_type: file
+        hidden: true
+        follow: false
+      register: edge_stack_verify_real_files
+      delegate_to: localhost
+      tags: [always]
+
+    - name: Bring the host to the converged host with the real role and record it
+      ansible.builtin.include_tasks:
+        file: tasks/baseline.yml
+        apply:
+          tags: [always]
+      tags: [always]
+
+    # ----- p0: the converged host is what the repository says, in the modes the containers need -----
+    - name: Case p0, the files, directories and stamps of the converged host
+      tags: [p0]
+      block:
+        - name: Name the files and the directories that must be there
+          ansible.builtin.set_fact:
+            edge_stack_verify_files: >-
+              {{ edge_stack_verify_real_files.files | map(attribute='path') | map('ansible.builtin.relpath', edge_stack_verify_real_stack) | sort | list }}
+            edge_stack_verify_dirs: [crowdsec, crowdsec/acquis.d]
+
+        - name: Read each delivered file and directory on the host
+          ansible.builtin.stat:
+            path: '{{ edge_stack_verify_dir }}/{{ item }}'
+            checksum_algorithm: sha256
+          loop: '{{ edge_stack_verify_files + edge_stack_verify_dirs + [""] }}'
+          register: edge_stack_verify_p0_stats
+          loop_control:
+            label: '{{ item }}'
+
+        - name: Read the same files in the repository
+          ansible.builtin.stat:
+            path: '{{ edge_stack_verify_real_stack }}/{{ item }}'
+            checksum_algorithm: sha256
+          loop: '{{ edge_stack_verify_files }}'
+          register: edge_stack_verify_p0_sources
+          delegate_to: localhost
+          loop_control:
+            label: '{{ item }}'
+
+        - name: Assert each file is root's, mode 0644, byte for byte its source
+          ansible.builtin.assert:
+            that:
+              - item.0.stat.exists
+              - item.0.stat.isreg
+              - item.0.stat.pw_name == 'root'
+              - item.0.stat.gr_name == 'root'
+              - item.0.stat.mode == '0644'
+              - item.0.stat.checksum == item.1.stat.checksum
+            quiet: true
+            fail_msg: '{{ item.0.item }} is missing, is not root:root 0644, or differs from the repository.'
+          loop: '{{ edge_stack_verify_p0_stats.results[: edge_stack_verify_files | length] | zip(edge_stack_verify_p0_sources.results) | list }}'
+          loop_control:
+            label: '{{ item.0.item }}'
+
+        - name: Assert each directory is root's, mode 0755
+          ansible.builtin.assert:
+            that:
+              - item.stat.exists
+              - item.stat.isdir
+              - item.stat.pw_name == 'root'
+              - item.stat.gr_name == 'root'
+              - item.stat.mode == '0755'
+            quiet: true
+            fail_msg: '{{ edge_stack_verify_dir }}/{{ item.item }} is missing, or is not a root-owned directory with mode 0755.'
+          loop: '{{ edge_stack_verify_p0_stats.results[edge_stack_verify_files | length :] }}'
+          loop_control:
+            label: '{{ edge_stack_verify_dir }}/{{ item.item }}'
+
+        - name: Read the stamps and their directory
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - /var/lib/branchleft
+            - /var/lib/branchleft/edge.caddy.applied
+            - /var/lib/branchleft/edge.compose.applied
+            - /var/lib/branchleft/edge.crowdsec.applied
+          register: edge_stack_verify_p0_stamps
+
+        - name: Assert the directory of the stamps is 0755 and each stamp is root's, mode 0600, one sha256 and a newline
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_p0_stamps.results[0].stat.isdir
+              - edge_stack_verify_p0_stamps.results[0].stat.mode == '0755'
+              - edge_stack_verify_p0_stamps.results[1:] | map(attribute='stat.mode') | unique | list == ['0600']
+              - edge_stack_verify_p0_stamps.results[1:] | map(attribute='stat.pw_name') | unique | list == ['root']
+              - edge_stack_verify_p0_stamps.results[1:] | map(attribute='stat.size') | unique | list == [65]
+              - edge_stack_verify_base.stamps.caddy is match(edge_stack_verify_hex64)
+              - edge_stack_verify_base.stamps.compose is match(edge_stack_verify_hex64)
+              - edge_stack_verify_base.stamps.crowdsec is match(edge_stack_verify_hex64)
+              - not edge_stack_verify_base.candidate_exists
+              - edge_stack_verify_base.unit_active == 'active'
+              - edge_stack_verify_base.unit_enabled == 'enabled'
+            quiet: true
+            fail_msg: A stamp, the directory of the stamps or the unit is not as the README says.
+
+    # ----- p1: nothing changed, nothing done -----
+    - name: Case p1, a run with nothing changed calls nothing and moves no stamp
+      tags: [p1]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Apply the role with nothing changed
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p1
+
+        - name: Assert no call was made and no stamp moved
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p1.failed
+              - edge_stack_verify_runs.p1.new == []
+              - edge_stack_verify_runs.p1.after.stamps == edge_stack_verify_runs.p1.before.stamps
+              - edge_stack_verify_runs.p1.after.caddy_inode == edge_stack_verify_runs.p1.before.caddy_inode
+            quiet: true
+            fail_msg: A run with nothing changed called {{ edge_stack_verify_runs.p1.new }} or moved a stamp.
+
+    # ----- p2: a Caddyfile-only change is validated, written in place and reloaded, never restarted -----
+    - name: Case p2, a change to the Caddyfile alone
+      tags: [p2]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p2
+            edge_stack_verify_variant_edits:
+              - { path: Caddyfile, append: "\n# case p2\n" }
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p2
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p2.path }}'
+
+        - name: Assert one validation and one reload, no restart, no up, written into the same inode
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p2.failed
+              - edge_stack_verify_runs.p2.kinds == ['validate-caddy', 'caddy-reload']
+              - edge_stack_verify_runs.p2.after.caddy_sha == edge_stack_verify_variants.p2.caddy
+              - edge_stack_verify_runs.p2.after.caddy_inode == edge_stack_verify_runs.p2.before.caddy_inode
+              - edge_stack_verify_runs.p2.after.view_sha == edge_stack_verify_variants.p2.caddy
+              - edge_stack_verify_runs.p2.after.stamps.caddy != edge_stack_verify_runs.p2.before.stamps.caddy
+              - edge_stack_verify_runs.p2.after.stamps.caddy is match(edge_stack_verify_hex64)
+              - edge_stack_verify_runs.p2.after.stamps.compose == edge_stack_verify_runs.p2.before.stamps.compose
+              - edge_stack_verify_runs.p2.after.stamps.crowdsec == edge_stack_verify_runs.p2.before.stamps.crowdsec
+              - not edge_stack_verify_runs.p2.after.candidate_exists
+            quiet: true
+            fail_msg: >-
+              A change to the Caddyfile alone did not make exactly a validation and a reload, written in place.
+              The calls were {{ edge_stack_verify_runs.p2.kinds }}; the sha on the host {{ edge_stack_verify_runs.p2.after.caddy_sha }}, in the
+              container's view {{ edge_stack_verify_runs.p2.after.view_sha }}, wanted {{ edge_stack_verify_variants.p2.caddy }}.
+
+    # ----- p3: a CrowdSec-only change restarts the container once; the prune stops at the acquisition directory -----
+    - name: Case p3, a change to the CrowdSec files alone, a stale acquisition file and a stray file
+      tags: [p3]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Put a stale acquisition file and a stray file outside the directory on the host
+          ansible.builtin.copy:
+            content: "# stale\n"
+            dest: '{{ edge_stack_verify_dir }}/{{ item }}'
+            owner: root
+            group: root
+            mode: '0644'
+          loop:
+            - crowdsec/acquis.d/zzz-stale.yaml
+            - crowdsec/stray.txt
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p3
+            edge_stack_verify_variant_edits:
+              - { path: crowdsec/config.yaml.local, append: "\n# case p3\n" }
+              - { path: crowdsec/acquis.d/caddy.yaml, append: "\n# case p3\n" }
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p3
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p3.path }}'
+
+        - name: Look at the stray file
+          ansible.builtin.stat:
+            path: '{{ edge_stack_verify_dir }}/crowdsec/stray.txt'
+            get_checksum: false
+          register: edge_stack_verify_p3_stray
+
+        - name: Assert one restart of CrowdSec and nothing else, the stale file pruned and the stray file left
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p3.failed
+              - edge_stack_verify_runs.p3.kinds == ['crowdsec-restart']
+              - edge_stack_verify_runs.p3.after.config_sha == edge_stack_verify_variants.p3.config
+              - edge_stack_verify_runs.p3.after.acquis == ['appsec.yaml', 'caddy.yaml']
+              - edge_stack_verify_p3_stray.stat.exists
+              - edge_stack_verify_runs.p3.after.stamps.crowdsec != edge_stack_verify_runs.p3.before.stamps.crowdsec
+              - edge_stack_verify_runs.p3.after.stamps.caddy == edge_stack_verify_runs.p3.before.stamps.caddy
+              - edge_stack_verify_runs.p3.after.stamps.compose == edge_stack_verify_runs.p3.before.stamps.compose
+            quiet: true
+            fail_msg: >-
+              A change to the CrowdSec files did not make exactly one restart of the container, or the prune
+              was wrong. The calls were {{ edge_stack_verify_runs.p3.kinds }}; the acquisition directory holds
+              {{ edge_stack_verify_runs.p3.after.acquis }}; the stray file is there: {{ edge_stack_verify_p3_stray.stat.exists }}.
+
+    # ----- p4: a Compose-only change restarts the unit, and the unit is the only path that runs up -----
+    - name: Case p4, a change to the Compose file alone
+      tags: [p4]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p4
+            edge_stack_verify_variant_edits:
+              - { path: compose.yml, append: "\n# case p4\n" }
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p4
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p4.path }}'
+
+        - name: Assert the Compose file was validated, the unit restarted once, and no docker compose up was made
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p4.failed
+              - edge_stack_verify_runs.p4.kinds == ['validate-compose', 'unit-start']
+              - edge_stack_verify_runs.p4.new | select('search', ' up( |$)') | list | length == 0
+              - edge_stack_verify_runs.p4.after.compose_sha == edge_stack_verify_variants.p4.compose
+              - edge_stack_verify_runs.p4.after.stamps.compose != edge_stack_verify_runs.p4.before.stamps.compose
+              - edge_stack_verify_runs.p4.after.stamps.caddy == edge_stack_verify_runs.p4.before.stamps.caddy
+              - edge_stack_verify_runs.p4.after.stamps.crowdsec == edge_stack_verify_runs.p4.before.stamps.crowdsec
+              - edge_stack_verify_runs.p4.after.unit_active == 'active'
+            quiet: true
+            fail_msg: >-
+              A change to the Compose file did not make exactly a validation and one restart of the unit.
+              The calls were {{ edge_stack_verify_runs.p4.new }}.
+
+    # ----- p5: a rotated key reaches the containers by restarting the unit -----
+    - name: Case p5, a rotated key in the secrets file
+      tags: [p5]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Rotate the key in the secrets file, as the owner does
+          ansible.builtin.copy:
+            content: |
+              CROWDSEC_BOUNCER_KEY=test-sentinel-edge-key-0003
+              ACME_EMAIL=test-sentinel-0002@test.invalid
+            dest: /etc/branchleft/edge.env
+            owner: root
+            group: root
+            mode: '0600'
+          no_log: true
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p5
+
+        - name: Assert the unit was restarted once, nothing was validated, and only the Compose stamp moved
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p5.failed
+              - edge_stack_verify_runs.p5.kinds == ['unit-start']
+              - edge_stack_verify_runs.p5.after.stamps.compose != edge_stack_verify_runs.p5.before.stamps.compose
+              - edge_stack_verify_runs.p5.after.stamps.caddy == edge_stack_verify_runs.p5.before.stamps.caddy
+              - edge_stack_verify_runs.p5.after.stamps.crowdsec == edge_stack_verify_runs.p5.before.stamps.crowdsec
+            quiet: true
+            fail_msg: A rotated key in edge.env did not make exactly one restart of the unit. The calls were {{ edge_stack_verify_runs.p5.kinds }}.
+
+    # ----- p6: a change in all three classes, placed before any action, acted on in order -----
+    - name: Case p6, a change to every class
+      tags: [p6]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p6
+            edge_stack_verify_variant_edits:
+              - { path: Caddyfile, append: "\n# case p6\n" }
+              - { path: compose.yml, append: "\n# case p6\n" }
+              - { path: crowdsec/config.yaml.local, append: "\n# case p6\n" }
+
+        - name: Apply the role with the variant
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p6
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p6.path }}'
+
+        - name: Assert the order, and that the unit started on files that were already placed
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p6.failed
+              - edge_stack_verify_runs.p6.kinds == ['validate-caddy', 'validate-compose', 'unit-start', 'crowdsec-restart', 'caddy-reload']
+              - >-
+                edge_stack_verify_runs.p6.new | select('match', '^UNIT-START ') | first ==
+                'UNIT-START caddyfile=' ~ edge_stack_verify_variants.p6.caddy[:12] ~ ' compose=' ~ edge_stack_verify_variants.p6.compose[:12]
+              - >-
+                edge_stack_verify_runs.p6.new | select('match', '^RESTART-CROWDSEC ') | first ==
+                'RESTART-CROWDSEC config=' ~ edge_stack_verify_variants.p6.config[:12]
+              - edge_stack_verify_runs.p6.new | select('match', '^RELOAD ') | first == 'RELOAD caddyfile=' ~ edge_stack_verify_variants.p6.caddy[:12]
+              - edge_stack_verify_runs.p6.after.stamps.caddy != edge_stack_verify_runs.p6.before.stamps.caddy
+              - edge_stack_verify_runs.p6.after.stamps.compose != edge_stack_verify_runs.p6.before.stamps.compose
+              - edge_stack_verify_runs.p6.after.stamps.crowdsec != edge_stack_verify_runs.p6.before.stamps.crowdsec
+            quiet: true
+            fail_msg: >-
+              A change to every class was not placed before the first action, or was acted on out of order.
+              The calls were {{ edge_stack_verify_runs.p6.new }}.
+
+    # ----- p7: a file changed on the host, with the stamp unchanged, is put back and acted on -----
+    - name: Case p7, a hand edit and a torn Caddyfile on the host
+      tags: [p7]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        # In place, so the inode the container's mount holds is the one that changes.
+        - name: Tear the Caddyfile on the host, in place
+          ansible.builtin.copy:
+            content: "# torn\n"
+            dest: '{{ edge_stack_verify_dir }}/Caddyfile'
+            owner: root
+            group: root
+            mode: '0644'
+            unsafe_writes: true
+
+        - name: Edit the Compose file and the CrowdSec file on the host by hand
+          ansible.builtin.copy:
+            content: "# hand edit\n"
+            dest: '{{ edge_stack_verify_dir }}/{{ item }}'
+            owner: root
+            group: root
+            mode: '0644'
+          loop:
+            - compose.yml
+            - crowdsec/config.yaml.local
+
+        - name: Apply the role, whose stamps still equal the repository's fingerprints
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p7
+
+        - name: Assert every class was put back and acted on, the stamps being what they were
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p7.failed
+              - edge_stack_verify_runs.p7.kinds == ['validate-caddy', 'validate-compose', 'unit-start', 'crowdsec-restart', 'caddy-reload']
+              - edge_stack_verify_runs.p7.after.caddy_sha == edge_stack_verify_real_sha.caddy
+              - edge_stack_verify_runs.p7.after.compose_sha == edge_stack_verify_real_sha.compose
+              - edge_stack_verify_runs.p7.after.config_sha == edge_stack_verify_real_sha.config
+              - edge_stack_verify_runs.p7.after.view_sha == edge_stack_verify_real_sha.caddy
+              - edge_stack_verify_runs.p7.after.stamps == edge_stack_verify_base.stamps
+            quiet: true
+            fail_msg: >-
+              A file that differs from the repository on the host was not repaired and acted on while its stamp
+              equalled the fingerprint. The calls were {{ edge_stack_verify_runs.p7.kinds }}.
+
+    # ----- p8: check mode names what a real run would do, and does none of it -----
+    - name: Case p8, a plan with every class changed and a Caddyfile torn on the host
+      tags: [p8]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p8
+            edge_stack_verify_variant_edits:
+              - { path: Caddyfile, append: "\n# case p8\n" }
+              - { path: compose.yml, append: "\n# case p8\n" }
+              - { path: crowdsec/config.yaml.local, append: "\n# case p8\n" }
+
+        - name: Snapshot before the plan
+          ansible.builtin.include_tasks: tasks/snapshot.yml
+
+        - name: Keep that snapshot
+          ansible.builtin.set_fact:
+            edge_stack_verify_p8_before: '{{ edge_stack_verify_snap }}'
+          no_log: true
+
+        # A separate ansible-playbook --check, the way the plan job runs, because the
+        # check_mode keyword of a task does not set ansible_check_mode, which the role reads.
+        - name: Plan the role with the variant, in check mode
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - --check
+              - --tags
+              - all
+              - --inventory
+              - '{{ inventory_dir }}'
+              - --extra-vars
+              - 'edge_stack_source_dir={{ edge_stack_verify_variants.p8.path }}'
+              - '{{ playbook_dir }}/plan.yml'
+          delegate_to: localhost
+          register: edge_stack_verify_p8_plan
+          changed_when: false
+          failed_when: false
+
+        - name: Snapshot after the plan
+          ansible.builtin.include_tasks: tasks/snapshot.yml
+
+        - name: Assert the plan succeeded, changed nothing and called nothing
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_p8_plan.rc == 0
+              - edge_stack_verify_snap.lines == edge_stack_verify_p8_before.lines
+              - edge_stack_verify_snap.stamps == edge_stack_verify_p8_before.stamps
+              - edge_stack_verify_snap.caddy_sha == edge_stack_verify_p8_before.caddy_sha
+              - edge_stack_verify_snap.compose_sha == edge_stack_verify_p8_before.compose_sha
+              - edge_stack_verify_snap.config_sha == edge_stack_verify_p8_before.config_sha
+              - not edge_stack_verify_snap.candidate_exists
+            quiet: true
+            fail_msg: A plan failed ({{ edge_stack_verify_p8_plan.rc }}), or changed the host, or called a stand-in.
+
+        - name: Keep the output of the plan
+          ansible.builtin.set_fact:
+            edge_stack_verify_p8_log: '{{ edge_stack_verify_p8_plan.stdout }}'
+          no_log: true
+
+        # The plan job's output is what the owner reads before approving. Each class that
+        # would be acted on is a task that reports changed in check mode.
+        - name: Assert the plan reported each action as a change
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_p8_log is search('(?s)' ~ item ~ '\]\s\*+(?:(?!TASK \[).){0,8000}?changed:\s\[')
+            quiet: true
+            fail_msg: The output of the plan does not show '{{ item }}' as a change, so a plan would show nothing for it.
+          loop:
+            - Report in check mode that the Caddyfile would be validated, written and reloaded
+            - Report in check mode that the edge unit would be restarted
+            - Report in check mode that the crowdsec container would be restarted
+
+    # ----- p9, p10, p11: the first run on a host that was delivered by hand -----
+    - name: Case p9, no stamps and every file already the repository's
+      tags: [p9]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Remove the three stamps, as on a host nobody has applied the role to
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /var/lib/branchleft/edge.caddy.applied
+            - /var/lib/branchleft/edge.compose.applied
+            - /var/lib/branchleft/edge.crowdsec.applied
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p9
+
+        - name: Assert nothing was acted on and the three stamps were written
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p9.failed
+              - edge_stack_verify_runs.p9.new == []
+              - edge_stack_verify_runs.p9.before.stamps.caddy == 'none'
+              - edge_stack_verify_runs.p9.after.stamps == edge_stack_verify_base.stamps
+            quiet: true
+            fail_msg: >-
+              Adopting a host whose files already equal the repository's acted on it, or did not write the stamps.
+              The calls were {{ edge_stack_verify_runs.p9.new }}.
+
+    # A stamp that is there and cannot be read is not "no stamp". Here the Caddy stamp is
+    # a link to nothing: the other two stamps are the base's, the files equal the
+    # repository's, so a run that took the unreadable stamp for none would adopt the
+    # class, replace the link with a stamp and succeed.
+    - name: Case p9b, a stamp that is there and cannot be read
+      tags: [p9b]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Replace the Caddy stamp with a link to nothing
+          ansible.builtin.file:
+            src: /var/lib/branchleft/no-such-stamp-target
+            dest: /var/lib/branchleft/edge.caddy.applied
+            state: link
+            force: true
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p9b
+
+        - name: Look at the Caddy stamp after the run
+          ansible.builtin.stat:
+            path: /var/lib/branchleft/edge.caddy.applied
+            follow: false
+            get_checksum: false
+          register: edge_stack_verify_p9b_stamp
+
+        - name: Assert the run failed before it placed or called anything, and left the stamp as it was
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs.p9b.failed
+              - edge_stack_verify_runs.p9b.new == []
+              - edge_stack_verify_runs.p9b.after.caddy_sha == edge_stack_verify_runs.p9b.before.caddy_sha
+              - edge_stack_verify_p9b_stamp.stat.islnk
+            quiet: true
+            fail_msg: >-
+              A stamp that exists and cannot be read was taken for no stamp: the run failed
+              {{ edge_stack_verify_runs.p9b.failed }}, called {{ edge_stack_verify_runs.p9b.new }}, and the stamp is a link
+              {{ edge_stack_verify_p9b_stamp.stat.islnk }}.
+      always:
+        - name: Remove the link
+          ansible.builtin.file:
+            path: /var/lib/branchleft/edge.caddy.applied
+            state: absent
+
+    - name: Case p10, no stamps and one class differs
+      tags: [p10]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Remove the three stamps
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /var/lib/branchleft/edge.caddy.applied
+            - /var/lib/branchleft/edge.compose.applied
+            - /var/lib/branchleft/edge.crowdsec.applied
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p10
+            edge_stack_verify_variant_edits:
+              - { path: Caddyfile, append: "\n# case p10\n" }
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p10
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p10.path }}'
+
+        - name: Assert only the class that differs was acted on, and all three are recorded
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p10.failed
+              - edge_stack_verify_runs.p10.kinds == ['validate-caddy', 'caddy-reload']
+              - edge_stack_verify_runs.p10.after.stamps.compose == edge_stack_verify_base.stamps.compose
+              - edge_stack_verify_runs.p10.after.stamps.crowdsec == edge_stack_verify_base.stamps.crowdsec
+              - edge_stack_verify_runs.p10.after.stamps.caddy is match(edge_stack_verify_hex64)
+              - edge_stack_verify_runs.p10.after.stamps.caddy != edge_stack_verify_base.stamps.caddy
+            quiet: true
+            fail_msg: Adopting a host where one class differs did not act on that class alone. The calls were {{ edge_stack_verify_runs.p10.kinds }}.
+
+    - name: Case p11, a first action that fails is not taken for an adopted host
+      tags: [p11]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Remove the three stamps
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /var/lib/branchleft/edge.caddy.applied
+            - /var/lib/branchleft/edge.compose.applied
+            - /var/lib/branchleft/edge.crowdsec.applied
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p11
+            edge_stack_verify_variant_edits:
+              - { path: Caddyfile, append: "\n# case p11\n" }
+
+        - name: Make the reload fail
+          ansible.builtin.file:
+            path: /run/standin.fail.reload
+            state: touch
+            mode: '0644'
+            access_time: preserve
+            modification_time: preserve
+
+        - name: Apply the role while the reload fails
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p11a
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p11.path }}'
+
+        - name: Let the reload work
+          ansible.builtin.file:
+            path: /run/standin.fail.reload
+            state: absent
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p11b
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p11.path }}'
+
+        - name: Assert the failed first run left the Caddy class unrecorded and the rerun reloaded
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs.p11a.failed
+              - "'exit code 72' in edge_stack_verify_runs.p11a.msg"
+              - edge_stack_verify_runs.p11a.after.stamps.caddy == 'pending'
+              - edge_stack_verify_runs.p11a.after.caddy_sha == edge_stack_verify_variants.p11.caddy
+              - not edge_stack_verify_runs.p11b.failed
+              - edge_stack_verify_runs.p11b.kinds == ['caddy-reload']
+              - edge_stack_verify_runs.p11b.after.stamps.caddy is match(edge_stack_verify_hex64)
+            quiet: true
+            fail_msg: >-
+              After a failed reload on a host with no stamp, the rerun did not reload. The first run said
+              '{{ edge_stack_verify_runs.p11a.msg }}' and left the stamp
+              '{{ edge_stack_verify_runs.p11a.after.stamps.caddy }}'; the rerun called {{ edge_stack_verify_runs.p11b.kinds }}.
+
+    # ----- p11c, p11d: a run that dies after a file is placed and before any action -----
+    # p11 dies in the Caddy reload, which is inside the locked script, after the pending
+    # mark. The Compose and CrowdSec files are placed by tasks of the role, so a run can
+    # die after they are placed and before the first action; tasks/crash_run.yml makes
+    # the prune fail for that. On a host with no stamp, a placed file equals the
+    # repository's, which is what a hand-delivered host looks like: unless the class
+    # was marked pending before the file was placed, the next run would adopt it and
+    # never restart the unit or CrowdSec.
+    - name: Case p11c, a run that dies after the Compose file is placed
+      tags: [p11c]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Remove the three stamps
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /var/lib/branchleft/edge.caddy.applied
+            - /var/lib/branchleft/edge.compose.applied
+            - /var/lib/branchleft/edge.crowdsec.applied
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p11c
+            edge_stack_verify_variant_edits:
+              - { path: compose.yml, append: "\n# case p11c\n" }
+
+        - name: Apply the role in a run that dies after the files are placed
+          ansible.builtin.include_tasks: tasks/crash_run.yml
+          vars:
+            edge_stack_verify_crash_source: '{{ edge_stack_verify_variants.p11c.path }}'
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p11c2
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p11c.path }}'
+
+        - name: Assert the Compose file was placed, its class was pending and not adopted, and the rerun restarted the unit
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_crash.rc != 0
+              - edge_stack_verify_crash.after.compose_sha == edge_stack_verify_variants.p11c.compose
+              - edge_stack_verify_crash.actions == []
+              - edge_stack_verify_crash.after.stamps.compose == 'pending'
+              - not edge_stack_verify_runs.p11c2.failed
+              - edge_stack_verify_runs.p11c2.kinds == ['unit-start', 'crowdsec-restart']
+              - edge_stack_verify_runs.p11c2.after.stamps.compose is match(edge_stack_verify_hex64)
+            quiet: true
+            fail_msg: >-
+              A run that died after the Compose file was placed left the Compose stamp
+              '{{ edge_stack_verify_crash.after.stamps.compose }}' (exit {{ edge_stack_verify_crash.rc }}, Compose file placed
+              {{ edge_stack_verify_crash.after.compose_sha == edge_stack_verify_variants.p11c.compose }}), and the rerun
+              called {{ edge_stack_verify_runs.p11c2.kinds }}.
+
+    - name: Case p11d, a run that dies after a CrowdSec file is placed
+      tags: [p11d]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Remove the three stamps
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /var/lib/branchleft/edge.caddy.applied
+            - /var/lib/branchleft/edge.compose.applied
+            - /var/lib/branchleft/edge.crowdsec.applied
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p11d
+            edge_stack_verify_variant_edits:
+              - { path: crowdsec/config.yaml.local, append: "\n# case p11d\n" }
+
+        - name: Apply the role in a run that dies after the files are placed
+          ansible.builtin.include_tasks: tasks/crash_run.yml
+          vars:
+            edge_stack_verify_crash_source: '{{ edge_stack_verify_variants.p11d.path }}'
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p11d2
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p11d.path }}'
+
+        - name: Assert the CrowdSec file was placed, its class was pending and not adopted, and the rerun restarted CrowdSec
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_crash.rc != 0
+              - edge_stack_verify_crash.after.config_sha == edge_stack_verify_variants.p11d.config
+              - edge_stack_verify_crash.actions == []
+              - edge_stack_verify_crash.after.stamps.crowdsec == 'pending'
+              - not edge_stack_verify_runs.p11d2.failed
+              - edge_stack_verify_runs.p11d2.kinds == ['crowdsec-restart']
+              - edge_stack_verify_runs.p11d2.after.stamps.crowdsec is match(edge_stack_verify_hex64)
+            quiet: true
+            fail_msg: >-
+              A run that died after a CrowdSec file was placed left the CrowdSec stamp
+              '{{ edge_stack_verify_crash.after.stamps.crowdsec }}' (exit {{ edge_stack_verify_crash.rc }}, file placed
+              {{ edge_stack_verify_crash.after.config_sha == edge_stack_verify_variants.p11d.config }}), and the rerun
+              called {{ edge_stack_verify_runs.p11d2.kinds }}.
+
+    # ----- p12: the read-back is what lets a stamp be written -----
+    - name: Case p12, the container still shows the old Caddyfile after a reload
+      tags: [p12]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p12
+            edge_stack_verify_variant_edits:
+              - { path: Caddyfile, append: "\n# case p12\n" }
+
+        - name: Make the container show the old Caddyfile
+          ansible.builtin.file:
+            path: /run/standin.stale.caddy
+            state: touch
+            mode: '0644'
+            access_time: preserve
+            modification_time: preserve
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p12a
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p12.path }}'
+
+        - name: Let the container show the file
+          ansible.builtin.file:
+            path: /run/standin.stale.caddy
+            state: absent
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p12b
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p12.path }}'
+
+        - name: Assert the read-back failed the run, no stamp was written, and the rerun reloaded
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs.p12a.failed
+              - "'exit code 73' in edge_stack_verify_runs.p12a.msg"
+              - edge_stack_verify_runs.p12a.after.stamps.caddy == 'pending'
+              - not edge_stack_verify_runs.p12b.failed
+              - edge_stack_verify_runs.p12b.kinds == ['caddy-reload']
+              - edge_stack_verify_runs.p12b.after.stamps.caddy is match(edge_stack_verify_hex64)
+            quiet: true
+            fail_msg: >-
+              A reload whose read-back failed was recorded, or its rerun did not reload. The first run said
+              '{{ edge_stack_verify_runs.p12a.msg }}' and left the stamp '{{ edge_stack_verify_runs.p12a.after.stamps.caddy }}'.
+
+    # ----- p13, p14: a refused candidate stops the run before any file is placed -----
+    - name: Case p13, a Caddyfile that Caddy refuses, with a Compose change beside it
+      tags: [p13]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p13
+            edge_stack_verify_variant_edits:
+              - { path: Caddyfile, append: "\n# BROKEN-CADDYFILE\n" }
+              - { path: compose.yml, append: "\n# case p13\n" }
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p13
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p13.path }}'
+
+        - name: Assert the run failed on the candidate, and nothing was placed, restarted or recorded
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs.p13.failed
+              - "'exit code 65' in edge_stack_verify_runs.p13.msg"
+              - edge_stack_verify_runs.p13.kinds == ['validate-caddy']
+              - edge_stack_verify_runs.p13.after.caddy_sha == edge_stack_verify_runs.p13.before.caddy_sha
+              - edge_stack_verify_runs.p13.after.compose_sha == edge_stack_verify_runs.p13.before.compose_sha
+              - edge_stack_verify_runs.p13.after.stamps == edge_stack_verify_runs.p13.before.stamps
+              - not edge_stack_verify_runs.p13.after.candidate_exists
+            quiet: true
+            fail_msg: >-
+              A Caddyfile that Caddy refuses was placed, or something beside it was placed or restarted, or the
+              candidate directory was left. The calls were {{ edge_stack_verify_runs.p13.kinds }}; it said '{{ edge_stack_verify_runs.p13.msg }}'.
+
+    - name: Case p14, a Compose file that Compose refuses, with a Caddyfile change beside it
+      tags: [p14]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p14
+            edge_stack_verify_variant_edits:
+              - { path: Caddyfile, append: "\n# case p14\n" }
+              - { path: compose.yml, append: "\n# BROKEN-COMPOSE\n" }
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p14
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p14.path }}'
+
+        - name: Assert the run failed on the candidate, and the Caddyfile that was valid was not written either
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs.p14.failed
+              - "'exit code 67' in edge_stack_verify_runs.p14.msg"
+              - edge_stack_verify_runs.p14.kinds == ['validate-caddy', 'validate-compose']
+              - edge_stack_verify_runs.p14.after.caddy_sha == edge_stack_verify_runs.p14.before.caddy_sha
+              - edge_stack_verify_runs.p14.after.compose_sha == edge_stack_verify_runs.p14.before.compose_sha
+              - edge_stack_verify_runs.p14.after.stamps == edge_stack_verify_runs.p14.before.stamps
+              - not edge_stack_verify_runs.p14.after.candidate_exists
+            quiet: true
+            fail_msg: >-
+              A Compose file that Compose refuses was placed, or the Caddyfile beside it was written before the
+              refusal. The calls were {{ edge_stack_verify_runs.p14.kinds }}; it said '{{ edge_stack_verify_runs.p14.msg }}'.
+
+    # ----- p15: a file in no class is refused, and so is a link -----
+    - name: Case p15, a file in no class, a file nested in the acquisition directory, and a link
+      tags: [p15]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make the variant with a file in no class
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p15a
+            edge_stack_verify_variant_edits:
+              - { path: Caddyfile.bak, append: "# a leftover\n" }
+
+        - name: Make the variant with a file nested in the acquisition directory
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p15b
+            edge_stack_verify_variant_edits:
+              - { path: crowdsec/acquis.d/nested/x.yaml, append: "# nested\n" }
+
+        - name: Make the variant with a link
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p15c
+            edge_stack_verify_variant_edits: []
+
+        - name: Put a link in that variant
+          ansible.builtin.file:
+            src: Caddyfile
+            dest: '{{ edge_stack_verify_variants.p15c.path }}/Caddyfile.link'
+            state: link
+          delegate_to: localhost
+
+        - name: Apply the role with each
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: 'p15{{ item }}'
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants["p15" ~ item].path }}'
+          loop: [a, b, c]
+
+        - name: Assert each was refused before anything was called or changed
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs['p15' ~ item].failed
+              - "'in no class' in edge_stack_verify_runs['p15' ~ item].msg"
+              - edge_stack_verify_runs['p15' ~ item].new == []
+              - edge_stack_verify_runs['p15' ~ item].after.stamps == edge_stack_verify_runs['p15' ~ item].before.stamps
+            quiet: true
+            fail_msg: >-
+              A file in no class, or a link, in the stack directory was not refused before anything was called.
+              It said '{{ edge_stack_verify_runs['p15' ~ item].msg }}'.
+          loop: [a, b, c]
+
+    # ----- p16: the pin must be exactly one IMAGE line holding a digest -----
+    - name: Case p16, pins the role refuses, and a pin that changes while the role waits for the lock
+      tags: [p16]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make a variant whose Caddyfile differs
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: pins
+            edge_stack_verify_variant_edits:
+              - { path: Caddyfile, append: "\n# case pins\n" }
+
+        - name: Refuse a tag, a second line, trailing text and an empty file
+          ansible.builtin.include_tasks: tasks/pin_case.yml
+          vars:
+            edge_stack_verify_pin_name: '{{ item.name }}'
+            edge_stack_verify_pin_content: '{{ item.content }}'
+          loop:
+            - { name: tag, content: "IMAGE=ghcr.io/branchleft/edge-caddy:latest\n" }
+            - name: two_lines
+              content: "{{ edge_stack_verify_pin_good }}\nIMAGE=other\n"
+            - name: trailing
+              content: "{{ edge_stack_verify_pin_good }} x\n"
+            - { name: empty, content: '' }
+          loop_control:
+            label: '{{ item.name }}'
+
+        # The role reads the pin early and the script reads it again inside the lock. A
+        # holder of the lock changes the pin while the role waits, so only the script's
+        # own check can refuse it.
+        - name: Hold the deploy lock for twenty seconds and then change the pin, as a deploy would
+          ansible.builtin.command:
+            argv:
+              - flock
+              - /etc/branchleft/edge.deploy.lock
+              - /bin/sh
+              - -c
+              - sleep 20; printf 'IMAGE=not-a-digest\n' > /etc/branchleft/edge.image.env
+          async: 90
+          poll: 0
+          register: edge_stack_verify_p16_holder
+          changed_when: false
+
+        - name: Give the holder time to take the lock
+          ansible.builtin.wait_for:
+            timeout: 1
+
+        - name: Apply the role while the pin is about to change
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p16toctou
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.pins.path }}'
+            edge_stack_verify_run_timeout: 90
+
+        - name: Wait for the holder to end
+          ansible.builtin.async_status:
+            jid: '{{ edge_stack_verify_p16_holder.ansible_job_id }}'
+          register: edge_stack_verify_p16_job
+          until: edge_stack_verify_p16_job.finished
+          retries: 60
+          delay: 1
+
+        - name: Assert the script refused the pin inside the lock and nothing was placed
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs.p16toctou.failed
+              - "'exit code 64' in edge_stack_verify_runs.p16toctou.msg"
+              - edge_stack_verify_runs.p16toctou.after.caddy_sha == edge_stack_verify_runs.p16toctou.before.caddy_sha
+              - edge_stack_verify_runs.p16toctou.kinds == []
+            quiet: true
+            fail_msg: >-
+              A pin that changed while the role waited for the lock was not refused inside the lock. It said
+              '{{ edge_stack_verify_runs.p16toctou.msg }}' and called {{ edge_stack_verify_runs.p16toctou.kinds }}.
+
+    # ----- p17: the secrets file the owner places must be root's, mode 0600, a plain file -----
+    - name: Case p17, a secrets file that is too open, not root's, or a link
+      tags: [p17]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Open the mode of the secrets file
+          ansible.builtin.file:
+            path: /etc/branchleft/edge.env
+            mode: '0644'
+          no_log: true
+
+        - name: Apply the role with the mode open
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p17mode
+
+        - name: Close the mode and give the file to another owner
+          ansible.builtin.file:
+            path: /etc/branchleft/edge.env
+            mode: '0600'
+            owner: nobody
+          no_log: true
+
+        - name: Apply the role with another owner
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p17owner
+
+        - name: Put the file back and replace it with a link to a copy
+          ansible.builtin.copy:
+            src: /etc/branchleft/edge.env
+            dest: /etc/branchleft/edge.env.real
+            remote_src: true
+            owner: root
+            group: root
+            mode: '0600'
+          no_log: true
+
+        - name: Replace the secrets file with a link
+          ansible.builtin.file:
+            src: /etc/branchleft/edge.env.real
+            dest: /etc/branchleft/edge.env
+            state: link
+            force: true
+          no_log: true
+
+        - name: Apply the role with a link
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p17link
+
+        - name: Assert each was refused before anything was called
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs[item].failed
+              - "'mode 0600' in edge_stack_verify_runs[item].msg"
+              - edge_stack_verify_runs[item].new == []
+            quiet: true
+            fail_msg: A secrets file that is not a root-owned plain file with mode 0600 was not refused. It said '{{ edge_stack_verify_runs[item].msg }}'.
+          loop: [p17mode, p17owner, p17link]
+
+        - name: Remove the copy
+          ansible.builtin.file:
+            path: /etc/branchleft/edge.env.real
+            state: absent
+
+    # ----- p18: the lock -----
+    - name: Case p18, the deploy lock is held while the role validates
+      tags: [p18]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p18
+            edge_stack_verify_variant_edits:
+              - { path: Caddyfile, append: "\n# case p18\n" }
+
+        - name: Hold the deploy lock for twenty-five seconds, as a running deploy does
+          ansible.builtin.command:
+            argv: [flock, /etc/branchleft/edge.deploy.lock, sleep, '25']
+          async: 90
+          poll: 0
+          register: edge_stack_verify_p18_holder
+          changed_when: false
+
+        - name: Give the holder time to take the lock
+          ansible.builtin.wait_for:
+            timeout: 1
+
+        - name: Apply the role with a wait of two seconds
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p18a
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p18.path }}'
+            edge_stack_verify_run_timeout: 2
+
+        - name: Wait for the holder to end
+          ansible.builtin.async_status:
+            jid: '{{ edge_stack_verify_p18_holder.ansible_job_id }}'
+          register: edge_stack_verify_p18_job
+          until: edge_stack_verify_p18_job.finished
+          retries: 60
+          delay: 1
+
+        - name: Hold the deploy lock for twenty-five seconds again
+          ansible.builtin.command:
+            argv: [flock, /etc/branchleft/edge.deploy.lock, sleep, '25']
+          async: 90
+          poll: 0
+          register: edge_stack_verify_p18_holder_b
+          changed_when: false
+
+        - name: Give the holder time to take the lock
+          ansible.builtin.wait_for:
+            timeout: 1
+
+        - name: Apply the role with a wait of thirty seconds
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p18b
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p18.path }}'
+            edge_stack_verify_run_timeout: 90
+
+        - name: Wait for the second holder to end
+          ansible.builtin.async_status:
+            jid: '{{ edge_stack_verify_p18_holder_b.ansible_job_id }}'
+          register: edge_stack_verify_p18_job_b
+          until: edge_stack_verify_p18_job_b.finished
+          retries: 60
+          delay: 1
+
+        - name: Assert the first run gave up on the lock and touched nothing, and the second waited and applied
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs.p18a.failed
+              - "'was not free within 2 seconds' in edge_stack_verify_runs.p18a.msg"
+              - edge_stack_verify_runs.p18a.new == []
+              - edge_stack_verify_runs.p18a.after.caddy_sha == edge_stack_verify_runs.p18a.before.caddy_sha
+              - edge_stack_verify_runs.p18a.after.stamps == edge_stack_verify_runs.p18a.before.stamps
+              - not edge_stack_verify_runs.p18b.failed
+              - edge_stack_verify_runs.p18b.kinds == ['validate-caddy', 'caddy-reload']
+              - edge_stack_verify_runs.p18b.after.caddy_sha == edge_stack_verify_variants.p18.caddy
+            quiet: true
+            fail_msg: >-
+              A held deploy lock did not make the validating stage wait and then give up, or a lock released in
+              time did not let it go on. The first said '{{ edge_stack_verify_runs.p18a.msg }}'; the second called {{ edge_stack_verify_runs.p18b.kinds }}.
+
+    - name: Case p19, the deploy lock is held while the role applies a class that needs no validation
+      tags: [p19]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p19
+            edge_stack_verify_variant_edits:
+              - { path: crowdsec/config.yaml.local, append: "\n# case p19\n" }
+
+        - name: Hold the deploy lock for sixty seconds, longer than the role takes to reach the apply stage
+          ansible.builtin.command:
+            argv: [flock, /etc/branchleft/edge.deploy.lock, sleep, '60']
+          async: 90
+          poll: 0
+          register: edge_stack_verify_p19_holder
+          changed_when: false
+
+        - name: Give the holder time to take the lock
+          ansible.builtin.wait_for:
+            timeout: 1
+
+        - name: Apply the role with a wait of two seconds
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p19
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p19.path }}'
+            edge_stack_verify_run_timeout: 2
+
+        - name: Wait for the holder to end
+          ansible.builtin.async_status:
+            jid: '{{ edge_stack_verify_p19_holder.ansible_job_id }}'
+          register: edge_stack_verify_p19_job
+          until: edge_stack_verify_p19_job.finished
+          retries: 60
+          delay: 1
+
+        - name: Assert the apply stage gave up on the lock and restarted nothing
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs.p19.failed
+              - "'was not free within 2 seconds' in edge_stack_verify_runs.p19.msg"
+              - edge_stack_verify_runs.p19.kinds == []
+            quiet: true
+            fail_msg: >-
+              A held deploy lock did not stop the apply stage. It said '{{ edge_stack_verify_runs.p19.msg }}'
+              and called {{ edge_stack_verify_runs.p19.kinds }}.
+
+    # ----- p20, p21: the unit's state -----
+    - name: Case p20, the unit is not enabled
+      tags: [p20]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Stop and disable the unit, as on a host awaiting the owner's first start
+          ansible.builtin.systemd_service:
+            name: branchleft-compose@edge.service
+            enabled: false
+            state: stopped
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p20
+            edge_stack_verify_variant_edits:
+              - { path: compose.yml, append: "\n# case p20\n" }
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p20a
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p20.path }}'
+
+        - name: Enable and start the unit, as the owner does
+          ansible.builtin.systemd_service:
+            name: branchleft-compose@edge.service
+            enabled: true
+            state: started
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p20b
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p20.path }}'
+
+        - name: Assert the disabled unit was left alone and its class left pending, and the next run restarted it
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p20a.failed
+              - "'unit-start' not in edge_stack_verify_runs.p20a.kinds"
+              - edge_stack_verify_runs.p20a.after.compose_sha == edge_stack_verify_variants.p20.compose
+              - edge_stack_verify_runs.p20a.after.stamps.compose == 'pending'
+              - edge_stack_verify_runs.p20a.after.unit_enabled == 'disabled'
+              - not edge_stack_verify_runs.p20b.failed
+              - edge_stack_verify_runs.p20b.kinds == ['unit-start']
+              - edge_stack_verify_runs.p20b.after.stamps.compose != edge_stack_verify_runs.p20a.before.stamps.compose
+            quiet: true
+            fail_msg: >-
+              A unit that is not enabled was restarted or recorded, or was not restarted once it was enabled. The first
+              run called {{ edge_stack_verify_runs.p20a.kinds }}, the second {{ edge_stack_verify_runs.p20b.kinds }}.
+
+    # p20 starts with stamps present. Here there are none: a host where the owner has
+    # not yet started the unit, or where containers were left running from an earlier
+    # hand `up`. The Compose file is placed while the unit is not enabled, then the
+    # owner enables the unit WITHOUT starting it. A class that was not marked pending
+    # when its file was placed would now have no stamp and no difference, would be
+    # adopted, and would stamp a fingerprint the running containers never got.
+    - name: Case p20c, no stamps, the unit is not enabled, and the unit is enabled without being started
+      tags: [p20c]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Remove the three stamps
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /var/lib/branchleft/edge.caddy.applied
+            - /var/lib/branchleft/edge.compose.applied
+            - /var/lib/branchleft/edge.crowdsec.applied
+
+        - name: Stop and disable the unit
+          ansible.builtin.systemd_service:
+            name: branchleft-compose@edge.service
+            enabled: false
+            state: stopped
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p20c
+            edge_stack_verify_variant_edits:
+              - { path: compose.yml, append: "\n# case p20c\n" }
+
+        - name: Apply the role while the unit is not enabled
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p20c1
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p20c.path }}'
+
+        - name: Enable the unit without starting it
+          ansible.builtin.systemd_service:
+            name: branchleft-compose@edge.service
+            enabled: true
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p20c2
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p20c.path }}'
+
+        - name: Assert the class was left pending, not adopted, and the unit was restarted once enabled
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p20c1.failed
+              - "'unit-start' not in edge_stack_verify_runs.p20c1.kinds"
+              - edge_stack_verify_runs.p20c1.after.compose_sha == edge_stack_verify_variants.p20c.compose
+              - edge_stack_verify_runs.p20c1.after.stamps.compose == 'pending'
+              - not edge_stack_verify_runs.p20c2.failed
+              - edge_stack_verify_runs.p20c2.kinds == ['unit-start']
+              - edge_stack_verify_runs.p20c2.after.stamps.compose is match(edge_stack_verify_hex64)
+            quiet: true
+            fail_msg: >-
+              A Compose file placed while the unit was not enabled, on a host with no stamp, was adopted once the
+              unit was enabled instead of acted on. The first run left the Compose stamp
+              '{{ edge_stack_verify_runs.p20c1.after.stamps.compose }}' and called {{ edge_stack_verify_runs.p20c1.kinds }};
+              the second called {{ edge_stack_verify_runs.p20c2.kinds }}.
+
+    - name: Case p21, the unit is failed and its restart fails again, then works on a corrected file
+      tags: [p21]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make the unit fail to start
+          ansible.builtin.file:
+            path: /run/edge-unit.fail
+            state: touch
+            mode: '0644'
+            access_time: preserve
+            modification_time: preserve
+
+        - name: Make the variants
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: '{{ edge_stack_verify_v }}'
+            edge_stack_verify_variant_edits:
+              - { path: compose.yml, append: "\n# case {{ edge_stack_verify_v }}\n" }
+          loop: [p21a, p21b]
+          loop_control:
+            loop_var: edge_stack_verify_v
+
+        - name: Apply the role while the unit cannot start
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p21a
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p21a.path }}'
+
+        - name: Let the unit start
+          ansible.builtin.file:
+            path: /run/edge-unit.fail
+            state: absent
+
+        - name: Apply the role with a corrected Compose file, the unit being failed
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p21b
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p21b.path }}'
+
+        - name: Assert the failed restart was not recorded, said so, and the corrected file restarted the failed unit
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs.p21a.failed
+              - "'locked step failed (exit code 68)' in edge_stack_verify_runs.p21a.msg"
+              - edge_stack_verify_runs.p21a.after.unit_active == 'failed'
+              - edge_stack_verify_runs.p21a.after.stamps.compose == 'pending'
+              - not edge_stack_verify_runs.p21b.failed
+              - edge_stack_verify_runs.p21b.before.unit_active == 'failed'
+              - edge_stack_verify_runs.p21b.kinds == ['validate-compose', 'unit-start']
+              - edge_stack_verify_runs.p21b.after.unit_active == 'active'
+              - edge_stack_verify_runs.p21b.after.stamps.compose is match(edge_stack_verify_hex64)
+            quiet: true
+            fail_msg: >-
+              A failed restart was recorded, or a failed unit was not restarted on a corrected file. The first said
+              '{{ edge_stack_verify_runs.p21a.msg }}'; the unit was {{ edge_stack_verify_runs.p21b.before.unit_active }} before the second.
+
+    # ----- p22: CrowdSec's API does not answer after the restart -----
+    - name: Case p22, CrowdSec does not come back, with the unit restarted in the same run
+      tags: [p22]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p22
+            edge_stack_verify_variant_edits:
+              - { path: compose.yml, append: "\n# case p22\n" }
+              - { path: crowdsec/config.yaml.local, append: "\n# case p22\n" }
+              - { path: Caddyfile, append: "\n# case p22\n" }
+
+        - name: Make CrowdSec's Local API not answer
+          ansible.builtin.file:
+            path: /run/standin.lapi.down
+            state: touch
+            mode: '0644'
+            access_time: preserve
+            modification_time: preserve
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p22a
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p22.path }}'
+            edge_stack_verify_run_tries: 2
+            edge_stack_verify_run_interval: 1
+
+        - name: Let CrowdSec answer
+          ansible.builtin.file:
+            path: /run/standin.lapi.down
+            state: absent
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p22b
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p22.path }}'
+
+        - name: Assert the class that finished was recorded, the ones that did not were not, and the rerun finished them
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs.p22a.failed
+              - "'exit code 71' in edge_stack_verify_runs.p22a.msg"
+              - edge_stack_verify_runs.p22a.after.stamps.compose is match(edge_stack_verify_hex64)
+              - edge_stack_verify_runs.p22a.after.stamps.compose != edge_stack_verify_runs.p22a.before.stamps.compose
+              - edge_stack_verify_runs.p22a.after.stamps.crowdsec == 'pending'
+              - edge_stack_verify_runs.p22a.after.stamps.caddy == 'pending'
+              - "'caddy-reload' not in edge_stack_verify_runs.p22a.kinds"
+              - not edge_stack_verify_runs.p22b.failed
+              - edge_stack_verify_runs.p22b.kinds == ['crowdsec-restart', 'caddy-reload']
+              - edge_stack_verify_runs.p22b.after.stamps.crowdsec is match(edge_stack_verify_hex64)
+              - edge_stack_verify_runs.p22b.after.stamps.caddy is match(edge_stack_verify_hex64)
+            quiet: true
+            fail_msg: >-
+              A CrowdSec that did not answer after its restart did not leave exactly the right stamps. The first run said
+              '{{ edge_stack_verify_runs.p22a.msg }}' and called {{ edge_stack_verify_runs.p22a.kinds }};
+              the rerun called {{ edge_stack_verify_runs.p22b.kinds }}.
+
+    # ----- p23: the containers are not running -----
+    - name: Case p23, a change to the Caddyfile and CrowdSec while neither container runs
+      tags: [p23]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Say that no service is running
+          ansible.builtin.file:
+            path: /run/standin.running
+            state: absent
+
+        - name: Make the variant
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: p23
+            edge_stack_verify_variant_edits:
+              - { path: Caddyfile, append: "\n# case p23\n" }
+              - { path: crowdsec/config.yaml.local, append: "\n# case p23\n" }
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p23a
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p23.path }}'
+
+        - name: Say that both services are running
+          ansible.builtin.copy:
+            content: "caddy\ncrowdsec\n"
+            dest: /run/standin.running
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p23b
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.p23.path }}'
+
+        - name: Assert the files were placed, nothing was reloaded or restarted, no stamp was written, and the rerun did both
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p23a.failed
+              - edge_stack_verify_runs.p23a.kinds == ['validate-caddy']
+              - edge_stack_verify_runs.p23a.after.caddy_sha == edge_stack_verify_variants.p23.caddy
+              - edge_stack_verify_runs.p23a.after.config_sha == edge_stack_verify_variants.p23.config
+              - edge_stack_verify_runs.p23a.after.stamps.caddy == 'pending'
+              - edge_stack_verify_runs.p23a.after.stamps.crowdsec == 'pending'
+              - not edge_stack_verify_runs.p23b.failed
+              - edge_stack_verify_runs.p23b.kinds == ['crowdsec-restart', 'caddy-reload']
+              - edge_stack_verify_runs.p23b.after.stamps.caddy is match(edge_stack_verify_hex64)
+              - edge_stack_verify_runs.p23b.after.stamps.crowdsec is match(edge_stack_verify_hex64)
+            quiet: true
+            fail_msg: >-
+              With no container running the role reloaded, restarted or recorded something, or the rerun after they ran
+              did not. The first run called {{ edge_stack_verify_runs.p23a.kinds }}, the second {{ edge_stack_verify_runs.p23b.kinds }}.
+
+    # ----- p24: a host with no stack directory at all -----
+    - name: Case p24, the first delivery to a host that has nothing
+      tags: [p24]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Remove the stack directory, the stamps and the containers' view
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /opt/branchleft/edge
+            - /var/lib/branchleft/edge.caddy.applied
+            - /var/lib/branchleft/edge.compose.applied
+            - /var/lib/branchleft/edge.crowdsec.applied
+            - /run/standin.running
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p24
+
+        - name: Read the delivered Caddyfile, the directories and the pending stamps
+          ansible.builtin.stat:
+            path: '{{ item }}'
+            get_checksum: false
+          loop:
+            - /opt/branchleft/edge
+            - /opt/branchleft/edge/crowdsec/acquis.d
+            - /opt/branchleft/edge/Caddyfile
+          register: edge_stack_verify_p24_stats
+
+        - name: Assert the Caddyfile was created whole, root's and mode 0644, in directories of 0755, and every class was acted on once and recorded
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p24.failed
+              - edge_stack_verify_runs.p24.after.caddy_sha == edge_stack_verify_real_sha.caddy
+              - edge_stack_verify_p24_stats.results[0].stat.mode == '0755'
+              - edge_stack_verify_p24_stats.results[1].stat.mode == '0755'
+              - edge_stack_verify_p24_stats.results[2].stat.mode == '0644'
+              - edge_stack_verify_p24_stats.results[2].stat.pw_name == 'root'
+              - edge_stack_verify_runs.p24.kinds == ['validate-caddy', 'validate-compose', 'unit-start', 'crowdsec-restart', 'caddy-reload']
+              - edge_stack_verify_runs.p24.after.stamps == edge_stack_verify_base.stamps
+            quiet: true
+            fail_msg: The first delivery to a host with nothing was wrong. The calls were {{ edge_stack_verify_runs.p24.kinds }}.
+
+    # ----- p26: the apply acts only on the pin the validation used -----
+    # A deploy that moves the pin to another valid digest after the validation read it
+    # and before the apply takes the lock. The pattern still matches, so only a comparison
+    # with the validated pin can refuse it. On a refusal nothing is acted on: the Caddyfile
+    # is as it was, no unit or container is touched, the class stays pending, and the next
+    # run, which validates in the new digest, acts.
+    - name: Case p26, a pin that moves between the validation and the apply
+      tags: [p26]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make a variant whose Caddyfile differs
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: pinmove
+            edge_stack_verify_variant_edits:
+              - { path: Caddyfile, append: "\n# case pin move\n" }
+
+        - name: Ask the stand-in to move the pin while it validates the Caddyfile
+          ansible.builtin.copy:
+            content: ''
+            dest: /run/standin.pin.change
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p26move
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.pinmove.path }}'
+
+        - name: Apply the role again, which validates in the pin that is there now
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p26rerun
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.pinmove.path }}'
+
+        - name: Assert the apply was refused with its own exit code and did nothing
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs.p26move.failed
+              - "'exit code 74' in edge_stack_verify_runs.p26move.msg"
+              - "'changed since the candidates were validated' in edge_stack_verify_runs.p26move.msg"
+              - edge_stack_verify_runs.p26move.after.caddy_sha == edge_stack_verify_runs.p26move.before.caddy_sha
+              - edge_stack_verify_runs.p26move.after.view_sha == edge_stack_verify_runs.p26move.before.view_sha
+              - edge_stack_verify_runs.p26move.kinds == ['validate-caddy']
+              - edge_stack_verify_runs.p26move.after.stamps.caddy == 'pending'
+              - edge_stack_verify_runs.p26move.after.stamps.compose == edge_stack_verify_runs.p26move.before.stamps.compose
+              - edge_stack_verify_runs.p26move.after.stamps.crowdsec == edge_stack_verify_runs.p26move.before.stamps.crowdsec
+            quiet: true
+            fail_msg: >-
+              A pin that moved between the validation and the apply was not refused with exit code 74 and nothing
+              done. It said '{{ edge_stack_verify_runs.p26move.msg }}', called {{ edge_stack_verify_runs.p26move.kinds }}
+              and left the Caddy stamp '{{ edge_stack_verify_runs.p26move.after.stamps.caddy }}'.
+
+        - name: Assert the next run acted on the class that was left pending
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p26rerun.failed
+              - edge_stack_verify_runs.p26rerun.kinds == ['validate-caddy', 'caddy-reload']
+              - edge_stack_verify_runs.p26rerun.after.caddy_sha == edge_stack_verify_variants.pinmove.caddy
+              - edge_stack_verify_runs.p26rerun.after.stamps.caddy is match(edge_stack_verify_hex64)
+            quiet: true
+            fail_msg: >-
+              The run after a refused apply did not reload Caddy and record the class. It called
+              {{ edge_stack_verify_runs.p26rerun.kinds }} and said '{{ edge_stack_verify_runs.p26rerun.msg }}'.
+
+        # The script by itself, with every action off. Each of the three runs is stopped,
+        # or not, by the pin alone, so a refusal below cannot be a refusal for another
+        # reason, and the third is the control: the same call is let through when the pin is
+        # the validated one.
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Run the apply mode with no validated pin, with another valid one, and with the pin that is there
+          ansible.builtin.include_tasks: tasks/script_apply.yml
+          vars:
+            edge_stack_verify_script_name: '{{ item.name }}'
+            edge_stack_verify_script_pin: '{{ item.pin }}'
+          loop:
+            - name: other
+              pin: '{{ edge_stack_verify_pin_other }}'
+            - name: same
+              pin: '{{ edge_stack_verify_pin_good | regex_replace("^IMAGE=", "") }}'
+          loop_control:
+            label: '{{ item.name }}'
+
+        - name: Run the apply mode with no validated pin at all
+          ansible.builtin.include_tasks: tasks/script_apply.yml
+          vars:
+            edge_stack_verify_script_name: none
+
+        - name: Assert the script refuses no pin and another pin, and lets the same pin through
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_script.none.rc == 74
+              - "'no validated pin' in edge_stack_verify_script.none.stderr"
+              - edge_stack_verify_script.other.rc == 74
+              - "'changed since the candidates were validated' in edge_stack_verify_script.other.stderr"
+              - edge_stack_verify_script.same.rc == 0
+              - edge_stack_verify_script.same.stdout == ''
+              - edge_stack_verify_script.none.calls == 0
+              - edge_stack_verify_script.other.calls == 0
+              - edge_stack_verify_script.same.calls == 0
+            quiet: true
+            fail_msg: >-
+              The apply mode did not refuse a missing or a different validated pin with exit code 74, or refused the pin
+              that is there. It said {{ edge_stack_verify_script }}.
+
+    # ----- p27: the Compose file that arrives is the one the validation read -----
+    # The stand-in adds a line to the candidate as it validates it, so the file the
+    # validation read is not the repository's. The file on the host must be that one: a
+    # role that read the repository's file a second time would put an unvalidated file in
+    # place. The second run is the control, with nothing added: the three are one file.
+    - name: Case p27, the Compose file placed is the candidate that was validated
+      tags: [p27]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Make a variant whose Compose file differs
+          ansible.builtin.include_tasks: tasks/variant.yml
+          vars:
+            edge_stack_verify_variant_name: composeval
+            edge_stack_verify_variant_edits:
+              - { path: compose.yml, append: "\n# case compose validated\n" }
+
+        - name: Ask the stand-in to add a line to the candidate Compose file as it validates it
+          ansible.builtin.copy:
+            content: ''
+            dest: /run/standin.compose.edit
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p27edit
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.composeval.path }}'
+
+        - name: Return to the converged host, with nothing added by the stand-in
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p27plain
+            edge_stack_verify_run_source: '{{ edge_stack_verify_variants.composeval.path }}'
+
+        - name: Assert the file on the host is the file the validation read, and not the repository's
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p27edit.failed
+              - edge_stack_verify_p27_edit_validated == [edge_stack_verify_runs.p27edit.after.compose_sha]
+              - edge_stack_verify_runs.p27edit.after.compose_sha != edge_stack_verify_variants.composeval.compose
+              - edge_stack_verify_runs.p27edit.after.candidate_exists == false
+            quiet: true
+            fail_msg: >-
+              The Compose file on the host is not the one the validation read. The validation read
+              {{ edge_stack_verify_p27_edit_validated }}, the host holds {{ edge_stack_verify_runs.p27edit.after.compose_sha }}
+              and the repository's file is {{ edge_stack_verify_variants.composeval.compose }}.
+          vars:
+            edge_stack_verify_p27_edit_validated: >-
+              {{ edge_stack_verify_runs.p27edit.new | select('match', '^VALIDATED-COMPOSE sha=')
+              | map('regex_replace', '^VALIDATED-COMPOSE sha=', '') | list }}
+
+        - name: Assert that with nothing added the validated file, the placed file and the repository's are one
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p27plain.failed
+              - edge_stack_verify_p27_plain_validated == [edge_stack_verify_variants.composeval.compose]
+              - edge_stack_verify_runs.p27plain.after.compose_sha == edge_stack_verify_variants.composeval.compose
+            quiet: true
+            fail_msg: >-
+              With nothing added to the candidate, the file on the host is not the repository's. The validation read
+              {{ edge_stack_verify_p27_plain_validated }} and the host holds {{ edge_stack_verify_runs.p27plain.after.compose_sha }}.
+          vars:
+            edge_stack_verify_p27_plain_validated: >-
+              {{ edge_stack_verify_runs.p27plain.new | select('match', '^VALIDATED-COMPOSE sha=')
+              | map('regex_replace', '^VALIDATED-COMPOSE sha=', '') | list }}
+
+    # ----- p25: the restore, and the log -----
+    - name: Case p25, put the host back, and scan the log for the values
+      tags: [p25]
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Read the log of this scenario's Ansible runs
+          ansible.builtin.set_fact:
+            edge_stack_verify_log: "{{ lookup('ansible.builtin.file', lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') ~ '/ansible.log') }}"
+          no_log: true
+
+        - name: Assert the log holds the output the scan is meant to read
+          ansible.builtin.assert:
+            that:
+              - "'EDGE_STACK_LOG_CANARY' in edge_stack_verify_log"
+              - "'Validate the candidates under the deploy lock' in edge_stack_verify_log"
+            quiet: true
+            fail_msg: The log lacks the canary or the role's task name, so an empty scan would prove nothing.
+          no_log: true
+
+        - name: Assert the log holds none of the sentinel values
+          ansible.builtin.assert:
+            that:
+              - item not in edge_stack_verify_log
+            quiet: true
+            fail_msg: A sentinel value is in the Ansible log, so a task that handles it lacks no_log.
+          loop:
+            - test-sentinel-edge-key-0001
+            - test-sentinel-0002
+            - test-sentinel-edge-key-0003
+            # The fingerprints hold the hash of edge.env. They pass through the includes of
+            # the _stamp_*.yml files as variables, which this scan reads.
+            - '{{ edge_stack_verify_base.stamps.caddy }}'
+            - '{{ edge_stack_verify_base.stamps.compose }}'
+            - '{{ edge_stack_verify_base.stamps.crowdsec }}'
+          loop_control:
+            label: scan
+          no_log: true
+
+        - name: Forget the log content, which may hold the values
+          ansible.builtin.set_fact:
+            edge_stack_verify_log: ''
+          no_log: true
+
+    - name: Remove the variants
+      ansible.builtin.file:
+        path: '{{ edge_stack_verify_tmp }}'
+        state: absent
+      delegate_to: localhost
+      tags: [always]

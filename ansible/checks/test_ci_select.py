@@ -172,7 +172,7 @@ class SelectionTest(unittest.TestCase):
         self.assertIn("ansible/roles/egress_nat", reads["hetzner/provision/branchleft-nat.service"])
 
     def test_a_file_outside_ansible_that_no_role_reads_runs_no_shard(self) -> None:
-        for path in ("hetzner/edge/stack/compose.yml", "hetzner/dns/zone.json", "mail/README.md"):
+        for path in ("hetzner/RUNBOOK-edge.md", "hetzner/dns/zone.json", "mail/README.md"):
             with self.subTest(path=path):
                 self.assertEqual([], self.pull_request(path))
 

@@ -1,0 +1,42 @@
+---
+# One bad pin: written, the role applied, the run asserted to fail before any call to
+# the stand-ins, and the pin put back. Inputs: edge_stack_verify_pin_name, edge_stack_verify_pin_content.
+- name: Write the pin
+  ansible.builtin.copy:
+    content: '{{ edge_stack_verify_pin_content }}'
+    dest: /etc/branchleft/edge.image.env
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Apply the role with a Caddyfile that differs, so a refused pin would otherwise be acted on
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    edge_stack_verify_run_name: 'pin_{{ edge_stack_verify_pin_name }}'
+    edge_stack_verify_run_source: '{{ edge_stack_verify_variants.pins.path }}'
+
+- name: Name that run
+  ansible.builtin.set_fact:
+    edge_stack_verify_pin_run: "{{ edge_stack_verify_runs['pin_' ~ edge_stack_verify_pin_name] }}"
+  no_log: true
+
+- name: Assert the role refused the pin and called nothing
+  ansible.builtin.assert:
+    that:
+      - edge_stack_verify_pin_run.failed
+      - "'must be exactly one line' in edge_stack_verify_pin_run.msg"
+      - edge_stack_verify_pin_run.new == []
+      - edge_stack_verify_pin_run.after.caddy_sha == edge_stack_verify_pin_run.before.caddy_sha
+      - edge_stack_verify_pin_run.after.stamps == edge_stack_verify_pin_run.before.stamps
+    quiet: true
+    fail_msg: >-
+      The role did not refuse the pin '{{ edge_stack_verify_pin_name }}' before it called anything. It said
+      '{{ edge_stack_verify_pin_run.msg }}' and made the calls {{ edge_stack_verify_pin_run.new }}.
+
+- name: Put the pin back
+  ansible.builtin.copy:
+    content: "{{ edge_stack_verify_pin_good }}\n"
+    dest: /etc/branchleft/edge.image.env
+    owner: root
+    group: root
+    mode: '0644'

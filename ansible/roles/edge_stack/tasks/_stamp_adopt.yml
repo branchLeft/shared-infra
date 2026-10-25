@@ -1,0 +1,19 @@
+---
+# The stamp steps of the restart shape, adopted. The class has no stamp and nothing
+# differs, so the host already has these files and the stamp is the whole change. It runs
+# in check mode too, which is how a plan shows the adoption. The hash is of files that may
+# hold a key, so the task is no_log and shows no diff. The input is edge_stack_stamp_classes,
+# a list of {name, file, fingerprint, adopt}.
+- name: Record each adopted class
+  ansible.builtin.copy:
+    content: "{{ item.fingerprint }}\n"
+    dest: '{{ item.file }}'
+    owner: root
+    group: root
+    mode: '0600'
+  loop: '{{ edge_stack_stamp_classes }}'
+  loop_control:
+    label: '{{ item.name }}'
+  when: item.adopt | bool
+  no_log: true
+  diff: false

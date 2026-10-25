@@ -1,0 +1,21 @@
+---
+# The stamp steps of the restart shape, marked. Called after every candidate is accepted
+# and before the first file of the class is placed or acted on. A run that dies anywhere
+# after this leaves a stamp that is no fingerprint, so the next run acts on the class
+# again. Placed later, a run that died after a file was placed and before this mark would
+# leave a class with no stamp and no difference, which the next run takes for a
+# hand-delivered host: it would stamp the class and never act on it. The input is
+# edge_stack_stamp_classes, a list of {name, file, mark}.
+- name: Mark each marked class as pending
+  ansible.builtin.copy:
+    content: "{{ edge_stack_stamp_pending }}\n"
+    dest: '{{ item.file }}'
+    owner: root
+    group: root
+    mode: '0600'
+  loop: '{{ edge_stack_stamp_classes }}'
+  loop_control:
+    label: '{{ item.name }}'
+  when: item.mark | bool and not ansible_check_mode
+  no_log: true
+  diff: false

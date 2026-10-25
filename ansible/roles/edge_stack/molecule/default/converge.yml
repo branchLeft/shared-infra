@@ -1,0 +1,209 @@
+---
+# The first converge puts a host in front of the role that was delivered by hand, with
+# an earlier release of every file, both services running on those files and no
+# stamp (adoption, where the files differ). The role must then validate and place the
+# new files, restart the unit once, restart CrowdSec once, reload Caddy once, in that
+# order, write the Caddyfile into the inode the container's mount holds, and record
+# all three classes. Every later converge (the idempotence step, the check-mode step
+# after verify) finds the host converged and must change nothing, so the setup runs
+# only while the Caddy stamp is absent.
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars:
+    edge_stack_converge_repo_stack: '{{ playbook_dir }}/../../files/stack'
+    edge_stack_converge_dir: /opt/branchleft/edge
+  tasks:
+    - name: Read whether the role has already been applied
+      ansible.builtin.stat:
+        path: /var/lib/branchleft/edge.caddy.applied
+        get_checksum: false
+      register: edge_stack_converge_existing
+
+    - name: Create the directories of the earlier release
+      ansible.builtin.file:
+        path: '{{ edge_stack_converge_dir }}/{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - ''
+        - crowdsec
+        - crowdsec/acquis.d
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    # An earlier release: different from the repository's files in every class, a
+    # stale acquisition file the repository does not hold, and a file outside the
+    # acquisition directory that the role must leave alone.
+    - name: Put the earlier release of the files on the host
+      ansible.builtin.copy:
+        content: '{{ item.content }}'
+        dest: '{{ edge_stack_converge_dir }}/{{ item.path }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - { path: Caddyfile, content: "# earlier release of the Caddyfile\n" }
+        - { path: compose.yml, content: "# earlier release of the Compose file\nname: edge\n" }
+        - { path: crowdsec/config.yaml.local, content: "# earlier release\n" }
+        - { path: crowdsec/acquis.d/caddy.yaml, content: "# earlier release\n" }
+        - path: crowdsec/acquis.d/old-site.yaml
+          content: "# a file the repository no longer holds\n"
+        - path: crowdsec/keep-me.txt
+          content: "# outside the acquisition directory: the role leaves it\n"
+      loop_control:
+        label: '{{ item.path }}'
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    # The containers' view of the two single-file mounts: a hard link, so the view
+    # follows the inode and not the name (standin-docker.sh).
+    - name: Give the containers their view of the single-file mounts
+      ansible.builtin.file:
+        src: '{{ edge_stack_converge_dir }}/{{ item.src }}'
+        dest: '/var/lib/standin-mount/{{ item.name }}'
+        state: hard
+        force: true
+        mode: '0644'
+      loop:
+        - { src: Caddyfile, name: Caddyfile }
+        - { src: crowdsec/config.yaml.local, name: config.yaml.local }
+      loop_control:
+        label: '{{ item.name }}'
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Enable and start the instance, as on a host that is already running
+      ansible.builtin.systemd_service:
+        name: branchleft-compose@edge.service
+        enabled: true
+        state: started
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Empty the log of the stand-in's calls, so it holds only what the role does
+      ansible.builtin.copy:
+        content: ''
+        dest: /var/log/docker-standin.calls
+        owner: root
+        group: root
+        mode: '0644'
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Read the inode of the Caddyfile the containers hold
+      ansible.builtin.stat:
+        path: '{{ edge_stack_converge_dir }}/Caddyfile'
+        get_checksum: false
+      register: edge_stack_converge_before
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Apply the role
+      ansible.builtin.include_role:
+        # Molecule links the role under its namespace and name, the namespace
+        # from galaxy_info in meta/main.yml.
+        name: branchleft.edge_stack
+
+    - name: Hash the repository's files, on the machine that runs the test
+      ansible.builtin.stat:
+        path: '{{ edge_stack_converge_repo_stack }}/{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - Caddyfile
+        - compose.yml
+      register: edge_stack_converge_sources
+      delegate_to: localhost
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Read the log of the stand-in's calls
+      ansible.builtin.slurp:
+        src: /var/log/docker-standin.calls
+      register: edge_stack_converge_calls
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Read the Caddyfile the role wrote, and the view the container holds
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - '{{ edge_stack_converge_dir }}/Caddyfile'
+        - /var/lib/standin-mount/Caddyfile
+      register: edge_stack_converge_after
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Read what is left of the earlier release's strays
+      ansible.builtin.stat:
+        path: '{{ edge_stack_converge_dir }}/{{ item }}'
+        get_checksum: false
+      loop:
+        - crowdsec/acquis.d/old-site.yaml
+        - crowdsec/keep-me.txt
+      register: edge_stack_converge_strays
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Work out the order of the calls
+      ansible.builtin.set_fact:
+        edge_stack_converge_kinds: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for line in (edge_stack_converge_calls.content | b64decode).splitlines() -%}
+          {%- if line.startswith('docker run ') -%}{%- set _ = ns.out.append('validate-caddy') -%}
+          {%- elif line.endswith(' config -q') -%}{%- set _ = ns.out.append('validate-compose') -%}
+          {%- elif line.startswith('UNIT-START ') -%}{%- set _ = ns.out.append('unit-start') -%}
+          {%- elif line.startswith('RESTART-CROWDSEC ') -%}{%- set _ = ns.out.append('crowdsec-restart') -%}
+          {%- elif line.startswith('RELOAD ') -%}{%- set _ = ns.out.append('caddy-reload') -%}
+          {%- elif line.endswith(' up') or ' up ' in line -%}{%- set _ = ns.out.append('UP') -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ ns.out }}
+        edge_stack_converge_unit_line: >-
+          {{ (edge_stack_converge_calls.content | b64decode).splitlines()
+          | select('match', '^UNIT-START ') | first | default('') }}
+        edge_stack_converge_reload_line: >-
+          {{ (edge_stack_converge_calls.content | b64decode).splitlines()
+          | select('match', '^RELOAD ') | first | default('') }}
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Assert the first apply did each action once, in order, on files that were all in place
+      ansible.builtin.assert:
+        that:
+          - edge_stack_converge_kinds == ['validate-caddy', 'validate-compose', 'unit-start', 'crowdsec-restart', 'caddy-reload']
+          - >-
+            edge_stack_converge_unit_line == 'UNIT-START caddyfile=' ~ edge_stack_converge_sources.results[0].stat.checksum[:12]
+            ~ ' compose=' ~ edge_stack_converge_sources.results[1].stat.checksum[:12]
+          - edge_stack_converge_reload_line == 'RELOAD caddyfile=' ~ edge_stack_converge_sources.results[0].stat.checksum[:12]
+        quiet: true
+        fail_msg: >-
+          The first apply did not validate both candidates, restart the unit once, restart CrowdSec once and reload Caddy
+          once, in that order, with the Caddyfile and the Compose file already on disk when the unit started, and with
+          no docker compose up. The kinds of call were {{ edge_stack_converge_kinds }}; the unit line was {{ edge_stack_converge_unit_line }}.
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    # The Caddyfile is written into the inode the container's mount holds. A write by
+    # rename leaves the view on the earlier bytes: the sha of the view then differs.
+    - name: Assert the Caddyfile was written in place and the container sees the new bytes
+      ansible.builtin.assert:
+        that:
+          - edge_stack_converge_after.results[0].stat.inode == edge_stack_converge_before.stat.inode
+          - edge_stack_converge_after.results[1].stat.inode == edge_stack_converge_before.stat.inode
+          - edge_stack_converge_after.results[0].stat.checksum == edge_stack_converge_sources.results[0].stat.checksum
+          - edge_stack_converge_after.results[1].stat.checksum == edge_stack_converge_sources.results[0].stat.checksum
+        quiet: true
+        fail_msg: The Caddyfile was replaced instead of written in place, or the container's view does not hold the new bytes.
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Assert the stale acquisition file was pruned and the file outside the directory was left
+      ansible.builtin.assert:
+        that:
+          - not edge_stack_converge_strays.results[0].stat.exists
+          - edge_stack_converge_strays.results[1].stat.exists
+        quiet: true
+        fail_msg: The stale acquisition file is still there, or the role removed a file outside the acquisition directory.
+      when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
+
+    # The control case for the log scan in verify.yml: a task with no no_log that is
+    # given a known canary. If the log did not show it, an empty result of the scan
+    # would mean nothing.
+    - name: Run a harmless command that is given a canary argument
+      ansible.builtin.command:
+        argv:
+          - /bin/true
+          - EDGE_STACK_LOG_CANARY
+      changed_when: false
+      check_mode: false
