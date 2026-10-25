@@ -1,6 +1,7 @@
 ---
 # Describe, in one text, everything a refused request must leave alone: the
-# marker the placeholder playbooks write, the rollback floor, the link to the
+# marker the placeholder playbooks write, the markers the placeholder steps write
+# (so a refusal that ran a step shows), the rollback floor, the link to the
 # current checkout and every file in the checkout, with owner, mode, size, time
 # and a hash of each file. Directories are described without size and time,
 # because a directory's own time moves when a fetch or a discarded scratch
@@ -19,6 +20,9 @@
       ( find '{{ snap_state }}/work' -type d -printf 'dir|%p|%U|%G|%m\n' 2>&1 || true ) | sort
       ( find '{{ snap_state }}' -maxdepth 1 -mindepth 1 ! -name repo.git ! -name tmp ! -name home \
           -printf 'top|%p|%y|%m|%l\n' 2>&1 || true ) | sort
+      ( find /var/tmp/ptt -maxdepth 1 -name 'step-*' \
+          -printf 'step|%p|%y|%U|%G|%m|%s|%T@\n' 2>&1 || true ) | sort
       ( find '{{ verify_marker }}' '{{ snap_state }}/work/' '{{ snap_state }}/last-applied' -type f -exec sha256sum {} + 2>&1 || true ) | sort
+      ( find /var/tmp/ptt -maxdepth 1 -name 'step-*' -type f -exec sha256sum {} + 2>&1 || true ) | sort
   register: pull_trigger_snapshot_result
   changed_when: false

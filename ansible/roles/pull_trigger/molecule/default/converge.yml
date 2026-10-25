@@ -24,3 +24,14 @@
         pull_trigger_playbooks:
           - ansible/playbooks/host.yml
         pull_trigger_playbook: ansible/playbooks/host.yml
+        # The words are public typing guards, not secrets.
+        pull_trigger_steps:
+          - id: migrate
+            tag: control_plane_db_migrate
+            word: MIGRATE-WORD
+          - id: identity
+            tag: control_plane_db_identity
+            word: IDENTITY-WORD
+          - id: provision
+            tag: control_plane_db_provision
+            word: PROVISION-WORD
