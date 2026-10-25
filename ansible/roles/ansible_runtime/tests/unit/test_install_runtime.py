@@ -189,6 +189,39 @@ class LogicalLinesTest(unittest.TestCase):
         self.assertEqual([(1, "a")], program.logical_lines("a \\"))
 
 
+class PhysicalLineOptionsTest(unittest.TestCase):
+    """The raw-line refusal: only an exact --hash=sha256 token may start with a dash."""
+
+    def refused_token(self, text: str) -> str:
+        with self.assertRaises(program.Refusal) as caught:
+            program.check_lock_options(text)
+        self.assertEqual(program.Reason.LOCK_UNHASHED, caught.exception.reason)
+        return caught.exception.detail
+
+    def test_an_option_is_refused_on_a_line_of_its_own_and_on_a_pin(self) -> None:
+        evil = "--index-url=https://evil.example/simple"
+        self.assertEqual(evil, self.refused_token(f"{evil}\n"))
+        self.assertEqual(evil, self.refused_token(f"a==1 --hash=sha256:{HASH_A} {evil}\n"))
+
+    def test_a_hash_that_is_not_exact_is_refused(self) -> None:
+        for token in (
+            f"--hash=sha256:{HASH_A}\\",
+            "--hash=sha256:abc",
+            f"--hash=md5:{HASH_A[:32]}",
+        ):
+            with self.subTest(token=token):
+                self.assertEqual(token, self.refused_token(f"a==1 {token}\n"))
+
+    def test_a_line_that_pip_splits_but_an_editor_does_not_is_judged_alone(self) -> None:
+        self.assertEqual("-r", self.refused_token("a==1 \\\x0b-r other.txt\n"))
+
+    def test_hashes_comments_and_dashes_inside_a_token_are_not_refused(self) -> None:
+        program.check_lock_options(
+            f"a-b==1 \\\n    --hash=sha256:{HASH_A} \\\n    --hash=sha256:{HASH_B}\n"
+        )
+        program.check_lock_options("    # via -r requirements.in\n# -e ./x\n")
+
+
 class LockChecksTest(Case):
     def test_a_matching_lock_installs_and_names_the_environment(self) -> None:
         runner = FakeRunner()
@@ -341,7 +374,7 @@ class LockChecksTest(Case):
                 with self.assertRaises(program.Refusal) as caught:
                     program.check_lock_is_hashed(LOCK_A + text.encode())
                 self.assertEqual(program.Reason.LOCK_UNHASHED, caught.exception.reason)
-                self.assertEqual("alpha==1.0", caught.exception.detail)
+                self.assertEqual("--index-url=https://evil.example/simple", caught.exception.detail)
 
     def test_a_separator_other_than_a_space_is_refused_as_pip_does_not_split_on_it(self) -> None:
         for name, separator in {"a tab": "\t", "a no-break space": "\xa0"}.items():

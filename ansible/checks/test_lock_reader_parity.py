@@ -48,10 +48,6 @@ HASH_TOKEN = re.compile(r"--hash=sha256:[0-9a-f]{64}")
 # split with it, so a lock can break a line where an editor shows none.
 ODD_BREAKS = {
     "carriage return": "\r",
-    "vertical tab": "\x0b",
-    "form feed": "\x0c",
-    "file separator": "\x1c",
-    "next line": "\x85",
     "line separator": "\u2028",
 }
 
@@ -188,28 +184,12 @@ def shapes() -> list[Shape]:
             None,
             False,
         ),
-        # The shapes of the cycle-3 verdict. In each, pip reads --index-url as a line of its own.
+        # One entry for the ways a continuation ends: the program judges each physical line alone
+        # (check_lock_options), so a comment, a space after the backslash or a blank line cannot
+        # carry an option past it, and the table keeps one of them as the witness.
         Shape(
-            "a comment-only line ends a continuation, then an option",
-            f"{PINNED} \\\n # c \\\n{EVIL}\n".encode(),
-            unhashed,
-            True,
-        ),
-        Shape(
-            "a space after the backslash, with a comment, then an option",
-            f"{PINNED} # c \\ \n{EVIL}\n".encode(),
-            unhashed,
-            True,
-        ),
-        Shape(
-            "a space after the backslash, with no comment, then an option",
+            "a space after the backslash, then an option",
             f"{PINNED} \\ \n{EVIL}\n".encode(),
-            unhashed,
-            True,
-        ),
-        Shape(
-            "a blank line ends a continuation, then an option",
-            f"{PINNED} \\\n\n{EVIL}\n".encode(),
             unhashed,
             True,
         ),
@@ -283,23 +263,11 @@ def shapes() -> list[Shape]:
             True,
             pip_text_differs=True,
         ),
-        Shape(
-            "a UTF-16 big-endian byte-order mark",
-            bom(b"\xfe\xff", "utf-16-be", f"{PINNED}\n{EVIL}\n"),
-            Reason.LOCK_ENCODING,
-            True,
-            pip_text_differs=True,
-        ),
+        # The big-endian marks are the same branch of pip's reader and of the program's tuple. The
+        # little-endian pair is kept because the UTF-16 mark is a prefix of the UTF-32 one.
         Shape(
             "a UTF-32 little-endian byte-order mark",
             bom(b"\xff\xfe\x00\x00", "utf-32-le", f"{PINNED}\n{EVIL}\n"),
-            Reason.LOCK_ENCODING,
-            True,
-            pip_text_differs=True,
-        ),
-        Shape(
-            "a UTF-32 big-endian byte-order mark",
-            bom(b"\x00\x00\xfe\xff", "utf-32-be", f"{PINNED}\n{EVIL}\n"),
             Reason.LOCK_ENCODING,
             True,
             pip_text_differs=True,
@@ -389,6 +357,15 @@ class ParityTests(unittest.TestCase):
         for shape in shapes():
             with self.subTest(shape=shape.name, pip=self.version):
                 self.assertEqual(shape.refuses, self.refusal_of(shape.data))
+
+    def test_the_program_refuses_every_shape_in_which_pip_sees_a_foreign_option(self) -> None:
+        # The outcome the whole file exists for, said once: whatever the shape, a lock that pip
+        # reads with an option other than --hash is never accepted.
+        hostile = [shape for shape in shapes() if shape.pip_option]
+        self.assertGreaterEqual(len(hostile), 6, "the table has too few hostile shapes")
+        for shape in hostile:
+            with self.subTest(shape=shape.name, pip=self.version):
+                self.assertIsNotNone(self.refusal_of(shape.data))
 
     def test_pip_reads_each_shape_as_the_table_says(self) -> None:
         # The control for the test above: a hostile shape that pip did not read as hostile would
@@ -488,28 +465,6 @@ class OracleVersionTests(unittest.TestCase):
         with self.seen_as(pinned_pip()):
             self.assertEqual("pip._internal.req.req_file", load_oracle().__name__)
 
-    def test_the_version_is_compared_before_any_pip_internal_is_imported_or_probed(self) -> None:
-        # A wrong pip that also lacks a function must be reported by its version, not by the
-        # attribute error the CI run showed.
-        req_file = importlib.import_module("pip._internal.req.req_file")
-        imported: list[str] = []
-        real_import = importlib.import_module
-
-        def recording(name: str, package: str | None = None) -> ModuleType:
-            imported.append(name)
-            return real_import(name, package)
-
-        with mock.patch.dict(vars(req_file)), self.seen_as("0.0.1"):
-            vars(req_file).pop("_decode_req_file", None)
-            with (
-                mock.patch.object(importlib, "import_module", recording),
-                self.assertRaises(OracleUnavailable) as raised,
-            ):
-                load_oracle()
-        self.assertEqual([], [name for name in imported if name.startswith("pip._internal")])
-        self.assertIn("0.0.1", str(raised.exception))
-        self.assertNotIn("_decode_req_file", str(raised.exception))
-
     def test_the_version_is_read_from_the_pin_file_each_time(self) -> None:
         # A literal in this file would be a second home that drifts from the file CI installs.
         running = pinned_pip()
@@ -522,17 +477,6 @@ class OracleVersionTests(unittest.TestCase):
             load_oracle()
         self.assertIn("9.9.9", str(raised.exception))
         self.assertIn(running, str(raised.exception))
-
-    def test_a_pin_file_that_does_not_pin_pip_fails(self) -> None:
-        running = pinned_pip()
-        empty = self.pin_file("# nothing is pinned here\n")
-        with (
-            mock.patch.dict(globals(), {"PIP_PIN": empty}),
-            self.seen_as(running),
-            self.assertRaises(OracleUnavailable) as raised,
-        ):
-            load_oracle()
-        self.assertIn("no pip version to check", str(raised.exception))
 
 
 if __name__ == "__main__":

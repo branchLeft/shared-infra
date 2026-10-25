@@ -218,6 +218,24 @@ def check_lock_encoding(lock: bytes) -> None:
             raise Refusal(Reason.LOCK_ENCODING, "coding declaration")
 
 
+def check_lock_options(text: str) -> None:
+    """Refuse an option other than an exact --hash=sha256 token on any physical line.
+
+    Each line is the one str.splitlines gives, as pip splits them, judged before anything is
+    joined, so no reading of continuations can hide an option from it. A comment-only line is
+    skipped, as pip skips it. A token that starts with "-" is an option to pip.
+
+    Raises:
+        Refusal: A line holds an option that is not an exact SHA-256 hash.
+    """
+    for raw in text.splitlines():
+        if COMMENT_LINE.match(raw) is not None:
+            continue
+        for token in raw.split():
+            if token.startswith("-") and HASH_OPTION.fullmatch(token) is None:
+                raise Refusal(Reason.LOCK_UNHASHED, token)
+
+
 def check_lock_is_hashed(lock: bytes) -> None:
     """Refuse a lock unless every line is a pinned requirement with hashes.
 
@@ -231,6 +249,7 @@ def check_lock_is_hashed(lock: bytes) -> None:
         text = lock.decode("utf-8")
     except UnicodeDecodeError as error:
         raise Refusal(Reason.LOCK_NOT_TEXT) from error
+    check_lock_options(text)
     lines = logical_lines(text)
     if not lines:
         raise Refusal(Reason.LOCK_EMPTY)

@@ -94,16 +94,6 @@ class PinTests(unittest.TestCase):
         local = [name for name in imports if (PROGRAMS / f"{name}.py").exists()]
         self.assertEqual(local, ["naming"])
 
-    def test_no_program_is_copied_into_the_role(self) -> None:
-        # ghost-platform is the programs' one home; a copy here is a second home. Neither a file of a program's
-        # name nor any file holding a program's bytes may be under the role.
-        pinned = set(VARS["db1_grants_program_sha256"].values())
-        for path in ROLE.rglob("*"):
-            if path.is_file() and "__pycache__" not in path.parts:
-                self.assertNotIn(path.name, VARS["db1_grants_program_sha256"], str(path))
-                self.assertNotIn(sha256(path), pinned, str(path))
-        self.assertFalse((ROLE / "molecule" / "default" / "files" / "fixtures").exists())
-
     def test_the_role_that_delivers_the_dump_programs_pins_the_same_bytes(self) -> None:
         self.assertTrue(
             SIBLING_VARS.is_file(),

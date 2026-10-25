@@ -6,12 +6,17 @@ because the CMT-3 gate requires comment blocks in the code to stay below 11 line
 ## test_lock_reader_parity.py: parity with pip
 
 The install program (`ansible/roles/ansible_runtime/files/install_runtime.py`) refuses a lock that
-pip would run with an option such as `--index-url`. To do that it has to read the lock as pip
-reads it, and two review cycles each found a difference by hand. So this file is the oracle: for a
-table of lock shapes it asks pip's own code how it reads each one (`_decode_req_file`, `preprocess`
-and `break_args_options` in `pip/_internal/req/req_file.py`) and holds the program to it. The table
-is a list of shapes, each saying what the program must do and what pip must see, and pip is asked
-as well, so a wrong entry in the table fails too.
+pip would run with an option such as `--index-url`. Its first refusal, `check_lock_options`, does
+not read the lock as pip joins it: it judges each physical line alone (the lines `str.splitlines`
+gives, as pip splits them) and refuses any token that starts with a dash and is not an exact
+`--hash=sha256:<64 hex>`. So the oracle is narrow: for a short table of lock shapes it asks pip's
+own code how it reads each one (`_decode_req_file`, `preprocess` and `break_args_options` in
+`pip/_internal/req/req_file.py`) and holds the program to it, with one test that no shape in which
+pip sees a foreign option is accepted. Each shape says what the program must do and what pip must
+see, and pip is asked as well, so a wrong entry in the table fails too. The table keeps one witness
+for each rule (a line break pip and the program both split on, an encoding mark, a continuation, an
+expanded variable); the shapes that only varied how a continuation ends are gone, because the
+physical-line rule does not depend on the join.
 
 The pip it asks is pinned. The pin is `ansible/checks/pip-requirements.txt`, a hashed requirement
 for one version (26.1.2), which both CI tool environments in `.github/workflows/ansible.yml` install
@@ -22,9 +27,8 @@ versions, when it is not the pin. It never skips and never falls back to `auto_d
 
 The version the test compares is read from `pip-requirements.txt` on every run, by `check_pins.py`
 (`read_pip_pin`), so the file the workflow installs is the only home of the version. The comparison
-runs before the test imports or probes any pip internal, so a wrong pip is reported by its version
-and not by a missing function. Tests in the same file patch the version they see and hold that
-down, so no second pip is needed to prove it.
+runs before the test imports or probes any pip internal. Tests in the same file patch the version
+they see and hold that down, so no second pip is needed to prove it.
 
 pip's `req_file` module is not a public interface. A pip upgrade is therefore two steps, done
 together: change the pin in `pip-requirements.txt` to the new version with the hash of its wheel
@@ -141,3 +145,23 @@ is not loaded there.
 
 The refusal's host test is not a host control. Under the trigger `inventory_hostname` is
 `localhost`, and the root-owned pull config is the control on the host.
+
+# check_role_imports and check_role_paths
+
+Two checks over the roles, each run by its own test file in the "Test the checks" step.
+
+`check_role_imports.py` is ANS-12 as one sentence: no role imports another role. In
+`tasks/`, `handlers/` and `meta/` of every directory under `roles/` and `patterns/` it refuses
+`include_role`, `import_role` (in any spelling), a `roles:` key, a `dependencies` entry in
+`meta/main.yml`, and a task or vars file loaded from a path with `..` in it. A `molecule/`
+directory is a playbook and may name roles. It reads literal keys: a role loaded through a
+templated name is not seen.
+
+`check_role_paths.py` holds that no two roles write the same path. It reads the tasks of every
+role under `roles/`, takes the `dest` or `path` of `copy`, `template`, `get_url`, `lineinfile`,
+`blockinfile`, `replace`, `assemble` and of `file` with `state: link`, `hard` or `touch`, and
+resolves each `{{ name }}` from the defaults and vars of the roles (names carry the role prefix,
+ANS-7). It prints how many paths it compared and how many stayed templated, because a path with a
+loop item or a filter is not compared. A directory two roles both make is not a write. It
+replaces the per-role tests that each asserted one home for one role's files; it does not check
+that a role holds no copy of a program (the DB-1 gate of the standards flags that).

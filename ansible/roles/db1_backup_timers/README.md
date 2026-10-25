@@ -32,7 +32,7 @@ The programs are the code of ghost-platform, and that repository is their one ho
 The role used to hold copies of them under `files/`; the DB-1 raw-SQL gate of the
 standards then flagged the copies, which are correct where they live. Keeping a copy
 is the second home the reuse rule forbids, so the role no longer holds a `.py` file
-at all. The unit test `test_no_program_is_copied_into_the_role` keeps it that way.
+at all. The DB-1 gate of the standards flags a copy.
 
 The fetch names one full 40-character commit, never a branch or a tag, so the bytes
 are fixed. `db1_backup_timers_program_sha256` pins the digest of each program at
