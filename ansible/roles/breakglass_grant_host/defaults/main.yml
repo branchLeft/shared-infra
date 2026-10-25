@@ -1,0 +1,7 @@
+---
+# The one input, with the value the role ships. The argument spec holds the same
+# default (ANS-7). It is not a secret. The commit is the one place the grant
+# tool, its wrapper and its units come from. The Node image is not an input: it
+# is a constant in vars/main.yml, set together with the file hashes, because the
+# wrapper and the expire unit carry their own copy of its digest.
+breakglass_grant_host_source_commit: 5e52f78427cab104438057164e4baa16b329875c

@@ -1,0 +1,73 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container.
+#
+# What this scenario is NOT: a control host with a signing key or a Docker
+# daemon. The key is a throwaway placeholder at a path of the scenario's own,
+# never the real key path, and a stand-in program takes the place of the docker
+# command (the grant role's files/docker_standin.sh, which is its one home).
+# The test proves what the role asked Docker to do, that the role looked at the
+# key's metadata and never at its content, and that the log holds no digest of
+# it. The gated run on the host is the proof against the real key and image.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party test base with the same Debian release as the production
+    # hosts, trusted by digest (see the role README). The digest is the pin; the
+    # tag is informational and moves weekly. It has Python in it. The scenario
+    # does not need systemd, so it sets none of the settings that run systemd:
+    # no cgroup mount, no cgroup namespace mode and no tmpfs. No privileged mode
+    # and no added capabilities.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # The image's own command starts systemd as the first process, and systemd
+    # needs a cgroup mount and a cgroup namespace mode that this scenario does
+    # not grant; on a host with cgroup v2 the container can exit at once. A
+    # plain sleep keeps the container alive so Ansible can run in it.
+    command: sleep infinity
+    # The image declares /sys/fs/cgroup as a volume and this scenario does not
+    # bind-mount it, so Docker makes an anonymous volume for every container
+    # started from the image. Molecule's destroy keeps a container's volumes
+    # unless told otherwise, and an anonymous volume carries no label to find it
+    # by, so each run would leave one behind.
+    keep_volumes: false
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every Ansible run of this scenario appends its output to one log on the
+    # controller, and verify reads it. Verbosity 3 prints each task's result with
+    # the arguments it was given, so a task that asks stat for the key's SHA-1
+    # shows that digest in the log, and verify fails.
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '3'
+  inventory:
+    # The paths and values the prepare, converge and verify plays share. The
+    # key is a placeholder with no use anywhere: its text is made up for this
+    # scenario, and so is the second file, whose digest the scan must find so
+    # that an empty scan proves nothing.
+    group_vars:
+      all:
+        scenario_state_dir: /var/lib/docker-standin
+        scenario_calls_log: /var/lib/docker-standin/calls.log
+        scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
+        scenario_key_dir: /tmp/breakglass-mint-test/keys
+        scenario_key_path: /tmp/breakglass-mint-test/keys/signing-key.pem
+        scenario_key_content: BREAKGLASS_TEST_PLACEHOLDER_NOT_A_KEY_3b9d1f6a
+        scenario_digest_control_path: /tmp/breakglass-mint-test/digest-control
+        scenario_digest_control_content: DIGEST_CONTROL_PLACEHOLDER_5e8c2a71
+        # What each file holds: its text and the newline it ends in. The newline
+        # is written here, in a double-quoted scalar, because a backslash escape
+        # inside a template string is not turned into a newline by Ansible.
+        scenario_key_file_text: "{{ scenario_key_content }}\n"
+        scenario_digest_control_file_text: "{{ scenario_digest_control_content }}\n"
+verifier:
+  name: ansible

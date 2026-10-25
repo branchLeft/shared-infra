@@ -9,6 +9,9 @@ test harness that proves a role in containers, and one worked role made from
 the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
 `roles/ansible_runtime` and `roles/pull_trigger`) and `db1` (`playbooks/db1.yml`, which applies
 `roles/db1_stack` and `roles/db1_grants`); the other trees hold only what those hosts need.
+The break-glass roles `roles/breakglass_mint_host` (for ops1) and
+`roles/breakglass_grant_host` (for app1) are not yet applied by any playbook: they
+reach their hosts through the per-host role list, in a later wiring change.
 
 ## Layout
 

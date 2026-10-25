@@ -1,0 +1,104 @@
+---
+# Puts the placeholder key into one wrong state, applies the role, requires that
+# it stops at the key check, and puts the key back. Every task that writes the
+# placeholder says no_log and diff: false: its text must not reach the log.
+- name: Take away what a case before left
+  ansible.builtin.file:
+    path: '{{ scenario_key_path }}'
+    state: absent
+
+- name: Set the key directory to the case's mode
+  ansible.builtin.file:
+    path: '{{ scenario_key_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '{{ refused.dir_mode | default("0700") }}'
+
+- name: Write the placeholder as a file with the case's mode and owner
+  ansible.builtin.copy:
+    content: '{{ scenario_key_file_text }}'
+    dest: '{{ scenario_key_path }}'
+    owner: '{{ refused.key_owner | default("root") }}'
+    group: root
+    mode: '{{ refused.key_mode | default("0600") }}'
+  when: refused.key_state == 'file'
+  no_log: true
+  diff: false
+
+- name: Make the key a link to a file that is root's and in mode 0600
+  ansible.builtin.file:
+    path: '{{ scenario_key_path }}'
+    src: '{{ scenario_digest_control_path }}'
+    state: link
+  when: refused.key_state == 'link'
+
+- name: Make the key a directory
+  ansible.builtin.file:
+    path: '{{ scenario_key_path }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when: refused.key_state == 'directory'
+
+- name: Apply the role with the key in that state
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.breakglass_mint_host
+      vars:
+        breakglass_mint_host_key_path: '{{ scenario_key_path }}'
+
+    - name: Record that the role accepted the key
+      ansible.builtin.set_fact:
+        breakglass_mint_host_c_refused_by: 'NOTHING: the role accepted the key'
+        breakglass_mint_host_c_refused_message: ''
+  rescue:
+    - name: Record which task refused the key
+      ansible.builtin.set_fact:
+        breakglass_mint_host_c_refused_by: '{{ ansible_failed_task.name }}'
+        breakglass_mint_host_c_refused_message: '{{ ansible_failed_result.msg | default("") }}'
+
+- name: Take the case's key away and put the placeholder back
+  ansible.builtin.file:
+    path: '{{ scenario_key_path }}'
+    state: absent
+
+- name: Put the key directory back to root 0700
+  ansible.builtin.file:
+    path: '{{ scenario_key_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Put the placeholder key back
+  ansible.builtin.copy:
+    content: '{{ scenario_key_file_text }}'
+    dest: '{{ scenario_key_path }}'
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+
+- name: Assert the role stopped at the key check
+  ansible.builtin.assert:
+    that:
+      - breakglass_mint_host_c_refused_by == 'Refuse a host whose signing key is missing or not private to root'
+    fail_msg: 'Expected the role to stop at the key check; it stopped at "{{ breakglass_mint_host_c_refused_by }}".'
+    quiet: true
+
+# The message names the path of the key and no field of the stat result, and
+# holds nothing of the key: not its text, and not a digest of it.
+- name: Assert the refusal names the path and shows no stat field or key content
+  ansible.builtin.assert:
+    that:
+      - scenario_key_path in breakglass_mint_host_c_refused_message
+      - breakglass_mint_host_c_refused_message is not search('checksum|inode|mtime|atime|ctime|size|uid|gid|pw_name')
+      - scenario_key_content not in breakglass_mint_host_c_refused_message
+      - scenario_key_file_text | hash('sha1') not in breakglass_mint_host_c_refused_message
+    fail_msg: The refusal named a field of the stat result, or held the key text or a digest of it.
+    quiet: true
+  no_log: true
