@@ -887,6 +887,10 @@ class ShippedInventoryLiveStateTests(unittest.TestCase):
                     "ghost-platform",
                     "infra/hosts/Pulumi.production.yaml",
                 ): "config:\n  a: b\n",
+                (
+                    "ghost-platform",
+                    "infra/demo-host/Pulumi.production.yaml",
+                ): "config:\n  a: b\n",
             }
             for (repo, rel), text in live.items():
                 path = root / repo / rel
