@@ -58,6 +58,74 @@ def section(job: dict[str, object], key: str) -> dict[str, object]:
     return mutable(job[key])
 
 
+CHOSEN = (
+    "${{ needs.plan.outputs.apply_environment == 'production-free' "
+    "&& 'production-free' || 'production' }}"
+)
+
+# Each of these is an expression C4 must not read, and each is one change away from CHOSEN.
+UNREADABLE_EXPRESSIONS = {
+    "a different operator in the test": (
+        "${{ needs.plan.outputs.e != 'production-free' && 'production-free' || 'production' }}"
+    ),
+    "the operators swapped": (
+        "${{ needs.plan.outputs.e == 'production-free' || 'production-free' && 'production' }}"
+    ),
+    "a non-literal second branch": (
+        "${{ needs.plan.outputs.e == 'production-free' && 'production-free' "
+        "|| needs.plan.outputs.f }}"
+    ),
+    "a non-literal first branch": (
+        "${{ needs.plan.outputs.e == 'production-free' && github.ref_name || 'production' }}"
+    ),
+    "a third branch": (
+        "${{ needs.plan.outputs.e == 'production-free' && 'production-free' || 'production' "
+        "|| 'staging' }}"
+    ),
+    "a result that differs from the literal tested": (
+        "${{ needs.plan.outputs.e == 'production-free' && 'production' || 'production-free' }}"
+    ),
+    "the github context in the test": (
+        "${{ github.ref_name == 'production-free' && 'production-free' || 'production' }}"
+    ),
+    "the inputs context in the test": (
+        "${{ inputs.target == 'production-free' && 'production-free' || 'production' }}"
+    ),
+    "the vars context in the test": (
+        "${{ vars.TARGET == 'production-free' && 'production-free' || 'production' }}"
+    ),
+    "a need that is not an output": (
+        "${{ needs.plan.result == 'production-free' && 'production-free' || 'production' }}"
+    ),
+    "an output compared with another output": (
+        "${{ needs.plan.outputs.e == needs.plan.outputs.f && 'production-free' || 'production' }}"
+    ),
+    "string concatenation": "${{ needs.plan.outputs.e }}-free",
+    "a prefix before the expression": (
+        "prod-${{ needs.plan.outputs.e == 'production-free' && 'production-free' || 'production' }}"
+    ),
+    "a second expression after it": (
+        "${{ needs.plan.outputs.e == 'production-free' && 'production-free' || 'production' }}"
+        "${{ matrix.target }}"
+    ),
+    "format()": "${{ format('{0}-free', needs.plan.outputs.e) }}",
+    "contains()": (
+        "${{ contains(needs.plan.outputs.e, 'free') && 'production-free' || 'production' }}"
+    ),
+    "a nested expression": (
+        "${{ needs.plan.outputs.e == '${{ inputs.t }}' && '${{ inputs.t }}' || 'production' }}"
+    ),
+    "an empty literal": "${{ needs.plan.outputs.e == '' && '' || 'production' }}",
+    "a literal with a space": (
+        "${{ needs.plan.outputs.e == 'production free' && 'production free' || 'production' }}"
+    ),
+    "a double-quoted literal": (
+        '${{ needs.plan.outputs.e == "production-free" && "production-free" || "production" }}'
+    ),
+    "a bare output": "${{ needs.plan.outputs.e }}",
+}
+
+
 class CallerTests(unittest.TestCase):
     """The caller as committed passes, and each weakening of it is named."""
 
@@ -380,6 +448,107 @@ MAIN_ONLY: dict[str, object] = {
 }
 NOT_FOUND: dict[str, object] = {"message": "Not Found", "status": "404"}
 WITH_KEY: dict[str, object] = {"total_count": 1, "secrets": [{"name": "SSH_APPLY_KEY"}]}
+
+
+class ChosenEnvironmentTests(unittest.TestCase):
+    """C4 reads the one closed expression for an environment name, and refuses every other."""
+
+    def test_the_closed_shape_names_both_environments_and_is_no_finding(self) -> None:
+        # A job output that picks between two literals is read, and C4 judges both literals.
+        with tempfile.TemporaryDirectory() as directory:
+            workflows = Path(directory)
+            (workflows / "other.yml").write_text(
+                "jobs:\n  apply:\n    runs-on: ubuntu-latest\n"
+                f"    environment: {json.dumps(CHOSEN)}\n",
+                encoding="utf-8",
+            )
+            names, findings = check_delivery.environments_used(workflows, "caller.yml")
+        self.assertEqual([], findings)
+        self.assertEqual(frozenset({"production-free", "production"}), names)
+
+    def test_the_closed_shape_is_read_in_a_mapping_and_in_a_called_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workflows = Path(directory)
+            (workflows / "mapping.yml").write_text(
+                "jobs:\n  apply:\n    runs-on: ubuntu-latest\n    environment:\n"
+                f"      name: {json.dumps(CHOSEN)}\n      url: https://example.org\n",
+                encoding="utf-8",
+            )
+            (workflows / "called.yml").write_text(
+                "jobs:\n  plan:\n    uses: org/repo/.github/workflows/x.yml@v1.0.0\n"
+                f"    with:\n      environment: {json.dumps(CHOSEN)}\n",
+                encoding="utf-8",
+            )
+            names, findings = check_delivery.environments_used(workflows, "caller.yml")
+        self.assertEqual([], findings)
+        self.assertEqual(frozenset({"production-free", "production"}), names)
+
+    def test_the_closed_shape_may_be_spaced_differently(self) -> None:
+        spaced = "${{  needs.a-b.outputs.c_d   ==  'x.y'  &&  'x.y'  ||  'Z-1'  }}"
+        self.assertEqual(("x.y", "Z-1"), check_delivery.chosen_environments(spaced))
+
+    def test_both_literals_of_the_closed_shape_are_judged_as_named(self) -> None:
+        # A job that may release into the apply environment shares its approval, whichever
+        # branch it takes, so naming ansible-hosts in either branch is the same finding as
+        # naming it outright.
+        expression = (
+            "${{ needs.plan.outputs.e == 'production' && 'production' || 'ansible-hosts' }}"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            workflows = Path(directory)
+            (workflows / "other.yml").write_text(
+                "jobs:\n  apply:\n    runs-on: ubuntu-latest\n"
+                f"    environment: {json.dumps(expression)}\n",
+                encoding="utf-8",
+            )
+            names, findings = check_delivery.environments_used(workflows, "caller.yml")
+        self.assertEqual([], findings)
+        self.assertIn("ansible-hosts", names)
+        findings = check_delivery.caller_findings(committed(), names)
+        self.assertTrue(
+            any("so one approval could release both" in finding for finding in findings), findings
+        )
+
+    def test_every_other_expression_stays_a_finding_naming_the_expression(self) -> None:
+        for why, expression in UNREADABLE_EXPRESSIONS.items():
+            with self.subTest(why):
+                with tempfile.TemporaryDirectory() as directory:
+                    workflows = Path(directory)
+                    (workflows / "other.yml").write_text(
+                        "jobs:\n  apply:\n    runs-on: ubuntu-latest\n"
+                        f"    environment: {json.dumps(expression)}\n",
+                        encoding="utf-8",
+                    )
+                    names, findings = check_delivery.environments_used(workflows, "caller.yml")
+                self.assertEqual(frozenset(), names)
+                self.assertEqual(1, len(findings), findings)
+                self.assertIn("by expression", findings[0])
+                self.assertIn(repr(expression), findings[0])
+
+    def test_the_refused_expressions_stay_refused_in_a_mapping_and_a_called_workflow(self) -> None:
+        expression = UNREADABLE_EXPRESSIONS["a non-literal second branch"]
+        with tempfile.TemporaryDirectory() as directory:
+            workflows = Path(directory)
+            (workflows / "mapping.yml").write_text(
+                "jobs:\n  apply:\n    runs-on: ubuntu-latest\n    environment:\n"
+                f"      name: {json.dumps(expression)}\n",
+                encoding="utf-8",
+            )
+            (workflows / "called.yml").write_text(
+                "jobs:\n  plan:\n    uses: org/repo/.github/workflows/x.yml@v1.0.0\n"
+                f"    with:\n      environment: {json.dumps(expression)}\n",
+                encoding="utf-8",
+            )
+            names, findings = check_delivery.environments_used(workflows, "caller.yml")
+        self.assertEqual(frozenset(), names)
+        self.assertEqual(2, len(findings), findings)
+
+    def test_the_committed_workflows_name_the_spend_gate_routing(self) -> None:
+        names, findings = check_delivery.environments_used(
+            WORKFLOWS, Path(check_delivery.CALLER).name
+        )
+        self.assertEqual([], findings)
+        self.assertTrue({"production-free", "production"} <= names, names)
 
 
 class EnvironmentTests(unittest.TestCase):
