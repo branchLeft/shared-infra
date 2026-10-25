@@ -1,23 +1,7 @@
 #!/usr/bin/env bash
 # Installs unbound as a loopback-only, fully recursive resolver for mx1.
-#
-# Spamhaus's free DNSBL tier answers 127.255.255.254 -- "query blocked" -- to
-# anything arriving from a high-volume shared resolver, which Hetzner's own
-# and every public one (8.8.8.8, 1.1.1.1) are. Only a resolver that walks the
-# root servers itself, from mx1's own address, gets real reputation data
-# back. So this config has no forwarders at all: adding one silently
-# reintroduces the exact failure this script exists to remove.
-#
-# /etc/resolv.conf is deliberately left as-is -- Debian's
-# unbound-resolvconf.service would otherwise point the whole box at unbound
-# on install, a far wider blast radius than the DNSBL check needs. It is
-# masked before the package is installed and the file is verified unchanged
-# afterwards. See mail/RUNBOOK-mx1-provision.md's "Local recursive resolver"
-# section.
-#
-# Idempotent: package install skipped when present, config compared
-# byte-for-byte before writing, service only restarted when something
-# actually changed.
+# Why it has no forwarders, how /etc/resolv.conf is protected and what
+# idempotent means here: 65-install-local-resolver.md.
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
@@ -58,7 +42,8 @@ cp /etc/resolv.conf "$RESOLV_BEFORE"
 # DNSSEC trust anchor unbound's own Debian drop-in requires is never
 # created and the service will not start at all.
 need_install=()
-for pkg in unbound unbound-anchor dns-root-data; do
+# bind9-dnsutils ships the dig the recursion check at the end needs.
+for pkg in unbound unbound-anchor dns-root-data bind9-dnsutils; do
     if ! dpkg -s "$pkg" >/dev/null 2>&1; then
         need_install+=("$pkg")
     fi
@@ -178,7 +163,9 @@ via 127.0.0.1 -- recursion is not working, do not trust DNSBL results until this
         fi
         echo "65-install-local-resolver: 127.0.0.1 resolved $SMOKE_TEST_NAME, recursion works"
     else
-        echo "65-install-local-resolver: dig not present, skipped the recursion smoke test"
+        echo "65-install-local-resolver: the recursion check could not run because dig is missing \
+(package bind9-dnsutils); install it and re-run" >&2
+        exit 1
     fi
 }
 
