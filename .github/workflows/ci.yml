@@ -32,6 +32,16 @@ name: CI
 #   5. The apply job re-runs preview and the guard immediately before
 #      `pulumi up`: what was approved and what is applied can diverge only
 #      inside one run's window, and never past the guard.
+#   6. The two Hetzner applies are routed by the spend gate (github-workflows'
+#      `spend-gate` action). A plan whose every change is a free resource type
+#      runs its apply in `production-free`, which only the reviewer App's
+#      protection rule answers. Every other plan, and any plan the gate could
+#      not read, runs in `production`, where the owner approves. Only the exact
+#      string `production-free` selects the free environment, the apply
+#      re-gates its own preview before `pulumi up`, and the apply refuses an
+#      environment without a rule. The mail apply is never routed: it stays in
+#      `production-mail` (scripts/choose-apply-environment.py,
+#      scripts/test_ci_apply_environments.py).
 #
 # There is deliberately no `pulumi preview` job on pull requests. It is the
 # obvious next step, but it means handing credentials to a job running
@@ -896,7 +906,9 @@ jobs:
   #     silent unattended apply. `production-mail` must have a
   #     required-reviewer rule; `production` may have that or an enabled
   #     custom deployment protection rule of the reviewer App (integration
-  #     id 5090756).
+  #     id 5090756). `production-free`, which only a plan the spend gate reads
+  #     as free reaches, needs that App rule: a plan job routes to it only
+  #     while the rule is there, and the apply checks again.
   #   - A newer push run cancels older runs of this workflow still `waiting`
   #     for approval, from each plan job (the step after its checkout, which
   #     the script it runs needs on disk). The workflow-level group does not do
@@ -1309,6 +1321,9 @@ jobs:
     # See mail-plan: the apply job is skipped only when this is the string 'false'.
     outputs:
       has_changes: ${{ steps.noop.outputs.has_changes }}
+      # Which environment the paired apply runs in (header guardrail 6). Unset
+      # or anything but `production-free` is read as `production`.
+      apply_environment: ${{ steps.route.outputs.environment }}
 
     # See mail-plan: `actions: write` is only for the cancel step.
     permissions:
@@ -1407,6 +1422,7 @@ jobs:
           printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_HETZNER_NETWORK" >> Pulumi.production.yaml
 
       - name: Preview the plan
+        id: preview
         run: pulumi preview --stack production --json > preview.json
 
       # See mail-plan: a second preview saves the update plan, best effort.
@@ -1415,6 +1431,7 @@ jobs:
         run: pulumi preview --stack production --save-plan preview-plan.json > /dev/null
 
       - name: Refuse a plan that destroys the network
+        id: deletes
         run: |
           python3 ../scripts/assert-no-hetzner-deletes.py --self-test
           python3 ../scripts/assert-no-hetzner-deletes.py --verify-coverage .
@@ -1424,6 +1441,55 @@ jobs:
             python3 -m json.tool preview.json
             exit 1
           fi
+
+      # Routing (header guardrail 6). These three steps pick the environment
+      # the paired apply runs in and never fail the plan: any trouble here
+      # leaves the output unset, which the apply reads as `production`, where
+      # the owner approves. The gate runs only when every step before it
+      # succeeded; a preview that failed gives it nothing to read.
+      - name: Decide whether the plan could cost money
+        id: spend
+        continue-on-error: true
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # main at the spend gate's merge; no tag carries it yet
+        with:
+          preview-json: preview.json
+          working-directory: hetzner
+
+      # Without this, a free plan would be routed to an environment that does
+      # not exist yet or has lost its rule. Only the reviewer App's enabled
+      # rule counts (integration id 5090756); any failure to read it counts as
+      # none. The apply job checks again before it touches a credential.
+      - name: Check the free apply environment is gated
+        id: free_ready
+        if: always()
+        continue-on-error: true
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          custom=0
+          if out=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production-free/deployment_protection_rules" \
+            --jq '[.custom_deployment_protection_rules[]? | select(.enabled == true and .app.id == 5090756)] | length' 2>/dev/null); then
+            custom="${out}"
+          fi
+          case "${custom}" in '' | *[!0-9]*) custom=0 ;; esac
+          ready=false
+          if [ "${custom}" -gt 0 ]; then ready=true; fi
+          echo "ready=${ready}" >> "$GITHUB_OUTPUT"
+
+      - name: Choose the apply environment
+        id: route
+        if: always()
+        continue-on-error: true
+        working-directory: .
+        env:
+          SPEND_VERDICT: ${{ steps.spend.outputs.verdict }}
+          PREVIEW_OUTCOME: ${{ steps.preview.outcome }}
+          DELETE_GUARD_OUTCOME: ${{ steps.deletes.outcome }}
+          FREE_ENVIRONMENT_READY: ${{ steps.free_ready.outputs.ready }}
+        run: |
+          python3 -I scripts/choose-apply-environment.py \
+            --github-output "$GITHUB_OUTPUT" --github-summary "$GITHUB_STEP_SUMMARY"
 
       # See mail-plan: fails closed, and writes the summary's first line.
       - name: Decide whether the plan changes anything
@@ -1461,9 +1527,14 @@ jobs:
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.hetzner-network-plan.outputs.has_changes != 'false'
 
-    # The Hetzner applies share `production`; the mail apply is in
-    # `production-mail`, so an approval here cannot release it.
-    environment: production
+    # The Hetzner applies run in `production`, where the owner approves, or in
+    # `production-free` when the plan job's spend gate said every change is
+    # free (header guardrail 6). Only the exact string `production-free`
+    # selects the second; anything else, unset included, is `production`. The
+    # mail apply is in `production-mail`, so an approval here cannot release it.
+    # The same expression is the job's APPLY_ENVIRONMENT below, which the steps
+    # read (pinned equal by scripts/test_ci_apply_environments.py).
+    environment: ${{ needs.hetzner-network-plan.outputs.apply_environment == 'production-free' && 'production-free' || 'production' }}
 
     concurrency:
       group: pulumi-hetzner-network-deploy
@@ -1474,6 +1545,7 @@ jobs:
         working-directory: hetzner
 
     env:
+      APPLY_ENVIRONMENT: ${{ needs.hetzner-network-plan.outputs.apply_environment == 'production-free' && 'production-free' || 'production' }}
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_NETWORK }}
       PULUMI_SALT_HETZNER_NETWORK: ${{ secrets.PULUMI_SALT_HETZNER_NETWORK }}
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_ESTATE }}
@@ -1489,13 +1561,21 @@ jobs:
       # unattended. The custom rule is not listed
       # in the environment object's `protection_rules`; it has its own
       # endpoint, read below. Any failure to read it counts as no rule, so
-      # this stays fail-closed.
+      # this stays fail-closed. It checks the environment this job is actually
+      # in (APPLY_ENVIRONMENT), and refuses a name that is neither of the two.
       - name: Refuse to apply through an ungated environment
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          api="repos/${GITHUB_REPOSITORY}/environments/production"
+          case "${APPLY_ENVIRONMENT}" in
+            production | production-free) ;;
+            *)
+              echo "::error::the apply environment is neither production nor production-free." >&2
+              exit 1
+              ;;
+          esac
+          api="repos/${GITHUB_REPOSITORY}/environments/${APPLY_ENVIRONMENT}"
           reviewers=$(gh api "${api}" \
             --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
           custom=0
@@ -1506,7 +1586,7 @@ jobs:
           case "${reviewers}" in '' | *[!0-9]*) reviewers=0 ;; esac
           case "${custom}" in '' | *[!0-9]*) custom=0 ;; esac
           if [ "${reviewers}" -eq 0 ] && [ "${custom}" -eq 0 ]; then
-            echo "::error::the production environment has neither a required-reviewer rule nor an enabled custom deployment protection rule of the reviewer App -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+            echo "::error::the ${APPLY_ENVIRONMENT} environment has neither a required-reviewer rule nor an enabled custom deployment protection rule of the reviewer App -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
             exit 1
           fi
 
@@ -1560,6 +1640,38 @@ jobs:
           python3 ../scripts/assert-no-hetzner-deletes.py --verify-coverage .
 
           if ! python3 ../scripts/assert-no-hetzner-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      # The route was chosen from the plan job's preview; this is the preview
+      # this apply acts on. On `production-free` nothing but a FREE verdict on
+      # it may reach `pulumi up`, so a plan that turned paid between the two
+      # fails here. On `production` the owner has read the plan and the verdict
+      # is advisory: a gate that could not run never blocks the owner's path.
+      - name: Decide whether the plan could cost money
+        id: spend
+        continue-on-error: true
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # main at the spend gate's merge; no tag carries it yet
+        with:
+          preview-json: preview.json
+          working-directory: hetzner
+
+      - name: Refuse a plan that could cost money on the free environment
+        env:
+          SPEND_VERDICT: ${{ steps.spend.outputs.verdict }}
+        run: |
+          case "${APPLY_ENVIRONMENT}" in
+            production) exit 0 ;;
+            production-free) ;;
+            *)
+              echo "::error::the apply environment is neither production nor production-free." >&2
+              exit 1
+              ;;
+          esac
+          if [ "${SPEND_VERDICT}" != "FREE" ]; then
+            echo "::error::this apply is in production-free, which is for free plans only, and the spend gate did not say FREE for the plan it is about to apply. Nothing was applied. Re-run all jobs of the run, not only the failed one: the plan is read again and a paid plan is routed to production, where the owner approves." >&2
             echo "--- full plan follows ---"
             python3 -m json.tool preview.json
             exit 1
@@ -1623,6 +1735,8 @@ jobs:
     # See mail-plan: the apply job is skipped only when this is the string 'false'.
     outputs:
       has_changes: ${{ steps.noop.outputs.has_changes }}
+      # See hetzner-network-plan: the paired apply's environment.
+      apply_environment: ${{ steps.route.outputs.environment }}
 
     # See mail-plan: `actions: write` is only for the cancel step.
     permissions:
@@ -1720,6 +1834,7 @@ jobs:
           printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_HETZNER_ESTATE" >> Pulumi.production.yaml
 
       - name: Preview the plan
+        id: preview
         run: pulumi preview --stack production --json > preview.json
 
       # See mail-plan: a second preview saves the update plan, best effort.
@@ -1728,6 +1843,7 @@ jobs:
         run: pulumi preview --stack production --save-plan preview-plan.json > /dev/null
 
       - name: Refuse a plan that destroys the estate
+        id: deletes
         run: |
           python3 ../../scripts/assert-no-hetzner-deletes.py --self-test
           python3 ../../scripts/assert-no-hetzner-deletes.py --verify-coverage ..
@@ -1737,6 +1853,48 @@ jobs:
             python3 -m json.tool preview.json
             exit 1
           fi
+
+      # See hetzner-network-plan: these three steps choose the paired apply's
+      # environment and never fail the plan.
+      - name: Decide whether the plan could cost money
+        id: spend
+        continue-on-error: true
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # main at the spend gate's merge; no tag carries it yet
+        with:
+          preview-json: preview.json
+          working-directory: hetzner/estate
+
+      - name: Check the free apply environment is gated
+        id: free_ready
+        if: always()
+        continue-on-error: true
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          custom=0
+          if out=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production-free/deployment_protection_rules" \
+            --jq '[.custom_deployment_protection_rules[]? | select(.enabled == true and .app.id == 5090756)] | length' 2>/dev/null); then
+            custom="${out}"
+          fi
+          case "${custom}" in '' | *[!0-9]*) custom=0 ;; esac
+          ready=false
+          if [ "${custom}" -gt 0 ]; then ready=true; fi
+          echo "ready=${ready}" >> "$GITHUB_OUTPUT"
+
+      - name: Choose the apply environment
+        id: route
+        if: always()
+        continue-on-error: true
+        working-directory: .
+        env:
+          SPEND_VERDICT: ${{ steps.spend.outputs.verdict }}
+          PREVIEW_OUTCOME: ${{ steps.preview.outcome }}
+          DELETE_GUARD_OUTCOME: ${{ steps.deletes.outcome }}
+          FREE_ENVIRONMENT_READY: ${{ steps.free_ready.outputs.ready }}
+        run: |
+          python3 -I scripts/choose-apply-environment.py \
+            --github-output "$GITHUB_OUTPUT" --github-summary "$GITHUB_STEP_SUMMARY"
 
       # See mail-plan: fails closed, and writes the summary's first line.
       - name: Decide whether the plan changes anything
@@ -1774,7 +1932,9 @@ jobs:
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.hetzner-estate-plan.outputs.has_changes != 'false'
 
-    environment: production
+    # See hetzner-network-apply: `production`, or `production-free` only when
+    # the plan job routed this free. The same expression is APPLY_ENVIRONMENT.
+    environment: ${{ needs.hetzner-estate-plan.outputs.apply_environment == 'production-free' && 'production-free' || 'production' }}
 
     concurrency:
       group: pulumi-hetzner-estate-deploy
@@ -1785,6 +1945,7 @@ jobs:
         working-directory: hetzner/estate
 
     env:
+      APPLY_ENVIRONMENT: ${{ needs.hetzner-estate-plan.outputs.apply_environment == 'production-free' && 'production-free' || 'production' }}
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_ESTATE }}
       PULUMI_SALT_HETZNER_ESTATE: ${{ secrets.PULUMI_SALT_HETZNER_ESTATE }}
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_ESTATE }}
@@ -1799,13 +1960,22 @@ jobs:
       # something answers. The
       # custom rule is not listed in the environment object's
       # `protection_rules`; it has its own endpoint, read below. Any failure
-      # to read it counts as no rule, so this stays fail-closed.
+      # to read it counts as no rule, so this stays fail-closed. It checks the
+      # environment this job is actually in (APPLY_ENVIRONMENT), and refuses a
+      # name that is neither of the two.
       - name: Refuse to apply through an ungated environment
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          api="repos/${GITHUB_REPOSITORY}/environments/production"
+          case "${APPLY_ENVIRONMENT}" in
+            production | production-free) ;;
+            *)
+              echo "::error::the apply environment is neither production nor production-free." >&2
+              exit 1
+              ;;
+          esac
+          api="repos/${GITHUB_REPOSITORY}/environments/${APPLY_ENVIRONMENT}"
           reviewers=$(gh api "${api}" \
             --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
           custom=0
@@ -1816,7 +1986,7 @@ jobs:
           case "${reviewers}" in '' | *[!0-9]*) reviewers=0 ;; esac
           case "${custom}" in '' | *[!0-9]*) custom=0 ;; esac
           if [ "${reviewers}" -eq 0 ] && [ "${custom}" -eq 0 ]; then
-            echo "::error::the production environment has neither a required-reviewer rule nor an enabled custom deployment protection rule of the reviewer App -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+            echo "::error::the ${APPLY_ENVIRONMENT} environment has neither a required-reviewer rule nor an enabled custom deployment protection rule of the reviewer App -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
             exit 1
           fi
 
@@ -1868,6 +2038,35 @@ jobs:
           python3 ../../scripts/assert-no-hetzner-deletes.py --verify-coverage ..
 
           if ! python3 ../../scripts/assert-no-hetzner-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      # See hetzner-network-apply: on `production-free` only a FREE verdict on
+      # this preview reaches `pulumi up`; on `production` it is advisory.
+      - name: Decide whether the plan could cost money
+        id: spend
+        continue-on-error: true
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # main at the spend gate's merge; no tag carries it yet
+        with:
+          preview-json: preview.json
+          working-directory: hetzner/estate
+
+      - name: Refuse a plan that could cost money on the free environment
+        env:
+          SPEND_VERDICT: ${{ steps.spend.outputs.verdict }}
+        run: |
+          case "${APPLY_ENVIRONMENT}" in
+            production) exit 0 ;;
+            production-free) ;;
+            *)
+              echo "::error::the apply environment is neither production nor production-free." >&2
+              exit 1
+              ;;
+          esac
+          if [ "${SPEND_VERDICT}" != "FREE" ]; then
+            echo "::error::this apply is in production-free, which is for free plans only, and the spend gate did not say FREE for the plan it is about to apply. Nothing was applied. Re-run all jobs of the run, not only the failed one: the plan is read again and a paid plan is routed to production, where the owner approves." >&2
             echo "--- full plan follows ---"
             python3 -m json.tool preview.json
             exit 1

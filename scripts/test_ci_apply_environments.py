@@ -18,12 +18,23 @@ import test_workflow_concurrency as concurrency_rules
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CI_YML = ROOT / ".github" / "workflows" / "ci.yml"
 
+def routed(plan_job: str) -> str:
+    """The `environment:` value of an apply the spend gate routes: the free
+    environment only on the exact string, `production` for anything else."""
+    return (
+        "${{ needs.%s.outputs.apply_environment == 'production-free' "
+        "&& 'production-free' || 'production' }}" % plan_job
+    )
+
+
 APPLY_JOBS = {
     "mail-apply": "production-mail",
-    "hetzner-network-apply": "production",
-    "hetzner-estate-apply": "production",
+    "hetzner-network-apply": routed("hetzner-network-plan"),
+    "hetzner-estate-apply": routed("hetzner-estate-plan"),
 }
+ROUTED_APPLY_JOBS = ("hetzner-network-apply", "hetzner-estate-apply")
 PLAN_JOBS = ["mail-plan", "hetzner-network-plan", "hetzner-estate-plan"]
+ROUTED_PLAN_JOBS = ("hetzner-network-plan", "hetzner-estate-plan")
 
 # The reviewer App's integration id, as `app.id` on the live rule object.
 REVIEWER_APP_ID = 5090756
@@ -128,7 +139,13 @@ def run_script(step_text: str) -> str:
 
 
 def environment_of(job: str) -> str | None:
-    match = re.search(r"^    environment: (\S+)[ \t]*$", job, re.M)
+    match = re.search(r"^    environment: (.+?)[ \t]*$", job, re.M)
+    return match.group(1) if match else None
+
+
+def job_env_value(job: str, name: str) -> str | None:
+    """A job-level `env:` entry (six spaces), or None."""
+    match = re.search(r"^      %s: (.+?)[ \t]*$" % re.escape(name), job, re.M)
     return match.group(1) if match else None
 
 
@@ -154,6 +171,8 @@ class StubGh:
             "STUB_LOG": str(self.log),
             "GITHUB_REPOSITORY": "ORG/REPO",
             "GH_TOKEN": "TOKEN_PLACEHOLDER",
+            # What the routed applies read; the mail apply names its own.
+            "APPLY_ENVIRONMENT": "production",
         }
         full.update(env)
         # GitHub runs `run:` bodies as `bash -e {0}`.
@@ -188,7 +207,7 @@ class StructureTests(unittest.TestCase):
 
     def test_only_the_three_applies_and_mail_plan_declare_an_environment(self):
         # mail-plan has its own environment since #2195 (no reviewer, main only).
-        declared = re.findall(r"^    environment: (\S+)", self.text, re.M)
+        declared = re.findall(r"^    environment: (.+?)[ \t]*$", self.text, re.M)
         self.assertEqual(sorted(declared), sorted([*APPLY_JOBS.values(), "mail-plan"]))
 
     def test_mail_apply_is_the_only_job_in_production_mail(self):
@@ -218,7 +237,9 @@ class StructureTests(unittest.TestCase):
         for job in ("hetzner-network-apply", "hetzner-estate-apply"):
             with self.subTest(job=job):
                 body = run_script(step(job_block(self.text, job), GATE_NAME))
-                self.assertIn('environments/production"', body)
+                # The job's own environment, from the same expression the job's
+                # `environment:` key uses (pinned equal in RouteStructureTests).
+                self.assertIn('environments/${APPLY_ENVIRONMENT}"', body)
                 self.assertNotIn("production-mail", body)
                 self.assertIn("required_reviewers", body)
                 self.assertIn("deployment_protection_rules", body)
@@ -739,6 +760,344 @@ class NoOpGateStructureTests(unittest.TestCase):
                     "run: pulumi preview --stack production --json > preview.json\n",
                     step(job_block(self.text, job), "Preview the plan"),
                 )
+
+
+SPEND_GATE_USES = re.compile(
+    r"uses: branchLeft/github-workflows/\.github/actions/spend-gate@([0-9a-f]{40}) #"
+)
+
+ROUTE_NAME = "Choose the apply environment"
+READY_NAME = "Check the free apply environment is gated"
+SPEND_NAME = "Decide whether the plan could cost money"
+REGATE_NAME = "Refuse a plan that could cost money on the free environment"
+DELETE_STEP_OF_PLAN = {
+    "hetzner-network-plan": "Refuse a plan that destroys the network",
+    "hetzner-estate-plan": "Refuse a plan that destroys the estate",
+}
+DELETE_STEP_OF_APPLY = {
+    "hetzner-network-apply": "Refuse to apply a plan that destroys the network",
+    "hetzner-estate-apply": "Refuse to apply a plan that destroys the estate",
+}
+PLAN_OF_ROUTED_APPLY = {
+    "hetzner-network-apply": "hetzner-network-plan",
+    "hetzner-estate-apply": "hetzner-estate-plan",
+}
+
+
+def resolve_environment(expression: str, outputs: dict[str, str]) -> str:
+    """Evaluate a routed `environment:` value the way GitHub does, for the one
+    shape the workflow uses: `A == 'production-free' && 'production-free' ||
+    'production'`, where A is the plan job's `apply_environment` output (an
+    output that was never set is the empty string). Any other shape raises, so
+    a rewrite of the expression cannot slip past the replay."""
+    match = re.fullmatch(
+        r"\$\{\{ needs\.([A-Za-z0-9_-]+)\.outputs\.apply_environment == 'production-free' "
+        r"&& 'production-free' \|\| 'production' \}\}",
+        expression,
+    )
+    if not match:
+        raise AssertionError(f"not the routed environment expression: {expression!r}")
+    # `a == b && c || d` is `(a == b && c) || d`; c is a non-empty string.
+    if outputs.get(match.group(1), "") == "production-free":
+        return "production-free"
+    return "production"
+
+
+class RouteStructureTests(unittest.TestCase):
+    def setUp(self):
+        self.text = workflow_text()
+
+    def test_each_routed_apply_uses_the_exact_routed_expression(self):
+        for job in ROUTED_APPLY_JOBS:
+            with self.subTest(job=job):
+                self.assertEqual(
+                    environment_of(job_block(self.text, job)), routed(PLAN_OF_ROUTED_APPLY[job])
+                )
+
+    def test_the_apply_environment_variable_is_the_same_expression(self):
+        for job in ROUTED_APPLY_JOBS:
+            with self.subTest(job=job):
+                block = job_block(self.text, job)
+                self.assertEqual(job_env_value(block, "APPLY_ENVIRONMENT"), environment_of(block))
+
+    def test_the_mail_jobs_are_never_routed(self):
+        for job in ("mail-plan", "mail-apply"):
+            block = job_block(self.text, job)
+            self.assertNotIn("production-free", block)
+            self.assertNotIn("apply_environment", block)
+            self.assertNotIn("spend-gate", block)
+
+    def test_each_routed_plan_job_publishes_the_route_step_output(self):
+        for job in ROUTED_PLAN_JOBS:
+            with self.subTest(job=job):
+                self.assertIn(
+                    "      apply_environment: ${{ steps.route.outputs.environment }}\n",
+                    job_block(self.text, job),
+                )
+
+    def test_the_route_step_binds_exactly_the_four_inputs(self):
+        for job in ROUTED_PLAN_JOBS:
+            with self.subTest(job=job):
+                body = step(job_block(self.text, job), ROUTE_NAME)
+                for binding in (
+                    "SPEND_VERDICT: ${{ steps.spend.outputs.verdict }}",
+                    "PREVIEW_OUTCOME: ${{ steps.preview.outcome }}",
+                    "DELETE_GUARD_OUTCOME: ${{ steps.deletes.outcome }}",
+                    "FREE_ENVIRONMENT_READY: ${{ steps.free_ready.outputs.ready }}",
+                ):
+                    self.assertIn(binding, body)
+                self.assertIn("id: route", body)
+                # A fault here must not fail the plan: the output stays unset.
+                self.assertIn("continue-on-error: true", body)
+
+    def test_the_ids_the_route_reads_belong_to_the_right_steps(self):
+        for job in ROUTED_PLAN_JOBS:
+            with self.subTest(job=job):
+                block = job_block(self.text, job)
+                self.assertIn("id: preview", step(block, "Preview the plan"))
+                self.assertIn("id: deletes", step(block, DELETE_STEP_OF_PLAN[job]))
+                self.assertIn("id: spend", step(block, SPEND_NAME))
+                self.assertIn("id: free_ready", step(block, READY_NAME))
+
+    def test_the_routing_steps_run_after_the_delete_guard_and_before_the_summary(self):
+        for job in ROUTED_PLAN_JOBS:
+            with self.subTest(job=job):
+                names = [n for n, _ in step_blocks(job_block(self.text, job))]
+                order = [
+                    "Preview the plan",
+                    DELETE_STEP_OF_PLAN[job],
+                    SPEND_NAME,
+                    READY_NAME,
+                    ROUTE_NAME,
+                    "Decide whether the plan changes anything",
+                    "Write the plan to the job summary",
+                ]
+                positions = [names.index(n) for n in order]
+                self.assertEqual(positions, sorted(positions))
+
+    def test_the_spend_gate_step_is_advisory_to_the_plan_and_runs_only_after_success(self):
+        for job in ROUTED_PLAN_JOBS:
+            with self.subTest(job=job):
+                body = step(job_block(self.text, job), SPEND_NAME)
+                self.assertIn("continue-on-error: true", body)
+                # No `if:`: it takes the default success(), so a failed
+                # preview or delete guard leaves its verdict unset.
+                self.assertNotRegex(body, r"^        if:", "the gate must run only after success")
+                self.assertIn("preview-json: preview.json", body)
+
+    def test_the_gate_is_pinned_to_one_full_sha_everywhere(self):
+        shas = set(SPEND_GATE_USES.findall(self.text))
+        self.assertEqual(len(shas), 1, "the four uses must pin the same commit")
+        self.assertEqual(len(SPEND_GATE_USES.findall(self.text)), 4)
+
+    def test_the_apply_re_gates_its_own_preview_before_pulumi_up(self):
+        for job in ROUTED_APPLY_JOBS:
+            with self.subTest(job=job):
+                block = job_block(self.text, job)
+                names = [n for n, _ in step_blocks(block)]
+                order = ["Preview the plan", DELETE_STEP_OF_APPLY[job], SPEND_NAME, REGATE_NAME, "Apply"]
+                positions = [names.index(n) for n in order]
+                self.assertEqual(positions, sorted(positions))
+                self.assertEqual(positions[3] + 1, positions[4], "nothing may sit between the re-gate and Apply")
+                regate = step(block, REGATE_NAME)
+                self.assertNotRegex(regate, r"^        if:", "the re-gate must not be skippable")
+                self.assertNotIn("continue-on-error", regate)
+                self.assertIn("SPEND_VERDICT: ${{ steps.spend.outputs.verdict }}", regate)
+
+    def test_the_apply_side_gate_cannot_block_the_owner_s_path(self):
+        for job in ROUTED_APPLY_JOBS:
+            with self.subTest(job=job):
+                self.assertIn("continue-on-error: true", step(job_block(self.text, job), SPEND_NAME))
+
+    def test_the_free_readiness_step_reads_only_the_free_environment(self):
+        for job in ROUTED_PLAN_JOBS:
+            with self.subTest(job=job):
+                body = run_script(step(job_block(self.text, job), READY_NAME))
+                self.assertIn("environments/production-free/deployment_protection_rules", body)
+                self.assertIn(f".app.id == {REVIEWER_APP_ID}", body)
+                self.assertNotIn("required_reviewers", body)
+
+
+@unittest.skipUnless(shutil.which("jq"), "jq is needed to run the readiness and gate steps")
+class RouteReplayTests(unittest.TestCase):
+    """A dry replay of the whole chain the workflow runs, step by step, on a
+    stub `gh`: readiness, the route, the environment expression, the apply's
+    environment gate and its re-gate. Each test is one route."""
+
+    def setUp(self):
+        text = workflow_text()
+        self.text = text
+        self.stub = StubGh(self)
+        self.work = self.stub.dir
+        (self.work / "preview.json").write_text("{}", encoding="utf-8")
+        self.outputs = self.work / "github-output"
+        self.summary = self.work / "github-summary"
+
+    @staticmethod
+    def app_rule(enabled: bool = True, app_id: int = REVIEWER_APP_ID) -> dict:
+        return {
+            "total_count": 1,
+            "custom_deployment_protection_rules": [{"id": 1, "enabled": enabled, "app": {"id": app_id}}],
+        }
+
+    def run_step(self, script: str, **env: str) -> subprocess.CompletedProcess:
+        return self.stub.run(
+            script,
+            cwd=str(ROOT),
+            GITHUB_OUTPUT=str(self.outputs),
+            GITHUB_STEP_SUMMARY=str(self.summary),
+            **env,
+        )
+
+    def output(self, key: str) -> str:
+        if not self.outputs.exists():
+            return ""
+        for line in self.outputs.read_text(encoding="utf-8").splitlines():
+            name, _, value = line.partition("=")
+            if name == key:
+                return value
+        return ""
+
+    def route(self, job: str, *, verdict: str, preview="success", deletes="success", rules=None) -> str:
+        """Run readiness then the route step; return the plan job's output as
+        the job would publish it (empty when the step wrote nothing)."""
+        self.outputs.write_text("", encoding="utf-8")
+        if rules is not None:
+            self.stub.put("rules.json", rules)
+        block = job_block(self.text, job)
+        ready = self.run_step(run_script(step(block, READY_NAME)))
+        self.assertEqual(ready.returncode, 0, ready.stderr)
+        ready_value = self.output("ready")
+        chosen = self.run_step(
+            run_script(step(block, ROUTE_NAME)),
+            SPEND_VERDICT=verdict,
+            PREVIEW_OUTCOME=preview,
+            DELETE_GUARD_OUTCOME=deletes,
+            FREE_ENVIRONMENT_READY=ready_value,
+        )
+        self.assertEqual(chosen.returncode, 0, chosen.stderr)
+        return self.output("environment")
+
+    def environment_for(self, job: str, published: str) -> str:
+        apply_job = {v: k for k, v in PLAN_OF_ROUTED_APPLY.items()}[job]
+        expression = environment_of(job_block(self.text, apply_job))
+        return resolve_environment(expression, {job: published})
+
+    def apply_gate(self, apply_job: str, environment: str, *, reviewers=False, rules=None) -> int:
+        self.stub.put("environment.json", environment_object(reviewers=reviewers))
+        if rules is not None:
+            self.stub.put("rules.json", rules)
+        script = run_script(step(job_block(self.text, apply_job), GATE_NAME))
+        return self.run_step(script, APPLY_ENVIRONMENT=environment).returncode
+
+    def regate(self, apply_job: str, environment: str, verdict: str) -> int:
+        script = run_script(step(job_block(self.text, apply_job), REGATE_NAME))
+        return self.stub.run(script, cwd=str(self.work), APPLY_ENVIRONMENT=environment, SPEND_VERDICT=verdict).returncode
+
+    def each_stack(self):
+        for plan_job, apply_job in (
+            ("hetzner-network-plan", "hetzner-network-apply"),
+            ("hetzner-estate-plan", "hetzner-estate-apply"),
+        ):
+            with self.subTest(stack=plan_job):
+                yield plan_job, apply_job
+
+    def test_free_plan_with_a_gated_free_environment_runs_in_production_free(self):
+        for plan_job, apply_job in self.each_stack():
+            published = self.route(plan_job, verdict="FREE", rules=self.app_rule())
+            self.assertEqual(published, "production-free")
+            environment = self.environment_for(plan_job, published)
+            self.assertEqual(environment, "production-free")
+            self.assertEqual(self.apply_gate(apply_job, environment, rules=self.app_rule()), 0)
+            self.assertEqual(self.regate(apply_job, environment, "FREE"), 0)
+            self.assertIn(
+                "GET repos/ORG/REPO/environments/production-free/deployment_protection_rules",
+                self.stub.calls(),
+            )
+
+    def test_a_paid_plan_runs_in_production(self):
+        for plan_job, apply_job in self.each_stack():
+            published = self.route(plan_job, verdict="PAID", rules=self.app_rule())
+            self.assertEqual(published, "production")
+            self.assertEqual(self.environment_for(plan_job, published), "production")
+
+    def test_a_plan_the_gate_could_not_read_runs_in_production(self):
+        # The gate step failed or was skipped: its output is the empty string.
+        for plan_job, apply_job in self.each_stack():
+            published = self.route(plan_job, verdict="", rules=self.app_rule())
+            self.assertEqual(published, "production")
+            self.assertEqual(self.environment_for(plan_job, published), "production")
+
+    def test_a_failed_preview_or_delete_guard_runs_in_production(self):
+        for plan_job, apply_job in self.each_stack():
+            for preview, deletes in (("failure", "success"), ("success", "failure"), ("skipped", "skipped")):
+                published = self.route(
+                    plan_job, verdict="FREE", preview=preview, deletes=deletes, rules=self.app_rule()
+                )
+                self.assertEqual(published, "production", (preview, deletes))
+
+    def test_a_free_plan_with_no_free_environment_runs_in_production(self):
+        # The environment is not created yet: the rules endpoint answers 404
+        # (the stub's unreadable case), so readiness is false.
+        for plan_job, apply_job in self.each_stack():
+            (self.work / "rules.json").unlink(missing_ok=True)
+            published = self.route(plan_job, verdict="FREE")
+            self.assertEqual(published, "production")
+
+    def test_a_free_plan_whose_environment_lost_the_app_rule_runs_in_production(self):
+        for plan_job, apply_job in self.each_stack():
+            for rules in (self.app_rule(enabled=False), self.app_rule(app_id=REVIEWER_APP_ID + 1)):
+                published = self.route(plan_job, verdict="FREE", rules=rules)
+                self.assertEqual(published, "production")
+
+    def test_the_apply_refuses_a_free_environment_that_lost_its_rule_after_routing(self):
+        for plan_job, apply_job in self.each_stack():
+            published = self.route(plan_job, verdict="FREE", rules=self.app_rule())
+            environment = self.environment_for(plan_job, published)
+            self.assertEqual(environment, "production-free")
+            self.assertEqual(self.apply_gate(apply_job, environment, rules=self.app_rule(enabled=False)), 1)
+
+    def test_the_apply_refuses_a_plan_that_turned_paid_after_routing(self):
+        for plan_job, apply_job in self.each_stack():
+            for verdict in ("PAID", "", "free", "FREE\n"):
+                self.assertEqual(self.regate(apply_job, "production-free", verdict), 1, verdict)
+
+    def test_the_apply_on_production_is_not_blocked_by_the_gate(self):
+        for plan_job, apply_job in self.each_stack():
+            for verdict in ("FREE", "PAID", ""):
+                self.assertEqual(self.regate(apply_job, "production", verdict), 0, verdict)
+
+    def test_an_unknown_environment_name_is_refused_by_both_apply_steps(self):
+        for plan_job, apply_job in self.each_stack():
+            for name in ("", "production-mail", "production-free ", "staging", "Production"):
+                self.assertEqual(self.apply_gate(apply_job, name, reviewers=True, rules=self.app_rule()), 1, name)
+                self.assertEqual(self.regate(apply_job, name, "FREE"), 1, name)
+
+    def test_the_apply_gate_reads_the_environment_it_runs_in(self):
+        for plan_job, apply_job in self.each_stack():
+            self.apply_gate(apply_job, "production", reviewers=True, rules=self.app_rule())
+            self.apply_gate(apply_job, "production-free", rules=self.app_rule())
+            calls = self.stub.calls()
+            self.assertIn("GET repos/ORG/REPO/environments/production", calls)
+            self.assertIn("GET repos/ORG/REPO/environments/production-free", calls)
+
+    def test_only_the_exact_published_string_selects_the_free_environment(self):
+        expression = routed("hetzner-network-plan")
+        for published, expected in (
+            ("production-free", "production-free"),
+            ("production", "production"),
+            ("", "production"),
+            ("PRODUCTION-FREE", "production"),
+            ("production-free ", "production"),
+            ("production-free-2", "production"),
+            ("true", "production"),
+        ):
+            with self.subTest(published=published):
+                self.assertEqual(
+                    resolve_environment(expression, {"hetzner-network-plan": published}), expected
+                )
+        # A plan job that published nothing at all (skipped or failed).
+        self.assertEqual(resolve_environment(expression, {}), "production")
 
 
 if __name__ == "__main__":
