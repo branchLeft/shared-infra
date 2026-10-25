@@ -1,0 +1,32 @@
+---
+# The roles each enrolled host's playbook may apply after the two pull roles (R2, R9).
+# The owner merges every edit here (/ansible/checks/ in CODEOWNERS), so the reviewer App
+# cannot widen what a pulled playbook runs as root. Rules and limits: checks/README.md.
+
+# A role is named by its directory under ansible/roles/. The check does not look at
+# that directory, so a name may be listed before its role merges. A host with no
+# entry may apply the two pull roles and nothing else. Planned, not listed: control_plane_db.
+edge1:
+  - monitoring_stack
+  - exporters_and_collectors
+  - ntfy_pager
+  - edge_stack
+  - host_baseline
+  - egress_nat
+ops1:
+  - control_plane
+  - nextcloud_stack
+  - backup_worker
+  - backup_restore
+  - breakglass_mint_host
+  - host_baseline
+app1:
+  - deploy_tooling
+  - website_app1
+  - breakglass_grant_host
+  - host_baseline
+db1:
+  - db1_stack
+  - db1_grants
+  - db1_backup_timers
+  - tunnel_account

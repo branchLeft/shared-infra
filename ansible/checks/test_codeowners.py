@@ -62,6 +62,17 @@ class CodeownersTests(unittest.TestCase):
     def test_a_neighbouring_role_file_is_not_the_owners(self) -> None:
         self.assertEqual([], owners_of(UNOWNED_NEIGHBOUR, self.rules))
 
+    def test_the_host_role_lists_and_their_check_are_the_owners(self) -> None:
+        # The list decides which roles a pulled playbook may run as root, so only the owner
+        # merges an edit to it, to the check that reads it, or to the tests that hold the check.
+        for path in (
+            "ansible/checks/host_roles.yml",
+            "ansible/checks/check_enrolment.py",
+            "ansible/checks/test_check_host_roles.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual([OWNER], owners_of(path, self.rules))
+
     def test_the_last_matching_line_wins(self) -> None:
         rules = [("/a/", [OWNER]), ("/a/b.py", ["@someone-else"])]
         self.assertEqual(["@someone-else"], owners_of("a/b.py", rules))
