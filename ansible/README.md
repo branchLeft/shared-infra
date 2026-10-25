@@ -162,7 +162,16 @@ CI runs the same commands, the pin check, and the harness over every role. The w
 (`.github/workflows/ansible.yml`) runs on every pull request and every push to
 `main`, with no path filter, so its jobs always report. The first job decides
 whether a file under `ansible/`, the two lint files or the workflow itself
-changed; when none did, the other jobs are skipped and the gate passes.
+changed (`ansible/` and `hetzner/` are watched whole); when none did, the other
+jobs are skipped and the gate passes.
+
+What runs, by event:
+
+| Event          | Lint | Shards                                                                                                                                                                                    |
+| -------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pull request   | yes  | the roles and patterns it changed, those that name them, and those that read a changed file outside `ansible/`; every shard if the harness, checks, lock, lint config or workflow changed |
+| merge queue    | yes  | every shard, whatever changed                                                                                                                                                             |
+| push to `main` | yes  | none: the delivery workflow runs the harness before it applies anything                                                                                                                   |
 
 The workflow has three kinds of job:
 
@@ -175,20 +184,25 @@ The workflow has three kinds of job:
   `molecule/` scenario still gets its `default` shard, and that shard fails at the
   `scenario-limits` step. A shard's name is the directory, and the directory and
   the scenario in brackets for any scenario but `default`, so names are unique.
+  `ansible/checks/ci_select.py` then narrows that list by the table above (its
+  docstring has the rules); any doubt keeps the shard.
 - `lint` runs the static checks once: yamllint, ansible-lint, mypy, ruff and the
   harness's unit tests.
-- `shard` runs the harness once for each entry `discover` listed, in parallel,
-  with `--scenario` set to the entry's scenario. Each shard has its own time
-  limit (25 minutes), so the run time does not grow with the number of roles in
-  one job. A role whose one scenario would not fit in the limit puts its
-  refusal cases in a second scenario, which is a second shard, not in a longer
-  limit.
+- `shard` runs the harness once for each entry `discover` kept, in parallel,
+  with `--scenario` set to the entry's scenario, and only after `lint` has
+  passed, so a lint error is red in minutes and starts no container. Each shard
+  has its own time limit (25 minutes), so the run time does not grow with the
+  number of roles in one job. A role whose one scenario would not fit in the
+  limit puts its refusal cases in a second scenario, which is a second shard,
+  not in a longer limit.
 
 The gate job is named `Lint and test the Ansible roles`. The ruleset requires
 a check with exactly that name, and a matrix job would report its checks under
 other names, so the gate stays one job. It fails unless `discover` succeeded
-and, when the Ansible inputs changed, `lint` and every shard succeeded. When
-nothing changed, `lint` and the shards are skipped and the gate passes.
+and, when the Ansible inputs changed, `lint` succeeded and, when `discover`
+chose shards, every chosen shard did. When nothing changed, `lint` and the
+shards are skipped and the gate passes; when the lint passed and no shard was
+needed, the shard job is skipped on purpose and the gate passes.
 
 How to add a pattern: nothing to edit here. A directory directly under
 `ansible/patterns/` or `ansible/roles/` is picked up by `discover` on the next
@@ -350,7 +364,7 @@ for its own.
 
 ### How updates and advisories surface, with no one watching
 
-`../.github/dependabot.yml` has a weekly `uv` entry for `/ansible`. The `uv`
+`../.github/dependabot.yml` has a monthly `uv` entry for `/ansible`. The `uv`
 ecosystem is the one that recompiles a lock made by `uv pip compile`: it finds
 `requirements.in` beside `requirements.txt`, bumps the chosen pin in the input,
 and reruns `uv pip compile` with `--generate-hashes`, `--universal` and the
@@ -372,7 +386,7 @@ setting that is not a file in git. The advisory database lists `ansible`
 advisories that name a bundled collection, so a collection fix is covered by the
 alert for the package that carries it.
 
-`../.github/dependabot.yml` also has a weekly `pip` entry for `/ansible/checks`,
+`../.github/dependabot.yml` also has a monthly `pip` entry for `/ansible/checks`,
 which reads the one-line pin in `checks/pip-requirements.txt` and opens a pull
 request of its own for a new pip. That pull request fails the parity test until
 the table in `checks/test_lock_reader_parity.py` is re-checked against the new
