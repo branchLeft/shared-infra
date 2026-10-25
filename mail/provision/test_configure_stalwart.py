@@ -6,6 +6,9 @@ mail/provision -p 'test_*.py' -v
 import copy
 import io
 import itertools
+import os
+import stat
+import tempfile
 import unittest
 from unittest import mock
 
@@ -1018,3 +1021,86 @@ class MainRestartReadinessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CompleteBootstrapTests(unittest.TestCase):
+    """_complete_bootstrap writes the one-time credential to disk before it
+    waits for Stalwart to come back, so a poll timeout cannot lose the secret,
+    and it waits by polling rather than by a fixed sleep.
+    """
+
+    NEW_USERNAME = "testadmin"
+    NEW_SECRET = "TEST_SECRET_VALUE"
+
+    def setUp(self):
+        stdout_patcher = mock.patch("sys.stdout", new_callable=io.StringIO)
+        stdout_patcher.start()
+        self.addCleanup(stdout_patcher.stop)
+
+        sleep_patcher = mock.patch("time.sleep")
+        self.sleep_mock = sleep_patcher.start()
+        self.addCleanup(sleep_patcher.stop)
+
+        password_patcher = mock.patch.object(
+            cs, "_read_bootstrap_password", return_value="BOOTSTRAP_PASSWORD_NOT_REAL"
+        )
+        password_patcher.start()
+        self.addCleanup(password_patcher.stop)
+
+        jmap_patcher = mock.patch.object(
+            cs,
+            "_jmap_call",
+            return_value={
+                "updated": {
+                    "singleton": {"username": self.NEW_USERNAME, "secret": self.NEW_SECRET}
+                }
+            },
+        )
+        jmap_patcher.start()
+        self.addCleanup(jmap_patcher.stop)
+
+        run_patcher = mock.patch.object(cs.subprocess, "run")
+        run_patcher.start()
+        self.addCleanup(run_patcher.stop)
+
+        temp_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_directory.cleanup)
+        self.credentials_path = os.path.join(temp_directory.name, "stalwart-admin-credentials")
+        path_patcher = mock.patch.object(cs, "CREDENTIALS_PATH", self.credentials_path)
+        path_patcher.start()
+        self.addCleanup(path_patcher.stop)
+
+    def test_waits_by_polling_with_the_new_credential_and_never_sleeps_six_seconds(self):
+        wait_mock = mock.Mock(return_value=None)
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", wait_mock):
+            cs._complete_bootstrap()
+
+        wait_mock.assert_called_once_with((self.NEW_USERNAME, self.NEW_SECRET))
+        self.assertNotIn(mock.call(6), self.sleep_mock.call_args_list)
+
+    def test_credentials_file_exists_with_mode_0600_before_the_poll_runs(self):
+        checks = []
+
+        def check_file_before_poll(auth):
+            with open(self.credentials_path, encoding="utf-8") as f:
+                contents = f.read()
+            mode = stat.S_IMODE(os.stat(self.credentials_path).st_mode)
+            checks.append((contents, mode))
+            self.assertEqual(contents, f"{self.NEW_USERNAME}:{self.NEW_SECRET}\n")
+            self.assertEqual(mode, 0o600)
+
+        wait_mock = mock.Mock(side_effect=check_file_before_poll)
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", wait_mock):
+            cs._complete_bootstrap()
+
+        wait_mock.assert_called_once()
+        self.assertEqual(len(checks), 1)
+
+    def test_a_poll_timeout_propagates_but_the_credentials_file_is_kept(self):
+        wait_mock = mock.Mock(side_effect=RuntimeError("stalwart's admin API did not answer"))
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", wait_mock):
+            with self.assertRaises(RuntimeError):
+                cs._complete_bootstrap()
+
+        with open(self.credentials_path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), f"{self.NEW_USERNAME}:{self.NEW_SECRET}\n")

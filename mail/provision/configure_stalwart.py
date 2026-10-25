@@ -412,13 +412,13 @@ def _complete_bootstrap() -> tuple[str, str]:
     username, secret = updated["username"], updated["secret"]
 
     subprocess.run(["docker", "restart", "stalwart"], check=True, capture_output=True)
-    import time
 
-    time.sleep(6)  # container needs to leave bootstrap mode before the API answers again
-
+    # Written before the readiness poll: the secret is shown only once, so a
+    # poll timeout must not lose it.
     with open(CREDENTIALS_PATH, "w", encoding="utf-8") as f:
         f.write(f"{username}:{secret}\n")
     os.chmod(CREDENTIALS_PATH, 0o600)
+    _wait_for_stalwart_ready((username, secret))
     print(f"configure_stalwart: bootstrap complete, credential written to {CREDENTIALS_PATH}")
     return username, secret
 
