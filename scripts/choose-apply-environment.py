@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
 """Choose the environment a Hetzner apply job runs in.
 
-Run by each plan job after the spend gate. Prints `production-free` only when
-every input is exactly the good value; every other input, missing or odd, picks
-`production`, where the owner approves. The rule and its reasons are in
-decide(). Reads the four inputs from the environment (never from arguments, so
-nothing the plan produced is parsed as a flag), and writes the choice to the
-GitHub output and summary files it is given.
-
-An exit status other than 0 writes nothing. The workflow reads an unset output
-as `production`, so a crash here also lands on the owner's environment.
+Prints `production-free` only when every input is exactly the good value;
+anything missing or odd picks `production`. Rule: decide().
+A non-zero exit writes nothing, and the workflow reads that as `production`.
+Narrative and reasons: scripts/choose-apply-environment.md.
 """
 
 import argparse
