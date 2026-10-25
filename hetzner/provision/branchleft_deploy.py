@@ -440,8 +440,6 @@ KNOWN_UNHEALTHCHECKED_SERVICES: frozenset[tuple[str, str]] = frozenset(
     {
         # branchLeft/website, deploy/compose.yml.
         ("website", "website-metrics"),
-        # branchLeft/ghost-platform, db/stack/compose.yml.
-        ("db", "mysqld-exporter"),
     }
 )
 

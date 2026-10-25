@@ -874,10 +874,17 @@ class HealthSignalGapsTests(unittest.TestCase):
             bd.health_signal_gaps("website", text), ([], ["website-metrics (absent)"])
         )
 
-    def test_the_db_stack_gap_is_also_reviewed(self):
+    def test_the_db_exporter_is_no_longer_a_reviewed_gap(self):
+        """The exporter declares its own healthcheck now, so it is no longer reviewed."""
         text = "services:\n  mysqld-exporter:\n    image: ${IMAGE}\n"
         self.assertEqual(
-            bd.health_signal_gaps("db", text), ([], ["mysqld-exporter (absent)"])
+            bd.health_signal_gaps("db", text), (["mysqld-exporter (absent)"], [])
+        )
+
+    def test_the_reviewed_gap_list_is_exactly_this_and_growing_it_means_editing_here(self):
+        # A deliberate edit here is the point: a new exemption must change this test in the same diff.
+        self.assertEqual(
+            bd.KNOWN_UNHEALTHCHECKED_SERVICES, frozenset({("website", "website-metrics")})
         )
 
     def test_an_image_provided_healthcheck_is_neither_refused_nor_warned(self):
