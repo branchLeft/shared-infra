@@ -152,7 +152,7 @@ jobs:
       # catch that rather than pass.
       #
       # ansible/checks/ci_select.py then keeps the shards this run needs, from the event and
-      # the changed files (its docstring has the rules). It prints `shards=false` and a
+      # the changed files (its rules are in ansible/checks/README.md). It prints `shards=false` and a
       # one-entry matrix that the shard job refuses when nothing is needed, because GitHub
       # rejects an empty matrix. A pull request with no changed-files list, because the base
       # commit was unknown, keeps every shard.

@@ -1,28 +1,9 @@
-"""Choose the Ansible shards a CI run must execute (ansible/README.md, "The CI workflow").
+"""Choose the Ansible shards a CI run must execute.
 
-The Ansible workflow lists every shard from the tree (ansible/harness/list_shards.py). This
-program narrows that list to the shards a run needs, from the event and the files the run
-changed. It reads the repository tree and nothing else, uses only the standard library (the
-discover job installs nothing), and prints the two job outputs as ``name=value`` lines.
-
-The rules, in the order they are applied:
-
-* a merge-queue run executes every shard: it is the last check before ``main``;
-* a push to ``main`` executes none: the lint job runs, and the delivery workflow runs the
-  harness before it applies anything;
-* a pull request whose base commit is unknown, or whose changed files are not listed,
-  executes every shard;
-* a changed file that is part of the harness, the checks, the lock or the lint config
-  executes every shard, because it decides what every role is held to;
-* a changed file under ``ansible/`` that nothing here recognises executes every shard,
-  because a new kind of file must be named below before it may skip a shard;
-* a changed file in a role or pattern executes that role's or pattern's shards, and the
-  shards of every role or pattern that names it;
-* a changed file outside ``ansible/`` executes the shards of every role or pattern that
-  reads it.
-
-A shard that is wrongly left out is a gate that passes without running, so every rule
-above errs towards running more.
+The rules, and why each errs towards running more, are in ansible/checks/README.md. This
+program reads the event, the changed files and the repository tree, and prints the two job
+outputs as ``name=value`` lines. It uses only the standard library, because discover installs
+nothing.
 """
 
 from __future__ import annotations

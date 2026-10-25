@@ -1,15 +1,7 @@
 """The order and the gate of the Ansible workflow, and the schedules the CI work depends on.
 
-ci_select.py chooses shards; this file holds the workflow to what the choice assumes:
-
-* the shard job waits for the lint job, so a lint error starts no container;
-* the shard job runs only when discover chose shards, and refuses the entry that stands for none;
-* the gate job (the check the ruleset requires) fails unless the lint passed, and fails when
-  shards were chosen and did not all pass;
-* the merge queue still triggers the workflow, so "merge_group runs everything" can happen;
-* the CrowdSec pin check opens a pull request on a stale pin and still fails when it cannot run;
-* the ansible-hosts environment probe is scheduled and judges the environment;
-* Dependabot runs monthly and grouped.
+ci_select.py chooses shards; these tests hold the workflow to what that choice assumes. Each
+test's name states the rule it holds; the reasons are in ansible/checks/README.md.
 """
 
 from __future__ import annotations

@@ -185,7 +185,7 @@ The workflow has three kinds of job:
   `scenario-limits` step. A shard's name is the directory, and the directory and
   the scenario in brackets for any scenario but `default`, so names are unique.
   `ansible/checks/ci_select.py` then narrows that list by the table above (its
-  docstring has the rules); any doubt keeps the shard.
+  rules are in `ansible/checks/README.md`); any doubt keeps the shard.
 - `lint` runs the static checks once: yamllint, ansible-lint, mypy, ruff and the
   harness's unit tests.
 - `shard` runs the harness once for each entry `discover` kept, in parallel,
