@@ -224,15 +224,12 @@ def chosen_environments(expression: str) -> tuple[str, str] | None:
 def environments_used(workflows: Path, skip: str) -> tuple[frozenset[str], list[str]]:
     """Return the environments every other workflow's jobs run in, and what could not be read.
 
-    A job names its environment either as a job key or, when it calls a reusable workflow,
-    as an input in ``with``, and either may be a string or a mapping with a ``name``. A name
-    that is an expression (``${{``) cannot be read, so it is a finding and never a silent pass,
-    with one exception: the closed shape of ``CHOSEN_ENVIRONMENT`` (a job output that picks
-    between two literals) is read, and both literals are judged as if each were named.
+    A job names its environment as a job key or as ``with.environment`` of a call, as a string
+    or a mapping's ``name``. An expression cannot be read, so it is a finding, except the closed
+    shape of ``CHOSEN_ENVIRONMENT``, whose two literals are both judged (see the README).
 
-    Named limit: only the workflows in this directory are read. A job that calls a remote
-    reusable workflow (``uses: org/repo/...@tag``) may run in an environment named inside
-    that workflow, and nothing here can see it.
+    Named limit: a remote reusable workflow (``uses: org/repo/...@tag``) may run in an
+    environment named inside it, and nothing here can see that.
     """
     names: set[str] = set()
     findings: list[str] = []

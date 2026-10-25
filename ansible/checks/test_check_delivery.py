@@ -123,6 +123,12 @@ UNREADABLE_EXPRESSIONS = {
         '${{ needs.plan.outputs.e == "production-free" && "production-free" || "production" }}'
     ),
     "a bare output": "${{ needs.plan.outputs.e }}",
+    "a newline inside the expression": (
+        "${{ needs.plan.outputs.e ==\n'production-free' && 'production-free' || 'production' }}"
+    ),
+    "a newline before the closing braces": (
+        "${{ needs.plan.outputs.e == 'production-free' && 'production-free' || 'production'\n}}"
+    ),
 }
 
 
