@@ -32,6 +32,22 @@ REUSABLE = re.compile(
     re.ASCII,
 )
 ROLE_DIRECTORIES = ["roles/*", "patterns/*"]
+# The one expression C4 reads in an environment name, and it reads this shape alone:
+#   ${{ needs.<job>.outputs.<name> == '<A>' && '<A>' || '<B>' }}
+# A and B are plain literals (an ASCII letter or digit first, then letters, digits, dot,
+# underscore or hyphen), and A is the same literal in the test and in the result, so the
+# value is A or B and nothing else. Used with fullmatch and in ASCII mode: another operator,
+# a branch that is not a literal, a third branch, another context (github, inputs, vars),
+# concatenation, a function call, a nested expression or any text around it does not match.
+ENVIRONMENT_LITERAL = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+CHOSEN_ENVIRONMENT = re.compile(
+    r"\$\{\{[ \t]+needs\.[A-Za-z_][A-Za-z0-9_-]*\.outputs\.[A-Za-z_][A-Za-z0-9_-]*"
+    r"[ \t]+==[ \t]+'(?P<first>" + ENVIRONMENT_LITERAL + r")'"
+    r"[ \t]+&&[ \t]+'(?P=first)'"
+    r"[ \t]+\|\|[ \t]+'(?P<second>" + ENVIRONMENT_LITERAL + r")'"
+    r"[ \t]+\}\}",
+    re.ASCII,
+)
 PYTHON_PATHS = "harness checks"
 PERMISSIONS = {"contents": "read", "actions": "read"}
 # The only secrets the call passes. The apply key is not among them: it is a secret of
@@ -192,16 +208,28 @@ def caller_findings(workflow: object, other_environments: frozenset[str]) -> lis
     return findings
 
 
+def chosen_environments(expression: str) -> tuple[str, str] | None:
+    """Return the two environments the one accepted expression names, else None.
+
+    The accepted expression is ``CHOSEN_ENVIRONMENT``: a job output picks between two literals.
+    Nothing else is read, so a caller that has to be sure which environment a job releases
+    treats None as unreadable.
+    """
+    found = CHOSEN_ENVIRONMENT.fullmatch(expression)
+    if found is None:
+        return None
+    return found["first"], found["second"]
+
+
 def environments_used(workflows: Path, skip: str) -> tuple[frozenset[str], list[str]]:
     """Return the environments every other workflow's jobs run in, and what could not be read.
 
-    A job names its environment either as a job key or, when it calls a reusable workflow,
-    as an input in ``with``, and either may be a string or a mapping with a ``name``. A name
-    that is an expression (``${{``) cannot be read, so it is a finding and never a silent pass.
+    A job names its environment as a job key or as ``with.environment`` of a call, as a string
+    or a mapping's ``name``. An expression cannot be read, so it is a finding, except the closed
+    shape of ``CHOSEN_ENVIRONMENT``, whose two literals are both judged (see the README).
 
-    Named limit: only the workflows in this directory are read. A job that calls a remote
-    reusable workflow (``uses: org/repo/...@tag``) may run in an environment named inside
-    that workflow, and nothing here can see it.
+    Named limit: a remote reusable workflow (``uses: org/repo/...@tag``) may run in an
+    environment named inside it, and nothing here can see that.
     """
     names: set[str] = set()
     findings: list[str] = []
@@ -226,10 +254,14 @@ def environments_used(workflows: Path, skip: str) -> tuple[frozenset[str], list[
                 if named is not None:
                     environment = named.get("name")
                 if isinstance(environment, str) and "${{" in environment:
-                    findings.append(
-                        f"{path.name} names an environment by expression {environment!r}: "
-                        "C4 cannot read which environment it releases, so it is a finding"
-                    )
+                    chosen = chosen_environments(environment)
+                    if chosen is None:
+                        findings.append(
+                            f"{path.name} names an environment by expression {environment!r}: "
+                            "C4 cannot read which environment it releases, so it is a finding"
+                        )
+                    else:
+                        names.update(chosen)
                 elif isinstance(environment, str):
                     names.add(environment)
     return frozenset(names), findings

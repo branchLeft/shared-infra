@@ -508,24 +508,10 @@ class ProviderSelectionSiteTests(unittest.TestCase):
         self.assertEqual(sites[0]["status"], "drift")
 
     def test_shipped_inventory_marks_exactly_the_fixed_sites_retired(self):
-        # root=None deliberately, matching this repo's own CI
-        # (.github/workflows/ci.yml runs the audit with no --root), so this
-        # is what the gate the shipped repo actually runs sees -- not a
-        # stand-in for a fuller check. With no root, `retired` claims can
-        # only ever read back as "retired-unverified" or "live", never
-        # "retired" -- so this asserts on the *claim* each site carries, not
-        # on file content. A prior version of this test asserted
-        # `all(status != "retired")`, which was true for every possible
-        # inventory content under root=None and could never fail -- it
-        # protected nothing. This one fails if a site's `retired` claim
-        # regresses either direction: silently un-flipping a fixed site, or
-        # flipping an unfixed one.
-        #
-        # `infra/provisioning/index.ts` is deliberately not one of these
-        # sites any more: it creates a new per-tenant *state bucket*, never a
-        # secrets-provider selection, and the earlier inventory carrying it
-        # here was a miscategorisation. It is tracked as its own item
-        # (branchLeft/workspace#105) rather than folded into this gate.
+        # root=None, as this repo's CI runs the audit. A `retired` claim can
+        # only read back as "retired-unverified" or "live" here, so this
+        # asserts each site's claim, not file content. Narrative:
+        # scripts/test_audit_pulumi_secrets.md.
         inventory = audit.load_inventory(audit.DEFAULT_INVENTORY)
         sites = audit.audit_provider_selection_sites(inventory, None)
         self.assertTrue(sites, "the tenant-provisioning minting sites must stay enumerated")
@@ -887,6 +873,10 @@ class ShippedInventoryLiveStateTests(unittest.TestCase):
                     "ghost-platform",
                     "infra/hosts/Pulumi.production.yaml",
                 ): "config:\n  a: b\n",
+                (
+                    "ghost-platform",
+                    "infra/demo-host/Pulumi.production.yaml",
+                ): "config:\n  a: b\n",
             }
             for (repo, rel), text in live.items():
                 path = root / repo / rel
@@ -923,17 +913,10 @@ class ShippedInventoryLiveStateTests(unittest.TestCase):
 
 
 class WorkspaceStackDiscoveryTests(unittest.TestCase):
-    """Regression guard for the failure this inventory's own `$comment`
-    names: a stack that exists but was never entered here. Every check
-    elsewhere in this file audits sites the inventory already knows about;
-    none of them can notice a whole stack nobody wrote down, which is
-    exactly how one went missing before. This walks the stack-owning repos
-    for every `Pulumi.yaml` and fails if one has no matching entry.
+    """Regression guard: every stack-owning repo's Pulumi.yaml needs an entry.
 
-    Only runs where those repos sit next to this one on disk -- this
-    repo's own CI checks out `shared-infra` alone, so there the sibling
-    repos are absent and the test skips rather than reporting a false
-    pass or fail for a tree it cannot see.
+    Skips when the sibling repos are absent, as in this repo's own CI.
+    Narrative: scripts/test_audit_pulumi_secrets.md.
     """
 
     STACK_OWNING_REPOS = ("website", "ghost-platform", "ghost-tenant-blog")
