@@ -20,7 +20,6 @@ STACK = ROOT / "hetzner" / "edge" / "stack"
 OWNER = "edge_stack"
 PROJECT_DIR = "/opt/branchleft/edge"
 UNIT = "branchleft-compose@edge"
-DROP_IN_DIRECTORY = "branchleft-compose@edge.service.d"
 
 # The directory name is a prefix of nothing else: a path component that continues with
 # another word character is a different directory (edge1, edge-staging).
@@ -80,7 +79,7 @@ def violations(role: Path, stack: Path = STACK) -> list[str]:
         found.append("files/ links into the edge stack directory")
     for name, path in role_files(role, ROLE_YAML_AREAS):
         text = path.read_text(encoding="utf-8")
-        if UNIT in text.replace(DROP_IN_DIRECTORY, ""):
+        if UNIT in text:
             found.append(f"{name} names the edge unit")
         if PROJECT_DIR_PATTERN.search(text):
             found.append(f"{name} names {PROJECT_DIR}")
@@ -143,7 +142,8 @@ class EdgeSingleHomeTest(unittest.TestCase):
             role = make_role(Path(tmp), "other", "other_files: []\n", STACK)
             self.assertEqual(["files/ links into the edge stack directory"], violations(role))
 
-    def test_the_drop_in_directory_of_the_unit_is_not_reported(self) -> None:
+    def test_a_role_that_names_the_drop_in_directory_of_the_unit_is_reported(self) -> None:
+        # The unit's drop-in has one home too: edge_stack installs it.
         with tempfile.TemporaryDirectory() as tmp:
             role = make_role(
                 Path(tmp),
@@ -151,7 +151,7 @@ class EdgeSingleHomeTest(unittest.TestCase):
                 "other_dir: /etc/systemd/system/branchleft-compose@edge.service.d\n",
                 None,
             )
-            self.assertEqual([], violations(role))
+            self.assertEqual(["vars/main.yml names the edge unit"], violations(role))
 
     def test_a_directory_that_only_starts_like_the_project_directory_is_not_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
