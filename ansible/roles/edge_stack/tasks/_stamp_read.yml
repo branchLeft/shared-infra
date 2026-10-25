@@ -1,0 +1,42 @@
+---
+# The stamp steps of the restart shape, read. Everything here is a read, so it runs in
+# check mode as well, and a plan job and a nightly drift run see the same stamps a real
+# run does. The input is edge_stack_stamp_classes, a list of {name, file}. The steps of
+# this file and of the four _stamp_*.yml beside it are the monitoring_stack role's shape,
+# copied here: a role holds its own copy (ANS-12), and the README says what that costs.
+
+# Not following links: a stamp that is a link is seen as there, and the read below fails
+# on one that leads nowhere.
+- name: Look for each stamp
+  ansible.builtin.stat:
+    path: '{{ item.file }}'
+    follow: false
+    get_checksum: false
+  loop: '{{ edge_stack_stamp_classes }}'
+  register: edge_stack_stamp_stats
+  loop_control:
+    label: '{{ item.name }}'
+
+# Only a stamp that is not there is `absent`, and only `absent` can be adopted. A stamp
+# that is there and cannot be read (a directory, a link to nothing, an I/O error) fails
+# this task and so the run, before anything is changed: it is not a host nobody has
+# applied the role to. The content is a hash of files that may hold a key.
+- name: Read the stamps that are there
+  ansible.builtin.slurp:
+    src: '{{ item.item.file }}'
+  loop: '{{ edge_stack_stamp_stats.results }}'
+  register: edge_stack_stamp_reads
+  when: item.stat.exists
+  no_log: true
+  loop_control:
+    label: '{{ item.item.name }}'
+
+- name: Keep the stamps by name
+  ansible.builtin.set_fact:
+    edge_stack_stamp_found: >-
+      {%- set ns = namespace(out={}) -%}
+      {%- for read in edge_stack_stamp_reads.results -%}
+      {%- set _ = ns.out.update({read.item.item.name: (read.content | b64decode | trim) if read.content is defined else edge_stack_stamp_absent}) -%}
+      {%- endfor -%}
+      {{ ns.out }}
+  no_log: true

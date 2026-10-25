@@ -1,0 +1,56 @@
+---
+# Runs the apply mode of the locked script by itself, as the role runs it (under the
+# deploy lock, with sh -ec), with every action switched off, so the only thing that can
+# stop it is the pin. Inputs: edge_stack_verify_script_name (the key the result is kept
+# under) and, optionally, edge_stack_verify_script_pin (the validated reference the
+# script is given; left undefined, the script is given none). The result is kept in
+# edge_stack_verify_script[<name>] with the exit code, the output and the number of calls
+# the stand-in logged while it ran.
+- name: Count the stand-in's calls before
+  ansible.builtin.command:
+    argv:
+      - wc
+      - -l
+      - /var/log/docker-standin.calls
+  register: edge_stack_verify_script_before
+  changed_when: false
+
+- name: Run the apply mode with every action off
+  ansible.builtin.command:
+    argv:
+      - flock
+      - -E
+      - '75'
+      - -w
+      - '30'
+      - /etc/branchleft/edge.deploy.lock
+      - /bin/sh
+      - -ec
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../files/edge_apply.sh') }}"
+      - edge_apply
+      - apply
+  environment: >-
+    {{ edge_stack_verify_script_env
+    | combine({'EDGE_VALIDATED_PIN': edge_stack_verify_script_pin} if edge_stack_verify_script_pin is defined else {}) }}
+  register: edge_stack_verify_script_run
+  changed_when: false
+  failed_when: false
+
+- name: Count the stand-in's calls after
+  ansible.builtin.command:
+    argv:
+      - wc
+      - -l
+      - /var/log/docker-standin.calls
+  register: edge_stack_verify_script_after
+  changed_when: false
+
+- name: Keep the result
+  ansible.builtin.set_fact:
+    edge_stack_verify_script: '{{ edge_stack_verify_script | default({}) | combine({edge_stack_verify_script_name: edge_stack_verify_script_one}) }}'
+  vars:
+    edge_stack_verify_script_one:
+      rc: '{{ edge_stack_verify_script_run.rc }}'
+      stdout: '{{ edge_stack_verify_script_run.stdout }}'
+      stderr: '{{ edge_stack_verify_script_run.stderr }}'
+      calls: '{{ (edge_stack_verify_script_after.stdout.split()[0] | int) - (edge_stack_verify_script_before.stdout.split()[0] | int) }}'

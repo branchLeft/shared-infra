@@ -1,0 +1,11 @@
+---
+# The role as the plan job runs it: ansible-playbook --check, started by verify (case p8)
+# with the stack directory as an extra variable. It is not one of Molecule's own steps.
+# The role is included, not listed under `roles:`, for the reason given in apply.yml.
+- name: Plan
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Plan the role
+      ansible.builtin.include_role:
+        name: branchleft.edge_stack
