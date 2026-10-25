@@ -30,6 +30,8 @@ fail() { FAILURES=$((FAILURES + 1)); echo "FAIL: $*"; }
 # The shared registry pull retry: one home, sourced here and by the port policy proof.
 # shellcheck disable=SC1091 # sourced at run time; CI shellcheck runs without -x
 . "$HERE/scripts/lib/docker-pull.sh"
+# shellcheck disable=SC1091 # sourced at run time; CI shellcheck runs without -x
+. "$HERE/scripts/lib/spool-egress-counters.sh"
 
 # dockerd's own PATH, so the policy writes to the iptables backend dockerd uses.
 DOCKERD_PATH=""
@@ -148,16 +150,26 @@ on_host "ip link add proofdummy type dummy && ip link set proofdummy up && ip -6
 for nd in 135 136; do
     on_host "ip6tables -I INPUT 1 -i br-mailspool -p icmpv6 --icmpv6-type $nd -j ACCEPT"
 done
-V6_BEFORE="$(on_host "ip6tables -nvxL DOCKER-USER 1 | awk '{print \$1}'")"
+# The drop is read by its fields, not its line: see spool-egress-counters.sh.
+# A missing drop leaves the count empty, which fails the check below.
+V6_BEFORE="$(on_host "ip6tables -nvxL DOCKER-USER --line-numbers" | spool_forward_drop_packets)" || V6_BEFORE=""
+DUMMY_TX_BEFORE="$(on_host "cat /sys/class/net/proofdummy/statistics/tx_packets")"
 on_host "docker run --rm --network drain $PROBE_IMAGE ping -6 -c 1 -W 2 2001:db8:1::1" >/dev/null 2>&1 || true
-V6_AFTER="$(on_host "ip6tables -nvxL DOCKER-USER 1 | awk '{print \$1}'")"
+V6_AFTER="$(on_host "ip6tables -nvxL DOCKER-USER --line-numbers" | spool_forward_drop_packets)" || V6_AFTER=""
+DUMMY_TX_AFTER="$(on_host "cat /sys/class/net/proofdummy/statistics/tx_packets")"
 for nd in 135 136; do
     on_host "ip6tables -D INPUT -i br-mailspool -p icmpv6 --icmpv6-type $nd -j ACCEPT"
 done
-if [ "$V6_AFTER" -gt "$V6_BEFORE" ]; then
+if [ -n "$V6_BEFORE" ] && [ -n "$V6_AFTER" ] && [ "$V6_AFTER" -gt "$V6_BEFORE" ]; then
     pass "a forwarded IPv6 packet from the drain bridge hit the drop ($V6_BEFORE -> $V6_AFTER)"
 else
     fail "a forwarded IPv6 packet from the drain bridge did not hit the drop ($V6_BEFORE -> $V6_AFTER)"
+fi
+# A dropped packet is never routed out, so nothing is transmitted on the egress.
+if [ "$DUMMY_TX_AFTER" = "$DUMMY_TX_BEFORE" ]; then
+    pass "a forwarded IPv6 packet from the drain bridge left nothing on the dummy egress ($DUMMY_TX_BEFORE -> $DUMMY_TX_AFTER)"
+else
+    fail "a forwarded IPv6 packet from the drain bridge reached the dummy egress ($DUMMY_TX_BEFORE -> $DUMMY_TX_AFTER)"
 fi
 
 echo "== after the policy"
