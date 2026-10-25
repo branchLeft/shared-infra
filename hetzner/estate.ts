@@ -33,6 +33,36 @@ import { verifyEstateProject } from './projectGuard';
  */
 export const estateProjectVerified = verifyEstateProject();
 
+/**
+ * Resolves to `value` only once the project check has passed. An ungated
+ * resource is registered even when the check refuses, so every input that
+ * reaches a provider resource goes through this or through `gateRegistration`.
+ */
+const verified = <T>(value: pulumi.Input<T>): pulumi.Output<T> =>
+  pulumi.all([estateProjectVerified, value]).apply(([, resolved]) => resolved as T);
+
+/**
+ * Makes the firewall's name, the server's type and the primary IPs' names wait
+ * on the check, so a refused check registers none of them. Applied to each
+ * Host below, whose children these are.
+ */
+export const GATED_PROPERTY: Record<string, string> = {
+  'hcloud:index/firewall:Firewall': 'name',
+  'hcloud:index/server:Server': 'serverType',
+  'hcloud:index/primaryIp:PrimaryIp': 'name',
+};
+
+export const gateRegistration: pulumi.ResourceTransformation = (args) => {
+  const property = GATED_PROPERTY[args.type];
+  if (property === undefined) {
+    return undefined;
+  }
+  return {
+    props: { ...args.props, [property]: verified(args.props[property]) },
+    opts: args.opts,
+  };
+};
+
 const config = new pulumi.Config();
 
 /**
@@ -46,7 +76,9 @@ const config = new pulumi.Config();
 const networkStack = new pulumi.StackReference(
   'organization/branchleft-hetzner-network/production'
 );
-const networkId = networkStack.requireOutput('networkId').apply(String);
+// Gated directly: the server's network attachment is built from this value
+// outside the transformation's reach.
+const networkId = verified(networkStack.requireOutput('networkId').apply(String));
 
 const image = config.require('image');
 
@@ -59,17 +91,20 @@ const ownerSshKeyNames = config.requireObject<string[]>('ownerSshKeyNames');
  * traffic. Caddy, CrowdSec and the monitoring stack are delivered onto it
  * separately; nothing here installs them.
  */
-export const edge1 = new Host({
-  name: 'edge1',
-  role: 'edge',
-  location: ESTATE_LOCATION,
-  image,
-  ownerSshKeyNames,
-  networkId,
-  serverType: config.require('edge1ServerType'),
-  privateIp: HOST_IPS.edge1,
-  deployPublicKey: config.require('edge1DeployPublicKey'),
-});
+export const edge1 = new Host(
+  {
+    name: 'edge1',
+    role: 'edge',
+    location: ESTATE_LOCATION,
+    image,
+    ownerSshKeyNames,
+    networkId,
+    serverType: config.require('edge1ServerType'),
+    privateIp: HOST_IPS.edge1,
+    deployPublicKey: config.require('edge1DeployPublicKey'),
+  },
+  { transformations: [gateRegistration] }
+);
 
 export const edge1PublicIpv4 = edge1.publicIpv4;
 
@@ -132,6 +167,7 @@ export const ops1 = new Host(
     // the exact URNs this must match. It can go only after the production
     // stack has applied the rename; before that, removing it is a replace.
     aliases: [{ name: 'nextcloud1' }],
+    transformations: [gateRegistration],
   }
 );
 
