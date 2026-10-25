@@ -98,7 +98,7 @@ PULL_ROLE_PATHS = [
 
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
 # owned would be seen. A host playbook is among them: the reviewer App may wire a listed role
-# into one (owner ruling of 2026-10-25, branchLeft/workspace#2341), and the per-host role list
+# into one (owner ruling of 2026-10-25), and the per-host role list
 # under ansible/checks/ is what is owner-only.
 UNOWNED_PATHS = [
     "ansible/playbooks/app1.yml",
