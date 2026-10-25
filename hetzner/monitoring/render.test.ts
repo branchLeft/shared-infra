@@ -469,6 +469,13 @@ describe('the rendered alert rules', () => {
     );
   });
 
+  it('warns when the mx1 mail certificate is within 14 days of expiry (MailCertificateExpiringSoon)', () => {
+    expect(rendered).toContain('alert: MailCertificateExpiringSoon');
+    expect(rendered).toContain(
+      'expr: probe_ssl_earliest_cert_expiry{job="blackbox_mail"} - time() < 14*86400'
+    );
+  });
+
   it('alerts on a failed mail liveness probe, scoped to the mail job so the alertname names the path', () => {
     expect(rendered).toContain('alert: MailHostDown');
     expect(rendered).toContain('expr: probe_success{job="blackbox_mail"} == 0');
@@ -799,6 +806,7 @@ describe('the owner_action="true" label', () => {
       'HostDiskSpaceLow',
       'MySQLConnectionsHigh',
       'TLSCertificateExpiringSoon',
+      'MailCertificateExpiringSoon',
       'SNDSAccessLinkExpiringSoon',
     ]);
   });
