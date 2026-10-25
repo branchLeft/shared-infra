@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Lists IPs Stalwart's own built-in scan-ban has blocked, and optionally
-clears specific ones -- see mail/RUNBOOK-mx1-provision.md's "Scan-ban"
-section for why this fires on nothing more hostile than an operator's own
-verification commands, and why a blanket clear is dangerous: a genuinely
-malicious scanner blocked alongside an operator's own false-positive would
-get released too.
-
+"""Lists IPs that Stalwart's built-in scan-ban has blocked, and clears them on request; reasoning is in list_and_clear_blocked_ips.md.
 Usage:
     python3 list_and_clear_blocked_ips.py                    # list only
     python3 list_and_clear_blocked_ips.py --list-only         # same, explicit
