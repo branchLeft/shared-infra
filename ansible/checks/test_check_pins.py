@@ -213,6 +213,17 @@ class LockTests(PinCase):
         )
         self.assertEqual(self.findings(), [])
 
+    def test_a_marker_on_a_required_tool_is_refused(self) -> None:
+        """A marker narrows where a pin applies, so a required tool would be unpinned elsewhere."""
+        for name, version in TOOLS.items():
+            with self.subTest(tool=name):
+                marked = lock_text().replace(
+                    f"{name}=={version} \\", f"{name}=={version} ; sys_platform == 'linux' \\", 1
+                )
+                self.put_lock(marked)
+                bare = check_pins.normalise(name.split("[")[0])
+                self.assert_found(f"pins {bare} with an environment marker")
+
     def test_a_continuation_cannot_hide_an_option_from_the_check(self) -> None:
         """The two shapes install_runtime refuses are refused here too: the line is not a pin."""
         hashed = f"alpha==1.0 {HASH}"

@@ -72,7 +72,7 @@ REQUIRED_TOOLS = frozenset(
 VERSION = r"\d+(?:\.\d+)*(?:(?:a|b|rc)\d+)?(?:\.post\d+)?"
 REQUIREMENT = re.compile(
     rf"(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[A-Za-z0-9._,-]+\])?==(?P<version>{VERSION})"
-    rf"(?: ?; ?{MARKER_CHARS}+?)?"
+    rf"(?P<marker>(?: ?; ?{MARKER_CHARS}+?)?)"
     r"(?P<hashes>(?: +--hash=sha256:[0-9a-f]{64})*)",
     re.ASCII,
 )
@@ -136,6 +136,11 @@ def locked_packages(requirements: Path) -> tuple[dict[str, str], list[str]]:
         name = re.sub(r"[-_.]+", "-", match["name"]).lower()
         if not HASH.search(match["hashes"]):
             findings.append(f"{requirements.name} line {number} pins {name} with no --hash")
+        if name in REQUIRED_TOOLS and match["marker"]:
+            findings.append(
+                f"{requirements.name} line {number} pins {name} with an environment marker, "
+                "so it is not pinned on every platform"
+            )
         if name in pins:
             findings.append(f"{requirements.name} line {number} pins {name} a second time")
         pins[name] = match["version"]
