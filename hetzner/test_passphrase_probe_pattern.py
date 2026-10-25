@@ -167,10 +167,6 @@ ALLOWLIST: dict[tuple[str, str], tuple[int, str]] = {
         "equally conclusive. Do not use `stack export --show-secrets` for either",
     ): (1, "prose explaining why the anti-pattern is unsafe"),
     (
-        "scripts/audit-pulumi-secrets.py",
-        "and this script cannot detect it. `pulumi stack export --show-secrets`",
-    ): (1, "docstring prose describing a detection gap, not an instruction to use the flag"),
-    (
         "scripts/test_verify_archive_passphrase.py",
         "# `plaintext` keys mean the export was taken with --show-secrets. It is",
     ): (1, "comment describing what a fixture's data represents, not a live command"),
