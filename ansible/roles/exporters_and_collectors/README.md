@@ -23,8 +23,10 @@ It runs in this order, and each step changes only what it names.
 1. Refuses its inputs before it changes anything: the version, the digest, the
    subnet prefix and the stop percentage must have the shape the role takes.
 2. Refuses to install when the host has no address in the estate subnet, so the
-   exporter can never bind a public interface. The address is taken from the
-   facts the play gathers.
+   exporter can never bind a public interface. The role gathers the network and
+   hardware facts it reads itself (`ansible.builtin.setup` with those two
+   subsets) before this, so the play may run with `gather_facts: false`, as the
+   pulled playbooks do.
 3. Refuses to install when a real mount of the host is at or above the stop
    percentage (70 by default). This is the first section of the db1 runbook, now
    a check the role makes.
