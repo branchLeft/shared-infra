@@ -11,7 +11,8 @@
   vars:
     edge_stack_verify_real_stack: '{{ playbook_dir }}/../../files/stack'
     edge_stack_verify_dir: /opt/branchleft/edge
-    edge_stack_verify_dropin_source: '{{ playbook_dir }}/../../files/edge.override.conf'
+    # Read directly from the repository, not through the role's link, as the stack is.
+    edge_stack_verify_dropin_source: '{{ playbook_dir }}/../../../../../hetzner/monitoring/systemd/edge.override.conf'
     edge_stack_verify_pin_good: IMAGE=ghcr.io/branchleft/edge-caddy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     edge_stack_verify_hex64: '^[0-9a-f]{64}$'
     edge_stack_verify_pin_other: ghcr.io/branchleft/edge-caddy@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
@@ -1964,7 +1965,7 @@
             name: branchleft-compose@edge.service
           register: edge_stack_verify_p30_rerun
 
-        - name: Assert the run that died placed the file and left the earlier release loaded, and the rerun made systemd read the new one without restarting the unit
+        - name: Assert the run that died left the earlier release loaded, and the rerun made systemd read the new one with no unit start
           ansible.builtin.assert:
             that:
               - edge_stack_verify_crash.rc != 0
