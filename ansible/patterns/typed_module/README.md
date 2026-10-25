@@ -158,8 +158,10 @@ The module (`library/typed_module_record.py`) has these parts, in this order:
 1. `DOCUMENTATION`, `EXAMPLES` and `RETURN` blocks (ANS-2).
 2. `Params`, a frozen dataclass with one annotated field per parameter. A field
    with no default is required, `X | None = None` is optional, a
-   `Literal["a", "b"]` is a `choices` list, and `metadata={"no_log": True}`
-   marks a secret. `repr=False` keeps the secret out of any traceback.
+   `Literal["a", "b"]` is a `choices` list, `metadata={"no_log": True}`
+   marks a secret, and `metadata={"plain": True}` declares a field not a
+   secret. Every field carries exactly one of the two markers. `repr=False`
+   keeps the secret out of any traceback.
 3. `build_argument_spec(Params)`, which generates the `argument_spec` from the
    types and refuses a type it cannot state.
 4. Pure functions: `validate` (a named refusal for a value that has the right
@@ -181,6 +183,19 @@ module = AnsibleModule(argument_spec=ARGUMENT_SPEC, supports_check_mode=True)
   types are the single source, and the documentation is the one thing a human
   keeps in step, which a unit test compares (type, required, default, choices)
   for every option.
+- Which options are secret is declared on each field, not guessed from its
+  name. The earlier test flagged a name containing `token`, `password`,
+  `secret` or `key`, so a secret named `passphrase` or `api_credential` passed
+  unmasked. The unit test `test_every_option_is_declared_secret_or_plain` now
+  fails on any field with neither marker, and checks that the spec's `no_log`
+  agrees with the marker.
+- mypy runs with `disallow_any_explicit = true`, the setting `ansible/pyproject.toml`
+  already has, so an explicit `Any` is an error here too. The `ansible.*`
+  override stays the only untyped-import exemption.
+- The directory-wide mypy run excludes `molecule/`. The scenario links a second
+  copy of the module into `molecule/default/library`, so mypy sees the module
+  twice under one name and stops. The `library/` copy is the one checked, and
+  the four commands above check it by path.
 - `no_log: True` on the token in the spec, as well as `no_log: true` on the
   task (ANS-16): the first masks the value wherever Ansible prints the module's
   arguments or result, the second hides the whole task result. The record holds
@@ -217,7 +232,9 @@ when it is removed.
 - The generated `argument_spec` equals the one expected for the dataclass, and
   every option of it agrees with the `DOCUMENTATION` block on type, required,
   default and choices (`test_documentation_options_match_the_generated_argument_spec`
-  names the option). Every secret-named option is `no_log`.
+  names the option). Every option carries exactly one of `no_log` (a secret)
+  or `plain`, and the spec's `no_log` agrees with that marker
+  (`test_every_option_is_declared_secret_or_plain` names the option).
 - The generator refuses a type, a choice list, a union or a default it cannot
   state.
 - `validate` refuses each bad value with its named message; no message carries
@@ -339,6 +356,7 @@ Each is proven by sabotage; the commands and results are in the pull request.
    only writer, `run` calls `apply` only outside check mode. Keep
    `build_argument_spec(Params)`; do not write the spec by hand.
 4. Mark every secret field with `metadata={"no_log": True}` and `repr=False`,
+   and every other field with `metadata={"plain": True}`,
    and give it no default in the role's `defaults/main.yml` (ANS-16).
 5. Update the `DOCUMENTATION`, `EXAMPLES` and `RETURN` blocks until the
    documentation unit test passes.

@@ -212,11 +212,13 @@ REASON_TYPE = "no argument_spec type for this annotation"
 class Params:
     """The module's parameters. The argument_spec is generated from this class."""
 
-    path: Path
-    name: str
-    count: int = 1
-    state: State = "present"
-    mode: str = "0600"
+    # Every field declares whether it is a secret: no_log marks one, plain marks one that is
+    # not. A test fails on a field that carries neither, so a secret is never guessed by name.
+    path: Path = dataclasses.field(metadata={"plain": True})
+    name: str = dataclasses.field(metadata={"plain": True})
+    count: int = dataclasses.field(default=1, metadata={"plain": True})
+    state: State = dataclasses.field(default="present", metadata={"plain": True})
+    mode: str = dataclasses.field(default="0600", metadata={"plain": True})
     # repr=False keeps the secret out of any traceback or log line that prints the object.
     token: str | None = dataclasses.field(default=None, repr=False, metadata={"no_log": True})
 

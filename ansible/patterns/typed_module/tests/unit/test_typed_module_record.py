@@ -67,11 +67,21 @@ class ArgumentSpecTests(unittest.TestCase):
             },
         )
 
-    def test_every_secret_named_option_is_no_log(self) -> None:
-        for name, option in record.ARGUMENT_SPEC.items():
-            if any(word in name for word in ("token", "password", "secret", "key")):
-                with self.subTest(option=name):
-                    self.assertIs(option.get("no_log"), True, f"{name} is a secret without no_log")
+    def test_every_option_is_declared_secret_or_plain(self) -> None:
+        # The set of secrets is declared on the field, never guessed from its name:
+        # each field carries exactly one of no_log (a secret) or plain (declared not secret).
+        for field in dataclasses.fields(record.Params):
+            with self.subTest(option=field.name):
+                secret = field.metadata.get("no_log") is True
+                plain = field.metadata.get("plain") is True
+                self.assertNotEqual(
+                    secret, plain, f"{field.name} must carry exactly one of no_log or plain"
+                )
+                self.assertIs(
+                    record.ARGUMENT_SPEC[field.name].get("no_log", False),
+                    secret,
+                    f"{field.name}: the spec's no_log disagrees with the field's marker",
+                )
 
     def test_the_documentation_blocks_are_valid_yaml(self) -> None:
         self.assertIn("typed_module_record", load_yaml(record.DOCUMENTATION)["module"] or "")
