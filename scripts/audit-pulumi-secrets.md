@@ -24,7 +24,7 @@ worse than no gate:
   lives in two places -- `secretsprovider`/`encryptedkey` in the committed
   `Pulumi.<stack>.yaml`, and `secrets_providers` inside the stack's
   checkpoint in its state bucket. Only the first is a committed file.
-  A *half-finished* re-wrap is precisely the case where the two disagree,
+  A _half-finished_ re-wrap is precisely the case where the two disagree,
   and this script cannot detect it. `pulumi stack export --show-secrets`
   against the stack is the only proof of the checkpoint side; the runbook
   requires it per stack and requires the result recorded.
@@ -49,7 +49,7 @@ Two further failure modes it does catch, both of which present as success:
   discovered when it applies against the state everyone else has left.
 - **A provider-selection site left live.** Separately from where state is
   read, some workflows select the shared KMS key via `--secrets-provider`
-  when they *create* a stack. A sweep that re-wraps every existing stack
+  when they _create_ a stack. A sweep that re-wraps every existing stack
   while one of those survives is not finished: the next stack it mints is
   KMS-wrapped again, in a bucket that did not exist when this inventory was
   written.
@@ -74,7 +74,7 @@ stack whose `Pulumi.<stack>.yaml` still reads `gcpkms://` would turn the gate
 green over the one stack in the set that could actually be checked.
 
 `"absent"` belongs here alongside `"passphrase"`, not as a looser check but
-as the *correct* one: PUL-12 forbids a migrated stack from ever committing
+as the _correct_ one: PUL-12 forbids a migrated stack from ever committing
 its `encryptionsalt` again, so the salt is injected at deploy and never
 lands in the tree. A fully migrated stack's config file is therefore
 indistinguishable, by content, from one whose stack was never created --
@@ -105,7 +105,7 @@ terminal state must not paper over.
 
 ## Provider-selection sites
 
-Sites that pass a secrets provider when *creating* a stack.
+Sites that pass a secrets provider when _creating_ a stack.
 
 Re-wrapping every stack that exists is only half the sweep. While one of
 these is live, the next stack minted is KMS-wrapped again -- and it lands
@@ -122,8 +122,8 @@ unrecoverable and the other direction merely inconvenient.
 ## Undeclared provider-selection sites
 
 The regression assertion `hetzner/RUNBOOK-existing-stack-migration.md`
-describes: re-wrapping every stack that *exists* is not the whole sweep while
-something can still *mint* a new KMS-wrapped one in a bucket no earlier
+describes: re-wrapping every stack that _exists_ is not the whole sweep while
+something can still _mint_ a new KMS-wrapped one in a bucket no earlier
 enumeration could list. `audit_provider_selection_sites` verifies the sites
 this inventory already knows about; `audit_provider_selection_scan` instead
 looks for one it does not.
