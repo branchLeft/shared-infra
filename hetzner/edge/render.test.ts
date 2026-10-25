@@ -40,6 +40,11 @@ const DETECT_ONLY: EdgePosture = {
   rateLimit: 'off',
   membersMagicLinkRateLimit: 'off',
 };
+const IN_BAND_ONLY: EdgePosture = {
+  crowdsec: 'inband-only',
+  rateLimit: 'off',
+  membersMagicLinkRateLimit: 'off',
+};
 const ENFORCING: EdgePosture = {
   crowdsec: 'enforcing',
   rateLimit: 'enforcing',
@@ -757,6 +762,25 @@ describe('the rendered Caddyfile', () => {
   });
 });
 
+describe('inband-only', () => {
+  it('loads the in-band AppSec configuration ahead of the out-of-band one, and nothing else', () => {
+    const configs = renderAppsecAcquisition(IN_BAND_ONLY)
+      .split('\n')
+      .filter((line) => line.startsWith('  - '))
+      .map((line) => line.slice(4));
+    expect(configs).toEqual(['crowdsecurity/appsec-default', 'crowdsecurity/crs']);
+  });
+
+  it('leaves the IP-decision handler out of every route', () => {
+    const rendered = render(IN_BAND_ONLY, [site({ injectionWafPreviewOnly: true })]);
+    expect(rendered).not.toMatch(/^\t+crowdsec$/m);
+  });
+
+  it('renders a Caddyfile identical to detect-only, so the stage changes the acquisition file alone', () => {
+    expect(render(IN_BAND_ONLY)).toBe(render(DETECT_ONLY));
+  });
+});
+
 describe('detect-only', () => {
   it('leaves the IP-decision handler out of every route', () => {
     const rendered = render(DETECT_ONLY, [site({ injectionWafPreviewOnly: true })]);
@@ -798,7 +822,9 @@ describe('detect-only', () => {
    */
   it('is what the committed posture says, so enforcement cannot arrive by redeploy', () => {
     expect(POSTURE).toEqual({
-      crowdsec: 'detect-only',
+      // In-band AppSec only: a known-bad request shape gets a 403, and no
+      // address is banned. The IP-decision handler is the next stage.
+      crowdsec: 'inband-only',
       // Still off: its threshold is inherited from a Cloud Armor rule that has
       // never enforced, so it is a number no traffic has been measured
       // against. Deriving a real threshold is tracked as open work.

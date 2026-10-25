@@ -42,10 +42,15 @@ export interface EdgePosture {
    * on — the same evidence Cloud Armor's preview mode produces, kept for the
    * review the parity gate requires before remediation is enabled.
    *
+   * `inband-only` adds the in-band AppSec configuration to the acquisition
+   * file and nothing else: a request matching a known-bad shape gets one 403,
+   * and no address is banned, because the IP-decision handler stays out of the
+   * route.
+   *
    * `enforcing` adds the in-band AppSec configuration and the IP-decision
    * handler.
    */
-  crowdsec: 'detect-only' | 'enforcing';
+  crowdsec: 'detect-only' | 'inband-only' | 'enforcing';
   /**
    * The general per-IP page-serving throttle. `off` renders no general
    * `rate_limit` handler at all; `enforcing` renders it at `RATE_LIMIT_EVENTS`
@@ -77,7 +82,7 @@ export interface EdgePosture {
 }
 
 export const POSTURE: EdgePosture = {
-  crowdsec: 'detect-only',
+  crowdsec: 'inband-only',
   rateLimit: 'off',
   membersMagicLinkRateLimit: 'enforcing',
 };
