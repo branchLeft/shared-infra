@@ -55,16 +55,21 @@
 /ansible/requirements.yml                @branchLeft/branchleft-admin
 # Every file CI runs as an Ansible gate: the checks (check_delivery, check_enrolment, check_pins, check_role_imports, check_role_paths), their tests, the CI-shape tests (test_ci_python_steps, test_ci_watched_paths), test_codeowners, test_lock_reader_parity and the hash-locked pip-requirements.txt the gates install from. The pin check is the gate that vouches for the locked toolchain and for the update route (ANS-4).
 /ansible/checks/                         @branchLeft/branchleft-admin
-# The pin check loads the lock reader and the allowed marker set from the role's install program and keeps no copy, so what the gate reads is decided in this one file: a role pull request does not change it on the reviewer App's approval alone.
-/ansible/roles/ansible_runtime/files/install_runtime.py  @branchLeft/branchleft-admin
+# Pull-role paths are the owner's alone (owner ruling pull-roles-owner-only, branchLeft/workspace#2340, 2026-10-21). Host playbooks are not: the reviewer App may wire a listed role into one (branchLeft/workspace#2341), and the per-host role list is under /ansible/checks/ above.
+# pull_trigger decides which signed commits a host applies as root, so a change to it is the owner's to review.
+/ansible/roles/pull_trigger/             @branchLeft/branchleft-admin
+# ansible_runtime installs the Ansible that runs as root. Its install program is also what the pin check loads the lock reader and the allowed marker set from, keeping no copy, so what the gate reads is decided in this directory.
+/ansible/roles/ansible_runtime/          @branchLeft/branchleft-admin
+# The broker deploy role's sudoers task and template decide which commands the deploy user may run as root: sudoers is a safety class, so the owner reviews it.
+/ansible/roles/broker_deploy/tasks/_sudoers.yml                    @branchLeft/branchleft-admin
+/ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2  @branchLeft/branchleft-admin
 # Each host's trusted signer list is the trust anchor of the pull. An edit to a file here is the owner's merge. check_enrolment.py (R2, R3, R6, R8) fails a change that sets a protected key outside its own file. It does not judge a role edit: roles run as root. The reusable gated apply exists in branchLeft/github-workflows, but nothing here calls it, so no gate on a role edit is wired.
 /ansible/trust/                          @branchLeft/branchleft-admin
 
-# Standards mode, standards tooling pin and docs-lint settings: they switch the standards and docs checks on, off or to warn.
+# The shared set from branchLeft/standards templates/codeowners (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, the standards tooling pin and the floors file, and /.github/ owns the workflows, actions and dependabot settings.
+/.standardsignore        @branchLeft/branchleft-admin
 /.standards.mode         @branchLeft/branchleft-admin
+/.docs-lint*             @branchLeft/branchleft-admin
+/tools/floors.tsv        @branchLeft/branchleft-admin
 /.standards-db-tooling   @branchLeft/branchleft-admin
-/.docs-lint.mode         @branchLeft/branchleft-admin
-/.docs-lintignore        @branchLeft/branchleft-admin
-
-# Workflows, actions and dependabot settings.
 /.github/                @branchLeft/branchleft-admin
