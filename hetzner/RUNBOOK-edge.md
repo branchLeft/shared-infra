@@ -44,7 +44,7 @@ Expect `active` then `provisioned`. Anything else: run
 that. The rendered Caddy configuration contains a site block only for a site
 whose registry entry carries a `privateUpstream`, and no site does today, so
 Caddy binds no public port and requests no certificate. That is deliberate: a
-hostname whose DNS still points at the GCP edge would fail HTTP-01 validation
+hostname whose DNS still points anywhere but edge1 would fail HTTP-01 validation
 in a loop and spend the Let's Encrypt failure budget for the whole account.
 Everything below is verified through the loopback probe listener instead.
 

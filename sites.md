@@ -10,23 +10,16 @@ about them beyond the hostname itself.
 
 `hetzner/edge/render.ts` derives the Caddy and CrowdSec configuration for
 the Hetzner edge VM from these entries; `hetzner/monitoring/render.ts`
-derives blackbox probe targets from them too. A second edge used to read
-it — `edge.ts` declared a GCP load balancer from the same registry — until
-the GCP estate was destroyed and that program was deleted once it
-described infrastructure that no longer existed.
+derives blackbox probe targets from them too. No other edge reads this file.
 
-`cloudRunService` and `region` below are what `edge.ts` used to read; no
-code reads them any more. They are left on existing entries rather than
-stripped as part of that deletion — pruning them, and the GCP-specific
-onboarding steps that used to follow this comment, is its own pass, not a
-side effect of removing the program that read them.
+`cloudRunService` and `region` on some entries are vestigial: no code reads
+them any more. Pruning them is its own pass.
 
 ## Onboarding a site to the Hetzner edge
 
 One entry with a `privateUpstream` — see that type's own doc comment in
 `siteTypes.ts` for what it needs, and `hetzner/edge/render.ts` for how the
-renderer turns it into a Caddy site block. There is no GCP-side step any
-more.
+renderer turns it into a Caddy site block.
 
 A hostname with nowhere to proxy to -- a fixed page the edge answers
 itself -- is a `StaticSite` in `staticSites` below instead, never an

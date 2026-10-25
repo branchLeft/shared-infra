@@ -43,10 +43,7 @@ prefix is the API and not `/ghost`.
 
 The exemption removes **all** AppSec evaluation on these paths, not only the
 injection rulesets -- the Caddy handler is per-request, so there is no way to
-exempt three rule families and keep a fourth. That was a widening relative to the
-GCP Cloud Armor policy this edge replaced, disclosed in that policy's baseline
-document before it and the program that declared it (`edge.ts`) were deleted once
-the GCP estate they described was destroyed.
+exempt three rule families and keep a fourth.
 
 ## `MEMBERS_MAGIC_LINK_ZONE`
 
@@ -104,7 +101,7 @@ and what the edge runs is the copy step. `render.test.ts` is what keeps the comm
 files and this file from drifting apart.
 
 The registry is the only hostname list: a hostname written here rather than derived
-from `sites.ts` is a hostname the GCP edge does not know about, which is precisely the
+from `sites.ts` is a hostname this renderer does not know about, which is precisely the
 class of stray record the cutover has to find and fix. Everything below is derived.
 
 ## `hstsDirective`
