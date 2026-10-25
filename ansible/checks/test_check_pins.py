@@ -23,6 +23,7 @@ TOOLS = {
     "yamllint": "1.38.0",
     "mypy": "2.4.0",
     "ruff": "0.17.0",
+    "ruamel-yaml": "0.19.1",
 }
 DEPENDABOT = (
     "version: 2\nupdates:\n  - package-ecosystem: 'npm'\n    directory: '/'\n"
@@ -48,6 +49,7 @@ HEADER = (
 )
 VIA_CHOSEN = "    # via -r requirements.in\n"
 VIA_PULLED = "    # via\n    #   ansible\n"
+VIA_CHOSEN_AND_PULLED = "    # via\n    #   -r requirements.in\n    #   ansible-lint\n"
 
 
 def lock_entry(name: str, version: str, marker: str = "", via: str = VIA_CHOSEN) -> str:
@@ -223,6 +225,40 @@ class LockTests(PinCase):
                 self.put_lock(marked)
                 bare = check_pins.normalise(name.split("[")[0])
                 self.assert_found(f"pins {bare} with an environment marker")
+
+    def test_ruamel_yaml_is_a_required_chosen_tool(self) -> None:
+        """ruamel-yaml is imported by the typed_module pattern, so it is chosen and pinned."""
+        self.assertIn("ruamel-yaml", check_pins.REQUIRED_TOOLS)
+        self.assertNotIn("ruamel-yaml", check_pins.INPUT_TOOLS - {"ruamel-yaml"})
+
+    def test_ruamel_yaml_line_removed_from_the_input_is_refused(self) -> None:
+        """Without its line in requirements.in the pin is not chosen on purpose."""
+        self.put_input(input_text().replace("ruamel-yaml==0.19.1\n", ""))
+        self.assert_found("requirements.in does not name ruamel-yaml")
+
+    def test_ruamel_yaml_removed_from_the_lock_is_refused(self) -> None:
+        """Without its pin in the lock nothing installs the module the pattern imports."""
+        lock = lock_text().replace(lock_entry("ruamel-yaml", "0.19.1", via=VIA_CHOSEN), "")
+        self.put_lock(lock)
+        self.assert_found("requirements.txt does not pin ruamel-yaml")
+
+    def test_ruamel_yaml_lock_reason_must_say_it_is_chosen(self) -> None:
+        """The lock's reason names requirements.in; a reason that names only ansible-lint is refused."""
+        lock = lock_text().replace(
+            lock_entry("ruamel-yaml", "0.19.1", via=VIA_CHOSEN),
+            lock_entry("ruamel-yaml", "0.19.1", via=VIA_PULLED.replace("ansible", "ansible-lint")),
+        )
+        self.put_lock(lock)
+        self.assert_found("requirements.in names ruamel-yaml but requirements.txt does not mark it")
+
+    def test_ruamel_yaml_reason_as_uv_writes_it_is_accepted(self) -> None:
+        """uv writes the chosen line and the pulling tool together, and the check reads that form."""
+        lock = lock_text().replace(
+            lock_entry("ruamel-yaml", "0.19.1", via=VIA_CHOSEN),
+            lock_entry("ruamel-yaml", "0.19.1", via=VIA_CHOSEN_AND_PULLED),
+        )
+        self.put_lock(lock)
+        self.assertEqual(self.findings(), [])
 
     def test_a_continuation_cannot_hide_an_option_from_the_check(self) -> None:
         """The two shapes install_runtime refuses are refused here too: the line is not a pin."""

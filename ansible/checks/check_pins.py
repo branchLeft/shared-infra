@@ -52,7 +52,8 @@ MARKER_CHARS: str = RUNTIME.MARKER_CHARS
 
 # The community package carries the collections, so it is pinned like a tool.
 # The others are the tools ANS-4 names and yamllint, which the harness runs
-# (ANS-6).
+# (ANS-6). ruamel-yaml is imported by the typed_module pattern, so it is chosen
+# here and not left to arrive through ansible-lint.
 REQUIRED_TOOLS = frozenset(
     {
         "ansible",
@@ -62,6 +63,7 @@ REQUIRED_TOOLS = frozenset(
         "molecule-plugins",
         "mypy",
         "ruff",
+        "ruamel-yaml",
         "yamllint",
     }
 )
