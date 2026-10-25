@@ -91,6 +91,17 @@ since a false refusal costs a rename and a miss costs a cancelled deploy.
 - A group term the template does not know matches anything, so the job literal
   is refused. That workflow group is already a violation of the run-keyed rule.
 
+## A job literal against another workflow's group
+
+Concurrency groups are one namespace for the whole repository, not per workflow.
+So a job literal equal to another workflow's top-level group would queue behind
+that workflow's runs, or replace a pending one. Each workflow's job literals are
+compared with every other workflow's top-level group, by `same_literal_group`
+and the same template rules as above: a literal top group is compared as text
+with `str.casefold()`, and a top group that holds expressions is compared with
+its template. A top group that is absent, or has no group key, is not compared.
+A workflow file that does not parse is skipped here, since its own rules refuse it.
+
 ## Failing closed
 
 Every check fails closed: a file that does not parse, whose top level is not a
