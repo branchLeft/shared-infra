@@ -161,23 +161,26 @@ the system resolver was meant to be untouched; restore it by hand before relying
     echo "65-install-local-resolver: reverted an unbound-resolvconf edit to /etc/resolv.conf"
 fi
 
-if command -v dig >/dev/null 2>&1; then
-    answer=""
-    for _ in 1 2 3 4 5; do
-        answer="$(dig +short +time=3 +tries=1 @127.0.0.1 A "$SMOKE_TEST_NAME" 2>/dev/null || true)"
-        if [[ -n "$answer" ]]; then
-            break
-        fi
-        sleep 2
-    done
-    if [[ -z "$answer" ]]; then
-        echo "65-install-local-resolver: unbound is running but did not resolve $SMOKE_TEST_NAME \
+smoke_test_recursion() {
+    if command -v dig >/dev/null 2>&1; then
+        answer=""
+        for _ in 1 2 3 4 5; do
+            answer="$(dig +short +time=3 +tries=1 @127.0.0.1 A "$SMOKE_TEST_NAME" 2>/dev/null || true)"
+            if [[ -n "$answer" ]]; then
+                break
+            fi
+            sleep 2
+        done
+        if [[ -z "$answer" ]]; then
+            echo "65-install-local-resolver: unbound is running but did not resolve $SMOKE_TEST_NAME \
 via 127.0.0.1 -- recursion is not working, do not trust DNSBL results until this is fixed" >&2
-        exit 1
+            exit 1
+        fi
+        echo "65-install-local-resolver: 127.0.0.1 resolved $SMOKE_TEST_NAME, recursion works"
+    else
+        echo "65-install-local-resolver: dig not present, skipped the recursion smoke test"
     fi
-    echo "65-install-local-resolver: 127.0.0.1 resolved $SMOKE_TEST_NAME, recursion works"
-else
-    echo "65-install-local-resolver: dig not present, skipped the recursion smoke test"
-fi
+}
 
+smoke_test_recursion
 echo "65-install-local-resolver: done"
