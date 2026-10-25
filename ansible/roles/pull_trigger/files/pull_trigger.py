@@ -477,17 +477,13 @@ def _config_path_from(value: str | None) -> Path:
 def resolve_request(arguments: Arguments, environ: Mapping[str, str]) -> Request:
     """Return what the caller asked for, or refuse.
 
-    The words come from ``SSH_ORIGINAL_COMMAND``, or, run by hand, from the positional
-    words; both, or neither, is refused. The mode (set by root on the command line,
-    never by the caller) decides which request is acceptable: ``--mode apply`` and
-    ``--mode check`` take one commit of 40 lowercase hex digits and nothing else, and
-    ``--mode step`` takes that commit, one step id and one confirmation word, separated by
-    single spaces. The word and the step id are only matched against their patterns here;
-    whether the step is on the allow-list and the word is its word is decided later.
+    The words come from ``SSH_ORIGINAL_COMMAND`` or the positional words; both, or neither,
+    is refused. The mode, set by root, sets the shape: ``apply`` and ``check`` take one commit;
+    ``step`` takes that commit, a step id and a confirmation word; the list is checked later.
 
     Raises:
         BadRequestError: The input does not have the shape the mode accepts.
-        StepModeOnlyError: A well-formed step request arrived with a mode that is not ``step``.
+        StepModeOnlyError: A step request arrived with a mode that is not ``step``.
     """
     original = environ.get("SSH_ORIGINAL_COMMAND")
     if original is not None:
