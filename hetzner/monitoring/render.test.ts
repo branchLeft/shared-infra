@@ -473,6 +473,12 @@ describe('the rendered alert rules', () => {
     expect(alerts).toContain('expr: probe_success{job="blackbox_object_storage"} == 0\n        for: 15m');
   });
 
+  it('warns when an unmarked target has read down for 24 hours, and leaves expected_up="false" targets out', () => {
+    const alerts = renderAlertRules();
+    expect(alerts).toContain('alert: TargetDownUnmarked');
+    expect(alerts).toContain('expr: up{expected_up!="false"} == 0\n        for: 24h');
+  });
+
   it('warns when a public HTTPS certificate is within 14 days of expiry, before the probe itself fails', () => {
     expect(rendered).toContain('alert: TLSCertificateExpiringSoon');
     expect(rendered).toContain(
