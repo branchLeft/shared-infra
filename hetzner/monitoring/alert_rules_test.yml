@@ -294,7 +294,7 @@ tests:
             exp_annotations:
               summary: 'https://example.branchleft.co.uk failed its external probe for 5 minutes.'
               description: >-
-                The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below.
+                The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below, and blackbox_object_storage, which has ObjectStorageProbeFailed.
 
   # TLSCertificateExpiringSoon: a public HTTPS certificate 13 days from expiry
   # fires the warning; one 15 days out stays silent. Values are seconds from
@@ -491,7 +491,7 @@ tests:
             exp_annotations:
               summary: 'https://other.branchleft.co.uk failed its external probe for 5 minutes.'
               description: >-
-                The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below.
+                The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below, and blackbox_object_storage, which has ObjectStorageProbeFailed.
 
   # RateLimitDecliningRealClients: the exact live label schema on edge1
   # (verified 2026-08-30) is a keyless zone-aggregate series and a
@@ -1899,3 +1899,62 @@ tests:
       - expr: ALERTS{alertname=~"Scanner.*", alertstate="firing"}
         eval_time: 30m
         exp_samples: []
+
+  # ObjectStorageProbeFailed: the bucket endpoint refusing or timing out for
+  # 15 minutes fires; a 10-minute outage that recovers does not. The series
+  # is the blackbox_object_storage job's probe_success, which BlackboxProbeFailed
+  # must not also page on at 5 minutes.
+  - interval: 30s
+    input_series:
+      - series: 'probe_success{job="blackbox_object_storage", instance="https://hel1.your-objectstorage.com"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 14m30s
+        alertname: ObjectStorageProbeFailed
+        exp_alerts: []
+      - eval_time: 15m30s
+        alertname: ObjectStorageProbeFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: blackbox_object_storage
+              instance: https://hel1.your-objectstorage.com
+            exp_annotations:
+              summary: 'https://hel1.your-objectstorage.com failed its object storage probe for 15 minutes.'
+              description: >-
+                The bucket endpoint is probed over HTTPS and the probe reads a 403 as
+                up: an anonymous request to the bare endpoint is refused by the service
+                itself, which is the liveness signal here. A refused or timed-out
+                connection held for 15 minutes is the outage this rule exists for.
+                BlackboxProbeFailed excludes blackbox_object_storage, so exactly one of
+                the two rules fires for a given probe.
+
+  - interval: 30s
+    input_series:
+      - series: 'probe_success{job="blackbox_object_storage", instance="https://hel1.your-objectstorage.com"}'
+        values: '0x20 1x40'
+    alert_rule_test:
+      - eval_time: 15m30s
+        alertname: ObjectStorageProbeFailed
+        exp_alerts: []
+
+  # The mutual-exclusion half: BlackboxProbeFailed must not page on the
+  # object storage job at 5 minutes, while a blackbox_http failure still does.
+  - interval: 30s
+    input_series:
+      - series: 'probe_success{job="blackbox_object_storage", instance="https://hel1.your-objectstorage.com"}'
+        values: '0x20'
+      - series: 'probe_success{job="blackbox_http", instance="https://other.branchleft.co.uk"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 5m30s
+        alertname: BlackboxProbeFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: blackbox_http
+              instance: https://other.branchleft.co.uk
+            exp_annotations:
+              summary: 'https://other.branchleft.co.uk failed its external probe for 5 minutes.'
+              description: >-
+                The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below, and blackbox_object_storage, which has ObjectStorageProbeFailed.
