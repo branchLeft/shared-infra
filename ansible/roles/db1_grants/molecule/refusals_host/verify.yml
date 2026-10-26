@@ -1,0 +1,5 @@
+---
+# The default scenario's verify.yml, which runs the cases whose part is this
+# scenario's name (vars/cases.yml) and the assertions on the whole run.
+- name: Verify as the default scenario does
+  ansible.builtin.import_playbook: ../default/verify.yml

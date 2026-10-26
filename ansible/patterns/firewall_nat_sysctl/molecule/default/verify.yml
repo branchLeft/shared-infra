@@ -128,8 +128,11 @@
     # the thing a start runs: it is enabled (asserted above) and its start-up
     # action loads the boot rules file. So the ruleset is flushed, as a start
     # leaves it, the unit is started, and the loaded tables must be the
-    # recorded set again. A boot file that is missing, stale or out of step
-    # with the loaded set fails here.
+    # recorded set again. This section alone catches a boot file that is
+    # present and identical to the active file but does not restore the
+    # recorded set when the unit loads it. A missing boot file, a wrong mode or
+    # a boot file that differs from the active file is caught earlier, by
+    # "Assert both rules files exist with their mode and hold the same rules".
     - name: Flush the whole kernel ruleset, as a start of the host leaves it
       ansible.builtin.command:
         argv: [nft, flush, ruleset]

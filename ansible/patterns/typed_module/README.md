@@ -14,7 +14,9 @@ The role has one task that calls the module `typed_module_record`. The module
 writes a record file (a name, a count and, when a token is given, a keyed
 signature of the name) or removes it. It replaces the file atomically, reports
 a change only when the content or the mode differs, and in check mode reports
-what it would do and changes nothing.
+what it would do and changes nothing. Its returned `diff` shows the signature's
+value as `signature=<hidden>`; the record file on disk still holds the real
+signature, which is how a second run notices a rotated token.
 
 It does not manage the owner or group of the file, create its directory,
 follow symbolic links or take a lock. It is not a service: it starts nothing
@@ -76,6 +78,7 @@ the repository root:
 
 ```text
 .venv/bin/mypy --config-file ansible/patterns/typed_module/pyproject.toml ansible/patterns/typed_module/library ansible/patterns/typed_module/tests
+.venv/bin/mypy --config-file ansible/patterns/typed_module/pyproject.toml ansible/patterns/typed_module
 .venv/bin/ruff check ansible/patterns/typed_module
 .venv/bin/ruff format --check ansible/patterns/typed_module
 PYTHONPATH=ansible/patterns/typed_module/library .venv/bin/python -m unittest discover -b -s ansible/patterns/typed_module/tests/unit -p "test_*.py"
@@ -102,7 +105,7 @@ run is the Molecule test on a container.
   the one function that changes the host (`apply`). Check mode is safe because
   `run` calls `apply` only when `check_mode` is false; do not add a second
   place that writes.
-- Run the module's four commands above and the whole harness, not only the
+- Run the module's five commands above and the whole harness, not only the
   step you touched. Keep every sabotage in "What the test proves" red: edit
   the control, see the named assertion fail, undo the edit.
 - Never loosen `verify.yml` or a unit test to make a change pass.
@@ -158,8 +161,11 @@ The module (`library/typed_module_record.py`) has these parts, in this order:
 1. `DOCUMENTATION`, `EXAMPLES` and `RETURN` blocks (ANS-2).
 2. `Params`, a frozen dataclass with one annotated field per parameter. A field
    with no default is required, `X | None = None` is optional, a
-   `Literal["a", "b"]` is a `choices` list, and `metadata={"no_log": True}`
-   marks a secret. `repr=False` keeps the secret out of any traceback.
+   `Literal["a", "b"]` is a `choices` list. Every field declares `no_log` as
+   true or false: `metadata={"no_log": True}` marks a secret and
+   `metadata={"no_log": False}` a non-secret. A unit test fails, naming the
+   field, if one declares neither. `repr=False` keeps the secret out of any
+   traceback.
 3. `build_argument_spec(Params)`, which generates the `argument_spec` from the
    types and refuses a type it cannot state.
 4. Pure functions: `validate` (a named refusal for a value that has the right
@@ -206,10 +212,12 @@ module = AnsibleModule(argument_spec=ARGUMENT_SPEC, supports_check_mode=True)
 Three layers. Each control below fails by default, with a named assertion,
 when it is removed.
 
-**Types and lint (the module's four commands).**
+**Types and lint (the module's five commands).**
 
 - `mypy --strict` over the module and its tests. Removing an annotation from a
   function is a `no-untyped-def` error.
+- The whole-directory `mypy` run covers the module, its tests and the scenario,
+  minus the excluded symbolic link.
 - `ruff check` and `ruff format --check` with the repository's policy.
 
 **Unit tests (`tests/unit`).**
@@ -262,7 +270,7 @@ Each is proven by sabotage; the commands and results are in the pull request.
 - **CI does not run the module's mypy, ruff or unit tests for a pattern.** The
   workflow's type-check, lint and unit-test steps cover `ansible/harness`
   only, and `ansible/pyproject.toml` has no `ansible.*` override. This pattern
-  carries its own `pyproject.toml` and the four commands above are run by hand.
+  carries its own `pyproject.toml` and the five commands above are run by hand.
   The Molecule scenario does run in CI. ANS-2 asks for mypy and ruff over
   `ansible/` in CI; widening the workflow is separate work, not decided here.
 - **Types stop at the Ansible boundary.** `ansible` is untyped, so mypy sees
@@ -315,7 +323,8 @@ Each is proven by sabotage; the commands and results are in the pull request.
   play finds the module through the role. Without the link ansible-lint
   reports an unknown module. The link is to the file, not to the directory:
   a test in `hetzner/provision` reads every tracked file as text and fails on
-  a link to a directory.
+  a link to a directory. The type check excludes the link through the `exclude`
+  in the pattern's `pyproject.toml`, and the whole-directory mypy command passes.
 - **ANS-8 and the bare name.** At the production profile, ansible-lint raised
   no finding for the bare name `typed_module_record`, called from the role and
   from the verify play. The module carries the role's name as its prefix, as
@@ -325,6 +334,13 @@ Each is proven by sabotage; the commands and results are in the pull request.
 - **Placeholders are not checked.** `AUTHOR_NAME`, `LICENSE_ID` and the
   `EXAMPLE_` and `SCENARIO_` names pass lint and the harness unedited; the
   reviewer stops a role reaching `main` with them.
+- **A rotated token is hidden in the diff.** Because the signature's value is
+  hidden, a rotated token reports `changed` with a `diff` whose two sides are
+  equal.
+- **The `no_log` declaration is checked for presence, not for truth.** The test
+  proves each field declared `no_log` as true or false. A field named like a
+  secret but declared false is still caught only by the name-word test
+  (`test_every_secret_named_option_is_no_log`).
 
 ## How a service role copies it
 
@@ -338,8 +354,10 @@ Each is proven by sabotage; the commands and results are in the pull request.
    `apply` with the service's. Keep the split: `plan` is pure, `apply` is the
    only writer, `run` calls `apply` only outside check mode. Keep
    `build_argument_spec(Params)`; do not write the spec by hand.
-4. Mark every secret field with `metadata={"no_log": True}` and `repr=False`,
-   and give it no default in the role's `defaults/main.yml` (ANS-16).
+4. Declare every field's `no_log`: `metadata={"no_log": True}` with
+   `repr=False` for a secret, `metadata={"no_log": False}` for a non-secret. A
+   unit test fails, naming the field, if one declares neither. Give a secret no
+   default in the role's `defaults/main.yml` (ANS-16).
 5. Update the `DOCUMENTATION`, `EXAMPLES` and `RETURN` blocks until the
    documentation unit test passes.
 6. Copy `pyproject.toml` (or, once CI covers patterns, add its two settings to
@@ -351,7 +369,7 @@ Each is proven by sabotage; the commands and results are in the pull request.
 8. Copy `verify.yml`'s sequence for the module (check mode on a fresh file, an
    apply, a second apply, drift, removal, the secret scan, the bad arguments)
    and the `molecule/default/library` link.
-9. Run the four commands and the harness. Then break each control once and see
+9. Run the five commands and the harness. Then break each control once and see
    it fail by name: remove an annotation (mypy), change a field's type (the
    documentation test), let `run` apply in check mode (unit and Molecule),
    make the apply always change (idempotence) and drop `no_log` (the secret

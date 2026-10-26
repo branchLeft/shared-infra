@@ -145,6 +145,19 @@ is matched against the cases' names in `molecule/default/vars/cases.yml`, and th
 positive cases are skipped unless `DB1_GRANTS_VERIFY_POSITIVE=true`. The harness
 sets neither, so it always runs everything.
 
+The cases are shared out between five scenarios, each its own shard with its own
+25-minute limit, because applying the role once per case is what takes the time.
+`default` runs all eight harness steps and the positive cases. `refusals_inputs`,
+`refusals_host`, `refusals_accounts` and `refusals_tenants` each apply the role once
+and run the refusal cases whose `part` (in `molecule/default/vars/cases.yml`) is the
+scenario's name; their `skip-steps.txt` leaves out the steps `default` runs. Their
+`molecule.yml`, `prepare.yml`, `converge.yml` and `verify.yml` are a link to or an
+import of the default scenario's, so each has one home. To run one part by hand, name
+its scenario: `molecule verify -s refusals_host`. A new case needs a `part`, and a new
+part needs a scenario of that name and an entry in `db1_grants_verify_parts`: a case
+with no scenario fails every scenario's verify (`tasks/assert_parts.yml`) and is never
+silently left out.
+
 The harness needs Docker and creates one container with no network. Its prepare step
 fetches the three pinned programs from ghost-platform on the controller, so the
 harness needs the network too; the container is given the fetched bytes.

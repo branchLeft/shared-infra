@@ -53,9 +53,10 @@ others; builds the environment with a scrubbed process environment (no pip
 variable of the caller reaches the install); installs with hash checking required and wheels only; checks that
 `ansible-playbook` is an executable file in the environment; writes the marker
 last; and, only when asked with `--link`, replaces the `ansible-playbook` link
-atomically. Every failure exits 1 with one JSON line on stdout that names the
-reason, so a failed first boot leaves the host un-enrolled and the owner
-installs by hand. It never falls back to an engine that is not the locked one.
+atomically. Every failure exits 1, writes one line `install_runtime: <reason>` on
+stderr and prints nothing on stdout, so a failed first boot leaves the host
+un-enrolled and the owner installs by hand. It never falls back to an engine that
+is not the locked one.
 
 The role's own link task stays last in `tasks/main.yml`, so the role is the one
 place that decides the link moves.
@@ -198,7 +199,8 @@ This is what a correct first pull shows for this role's tasks:
 
 A first pull that builds a second `venv-<fingerprint>`, moves the link, or fails
 at the program is not correct: the lock's fingerprint differed from the marker's,
-or the program refused, and its one-line JSON reason says which.
+or the program refused: it exits 1, writes one line `install_runtime: <reason>` on
+stderr and prints nothing on stdout, so the reason says which.
 
 ## Named limits
 

@@ -48,6 +48,10 @@ POLL_SECONDS: Final = 0.2
 RECAP_TAIL_BYTES: Final = 262_144
 FLOOR_NAME: Final = "last-applied"
 CURRENT_NAME: Final = "current"
+# ansible-playbook reads this file instead of any ansible.cfg in the checkout. It is empty, so
+# nothing a commit carries can set a plugin path or any other option. The name needs the .cfg
+# extension, which ansible requires of a configuration file.
+ANSIBLE_CONFIG_NAME: Final = "ansible.cfg"
 
 HTTPS_URL: Final = re.compile(r"https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~-]+)+")
 FILE_URL: Final = re.compile(r"file:///[A-Za-z0-9._~/-]+")
@@ -1157,6 +1161,7 @@ class Workspace:
         """Create the private directories, or check the existing ones."""
         for directory in (self.root, self.repo, self.work, self.scratch, self.home):
             ensure_private_dir(directory)
+        write_private_file(self.home / ANSIBLE_CONFIG_NAME, "")
 
     def sweep(self) -> None:
         """Remove work directories and scratch left by a run that died (called under the lock)."""
@@ -1351,6 +1356,7 @@ class PlaybookRunner:
             "HOME": str(self._home),
             "LC_ALL": "C.UTF-8",
             "TZ": "UTC",
+            "ANSIBLE_CONFIG": str(self._home / ANSIBLE_CONFIG_NAME),
             "ANSIBLE_NOCOLOR": "1",
             "ANSIBLE_FORCE_COLOR": "0",
             "ANSIBLE_RETRY_FILES_ENABLED": "0",

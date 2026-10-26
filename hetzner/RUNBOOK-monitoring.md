@@ -622,8 +622,16 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   docker ps --filter label=com.docker.compose.project=monitoring'
 ```
 
-Expect six containers, all `Up`: `prometheus`, `alertmanager`, `grafana`,
-`node-exporter`, `blackbox-exporter`, `cadvisor`.
+Expect seven containers, each reading `Up (healthy)`: `prometheus`,
+`alertmanager`, `ntfy`, `grafana`, `node-exporter`, `blackbox-exporter`,
+`cadvisor`.
+
+Every one of them has a health check, so the health state is part of the
+answer. `Up (health: starting)` is normal for up to about a minute after a
+start or restart (`grafana` is the slowest): wait, then run the command again.
+A bare `Up` with no health field, or `(unhealthy)`, is a failure. A bare `Up`
+means the host is running an older Compose definition than the committed
+one; `(unhealthy)` means the container is running but its check is failing.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner -L 9090:127.0.0.1:9090 root@"$EDGE1_IPV4" -N &
@@ -639,7 +647,7 @@ as though nothing is up. This warm-up window is specific to
 itself is up, with no such delay, so do not apply the same caution there.
 
 Expect `prometheus`, `alertmanager`, `caddy`, `crowdsec`, `website`,
-`cadvisor`, `blackbox_http` (three targets, one per `sites.ts` hostname),
+`cadvisor`, `blackbox_http` (nine targets, one per `sites.ts` hostname),
 `blackbox_mail` (four targets on `mx1.branchleft.co.uk`: 25 and 587 read the
 SMTP banner, 465 and 993 complete a TLS handshake), `stalwart` (Stalwart's own
 Prometheus exporter on `mx1`, over HTTPS on 443), the `node` target for

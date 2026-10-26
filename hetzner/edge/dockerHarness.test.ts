@@ -358,6 +358,7 @@ describe.skipIf(!hasCli)(
       const failure = await ensureImage(IMAGE, { env }).catch((e: unknown) => e);
       expect(failure).toBeInstanceOf(DockerFailure);
       expect((failure as Error).message).toContain('No Docker engine is reachable');
+      expect((failure as Error).message).toContain('found no engine');
       expect((failure as Error).message).not.toContain('could not be pulled');
     }, 20_000);
 
@@ -379,9 +380,25 @@ describe.skipIf(!hasCli)(
         const failure = await ensureImage(IMAGE, { env }).catch((e: unknown) => e);
         expect(failure).toBeInstanceOf(DockerFailure);
         expect((failure as Error).message).toContain('No Docker engine is reachable');
+        expect((failure as Error).message).toContain('found no engine');
         expect((failure as Error).message).not.toContain('could not be pulled');
       }, 20_000);
     }
+
+    it('reports a probe that gives no answer, not the failed inspect, as the reason', async () => {
+      const dir = shim(
+        'case "$1" in\nimage) echo \'inspect broke\' >&2; exit 1;;\n*) exec sleep 30;;\nesac'
+      );
+      const env = { ...process.env, PATH: `${dir}:${process.env.PATH}` };
+      const failure = await ensureImage(IMAGE, { env }, { inspectMs: 1_500, pullMs: 1_500 }).catch(
+        (e: unknown) => e
+      );
+      expect(failure).toBeInstanceOf(DockerFailure);
+      expect((failure as Error).message).toContain('No Docker engine is reachable');
+      expect((failure as Error).message).toContain('gave no answer');
+      expect((failure as Error).message).not.toContain('inspect broke');
+      expect((failure as Error).message).not.toContain('could not be pulled');
+    }, 20_000);
 
     it('treats a missing socket as no engine in both probes', async () => {
       const env = { ...process.env, DOCKER_HOST: `unix://${join(tmpdir(), 'bl-no-such.sock')}` };
