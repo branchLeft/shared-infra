@@ -164,7 +164,7 @@ class DriftCallerTests(unittest.TestCase):
     def test_reference_is_an_exact_tag_not_a_sha_branch_or_major(self) -> None:
         base = "branchLeft/github-workflows/.github/workflows/ansible-drift-check.yml@"
         sha = "0123456789abcdef0123456789abcdef01234567"
-        self.assertEqual([], self.weakened(lambda doc: self.job(doc).update(uses=base + "v1.0.12")))
+        self.assertEqual([], self.weakened(lambda doc: self.job(doc).update(uses=base + "v1.0.13")))
         for ref in (sha, "main", "v1", "v1.0"):
             with self.subTest(ref=ref):
 
