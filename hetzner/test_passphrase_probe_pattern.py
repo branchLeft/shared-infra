@@ -16,10 +16,7 @@ REPO_ROOT = HETZNER.parent
 def runbooks() -> list[pathlib.Path]:
     """Find all RUNBOOK-*.md files: hetzner/, mail/, and the repo root.
 
-    Non-recursive per directory, matching this repo's own convention -- every
-    RUNBOOK lives directly in one of these three places, never nested
-    further -- but all three, not just hetzner/ and mail/: RUNBOOK-edge-state-move.md
-    lives at the repo root, and a scan that skips it never sees it.
+    Scope rationale: hetzner/test_passphrase_probe_pattern.md, section SCAN SCOPE.
     """
     found: set[pathlib.Path] = set()
     for base in (HETZNER, REPO_ROOT / "mail", REPO_ROOT):
@@ -30,26 +27,15 @@ def runbooks() -> list[pathlib.Path]:
 
 _SCAN_EXTENSIONS = (".py", ".sh", ".yml", ".yaml")
 
-# This module's own path, relative to the repo root: excluded from the scan
-# below because a guard whose whole job is discussing the flag necessarily
-# mentions it dozens of times, in docstrings, comments and the ALLOWLIST
-# literal itself -- none of that is a runbook or script that could teach a
-# reader the anti-pattern is safe, which is the harm this scan exists to
-# catch. Excluding it by path, rather than trying to allowlist its own
-# literals, keeps the ALLOWLIST meaningful: every entry in it should describe
-# a real occurrence outside this file, not this file's own vocabulary.
+# This module's own path is excluded from the scan below; the reason is in
+# hetzner/test_passphrase_probe_pattern.md, section SCAN SCOPE.
 _SELF_PATH = str(pathlib.Path(__file__).resolve().relative_to(pathlib.Path(__file__).resolve().parent.parent))
 
 
 def _tracked_scan_files() -> list[pathlib.Path]:
     """Every git-tracked .py/.sh/.yml/.yaml file in the repo, except this file.
 
-    Uses `git ls-files` rather than a hand-maintained directory list: a
-    fixed glob can leave a whole class of tracked files unscanned -- scripts
-    and workflow files outside a runbook-only glob, for instance, while the
-    literal flag still appears in them. This one grows automatically with
-    the tracked tree instead of needing a second edit whenever a new script
-    or workflow is added.
+    Scope rationale: hetzner/test_passphrase_probe_pattern.md, section SCAN SCOPE.
     """
     result = subprocess.run(
         ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
@@ -69,14 +55,7 @@ def scanned_files() -> list[pathlib.Path]:
 def show_secrets_occurrences() -> list[tuple[pathlib.Path, int, str]]:
     """Every line in every scanned file containing the literal `--show-secrets` flag.
 
-    Deliberately not scoped to code fences, a preceding `pulumi stack
-    export`, or nearby keywords: the anti-pattern is exactly this flag being
-    used to prove a stack decrypts, and catching every way of writing that
-    needs to key on the one thing every such command has in common -- the
-    flag's own name appearing somewhere in the source a human would type,
-    paste, or read as an instruction. A per-line scan also gives a useful
-    failure message (file, line number, exact text) with no surrounding-
-    context machinery needed to produce it.
+    See hetzner/test_passphrase_probe_pattern.md, section SCAN SCOPE.
     """
     found = []
     for path in scanned_files():
@@ -146,14 +125,7 @@ class ShowSecretsAllowlistTests(unittest.TestCase):
     def test_show_secrets_is_allowlisted_everywhere_it_appears(self):
         """Deny-by-default: every `--show-secrets` occurrence must be on ALLOWLIST.
 
-        Two ways an occurrence can be wrong, both checked: unlisted entirely
-        (not on ALLOWLIST at all), or listed with the wrong count (the file
-        now has more, or fewer, copies of that exact line than the entry
-        says it should). Also guards the guard itself against scanning
-        nothing: scanned_files() returning zero files would otherwise make
-        this pass by finding zero problems among zero files scanned, the
-        same vacuous-pass failure this file exists to prevent -- so a
-        non-zero scanned-file count is asserted here directly.
+        See hetzner/test_passphrase_probe_pattern.md, section SCAN SCOPE.
         """
         files = scanned_files()
         self.assertGreater(
