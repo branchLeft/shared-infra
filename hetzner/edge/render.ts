@@ -125,7 +125,7 @@ const ACME_DIRECTORY = 'https://acme-v02.api.letsencrypt.org/directory';
 
 /**
  * In-band AppSec configuration: known-exploit shapes, evaluated before the
- * request proceeds. Only loaded when the posture enforces.
+ * request proceeds. Loaded unless the posture is detect-only.
  */
 const APPSEC_CONFIG_INBAND = 'crowdsecurity/appsec-default';
 
@@ -726,11 +726,13 @@ export function renderCaddyfile(
  *
  * In-band versus out-of-band is a property of the AppSec *configuration*, not
  * of the datasource, so which configurations this file names is what decides
- * whether a rule can block. Detect-only names only the out-of-band one.
+ * whether a rule can block. Detect-only names only the out-of-band one; the
+ * in-band one is named in every posture past it, with or without the
+ * IP-decision handler.
  */
 export function renderAppsecAcquisition(posture: EdgePosture): string {
   const configs =
-    posture.crowdsec === 'enforcing'
+    posture.crowdsec !== 'detect-only'
       ? [APPSEC_CONFIG_INBAND, APPSEC_CONFIG_OUT_OF_BAND]
       : [APPSEC_CONFIG_OUT_OF_BAND];
 
