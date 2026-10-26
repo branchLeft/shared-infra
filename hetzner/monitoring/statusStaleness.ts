@@ -10,16 +10,11 @@
 export type ComponentState = 'UP' | 'DOWN' | 'UNKNOWN';
 
 /**
- * The shown state of one component.
- *
- * `lastReportAt` is whole seconds since the epoch of the runner's last report,
- * or `null` if it has never reported. `now` is whole seconds since the epoch.
- * `maxAgeSeconds` is the oldest report still counted as fresh; a report exactly
- * that old is fresh, one second older is not. `lastProbeOk` is the reading in
- * that last report and is shown only while the report is fresh.
- *
- * A report stamped after `now` is UNKNOWN: its age is negative, so trusting it
- * would keep a stopped runner green indefinitely once its clock runs ahead.
+ * The shown state of one component: UP or DOWN from `lastProbeOk` while the
+ * runner's report is fresh, else UNKNOWN. `lastReportAt` (null if never
+ * reported) and `now` are whole epoch seconds. A report exactly `maxAgeSeconds`
+ * old is fresh; one older, or stamped after `now` (negative age, which would
+ * keep a stopped runner green once its clock runs ahead), is UNKNOWN.
  */
 export function componentStatus(
   lastReportAt: number | null,
