@@ -1298,7 +1298,7 @@ tests:
               summary: >-
                 tenant-c's last successful backup is over 36 hours old.
               description: >-
-                backup_worker_last_success_timestamp_seconds only advances on a floor-verified successful dump, so a stopped or consistently-refused worker for one tenant leaves that tenant's gauge frozen while every other tenant's keeps advancing -- each tenant is its own series, so this fires for the stale one alone. The `or absent(...)` half catches the whole metric family vanishing -- the exporter down, or the textfile deleted -- which the time() subtraction alone cannot see, since subtracting from an absent series yields no series at all, not a large number; that branch carries no tenant label, unlike a single stale tenant firing on its own. 129600s (36h) is 1.5x the nightly (24h) cadence, following this file's own SNDSCollectorStale threshold convention -- LLD-9 names the cadence, not a number of missed runs. Warning, never page: a stale backup is not an outage on its own timescale. The scrape wiring for the worker's own host -- the node_exporter textfile-collector mount -- is a separate, host-specific change; see RUNBOOK-monitoring.md for the bring-up shape once that host is chosen. Per-tenant coverage is proved in alert_rules_test.yml.
+                backup_worker_last_success_timestamp_seconds only advances on a floor-verified successful dump, so a stopped or consistently-refused worker for one tenant leaves that tenant's gauge frozen while every other tenant's keeps advancing -- each tenant is its own series, so this fires for the stale one alone. The `or label_replace(absent(...))` half catches the whole metric family vanishing -- the exporter down, or the textfile deleted -- which the time() subtraction alone cannot see, since subtracting from an absent series yields no series at all, not a large number. That branch is tagged scope="family" and carries no tenant label, so its summary says no tenant is being reported instead of rendering an empty tenant name. 129600s (36h) is 1.5x the nightly (24h) cadence, following this file's own SNDSCollectorStale threshold convention -- LLD-9 names the cadence, not a number of missed runs. Warning, never page: a stale backup is not an outage on its own timescale. The scrape wiring for the worker's own host -- the node_exporter textfile-collector mount -- is a separate, host-specific change; see RUNBOOK-monitoring.md for the bring-up shape once that host is chosen. Per-tenant coverage is proved in alert_rules_test.yml.
 
   # The other failure shape entirely: the metric family has never existed at
   # all -- exporter down, or the textfile deleted -- so there is no per-tenant
@@ -1309,12 +1309,18 @@ tests:
   # cover the case a per-tenant selector structurally cannot.
   - interval: 1h
     input_series: []
-    promql_expr_test:
-      - expr: ALERTS{alertname="TenantBackupAgeHigh", alertstate="firing"}
-        eval_time: 1h
-        exp_samples:
-          - labels: 'ALERTS{alertname="TenantBackupAgeHigh", alertstate="firing", severity="warning"}'
-            value: 1
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: TenantBackupAgeHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              scope: family
+            exp_annotations:
+              summary: >-
+                No tenant's backup age is being reported at all.
+              description: >-
+                backup_worker_last_success_timestamp_seconds only advances on a floor-verified successful dump, so a stopped or consistently-refused worker for one tenant leaves that tenant's gauge frozen while every other tenant's keeps advancing -- each tenant is its own series, so this fires for the stale one alone. The `or label_replace(absent(...))` half catches the whole metric family vanishing -- the exporter down, or the textfile deleted -- which the time() subtraction alone cannot see, since subtracting from an absent series yields no series at all, not a large number. That branch is tagged scope="family" and carries no tenant label, so its summary says no tenant is being reported instead of rendering an empty tenant name. 129600s (36h) is 1.5x the nightly (24h) cadence, following this file's own SNDSCollectorStale threshold convention -- LLD-9 names the cadence, not a number of missed runs. Warning, never page: a stale backup is not an outage on its own timescale. The scrape wiring for the worker's own host -- the node_exporter textfile-collector mount -- is a separate, host-specific change; see RUNBOOK-monitoring.md for the bring-up shape once that host is chosen. Per-tenant coverage is proved in alert_rules_test.yml.
 
   # StateCopyStale: the issue's sabotage line, stopping the nightly copy fires
   # it. The estate series keeps advancing; the tenant series is frozen, so only
