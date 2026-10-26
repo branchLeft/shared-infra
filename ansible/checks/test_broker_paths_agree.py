@@ -86,7 +86,7 @@ def unit_value(text: str, key: str) -> str:
     found = re.findall(rf"^{key}=(.+)$", text, flags=re.MULTILINE)
     if len(found) != 1:
         refuse(f"the unit must set {key} exactly once")
-    return found[0].strip()
+    return str(found[0]).strip()
 
 
 def facts(root: Path = ROOT) -> dict[str, str]:
