@@ -243,7 +243,7 @@ class LockTests(PinCase):
         self.assert_found("requirements.txt does not pin ruamel-yaml")
 
     def test_ruamel_yaml_lock_reason_must_say_it_is_chosen(self) -> None:
-        """The lock's reason names requirements.in; a reason that names only ansible-lint is refused."""
+        """A lock reason naming only ansible-lint, not requirements.in, is refused."""
         lock = lock_text().replace(
             lock_entry("ruamel-yaml", "0.19.1", via=VIA_CHOSEN),
             lock_entry("ruamel-yaml", "0.19.1", via=VIA_PULLED.replace("ansible", "ansible-lint")),
@@ -252,7 +252,7 @@ class LockTests(PinCase):
         self.assert_found("requirements.in names ruamel-yaml but requirements.txt does not mark it")
 
     def test_ruamel_yaml_reason_as_uv_writes_it_is_accepted(self) -> None:
-        """uv writes the chosen line and the pulling tool together, and the check reads that form."""
+        """The form uv writes, chosen line and pulling tool together, is accepted."""
         lock = lock_text().replace(
             lock_entry("ruamel-yaml", "0.19.1", via=VIA_CHOSEN),
             lock_entry("ruamel-yaml", "0.19.1", via=VIA_CHOSEN_AND_PULLED),
