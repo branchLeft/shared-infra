@@ -1,43 +1,10 @@
 #!/usr/bin/env python3
 """Exercise a Hetzner Object Storage bucket and report what it actually does.
 
-Usage:
-    export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...
-    probe-object-storage.py --bucket branchleft-lab-probe \
-        --endpoint hel1.your-objectstorage.com --region hel1
-
-Settles the storage properties a state backend depends on -- versioning,
-object lifecycle, and whether anonymous read can be granted without also
-granting listing -- which only a live bucket can answer. Prints a dated
-markdown block to paste into whatever register tracks them. Each probe records
-what was observed, including when the observation is a failure -- a probe that
-cannot run is reported as UNKNOWN, and UNKNOWN is not a passing exit code.
-
-**This script writes, and one of the things it writes is a policy granting
-anonymous reads.** Three properties keep that bounded, and none of them is
-advisory:
-
-* It refuses any bucket whose name ends in `-pulumi-state`. That suffix is
-  the convention `scripts/assert-no-provisioning-deletes.py` already guards
-  on, and it covers the per-tenant state buckets the provisioning flow mints
-  as well as the ones that exist today.
-* The public-read grant names `<bucket>/_probe/*`, never `<bucket>/*`. It
-  proves the same property -- `s3:GetObject` granted, `s3:ListBucket`
-  absent -- without making anything else in the bucket anonymously readable.
-* It refuses a bucket that already carries a bucket policy or a lifecycle
-  configuration, because both are whole-document replacements at the API and
-  it cannot put back what it would overwrite.
-
-Run it against a scratch bucket regardless. The state backend and the probe
-target are deliberately two different buckets; Object Storage bills per
-account rather than per bucket, so the second one costs nothing.
-
-Stdlib only, so it runs on a workstation with no S3 client installed --
-deliberate, since the alternative is a `brew install` standing between the
-platform owner and a spike everything else is waiting on. SigV4 is
-implemented here rather than delegated; a signer that is subtly wrong fails
-as an opaque 403, indistinguishable from a wrong key, a wrong region or a
-wrong-location endpoint, and would be debugged in entirely the wrong place.
+Usage, the refusals and the rationale are in probe-object-storage.md beside
+this file. This script writes an anonymous-read policy. Its only protection
+against operating on a state-backend bucket is the PROTECTED_SUFFIX refusal;
+the same-named check in ghost-platform is an unrelated Pulumi plan check.
 """
 
 # Keeps the `X | None` annotations legal on Python 3.9, which is what
@@ -57,9 +24,8 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
-# Bucket names ending here hold Pulumi state. `assert-no-provisioning-deletes.py`
-# guards on the same suffix; matching it means a bucket minted by the
-# provisioning flow is protected the day it appears, without an edit here.
+# Bucket names ending here are Pulumi state backends. This refusal is this
+# script's own; the same-named check in ghost-platform is unrelated (see the .md).
 PROTECTED_SUFFIX = "-pulumi-state"
 
 ALGORITHM = "AWS4-HMAC-SHA256"
