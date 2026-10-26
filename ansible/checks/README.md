@@ -189,11 +189,15 @@ that a role holds no copy of a program (the DB-1 gate of the standards flags tha
 `ci_select.py` narrows the shard list from `ansible/harness/list_shards.py` to the shards a
 run needs, from the event and the files it changed. The rules, in the order they apply:
 
-- a merge-queue run executes every shard: it is the last check before `main`;
-- a push to `main` executes none: the lint job runs, and the delivery workflow runs the
-  harness before it applies anything;
-- a pull request whose base commit is unknown, or whose changed files are not listed,
-  executes every shard;
+- the weekly scheduled run and a manual run execute every shard, whatever changed: they are
+  what finds drift in an external image or collection, which no diff shows;
+- a push to `main` executes none, and runs no lint: the pushed tree is the tree the merge
+  queue tested, and the delivery workflow runs its own checks before it applies anything;
+- a pull request or a merge-queue entry whose base commit is unknown, or whose changed
+  files are not listed, executes every shard. The queue entry's changed files are the diff
+  from its `base_sha` to its `head_sha`, so a shared file in that diff executes every shard,
+  as it does in a pull request. An entry stacked on another is tested on that one's tree
+  and diffed from it; if the earlier entry leaves the queue, the later one is tested again;
 - a changed file that is part of the harness, the checks, the lock or the lint config
   executes every shard, because it decides what every role is held to;
 - a changed file under `ansible/` that nothing here recognises executes every shard,
@@ -215,7 +219,9 @@ These tests hold the CI workflows to what `ci_select.py` assumes:
   for none;
 - the gate job (the check the ruleset requires) fails unless the lint passed, and fails
   when shards were chosen and did not all pass;
-- the merge queue still triggers the workflow, so "merge_group runs everything" can happen;
+- the merge queue still triggers the workflow, and the weekly sweep is scheduled;
+- the lint and every shard restore the tool environment from a SHA-pinned `actions/cache`
+  keyed on the lock files, and install only on a miss;
 - the CrowdSec pin check opens a pull request on a stale pin and still fails when it cannot
   run;
 - the ansible-hosts environment probe is scheduled and judges the environment;

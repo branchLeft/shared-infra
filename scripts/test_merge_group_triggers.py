@@ -133,16 +133,50 @@ class MergeGroupTriggerTests(unittest.TestCase):
                 with self.subTest(job=key):
                     self.assertIn(key, [*PLAN_JOBS, *APPLY_JOBS])
 
-    def test_ansible_gate_runs_every_check_on_merge_group(self):
+    def decide_step(self):
         text = read("ansible.yml")
         step = text.split("- name: Decide whether the Ansible inputs changed", 1)[1]
-        step = step.split("- name: List the shards", 1)[0]
-        merge_branch = step.index('"$EVENT_NAME" = "merge_group"')
-        self.assertLess(merge_branch, step.index("git cat-file"))
-        self.assertLess(merge_branch, step.index("git diff"))
-        branch = step[merge_branch : step.index("fi", merge_branch)]
+        return step.split("- name: List the shards", 1)[0]
+
+    def test_ansible_gate_diffs_the_queue_entry_on_merge_group(self):
+        # The queue entry is narrowed by its own diff, base_sha..head_sha, by the rules a
+        # pull request has (ci_select.py); it is not diffed against HEAD or a push's `before`.
+        step = self.decide_step()
+        self.assertIn("MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}", step)
+        self.assertIn("MERGE_GROUP_HEAD: ${{ github.event.merge_group.head_sha }}", step)
+        merge_branch = step[step.index("merge_group)") :]
+        merge_branch = merge_branch[: merge_branch.index(";;")]
+        self.assertIn('base="$MERGE_GROUP_BASE"', merge_branch)
+        self.assertIn('head="$MERGE_GROUP_HEAD"', merge_branch)
+        self.assertIn('git diff --name-only -z --no-renames "$base" "$head"', step)
+        self.assertNotIn("github.event.before", step)
+
+    def test_ansible_gate_runs_every_check_when_the_queue_diff_cannot_be_read(self):
+        # A base or head the runner cannot resolve must widen the run, never skip it.
+        step = self.decide_step()
+        unknown = step[step.index("git cat-file") :]
+        self.assertIn('"${base}^{commit}"', unknown)
+        self.assertIn('"${head}^{commit}"', unknown)
+        branch = unknown[: unknown.index("fi\n")]
         self.assertIn('echo "ansible=true" >> "$GITHUB_OUTPUT"', branch)
         self.assertIn("exit 0", branch)
+        self.assertLess(unknown.index("exit 0"), unknown.index("git diff"))
+
+    def test_ansible_gate_runs_every_check_on_the_weekly_sweep(self):
+        text = read("ansible.yml")
+        self.assertRegex(on_block(text), r"(?m)^  schedule:\n    - cron: ")
+        step = self.decide_step()
+        other = step[step.index("*)") :]
+        other = other[: other.index(";;")]
+        self.assertIn('echo "ansible=true" >> "$GITHUB_OUTPUT"', other)
+        self.assertIn("exit 0", other)
+
+    def test_ansible_push_to_main_repeats_no_check_the_queue_ran(self):
+        step = self.decide_step()
+        push = step[step.index("push)") :]
+        push = push[: push.index(";;")]
+        self.assertIn('echo "ansible=false" >> "$GITHUB_OUTPUT"', push)
+        self.assertIn("exit 0", push)
 
 
 if __name__ == "__main__":
