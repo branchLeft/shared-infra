@@ -1,22 +1,11 @@
 #!/usr/bin/env python3
 """Unit tests for branchleft_nat.sh.
 
-The script is the whole difference between a host with no public address
-reaching the internet and not reaching it, and the rules it writes are a
-forwarding decision on the one host that terminates public traffic. Two of its
-behaviours are therefore asserted directly rather than smoke-tested by a real
-run: that the return direction is accepted only for flows conntrack already
-knows, and that it refuses to run on a host whose default route is itself the
-private network -- which is the configuration that would loop the estate's
-egress back into the subnet it came from.
-
-The script talks to the live routing table, netfilter and sysctl, none of
-which a test process may do. All three are replaced by fakes earlier on
-`PATH`, and the sysctl drop-in path is redirected with the environment
-variable the script reads as an override. `PATH` is set to the fake directory
-plus `/usr/bin` and `/bin` only: `iptables` and `ip` live in `/usr/sbin` on a
-real Linux host, and leaving that directory out is what makes the
-missing-iptables case testable on a machine that has iptables.
+The script writes forwarding rules on the host that terminates public traffic,
+so the return-path rule and the refusal on a private default route are
+asserted directly. Routing, netfilter and sysctl are faked on PATH; PATH omits
+/usr/sbin, where the real iptables and ip live, so the missing-iptables case
+is testable on any machine.
 """
 
 import os
