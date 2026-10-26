@@ -14,6 +14,7 @@ import re
 import unittest
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from check_pins import load_yaml
 
@@ -95,11 +96,18 @@ def caller_findings(workflow: object) -> list[str]:
 
 
 def committed() -> dict[str, object]:
-    """Return a fresh copy of the committed caller, or fail the test if it cannot be read."""
+    """Return a fresh copy of the committed caller.
+
+    Raises:
+        AssertionError: the caller cannot be read as YAML, or it is not a mapping.
+    """
     document, problem = load_yaml(REPO_ROOT / CALLER)
-    if problem is not None:
+    mapping = as_mapping(document)
+    if problem is None and mapping is None:
+        problem = f"{CALLER} is not a mapping"
+    if problem is not None or mapping is None:
         raise AssertionError(problem)
-    return copy.deepcopy(document)  # type: ignore[return-value]
+    return copy.deepcopy(mapping)
 
 
 class DriftCallerTests(unittest.TestCase):
@@ -112,7 +120,9 @@ class DriftCallerTests(unittest.TestCase):
 
     def job(self, document: dict[str, object]) -> dict[str, object]:
         # The live mapping, not a copy: a change to it must reach ``document``.
-        return document["jobs"][JOB]  # type: ignore[index,return-value]
+        # The fixture is built by the test itself, so the shape is known here.
+        jobs = cast("dict[str, object]", document["jobs"])
+        return cast("dict[str, object]", jobs[JOB])
 
     def test_committed_caller_passes(self) -> None:
         self.assertEqual([], caller_findings(committed()))
@@ -152,12 +162,16 @@ class DriftCallerTests(unittest.TestCase):
                 self.assertTrue(any("secrets must name exactly" in f for f in findings), findings)
 
     def test_reference_is_an_exact_tag_not_a_sha_branch_or_major(self) -> None:
-        base = f"branchLeft/github-workflows/.github/workflows/ansible-drift-check.yml@"
+        base = "branchLeft/github-workflows/.github/workflows/ansible-drift-check.yml@"
         sha = "0123456789abcdef0123456789abcdef01234567"
         self.assertEqual([], self.weakened(lambda doc: self.job(doc).update(uses=base + "v1.0.12")))
         for ref in (sha, "main", "v1", "v1.0"):
             with self.subTest(ref=ref):
-                findings = self.weakened(lambda doc, ref=ref: self.job(doc).update(uses=base + ref))
+
+                def point_at(doc: dict[str, object], uses: str = base + ref) -> None:
+                    self.job(doc).update(uses=uses)
+
+                findings = self.weakened(point_at)
                 self.assertTrue(any("exact tag" in f for f in findings), findings)
 
     def test_triggers_are_schedule_and_manual_only(self) -> None:
