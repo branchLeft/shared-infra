@@ -39,7 +39,7 @@ permissions:
 
 jobs:
   delivery:
-    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.11
+    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.13
     with:
       environment: ansible-hosts
       role-directories: |
