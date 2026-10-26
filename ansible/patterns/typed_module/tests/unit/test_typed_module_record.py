@@ -4,8 +4,11 @@ The pattern README gives the command, with the library directory on PYTHONPATH.
 """
 
 import dataclasses
+import hmac
+import re
 import stat
 import tempfile
+import typing
 import unittest
 from collections.abc import Mapping
 from pathlib import Path
@@ -14,6 +17,9 @@ from unittest import mock
 
 import typed_module_record as record
 from ruamel.yaml import YAML
+
+if typing.TYPE_CHECKING:
+    from _typeshed import DataclassInstance
 
 # Values made for the test run: none is a real secret.
 THROWAWAY_TOKEN = "THROWAWAY_TOKEN_VALUE_0001"  # noqa: S105
@@ -32,6 +38,15 @@ SAMPLE: Mapping[str, object] = {
 def load_yaml(text: str) -> Mapping[str, Mapping[str, object]]:
     """Parse one of the module's documentation blocks."""
     return cast("Mapping[str, Mapping[str, object]]", YAML(typ="safe").load(text))
+
+
+def undeclared_options(model: "type[DataclassInstance]") -> list[str]:
+    """Return, in field order, the fields that do not declare ``no_log`` as True or False."""
+    return [
+        field.name
+        for field in dataclasses.fields(model)
+        if not isinstance(field.metadata.get("no_log"), bool)
+    ]
 
 
 def make_params(directory: Path, **changes: object) -> record.Params:
@@ -69,9 +84,51 @@ class ArgumentSpecTests(unittest.TestCase):
 
     def test_every_secret_named_option_is_no_log(self) -> None:
         for name, option in record.ARGUMENT_SPEC.items():
-            if any(word in name for word in ("token", "password", "secret", "key")):
+            if any(
+                word in name
+                for word in ("token", "password", "secret", "key", "passphrase", "credential")
+            ):
                 with self.subTest(option=name):
                     self.assertIs(option.get("no_log"), True, f"{name} is a secret without no_log")
+
+    def test_every_option_declares_whether_it_is_secret(self) -> None:
+        self.assertEqual(undeclared_options(record.Params), [])
+
+    def test_an_undeclared_option_is_reported_by_its_field_name(self) -> None:
+        @dataclasses.dataclass
+        class Undeclared:
+            api_credential: str | None = dataclasses.field(default=None)
+
+        @dataclasses.dataclass
+        class DeclaredPublic:
+            api_credential: str | None = dataclasses.field(default=None, metadata={"no_log": False})
+
+        @dataclasses.dataclass
+        class DeclaredSecret:
+            api_credential: str | None = dataclasses.field(default=None, metadata={"no_log": True})
+
+        @dataclasses.dataclass
+        class DeclaredNotABool:
+            api_credential: str | None = dataclasses.field(default=None, metadata={"no_log": "yes"})
+
+        @dataclasses.dataclass
+        class Mixed:
+            label: str | None = dataclasses.field(default=None, metadata={"no_log": False})
+            api_credential: str | None = dataclasses.field(default=None)
+            other_note: str | None = dataclasses.field(default=None)
+
+        self.assertEqual(undeclared_options(Undeclared), ["api_credential"])
+        self.assertEqual(undeclared_options(DeclaredPublic), [])
+        self.assertEqual(undeclared_options(DeclaredSecret), [])
+        self.assertEqual(undeclared_options(DeclaredNotABool), ["api_credential"])
+        self.assertEqual(undeclared_options(Mixed), ["api_credential", "other_note"])
+
+    def test_every_secret_option_is_kept_out_of_the_repr(self) -> None:
+        secrets = [f for f in dataclasses.fields(record.Params) if f.metadata.get("no_log") is True]
+        self.assertTrue(secrets, "Params declares no secret option, so this test proves nothing")
+        for field in secrets:
+            with self.subTest(option=field.name):
+                self.assertFalse(field.repr, f"{field.name} is a secret that the repr prints")
 
     def test_the_documentation_blocks_are_valid_yaml(self) -> None:
         self.assertIn("typed_module_record", load_yaml(record.DOCUMENTATION)["module"] or "")
@@ -181,6 +238,24 @@ class ValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             record.validate(make_params(Path(directory), count=100, mode="0000"))
             record.validate(make_params(Path(directory), count=1, name="a"))
+
+
+class HiddenFormTests(unittest.TestCase):
+    """The returned diff hides the signature, whatever else the text holds."""
+
+    def test_the_hidden_form_replaces_only_the_signature_value(self) -> None:
+        signed = "name=A\ncount=3\nsignature=" + "0123456789abcdef" * 4 + "\n"
+        self.assertEqual(record.hidden_form(signed), "name=A\ncount=3\nsignature=<hidden>\n")
+        unsigned = "name=A\ncount=3\n"
+        self.assertEqual(record.hidden_form(unsigned), unsigned)
+        self.assertEqual(record.hidden_form(""), "")
+
+    def test_the_hidden_form_keeps_line_endings_and_other_lines(self) -> None:
+        text = "signature=abc\r\nname=signature=x\r\n signature=y\nsignature=z"
+        self.assertEqual(
+            record.hidden_form(text),
+            "signature=<hidden>\r\nname=signature=x\r\n signature=y\nsignature=<hidden>",
+        )
 
 
 class RenderAndPlanTests(unittest.TestCase):
@@ -398,6 +473,30 @@ class MainTests(unittest.TestCase):
     def test_the_result_never_carries_the_token(self) -> None:
         module = self.run_main(check_mode=False)
         self.assertNotIn(THROWAWAY_TOKEN, repr(module.result))
+
+    def test_the_returned_diff_never_carries_the_signature(self) -> None:
+        name = str(SAMPLE["name"])
+        signatures = [
+            hmac.new(token.encode("utf-8"), name.encode("utf-8"), "sha256").hexdigest()
+            for token in (THROWAWAY_TOKEN, OTHER_THROWAWAY_TOKEN)
+        ]
+        self.run_main(check_mode=False, token=THROWAWAY_TOKEN)
+        on_disk = (self.directory / "record").read_text(encoding="utf-8")
+        self.assertIn(f"signature={signatures[0]}", on_disk)
+        diff = cast(
+            "Mapping[str, str]",
+            self.run_main(check_mode=False, token=OTHER_THROWAWAY_TOKEN).result["diff"],
+        )
+        for side in ("before", "after"):
+            with self.subTest(side=side):
+                self.assertIsNone(re.search(r"[0-9a-f]{64}", diff[side]))
+                for signature in signatures:
+                    self.assertNotIn(signature, diff[side])
+        self.assertIn("signature=<hidden>", diff["after"])
+        self.assertEqual(diff["before"], on_disk.replace(signatures[0], "<hidden>"))
+        record_text = (self.directory / "record").read_text(encoding="utf-8")
+        self.assertIsNotNone(re.search(r"^signature=[0-9a-f]{64}$", record_text, re.MULTILINE))
+        self.assertIn(f"signature={signatures[1]}", record_text)
 
 
 if __name__ == "__main__":
