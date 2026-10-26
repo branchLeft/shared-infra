@@ -512,7 +512,10 @@ describe('the rendered alert rules', () => {
     const start = rendered.indexOf('alert: TenantBackupAgeHigh');
     const end = rendered.indexOf('- alert:', start + 1);
     const block = rendered.slice(start, end === -1 ? undefined : end);
-    expect(block).toContain('or absent(backup_worker_last_success_timestamp_seconds)');
+    expect(block).toContain(
+      'or label_replace(absent(backup_worker_last_success_timestamp_seconds), "scope", "family", "", "")'
+    );
+    expect(block).toContain('{{ if eq $labels.scope "family" }}');
   });
 
   // The five rules that read db1's own dump and binlog shipping. promtool
