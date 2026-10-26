@@ -23,6 +23,7 @@ TOOLS = {
     "yamllint": "1.38.0",
     "mypy": "2.4.0",
     "ruff": "0.17.0",
+    "ruamel-yaml": "0.19.1",
 }
 DEPENDABOT = (
     "version: 2\nupdates:\n  - package-ecosystem: 'npm'\n    directory: '/'\n"
@@ -48,6 +49,7 @@ HEADER = (
 )
 VIA_CHOSEN = "    # via -r requirements.in\n"
 VIA_PULLED = "    # via\n    #   ansible\n"
+VIA_CHOSEN_AND_PULLED = "    # via\n    #   -r requirements.in\n    #   ansible-lint\n"
 
 
 def lock_entry(name: str, version: str, marker: str = "", via: str = VIA_CHOSEN) -> str:
@@ -213,6 +215,51 @@ class LockTests(PinCase):
         )
         self.assertEqual(self.findings(), [])
 
+    def test_a_marker_on_a_required_tool_is_refused(self) -> None:
+        """A marker narrows where a pin applies, so a required tool would be unpinned elsewhere."""
+        for name, version in TOOLS.items():
+            with self.subTest(tool=name):
+                marked = lock_text().replace(
+                    f"{name}=={version} \\", f"{name}=={version} ; sys_platform == 'linux' \\", 1
+                )
+                self.put_lock(marked)
+                bare = check_pins.normalise(name.split("[")[0])
+                self.assert_found(f"pins {bare} with an environment marker")
+
+    def test_ruamel_yaml_is_a_required_chosen_tool(self) -> None:
+        """ruamel-yaml is imported by the typed_module pattern, so it is chosen and pinned."""
+        self.assertIn("ruamel-yaml", check_pins.REQUIRED_TOOLS)
+        self.assertNotIn("ruamel-yaml", check_pins.INPUT_TOOLS - {"ruamel-yaml"})
+
+    def test_ruamel_yaml_line_removed_from_the_input_is_refused(self) -> None:
+        """Without its line in requirements.in the pin is not chosen on purpose."""
+        self.put_input(input_text().replace("ruamel-yaml==0.19.1\n", ""))
+        self.assert_found("requirements.in does not name ruamel-yaml")
+
+    def test_ruamel_yaml_removed_from_the_lock_is_refused(self) -> None:
+        """Without its pin in the lock nothing installs the module the pattern imports."""
+        lock = lock_text().replace(lock_entry("ruamel-yaml", "0.19.1", via=VIA_CHOSEN), "")
+        self.put_lock(lock)
+        self.assert_found("requirements.txt does not pin ruamel-yaml")
+
+    def test_ruamel_yaml_lock_reason_must_say_it_is_chosen(self) -> None:
+        """A lock reason naming only ansible-lint, not requirements.in, is refused."""
+        lock = lock_text().replace(
+            lock_entry("ruamel-yaml", "0.19.1", via=VIA_CHOSEN),
+            lock_entry("ruamel-yaml", "0.19.1", via=VIA_PULLED.replace("ansible", "ansible-lint")),
+        )
+        self.put_lock(lock)
+        self.assert_found("requirements.in names ruamel-yaml but requirements.txt does not mark it")
+
+    def test_ruamel_yaml_reason_as_uv_writes_it_is_accepted(self) -> None:
+        """The form uv writes, chosen line and pulling tool together, is accepted."""
+        lock = lock_text().replace(
+            lock_entry("ruamel-yaml", "0.19.1", via=VIA_CHOSEN),
+            lock_entry("ruamel-yaml", "0.19.1", via=VIA_CHOSEN_AND_PULLED),
+        )
+        self.put_lock(lock)
+        self.assertEqual(self.findings(), [])
+
     def test_a_continuation_cannot_hide_an_option_from_the_check(self) -> None:
         """The two shapes install_runtime refuses are refused here too: the line is not a pin."""
         hashed = f"alpha==1.0 {HASH}"
@@ -250,6 +297,17 @@ class LockTests(PinCase):
         """An underscore or capital in the name still counts as the tool."""
         self.put_lock(lock_text().replace("molecule-plugins", "Molecule_Plugins"))
         self.assertEqual(self.findings(), [])
+
+    def test_normalise_alone_sets_the_name_form(self) -> None:
+        """normalise() is the one name rule: dash, dot and underscore runs become a dash."""
+        self.assertEqual(check_pins.normalise("Molecule_Plugins"), "molecule-plugins")
+        self.assertEqual(check_pins.normalise("ruamel.yaml"), "ruamel-yaml")
+        self.assertEqual(check_pins.normalise("a__b..C-d"), "a-b-c-d")
+
+    def test_the_name_regex_is_written_once(self) -> None:
+        """One home: locked_packages calls normalise(), so the substitution is written once."""
+        source = Path(check_pins.__file__).read_text(encoding="utf-8")
+        self.assertEqual(source.count('re.sub(r"[-_.]+", "-"'), 1)
 
     def test_missing_lock_is_refused(self) -> None:
         """Without the file there is nothing to install from."""
