@@ -218,19 +218,19 @@ run again on trixie:
   writes is not covered.
 - `check-fresh` skips the enable and start (see (c)), and the harness does not catch
   a silent skip. This section is the review of it.
-- CI does not run this scenario today: the Ansible workflow
-  (`.github/workflows/ansible.yml`) runs the harness over `ansible/roles` only. Until
-  it lists `ansible/patterns`, a change here is proven by the local run above.
+- CI runs this scenario. The Ansible workflow (`.github/workflows/ansible.yml`) runs
+  the harness over each role and pattern in its own shard, and
+  [`ansible/checks/README.md`](../../checks/README.md) says which shards a change runs.
+  The merge-queue run that passed this pattern's shard is
+  https://github.com/branchLeft/shared-infra/actions/runs/40208435018 (job
+  `Harness: ansible/patterns/files_and_units`, conclusion `success`).
 - The settings in `molecule.yml` are measured on two hosts: Docker Desktop (the
   owner's machine) and a GitHub `ubuntu-24.04` runner (cgroup v2, Docker 28.0.4), where
-  the full harness passed with `cgroupns_mode: host` in place (source: the runs at
-  https://github.com/branchLeft/shared-infra/actions/runs/39073430228 and
-  https://github.com/branchLeft/shared-infra/actions/runs/39073641288). CI does not
-  run this pattern from this change alone: a later pull request adds `ansible/patterns`
-  to CI.
-- The runner image `ubuntu-latest` moves to Ubuntu 26.04 in a rollout from 19 October
-  2026 (source: https://github.com/actions/runner-images/issues/14748). This pattern has
-  not been run on Ubuntu 26.04, so that move is unproven for it.
+  the full harness passed with `cgroupns_mode: host` in place. The CI evidence for this
+  pattern is the merge-queue run named above.
+- The Ansible workflow's harness jobs run on `ubuntu-24.04`, not `ubuntu-latest`. Its
+  `runs-on` line carries the comment "Pinned until the harness is verified on the next
+  Ubuntu LTS image" (`.github/workflows/ansible.yml`, the harness job).
 - The base image is Debian 13 with Python 3.13 and an `EXTERNALLY-MANAGED` marker
   that its Dockerfile tries to remove at a 3.11 path, so the marker stays and its
   unpinned `ansible` and `cryptography` installs rely on `--break-system-packages`.
@@ -317,9 +317,9 @@ with its Linux engine (cgroup v2), by creating the container and asking
 | `cgroupns_mode: host` and the mounts, without the tmpfs                       | the container exits (code 255, no log) |
 | `cgroupns_mode: host` and the tmpfs, without the cgroup mount                 | the container exits                    |
 
-The table was measured on the Debian 12 image. On the Debian 13 image only the
-scenario row was re-run, with the full harness passing; the other rows were not
-measured again on trixie.
+The first row is the scenario, and it is measured on the pinned Debian 13 image: the
+full harness passes on it. The other three rows were measured on the Debian 12 image
+and were not measured again on Debian 13.
 
 So the scenario sets no `privileged` and no capabilities. It sets `cgroupns_mode: host`
 because on the GitHub `ubuntu-24.04` runner (cgroup v2) a private cgroup namespace over
