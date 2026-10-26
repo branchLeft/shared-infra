@@ -60,7 +60,8 @@ provisioner:
     # controller, and verify reads it. Verbosity 3 prints each task's result
     # with the arguments it was given, so a task that handles a private input
     # without no_log or diff: false shows it in the log, and verify fails
-    # (ANS-16). The two harness check runs use --diff, so the diffs are in it.
+    # (ANS-16). The check run of prepare.yml and the two harness check runs use
+    # --diff, so the diffs are in it.
     ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
     ANSIBLE_VERBOSITY: '3'
 verifier:
