@@ -24,3 +24,29 @@ that could hide a real reintroduction; and `scripts/pulumi-stack-inventory.json`
 is deliberately out of scope, since it is a data file recording completed
 operations rather than prose or code a future reader could learn the
 anti-pattern from.
+
+## ALLOWLIST
+
+```text
+# ALLOWLIST keys every current, reviewed appearance of the literal flag by
+# (path relative to the repo root, exact stripped line text) -> (expected
+# occurrence count, justification).
+#
+# The count is load-bearing, not decoration: keying on text alone, with no
+# count, lets one allowlisted prose line also allowlist every future
+# identical line in that file, including a live one pasted into a new code
+# fence where the same backticked text becomes a real command. Requiring the
+# *count* of a (file, text) pair to match exactly means a duplicate --
+# benign copy-paste or a live reintroduction disguised as one -- moves the
+# count from N to N+1 and fails. Line numbers are deliberately not part of
+# the key: they shift under every unrelated edit to the file, and keying on
+# them too would fail the check on an edit that made no security-relevant
+# change to this line at all.
+#
+# Seeded from the whole corpus as it exists today, across every file this
+# scan inspects (all RUNBOOK-*.md, plus every tracked .py/.sh/.yml/.yaml).
+# Every entry below is prose warning against the anti-pattern -- a `#`
+# comment or backticked inline text in surrounding prose -- never a line a
+# shell would execute. There are currently zero legitimate live uses of the
+# flag anywhere in the scanned tree.
+```
