@@ -62,30 +62,82 @@
     path: '{{ scenario_directory }}/{{ item }}'
   loop: '{{ state_checksums.keys() | sort }}'
   register: state_files
-  # The results hold the SHA-1 of each secret file, so the task and the assertion
-  # that reads them are hidden from the log (ANS-16: a digest is a leak too).
+  # The results hold the SHA-1 of each secret file, so the task that reads them is
+# hidden from the log (ANS-16: a digest is a leak too). It keeps only the names of
+# the files that break each attribute, as JSON, so the assertions below can name
+# the attribute and the files without a digest reaching the log.
+- name: Work out which secret files break each attribute
+  ansible.builtin.set_fact:
+    state_broken: >-
+      {%- set bad = {'kind': [], 'mode': [], 'owner': [], 'group': [], 'links': [], 'checksum': []} -%}
+      {%- for r in state_files.results -%}
+        {%- if not (r.stat.exists | default(false)) or not (r.stat.isreg | default(false)) -%}
+          {%- set _ = bad['kind'].append(r.item) -%}
+        {%- endif -%}
+        {%- if r.stat.mode | default('') != '0600' -%}
+          {%- set _ = bad['mode'].append(r.item) -%}
+        {%- endif -%}
+        {%- if r.stat.pw_name | default('') != scenario_owner -%}
+          {%- set _ = bad['owner'].append(r.item) -%}
+        {%- endif -%}
+        {%- if r.stat.gr_name | default('') != scenario_group -%}
+          {%- set _ = bad['group'].append(r.item) -%}
+        {%- endif -%}
+        {%- if r.stat.nlink | default(0) != 1 -%}
+          {%- set _ = bad['links'].append(r.item) -%}
+        {%- endif -%}
+        {%- if r.stat.checksum | default('') != state_checksums[r.item] -%}
+          {%- set _ = bad['checksum'].append(r.item) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ bad | to_json }}
   no_log: true
 
 # Mode 0600 and an owner that is not root: an earlier file that anyone could
 # read and root owned stays that way unless the role sets both. One link, so
 # no second name for the file exists. The checksum is of exactly the value (the
 # environment file: exactly its lines), so a trailing line break would fail.
-- name: Assert each file is private to its owner and holds exactly its value
+- name: Assert each secret file is a plain file that exists
   ansible.builtin.assert:
     that:
-      - item.stat.exists
-      - item.stat.isreg
-      - item.stat.mode == '0600'
-      - item.stat.pw_name == scenario_owner
-      - item.stat.gr_name == scenario_group
-      - item.stat.nlink == 1
-      - item.stat.checksum == state_checksums[item.item]
-    fail_msg: 'The file {{ item.item }} is not as declared.'
+      - (state_broken | from_json)['kind'] | length == 0
+    fail_msg: 'Not an existing plain file: {{ (state_broken | from_json)["kind"] | join(", ") }}.'
     quiet: true
-  loop: '{{ state_files.results }}'
-  loop_control:
-    label: '{{ item.item }}'
-  no_log: true
+
+- name: Assert each secret file has mode 0600
+  ansible.builtin.assert:
+    that:
+      - (state_broken | from_json)['mode'] | length == 0
+    fail_msg: 'Not mode 0600: {{ (state_broken | from_json)["mode"] | join(", ") }}.'
+    quiet: true
+
+- name: Assert each secret file is owned by the scenario owner
+  ansible.builtin.assert:
+    that:
+      - (state_broken | from_json)['owner'] | length == 0
+    fail_msg: 'Not owned by the scenario owner: {{ (state_broken | from_json)["owner"] | join(", ") }}.'
+    quiet: true
+
+- name: Assert each secret file is in the scenario group
+  ansible.builtin.assert:
+    that:
+      - (state_broken | from_json)['group'] | length == 0
+    fail_msg: 'Not in the scenario group: {{ (state_broken | from_json)["group"] | join(", ") }}.'
+    quiet: true
+
+- name: Assert each secret file has one link
+  ansible.builtin.assert:
+    that:
+      - (state_broken | from_json)['links'] | length == 0
+    fail_msg: 'Not one link: {{ (state_broken | from_json)["links"] | join(", ") }}.'
+    quiet: true
+
+- name: Assert each secret file holds exactly its value
+  ansible.builtin.assert:
+    that:
+      - (state_broken | from_json)['checksum'] | length == 0
+    fail_msg: 'Does not hold exactly its value: {{ (state_broken | from_json)["checksum"] | join(", ") }}.'
+    quiet: true
 
 - name: Read the source file of the host-file secret
   ansible.builtin.stat:

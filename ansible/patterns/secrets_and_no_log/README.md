@@ -75,15 +75,16 @@ a secret. The fixed values (the modes `0700` and `0600`, and the patterns that a
 name, a path and an environment line must match) are in `vars/main.yml`, not in
 the interface, so an inventory cannot loosen them.
 
-| Variable                       | Default                        | Meaning                                                                   |
-| ------------------------------ | ------------------------------ | ------------------------------------------------------------------------- |
-| `secrets_and_no_log_directory` | `/etc/example-service/secrets` | The directory the files go in, an absolute path of plain characters       |
-| `secrets_and_no_log_owner`     | `root`                         | The account that owns the directory and the files                         |
-| `secrets_and_no_log_group`     | `root`                         | The group of the directory and the files                                  |
-| `secrets_and_no_log_env_name`  | empty                          | The name of one environment file inside the directory; empty writes none  |
-| `secrets_and_no_log_secrets`   | `[]`                           | The list of secrets: `name`, and exactly one of `value` and `source_file` |
+| Variable                       | Default                        | Meaning                                                                                                        | Holds a secret                                                 |
+| ------------------------------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `secrets_and_no_log_directory` | `/etc/example-service/secrets` | The directory the files go in, an absolute path of plain characters                                            | no                                                             |
+| `secrets_and_no_log_owner`     | `root`                         | The account that owns the directory and the files                                                              | no                                                             |
+| `secrets_and_no_log_group`     | `root`                         | The group of the directory and the files                                                                       | no                                                             |
+| `secrets_and_no_log_env_name`  | empty                          | The name of one environment file inside the directory; empty writes none; must differ from every secret's name | yes: the file it names holds each value given as a value       |
+| `secrets_and_no_log_secrets`   | `[]`                           | The list of secrets: `name`, and exactly one of `value` and `source_file`                                      | yes: each `value`; a `source_file` names a file that holds one |
 
-`secrets_and_no_log_secrets` is the secret variable (ANS-14): each entry's `value`
+`secrets_and_no_log_secrets` is the secret variable (ANS-14), and the table marks each
+variable that holds a secret. Each entry's `value`
 is a secret and must never be written in a file, a default or a log. Its
 `source_file` is a path, not a secret, but the file it names holds one. A secret
 is given as a `source_file` (a root-only file on the host) where the source can
@@ -196,8 +197,8 @@ after it names that number and the rule, never a name, a path or a value.
   the secret; `no_log` is what keeps that result out of the log (see "What the test
   shows about logs").
 - The source file is checked first, and must be a plain file (not a link), owned
-  by root, with no group or other permission. Its `stat` asks for no digest
-  (`get_checksum: false`): the default SHA-1 of a secret would be printed by the
+  by root, with no group or other permission, and not empty. Its `stat` asks for
+  no digest (`get_checksum: false`): the default SHA-1 of a secret would be printed by the
   assertion that refuses a bad source, and the register is emptied in the always
   section like the write registers. A copy keeps the mode of its source
   until the role sets the final mode, so a source that others could read would
@@ -225,6 +226,9 @@ after it names that number and the rule, never a name, a path or a value.
 - The environment file is written by `template`, not assembled by `lineinfile` or
   a shell loop. It lives inside the secrets directory, so its parent is always the
   `0700` directory. It holds exactly one line per secret given as a value.
+- The name of the environment file must differ from every secret's name, or it
+  would replace that secret's file. `problems.j2` detects the clash and the
+  refusal is in `tasks/main.yml`; the unit test is `tests/unit/test_checks.py`.
 - The name of a secret must match `^[A-Z][A-Z0-9_]*\Z`, the path of a source file
   `^/[A-Za-z0-9._/-]+\Z`, and the name of the environment file
   `^[A-Za-z0-9][A-Za-z0-9._-]*\Z`. The patterns end in `\Z`, not `$`, because `$`
@@ -410,6 +414,8 @@ account identifiers in this list.
 | `HCLOUD_TOKEN`                               | the provisioning runbooks | Issued in the provider's console, then typed by the owner |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | the provisioning runbooks | Issued in the provider's console, then typed by the owner |
 
+Every name in this table is a secret, and so is its value.
+
 "Not read" means the creation step was not examined for this list. Under this
 pattern the owner creates the last two rows: a provider's console issues them, and
 the runbooks read them into the shell with `read -rs`. Whether any other row stays
@@ -533,14 +539,8 @@ unedited fresh role were green too.
   is delivered literally. The role does not refuse a marker in a value, so a secret
   that holds one must come as a `source_file` or from a lookup. Not tested for every
   shape.
-- **An environment file named like a secret overwrites that secret's file, and
-  is not idempotent.** `secrets_and_no_log_env_name` equal to a secret's name is not
-  refused. The environment file replaces the secret's file, and the role reports a
-  change on every run. Give the environment file a name no secret uses.
-- **An empty source file is delivered as an empty secret.** A `value` of the empty
-  string is refused, but a `source_file` that is empty is copied, and the consumer
-  gets an empty secret with no error. The role does not check the content of a
-  source file.
+- **The content of a source file is not checked.** The role refuses a source file
+  that is empty, and nothing else about what it holds.
 - **The parent directories of a source file are not checked.** Only the final
   component (a plain file, not a link, owned by root, mode with no group or other
   bit) is checked. A link in a parent directory that another account can write to

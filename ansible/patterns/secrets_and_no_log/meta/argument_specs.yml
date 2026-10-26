@@ -31,7 +31,7 @@ argument_specs:
           File name, inside the directory, of an environment file holding one
           NAME=value line for every secret given as a value. An empty string
           writes no environment file. A secret given as a host file is never
-          written to it.
+          written to it. The name must differ from every secret's name.
         default: ''
       secrets_and_no_log_secrets:
         type: list
@@ -62,6 +62,6 @@ argument_specs:
             default: ''
             description: >-
               Absolute path of a file already on the host that holds the value.
-              It must be a plain file owned by root with no group or other
-              permission. The role copies it on the host and never reads it into
+              It must be a non-empty plain file owned by root with no group or
+              other permission. The role copies it on the host and never reads it into
               Ansible. Leave it empty when value is given.
