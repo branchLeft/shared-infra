@@ -636,6 +636,24 @@ function assertUpstreamsAreDistinct(servable: readonly EdgeSite[]): void {
   }
 }
 
+// Why: two sites claiming one hostname = Caddy renders two site blocks for it and
+// silently lets one shadow the other. See render.md §"assertHostnamesAreDistinct".
+function assertHostnamesAreDistinct(servable: readonly EdgeSite[]): void {
+  const seen = new Map<string, string>();
+  for (const site of servable) {
+    for (const hostname of site.hostnames) {
+      const owner = seen.get(hostname);
+      if (owner !== undefined) {
+        throw new Error(
+          `sites ${owner} and ${site.name} both claim ${hostname}; Caddy would let one ` +
+            'site block silently shadow the other.'
+        );
+      }
+      seen.set(hostname, site.name);
+    }
+  }
+}
+
 /**
  * A static site's hostname must not be one an `EdgeSite` already serves --
  * Caddy would happily bind two site blocks to the same address, and whichever
@@ -670,6 +688,7 @@ export function renderCaddyfile(
 ): string {
   const servable = servableSites(sites);
   assertUpstreamsAreDistinct(servable);
+  assertHostnamesAreDistinct(servable);
   const servableHostnames = new Set(servable.flatMap((site) => site.hostnames));
   assertStaticHostnamesAreDistinct(staticSites, servableHostnames);
 

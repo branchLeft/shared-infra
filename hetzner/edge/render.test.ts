@@ -215,6 +215,61 @@ describe('two sites may not share one upstream', () => {
   });
 });
 
+describe('two sites may not share one hostname', () => {
+  it('refuses two sites that claim one hostname, because Caddy would let one shadow the other', () => {
+    const a = site({
+      name: 'tenant-a',
+      hostnames: ['shared.test'],
+      privateUpstream: { host: 'app1', port: 2368 },
+    });
+    const b = site({
+      name: 'tenant-b',
+      hostnames: ['shared.test'],
+      privateUpstream: { host: 'app1', port: 2369 },
+    });
+    expect(() => render(ENFORCING, [a, b])).toThrow(
+      /sites tenant-a and tenant-b both claim shared\.test/
+    );
+  });
+
+  it('allows two sites with different hostnames', () => {
+    const a = site({
+      name: 'tenant-a',
+      hostnames: ['a.test'],
+      privateUpstream: { host: 'app1', port: 2368 },
+    });
+    const b = site({
+      name: 'tenant-b',
+      hostnames: ['b.test'],
+      privateUpstream: { host: 'app1', port: 2369 },
+    });
+    expect(() => render(ENFORCING, [a, b])).not.toThrow();
+  });
+
+  it('ignores a site this edge does not serve, which claims no hostname', () => {
+    const served = site({
+      name: 'served',
+      hostnames: ['shared.test'],
+      privateUpstream: { host: 'app1', port: 2368 },
+    });
+    const pending = site({
+      name: 'pending',
+      hostnames: ['shared.test'],
+      privateUpstream: undefined,
+    });
+    expect(() => render(ENFORCING, [served, pending])).not.toThrow();
+  });
+
+  it('the real registry has no two sites claiming one hostname', () => {
+    // Non-vacuous by construction: asserts the registry has enough entries and
+    // hostnames to compare, so this cannot pass by matching nothing.
+    expect(sites.length).toBeGreaterThanOrEqual(2);
+    const hostnames = sites.flatMap((s) => s.hostnames);
+    expect(hostnames.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(hostnames).size).toBe(hostnames.length);
+  });
+});
+
 describe('the request-body ceiling', () => {
   // The value's source is a tenant stack output derived alongside the
   // container's tmpfs ceiling; see `requestBodyMaxSize` in siteTypes.ts.
