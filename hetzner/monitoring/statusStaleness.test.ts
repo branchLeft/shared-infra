@@ -42,4 +42,41 @@ describe('the status page staleness rule', () => {
     expect(() => componentStatus(NOW, NOW, 0, true)).toThrow(RangeError);
     expect(() => componentStatus(NOW, NOW, -5, true)).toThrow(RangeError);
   });
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['undefined', undefined],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['-Infinity', Number.NEGATIVE_INFINITY],
+  ])('is UNKNOWN, never UP or DOWN, when lastReportAt is %s', (_label, value) => {
+    const lastReportAt = value as unknown as number;
+    expect(componentStatus(lastReportAt, NOW, MAX_AGE, true)).toBe('UNKNOWN');
+    expect(componentStatus(lastReportAt, NOW, MAX_AGE, false)).toBe('UNKNOWN');
+  });
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['undefined', undefined],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['-Infinity', Number.NEGATIVE_INFINITY],
+  ])('is UNKNOWN, never UP or DOWN, when now is %s', (_label, value) => {
+    const now = value as unknown as number;
+    expect(componentStatus(NOW - 60, now, MAX_AGE, true)).toBe('UNKNOWN');
+    expect(componentStatus(NOW - 60, now, MAX_AGE, false)).toBe('UNKNOWN');
+  });
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['undefined', undefined],
+    ['Infinity', Number.POSITIVE_INFINITY],
+  ])('refuses a maxAgeSeconds of %s with a RangeError, not a verdict', (_label, value) => {
+    const maxAgeSeconds = value as unknown as number;
+    expect(() => componentStatus(NOW - 60, NOW, maxAgeSeconds, true)).toThrow(RangeError);
+    expect(() => componentStatus(NOW - 60, NOW, maxAgeSeconds, false)).toThrow(RangeError);
+  });
+
+  it('gives the probe state for a finite, positive, valid input set', () => {
+    expect(componentStatus(NOW - 60, NOW, MAX_AGE, true)).toBe('UP');
+    expect(componentStatus(NOW - 60, NOW, MAX_AGE, false)).toBe('DOWN');
+  });
 });

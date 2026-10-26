@@ -27,10 +27,13 @@ export function componentStatus(
   maxAgeSeconds: number,
   lastProbeOk: boolean
 ): ComponentState {
-  if (!(maxAgeSeconds > 0)) {
-    throw new RangeError(`maxAgeSeconds must be positive, got ${maxAgeSeconds}`);
+  if (!Number.isFinite(maxAgeSeconds) || !(maxAgeSeconds > 0)) {
+    throw new RangeError(`maxAgeSeconds must be finite and positive, got ${maxAgeSeconds}`);
   }
   if (lastReportAt === null) return 'UNKNOWN';
+  // Number.isFinite, not the stale comparison below: NaN fails every comparison,
+  // so a NaN timestamp would otherwise read as fresh.
+  if (!Number.isFinite(lastReportAt) || !Number.isFinite(now)) return 'UNKNOWN';
   const age = now - lastReportAt;
   if (age < 0 || age > maxAgeSeconds) return 'UNKNOWN';
   return lastProbeOk ? 'UP' : 'DOWN';
