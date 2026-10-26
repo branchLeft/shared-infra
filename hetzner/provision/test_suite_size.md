@@ -4,8 +4,8 @@
 
 Two ways a test module can vanish from a run both leave `unittest discover`
 reporting a smaller number with no other signal: an interpreter below a
-module's declared minimum (see test_compose_unit_contract.py's own version
-guard) turns the whole module into one `_FailedTest` placeholder, and a
+module's floor (`MIN_PYTHON` in test_suite_size.py, Python 3.9) turns the
+whole module into one `_FailedTest` placeholder, and a
 module deleted from disk is simply not there to find. Either way the suite
 can still exit 0 if everything it did collect passes -- a shrunken run looks
 identical to a smaller, still-complete one unless something states what the

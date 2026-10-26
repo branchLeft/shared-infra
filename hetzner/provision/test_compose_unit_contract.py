@@ -4,26 +4,16 @@
 The contract, and why each assertion exists, is in `test_compose_unit_contract.md`.
 """
 
+# Keeps the `X | None` annotations legal on Python 3.9. Without it the module
+# fails at import, and unittest discover reports that as one error in place
+# of every test in the module.
+from __future__ import annotations
+
 import pathlib
 import re
 import subprocess
 import sys
 import unittest
-
-# `drop_in_for` below returns `pathlib.Path | None`: PEP 604 syntax that a
-# function-signature annotation evaluates eagerly, before Python 3.10. Under
-# an older interpreter that eager evaluation is a `TypeError` on a line deep
-# in the file, which unittest reports as a bare import error -- a reader has
-# no way to tell "this module needs a newer Python" from "this module is
-# broken". Checking the version first turns that into a message that names
-# the actual requirement, before the incompatible syntax is ever reached.
-if sys.version_info < (3, 10):
-    raise RuntimeError(
-        "test_compose_unit_contract.py requires Python 3.10 or newer (drop_in_for's "
-        f"`pathlib.Path | None` return annotation is PEP 604 syntax); running under "
-        f"{sys.version.split()[0]}. On macOS, `/usr/bin/python3` is the system 3.9 -- "
-        "run this suite with `python3` from PATH instead."
-    )
 
 import branchleft_deploy as bd
 from branchleft_deploy import (
