@@ -285,6 +285,19 @@ registered on 8081, read off `ss -ltnp` on app1, before its own stack config was
 consulted and gave 8100. 8081 was free; had it been the website's 8080, nothing here
 or in CI would have said so.
 
+## `assertHostnamesAreDistinct`
+
+No hostname may be claimed by two served sites.
+
+Two sites that list one hostname render it in two Caddy site blocks, and Caddy does not
+refuse that: one block silently shadows the other, so the hostname answers with whichever
+tenant Caddy happened to pick. The check runs on the servable sites only. An entry with no
+private upstream is dropped before rendering, so it claims nothing and may list a hostname
+a served site also lists.
+
+A snapshot test cannot see this either. The snapshot is whatever the registry asked for,
+so a mistaken duplicate is simply committed as the new expected output.
+
 ## `rateLimitDirective`: client IP key
 
 The edge is the first hop -- no proxy in front of it -- so the direct peer is the

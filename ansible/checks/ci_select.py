@@ -229,11 +229,13 @@ def select(
 ) -> list[dict[str, str]]:
     """Return the shards a run of ``event`` must execute, given the files it changed.
 
-    ``changed`` is None when the run cannot say what changed.
+    ``changed`` is None when the run cannot say what changed. A pull request and a merge-queue
+    entry are narrowed by their diff, by the same rules. Every other event (the weekly sweep, a
+    manual run, one nobody planned for) runs every shard, whatever ``changed`` says.
     """
     if event == PUSH:
         return []
-    if event != PULL_REQUEST or changed is None:
+    if event not in (PULL_REQUEST, MERGE_GROUP) or changed is None:
         return shards
     wanted = needed_units(changed, root)
     if wanted is None:

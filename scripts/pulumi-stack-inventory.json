@@ -158,6 +158,18 @@
       "attestation": null
     },
     {
+      "project": "branchleft-ghost-platform-demo-host",
+      "stack": "production",
+      "repo": "ghost-platform",
+      "project_path": "infra/demo-host/Pulumi.yaml",
+      "config_path": "infra/demo-host/Pulumi.production.yaml",
+      "state_backend": "hetzner",
+      "expected_secrets_provider": "passphrase",
+      "terminal_state": "never-kms",
+      "note": "Born pinned to the Hetzner backend, never wrapped by the KMS key, same shape as the hosts stack above, in its own Hetzner project with its own token. infra/demo-host/Pulumi.production.yaml holds non-secret configuration only -- no `encryptionsalt`, so the file reads `absent`, which reports `needs-attestation` -- not drift -- and never-kms accepts that on its own.",
+      "attestation": null
+    },
+    {
       "project": "branchleft-hetzner-tenants",
       "stack": "production",
       "repo": "shared-infra",

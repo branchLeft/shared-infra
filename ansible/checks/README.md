@@ -189,11 +189,15 @@ that a role holds no copy of a program (the DB-1 gate of the standards flags tha
 `ci_select.py` narrows the shard list from `ansible/harness/list_shards.py` to the shards a
 run needs, from the event and the files it changed. The rules, in the order they apply:
 
-- a merge-queue run executes every shard: it is the last check before `main`;
-- a push to `main` executes none: the lint job runs, and the delivery workflow runs the
-  harness before it applies anything;
-- a pull request whose base commit is unknown, or whose changed files are not listed,
-  executes every shard;
+- the weekly scheduled run and a manual run execute every shard, whatever changed: they are
+  what finds drift in an external image or collection, which no diff shows;
+- a push to `main` executes none, and runs no lint: the pushed tree is the tree the merge
+  queue tested, and the delivery workflow runs its own checks before it applies anything;
+- a pull request or a merge-queue entry whose base commit is unknown, or whose changed
+  files are not listed, executes every shard. The queue entry's changed files are the diff
+  from its `base_sha` to its `head_sha`, so a shared file in that diff executes every shard,
+  as it does in a pull request. An entry stacked on another is tested on that one's tree
+  and diffed from it; if the earlier entry leaves the queue, the later one is tested again;
 - a changed file that is part of the harness, the checks, the lock or the lint config
   executes every shard, because it decides what every role is held to;
 - a changed file under `ansible/` that nothing here recognises executes every shard,
@@ -215,8 +219,35 @@ These tests hold the CI workflows to what `ci_select.py` assumes:
   for none;
 - the gate job (the check the ruleset requires) fails unless the lint passed, and fails
   when shards were chosen and did not all pass;
-- the merge queue still triggers the workflow, so "merge_group runs everything" can happen;
+- the merge queue still triggers the workflow, and the weekly sweep is scheduled;
+- the lint and every shard restore the tool environment from a SHA-pinned `actions/cache`
+  keyed on the lock files, and install only on a miss;
 - the CrowdSec pin check opens a pull request on a stale pin and still fails when it cannot
   run;
 - the ansible-hosts environment probe is scheduled and judges the environment;
 - Dependabot runs monthly and grouped.
+
+## check_delivery.py: C4, the environments of the other workflows
+
+C4 fails when another workflow runs a job in the environment the Ansible apply is approved
+in (`ansible-hosts`, compared without regard to case), because one approval would then release
+both. It reads the `environment` of every other workflow's jobs, as a job key or as the
+`with.environment` of a call, as a string or as a mapping's `name`.
+
+An environment named by an expression cannot be read, so it is a finding that names the
+expression. There is one exception, and it is one shape only:
+
+```
+${{ needs.<job>.outputs.<name> == '<A>' && '<A>' || '<B>' }}
+```
+
+`<A>` and `<B>` are plain literals (an ASCII letter or digit first, then letters, digits,
+dots, underscores or hyphens). `<A>` is the same literal in the test and in the result, so the
+job runs in `<A>` or in `<B>` and nowhere else. C4 reads both and judges each as if it were
+named outright. This is how a Hetzner apply is routed to `production-free` or `production` by
+the spend gate. Spaces and tabs may differ where the shape has them.
+
+Every other expression stays a finding: another operator, a branch that is not a literal, a third
+branch, a different literal in the test and the result, the `github`, `inputs` or `vars` context,
+string concatenation, a function such as `format()`, a nested `${{ }}`, or any text before or
+after the expression.
