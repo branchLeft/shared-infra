@@ -1398,7 +1398,8 @@ mx1 delivers locally, so they cost no sending reputation. Two kinds carry it:
   mail it reports on.
 
 **Every `severity: warning` alert also routes to `email-on-host`.** The
-off-host mailbox receives critical alerts only, with no resolved notices,
+off-host mailbox receives critical alerts, and the `owner_action` alerts
+below, with no resolved notices,
 `group_interval: 1h` and `repeat_interval: 24h`, because repeated unread
 machine mail to Gmail is what spent mx1's reputation. Three `inhibit_rules`
 mute an alert whose cause is already firing (`ServiceFlapping` under
@@ -1407,10 +1408,41 @@ three mail-delivery rules under `MailHostDown`). The route tree is proven by
 CI's `Test the Alertmanager routing` step; amtool cannot test inhibition, so
 read it back from `/api/v2/status` on the host after a deploy.
 
-Read these in the on-host mailbox, not the off-host one. CI's
-`Test the Alertmanager routing` step proves the route tree delivers each to
-exactly the receiver it names; `MailHostDown` keeps its off-host path, since
-it fires precisely when mx1 cannot deliver anything.
+Read the `notify: on-host` alerts in the on-host mailbox, not the off-host one.
+The `owner_action` alerts are the exception, and they arrive in both (see the
+next section). CI's `Test the Alertmanager routing` step proves the route tree
+delivers each to exactly the receiver it names; `MailHostDown` keeps its
+off-host path, since it fires precisely when mx1 cannot deliver anything.
+
+### Alerts that carry `owner_action` (`owner_action: "true"`)
+
+The `owner_action` label marks an alert whose fix needs the owner's own hands:
+a spend, a portal visit or a dated expiry. In the rendered Alertmanager config,
+a non-critical alert with that label matches the route `owner_action = "true"`
+with `severity != "critical"`, which sends it to the receiver `email` (the
+off-host mailbox) and continues the walk. The walk then reaches
+`email-on-host` through the `notify = "on-host"` route or the
+`severity = "warning"` route, so each of these alerts also reaches the on-host
+mailbox. Six rules carry the label, and every one is `severity: warning`:
+
+- **`HostMemoryPressure`**: an app host has used over 75% of its memory for 24
+  hours. The `doc 14` section 4 trigger to provision the next host, which is a
+  spend.
+- **`HostDiskSpaceLow`**: a filesystem is over 70% full. The `doc 14` section 4
+  trigger to grow the volume, which is a spend.
+- **`MySQLConnectionsHigh`**: db1 is using over 70% of its
+  `max_connections`. The `doc 14` section 4 trigger to escalate the database
+  rung.
+- **`TLSCertificateExpiringSoon`**: a public HTTPS certificate expires in under
+  14 days. Caddy renews automatically, so this fires only when a renewal has
+  failed and there is still time to fix it.
+- **`MailCertificateExpiringSoon`**: the mail TLS certificate on ports 465 and
+  993 expires in under 14 days. Stalwart renews automatically, so the same
+  reasoning applies.
+- **`SNDSAccessLinkExpiringSoon`**: the SNDS automated-access link is 25 days
+  old, five days short of its 30-day expiry. Rotating it is a portal visit and
+  one line in `monitoring.env` (section 14). This rule also carries
+  `notify: on-host`, so it reaches `email-on-host` through that route as well.
 
 ## Responding to the SNDS complaint-rate alerts
 
