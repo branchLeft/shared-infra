@@ -91,6 +91,16 @@ class ArgumentSpecTests(unittest.TestCase):
                 with self.subTest(option=name):
                     self.assertIs(option.get("no_log"), True, f"{name} is a secret without no_log")
 
+    def test_every_spec_no_log_agrees_with_the_field_declaration(self) -> None:
+        # The declaration on the field is the source of truth; the generated spec must follow it.
+        for field in dataclasses.fields(record.Params):
+            with self.subTest(option=field.name):
+                self.assertIs(
+                    record.ARGUMENT_SPEC[field.name].get("no_log", False),
+                    field.metadata.get("no_log"),
+                    f"{field.name}: the spec's no_log disagrees with the field's declaration",
+                )
+
     def test_every_option_declares_whether_it_is_secret(self) -> None:
         self.assertEqual(undeclared_options(record.Params), [])
 
