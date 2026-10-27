@@ -747,3 +747,11 @@ case where the stack started cleanly and is behaving wrongly.
 - **It does not open the probe port.** Compose publishes `8080` on `127.0.0.1`
   only and the Hetzner firewall on `edge1` opens 22, 80, 443 and ICMP. Reaching
   the probe requires SSH to the host.
+- **It does not keep CrowdSec's decisions database longer than the edge keeps
+  its logs.** The alerts and decisions CrowdSec stores hold client addresses,
+  scenarios and timestamps. `db_config.flush` in `crowdsec/config.yaml.local`
+  flushes them at 30 days (`max_age: 30d`), the same figure as the edge's log
+  retention; `max_items` stays at the image default. Changing either figure
+  means changing the other. Read the effective value back with `docker exec
+  "$CROWDSEC_CTR" cscli config show --key Config.DbConfig.Flush` once
+  `$CROWDSEC_CTR` is set as in the CrowdSec sections above.
