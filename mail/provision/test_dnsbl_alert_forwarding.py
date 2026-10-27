@@ -43,7 +43,9 @@ class PingServer:
     answer into a redirect; `stall` makes it hold the connection open past any
     client timeout."""
 
-    def __init__(self, *, status: int = 200, redirect_to: str | None = None, stall: bool = False) -> None:
+    def __init__(
+        self, *, status: int = 200, redirect_to: str | None = None, stall: bool = False, answer: bytes = b"OK"
+    ) -> None:
         self.requests: list[RecordedRequest] = []
         self._release = threading.Event()
         recorded = self.requests
@@ -60,8 +62,9 @@ class PingServer:
                 self.send_response(302 if redirect_to else status)
                 if redirect_to:
                     self.send_header("Location", redirect_to)
-                self.send_header("Content-Length", "0")
+                self.send_header("Content-Length", str(len(answer)))
                 self.end_headers()
+                self.wfile.write(answer)
 
             do_GET = _handle
             do_POST = _handle
@@ -369,6 +372,19 @@ class ForwarderContainmentTests(MainRunTestCase):
         self.assert_check_unaffected(outcome, 0, "not_listed")
         self.assertIn("HTTP 500", outcome.log_text)
         self.assert_url_not_leaked(outcome, server)
+
+    def test_a_two_hundred_that_is_not_ok_is_a_failure(self) -> None:
+        # Healthchecks.io answers 200 to a URL that names no check, and to a
+        # ping it ignored for rate limiting; only a plain OK means recorded.
+        self.allow_plain_http()
+        for answer in (b"OK (not found)", b"OK (rate limited)", b""):
+            with self.subTest(answer=answer):
+                with PingServer(answer=answer) as server:
+                    os.environ["DNSBL_PING_URL"] = server.url()
+                    outcome = self.run_main(resolver_listing_everything)
+                self.assert_check_unaffected(outcome, 1, "listed")
+                self.assertIn("the check did not answer OK", outcome.log_text)
+                self.assert_url_not_leaked(outcome, server)
 
     def test_a_redirect_is_refused_not_followed(self) -> None:
         self.allow_plain_http()

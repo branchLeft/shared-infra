@@ -116,6 +116,7 @@ ACCEPTED_PING_SCHEMES = frozenset({"https"})
 # tick is an hour away and the check's grace time covers a late one.
 PING_TIMEOUT_SECONDS = 10.0
 PING_BODY_LIMIT_BYTES = 10_000
+PING_ANSWER_LIMIT_BYTES = 64
 CRASH_PING_BODY = "dnsbl check crashed before completing"
 
 
@@ -476,6 +477,13 @@ class PingConfigurationError(Exception):
     file content -- so it is safe to log."""
 
 
+class PingAnswerError(Exception):
+    """The check answered 2xx but not with a plain OK. Healthchecks.io answers
+    200 "OK (not found)" to a URL naming no check and 200 "OK (rate limited)"
+    to a ping it ignored, so a 2xx alone does not prove the ping was
+    recorded."""
+
+
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
     """A redirect would send the credential, or a failure report, somewhere
     the owner never configured, so a redirect is an error instead."""
@@ -611,9 +619,10 @@ def send_ping(url: str, body: str, failed: bool) -> None:
     """I/O: one POST of `body` to the check, once, with no retry. Proxy
     environment variables are ignored and redirects refused.
 
-    Raises urllib.error.URLError (or an OSError) on any transport failure
-    and urllib.error.HTTPError on a non-2xx answer. Their text can carry the
-    URL, so callers must not log it.
+    Raises urllib.error.URLError (or an OSError) on any transport failure,
+    urllib.error.HTTPError on a non-2xx answer, and PingAnswerError on a 2xx
+    answer that is not exactly OK. Their text can carry the URL, so callers
+    must not log it.
     """
     request = urllib.request.Request(
         build_ping_url(url, failed),
@@ -622,8 +631,10 @@ def send_ping(url: str, body: str, failed: bool) -> None:
         headers={"Content-Type": "text/plain; charset=utf-8"},
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _RefuseRedirects)
-    with opener.open(request, timeout=PING_TIMEOUT_SECONDS):
-        pass
+    with opener.open(request, timeout=PING_TIMEOUT_SECONDS) as response:
+        answer = response.read(PING_ANSWER_LIMIT_BYTES).strip()
+    if answer != b"OK":
+        raise PingAnswerError("the check did not answer OK")
 
 
 def describe_ping_failure(exc: Exception) -> str:
@@ -631,6 +642,8 @@ def describe_ping_failure(exc: Exception) -> str:
     exception class name, never the exception's text."""
     if isinstance(exc, urllib.error.HTTPError):
         return f"HTTP {exc.code}"
+    if isinstance(exc, PingAnswerError):
+        return str(exc)
     if isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, BaseException):
         return type(exc.reason).__name__
     return type(exc).__name__
