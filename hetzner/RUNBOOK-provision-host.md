@@ -604,7 +604,7 @@ unscoped form of `branchleft-deploy` lets the caller name the stack. `hetzner/RE
 carries the design; this is the procedure.
 
 Run once per stack, before that repository's first deploy. Steps 1–3 are the
-platform owner's; step 5 is the platform owner's too, because it writes a
+platform owner's; step 6 is the platform owner's too, because it writes a
 credential into a repository.
 
 ```bash

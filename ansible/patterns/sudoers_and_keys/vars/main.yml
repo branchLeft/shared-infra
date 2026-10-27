@@ -33,8 +33,9 @@ sudoers_and_keys_command_forbidden_pattern: '["\\]|[^ -~]'
 # The key module reads the first whitespace-separated word of a line that is a
 # key type as the key, so a forced command holding one such word as a word of
 # its own is read as the key and the real key lands in the comment: the line is
-# rewritten wrongly on every run. This is the module's own list (collection
-# pinned in ansible/requirements.yml); a collection that adds a type adds a word.
+# rewritten wrongly on every run. This is the module's own list (the `ansible.posix`
+# collection inside the `ansible` package pinned in ansible/requirements.txt); a
+# collection that adds a type adds a word.
 sudoers_and_keys_key_type_words:
   - sk-ecdsa-sha2-nistp256@openssh\.com
   - sk-ecdsa-sha2-nistp256-cert-v01@openssh\.com

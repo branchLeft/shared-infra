@@ -45,8 +45,8 @@ protect).
 
 - ansible-core as pinned in `ansible/requirements.txt`, with `min_ansible_version` in
   `meta/main.yml` equal to it.
-- The collection `community.docker`, pinned in `ansible/requirements.yml`, on the
-  machine that runs Ansible.
+- The collection `community.docker`, from the `ansible` package pinned in
+  `ansible/requirements.txt`, on the machine that runs Ansible.
 - On the target: Debian 13 (the release the test runs on), Python 3, the Docker CLI and
   the Compose plugin at the version `community.docker.docker_compose_v2` needs. The
   module reads it with `docker compose version --format json` and refuses an older one
@@ -553,8 +553,8 @@ reusable workflow are separate work.
 Change the tasks, the templates and the converge and verify plays together, run the
 harness, and break the control you touched (the table above) to see it fail. A change
 to the stand-in is a change to what the test believes the CLI does, so review it
-against the module's source for the pinned collection version. A bump of
-`community.docker` in `ansible/requirements.yml` is its own change: re-read the calls
+against the module's source for the pinned collection version. A bump of the
+`ansible` package in `ansible/requirements.txt` is its own change: re-read the calls
 the new module version makes against the stand-in and the verify play's list, and the
 minimum Compose version. An edit to a default is a change of behaviour on every host
 that uses the role.

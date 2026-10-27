@@ -364,6 +364,38 @@ class ScenarioLimitTests(RoleCase):
         refused = scenario(platform="    capabilities:\n      - SYS_TIME\n")
         self.assert_refused(refused, "without a comment")
 
+    def test_a_pid_mode_platform_needs_a_stated_reason(self) -> None:
+        self.assert_refused(scenario(platform="    pid_mode: host\n"), "asks for pid_mode")
+
+    def test_an_ipc_mode_platform_needs_a_stated_reason(self) -> None:
+        self.assert_refused(scenario(platform="    ipc_mode: host\n"), "asks for ipc_mode")
+
+    def test_a_userns_mode_platform_needs_a_stated_reason(self) -> None:
+        self.assert_refused(scenario(platform="    userns_mode: host\n"), "asks for userns_mode")
+
+    def test_a_uts_mode_platform_needs_a_stated_reason(self) -> None:
+        self.assert_refused(scenario(platform="    uts_mode: host\n"), "asks for uts_mode")
+
+    def test_a_devices_platform_needs_a_stated_reason(self) -> None:
+        refused = scenario(platform="    devices:\n      - /dev/fuse:/dev/fuse\n")
+        self.assert_refused(refused, "asks for devices")
+
+    def test_a_cap_add_platform_needs_a_stated_reason(self) -> None:
+        refused = scenario(platform="    cap_add:\n      - SYS_TIME\n")
+        self.assert_refused(refused, "asks for cap_add")
+
+    def test_a_network_mode_other_than_none_needs_a_stated_reason(self) -> None:
+        self.assert_refused(scenario(platform="    network_mode: host\n"), "asks for network_mode")
+
+    def test_network_mode_none_needs_no_reason(self) -> None:
+        self.assertEqual(self.problems(scenario(platform="    network_mode: none\n")), [])
+
+    def test_a_namespace_key_with_a_reason_above_it_passes(self) -> None:
+        reasoned = scenario(
+            platform="    # The role under test reads the host process table.\n    pid_mode: host\n"
+        )
+        self.assertEqual(self.problems(reasoned), [])
+
     def test_a_privileged_platform_with_a_reason_above_the_key_passes(self) -> None:
         reasoned = scenario(
             platform="    # The role under test starts a service manager.\n    privileged: true\n"

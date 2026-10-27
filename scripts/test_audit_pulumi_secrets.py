@@ -17,6 +17,7 @@ import os
 import pathlib
 import tempfile
 import unittest
+import unittest.mock
 
 
 def _load_module():
@@ -680,6 +681,19 @@ class MainTests(unittest.TestCase):
             self.assertEqual(code, 0, output)
             self.assertIn("sweep complete", output)
 
+    def test_an_unreadable_file_exits_two_through_main(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = pathlib.Path(tmp)
+            os.symlink("no-such-target.md", tree / "broken.md")
+            out = io.StringIO()
+            err = io.StringIO()
+            with unittest.mock.patch.object(audit, "REPO_ROOT", tree):
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    code = audit.main([])
+        self.assertEqual(code, 2)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("broken.md", err.getvalue())
+
 
 class ReferenceScanTests(unittest.TestCase):
     def setUp(self):
@@ -719,6 +733,30 @@ class ReferenceScanTests(unittest.TestCase):
 
     def test_ignores_unscannable_suffixes(self):
         self._write("notes.txt", "gs://branchleft-pulumi-state\n")
+        self.assertEqual(audit.scan_backend_references(self.tree), set())
+
+    def test_an_unreadable_file_is_reported_not_skipped(self):
+        # A dangling symlink fails to open for every user, unlike chmod 000,
+        # which root reads straight through.
+        os.symlink("no-such-target.md", self.tree / "broken.md")
+        with self.assertRaises(Exception) as caught:
+            audit.scan_backend_references(self.tree)
+        self.assertIn("broken.md", str(caught.exception))
+
+    def test_every_unreadable_file_is_named_not_just_the_first(self):
+        self._write("nested/keep.md", "nothing here\n")
+        os.symlink("no-such-target.md", self.tree / "broken.md")
+        os.symlink("no-such-target.md", self.tree / "nested" / "also-broken.md")
+        with self.assertRaises(Exception) as caught:
+            audit.scan_backend_references(self.tree)
+        message = str(caught.exception)
+        self.assertIn("broken.md", message)
+        self.assertIn("nested/also-broken.md", message)
+        self.assertLess(message.index("broken.md"), message.index("nested/also-broken.md"))
+
+    def test_an_unreadable_file_in_a_skipped_directory_is_ignored(self):
+        (self.tree / "node_modules").mkdir()
+        os.symlink("no-such-target.md", self.tree / "node_modules" / "broken.md")
         self.assertEqual(audit.scan_backend_references(self.tree), set())
 
 
@@ -767,6 +805,12 @@ class ProviderSelectionScanTests(unittest.TestCase):
         for skipped in ("node_modules", "vendor", "graphify-out"):
             self._write(f"{skipped}/w.yml", f'--secrets-provider="{GCPKMS_URL}"\n')
         self.assertEqual(audit.scan_provider_selection_hits(self.tree), set())
+
+    def test_an_unreadable_file_is_reported_by_the_provider_selection_scan(self):
+        os.symlink("no-such-target.sh", self.tree / "broken.sh")
+        with self.assertRaises(Exception) as caught:
+            audit.scan_provider_selection_hits(self.tree)
+        self.assertIn("broken.sh", str(caught.exception))
 
 
 class ProviderSelectionUndeclaredTests(unittest.TestCase):

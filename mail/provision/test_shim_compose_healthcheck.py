@@ -1,45 +1,19 @@
 #!/usr/bin/env python3
-"""A Compose healthcheck that probes a name resolving to more than one address
-family can race those families against each other: the client tries one, and
-only falls back to the other after that attempt is timed out rather than
-refused outright. That race can cost seconds even when the server itself
-answers in milliseconds, and a `timeout:` sized for the server's own latency
-has no margin for it.
-
-This asserts every HTTP healthcheck probe committed in shim-compose.yml
-targets a literal address rather than a name -- `ipaddress.ip_address()`
-raises on anything that isn't one, which a hostname like `localhost` is,
-whether or not it happens to resolve to a single family today. Matched by
-regex rather than a YAML parser, the same way the sibling suites in this
-directory and in hetzner/provision/ do, to stay stdlib-only.
-
-What this does not and cannot prove: that the underlying service actually
-listens on the family this probes, or that the multi-second stall the probed
-name previously produced is gone. Both are host-observable facts this suite
-has no access to; the delivery mechanism for this file is a human rsyncing it
-to the host, and the healthcheck's own live status after that is what proves
-it.
-
-`HealthcheckResponseDrainTests` and `HealthcheckProbeTimingTests` below cover
-a second, unrelated stall in the same probe: the callback reads
-`r.statusCode` but, absent a fix, never drains or destroys `r`. An unconsumed
-`http.IncomingMessage` leaves its socket paused, so Node's event loop cannot
-empty and the process survives until the *server's* own `keepAliveTimeout`
-(5000ms by default) closes the connection -- comfortably past this
-healthcheck's 3s budget even though the server answers instantly. The static
-test below (`HealthcheckResponseDrainTests`) is what would have caught that
-defect; the timing test is a live differential proof for anyone verifying
-the fix rather than trusting the pattern match.
+"""Regression tests for the mailgun-shim healthcheck in shim-compose.yml.
+Why each assertion exists, and what these tests cannot prove:
+test_shim_compose_healthcheck.md beside this file.
 """
 
 from __future__ import annotations
 
 import ipaddress
 import pathlib
+import queue
 import re
-import selectors
 import shutil
 import subprocess
+import sys
+import threading
 import time
 import unittest
 from urllib.parse import urlsplit
@@ -154,26 +128,9 @@ class HealthcheckResponseDrainTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("node"), "node not on PATH")
 class HealthcheckProbeTimingTests(unittest.TestCase):
-    """Runs the exact committed `node -e` script against a real local HTTP
-    server, the same way Docker's healthcheck runs it against the shim. The
-    server's `keepAliveTimeout` is set to 3s rather than the production
-    default of 5s: still comfortably above ordinary `node -e` process-startup
-    noise on a loaded CI runner (a bare `node -e` measured at 151ms, 196ms
-    end-to-end once drained, on a quiet machine), so a regression here fails
-    clearly rather than racing the pass threshold, while still failing well
-    inside the 10-minute CI job budget rather than waiting out the full 5s
-    production default.
-
-    A Node server, not Python's stdlib `http.server`, is the throwaway
-    fixture here even though it adds a second subprocess: the differential
-    this test relies on is specifically Node's `keepAliveTimeout` behaviour
-    on the *server* side, and Python's stdlib server has no equivalent knob
-    to reproduce it with. The client script under test already requires
-    `node` (skip-guarded above), so this adds no new environment dependency.
-
-    Skipped, not failed, where `node` is unavailable: this environment is not
-    guaranteed to have it, and `HealthcheckResponseDrainTests` above is the
-    assertion that must never be skippable.
+    """Runs the committed `node -e` probe against a real local Node server.
+    The keepAliveTimeout, threshold and skip rationale is in
+    test_shim_compose_healthcheck.md beside this file.
     """
 
     # Must match the port the committed probe itself targets
@@ -182,8 +139,14 @@ class HealthcheckProbeTimingTests(unittest.TestCase):
     # API on the same port, so a real collision here would mean something
     # else on this machine is already bound to it.
     PORT = 8080
-    KEEP_ALIVE_TIMEOUT_MS = 3000
-    READY_TIMEOUT_S = 5
+    KEEP_ALIVE_TIMEOUT_MS = 6000
+    READY_TIMEOUT_S = 60
+    # The pass threshold is at least 10x the slowest loaded passing probe and
+    # at most half the shortest stall (keepAlive plus about 1.05s). The probe
+    # timeout leaves at least 5s beyond that stall, so a stalled probe fails on
+    # the elapsed assertion rather than on TimeoutExpired.
+    ELAPSED_THRESHOLD_S = KEEP_ALIVE_TIMEOUT_MS / 2000
+    PROBE_TIMEOUT_S = KEEP_ALIVE_TIMEOUT_MS / 1000 + 9
 
     SERVER_SCRIPT = (
         "const http = require('node:http');"
@@ -204,41 +167,60 @@ class HealthcheckProbeTimingTests(unittest.TestCase):
             text=True,
         )
         self.addCleanup(self._stop_server)
-        ready = self._read_line_with_timeout(self.server.stdout, self.READY_TIMEOUT_S)
-        if ready is None:
-            self.fail(
-                f"local test server printed nothing within {self.READY_TIMEOUT_S}s -- "
-                "it may be hung rather than crashed, since a bind failure "
-                "prints 'server-error: ...' immediately"
-            )
-        if ready.startswith("server-error:"):
-            self.fail(
-                f"local test server failed to start: {ready.strip()} -- if this is "
-                f"EADDRINUSE, something else on this machine already holds "
-                f"127.0.0.1:{self.PORT}, which is not a regression in the "
-                "probe itself"
-            )
-        if "ready" not in ready:
-            self.fail(f"local test server did not report ready; got {ready!r}")
+        self.ready_lines: queue.Queue[str | None] = queue.Queue()
+        self.reader = threading.Thread(target=self._pump_server_stdout, daemon=True)
+        self.reader.start()
+        self._wait_for_ready_line()
 
-    @staticmethod
-    def _read_line_with_timeout(stream, timeout_s: float) -> str | None:
-        """`stream.readline()` blocks forever if the subprocess neither
-        writes a line nor exits, which would hang the whole CI job rather
-        than fail it. `select` gives this a hard bound.
+    def _pump_server_stdout(self) -> None:
+        """Blocking reads belong on a thread: a select over the text stream can
+        report nothing to read while a line already sits in Python's buffer.
+        A None sentinel marks EOF.
         """
-        selector = selectors.DefaultSelector()
-        selector.register(stream, selectors.EVENT_READ)
-        try:
-            if not selector.select(timeout=timeout_s):
-                return None
-            return stream.readline()
-        finally:
-            selector.close()
+        for line in iter(self.server.stdout.readline, ""):
+            self.ready_lines.put(line)
+        self.ready_lines.put(None)
+
+    def _wait_for_ready_line(self) -> None:
+        """Consumes server output until its `ready` line arrives, within one
+        READY_TIMEOUT_S deadline. Raises through self.fail, quoting all output
+        read so far, on a `server-error:` line, on EOF, or on the deadline.
+        """
+        lines: list[str] = []
+        deadline = time.monotonic() + self.READY_TIMEOUT_S
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.fail(
+                    f"local test server printed no ready line within {self.READY_TIMEOUT_S}s -- "
+                    "it may be hung rather than crashed, since a bind failure "
+                    f"prints 'server-error: ...' immediately; server output: {''.join(lines)!r}"
+                )
+            try:
+                line = self.ready_lines.get(timeout=remaining)
+            except queue.Empty:
+                continue
+            if line is None:
+                return_code = self.server.wait(timeout=5)
+                self.fail(
+                    f"local test server exited with return code {return_code} before "
+                    f"printing a ready line; server output: {''.join(lines)!r}"
+                )
+            lines.append(line)
+            if line.startswith("server-error:"):
+                self.fail(
+                    f"local test server failed to start: {line.strip()} -- if this is "
+                    f"EADDRINUSE, something else on this machine already holds "
+                    f"127.0.0.1:{self.PORT}, which is not a regression in the "
+                    f"probe itself; server output: {''.join(lines)!r}"
+                )
+            if line.strip() == "ready":
+                return
 
     def _stop_server(self):
         self.server.kill()
         self.server.wait(timeout=5)
+        self.reader.join(timeout=5)
         self.server.stdout.close()
 
     def test_probe_completes_well_under_its_own_healthcheck_timeout(self):
@@ -249,33 +231,33 @@ class HealthcheckProbeTimingTests(unittest.TestCase):
                 [shutil.which("node"), "-e", script],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=self.PROBE_TIMEOUT_S,
             )
         except subprocess.TimeoutExpired:
             self.fail(
-                "probe did not exit within 10s against a 200 response -- an "
+                f"probe did not exit within {self.PROBE_TIMEOUT_S}s against a 200 response -- an "
                 "undrained response would stall for this test server's "
-                f"{self.KEEP_ALIVE_TIMEOUT_MS}ms keepAliveTimeout at "
-                "minimum, so 10s is already a wide margin, not a tight one"
+                f"{self.KEEP_ALIVE_TIMEOUT_MS}ms keepAliveTimeout, which the timeout is sized to outlast"
             )
         elapsed = time.monotonic() - start
+        sys.stderr.write(f"probe-elapsed: {elapsed:.3f}s (threshold {self.ELAPSED_THRESHOLD_S}s)\n")
         self.assertEqual(
             result.returncode,
             0,
             f"probe did not exit 0 against a 200 response (stderr: {result.stderr!r})",
         )
-        # 2s sits well clear of both sides of the differential this test
-        # relies on: comfortably above ordinary process-startup noise even
-        # under CI load, comfortably below the 3s an undrained response
-        # would stall for against this test server. A regression that
-        # removes `.resume()`/`.destroy()` fails this in several seconds.
+        # The threshold sits well clear of both sides of the differential: far
+        # above a loaded passing probe, and at most half the stall an undrained
+        # response causes against this server. A regression that removes
+        # `.resume()`/`.destroy()` fails this by several seconds.
         self.assertLess(
             elapsed,
-            2.0,
+            self.ELAPSED_THRESHOLD_S,
             f"probe took {elapsed:.3f}s against a 3s production healthcheck "
             "timeout -- an unconsumed response socket stalling until the "
             "server's own keepAliveTimeout closes it would look exactly "
-            "like this",
+            f"like this (this test's server uses {self.KEEP_ALIVE_TIMEOUT_MS}ms; "
+            "production keepAliveTimeout is 5000ms)",
         )
 
 

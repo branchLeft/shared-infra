@@ -915,9 +915,10 @@
     # The scenario sets verbosity 3 and a log path (molecule.yml), so a task that
     # handles an input without no_log or diff: false prints it into this log, in
     # its result, its loop item, its diff or the message of a failure. The log
-    # holds every run above: the harness's check run with --diff against the
-    # fresh host, the converge, the second converge, and this play with its
-    # refusals and failures. The scan runs last. The db1 public key is printed on
+    # holds every run above: the check run with --diff against the fresh host
+    # (prepare.yml makes it, so `molecule test` alone holds it too), the converge,
+    # the second converge, and this play with its refusals and failures. The
+    # scan runs last. The db1 public key is printed on
     # purpose (it is public data), so the scan must find it: that, and the task
     # names and the diff headers, show the scan reads a log that holds output.
     - name: Read the log of this scenario's Ansible runs

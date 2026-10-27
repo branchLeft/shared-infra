@@ -511,7 +511,7 @@ literally the configuration the host will run.
 | --------------------------- | --------------------------------- | ------------------------------------------------------- |
 | `membersMagicLinkRateLimit` | **`enforcing`** — already flipped | §8b                                                     |
 | `rateLimit`                 | `off`                             | §10a below turns it on; §8a proves it is off until then |
-| `crowdsec`                  | `detect-only`                     | §10b below turns it on                                  |
+| `crowdsec`                  | `inband-only`                     | §10b below completes it with the IP-decision handler    |
 
 Turn the remaining two on one at a time, in this order, with time between them:
 the throttle is reversible and low-consequence, and the WAF is the one that can
@@ -621,8 +621,10 @@ above, performed by whoever holds `~/.ssh/id_ed25519_hetzner`.
 
 ### 10b. The WAF and IP remediation
 
-Same four steps with `crowdsec: 'enforcing'`, which changes both the Caddy
-route chain and `crowdsec/acquis.d/appsec.yaml`.
+Same four steps. The committed `crowdsec: 'inband-only'` already loads the
+in-band AppSec configuration in `crowdsec/acquis.d/appsec.yaml`: a known-bad
+request shape gets a 403 and no address is banned. Setting
+`crowdsec: 'enforcing'` adds the IP-decision handler to the Caddy route chain.
 
 Confirm it took. `$EDGE1_IPV4` is set under "What has to be true first"
 above; re-set it first if you are entering this section independently:

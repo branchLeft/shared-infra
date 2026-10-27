@@ -29,12 +29,9 @@ It does four things:
 3. It installs `hetzner/monitoring/systemd/monitoring.override.conf` as
    `/etc/systemd/system/branchleft-compose@monitoring.service.d/override.conf`,
    the destination `hetzner/provision/install-systemd-drop-ins.sh` uses for the
-   instance named `monitoring`, and installs
-   `hetzner/monitoring/systemd/edge.override.conf` as
-   `/etc/systemd/system/branchleft-compose@edge.service.d/override.conf`. It
-   reloads systemd when either file changed, or when a restart is due. No edge
-   role exists yet, so the edge drop-in is installed here; moving it to an edge
-   role is discovered work.
+   instance named `monitoring`. It reloads systemd when that file changed, or when
+   a restart is due. The drop-in that bounds the edge instance on the same host is
+   not installed here: the `edge_stack` role owns the edge unit and installs it.
 4. It restarts the monitoring unit when the fingerprint of what the unit runs
    from differs from the stamp of the last restart that was read back as active,
    and only when the unit is enabled (see "Restart").
@@ -94,9 +91,7 @@ it with a stamp that it writes only after a restart was read back as active.
   files, the monitoring drop-in, the renderer and the pager's secrets file
   (`ntfy-pager.env`, written by `ntfy_pager`), and the sha256 of the secrets
   file with its `SNDS_DATA_URL` line removed. The list is `monitoring_stack_fingerprint_files`
-  in `vars/main.yml`. The edge drop-in is not in it: it binds
-  `branchleft-compose@edge`, which this role never restarts (runbook step 6 does).
-  The `SNDS_DATA_URL` line is left out because only the collector reads it and it
+  in `vars/main.yml`. The `SNDS_DATA_URL` line is left out because only the collector reads it and it
   rotates every 30 days; a rotation must not recreate the stack.
 - **The stamp** is `/var/lib/branchleft/monitoring.applied`: one sha256 and a
   newline, `root:root` `0600`. It is written last, after the restart and a
@@ -136,12 +131,12 @@ it with a stamp that it writes only after a restart was read back as active.
   sets the task keyword `check_mode`, which does not set the `ansible_check_mode`
   variable the role's guards read; the guards are reviewed, not proven (see "Sabotage rows").
 - **A reload is made whenever systemd says it needs one**, not only in the run that
-  wrote a drop-in. The role reads `NeedDaemonReload` of the monitoring instance and
-  of the edge instance and reloads when either says `yes`, as well as when a
-  drop-in changed or a restart is due. A run that fails after it wrote the edge
-  drop-in (the stamp directory cannot be made, say) leaves the old drop-in loaded;
+  wrote a drop-in. The role reads `NeedDaemonReload` of the monitoring instance
+  and reloads when it says `yes`, as well as when the drop-in changed or a restart
+  is due. A run that fails after it wrote the drop-in leaves the old one loaded;
   the rerun finds nothing changed, and without this term the new limit would wait
-  for the next reboot.
+  for the next reboot. This term is reviewed, not proven here (see "Sabotage rows");
+  the same mechanism for the edge unit's drop-in is proven in `edge_stack`, case `p30`.
 - **A hand write to the secrets file restarts the unit once**, like any other change
   to it: the `STALWART_PROMETHEUS_SECRET` block, or any line but `SNDS_DATA_URL`,
   written by hand changes the fingerprint, and the next run restarts and stamps.
@@ -293,8 +288,6 @@ their own user, so a file or directory tighter than this makes a container fail.
   `prometheus/alerts.yml` and `prometheus/prometheus.yml`.
 - `/etc/systemd/system/branchleft-compose@monitoring.service.d/`, mode `0755`,
   holding `override.conf`, mode `0644`.
-- `/etc/systemd/system/branchleft-compose@edge.service.d/`, mode `0755`, holding
-  `override.conf`, mode `0644`, from `files/edge.override.conf`.
 - `/etc/branchleft/`, mode `0755`, if absent, and `/etc/branchleft/monitoring.env`,
   created with `state: touch` if absent, mode `0600`, `root:root`, with the access
   and modification times preserved so a second run changes nothing.
@@ -311,8 +304,7 @@ their own user, so a file or directory tighter than this makes a container fail.
 
 The role holds no copy of the files it delivers. `files/stack` is a link to
 `hetzner/monitoring/stack` and `files/monitoring.override.conf` is a link to
-`hetzner/monitoring/systemd/monitoring.override.conf` and `files/edge.override.conf`
-is a link to `hetzner/monitoring/systemd/edge.override.conf`, all relative, so a change
+`hetzner/monitoring/systemd/monitoring.override.conf`, both relative, so a change
 to the stack in its own directory is what the next apply delivers, and the role
 cannot drift from it. The images stay pinned by tag and digest inside
 `compose.yml`, where the dependency bot reads them.
@@ -352,7 +344,7 @@ What each part of the scenario does:
   `ExecStart` to `docker compose up`, which is the stand-in here, so each restart
   of the instance is one line in the log.
 - `converge.yml`, on an instance with no drop-in, first installs an earlier
-  release of the drop-ins (a different `MemoryMax`), starts and enables the
+  release of the drop-in (a different `MemoryMax`), starts and enables the
   instance, and asks systemd, so that systemd holds the earlier value. It then
   applies the role and asks systemd again, straight away: a reload that is
   missing, or left to the end of the play, fails on `MemoryMax`. The first apply
@@ -368,8 +360,7 @@ What each part of the scenario does:
   `root:root` `0600` and holds each key once; every image in the Compose file is
   pinned by digest; and the stamp is one sha256 and a newline, `0600`, in a
   directory of mode `0755`, and the fingerprint's list names the eight files, the
-  monitoring drop-in, the renderer and the pager's secrets file and not the edge
-  drop-in.
+  monitoring drop-in, the renderer and the pager's secrets file.
 - `verify.yml`, the project directory: a play applies the role with a play variable
   that names another project directory, and that directory must not exist and the
   stack must stay where the unit runs it; the three copies of the path (this
@@ -392,11 +383,6 @@ What each part of the scenario does:
     argument in the `ExecStart`): read by systemd, and one restart that runs the
     stand-in with that argument; this role applied again puts the repository's
     drop-in back with one more restart;
-  - the edge drop-in changed: put back and read by systemd, no restart of
-    monitoring;
-  - the role failing after it wrote the edge drop-in (the stamp directory is a
-    file): systemd still holds the earlier limit; the rerun makes systemd read the
-    new one with no restart of monitoring;
   - the unit stopped but enabled: started once;
   - the unit stopped and disabled: not started, nothing stamped; enabled and
     started again by the test, as at runbook step 7a: the next run restarts once
@@ -441,19 +427,17 @@ edit and run `ansible/harness/run_harness.py` over the role.
 
 The reload and the files:
 
-| Edit to the role                                                       | Step that fails | Assertion or task that names it                                                                                    |
-| ---------------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------ |
-| The task that installs the monitoring drop-in removed                  | `converge`      | systemd does not hold the drop-in the role installed (monitoring `MemoryMax`)                                      |
-| The daemon-reload task removed                                         | `converge`      | the same assertion                                                                                                 |
-| The monitoring drop-in directory misspelt (`monitorinq`)               | `converge`      | the same assertion                                                                                                 |
-| The edge drop-in directory misspelt (`edgf`)                           | `converge`      | the edge `MemoryMax` assertion                                                                                     |
-| The reload moved after the restart                                     | `converge`      | "Assert the unit was restarted once, under the new drop-in"                                                        |
-| The reload only when a drop-in changed in this run (the old condition) | `verify`        | "Assert the failed run left the old drop-in loaded, and the rerun made systemd read the new one without a restart" |
-| Mode of the delivered files changed from `0644` to `0640`              | `verify`        | "Assert every file is on the instance ..." (one failure per file)                                                  |
-| The delivered file taken from another source file                      | `verify`        | the same task: the file differs from its source                                                                    |
-| `compose.yml` removed from `monitoring_stack_files`                    | `verify`        | the same task                                                                                                      |
-| A new file added to `hetzner/monitoring/stack/`                        | `verify`        | the same task names the file                                                                                       |
-| The stamp written with mode `0644`                                     | `verify`        | "Assert the stamp is one sha256 and a newline, in a root-only file ..."                                            |
+| Edit to the role                                          | Step that fails | Assertion or task that names it                                               |
+| --------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------- |
+| The task that installs the monitoring drop-in removed     | `converge`      | systemd does not hold the drop-in the role installed (monitoring `MemoryMax`) |
+| The daemon-reload task removed                            | `converge`      | the same assertion                                                            |
+| The monitoring drop-in directory misspelt (`monitorinq`)  | `converge`      | the same assertion                                                            |
+| The reload moved after the restart                        | `converge`      | "Assert the unit was restarted once, under the new drop-in"                   |
+| Mode of the delivered files changed from `0644` to `0640` | `verify`        | "Assert every file is on the instance ..." (one failure per file)             |
+| The delivered file taken from another source file         | `verify`        | the same task: the file differs from its source                               |
+| `compose.yml` removed from `monitoring_stack_files`       | `verify`        | the same task                                                                 |
+| A new file added to `hetzner/monitoring/stack/`           | `verify`        | the same task names the file                                                  |
+| The stamp written with mode `0644`                        | `verify`        | "Assert the stamp is one sha256 and a newline, in a root-only file ..."       |
 
 The restart decision:
 
@@ -472,7 +456,6 @@ The restart decision:
 | The renderer left out of the fingerprint list                                            | `verify`        | the fingerprint-definition assertion for `monitoring_stack_renderer`                                                                                        |
 | The monitoring drop-in left out of the fingerprint list                                  | `verify`        | the same assertion for `monitoring_stack_dropin_dest`                                                                                                       |
 | The eight stack files left out of the fingerprint list                                   | `verify`        | the same assertion for `monitoring_stack_files`                                                                                                             |
-| The edge drop-in added to the fingerprint                                                | `verify`        | the assertion that `monitoring_stack_edge` is not in the definition                                                                                         |
 | The `env=` part of the fingerprint removed                                               | `verify`        | "Assert a rotated key restarted the unit once ..."                                                                                                          |
 | The `SNDS_DATA_URL` line hashed                                                          | `verify`        | "Assert the rotated SNDS_DATA_URL is in the file and restarted nothing"                                                                                     |
 | The pager's secrets file left out of the fingerprint list                                | `verify`        | the fingerprint-definition assertion for `monitoring_stack_ntfy_env_file`, and "Assert the NTFY_ rotation restarted the unit on this role's next run, once" |
@@ -526,8 +509,11 @@ Run, and stayed green (so the control is not shown to work):
 Reviewed or asserted, but not proven by a sabotage run (a control with no row above
 is not shown to fail):
 
-- the reload for a monitoring drop-in on a unit that is not enabled: it shares one
-  condition term with the proven edge case, but is not separately broken;
+- the `NeedDaemonReload` term of the reload (a reload that a failed run did not make,
+  and a monitoring drop-in on a unit that is not enabled): the run that failed after
+  the copy was proven with the edge unit's drop-in, which moved to `edge_stack`
+  (case `p30` there), so here the term is not broken by a run. The reload on a change
+  and before a restart is proven by `converge`;
 - the order of the mode before the values in the secrets-file tasks (a first run
   that wrote a value before closing the file);
 - that a changed stack file restarts the unit: covered by the assertion on the

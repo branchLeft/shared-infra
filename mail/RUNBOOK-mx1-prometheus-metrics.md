@@ -300,8 +300,11 @@ when that second PR is merged and deployed.
 
 ## What this deliberately does not do
 
-- **No alert rule.** A rule against a metric nobody has scraped yet never
-  evaluates and reads as covered — the reasoning already recorded on #42.
+- **Alerting now exists.** Alert rules for Stalwart's own metrics are in the
+  `mail-delivery` group of `hetzner/monitoring/stack/prometheus/alerts.yml`, and
+  the certificate mx1 presents is covered by `MailCertificateExpiringSoon` on the
+  `blackbox_mail` job, which warns 14 days before it expires (the series comes
+  from ports 465 and 993 only).
 - **No complaint-rate signal.** Feedback loops are reported out of band by
   receiving providers; no self-hosted MTA produces them. `#222`'s criterion 3
   asks for something Stalwart cannot give, and the honest substitute is a

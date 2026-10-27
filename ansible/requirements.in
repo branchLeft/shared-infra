@@ -5,3 +5,4 @@ molecule-plugins[docker]==26.10.12
 yamllint==1.38.0
 mypy==2.4.0
 ruff==0.17.0
+ruamel-yaml==0.19.1
