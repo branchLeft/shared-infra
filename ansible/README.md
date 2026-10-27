@@ -6,12 +6,12 @@ page of the standards repository (clauses ANS-1 to ANS-17).
 
 This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
-the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
-`roles/ansible_runtime` and `roles/pull_trigger`) and `db1` (`playbooks/db1.yml`, which applies
-`roles/db1_stack` and `roles/db1_grants`); the other trees hold only what those hosts need.
-The break-glass roles `roles/breakglass_mint_host` (for ops1) and
-`roles/breakglass_grant_host` (for app1) are not yet applied by any playbook: they
-reach their hosts through the per-host role list, in a later wiring change.
+the skeleton. Its real hosts are `edge1`, `ops1`, `app1` and `db1`. The first three have
+playbooks enrolled in the gated pull. Each of them applies `roles/ansible_runtime` and
+`roles/pull_trigger`, then `roles/host_baseline`: `playbooks/edge1.yml` stops there,
+`playbooks/ops1.yml` adds `roles/breakglass_mint_host` and `playbooks/app1.yml` adds
+`roles/breakglass_grant_host`. `playbooks/db1.yml` applies `roles/db1_stack` and
+`roles/db1_grants`. The other trees hold only what those hosts need.
 
 ## Layout
 

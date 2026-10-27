@@ -1,6 +1,7 @@
 ---
-# edge1: the first host under the gated pull. Two roles, in order: the
+# edge1: the first host under the gated pull. Two pull roles, in order: the
 # Ansible toolchain the host runs this playbook with, then the trigger that runs it.
+# After them, only roles on edge1's list in checks/host_roles.yml.
 #
 # The host's trigger runs this file on a signed checkout with the inventory
 # `localhost,`, which loads no group variables, so every value the roles read comes
@@ -27,3 +28,4 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_baseline # noqa: role-name[path]
