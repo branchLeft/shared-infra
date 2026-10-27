@@ -208,6 +208,84 @@ the `*` version segment.
 After the protection chain, before `reverse_proxy`: a client probing for an open setup is
 throttled and seen by CrowdSec rather than answered for free.
 
+## `logDirective`: break-glass token redaction and strip
+
+The break-glass sign-in (how support opens a customer's Ghost admin) carries a single-use
+token in the query parameter `bl_break_glass` on a `/ghost/` request. Left alone, Caddy's
+JSON access log writes it to disk in clear. Measured against Caddy v2.11.4 with the old
+bare `format json`, the token appears in exactly three fields of a log line:
+`request.uri`, `request.headers.Referer` (a refused token leaves the sign-in page at its
+original URL, and its same-origin sub-requests send that URL) and `resp_headers.Location`
+(Ghost's 302 to `/ghost/#/?bl_break_glass=...`). Nowhere else; `breakGlassToken.test.ts`
+reads the real log back to keep it that way.
+
+**Redaction.** Every `log` block, of every kind (site, redirect, static, probe), is written
+by `logDirective`, which wraps the same JSON encoder in `format filter` and runs a
+`regexp` filter over those three fields. The value of the parameter becomes `REDACTED`, so
+a reader of the log can still see that a token was presented. A line with no token is
+written byte for byte as before and has the same JSON key set, so CrowdSec's parser and
+the rate-limit derivation in the runbook read it unchanged; the test compares the parsed
+key sets of the old and new formats.
+
+The log pattern is deliberately wider than what Ghost reads. It is case-insensitive and
+redacts any parameter whose name starts with the token's, so `BL_BREAK_GLASS=`,
+`bl_break_glass[]=` and a bare `?bl_break_glass` leave nothing. The `[?&]` boundary also
+covers the `#/?bl_break_glass=` fragment in Ghost's `Location`. It does not hide the name
+when it sits inside another parameter's value, which is not a token to anyone. The pattern
+uses no backslash, brace or quote, so Caddyfile quoting cannot corrupt it. The `query`
+filter is not used: it re-encodes every URI it touches, which would change token-free
+lines.
+
+**Strip.** The token is read only on `/ghost/` (Ghost's adapter reads exactly
+`bl_break_glass`, case-sensitive, as a string). On any other path the adapter never sees,
+refuses or consumes it, so it would sit valid in Ghost's request log until it expires. The
+edge therefore removes it with `uri ... query -bl_break_glass` before any other handler,
+and forwards the rest. It is a strip, not a refusal, so a stray parameter on an ordinary
+page is not turned into an error. On `/ghost/` the request is forwarded byte for byte.
+
+The gate (`@break_glass_strip`) is a CEL `expression` over the raw request target
+`{http.request.orig_uri}`, not Caddy's `path` matcher. The `path` matcher lowercases,
+decodes and cleans before matching, but Ghost's router (Express) routes on the raw path, so
+`/%67host/`, `/ghost%2Fx` and `/%67host/x` would look like `/ghost/` to Caddy while Ghost
+sends them to its front end, where the adapter never sees the token. Reading the raw target
+removes the disagreement. It fires when both hold:
+
+- the query has a parameter whose name is the token's, at the start of a parameter (so
+  `a=?bl_break_glass=T` is one parameter named `a` and does not fire). Each character of
+  the name is accepted as itself or as its percent form, with either hex case, because
+  `%5f` and `%5F` decode to the same byte. The letters stay case-sensitive. One
+  function, `paramNamePattern`, spells the name for both this gate and the log filter.
+- the raw path is not `/ghost` followed by `/`, `?` or the end (lowercase only), or it
+  contains two dot-spellings in a row (`.` or `%2e`).
+
+The keep-test is lowercase on purpose. Express also routes `/GHOST/`, so a capitalised
+break-glass URL is stripped and fails; the minter only builds lowercase `/ghost/` URLs.
+`/ghost/../` is stripped although Express would route it into the admin app, to keep the
+rule simple and to err toward stripping. Every form where Caddy and Express could disagree
+about "under `/ghost/`" is therefore stripped, which is the safe direction.
+
+`uri query` re-encodes the query it rewrites: keys come out sorted and values re-escaped.
+Measured, the other parameters keep their decoded names and values; a token-only query
+leaves no `?` at all; a pair with an invalid escape (`c=%ZZ`) is dropped by Go's query
+parser along with the token. The rule fires only when the parameter is present, so no
+other query string is ever re-encoded.
+
+The strip is first in the route after the HSTS header, ahead of `request_body`, the
+protection chain, the setup refusal and `reverse_proxy`, so neither the AppSec hop nor the
+upstream carries a token that is off `/ghost/`. It is unconditional (no posture field
+switches it off), is on every served site block and on both probe listeners so a loopback
+`curl` can prove it, and is absent from redirect, static and metrics blocks, whose logs are
+still filtered.
+
+Not covered, by decision:
+
+- Ghost's own request log on the application host. The token is on `/ghost/` by design,
+  and the adapter's README names that as accepted.
+- CrowdSec's records (alerts, AppSec event metadata).
+- Forms the adapter does not read: `BL_BREAK_GLASS`, `bl_break_glass[]` (an array, refused
+  as malformed) and a name hidden inside another parameter's value. They are forwarded
+  as sent, and the first two are redacted in the log.
+
 ## `siteBlock`: discard route
 
 `EdgeSite.discardRoute` is one literal path the edge answers itself: `POST` gets an empty
