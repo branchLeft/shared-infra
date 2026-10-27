@@ -3,29 +3,7 @@ import * as pulumi from '@pulumi/pulumi';
 
 import { verifyEstateProject } from './projectGuard';
 
-/**
- * The hosts this repository owns: the edge, the monitoring host once it
- * splits off it, and `ops1` — a shared, product-agnostic operations host
- * (today self-hosted Calendly-equivalent booking + video calling), which
- * belongs here rather than in `ghost-platform` precisely because it has
- * nothing to do with the Ghost platform. The Ghost application and database
- * hosts are still homed in the Ghost platform repository and created by a
- * stack there, not by this one — `ops1` is not one of those; it is
- * shared estate infrastructure like `edge1`, just not edge-role.
- *
- * `Host` and the address plan come from `@branchleft/hetzner-host` — the same
- * package `ghost-platform` depends on for its own hosts — never from
- * `./index`, which constructs the network at module scope; importing it here
- * would put a second network in this stack's state.
- *
- * The program file sits in the package root while its Pulumi project sits in
- * `estate/`, so that both projects share one `node_modules`. That resolves
- * one `@pulumi/hcloud` version for `network.ts`'s own resources, and this
- * project's `@branchleft/hetzner-host` dependency exact-pins the same
- * version, so `Host`'s resources resolve it too. A provider version is part
- * of every resource's URN, and these resources attach to a network another
- * project owns.
- */
+// Narrative moved to hetzner/estate.md, "Header".
 
 /**
  * Refuses the whole program if `hcloud:token` addresses the mail project.
