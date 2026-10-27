@@ -423,9 +423,14 @@ def service_lines(drop_in: pathlib.Path) -> list[str]:
 
 def section_lines(unit_file: pathlib.Path, section: str) -> list[str]:
     """Stripped, non-comment lines of the named `[section]`, in file order."""
+    return section_lines_of_text(unit_file.read_text(encoding="utf-8"), section)
+
+
+def section_lines_of_text(unit_text: str, section: str) -> list[str]:
+    """`section_lines` over unit text, so a test can feed it a unit it made up."""
     lines = []
     in_section = False
-    for raw in unit_file.read_text(encoding="utf-8").splitlines():
+    for raw in unit_text.splitlines():
         line = raw.strip()
         if line.startswith("[") and line.endswith("]"):
             in_section = line == f"[{section}]"
@@ -433,6 +438,120 @@ def section_lines(unit_file: pathlib.Path, section: str) -> list[str]:
         if in_section and line and not line.startswith("#"):
             lines.append(line)
     return lines
+
+
+class UnparseableUnitValue(ValueError):
+    """A retry directive's value is not a number systemd would read."""
+
+
+INFINITY = float("inf")
+
+# systemd.time(7): a bare number is seconds, and a unit may follow it.
+DURATION_TOKEN = re.compile(
+    r"(?P<number>\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>usec|us|msec|ms|seconds|second|sec|s|minutes|minute|min|m|hours|hour|hr|h)?"
+)
+SECONDS_PER_UNIT = {
+    "us": 0.000001, "usec": 0.000001,
+    "ms": 0.001, "msec": 0.001,
+    "s": 1, "sec": 1, "second": 1, "seconds": 1,
+    "m": 60, "min": 60, "minute": 60, "minutes": 60,
+    "h": 3600, "hr": 3600, "hour": 3600, "hours": 3600,
+}
+
+
+def parse_seconds(value: str) -> float:
+    """`30`, `30s`, `1min` and `1min 30s` as seconds; `infinity` is INFINITY.
+
+    Raises:
+        UnparseableUnitValue: when any part of the value is not a duration.
+    """
+    text = value.strip()
+    if text == "infinity":
+        return INFINITY
+    total = 0.0
+    position = 0
+    while position < len(text):
+        token = DURATION_TOKEN.match(text, position)
+        if token is None:
+            raise UnparseableUnitValue(f"`{value}` is not a duration systemd reads")
+        total += float(token["number"]) * SECONDS_PER_UNIT[token["unit"] or "s"]
+        position = token.end()
+        while position < len(text) and text[position].isspace():
+            position += 1
+    if position == 0:
+        raise UnparseableUnitValue(f"`{value}` is not a duration systemd reads")
+    return total
+
+
+def last_assignment(lines: list[str], directive: str) -> str | None:
+    """The whole last `directive=` line, or None: systemd lets the last one win."""
+    matching = [line for line in lines if line.startswith(f"{directive}=")]
+    return matching[-1] if matching else None
+
+
+MINIMUM_RESTART_SECONDS = 15
+MINIMUM_START_LIMIT_BURST = 3
+RESTART_DIRECTIVES = ("Restart", "RestartSec")
+START_LIMIT_PREFIX = "StartLimit"
+
+
+def retry_faults(unit_text: str) -> list[str]:
+    """Every way the template's retry lines break the contract, each naming its line.
+
+    Raises:
+        UnparseableUnitValue: when `RestartSec=`, `StartLimitIntervalSec=` or
+            `StartLimitBurst=` holds something systemd could not read as a number.
+    """
+    unit = section_lines_of_text(unit_text, "Unit")
+    service = section_lines_of_text(unit_text, "Service")
+    faults = []
+
+    restart = last_assignment(service, "Restart")
+    if restart is None:
+        faults.append("[Service] has no `Restart=on-failure`")
+    elif restart != "Restart=on-failure":
+        faults.append(f"[Service] `{restart}` is not `Restart=on-failure`")
+
+    pause = last_assignment(service, "RestartSec")
+    if pause is None:
+        faults.append(f"[Service] has no `RestartSec=` of at least {MINIMUM_RESTART_SECONDS}s")
+    elif parse_seconds(pause.partition("=")[2]) < MINIMUM_RESTART_SECONDS:
+        faults.append(f"[Service] `{pause}` is under {MINIMUM_RESTART_SECONDS}s")
+
+    interval = last_assignment(unit, "StartLimitIntervalSec")
+    if interval is None:
+        faults.append("[Unit] has no finite `StartLimitIntervalSec=`")
+    else:
+        seconds = parse_seconds(interval.partition("=")[2])
+        if seconds == 0 or seconds == INFINITY:
+            faults.append(f"[Unit] `{interval}` is not finite: systemd reads 0 and infinity as no limit")
+
+    burst = last_assignment(unit, "StartLimitBurst")
+    if burst is None:
+        faults.append(f"[Unit] has no `StartLimitBurst=` of at least {MINIMUM_START_LIMIT_BURST}")
+    else:
+        count = burst.partition("=")[2].strip()
+        if not count.isdigit():
+            raise UnparseableUnitValue(f"`{burst}` is not a whole number")
+        if int(count) < MINIMUM_START_LIMIT_BURST:
+            faults.append(f"[Unit] `{burst}` is under {MINIMUM_START_LIMIT_BURST}")
+    return faults
+
+
+def drop_in_retry_faults(drop_in_text: str) -> list[str]:
+    """Every `Restart*=` or `StartLimit*=` line an instance drop-in sets, in either section.
+
+    An instance drop-in is applied over the template, so a line here replaces
+    the template's bound for that one stack.
+    """
+    lines = section_lines_of_text(drop_in_text, "Unit") + section_lines_of_text(drop_in_text, "Service")
+    return [
+        f"`{line}` overrides the template's retry bound"
+        for line in lines
+        if line.partition("=")[0].strip() in RESTART_DIRECTIVES
+        or line.startswith(START_LIMIT_PREFIX)
+    ]
 
 
 def classify_stacks() -> tuple[list[tuple[str, pathlib.Path]], list[tuple[str, pathlib.Path]]]:
@@ -951,6 +1070,163 @@ class MonitoringForceRecreateTests(unittest.TestCase):
             template_lines,
         )
         self.assertNotIn(FORCE_RECREATE_START, template_lines)
+
+
+class UnitRetryContractTests(unittest.TestCase):
+    """A failed start retries a bounded number of times, and a deploy still sees the failure.
+
+    Full reasoning: `test_compose_unit_contract.md`. Each fault below is fed to
+    `retry_faults` as unit text, so the refusal itself is tested and not only
+    the real file's pass.
+    """
+
+    unit_file = HETZNER / "provision" / "branchleft-compose@.service"
+    # A unit that meets the contract, so that each fault below is the only
+    # thing wrong with its text and does not move with the real template.
+    compliant_unit = (
+        "[Unit]\nStartLimitIntervalSec=900\nStartLimitBurst=5\n\n"
+        "[Service]\nType=oneshot\nRestart=on-failure\nRestartSec=30s\n\n"
+        "[Install]\nWantedBy=multi-user.target\n"
+    )
+
+    def without_line(self, directive: str) -> str:
+        kept = [line for line in self.compliant_unit.splitlines() if not line.startswith(f"{directive}=")]
+        return "\n".join(kept) + "\n"
+
+    def with_line(self, directive: str, value: str) -> str:
+        """The compliant unit with `directive=` set to `value` where it already sits."""
+        original = next(line for line in self.compliant_unit.splitlines() if line.startswith(f"{directive}="))
+        return self.compliant_unit.replace(original, f"{directive}={value}")
+
+    def test_the_template_meets_the_retry_contract(self):
+        self.assertEqual(retry_faults(self.unit_file.read_text(encoding="utf-8")), [])
+
+    def test_the_compliant_unit_the_faults_start_from_has_none(self):
+        self.assertEqual(retry_faults(self.compliant_unit), [])
+
+    def test_a_template_without_restart_is_refused(self):
+        faults = retry_faults(self.without_line("Restart"))
+        self.assertEqual(len(faults), 1, faults)
+        self.assertIn("no `Restart=on-failure`", faults[0])
+
+    def test_every_other_restart_policy_is_refused_naming_its_line(self):
+        for policy in ("always", "on-success", "no", "on-abnormal"):
+            with self.subTest(policy=policy):
+                text = self.with_line("Restart", policy)
+                faults = retry_faults(text)
+                self.assertEqual(len(faults), 1, faults)
+                self.assertIn(f"`Restart={policy}`", faults[0])
+
+    def test_a_later_restart_line_overrides_an_earlier_one(self):
+        text = self.compliant_unit.replace("[Install]", "Restart=no\n\n[Install]")
+        faults = retry_faults(text)
+        self.assertEqual(len(faults), 1, faults)
+        self.assertIn("`Restart=no`", faults[0])
+
+    def test_a_restart_pause_under_fifteen_seconds_is_refused_naming_its_line(self):
+        for pause in ("14s", "5", "1500ms", "0", "0s"):
+            with self.subTest(pause=pause):
+                text = self.with_line("RestartSec", pause)
+                faults = retry_faults(text)
+                self.assertEqual(len(faults), 1, faults)
+                self.assertIn(f"`RestartSec={pause}` is under 15s", faults[0])
+
+    def test_a_missing_restart_pause_is_refused(self):
+        faults = retry_faults(self.without_line("RestartSec"))
+        self.assertEqual(len(faults), 1, faults)
+        self.assertIn("no `RestartSec=`", faults[0])
+
+    def test_a_restart_pause_in_the_wrong_section_does_not_count(self):
+        text = self.without_line("RestartSec").replace("[Unit]", "[Unit]\nRestartSec=30s", 1)
+        faults = retry_faults(text)
+        self.assertEqual(len(faults), 1, faults)
+        self.assertIn("no `RestartSec=`", faults[0])
+
+    def test_durations_are_read_as_systemd_reads_them(self):
+        for spelling, seconds in (
+            ("30", 30), ("30s", 30), ("30 s", 30), ("1min", 60), ("1min 30s", 90),
+            ("2m", 120), ("1h", 3600), ("1500ms", 1.5), ("infinity", INFINITY),
+        ):
+            with self.subTest(spelling=spelling):
+                self.assertEqual(parse_seconds(spelling), seconds)
+
+    def test_a_duration_that_cannot_be_read_fails_loudly(self):
+        for spelling in ("", "soon", "30 parsecs", "-5", "s30"):
+            with self.subTest(spelling=spelling):
+                with self.assertRaises(UnparseableUnitValue):
+                    parse_seconds(spelling)
+        text = self.with_line("RestartSec", "soon")
+        with self.assertRaises(UnparseableUnitValue):
+            retry_faults(text)
+
+    def test_a_start_limit_interval_that_is_not_finite_is_refused_naming_its_line(self):
+        for interval in ("0", "0s", "infinity"):
+            with self.subTest(interval=interval):
+                text = self.with_line("StartLimitIntervalSec", interval)
+                faults = retry_faults(text)
+                self.assertEqual(len(faults), 1, faults)
+                self.assertIn(f"`StartLimitIntervalSec={interval}` is not finite", faults[0])
+
+    def test_a_missing_start_limit_interval_is_refused(self):
+        faults = retry_faults(self.without_line("StartLimitIntervalSec"))
+        self.assertEqual(len(faults), 1, faults)
+        self.assertIn("no finite `StartLimitIntervalSec=`", faults[0])
+
+    def test_a_start_limit_burst_under_three_is_refused_naming_its_line(self):
+        for burst in ("2", "1", "0"):
+            with self.subTest(burst=burst):
+                text = self.with_line("StartLimitBurst", burst)
+                faults = retry_faults(text)
+                self.assertEqual(len(faults), 1, faults)
+                self.assertIn(f"`StartLimitBurst={burst}` is under 3", faults[0])
+
+    def test_a_missing_start_limit_burst_is_refused(self):
+        faults = retry_faults(self.without_line("StartLimitBurst"))
+        self.assertEqual(len(faults), 1, faults)
+        self.assertIn("no `StartLimitBurst=`", faults[0])
+
+    def test_a_start_limit_burst_that_is_not_a_number_fails_loudly(self):
+        text = self.with_line("StartLimitBurst", "many")
+        with self.assertRaises(UnparseableUnitValue):
+            retry_faults(text)
+
+    def test_a_start_limit_in_the_wrong_section_does_not_count(self):
+        text = self.without_line("StartLimitBurst").replace("[Install]", "StartLimitBurst=5\n\n[Install]")
+        faults = retry_faults(text)
+        self.assertEqual(len(faults), 1, faults)
+        self.assertIn("no `StartLimitBurst=`", faults[0])
+
+    def test_no_committed_instance_drop_in_sets_a_retry_directive(self):
+        drop_ins = sorted(HETZNER.glob("*/systemd/*.override.conf"))
+        self.assertGreaterEqual(
+            len(drop_ins), 3, f"the glob found {drop_ins}: edge, monitoring and nextcloud1 are committed"
+        )
+        for drop_in in drop_ins:
+            with self.subTest(drop_in=str(drop_in.relative_to(HETZNER))):
+                self.assertEqual(
+                    drop_in_retry_faults(drop_in.read_text(encoding="utf-8")),
+                    [],
+                    f"{drop_in} would silently undo the template's retry bound for one stack",
+                )
+
+    def test_a_drop_in_that_sets_a_retry_directive_is_refused_naming_its_line(self):
+        for section, line in (
+            ("Service", "Restart=no"),
+            ("Service", "Restart="),
+            ("Service", "RestartSec=1"),
+            ("Unit", "StartLimitIntervalSec=0"),
+            ("Unit", "StartLimitBurst=1"),
+            ("Service", "StartLimitBurst=1"),
+        ):
+            with self.subTest(section=section, line=line):
+                faults = drop_in_retry_faults(f"[{section}]\nExecStart=\n{line}\n")
+                self.assertEqual(len(faults), 1, faults)
+                self.assertIn(f"`{line}`", faults[0])
+
+    def test_a_drop_in_with_no_retry_directive_is_accepted(self):
+        self.assertEqual(
+            drop_in_retry_faults("[Service]\nExecStart=\nExecStart=/bin/true\n# Restart=no\n"), []
+        )
 
 
 class StackNameScanTests(unittest.TestCase):
