@@ -143,8 +143,7 @@ class CrowdsecAcquisitionMountTests(unittest.TestCase):
             target == "/etc/crowdsec" or target.startswith("/etc/crowdsec/"),
             f"{compose} mounts the acquisition files at {target}, which is under "
             "/etc/crowdsec -- the populate rsync walks everything there on a cold "
-            "start, and a read-only directory there fails it with EROFS "
-            "(branchLeft/shared-infra#85).",
+            "start, and a read-only directory there fails it with EROFS.",
         )
 
 
