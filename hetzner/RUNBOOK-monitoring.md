@@ -7,7 +7,14 @@ the three mitigations that ride with that collocation: cgroup bounds on both
 compose stacks' containers, Grafana bound to the private address only, and a
 heartbeat wired to an external dead-man's switch.
 
-`edge1` is `46.225.95.167` (private `10.20.1.10`), a `cx23` in `nbg1`. Every
+`edge1` lives in the estate Hetzner project (`org` in `hetzner/projects.ts`,
+console name "branchLeft estate"). A `hcloud` context reaches only the project
+its token was minted in, so every `hcloud` lookup below names that project's
+context. `ESTATE_HCLOUD_CONTEXT` is that context's name, which
+`hcloud context list` shows (read-only). It is not written in this repository:
+set it by hand before you run the lookup.
+
+`edge1` is a `cx23` in `nbg1`. Every
 `ssh`/`scp` below uses the platform owner's key, `~/.ssh/id_ed25519_hetzner`.
 Run every workstation command from the root of a `branchLeft/shared-infra`
 checkout, same convention as `RUNBOOK-edge.md`.
@@ -20,14 +27,19 @@ second Compose stack beside it, does not create the host, and assumes
 are already installed.
 
 ```bash
-EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+EDGE1_IPV4=$(hcloud --context ESTATE_HCLOUD_CONTEXT server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])") &&
+test -n "$EDGE1_IPV4" &&
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl is-active branchleft-compose@edge &&
   test -x /usr/bin/python3 &&
   echo ready'
 ```
 
-Expect `active` then `ready`. `python3` is what
+Expect `active` then `ready`. The lookup must print edge1's public IPv4 into
+`EDGE1_IPV4`. If `hcloud` reports an error, or the lookup returns nothing, the
+chain stops before `ssh` runs: the context named by `ESTATE_HCLOUD_CONTEXT` does
+not reach the estate project that holds edge1. Fix the context. Do not
+substitute an address typed by hand. `python3` is what
 `stack/render_alertmanager_config.py` runs under -- see "Colocation cgroup
 bounds" below for why that script exists at all.
 
@@ -740,10 +752,14 @@ publishes Grafana on `10.20.1.10:3000` only, and `10.20.1.10` does not route
 from the public internet.
 
 ```bash
-EDGE1_PRIVATE_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")
+EDGE1_PRIVATE_IPV4=$(hcloud --context ESTATE_HCLOUD_CONTEXT server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")
 ssh -i ~/.ssh/id_ed25519_hetzner -L 3000:"$EDGE1_PRIVATE_IPV4":3000 root@"$EDGE1_IPV4" -N &
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/login
 ```
+
+Before the tunnel, expect `EDGE1_PRIVATE_IPV4` to hold edge1's private address
+(non-empty). If it is empty, the `hcloud` context is wrong, as in section 1
+above: stop, because the tunnel would otherwise be opened to nothing.
 
 Expect `200`, reached only through the tunnel. Confirm the registry side too:
 
