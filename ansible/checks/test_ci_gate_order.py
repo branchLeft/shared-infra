@@ -107,6 +107,55 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
             {"merge_group", "pull_request", "push"}, keys(get(self.workflow, "on"))
         )
 
+    def test_the_full_sweep_is_scheduled_weekly(self) -> None:
+        # Drift in an external image or collection shows in no diff; only a sweep finds it.
+        schedule = items(get(self.workflow, "on", "schedule"))
+        self.assertEqual(1, len(schedule))
+        fields = str(get(schedule[0], "cron")).split()
+        self.assertEqual(5, len(fields))
+        self.assertNotIn("*", fields[4], "the sweep must name its weekday: it is weekly")
+        self.assertEqual("*", fields[2])
+        self.assertEqual("*", fields[3])
+
+    def test_the_lint_and_every_shard_restore_the_tool_environment_from_a_pinned_cache(
+        self,
+    ) -> None:
+        for name in ("lint", "shard"):
+            steps = items(get(self.job(name), "steps"))
+            caches = [step for step in steps if "actions/cache@" in str(get(step, "uses"))]
+            with self.subTest(job=name):
+                self.assertEqual(1, len(caches))
+                self.assertRegex(str(get(caches[0], "uses")), r"^actions/cache@[0-9a-f]{40}$")
+                key = str(get(caches[0], "with", "key"))
+                self.assertIn("hashFiles('ansible/requirements.txt'", key)
+                self.assertIn("ansible/checks/pip-requirements.txt", key)
+                self.assertIn("steps.python.outputs.version", key)
+                self.assertIn("ansible-venv", str(get(caches[0], "with", "path")))
+
+    def test_the_installs_run_only_when_the_cache_missed(self) -> None:
+        for name in ("lint", "shard"):
+            for step in items(get(self.job(name), "steps")):
+                text = str(get(step, "run") or "")
+                if "python3 -m venv" in text or 'pip" install' in text:
+                    with self.subTest(job=name, step=get(step, "name")):
+                        self.assertEqual("steps.venv.outputs.cache-hit != 'true'", get(step, "if"))
+
+    def test_the_environment_is_checked_whether_it_was_built_or_restored(self) -> None:
+        for name in ("lint", "shard"):
+            checks = [
+                step
+                for step in items(get(self.job(name), "steps"))
+                if 'pip" check' in str(get(step, "run") or "")
+            ]
+            with self.subTest(job=name):
+                self.assertEqual(1, len(checks))
+                self.assertIsNone(get(checks[0], "if"))
+
+    def test_a_push_to_main_runs_no_lint(self) -> None:
+        text = str(get(self.job("discover"), "steps", 1, "run"))
+        push = text[text.index("push)") :]
+        self.assertIn('echo "ansible=false"', push[: push.index(";;")])
+
 
 class CrowdsecPinCheckTest(unittest.TestCase):
     workflow = load(WORKFLOWS / "crowdsec-hub-pin-check.yml")

@@ -3,10 +3,21 @@
 access, no live server needed. Run with: python3 -m unittest discover -s
 mail/provision -p 'test_*.py' -v
 """
+import base64
 import copy
+import http.client
 import io
 import itertools
+import os
+import socket
+import stat
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
 import unittest
+import urllib.error
 from unittest import mock
 
 import configure_stalwart as cs
@@ -1018,3 +1029,262 @@ class MainRestartReadinessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CompleteBootstrapTests(unittest.TestCase):
+    """_complete_bootstrap writes the one-time credential to disk before it
+    waits for Stalwart to come back, so a poll timeout cannot lose the secret,
+    and it waits by polling rather than by a fixed sleep.
+    """
+
+    NEW_USERNAME = "testadmin"
+    NEW_SECRET = "TEST_SECRET_VALUE"
+
+    def setUp(self):
+        stdout_patcher = mock.patch("sys.stdout", new_callable=io.StringIO)
+        stdout_patcher.start()
+        self.addCleanup(stdout_patcher.stop)
+
+        sleep_patcher = mock.patch("time.sleep")
+        self.sleep_mock = sleep_patcher.start()
+        self.addCleanup(sleep_patcher.stop)
+
+        password_patcher = mock.patch.object(
+            cs, "_read_bootstrap_password", return_value="BOOTSTRAP_PASSWORD_NOT_REAL"
+        )
+        password_patcher.start()
+        self.addCleanup(password_patcher.stop)
+
+        jmap_patcher = mock.patch.object(
+            cs,
+            "_jmap_call",
+            return_value={
+                "updated": {
+                    "singleton": {"username": self.NEW_USERNAME, "secret": self.NEW_SECRET}
+                }
+            },
+        )
+        jmap_patcher.start()
+        self.addCleanup(jmap_patcher.stop)
+
+        run_patcher = mock.patch.object(cs.subprocess, "run")
+        run_patcher.start()
+        self.addCleanup(run_patcher.stop)
+
+        temp_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_directory.cleanup)
+        self.credentials_path = os.path.join(temp_directory.name, "stalwart-admin-credentials")
+        path_patcher = mock.patch.object(cs, "CREDENTIALS_PATH", self.credentials_path)
+        path_patcher.start()
+        self.addCleanup(path_patcher.stop)
+
+    def test_waits_by_polling_with_the_new_credential_and_never_sleeps_six_seconds(self):
+        wait_mock = mock.Mock(return_value=None)
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", wait_mock):
+            cs._complete_bootstrap()
+
+        wait_mock.assert_called_once_with((self.NEW_USERNAME, self.NEW_SECRET))
+        self.assertNotIn(mock.call(6), self.sleep_mock.call_args_list)
+
+    def test_credentials_file_exists_with_mode_0600_before_the_poll_runs(self):
+        checks = []
+
+        def check_file_before_poll(auth):
+            with open(self.credentials_path, encoding="utf-8") as f:
+                contents = f.read()
+            mode = stat.S_IMODE(os.stat(self.credentials_path).st_mode)
+            checks.append((contents, mode))
+            self.assertEqual(contents, f"{self.NEW_USERNAME}:{self.NEW_SECRET}\n")
+            self.assertEqual(mode, 0o600)
+
+        wait_mock = mock.Mock(side_effect=check_file_before_poll)
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", wait_mock):
+            cs._complete_bootstrap()
+
+        wait_mock.assert_called_once()
+        self.assertEqual(len(checks), 1)
+
+    def test_a_poll_timeout_propagates_but_the_credentials_file_is_kept(self):
+        wait_mock = mock.Mock(side_effect=RuntimeError("stalwart's admin API did not answer"))
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", wait_mock):
+            with self.assertRaises(RuntimeError):
+                cs._complete_bootstrap()
+
+        with open(self.credentials_path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), f"{self.NEW_USERNAME}:{self.NEW_SECRET}\n")
+
+
+SECRET_VALUE = "TEST_SECRET_VALUE"
+UNREACHABLE_BASE_URL = "http://127.0.0.1:1"
+SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configure_stalwart.py")
+
+
+def _write_credentials_file(test: unittest.TestCase) -> str:
+    temp_directory = tempfile.TemporaryDirectory()
+    test.addCleanup(temp_directory.cleanup)
+    path = os.path.join(temp_directory.name, "stalwart-admin-credentials")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"testadmin:{SECRET_VALUE}\n")
+    return path
+
+
+class RunReportsFailureAsOneLineTests(unittest.TestCase):
+    """run() turns a failed API call into one stderr line and exit status 1,
+    classified by what the failure says about the server: no answer (network),
+    an answer with an error status (HTTP), or a local problem such as a missing
+    file or binary. Each test fails inside the real _request/_jmap_call by
+    faking only urlopen, so the Authorization header is built before the
+    failure.
+    """
+
+    def setUp(self):
+        self.credentials_path = _write_credentials_file(self)
+        for name, value in (("CREDENTIALS_PATH", self.credentials_path), ("BASE_URL", UNREACHABLE_BASE_URL)):
+            patcher = mock.patch.object(cs, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _run_with_urlopen_raising(self, exc: BaseException) -> tuple[int, str]:
+        with mock.patch("urllib.request.urlopen", side_effect=exc):
+            with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                status = cs.run()
+        return status, stderr.getvalue()
+
+    def test_network_failures_print_one_line_naming_the_endpoint_and_exit_1(self):
+        direct = [
+            ConnectionResetError(104, "connection reset by peer"),
+            ConnectionRefusedError(111, "connection refused"),
+            ConnectionAbortedError(103, "connection aborted"),
+            BrokenPipeError(32, "broken pipe"),
+            TimeoutError("timed out"),
+        ]
+        gaierror = socket.gaierror(-2, "Name or service not known")
+        cases = [
+            *direct,
+            http.client.RemoteDisconnected("Remote end closed connection without response"),
+            http.client.IncompleteRead(b"partial", 10),
+            gaierror,
+            *[urllib.error.URLError(inner) for inner in (*direct, gaierror)],
+        ]
+        for exc in cases:
+            with self.subTest(exception=repr(exc)):
+                status, output = self._run_with_urlopen_raising(exc)
+
+                self.assertEqual(status, 1)
+                self.assertEqual(len(output.splitlines()), 1, output)
+                self.assertIn(UNREACHABLE_BASE_URL, output)
+                self.assertIn("restarting", output)
+                inner = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+                self.assertIn(type(inner).__name__, output)
+
+    def test_an_http_error_status_says_the_server_answered(self):
+        exc = urllib.error.HTTPError(f"{UNREACHABLE_BASE_URL}/api/account", 401, "Unauthorized", {}, None)
+
+        status, output = self._run_with_urlopen_raising(exc)
+
+        self.assertEqual(status, 1)
+        self.assertEqual(len(output.splitlines()), 1, output)
+        self.assertIn("401", output)
+        self.assertIn(UNREACHABLE_BASE_URL, output)
+        for forbidden in ("restarting", "reach", "not answering"):
+            self.assertNotIn(forbidden, output)
+
+    def test_a_local_file_error_is_not_blamed_on_the_server(self):
+        missing_path = self.credentials_path + ".missing"
+        permission_error = PermissionError(13, "Permission denied", self.credentials_path)
+        cases = {
+            "missing docker binary": (
+                missing_path,
+                mock.patch.object(
+                    cs.subprocess, "run", side_effect=FileNotFoundError(2, "No such file or directory", "docker")
+                ),
+                "docker",
+            ),
+            "unreadable credentials file": (
+                self.credentials_path,
+                mock.patch.object(cs, "_load_credentials", side_effect=permission_error),
+                self.credentials_path,
+            ),
+        }
+        for name, (credentials_path, failure, expected_text) in cases.items():
+            with self.subTest(case=name):
+                with mock.patch.object(cs, "CREDENTIALS_PATH", credentials_path), failure:
+                    with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                        status = cs.run()
+                output = stderr.getvalue()
+
+                self.assertEqual(status, 1)
+                self.assertEqual(len(output.splitlines()), 1, output)
+                self.assertIn(expected_text, output)
+                self.assertRegex(output, "FileNotFoundError|PermissionError")
+                for forbidden in ("restarting", "reach", "not answering"):
+                    self.assertNotIn(forbidden, output)
+
+    def test_the_line_is_one_line_even_if_the_exception_text_has_a_newline(self):
+        status, output = self._run_with_urlopen_raising(ConnectionResetError("reset\nby\npeer"))
+
+        self.assertEqual(status, 1)
+        self.assertEqual(len(output.splitlines()), 1, output)
+        self.assertIn("reset by peer", output)
+
+    def test_the_credential_never_appears_in_the_line(self):
+        _, output = self._run_with_urlopen_raising(ConnectionResetError(104, "connection reset by peer"))
+
+        encoded = base64.b64encode(f"testadmin:{SECRET_VALUE}".encode()).decode()
+        self.assertNotIn(SECRET_VALUE, output)
+        self.assertNotIn(encoded, output)
+        self.assertNotIn("Authorization", output)
+
+    def test_other_failures_keep_propagating(self):
+        with mock.patch.object(cs, "main", side_effect=RuntimeError("x:Security/get failed")):
+            with self.assertRaises(RuntimeError):
+                cs.run()
+
+    def test_a_successful_main_returns_its_status_unchanged(self):
+        with mock.patch.object(cs, "main", return_value=0):
+            self.assertEqual(cs.run(), 0)
+
+
+class ConnectionResetEndToEndTests(unittest.TestCase):
+    def setUp(self):
+        self.credentials_path = _write_credentials_file(self)
+        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.addCleanup(self.listener.close)
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(5)
+        self.listener.settimeout(0.2)
+        self.stop_accepting = threading.Event()
+        thread = threading.Thread(target=self._accept_and_reset_until_stopped, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join)
+        self.addCleanup(self.stop_accepting.set)
+
+    def _accept_and_reset_until_stopped(self) -> None:
+        while not self.stop_accepting.is_set():
+            try:
+                connection, _ = self.listener.accept()
+            except socket.timeout:
+                continue
+            connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            connection.close()
+
+    def test_a_real_connection_reset_is_reported_as_one_line(self):
+        port = self.listener.getsockname()[1]
+        environment = dict(
+            os.environ,
+            STALWART_BASE_URL=f"http://127.0.0.1:{port}",
+            STALWART_CREDENTIALS_PATH=self.credentials_path,
+        )
+
+        completed = subprocess.run(
+            [sys.executable, SCRIPT_PATH],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(len(completed.stderr.splitlines()), 1, completed.stderr)
+        self.assertIn("restarting", completed.stderr)

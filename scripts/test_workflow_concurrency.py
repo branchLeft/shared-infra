@@ -236,12 +236,20 @@ def merge_group_problems(name: str, data: dict, pull_request: bool) -> list[str]
     return found
 
 
-def job_problems(name: str, job_name: str, job: dict, top_group: object, workflow_label: str) -> list[str]:
-    """A job never cancels, and never takes the workflow's own group.
+def job_problems(
+    name: str,
+    job_name: str,
+    job: dict,
+    top_group: object,
+    workflow_label: str,
+    others: tuple[tuple[str, object, str], ...] = (),
+) -> list[str]:
+    """A job never cancels, and never takes the workflow's own group or another workflow's.
 
     The pull_request expression is refused here: a job group every run shares lets
     a pull request run cancel a push run, and the per-pull-request group is the
-    workflow's own group, so the job would wait on its own run.
+    workflow's own group, so the job would wait on its own run. A job literal that
+    equals another workflow's top-level group queues behind that workflow's runs.
     """
     where = f"job {job_name}"
     problem = shape_problem(where, job["concurrency"])
@@ -259,14 +267,54 @@ def job_problems(name: str, job_name: str, job: dict, top_group: object, workflo
         found.append(
             f"{name}: {where} has the same group as the workflow, so it would wait on its own run: {group!r}"
         )
+    else:
+        for other_name, other_top, other_label in others:
+            if same_literal_group(group, other_top, other_label):
+                found.append(
+                    f"{name}: {where} has the same group as the top level of {other_name}, "
+                    f"so the two workflows' runs would queue on one another: {group!r}"
+                )
+                break
     problem = cancel_problem(where, config)
     if problem:
         found.append(f"{name}: {problem}")
     return found
 
 
-def violations(name: str, text: str) -> list[str]:
-    """Every rule break in one workflow's text, or [] for a file that passes."""
+def workflow_label(name: str, data: dict) -> str:
+    """github.workflow: the workflow's name: key, or its file path when there is none."""
+    workflow_name = data.get("name")
+    return workflow_name if isinstance(workflow_name, str) and workflow_name else f".github/workflows/{name}"
+
+
+def top_groups(documents: list[tuple[str, str]]) -> list[tuple[str, object, str]]:
+    """(file name, top-level group, github.workflow label) for each workflow that has a top-level group.
+
+    A document that does not load is skipped: its own rules report it.
+    """
+    found = []
+    for name, text in documents:
+        try:
+            data = load(text)
+        except yaml.YAMLError:
+            continue
+        config = data.get("concurrency") if isinstance(data, dict) else None
+        if isinstance(config, dict) and "group" in config:
+            found.append((name, config["group"], workflow_label(name, data)))
+    return found
+
+
+def others_for(name: str, documents: list[tuple[str, str]]) -> tuple[tuple[str, object, str], ...]:
+    """The top-level groups of every workflow in documents except the one named name."""
+    return tuple(group for group in top_groups(documents) if group[0] != name)
+
+
+def violations(name: str, text: str, others: tuple[tuple[str, object, str], ...] = ()) -> list[str]:
+    """Every rule break in one workflow's text, or [] for a file that passes.
+
+    others are the other workflows' top-level groups (from others_for), which a job
+    literal must not equal.
+    """
     try:
         data = load(text)
     except yaml.YAMLError as error:
@@ -304,9 +352,7 @@ def violations(name: str, text: str) -> list[str]:
         found += merge_group_problems(name, data, pull_request)
     top = data.get("concurrency")
     top_group = top.get("group") if isinstance(top, dict) else None
-    # github.workflow is the name: key, or the file path when there is none.
-    workflow_name = data.get("name")
-    workflow_label = workflow_name if isinstance(workflow_name, str) and workflow_name else f".github/workflows/{name}"
+    label = workflow_label(name, data)
     jobs = data.get("jobs")
     if not isinstance(jobs, dict):
         return found + [f"{name}: jobs is not a mapping"]
@@ -314,7 +360,7 @@ def violations(name: str, text: str) -> list[str]:
         if not isinstance(job, dict):
             found.append(f"{name}: job {job_name} is not a mapping")
         elif "concurrency" in job:
-            found += job_problems(name, job_name, job, top_group, workflow_label)
+            found += job_problems(name, job_name, job, top_group, label, others)
     return found
 
 
@@ -331,10 +377,10 @@ class WorkflowConcurrencyTests(unittest.TestCase):
         self.assertIn("standards.yml", names)
 
     def test_every_workflow_passes_the_concurrency_rules(self):
-        for path in workflow_files():
-            with self.subTest(workflow=path.name):
-                text = path.read_text(encoding="utf-8")
-                self.assertEqual(violations(path.name, text), [])
+        documents = [(path.name, path.read_text(encoding="utf-8")) for path in workflow_files()]
+        for name, text in documents:
+            with self.subTest(workflow=name):
+                self.assertEqual(violations(name, text, others_for(name, documents)), [])
 
     def test_the_rules_are_not_vacuous_on_the_real_tree(self):
         # A walk that found no pull_request or merge_group workflow would pass
@@ -855,6 +901,74 @@ ACCEPTED = {
     "a quoted string that starts with '!!'": PUSH_ON
     + deploy_jobs('    concurrency: {group: "!!bool off", cancel-in-progress: false}\n'),
 }
+
+
+# Cross-workflow: name -> (this workflow's text, the other workflows as (name, text),
+# a fragment that must appear in a violation). Concurrency groups are one namespace
+# for the whole repository, so a job literal that equals another workflow's
+# top-level group would queue behind, or replace, that other workflow's run.
+CROSS_OTHER = PUSH_ON + "name: Other\nconcurrency:\n  group: shared-deploy\n  cancel-in-progress: false\n" + JOBS
+CROSS_REFUSED = {
+    "zz-x1-literal-top": (
+        PUSH_ON + deploy_jobs(job_concurrency("false", "shared-deploy")),
+        [("zz-x1-other.yml", CROSS_OTHER)],
+        "same group as the top level of zz-x1-other.yml",
+    ),
+    "zz-x2-literal-top-case": (
+        PUSH_ON + deploy_jobs(job_concurrency("false", "SHARED-DEPLOY")),
+        [("zz-x2-other.yml", CROSS_OTHER)],
+        "same group as the top level of zz-x2-other.yml",
+    ),
+    "zz-x3-template-top": (
+        PUSH_ON + deploy_jobs(job_concurrency("false", "Other-39646213815")),
+        [
+            (
+                "zz-x3-other.yml",
+                "name: Other\n"
+                + PUSH_ON
+                + "concurrency:\n  group: ${{ github.workflow }}-${{ github.run_id }}\n  cancel-in-progress: false\n"
+                + JOBS,
+            )
+        ],
+        "same group as the top level of zz-x3-other.yml",
+    ),
+}
+CROSS_ACCEPTED = {
+    "a job literal that is a sibling of another workflow's literal group": PUSH_ON
+    + deploy_jobs(job_concurrency("false", "shared-deploy-check")),
+    "a job literal under another workflow's run-keyed group": PUSH_ON
+    + deploy_jobs(job_concurrency("false", "x-mail")),
+}
+
+
+def cross_documents(name: str, text: str, others: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    return [(name, text), *others]
+
+
+class CrossWorkflowTests(unittest.TestCase):
+    def test_every_refused_cross_workflow_fixture_is_refused_for_its_reason(self):
+        for probe, (text, others, fragment) in CROSS_REFUSED.items():
+            with self.subTest(probe=probe):
+                found = violations(f"{probe}.yml", text, others_for(f"{probe}.yml", cross_documents(f"{probe}.yml", text, others)))
+                self.assertTrue(
+                    any(fragment in line for line in found),
+                    f"{probe}: expected a violation containing {fragment!r}, got {found!r}",
+                )
+
+    def test_every_accepted_cross_workflow_shape_passes(self):
+        for shape, text in CROSS_ACCEPTED.items():
+            with self.subTest(shape=shape):
+                others = [("zz-accepted-other.yml", CROSS_OTHER), ("zz-accepted-run.yml", PUSH_ON + "name: Run\nconcurrency:\n  group: x-${{ github.run_id }}\n  cancel-in-progress: false\n" + JOBS)]
+                documents = cross_documents("accepted.yml", text, others)
+                self.assertEqual(violations("accepted.yml", text, others_for("accepted.yml", documents)), [])
+
+    def test_the_real_tree_has_top_level_groups_to_compare_against(self):
+        # A walk that found no other top-level group would let every job literal
+        # pass the cross-workflow rule without testing one.
+        documents = [(path.name, path.read_text(encoding="utf-8")) for path in workflow_files()]
+        groups = {name for name, _, _ in top_groups(documents)}
+        self.assertIn("ci.yml", groups)
+        self.assertIn("ansible.yml", groups)
 
 
 class DetectorTests(unittest.TestCase):

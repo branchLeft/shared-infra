@@ -6,14 +6,13 @@ requires-python = ">=3.13"
 
 [tool.mypy]
 strict = true
-# disallow_any_explicit matches ansible/pyproject.toml: an explicit Any is a type error here too.
-disallow_any_explicit = true
 python_version = "3.13"
-# The molecule scenario links its copy of the module into molecule/default/library, so a
-# directory-wide run sees the module twice under one name. The library/ copy is the one checked.
-exclude = ["(^|/)molecule/"]
 # The module is a single file in library/, imported by the tests by its own name.
 mypy_path = "$MYPY_CONFIG_FILE_DIR/library"
+# The symbolic link in molecule/ is the module itself, checked once in library/.
+exclude = ["(^|/)molecule/"]
+# Matches ansible/pyproject.toml. The module's code needed no change to pass it.
+disallow_any_explicit = true
 
 # ANS-2: Ansible's own imports are untyped, so the override names the ansible.*
 # modules and nothing else. A blanket ignore_missing_imports is not the override.

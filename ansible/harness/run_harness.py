@@ -45,7 +45,20 @@ CONNECTION_KEYS = frozenset(
 INVENTORY_HOST_KEYS = frozenset({"hosts", "links"})
 IMAGE_DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 ENGINE_SOCKET = re.compile(r"(docker|podman)\.sock")
-PRIVILEGE_KEYS = ("privileged", "capabilities")
+# Keys that let a platform reach past its own container: privilege, added
+# capabilities or devices, and a namespace or network mode shared with the host.
+# network_mode "none" is the one value that shares nothing, so it is not listed.
+PRIVILEGE_KEYS = (
+    "privileged",
+    "capabilities",
+    "cap_add",
+    "devices",
+    "pid_mode",
+    "ipc_mode",
+    "userns_mode",
+    "uts_mode",
+    "network_mode",
+)
 
 # A role has a scenario called default, and may have more (a directory under
 # molecule/). One run of the harness runs one scenario, named by --scenario, so
@@ -194,9 +207,13 @@ def platform_problems(platform: Mapping[str, object]) -> list[str]:
 
 
 def asks_for_privilege(platform: Mapping[str, object], key: str) -> bool:
-    """Return whether a platform sets ``privileged`` to true or lists any ``capabilities``."""
+    """Return whether a platform sets one of PRIVILEGE_KEYS to a value that reaches past it."""
     value = platform.get(key)
-    return value is True if key == "privileged" else bool(value)
+    if key == "privileged":
+        return value is True
+    if key == "network_mode":
+        return value is not None and value != "none"
+    return bool(value)
 
 
 def comment_above(lines: Sequence[str], index: int) -> bool:
@@ -205,8 +222,10 @@ def comment_above(lines: Sequence[str], index: int) -> bool:
     return before.startswith("#")
 
 
-def unexplained_privileged_platforms(text: str, platforms: Sequence[object]) -> int:
-    """Count platforms that ask for privilege with no comment above any of their own keys.
+def unexplained_privileged_platforms(text: str, platforms: Sequence[object]) -> list[str]:
+    """Name each platform that asks for privilege with no comment above any of its own keys.
+
+    Each entry is the platform name and the keys it asks with, for the refusal to name.
 
     Each platform is judged by the lines of its own privilege keys, read from the
     round-trip parse of ``text``. A comment above one platform's key never explains
@@ -214,18 +233,19 @@ def unexplained_privileged_platforms(text: str, platforms: Sequence[object]) -> 
     bare one. A platform whose key positions cannot be read is counted as unexplained.
     """
     lines = [line.strip() for line in text.splitlines()]
-    unexplained = 0
+    unexplained: list[str] = []
     for platform in platforms:
         if not isinstance(platform, Mapping):
             continue
         asked = [key for key in PRIVILEGE_KEYS if asks_for_privilege(platform, key)]
         if not asked:
             continue
+        label = f"{platform.get('name', '?')} asks for {', '.join(asked)}"
         if not isinstance(platform, CommentedMap) or not all(key in platform for key in asked):
-            unexplained += 1
+            unexplained.append(label)
             continue
         if not any(comment_above(lines, platform.lc.key(key)[0]) for key in asked):
-            unexplained += 1
+            unexplained.append(label)
     return unexplained
 
 
@@ -263,11 +283,8 @@ def scenario_problems(scenario: Path) -> list[str]:
         if isinstance(platform, Mapping):
             name = platform.get("name", "?")
             problems.extend(f"platform {name}: {found}" for found in platform_problems(platform))
-    if unexplained_privileged_platforms(text, YAML().load(text).get("platforms", [])):
-        problems.append(
-            "a platform asks for privileged or capabilities without a comment above the key "
-            "saying why"
-        )
+    for label in unexplained_privileged_platforms(text, YAML().load(text).get("platforms", [])):
+        problems.append(f"platform {label} without a comment above the key saying why")
     return sorted(set(problems))
 
 

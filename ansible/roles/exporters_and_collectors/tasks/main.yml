@@ -14,8 +14,20 @@
       an address prefix ending in a dot, or a percentage between 1 and 100.
     quiet: true
 
-# The node exporter's private address is taken from the facts the play gathers, so
-# the address is the one the host holds in the estate subnet, and not a public one.
+# The play may run with gather_facts off (the pulled playbooks do), so the role asks for
+# the two facts it reads: the network addresses and the mounts. It reports no change, and
+# runs under --check. The result lists this host's addresses, so no_log (ANS-16).
+- name: Gather this host's network and hardware facts
+  ansible.builtin.setup:
+    gather_subset:
+      - '!all'
+      - '!min'
+      - network
+      - hardware
+  no_log: true
+
+# The node exporter's private address is the one the host holds in the estate subnet,
+# and not a public one.
 - name: Find the address of this host in the estate subnet
   ansible.builtin.set_fact:
     exporters_and_collectors_private_address: >-

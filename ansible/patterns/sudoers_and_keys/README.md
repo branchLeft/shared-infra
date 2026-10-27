@@ -32,7 +32,8 @@ policy, but both are treated as sensitive: every task that handles them sets
 
 - ansible-core as pinned in `ansible/requirements.txt`, and `min_ansible_version`
   in `meta/main.yml` equal to it.
-- `ansible.posix`, pinned in `ansible/requirements.yml`, for `authorized_key`.
+- `ansible.posix`, from the `ansible` package pinned in `ansible/requirements.txt`, for
+  `authorized_key`.
 - Target: a Debian-family host with `sudo` (the role calls `/usr/sbin/visudo`),
   Python 3, and an existing account. The test image is Debian 13, the release the
   production hosts run.
@@ -399,9 +400,9 @@ named in them (one harness run each).
   SSH server, so it does not show that `sshd` accepts a line, and the version of
   `ssh-keygen` on the controller may differ from the one on a host.
 - **The key type words are a copy.** The words a forced command may not hold are the
-  module's own list in the collection pinned in `ansible/requirements.yml`; a newer
-  collection that adds a key type adds a word the role does not know. Nothing in the
-  test compares the two lists.
+  module's own list in the `ansible.posix` collection inside the `ansible` package
+  pinned in `ansible/requirements.txt`; a newer collection that adds a key type adds a
+  word the role does not know. Nothing in the test compares the two lists.
 - **A forced command may hold no backslash** (a command that needs one must be put in
   a script on the host and run by its path), and a sudoers line may hold no tab.
 - **A forced command keeps no run of two spaces.** The key module joins the words of

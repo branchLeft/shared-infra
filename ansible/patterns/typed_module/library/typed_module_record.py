@@ -66,7 +66,8 @@ attributes:
     description: Reports what an apply would change and changes nothing.
   diff_mode:
     support: full
-    description: Returns the record's content before and after.
+    description: Returns the record's content before and after, with the signature's value
+      hidden as C(signature=<hidden>).
 """
 
 EXAMPLES = r"""
@@ -106,7 +107,8 @@ path:
   type: str
   sample: /etc/EXAMPLE_SERVICE.record
 diff:
-  description: The record's content before and after, shown by --diff.
+  description: The record's content before and after, shown by --diff, with the signature's
+    value hidden as C(signature=<hidden>).
   returned: success
   type: dict
 """
@@ -118,6 +120,9 @@ COUNT_MIN = 1
 COUNT_MAX = 100
 NAME_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
 MODE_PATTERN = re.compile(r"0[0-7]{3}")
+SIGNATURE_PREFIX = "signature="
+HIDDEN_VALUE = "<hidden>"
+SIGNATURE_LINE_PATTERN = re.compile(rf"(?<![^\r\n]){SIGNATURE_PREFIX}[^\r\n]*")
 
 _SCALAR_TYPES: dict[type, str] = {
     str: "str",
@@ -212,13 +217,12 @@ REASON_TYPE = "no argument_spec type for this annotation"
 class Params:
     """The module's parameters. The argument_spec is generated from this class."""
 
-    # Every field declares whether it is a secret: no_log marks one, plain marks one that is
-    # not. A test fails on a field that carries neither, so a secret is never guessed by name.
-    path: Path = dataclasses.field(metadata={"plain": True})
-    name: str = dataclasses.field(metadata={"plain": True})
-    count: int = dataclasses.field(default=1, metadata={"plain": True})
-    state: State = dataclasses.field(default="present", metadata={"plain": True})
-    mode: str = dataclasses.field(default="0600", metadata={"plain": True})
+    # Every field states whether it is a secret: metadata no_log True or False.
+    path: Path = dataclasses.field(metadata={"no_log": False})
+    name: str = dataclasses.field(metadata={"no_log": False})
+    count: int = dataclasses.field(default=1, metadata={"no_log": False})
+    state: State = dataclasses.field(default="present", metadata={"no_log": False})
+    mode: str = dataclasses.field(default="0600", metadata={"no_log": False})
     # repr=False keeps the secret out of any traceback or log line that prints the object.
     token: str | None = dataclasses.field(default=None, repr=False, metadata={"no_log": True})
 
@@ -390,6 +394,14 @@ def render(params: Params) -> str:
     return "\n".join(lines) + "\n"
 
 
+def hidden_form(text: str) -> str:
+    """Return ``text`` with the value of each ``signature=`` line replaced by ``<hidden>``.
+
+    Every other character, line endings included, is kept exactly. Raises nothing.
+    """
+    return SIGNATURE_LINE_PATTERN.sub(f"{SIGNATURE_PREFIX}{HIDDEN_VALUE}", text)
+
+
 def observe(path: Path) -> Observed:
     """Read the record file as the host holds it now.
 
@@ -473,7 +485,7 @@ def main() -> None:
             changed=decided.changed,
             action=decided.action,
             path=str(params.path),
-            diff={"before": decided.before, "after": decided.after},
+            diff={"before": hidden_form(decided.before), "after": hidden_form(decided.after)},
         )
 
 

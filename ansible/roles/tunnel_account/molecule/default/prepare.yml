@@ -70,3 +70,33 @@
       loop_control:
         label: '{{ item.key }}'
       no_log: true
+
+# The check run the ANS-16 log scan reads: converge.yml in check mode with --diff
+# against this fresh host, before anything is converged. The harness
+# (ansible/harness/run_harness.py) does the same as its check-fresh step, but a
+# caller that runs only `molecule test` has no such step, and the scan in
+# verify.yml then fails on a log with no diff header. The delivery workflow is
+# such a caller. Doing it here makes the scenario hold on its own.
+# It is a second ansible-playbook run with the command-line --check, not a play
+# keyword: the role's `when: not ansible_check_mode` guards read the command-line
+# flag, which a `check_mode: true` keyword does not set. The run inherits
+# Molecule's environment (the config, the log path and the verbosity), so its
+# output lands in the same log. A check run changes nothing, so converge and the
+# idempotence step are as they were.
+- name: Check the fresh host
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Run converge.yml in check mode with a diff against the fresh host
+      ansible.builtin.command:
+        argv:
+          - '{{ ansible_playbook_python }}'
+          - -m
+          - ansible.cli.playbook
+          - --inventory
+          - "{{ lookup('ansible.builtin.env', 'MOLECULE_INVENTORY_FILE') }}"
+          - --check
+          - --diff
+          - '{{ playbook_dir }}/converge.yml'
+      changed_when: false

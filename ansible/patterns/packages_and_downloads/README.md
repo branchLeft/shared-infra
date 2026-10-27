@@ -45,8 +45,8 @@ sets none of the three.
 - ansible-core at the version pinned in `ansible/requirements.txt`; the role's
   `min_ansible_version` is that version (ANS-4).
 - No collection beyond `ansible.builtin` for the role itself. The test also
-  uses `community.docker` and `ansible.posix`, pinned in
-  `ansible/requirements.yml`.
+  uses `community.docker` and `ansible.posix`, from the `ansible` package pinned in
+  `ansible/requirements.txt`.
 - A Debian 13 target with `python3` and `python3-apt`, which the `apt` module
   needs. Debian 13 is the release every production host runs. The test image
   has both and has `dpkg-deb`, which the test uses to build its placeholder
