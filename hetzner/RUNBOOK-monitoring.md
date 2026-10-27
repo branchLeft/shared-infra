@@ -460,6 +460,8 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'chown -R root:root /opt/branchleft/monitoring/'
 ```
 
+The sync prints the deletion of `prometheus/mx1-metrics-password`: that is expected, because the restart's `ExecStartPre` in step 7 regenerates it, and step 7 reads it back.
+
 **This copy alone changes nothing in the running stack.** Prometheus and
 Alertmanager both read their config only from what is on disk when their
 container starts. Prometheus's reload endpoint is disabled outright -- this
@@ -598,6 +600,18 @@ true first" above; re-set it first if you are entering here independently.
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'systemctl restart branchleft-compose@monitoring'
 ```
+
+Read back the scrape credential that step 4's sync deleted. The read prints
+only `present` or nothing, never the value:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
+  'test -s /opt/branchleft/monitoring/prometheus/mx1-metrics-password && echo present'
+```
+
+Expect `present`. Nothing printed means `STALWART_PROMETHEUS_SECRET` is unset in
+`/etc/branchleft/monitoring.env`, the one case where the renderer removes the
+file on purpose; set it and restart again.
 
 Once the `monitoring_stack` role runs on a host, the role does this restart
 itself: it restarts the enabled unit when the fingerprint of its inputs differs
