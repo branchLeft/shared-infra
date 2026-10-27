@@ -70,7 +70,7 @@ jobs:
 
   delivery:
     needs: [queue-proof]
-    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.13
+    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.15
     with:
       environment: ansible-hosts
       role-directories: |
