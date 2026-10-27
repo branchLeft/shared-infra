@@ -1082,7 +1082,7 @@ How it works:
 - **Where the URL comes from.** The URL is a credential: it identifies and
   authorises the check. The script reads it from `DNSBL_PING_URL`, and if
   that is unset from the `KEY=VALUE` file named by `DNSBL_ENV_FILE`
-  (default `/etc/branchleft/dnsbl-check.env`). Cron sets no environment, so
+  (default `/etc/branchleft/dnsbl-check.conf`). Cron sets no environment, so
   on mx1 the file is what is used; the script reads it itself and nothing
   sources it. Only an `https://` URL with a host is accepted. The file is
   refused unless it is a regular file, owned by the user running the script,
@@ -1139,13 +1139,13 @@ it succeeds.
    # Pipe the URL to mx1 on stdin and write it root-only; prints the file's mode and its key name only.
    printf 'DNSBL_PING_URL=%s\n' "$DNSBL_PING_URL" |
      ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk '
-       test ! -e /etc/branchleft/dnsbl-check.env || { echo "FAILED: dnsbl-check.env exists; not overwriting it" >&2; exit 1; }
+       test ! -e /etc/branchleft/dnsbl-check.conf || { echo "FAILED: dnsbl-check.conf exists; not overwriting it" >&2; exit 1; }
        test -d /etc/branchleft || install -d -m 0700 -o root -g root /etc/branchleft &&
        umask 077 &&
-       cat > /etc/branchleft/dnsbl-check.env &&
-       chmod 0600 /etc/branchleft/dnsbl-check.env &&
-       stat -c "%a %U:%G" /etc/branchleft/dnsbl-check.env &&
-       cut -d= -f1 /etc/branchleft/dnsbl-check.env'
+       cat > /etc/branchleft/dnsbl-check.conf &&
+       chmod 0600 /etc/branchleft/dnsbl-check.conf &&
+       stat -c "%a %U:%G" /etc/branchleft/dnsbl-check.conf &&
+       cut -d= -f1 /etc/branchleft/dnsbl-check.conf'
    unset DNSBL_PING_URL
    ```
 

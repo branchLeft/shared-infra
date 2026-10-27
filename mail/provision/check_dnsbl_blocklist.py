@@ -42,14 +42,6 @@ scripts (see configure_stalwart.py's docstring for why) -- including the
 DNS query itself, which is why there is a small wire-format encoder and
 parser here rather than a dnspython dependency.
 
-Every run also reports to a Healthchecks.io check: a success ping when clean,
-a /fail ping carrying the finding lines when any list is listed or
-inconclusive (or the check crashed). The journal stays the record; the ping is
-what tells the owner, and its absence is what tells the owner the hourly run
-stopped. The ping URL is a credential and is read from the environment or a
-root-only file, never logged. See mail/RUNBOOK-mx1-provision.md, "Forwarding
-findings to Healthchecks.io".
-
 Usage:
     python3 check_dnsbl_blocklist.py            # run a live check, alert on findings
     python3 check_dnsbl_blocklist.py --status    # print the last recorded state, no query
@@ -105,9 +97,10 @@ QUERY_ERROR_PREFIX = "127.255.255."
 # Alert forwarding. The ping URL names and authorises one Healthchecks.io check,
 # so it is configuration read at call time (never source) and never logged.
 # The file named by DNSBL_ENV_FILE is read only when DNSBL_PING_URL is unset.
+# Runbook: "Forwarding findings to Healthchecks.io" in mail/RUNBOOK-mx1-provision.md.
 PING_URL_VARIABLE = "DNSBL_PING_URL"
 ENV_FILE_VARIABLE = "DNSBL_ENV_FILE"
-DEFAULT_ENV_FILE = "/etc/branchleft/dnsbl-check.env"
+DEFAULT_ENV_FILE = "/etc/branchleft/dnsbl-check.conf"
 ENV_FILE_MAX_BYTES = 4096
 # Production accepts https only; a test widens this to exercise the real
 # network stack against a loopback server.

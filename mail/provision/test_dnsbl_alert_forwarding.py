@@ -512,7 +512,7 @@ class StatusTests(MainRunTestCase):
 
 
 class EnvFileTests(MainRunTestCase):
-    def write_env_file(self, content: str, mode: int = 0o600, name: str = "dnsbl-check.env") -> str:
+    def write_env_file(self, content: str, mode: int = 0o600, name: str = "dnsbl-check.conf") -> str:
         path = os.path.join(self.tmp_path, name)
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(content)
