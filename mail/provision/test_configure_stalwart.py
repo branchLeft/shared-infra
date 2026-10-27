@@ -1113,6 +1113,90 @@ class CompleteBootstrapTests(unittest.TestCase):
         with open(self.credentials_path, encoding="utf-8") as f:
             self.assertEqual(f.read(), f"{self.NEW_USERNAME}:{self.NEW_SECRET}\n")
 
+    def test_a_failed_restart_leaves_the_secret_saved_at_mode_0600(self):
+        cs.subprocess.run.side_effect = subprocess.CalledProcessError(
+            1, ["docker", "restart", "stalwart"]
+        )
+        wait_mock = mock.Mock(return_value=None)
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", wait_mock):
+            with self.assertRaises(subprocess.CalledProcessError):
+                cs._complete_bootstrap()
+
+        with open(self.credentials_path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), f"{self.NEW_USERNAME}:{self.NEW_SECRET}\n")
+        self.assertEqual(stat.S_IMODE(os.stat(self.credentials_path).st_mode), 0o600)
+        wait_mock.assert_not_called()
+
+    def test_the_credentials_file_is_saved_before_the_restart_runs(self):
+        restart_checks = []
+
+        def check_file_before_restart(command, **kwargs):
+            if command == ["docker", "restart", "stalwart"]:
+                with open(self.credentials_path, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), f"{self.NEW_USERNAME}:{self.NEW_SECRET}\n")
+                self.assertEqual(stat.S_IMODE(os.stat(self.credentials_path).st_mode), 0o600)
+                restart_checks.append(command)
+
+        cs.subprocess.run.side_effect = check_file_before_restart
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", mock.Mock(return_value=None)):
+            cs._complete_bootstrap()
+
+        self.assertEqual(restart_checks, [["docker", "restart", "stalwart"]])
+
+    def test_the_temporary_file_is_created_at_mode_0600_whatever_the_umask(self):
+        # Variant used: chmod and fchmod are patched out, so only the creation
+        # mode passed to os.open can produce 0600. The old code never called
+        # os.replace and created the file at the umask-default mode, so it fails.
+        old_umask = os.umask(0)
+        self.addCleanup(os.umask, old_umask)
+
+        observed_source_modes = []
+        real_replace = os.replace
+
+        def spying_replace(src, dst, *args, **kwargs):
+            observed_source_modes.append(stat.S_IMODE(os.stat(src).st_mode))
+            real_replace(src, dst, *args, **kwargs)
+
+        wait_mock = mock.Mock(return_value=None)
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", wait_mock), \
+             mock.patch.object(os, "chmod"), \
+             mock.patch.object(os, "fchmod"), \
+             mock.patch.object(os, "replace", side_effect=spying_replace):
+            cs._complete_bootstrap()
+
+        self.assertEqual(observed_source_modes, [0o600])
+
+    def test_a_re_run_over_a_saved_file_overwrites_it(self):
+        with open(self.credentials_path, "w", encoding="utf-8") as f:
+            f.write("stale:STALE_VALUE\n")
+        os.chmod(self.credentials_path, 0o600)
+
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", mock.Mock(return_value=None)):
+            cs._complete_bootstrap()
+
+        with open(self.credentials_path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), f"{self.NEW_USERNAME}:{self.NEW_SECRET}\n")
+        self.assertEqual(stat.S_IMODE(os.stat(self.credentials_path).st_mode), 0o600)
+
+    def test_no_temporary_file_is_left_after_success(self):
+        directory = os.path.dirname(self.credentials_path)
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", mock.Mock(return_value=None)):
+            cs._complete_bootstrap()
+
+        self.assertEqual(os.listdir(directory), [os.path.basename(self.credentials_path)])
+
+    def test_no_temporary_file_is_left_when_the_replace_fails(self):
+        directory = os.path.dirname(self.credentials_path)
+        replace_patcher = mock.patch.object(
+            os, "replace", side_effect=OSError("TEST_REPLACE_FAILURE")
+        )
+        with replace_patcher, \
+             mock.patch.object(cs, "_wait_for_stalwart_ready", mock.Mock(return_value=None)):
+            with self.assertRaises(OSError):
+                cs._complete_bootstrap()
+
+        self.assertEqual(os.listdir(directory), [])
+
 
 SECRET_VALUE = "TEST_SECRET_VALUE"
 UNREACHABLE_BASE_URL = "http://127.0.0.1:1"
