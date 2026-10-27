@@ -173,6 +173,7 @@ jobs:
             exit 1
           fi
           echo "image=$IMAGE@$digest" >> "$GITHUB_OUTPUT"
+          echo "Pushed $IMAGE@$digest"
 
       - name: Write the outcome to the job summary
         id: summary
