@@ -1,0 +1,13 @@
+---
+# Puts the probe instance back to inactive with its start counters at zero, so
+# that a scenario of the retry case starts from the unit's own limits and no
+# earlier scenario's starts count against it.
+- name: Stop the probe instance
+  ansible.builtin.systemd_service:
+    name: branchleft-compose@Molecule-Probe.service
+    state: stopped
+
+- name: Clear the probe instance's failed state and start counters
+  ansible.builtin.command:
+    argv: [systemctl, reset-failed, 'branchleft-compose@Molecule-Probe.service']
+  changed_when: false
