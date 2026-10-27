@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Checks the mail host's public IP against the major DNSBLs (DNS-based
-blocklists) and raises a clear, actionable signal the moment any of them
-lists it, and reports each run to a Healthchecks.io check.
-
-Reasoning and query mechanics: see check_dnsbl_blocklist.md, "Module overview".
+blocklists), alerts the moment any lists it, and reports each run to a
+Healthchecks.io check. Reasoning: check_dnsbl_blocklist.md, "Module overview".
 
 Usage:
     python3 check_dnsbl_blocklist.py            # run a live check, alert on findings
@@ -491,14 +489,11 @@ def _require_private_regular_file(descriptor: int) -> None:
 
 def read_env_file_value(path: str, key: str) -> str | None:
     """I/O: the value of `key` in the KEY=VALUE file at `path`; None if the
-    file does not exist or does not set the key.
+    file does not exist or does not set the key. Fails closed: opens without
+    following a symlink or blocking on a FIFO, and checks the opened descriptor.
 
-    The file holds a credential and is read by a root cron job, so it fails
-    closed: it is opened without following a symlink and without blocking on
-    a FIFO, and the opened descriptor (not the path) is checked.
-
-    Raises PingConfigurationError if it is a symlink, not a regular file,
-    not owned by the running user, readable by group or other, larger than
+    Raises PingConfigurationError if it is a symlink, not a regular file, not
+    owned by the running user, readable by group or other, larger than
     ENV_FILE_MAX_BYTES, unreadable, or not UTF-8.
     """
     try:
