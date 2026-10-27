@@ -21,7 +21,7 @@ and UNKNOWN is not a passing exit code.
 This script writes, and one of the things it writes is a policy granting
 anonymous reads. Three properties bound that:
 
-* It refuses any bucket whose name ends in `-pulumi-state`
+- It refuses any bucket whose name ends in `-pulumi-state`
   (`PROTECTED_SUFFIX` in the script). This refusal is the script's own, and it
   is its only protection against operating on a state-backend bucket. The
   same-named `scripts/assert-no-provisioning-deletes.py` in ghost-platform is a
@@ -29,10 +29,10 @@ anonymous reads. Three properties bound that:
   never sees this script's calls. It is not a second layer here. The refusal
   covers per-tenant state buckets the provisioning flow mints, as well as the
   ones that exist today.
-* The public-read grant names `<bucket>/_probe/*`, never `<bucket>/*`. It proves
+- The public-read grant names `<bucket>/_probe/*`, never `<bucket>/*`. It proves
   the same property (`s3:GetObject` granted, `s3:ListBucket` absent) without
   making anything else in the bucket anonymously readable.
-* It refuses a bucket that already carries a bucket policy or a lifecycle
+- It refuses a bucket that already carries a bucket policy or a lifecycle
   configuration. Both are whole-document replacements at the API, and the script
   cannot put back what it would overwrite.
 
