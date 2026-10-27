@@ -57,15 +57,17 @@
     fail_msg: 'The secrets directory holds {{ state_listing.files | map(attribute="path") | map("basename") | sort }}.'
     quiet: true
 
+# The results hold the SHA-1 of each secret file, so this task is hidden from the
+# log (ANS-16: a digest is a leak too). The task after it keeps only the names of
+# the files that break each attribute, as JSON, so the assertions below can name
+# the attribute and the files without a digest reaching the log.
 - name: Read each secret file
   ansible.builtin.stat:
     path: '{{ scenario_directory }}/{{ item }}'
   loop: '{{ state_checksums.keys() | sort }}'
   register: state_files
-  # The results hold the SHA-1 of each secret file, so the task that reads them is
-# hidden from the log (ANS-16: a digest is a leak too). It keeps only the names of
-# the files that break each attribute, as JSON, so the assertions below can name
-# the attribute and the files without a digest reaching the log.
+  no_log: true
+
 - name: Work out which secret files break each attribute
   ansible.builtin.set_fact:
     state_broken: >-
