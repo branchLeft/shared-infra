@@ -120,10 +120,11 @@ dump for that tenant, so a stopped or consistently-refused worker leaves
 one tenant's series frozen while every other tenant's keeps climbing --
 the metric carries a `tenant` label already, so one alert instance per
 stale tenant is what `time()` minus the gauge naturally produces, with no
-group-by needed. The rule's own `or absent(...)` branch covers the other
+group-by needed. The rule's own `or label_replace(absent(...))` branch covers the other
 failure shape: the whole metric family gone (exporter down, textfile
 deleted), which no per-tenant series can ever be stale enough to represent
-on its own. Warning, never page: a stale backup is a chore on its own
+on its own. That branch is tagged `scope="family"` and renders a summary
+without a tenant name. Warning, never page: a stale backup is a chore on its own
 timescale, not an outage, and this estate has no page register entry for
 it by design -- routing carries no `notify: on-host` label either, since
 the producer host is not mx1, so this reaches the same off-host email

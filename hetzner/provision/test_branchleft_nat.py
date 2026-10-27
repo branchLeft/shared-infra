@@ -1,22 +1,11 @@
 #!/usr/bin/env python3
 """Unit tests for branchleft_nat.sh.
 
-The script is the whole difference between a host with no public address
-reaching the internet and not reaching it, and the rules it writes are a
-forwarding decision on the one host that terminates public traffic. Two of its
-behaviours are therefore asserted directly rather than smoke-tested by a real
-run: that the return direction is accepted only for flows conntrack already
-knows, and that it refuses to run on a host whose default route is itself the
-private network -- which is the configuration that would loop the estate's
-egress back into the subnet it came from.
-
-The script talks to the live routing table, netfilter and sysctl, none of
-which a test process may do. All three are replaced by fakes earlier on
-`PATH`, and the sysctl drop-in path is redirected with the environment
-variable the script reads as an override. `PATH` is set to the fake directory
-plus `/usr/bin` and `/bin` only: `iptables` and `ip` live in `/usr/sbin` on a
-real Linux host, and leaving that directory out is what makes the
-missing-iptables case testable on a machine that has iptables.
+The script writes forwarding rules on the host that terminates public traffic,
+so the return-path rule and the refusal on a private default route are
+asserted directly. Routing, netfilter and sysctl are faked on PATH; PATH omits
+/usr/sbin, where the real iptables and ip live, so the missing-iptables case
+is testable on any machine.
 """
 
 import os
@@ -31,6 +20,38 @@ UNIT = os.path.join(os.path.dirname(__file__), "branchleft-nat.service")
 RUNBOOK = os.path.join(
     os.path.dirname(__file__), "..", "RUNBOOK-provision-host.md"
 )
+
+
+def _runbook_section(heading):
+    """The text of RUNBOOK-provision-host.md under `heading`, up to the next
+    heading of the same or a higher level. A section is found by its own
+    heading, so a neighbour's wording or number can change without moving
+    it. Lines inside a code fence are not headings: the grant procedure's
+    bash blocks carry `# 1.`-style comments."""
+    with open(RUNBOOK, encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+    level = len(heading) - len(heading.lstrip("#"))
+    start = None
+    in_fence = False
+    for index, line in enumerate(lines):
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if start is None:
+            if line == heading:
+                start = index + 1
+            continue
+        match = re.match(r"(#{1,6}) ", line)
+        if match and len(match.group(1)) <= level:
+            return "\n".join(lines[start:index]) + "\n"
+    if start is None:
+        raise AssertionError(
+            f"RUNBOOK-provision-host.md has no heading {heading!r}; "
+            "its section structure changed"
+        )
+    return "\n".join(lines[start:]) + "\n"
 
 FAKE_IP = """#!/usr/bin/env bash
 for arg in "$@"; do
@@ -329,9 +350,7 @@ def _extract_gateway_check_patterns():
     """Pull the three `grep` invocations out of RUNBOOK-provision-host.md's
     "Confirm the gateway is forwarding" block, so the test below runs the
     exact command an operator pastes rather than a paraphrase of it."""
-    with open(RUNBOOK, encoding="utf-8") as handle:
-        text = handle.read()
-    section = text.split("### 3. Confirm the gateway is forwarding", 1)[1]
+    section = _runbook_section("### 3. Confirm the gateway is forwarding")
     block = section.split("```bash", 1)[1].split("```", 1)[0]
     matches = re.findall(r'grep( -E)? -- "([^"]+)"', block)
     if len(matches) != 3:
@@ -425,10 +444,7 @@ class RunbookRestartCheckTests(unittest.TestCase):
     than only in this repo's memory of having written it."""
 
     def setUp(self):
-        with open(RUNBOOK, encoding="utf-8") as handle:
-            text = handle.read()
-        section = text.split("### 3. Confirm the gateway is forwarding", 1)[1]
-        self.section = section.split("### 4.", 1)[0]
+        self.section = _runbook_section("### 3. Confirm the gateway is forwarding")
 
     def test_restarts_docker_before_reverifying(self):
         self.assertIn("systemctl restart docker.service", self.section)
@@ -446,16 +462,15 @@ def _extract_restart_check_script():
     block in §3, the same way _extract_gateway_check_patterns does for the
     boot-time block -- so the test below runs the operator's paste, not a
     paraphrase of it."""
-    with open(RUNBOOK, encoding="utf-8") as handle:
-        text = handle.read()
-    section = text.split("### 3. Confirm the gateway is forwarding", 1)[1]
-    section = section.split("### 4.", 1)[0]
+    section = _runbook_section("### 3. Confirm the gateway is forwarding")
     blocks = section.split("```bash")[1:]
-    if len(blocks) != 2:
+    restart_blocks = [b for b in blocks if "systemctl restart docker.service" in b]
+    if len(restart_blocks) != 1:
         raise AssertionError(
-            f"expected 2 bash blocks in section 3, found {len(blocks)}"
+            "expected 1 bash block in section 3 that restarts docker, "
+            f"found {len(restart_blocks)}"
         )
-    restart_block = blocks[1].split("```", 1)[0]
+    restart_block = restart_blocks[0].split("```", 1)[0]
     body = restart_block.split('root@"$EDGE1_IPV4" \'', 1)[1]
     return body.rsplit("'", 1)[0]
 

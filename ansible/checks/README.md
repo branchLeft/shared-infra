@@ -189,11 +189,15 @@ that a role holds no copy of a program (the DB-1 gate of the standards flags tha
 `ci_select.py` narrows the shard list from `ansible/harness/list_shards.py` to the shards a
 run needs, from the event and the files it changed. The rules, in the order they apply:
 
-- a merge-queue run executes every shard: it is the last check before `main`;
-- a push to `main` executes none: the lint job runs, and the delivery workflow runs the
-  harness before it applies anything;
-- a pull request whose base commit is unknown, or whose changed files are not listed,
-  executes every shard;
+- the weekly scheduled run and a manual run execute every shard, whatever changed: they are
+  what finds drift in an external image or collection, which no diff shows;
+- a push to `main` executes none, and runs no lint: the pushed tree is the tree the merge
+  queue tested, and the delivery workflow runs its own checks before it applies anything;
+- a pull request or a merge-queue entry whose base commit is unknown, or whose changed
+  files are not listed, executes every shard. The queue entry's changed files are the diff
+  from its `base_sha` to its `head_sha`, so a shared file in that diff executes every shard,
+  as it does in a pull request. An entry stacked on another is tested on that one's tree
+  and diffed from it; if the earlier entry leaves the queue, the later one is tested again;
 - a changed file that is part of the harness, the checks, the lock or the lint config
   executes every shard, because it decides what every role is held to;
 - a changed file under `ansible/` that nothing here recognises executes every shard,
@@ -215,7 +219,9 @@ These tests hold the CI workflows to what `ci_select.py` assumes:
   for none;
 - the gate job (the check the ruleset requires) fails unless the lint passed, and fails
   when shards were chosen and did not all pass;
-- the merge queue still triggers the workflow, so "merge_group runs everything" can happen;
+- the merge queue still triggers the workflow, and the weekly sweep is scheduled;
+- the lint and every shard restore the tool environment from a SHA-pinned `actions/cache`
+  keyed on the lock files, and install only on a miss;
 - the CrowdSec pin check opens a pull request on a stale pin and still fails when it cannot
   run;
 - the ansible-hosts environment probe is scheduled and judges the environment;
@@ -245,3 +251,41 @@ Every other expression stays a finding: another operator, a branch that is not a
 branch, a different literal in the test and the result, the `github`, `inputs` or `vars` context,
 string concatenation, a function such as `format()`, a nested `${{ }}`, or any text before or
 after the expression.
+
+## test_no_new_hand_installers.py: the hand installers stay frozen
+
+A hand installer is a bash script under any `provision/` directory, or under `hetzner/scripts`.
+Each one is listed in `hand_installers.yml` with a reason: `stays-as-code`, or `pending-role`
+naming the role that will replace it. The test walks the tree and fails on a script that is not
+listed, and on an entry whose script is gone. The list is the baseline as it stood when the guard
+was added, so a new installer needs a reviewed entry, which is an owner merge under CODEOWNERS.
+The test reads the role name and does not check that the role exists, as `host_roles.yml` does.
+It does not stop a runbook that edits a host by hand; that half is not covered here.
+
+## merge_group_proof.py: when a delivery may skip its re-test
+
+`ansible-delivery.yml` has a job, `queue-proof`, that decides whether the delivery of a pushed
+commit may skip the lint and Molecule re-run. It reads the runs of `ansible.yml` for the pushed
+commit and `merge_group_proof.py` answers `tested=true` only for a run that has all of:
+
+- the workflow `.github/workflows/ansible.yml`, the event `merge_group`, the pushed commit as head;
+- a head branch that starts with `gh-readonly-queue/`;
+- the status `completed` and the conclusion `success`.
+
+The event is judged here and is never narrowed by the API's own `event` filter, because after a
+squash queue main carries a green push run of the same commit under the same check name, from a
+job with no diff. A check name, or any success on the commit, is not proof. A merge that skipped
+the queue has no queue run, so it gets `tested=false` and the delivery re-tests in full. An
+unreadable, truncated or malformed answer is `false` too.
+
+`check_delivery.py` fixes the shape of the proof job and of the two inputs the delivery passes
+(`skip-rerun-after-merge-group` from the proof's output, and `merge-group-check-name`, the gate
+job's name in `ansible.yml`). The reusable workflow then checks the queue's check run and suite
+itself and refuses the delivery if they disagree, so a skip needs both to agree.
+
+After a lock-file merge (for example Dependabot), dispatch the Ansible workflow, because the
+venv cache stays cold until the Monday sweep.
+
+Named limit: that only an org-admin pull-request bypass can skip the queue comes from the org
+ruleset standard. The ruleset's bypass list could not be read with the App tokens, so the owner
+should confirm it from the owner's view.

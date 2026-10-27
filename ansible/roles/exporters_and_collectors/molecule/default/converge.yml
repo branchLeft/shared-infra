@@ -1,7 +1,7 @@
 ---
 - name: Converge
   hosts: all
-  gather_facts: true
+  gather_facts: false
   # The container has an address on the Docker bridge, not on the estate subnet, so the
   # test names the bridge's prefix. The disk stop is set to 100: the mounts the check reads
   # here belong to the test host, and a full one is refused by its own assertion instead.

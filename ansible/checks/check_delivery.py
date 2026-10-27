@@ -60,14 +60,39 @@ SECRETS = {
 APPLY_KEY = "ssh_apply_key"
 
 WORKFLOW_KEYS = frozenset({"name", "on", "permissions", "jobs"})
-JOB_KEYS = frozenset({"uses", "with", "secrets"})
-INPUT_KEYS = frozenset({"environment", "role-directories", "python-paths"})
+JOB_KEYS = frozenset({"uses", "with", "secrets", "needs"})
+SKIP_INPUT = "skip-rerun-after-merge-group"
+CHECK_NAME_INPUT = "merge-group-check-name"
+INPUT_KEYS = frozenset(
+    {"environment", "role-directories", "python-paths", SKIP_INPUT, CHECK_NAME_INPUT}
+)
+# The delivery may skip its lint and Molecule re-run only on the answer of the proof job, which
+# is true for a successful merge_group run of this exact commit (merge_group_proof.py). A static
+# true would skip it for a merge that never went through the queue, or refuse that merge.
+PROOF_JOB = "queue-proof"
+PROOF_STEP = "proof"
+SKIP_EXPRESSION = "${{ needs.queue-proof.outputs.tested == 'true' }}"
+PROOF_OUTPUTS = {"tested": "${{ steps.proof.outputs.tested }}"}
+# The check run the merge queue publishes for the gate: the name of the gate job of ansible.yml
+# (test_check_delivery.py reads it from there). The reusable workflow looks for it by this name.
+GATE_CHECK_NAME = "Lint and test the Ansible roles"
+PROOF_SCRIPT = "ansible/checks/merge_group_proof.py"
+PROOF_JOB_KEYS = frozenset({"name", "runs-on", "timeout-minutes", "outputs", "steps"})
+CHECKOUT_KEYS = frozenset({"name", "uses", "with"})
+PROOF_STEP_KEYS = frozenset({"name", "id", "env", "run"})
+CHECKOUT_WITH = {"persist-credentials": False}
+PROOF_ENV = {
+    "GH_TOKEN": "${{ github.token }}",
+    "REPO": "${{ github.repository }}",
+    "SHA": "${{ github.sha }}",
+}
 # What a key that must not be there would do, for the finding's text.
 WHY = {
     "dry-run": "a dry run replaces the host call, so a green run would reach no host",
     "dry-run-stub": "a stand-in for the host",
     "if": "a condition can skip the delivery without a red run",
     "needs": "a dependency can skip the delivery without a red run",
+    "continue-on-error": "a failed proof would read as a pass",
     "environment": "the environment is an input of the call, not a job key",
     "permissions": "the token is set once, for the whole workflow",
 }
@@ -142,6 +167,16 @@ def input_findings(inputs: object, other_environments: frozenset[str]) -> list[s
         findings.append(
             f"with.python-paths must be {PYTHON_PATHS!r}, got {given.get('python-paths')!r}"
         )
+    if given.get(SKIP_INPUT) != SKIP_EXPRESSION:
+        findings.append(
+            f"with.{SKIP_INPUT} must be {SKIP_EXPRESSION!r}, so only a commit the proof job found "
+            f"tested by the merge queue skips the re-test, got {given.get(SKIP_INPUT)!r}"
+        )
+    if given.get(CHECK_NAME_INPUT) != GATE_CHECK_NAME:
+        findings.append(
+            f"with.{CHECK_NAME_INPUT} must be {GATE_CHECK_NAME!r}, the gate job of ansible.yml, "
+            f"got {given.get(CHECK_NAME_INPUT)!r}"
+        )
     return findings
 
 
@@ -172,15 +207,73 @@ def secret_findings(secrets: object) -> list[str]:
     return findings
 
 
+def proof_step_findings(steps: object) -> list[str]:
+    """Check the proof job is the checkout and the one step that runs the proof script."""
+    mappings = [as_mapping(step) for step in steps] if isinstance(steps, list) else []
+    if len(mappings) != 2:
+        return [f"job {PROOF_JOB} must hold exactly two steps (checkout, proof), got {steps!r}"]
+    checkout, proof = mappings
+    if checkout is None or proof is None:
+        return [f"job {PROOF_JOB} steps must be mappings, got {steps!r}"]
+    findings = unexpected(checkout, CHECKOUT_KEYS, "the checkout step")
+    uses = checkout.get("uses")
+    if not isinstance(uses, str) or not uses.startswith("actions/checkout@"):
+        findings.append(f"the checkout step must use actions/checkout, got {uses!r}")
+    if checkout.get("with") != CHECKOUT_WITH:
+        findings.append(
+            f"the checkout step with must be {CHECKOUT_WITH!r}: the commit pushed, no credentials "
+            f"kept, got {checkout.get('with')!r}"
+        )
+    findings.extend(unexpected(proof, PROOF_STEP_KEYS, f"step {PROOF_STEP}"))
+    if proof.get("id") != PROOF_STEP:
+        findings.append(f"step {PROOF_STEP} id must be {PROOF_STEP}, got {proof.get('id')!r}")
+    if proof.get("env") != PROOF_ENV:
+        findings.append(
+            f"step {PROOF_STEP} env must be {PROOF_ENV!r}: the pushed commit and the run's own "
+            f"read-only token, got {proof.get('env')!r}"
+        )
+    run = proof.get("run")
+    wanted = (f"python3 {PROOF_SCRIPT} --runs", '--sha "$SHA"', "$GITHUB_OUTPUT")
+    # A literal answer in the script text would decide the skip without the evidence.
+    if not isinstance(run, str) or any(part not in run for part in wanted) or "tested=" in run:
+        findings.append(
+            f"step {PROOF_STEP} run must run {PROOF_SCRIPT} on the runs file and the pushed "
+            f"commit and write its output to $GITHUB_OUTPUT, and set no answer itself, got {run!r}"
+        )
+    return findings
+
+
+def proof_findings(declared: object) -> list[str]:
+    """Check the proof job is the one fixed shape that decides whether the re-test is skipped."""
+    job = as_mapping(declared)
+    if job is None:
+        return [f"job {PROOF_JOB} must be a mapping, got {declared!r}"]
+    findings = unexpected(job, PROOF_JOB_KEYS, f"job {PROOF_JOB}")
+    if job.get("outputs") != PROOF_OUTPUTS:
+        findings.append(
+            f"job {PROOF_JOB} outputs must be {PROOF_OUTPUTS!r}, got {job.get('outputs')!r}"
+        )
+    findings.extend(proof_step_findings(job.get("steps")))
+    return findings
+
+
 def job_findings(jobs: object, other_environments: frozenset[str]) -> list[str]:
-    """Check the one job calls the reusable workflow at an exact tag and sets nothing else."""
+    """Check the proof job is fixed and the call is the reusable workflow at an exact tag."""
     declared = as_mapping(jobs)
-    if declared is None or sorted(declared) != [JOB]:
-        return [f"jobs must hold exactly one job, {JOB}, got {jobs!r}"]
+    if declared is None or sorted(declared) != sorted([PROOF_JOB, JOB]):
+        return [f"jobs must hold exactly the two jobs {PROOF_JOB} and {JOB}, got {jobs!r}"]
+    findings = proof_findings(declared[PROOF_JOB])
     job = as_mapping(declared[JOB])
     if job is None:
-        return [f"job {JOB} must be a mapping, got {declared[JOB]!r}"]
-    findings = unexpected(job, JOB_KEYS, f"job {JOB}")
+        return [*findings, f"job {JOB} must be a mapping, got {declared[JOB]!r}"]
+    findings.extend(unexpected(job, JOB_KEYS, f"job {JOB}"))
+    if "needs" not in job:
+        findings.append(f"job {JOB} must have needs {[PROOF_JOB]!r}, so it waits for the proof")
+    elif job["needs"] != [PROOF_JOB]:
+        findings.append(
+            f"job {JOB} has needs {job['needs']!r}, which is not allowed: it must be exactly "
+            f"{[PROOF_JOB]!r}, so it waits for the proof and for nothing that could skip it"
+        )
     uses = job.get("uses")
     if not isinstance(uses, str) or REUSABLE.fullmatch(uses) is None:
         findings.append(

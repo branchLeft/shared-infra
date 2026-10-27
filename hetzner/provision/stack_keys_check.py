@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Structural check of the control-plane stack files, on their parsed YAML.
-
-The check reads keys, not spellings. Quoting, flow style, anchors and merge
-keys all parse to the key they name, and Compose reads them the same way, so
-none of them can slip past a check that matches text.
-
+Reads keys, not spellings: quoting, flow style, anchors and merge keys all
+parse to the key they name, as Compose reads them, so none can slip past a
+check that matches text. Refuses the Zitadel master key in any environment
+entry, whatever its spelling, and in any --masterkey* command flag except the
+exact pair --masterkeyFile /run/secrets/zitadel-masterkey.
 Usage: stack_keys_check.py FILE...
 Exit 0: clean. Exit 1: at least one violation, printed one per line.
 Exit 2: a file could not be read or parsed.
 """
 
 import pathlib
+import shlex
 import sys
 
 import yaml
@@ -19,13 +20,18 @@ import yaml
 # service without being named, so the named-variable checks cannot see them.
 FORBIDDEN = frozenset({"env_file", "include", "extends"})
 
+MASTER_KEY_MARKER = "MASTERKEY"
+MASTER_KEY_FLAG_PREFIX = "--masterkey"
+MASTER_KEY_FILE_FLAG = "--masterkeyFile"
+MASTER_KEY_FILE_PATH = "/run/secrets/zitadel-masterkey"
+
 # Every service key the stack files carry today. A new key is added here on
 # purpose, with the reason it cannot bring in another file's values.
 ALLOWED_SERVICE_KEYS = {
     "command": "the phase the runtime runs; names no file",
     "cpu_shares": "scheduler weight; carries no value",
     "depends_on": "start order between the stack's own services",
-    "environment": "named variables only; each is checked by name in the tests",
+    "environment": "named variables only; the checker refuses a master-key variable by name and the tests pin the named variables",
     "healthcheck": "the probe command; carries no value",
     "image": "the image reference, pinned by digest and checked by the tests",
     "mem_limit": "memory cap, checked against the measured budget",
@@ -38,8 +44,90 @@ ALLOWED_SERVICE_KEYS = {
 }
 
 
+def is_list_of_strings(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def environment_is_readable(environment: object) -> bool:
+    """An unset environment, a mapping, or a list of strings. Anything else is refused."""
+    return environment is None or isinstance(environment, dict) or is_list_of_strings(environment)
+
+
+def command_is_readable(command: object) -> bool:
+    """An unset command, a string, or a list of strings. Anything else is refused."""
+    return command is None or isinstance(command, str) or is_list_of_strings(command)
+
+
+def environment_names(environment: object) -> list[str]:
+    """The variable names an environment value sets: mapping keys, or list entries before '='."""
+    if isinstance(environment, dict):
+        return [str(key) for key in environment]
+    if isinstance(environment, list):
+        return [entry.split("=", 1)[0] for entry in environment]
+    return []
+
+
+def command_tokens(command: object) -> list[str]:
+    """The arguments of a command; a string is split the way a shell would split it."""
+    if isinstance(command, str):
+        return shlex.split(command)
+    if isinstance(command, list):
+        return list(command)
+    return []
+
+
+def unsupported_shape_problem(name: str, field: str, label: str) -> str:
+    """Refusal for a field whose value is neither unset nor a shape the checker reads."""
+    return (
+        f"{label}: service '{name}' {field} has an unsupported shape; "
+        "the master key cannot be checked"
+    )
+
+
+def is_allowed_master_key_flag(tokens: list[str], index: int) -> bool:
+    """True only for the exact pair --masterkeyFile /run/secrets/zitadel-masterkey."""
+    following = tokens[index + 1] if index + 1 < len(tokens) else None
+    return tokens[index] == MASTER_KEY_FILE_FLAG and following == MASTER_KEY_FILE_PATH
+
+
+def environment_problems(name: str, service: dict[str, object], label: str) -> list[str]:
+    """Master-key variables named in the environment. The value is never echoed."""
+    if not environment_is_readable(service.get("environment")):
+        return [unsupported_shape_problem(name, "environment", label)]
+    return [
+        (
+            f"{label}: service '{name}' environment names '{variable}'; "
+            "the master key is read from a secret file only"
+        )
+        for variable in environment_names(service.get("environment"))
+        if MASTER_KEY_MARKER in variable.upper()
+    ]
+
+
+def command_problems(name: str, service: dict[str, object], label: str) -> list[str]:
+    """Master-key flags in the command, failing closed when a string cannot be split."""
+    if not command_is_readable(service.get("command")):
+        return [unsupported_shape_problem(name, "command", label)]
+    try:
+        tokens = command_tokens(service.get("command"))
+    except ValueError:
+        return [
+            (
+                f"{label}: service '{name}' command cannot be split into arguments; "
+                "the master key flags cannot be checked"
+            )
+        ]
+    return [
+        f"{label}: service '{name}' command has '{token}'; "
+        f"only '{MASTER_KEY_FILE_FLAG} {MASTER_KEY_FILE_PATH}' is accepted"
+        for index, token in enumerate(tokens)
+        if token.lower().startswith(MASTER_KEY_FLAG_PREFIX.lower())
+        and not is_allowed_master_key_flag(tokens, index)
+    ]
+
+
 def service_problems(name, service, label):
-    """Problems in one service: a file-pulling key, or a key not on the allowlist."""
+    """Problems in one service: a file-pulling key, a key not on the allowlist, or a master key."""
     if not isinstance(service, dict):
         return [f"{label}: service '{name}' is not a mapping"]
     problems = []
@@ -55,6 +143,8 @@ def service_problems(name, service, label):
                 f"{label}: service '{name}' key '{key}' is not in "
                 "ALLOWED_SERVICE_KEYS; add it there deliberately, with a reason"
             )
+    problems.extend(environment_problems(name, service, label))
+    problems.extend(command_problems(name, service, label))
     return problems
 
 

@@ -254,17 +254,15 @@
           A play variable moved the project directory: /opt/elsewhere exists, or the stack is no longer in
           /opt/branchleft/monitoring. The path is a constant of the role.
 
-# The secrets file, the edge drop-in and the renderer path. The secrets file is
+# The secrets file and the renderer path. The secrets file is
 # read with no_log, so no value reaches the output: the check counts the keys.
-- name: Verify the monitoring secrets file, the edge drop-in and the renderer path
+- name: Verify the monitoring secrets file and the renderer path
   hosts: all
   gather_facts: false
   vars:
     verify_repo: '{{ playbook_dir }}/../../../../..'
     verify_env_file: /etc/branchleft/monitoring.env
     verify_ntfy_env_file: /etc/branchleft/ntfy-pager.env
-    verify_edge_source: '{{ verify_repo }}/hetzner/monitoring/systemd/edge.override.conf'
-    verify_edge_dir: /etc/systemd/system/branchleft-compose@edge.service.d
     verify_renderer: /opt/branchleft/monitoring/render_alertmanager_config.py
     verify_dropin_repo: '{{ verify_repo }}/hetzner/monitoring/systemd/monitoring.override.conf'
     verify_ntfy_vars: '{{ verify_repo }}/ansible/roles/ntfy_pager/vars/main.yml'
@@ -313,30 +311,6 @@
       loop_control:
         label: '{{ item }}'
       no_log: true
-
-    - name: Read the edge drop-in on the instance and its source in the repository
-      ansible.builtin.stat:
-        path: '{{ verify_edge_dir }}/override.conf'
-        checksum_algorithm: sha256
-      register: monitoring_stack_verify_edge
-
-    - name: Read the edge drop-in's source on the machine that runs the test
-      ansible.builtin.stat:
-        path: '{{ verify_edge_source }}'
-        checksum_algorithm: sha256
-      register: monitoring_stack_verify_edge_src
-      delegate_to: localhost
-
-    - name: Assert the edge drop-in is root-owned, mode 0644, byte for byte its source
-      ansible.builtin.assert:
-        that:
-          - monitoring_stack_verify_edge.stat.isreg
-          - monitoring_stack_verify_edge.stat.pw_name == 'root'
-          - monitoring_stack_verify_edge.stat.gr_name == 'root'
-          - monitoring_stack_verify_edge.stat.mode == '0644'
-          - monitoring_stack_verify_edge.stat.checksum == monitoring_stack_verify_edge_src.stat.checksum
-        quiet: true
-        fail_msg: '{{ verify_edge_dir }}/override.conf differs from {{ verify_edge_source }}, or is not a root-owned 0644 file.'
 
     # The renderer's path is held in three places: the monitoring drop-in's
     # ExecStartPre, ntfy_pager's delivery list, and the role's constant. Each one
@@ -443,7 +417,6 @@
     verify_ntfy_machine: test-sentinel-ntfy-machine-0021
     verify_ntfy_role: '{{ playbook_dir }}/../../../ntfy_pager'
     verify_unit: branchleft-compose@monitoring.service
-    verify_edge_unit: branchleft-compose@edge.service
     verify_renderer_path: /opt/branchleft/monitoring/render_alertmanager_config.py
     verify_template_path: /etc/systemd/system/branchleft-compose@.service
     verify_fail_flag: /run/docker-standin.fail
@@ -491,14 +464,13 @@
         monitoring_stack_verify_fp_definition: >-
           {{ monitoring_stack_verify_vars_text.split("monitoring_stack_fingerprint_files: >-")[1].split("monitoring_stack_stamp_dir:")[0] }}
 
-    - name: Assert the fingerprint hashes the eight stack files, the monitoring drop-in, the renderer and the pager's secrets file, and not the edge drop-in
+    - name: Assert the fingerprint hashes the eight stack files, the monitoring drop-in, the renderer and the pager's secrets file
       ansible.builtin.assert:
         that:
           - "'monitoring_stack_files' in monitoring_stack_verify_fp_definition"
           - "'monitoring_stack_dropin_dest' in monitoring_stack_verify_fp_definition"
           - "'monitoring_stack_renderer' in monitoring_stack_verify_fp_definition"
           - "'monitoring_stack_ntfy_env_file' in monitoring_stack_verify_fp_definition"
-          - "'monitoring_stack_edge' not in monitoring_stack_verify_fp_definition"
         quiet: true
         fail_msg: >-
           The list of files the fingerprint hashes is not the stack files, the monitoring drop-in, the renderer and the pager's secrets file:
@@ -990,146 +962,6 @@
         path: '{{ monitoring_stack_verify_scratch.path }}'
         state: absent
       delegate_to: localhost
-
-    # ----- A change to the edge drop-in is applied and does not restart monitoring -----
-    - name: Put an earlier release of the edge drop-in on the instance
-      ansible.builtin.copy:
-        content: |
-          [Service]
-          MemoryMax=1024M
-        dest: /etc/systemd/system/branchleft-compose@edge.service.d/override.conf
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Apply the role after the edge drop-in changed
-      ansible.builtin.include_role:
-        name: branchleft.monitoring_stack
-      vars:
-        monitoring_stack_smtp_password: '{{ verify_rot_a }}'
-        monitoring_stack_snds_data_url: '{{ verify_rot_snds }}'
-
-    - name: Snapshot after the edge drop-in changed
-      ansible.builtin.include_tasks: tasks/snapshot.yml
-      vars:
-        monitoring_stack_verify_snap_name: edge_after
-
-    - name: Ask systemd for the edge instance
-      ansible.builtin.systemd_service:
-        name: branchleft-compose@edge.service
-      register: monitoring_stack_verify_edge_unit
-
-    - name: Assert the edge drop-in was put back and read by systemd, and monitoring was not restarted
-      ansible.builtin.assert:
-        that:
-          - monitoring_stack_verify_edge_unit.status.MemoryMax == '1610612736'
-          - monitoring_stack_verify_snaps.edge_after.calls == monitoring_stack_verify_snaps.dropin_restored.calls
-          - monitoring_stack_verify_snaps.edge_after.stamp == monitoring_stack_verify_snaps.dropin_restored.stamp
-        quiet: true
-        fail_msg: >-
-          A change to the edge drop-in was not put back and read by systemd, or it restarted the monitoring unit
-          (edge MemoryMax {{ monitoring_stack_verify_edge_unit.status.MemoryMax }}).
-
-    # ----- A reload that a failed run did not make is made by the next run -----
-    # The edge drop-in is outside the fingerprint, so a rerun finds it unchanged
-    # and no restart is due: only systemd saying the file on disk is newer than the
-    # one it holds can bring the reload back. The run is made to fail after the
-    # copy by putting a plain file where the stamp's directory is, which the role
-    # cannot turn into a directory; no hook is in the role.
-    - name: Put an earlier release of the edge drop-in on the instance
-      ansible.builtin.copy:
-        content: |
-          [Service]
-          MemoryMax=1024M
-        dest: /etc/systemd/system/branchleft-compose@edge.service.d/override.conf
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Make systemd read the earlier release, so that it holds 1024M
-      ansible.builtin.systemd_service:
-        daemon_reload: true
-
-    - name: Snapshot before the run that fails after the copy
-      ansible.builtin.include_tasks: tasks/snapshot.yml
-      vars:
-        monitoring_stack_verify_snap_name: reload_before
-
-    - name: Move the stamp's directory aside
-      ansible.builtin.command:
-        argv: [mv, /var/lib/branchleft, /var/lib/branchleft.aside]
-      changed_when: true
-
-    - name: Put a plain file where the stamp's directory was
-      ansible.builtin.copy:
-        content: ''
-        dest: /var/lib/branchleft
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Apply the role, which installs the edge drop-in and then fails
-      block:
-        - name: Apply the role while the stamp's directory cannot be made
-          ansible.builtin.include_role:
-            name: branchleft.monitoring_stack
-          vars:
-            monitoring_stack_smtp_password: '{{ verify_rot_a }}'
-            monitoring_stack_snds_data_url: '{{ verify_rot_snds }}'
-        - name: Note that the role did not fail
-          ansible.builtin.set_fact:
-            monitoring_stack_verify_failed_run: false
-      rescue:
-        - name: Note that the role failed
-          ansible.builtin.set_fact:
-            monitoring_stack_verify_failed_run: true
-
-    - name: Ask systemd for the edge instance after the failed run
-      ansible.builtin.systemd_service:
-        name: '{{ verify_edge_unit }}'
-      register: monitoring_stack_verify_edge_failed
-
-    - name: Take the plain file away and put the stamp's directory back
-      ansible.builtin.file:
-        path: /var/lib/branchleft
-        state: absent
-
-    - name: Move the stamp's directory back
-      ansible.builtin.command:
-        argv: [mv, /var/lib/branchleft.aside, /var/lib/branchleft]
-      changed_when: true
-
-    - name: Apply the role again with the same inputs
-      ansible.builtin.include_role:
-        name: branchleft.monitoring_stack
-      vars:
-        monitoring_stack_smtp_password: '{{ verify_rot_a }}'
-        monitoring_stack_snds_data_url: '{{ verify_rot_snds }}'
-
-    - name: Ask systemd for the edge instance after the rerun
-      ansible.builtin.systemd_service:
-        name: '{{ verify_edge_unit }}'
-      register: monitoring_stack_verify_edge_rerun
-
-    - name: Snapshot after the rerun
-      ansible.builtin.include_tasks: tasks/snapshot.yml
-      vars:
-        monitoring_stack_verify_snap_name: reload_after
-
-    - name: Assert the failed run left the old drop-in loaded, and the rerun made systemd read the new one without a restart
-      ansible.builtin.assert:
-        that:
-          - monitoring_stack_verify_failed_run
-          - monitoring_stack_verify_edge_failed.status.MemoryMax == '1073741824'
-          - monitoring_stack_verify_edge_rerun.status.MemoryMax == '1610612736'
-          - monitoring_stack_verify_snaps.reload_after.calls == monitoring_stack_verify_snaps.reload_before.calls
-          - monitoring_stack_verify_snaps.reload_after.stamp == monitoring_stack_verify_snaps.reload_before.stamp
-        quiet: true
-        fail_msg: >-
-          The run that was made to fail did not fail, or did not leave the earlier edge drop-in loaded, or the rerun
-          did not make systemd read the new one without a restart (edge MemoryMax after the failed run
-          {{ monitoring_stack_verify_edge_failed.status.MemoryMax }}, after the rerun
-          {{ monitoring_stack_verify_edge_rerun.status.MemoryMax }}).
 
     # ----- An enabled unit that is inactive is started when a restart is due -----
     - name: Stop the monitoring unit, which stays enabled

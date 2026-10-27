@@ -290,12 +290,15 @@ def fake_ansible(directory: Path, changed: int = 1, code: int = 0, sleep: float 
     """Write a stand-in for ansible-playbook that records how it was called."""
     script = directory / "ansible-playbook"
     calls = directory / "calls.txt"
+    config_env = directory / "config-env.txt"
     script.write_text(
         f"#!{sys.executable}\n"
         "import os, sys, time\n"
         f"with open({str(calls)!r}, 'a', encoding='utf-8') as handle:\n"
         "    handle.write(' '.join(sys.argv[1:]) + '\\n')\n"
         "    handle.write('cwd=' + os.getcwd() + '\\n')\n"
+        f"with open({str(config_env)!r}, 'a', encoding='utf-8') as handle:\n"
+        "    handle.write(os.environ.get('ANSIBLE_CONFIG', '<unset>') + '\\n')\n"
         f"time.sleep({sleep})\n"
         "print('PLAY RECAP *****')\n"
         f"print('localhost : ok=3 changed={changed} unreachable=0 failed=0 skipped=0')\n"
@@ -1844,6 +1847,21 @@ class EndToEndTests(unittest.TestCase):
         self.assertNotIn("EXAMPLE_TOKEN", names)
         self.assertNotIn("GIT_DIR", names)
         self.assertNotIn("SSH_ORIGINAL_COMMAND", names)
+
+    def test_the_playbook_is_pointed_at_an_empty_private_config_not_the_checkout(self) -> None:
+        scene = self.make_scene()
+        result = self.request(scene, self.commits["c6"])
+        self.assertEqual(10, result.code, result.summary + result.errors)
+        recorded = (scene.ansible.parent / "config-env.txt").read_text(encoding="utf-8")
+        self.assertEqual(1, len(recorded.splitlines()))
+        config = Path(recorded.strip())
+        self.assertEqual(scene.state / "home" / "ansible.cfg", config)
+        self.assertEqual(".cfg", config.suffix)
+        self.assertEqual("", config.read_text(encoding="utf-8"))
+        self.assertEqual(0o600, stat.S_IMODE(config.stat().st_mode))
+        self.assertEqual(os.geteuid(), config.stat().st_uid)
+        self.assertFalse(config.is_symlink())
+        self.assertNotIn(str(scene.state / "work"), str(config))
 
     def test_old_run_output_is_pruned_to_the_configured_number(self) -> None:
         scene = self.make_scene(keep_runs=2)

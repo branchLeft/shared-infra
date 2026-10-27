@@ -54,8 +54,58 @@ class SelectionTest(unittest.TestCase):
         self.assertGreater(len(paths_of(self.shards)), 10)
         self.assertIn(ci_select.SKELETON, paths_of(self.shards))
 
-    def test_a_merge_queue_run_runs_every_shard(self) -> None:
-        self.assertEqual(self.shards, ci_select.select("merge_group", [], self.shards, ROOT))
+    def queue_entry(self, *changed: str) -> list[dict[str, str]]:
+        return ci_select.select("merge_group", list(changed), self.shards, ROOT)
+
+    def test_a_merge_queue_entry_that_cannot_say_what_changed_runs_every_shard(self) -> None:
+        self.assertEqual(self.shards, ci_select.select("merge_group", None, self.shards, ROOT))
+
+    def test_a_merge_queue_entry_that_changed_a_shared_file_runs_every_shard(self) -> None:
+        # The sabotage case: the rule that a shared file runs every shard must hold for the
+        # queue's diff as it does for a pull request's. Each of these is read by every role.
+        for path in (
+            "ansible/harness/run_harness.py",
+            "ansible/checks/check_pins.py",
+            "ansible/requirements.txt",
+            "ansible/requirements.yml",
+            "ansible/pyproject.toml",
+            ".ansible-lint",
+            ".yamllint",
+            ".github/workflows/ansible.yml",
+            "ansible/ansible.cfg",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(self.shards, self.queue_entry(path))
+                self.assertEqual(self.shards, self.queue_entry("ansible/roles/egress_nat/x", path))
+
+    def test_a_merge_queue_entry_that_changed_one_role_runs_that_role_alone(self) -> None:
+        chosen = self.queue_entry("ansible/roles/egress_nat/tasks/main.yml")
+        self.assertEqual({"ansible/roles/egress_nat"}, paths_of(chosen))
+        self.assertEqual(self.pull_request("ansible/roles/egress_nat/tasks/main.yml"), chosen)
+
+    def test_a_merge_queue_entry_is_narrowed_as_a_pull_request_is(self) -> None:
+        # A control that the two events share one set of rules, on every kind of file.
+        for changed in (
+            ("ansible/patterns/typed_module/library/x.py",),
+            ("ansible/role_skeleton/tasks/main.yml.j2",),
+            ("ansible/roles/backup_worker/tasks/main.yml",),
+            ("hetzner/provision/branchleft-nat.service",),
+            ("ansible/playbooks/app1.yml",),
+            ("README.md",),
+            ("ansible/roles/gone/tasks/main.yml",),
+        ):
+            with self.subTest(changed=changed):
+                self.assertEqual(self.pull_request(*changed), self.queue_entry(*changed))
+
+    def test_a_merge_queue_entry_that_changed_nothing_a_shard_reads_runs_no_shard(self) -> None:
+        self.assertEqual([], self.queue_entry("README.md", "hetzner/dns/zone.json"))
+
+    def test_the_weekly_sweep_runs_every_shard_whatever_the_diff_says(self) -> None:
+        self.assertEqual(self.shards, ci_select.select("schedule", None, self.shards, ROOT))
+        self.assertEqual(self.shards, ci_select.select("schedule", [], self.shards, ROOT))
+        self.assertEqual(
+            self.shards, ci_select.select("schedule", ["README.md"], self.shards, ROOT)
+        )
 
     def test_a_push_to_main_runs_no_shard(self) -> None:
         self.assertEqual([], ci_select.select("push", ["ansible/harness/x.py"], self.shards, ROOT))
@@ -285,9 +335,27 @@ class CommandTest(unittest.TestCase):
         self.assertEqual("true", outputs["shards"])
         self.assertEqual(2, len(json.loads(outputs["matrix"])["include"]))
 
-    def test_the_merge_queue_runs_everything_whatever_changed(self) -> None:
-        changed = self.changed("README.md")
+    def test_the_merge_queue_runs_the_shards_its_diff_names(self) -> None:
+        changed = self.changed("ansible/roles/b/tasks/main.yml")
         status, outputs = self.run_main("--event", "merge_group", "--changed-file", str(changed))
+        self.assertEqual(0, status)
+        self.assertEqual("true", outputs["shards"])
+        self.assertEqual(["b"], [s["name"] for s in json.loads(outputs["matrix"])["include"]])
+
+    def test_the_merge_queue_runs_everything_when_a_shared_file_changed(self) -> None:
+        changed = self.changed("ansible/roles/b/tasks/main.yml", "ansible/requirements.txt")
+        status, outputs = self.run_main("--event", "merge_group", "--changed-file", str(changed))
+        self.assertEqual(0, status)
+        self.assertEqual(2, len(json.loads(outputs["matrix"])["include"]))
+
+    def test_the_merge_queue_runs_everything_when_it_could_not_diff(self) -> None:
+        status, outputs = self.run_main("--event", "merge_group")
+        self.assertEqual(0, status)
+        self.assertEqual(2, len(json.loads(outputs["matrix"])["include"]))
+
+    def test_the_weekly_sweep_runs_everything(self) -> None:
+        changed = self.changed("README.md")
+        status, outputs = self.run_main("--event", "schedule", "--changed-file", str(changed))
         self.assertEqual(0, status)
         self.assertEqual(2, len(json.loads(outputs["matrix"])["include"]))
 
