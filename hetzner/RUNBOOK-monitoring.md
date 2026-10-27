@@ -1380,7 +1380,9 @@ no recipient-domain label, so neither can name the provider; Gmail's
 2. Check Google Postmaster Tools (branchleft.co.uk) for IP and domain
    reputation and delivery errors over the same days.
 3. Which messages are stuck, and to which domain, is visible only on mx1 --
-   an owner step, since mx1 is never agent-operated.
+   an owner step, since mx1 is never agent-operated. The read-only commands
+   that print "N recipients to DOMAIN, status STATUS" are in
+   `mail/RUNBOOK-mx1-outbound-queue.md`.
 
 ### Alerts that stay on mx1 (`notify: on-host`)
 
