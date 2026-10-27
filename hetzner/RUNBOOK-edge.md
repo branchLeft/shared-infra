@@ -753,5 +753,5 @@ case where the stack started cleanly and is behaving wrongly.
   flushes them at 30 days (`max_age: 30d`), the same figure as the edge's log
   retention; `max_items` stays at the image default. Changing either figure
   means changing the other. Read the effective value back with `docker exec
-  "$CROWDSEC_CTR" cscli config show --key Config.DbConfig.Flush` once
+"$CROWDSEC_CTR" cscli config show --key Config.DbConfig.Flush` once
   `$CROWDSEC_CTR` is set as in the CrowdSec sections above.
