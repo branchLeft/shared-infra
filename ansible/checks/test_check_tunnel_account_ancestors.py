@@ -35,7 +35,9 @@ class Drift(unittest.TestCase):
         self.copy.write_text(self.text.replace(old, new), encoding="utf-8")
 
     def test_a_directory_level_added_to_the_inputs_path_fails(self) -> None:
-        self._edit(INPUTS_LINE, "tunnel_account_inputs_dir: '{{ tunnel_account_key_dir }}/x/inputs'")
+        self._edit(
+            INPUTS_LINE, "tunnel_account_inputs_dir: '{{ tunnel_account_key_dir }}/x/inputs'"
+        )
         findings = check(self.copy)
         self.assertEqual(1, len(findings))
         self.assertIn("/etc/branchleft/db-tunnel/x", findings[0])
