@@ -487,12 +487,13 @@ is read as the container-side user, so a root-owned file becomes unreadable.
 `$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
 first if you are entering here independently.
 
-The `monitoring_stack` role installs both drop-ins: `monitoring.override.conf`
-into `branchleft-compose@monitoring.service.d/` and `edge.override.conf` into
-`branchleft-compose@edge.service.d/`, each as `override.conf`, `root:root` mode
-`0644`, and it reloads systemd when either changed. The role is not yet wired
-to a host (step 3), so until the first gated converge this script is the
-runnable path, and it installs the same two files:
+Each drop-in has one role that owns it. The `edge_stack` role installs
+`edge.override.conf` into `branchleft-compose@edge.service.d/` as `override.conf`,
+and the `monitoring_stack` role installs `monitoring.override.conf` into
+`branchleft-compose@monitoring.service.d/` as `override.conf`, for its own unit
+only. Each is `root:root` mode `0644`, and each role reloads systemd when its own
+file changed. Neither role is yet wired to a host, so until the first gated
+converge this script is the runnable path, and it installs the same two files:
 
 <!-- interim-hand-block: s5-script-call -->
 
