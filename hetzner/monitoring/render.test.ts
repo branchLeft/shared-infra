@@ -459,7 +459,9 @@ describe('the rendered alert rules', () => {
 
   it('alerts on a failed public probe, excluding the mail job so it is not double-alerted with MailHostDown', () => {
     expect(rendered).toContain('alert: BlackboxProbeFailed');
-    expect(rendered).toContain('expr: probe_success{job!~"blackbox_mail|blackbox_object_storage"} == 0');
+    expect(rendered).toContain(
+      'expr: probe_success{job!~"blackbox_mail|blackbox_object_storage"} == 0'
+    );
   });
 
   it('probes the object storage endpoint through its own module, and pages on it at 15 minutes', () => {
@@ -470,7 +472,9 @@ describe('the rendered alert rules', () => {
     expect(section).toContain("labels: {host: edge1, expected_up: 'true'}");
     const alerts = renderAlertRules();
     expect(alerts).toContain('alert: ObjectStorageProbeFailed');
-    expect(alerts).toContain('expr: probe_success{job="blackbox_object_storage"} == 0\n        for: 15m');
+    expect(alerts).toContain(
+      'expr: probe_success{job="blackbox_object_storage"} == 0\n        for: 15m'
+    );
   });
 
   it('warns when an unmarked target has read down for 24 hours, and leaves expected_up="false" targets out', () => {
