@@ -626,33 +626,48 @@ passphrase is not.
 
 ## A.3 The special case: the provisioning stack
 
-`branchleft-ghost-provisioning/blog` has no `Pulumi.blog.yaml` in any repo. The
-tenant-provisioning workflow rebuilds it on the runner from
-`pulumi stack export` on every run, via
-`ghost-platform/infra/provisioning/scripts/restore-stack-secrets-config.py`,
-and that script raises outright on any provider that is not `cloud`:
+`branchleft-ghost-provisioning/blog` has no `Pulumi.blog.yaml` in any repo, so
+step 3 of A.2 has no file to copy. That is the whole of what makes it special.
 
-> stack … records a … secrets provider. Restoring its configuration would not
-> reproduce the key its state was encrypted with.
+**There is no restore script, and nothing to land first.** An earlier version of
+this section said the tenant-provisioning workflow rebuilds this stack on the
+runner through a restore script in `ghost-platform`'s provisioning scripts, and
+that the script would need changing before the re-wrap. No such script exists
+in `ghost-platform`, and the workflow (`provision-tenant.yml`) never restores a
+stack from `pulumi stack export`. What it does, per tenant, is:
 
-So re-wrapping this stack breaks tenant provisioning until that script and the
-workflow are changed to handle a passphrase-managed stack — restoring
-`encryptionsalt` from the deployment's `secrets_providers.state.salt` and
-sourcing the passphrase from a GitHub Actions secret. **That change lands
-first, in `ghost-platform`; the re-wrap follows it.** Doing it the other way
-round leaves the provisioning pipeline broken for as long as the fix takes,
-and the pipeline is how a tenant gets onboarded.
+1. **Mint, escrow and publish this tenant's secrets passphrase** — one new
+   value per tenant, set as that tenant repository's environment secret.
+2. **Initialise the tenant stack and write its non-secret config** — a fresh
+   `pulumi stack init` with the `passphrase` secrets provider, under the value
+   from step 1. It fails on a stack that already exists, deliberately.
+3. **Publish this tenant's encryption salt to its own environment secret** —
+   the salt is the `encryptionsalt:` line in the config file that `stack init`
+   just generated, read from there.
+4. **Remove the encryption salt before the stack config is committed** — first
+   checks that the config's `encryptionsalt:` line still equals the value
+   published in step 3, then deletes it, so the handover commit carries none.
 
-The re-wrap itself works the same way — Pulumi writes `Pulumi.blog.yaml` into
-the working directory, and that file must never be committed. Instead,
-**`encryptionsalt` is reconstructed from the deployment on every run**, via
-`restore-stack-secrets-config.py` reading `deployment.secrets_providers.state.salt`.
-This is deliberate and not an oversight: `pulumi stack export` needs only bucket
-read access and no secret, so the salt is genuinely reproducible. The salt is an
-offline passphrase verifier (see A.0), safe to reconstruct this way, and
-committing the file would add no security benefit while requiring a commit-back
-step the workflow does not have. Reconstructing on every run has the same
-exposure as the current process for `cloud` provider stacks already accepts.
+That flow creates tenant stacks. It does not read, export or re-create
+`branchleft-ghost-provisioning/blog`, so the ordering rule this section used to
+state ("that change lands first, in `ghost-platform`; the re-wrap follows")
+depends on nothing: there is no workflow change to wait for, and re-wrapping
+this stack does not break tenant provisioning through any path found in the
+workflow.
+
+What the re-wrap does need is the same as for any stack whose config is not
+committed: the salt cannot be copied from a file, and `stack init` would mint a
+different one. So, for this stack only, read the salt from the exported
+checkpoint's `deployment.secrets_providers.state.salt` (`pulumi stack export`
+is read-only and needs no passphrase), record it with the passphrase before
+step 5 of A.2, and treat it as the A.0 passphrase verifier it is: never commit
+it. The same record is what makes the step 6 verify meaningful.
+
+**Open question for the owner, not decided here:** whether
+`branchleft-ghost-provisioning/blog` is still used at all. The workflow as it
+stands does not touch it, and if it is unused the right move may be to remove
+it (A.2 order, item 1) rather than re-wrap it. Until that is answered, this
+runbook does not say which.
 
 ## A.4 Rollback, and the point of no return
 
