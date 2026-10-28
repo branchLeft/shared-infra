@@ -245,11 +245,19 @@ class CallerTests(unittest.TestCase):
 
         self.assert_names(self.weakened(inherit), "secrets: inherit")
 
-    def test_an_explicit_apply_key_is_named(self) -> None:
-        def pass_key(document: dict[str, object]) -> None:
-            section(job_of(document), "secrets")["ssh_apply_key"] = "${{ secrets.APPLY }}"
+    def test_a_caller_without_the_apply_key_is_named(self) -> None:
+        def drop_key(document: dict[str, object]) -> None:
+            del section(job_of(document), "secrets")["ssh_apply_key"]
 
-        self.assert_names(self.weakened(pass_key), "the apply key is a secret of the environment")
+        self.assert_names(self.weakened(drop_key), "secrets.ssh_apply_key must be")
+
+    def test_a_wrong_apply_key_expression_is_named(self) -> None:
+        for value in ("${{ secrets.APPLY }}", "", "${{ secrets.ANSIBLE_CHECK_KEY }}"):
+
+            def set_key(document: dict[str, object], value: str = value) -> None:
+                section(job_of(document), "secrets")["ssh_apply_key"] = value
+
+            self.assert_names(self.weakened(set_key), "secrets.ssh_apply_key must be")
 
     def test_another_secret_or_a_swapped_secret_is_named(self) -> None:
         def add_secret(document: dict[str, object]) -> None:

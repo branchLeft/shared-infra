@@ -27,8 +27,8 @@ name: Ansible delivery
 # where the three files are the output of `gh api` on repos/<owner>/<repo>/environments/
 # ansible-hosts, on its /deployment-branch-policies and on its /secrets.
 #
-# The apply key is an environment secret and is never passed here. The three secrets
-# below are repository secrets, named one by one: `secrets: inherit` would pass all.
+# The apply key is an environment secret, named here like the others: only the job in the
+# environment reads it, after approval. The three repository secrets are named one by one; `secrets: inherit` passes all.
 
 on:
   push:
@@ -83,3 +83,4 @@ jobs:
       ssh_hosts: ${{ secrets.ANSIBLE_HOSTS }}
       ssh_known_hosts: ${{ secrets.ANSIBLE_KNOWN_HOSTS }}
       ssh_check_key: ${{ secrets.ANSIBLE_CHECK_KEY }}
+      ssh_apply_key: ${{ secrets.SSH_APPLY_KEY }}
