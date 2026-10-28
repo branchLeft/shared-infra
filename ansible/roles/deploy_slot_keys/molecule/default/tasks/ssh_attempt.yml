@@ -73,7 +73,7 @@
 - name: Assert the key's forced command ran with its own slot and the image on its input
   ansible.builtin.assert:
     that:
-      - deploy_slot_keys_scenario_attempt_record.results | rejectattr('failed') | list | length == 3
+      - deploy_slot_keys_scenario_attempt_record.results | selectattr('content', 'defined') | list | length == 3
       - (deploy_slot_keys_scenario_attempt_record.results[0].content | b64decode | trim) == '2'
       - (deploy_slot_keys_scenario_attempt_record.results[1].content | b64decode).splitlines() == ['--slot', attempt_slot]
       - >-
@@ -91,7 +91,7 @@
   ansible.builtin.assert:
     that:
       - deploy_slot_keys_scenario_attempt_result.rc != 0
-      - deploy_slot_keys_scenario_attempt_record.results | selectattr('failed') | list | length == 3
+      - deploy_slot_keys_scenario_attempt_record.results | selectattr('content', 'defined') | list | length == 0
     fail_msg: 'The key {{ attempt_key }} was not turned away.'
     quiet: true
   when: attempt_expect == 'denied'
@@ -100,7 +100,7 @@
   ansible.builtin.assert:
     that:
       - deploy_slot_keys_scenario_attempt_result.rc != 0
-      - deploy_slot_keys_scenario_attempt_record.results | selectattr('failed') | list | length == 3
+      - deploy_slot_keys_scenario_attempt_record.results | selectattr('content', 'defined') | list | length == 0
     fail_msg: 'The request was not refused for {{ attempt_key }}.'
     quiet: true
   when: attempt_expect == 'blocked'
