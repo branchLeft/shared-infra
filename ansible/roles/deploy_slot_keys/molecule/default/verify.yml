@@ -5,7 +5,7 @@
 #
 #   1  the converged host: owners, modes, the exact lines, the account's inability to write
 #   2  every slot key, asked for commands it must not run, over a real sshd
-#   3  the requests a restricted key refuses: a pty, a port forward, sftp and scp
+#   3  the requests a restricted key refuses: a pty, local and remote port forwards, sftp, scp
 #   4  the host-level key still works and was not touched
 #   5  lists the module must refuse, each leaving the host exactly as it was
 #   6  check mode on a list that would change the host, which changes nothing
@@ -81,12 +81,74 @@
         attempt_expect: slot
         attempt_stderr_contains: PTY allocation request failed
 
-    - name: Ask for a port forward, which a restricted key refuses
+    # The target is the scenario's own sshd, which is listening: a key that was allowed to
+    # forward would be served its banner, and sshd would log no refusal. A target nothing
+    # listens on would fail the same way with or without the refusal.
+    - name: Ask for a port forward to a listening port, which a restricted key refuses
       ansible.builtin.include_tasks: tasks/ssh_attempt.yml
       vars:
         attempt_key: a
-        attempt_options: ['-W', '127.0.0.1:22']
+        attempt_options: ['-W', '127.0.0.1:{{ scenario_ssh_port }}']
         attempt_expect: blocked
+        attempt_sshd_log_contains: 'refused local port forward'
+        attempt_stdout_excludes: 'SSH-2.0-'
+
+    # No command and no stdin: -N asks for no session, so the forced command is not
+    # involved, and the only thing that can end the client is the answer to the forward.
+    # A refusal ends it at once (255). A key that was allowed to forward leaves it running
+    # until timeout ends it, which the first assertion names. sshd logs no line for a
+    # refused remote forward (it sends the client a debug message and a failure reply), so
+    # the client's own error, which ExitOnForwardFailure raises only on that reply, is the
+    # evidence.
+    - name: Ask for a remote port forward, which a restricted key refuses
+      ansible.builtin.command:
+        argv:
+          - timeout
+          - --kill-after=5
+          - '30'
+          - ssh
+          - -n
+          - -N
+          - -o
+          - ExitOnForwardFailure=yes
+          - -o
+          - ConnectTimeout=10
+          - -i
+          - '{{ scenario_key_dir }}/a'
+          - -p
+          - '{{ scenario_ssh_port }}'
+          - -o
+          - IdentitiesOnly=yes
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - -o
+          - LogLevel=ERROR
+          - -R
+          - '127.0.0.1:{{ scenario_ssh_port + 1 }}:127.0.0.1:{{ scenario_ssh_port }}'
+          - deploy@127.0.0.1
+      register: deploy_slot_keys_scenario_verify_remote_forward
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Assert the client was not left holding a remote forward
+      ansible.builtin.assert:
+        that:
+          - deploy_slot_keys_scenario_verify_remote_forward.rc not in [124, 137]
+        fail_msg: 'The remote forward was accepted: the client ran until it was killed.'
+        quiet: true
+
+    - name: Assert the remote port forward was refused
+      ansible.builtin.assert:
+        that:
+          - deploy_slot_keys_scenario_verify_remote_forward.rc != 0
+          - "'remote port forwarding failed' in deploy_slot_keys_scenario_verify_remote_forward.stderr"
+        fail_msg: 'The remote forward was not refused: {{ deploy_slot_keys_scenario_verify_remote_forward.stderr }}'
+        quiet: true
 
     - name: Ask for the sftp subsystem, which runs the forced command and not sftp
       ansible.builtin.include_tasks: tasks/ssh_attempt.yml

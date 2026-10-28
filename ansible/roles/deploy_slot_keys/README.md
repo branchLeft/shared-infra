@@ -174,10 +174,21 @@ of these, for the privilege boundary in particular:
 The Molecule scenario starts a real `sshd`, grants four slots (one adopted), and then:
 
 - connects with each slot key and asks for another stack's command, a shell, a command
-  chain with `;`, `&&`, a newline, a pipe, a redirect, `$()` and backticks, a pty, a port forward, the
+  chain with `;`, `&&`, a newline, a pipe, a redirect, `$()` and backticks, a pty, the
   `sftp` subsystem and `scp` in both protocols. A stand-in for the wrapper records what it
   was given; the test requires that it was given exactly the stack's own argument and that
   no marker file a hostile command would make exists;
+- asks a slot key for a local port forward (`ssh -W`) to the scenario's own `sshd`, which is
+  listening, and requires that `sshd` logged `refused local port forward`, that no
+  `SSH-2.0-` banner came back and that the client failed. A key that could forward would be
+  served the banner and `sshd` would log nothing;
+- asks a slot key for a remote port forward (`ssh -N -R` with `ExitOnForwardFailure=yes`)
+  and requires the client's `remote port forwarding failed` error and a non-zero exit. `sshd`
+  logs no line for a refused remote forward, so the client's error, which that option raises
+  only when `sshd` answers the request with a failure, is the evidence. A key that could
+  forward would leave the client running until `timeout` killed it, which the test names as
+  its own failure. Neither forward case covers `-A`, `-X` or Unix-socket forwards: `restrict`
+  turns those off too, and they are pinned only by the exact `restrict,` line;
 - proves the host-level key still works as the account, before and after a rotation;
 - proves the account cannot write `/home/deploy`, its `.ssh`, `authorized_keys` or a file
   in it, with `/tmp` as the control that the check can say yes;

@@ -3,11 +3,12 @@
 # saw. Inputs: attempt_key, the key pair's name; attempt_expect, one of slot (the key's
 # forced command ran, with attempt_slot as its only argument), denied (the key did not
 # authenticate) or blocked (it authenticated, and the request was refused); attempt_command,
-# the remote command the client asks for (sent after a double dash, so a leading dash is
-# not read as a client option), left out when the case asks for none; attempt_options,
-# more ssh options; attempt_input, what is sent on standard input; attempt_expect_stdin,
-# true unless a case says false, whether the input must arrive. Nothing the client asks
-# for may run: the marker file below is what every hostile command tries to make.
+# the remote command (sent after a double dash), left out when the case asks for none;
+# attempt_options, more ssh options; attempt_input, what is sent on standard input;
+# attempt_expect_stdin, true unless false, whether the input must arrive;
+# attempt_sshd_log_contains, a line sshd must log during this connection (read before and
+# after, so an older line cannot count); attempt_stdout_excludes, text the client must not
+# receive. The marker file below is what every hostile command tries to make.
 - name: Clear what the stand-in wrapper recorded and the marker
   ansible.builtin.file:
     path: '{{ item }}'
@@ -17,6 +18,13 @@
     - '{{ scenario_record_dir }}/argv'
     - '{{ scenario_record_dir }}/stdin'
     - /tmp/EXAMPLE_MARKER
+
+- name: Look at what the test SSH server had logged before the connection
+  ansible.builtin.slurp:
+    src: '{{ scenario_record_dir }}/sshd.log'
+  register: deploy_slot_keys_scenario_attempt_log_before
+  check_mode: false
+  when: attempt_sshd_log_contains is defined
 
 - name: Connect with the key
   ansible.builtin.command:
@@ -70,6 +78,13 @@
     path: /tmp/EXAMPLE_MARKER
   register: deploy_slot_keys_scenario_attempt_marker
   check_mode: false
+
+- name: Look at what the test SSH server has logged since
+  ansible.builtin.slurp:
+    src: '{{ scenario_record_dir }}/sshd.log'
+  register: deploy_slot_keys_scenario_attempt_log_after
+  check_mode: false
+  when: attempt_sshd_log_contains is defined
 
 - name: Assert the client was not left waiting
   ansible.builtin.assert:
@@ -127,3 +142,23 @@
     fail_msg: 'The client was not told: {{ attempt_stderr_contains }}. It was told: {{ deploy_slot_keys_scenario_attempt_result.stderr }}'
     quiet: true
   when: attempt_stderr_contains is defined
+
+# split leaves one more piece than the line occurs, so more pieces after than before means
+# the line was logged during this connection.
+- name: Assert the test SSH server logged the refusal during this connection
+  ansible.builtin.assert:
+    that:
+      - >-
+        (deploy_slot_keys_scenario_attempt_log_after.content | b64decode).split(attempt_sshd_log_contains) | length
+        > (deploy_slot_keys_scenario_attempt_log_before.content | b64decode).split(attempt_sshd_log_contains) | length
+    fail_msg: 'The test SSH server did not log: {{ attempt_sshd_log_contains }}'
+    quiet: true
+  when: attempt_sshd_log_contains is defined
+
+- name: Assert nothing the key was not to reach came back on the client's output
+  ansible.builtin.assert:
+    that:
+      - attempt_stdout_excludes not in deploy_slot_keys_scenario_attempt_result.stdout
+    fail_msg: 'The client received {{ attempt_stdout_excludes }}: the request was served.'
+    quiet: true
+  when: attempt_stdout_excludes is defined
