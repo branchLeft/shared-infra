@@ -260,7 +260,18 @@ naming the role that will replace it. The test walks the tree and fails on a scr
 listed, and on an entry whose script is gone. The list is the baseline as it stood when the guard
 was added, so a new installer needs a reviewed entry, which is an owner merge under CODEOWNERS.
 The test reads the role name and does not check that the role exists, as `host_roles.yml` does.
-It does not stop a runbook that edits a host by hand; that half is not covered here.
+
+## test_no_new_hand_runbook_steps.py: the hand runbook steps stay frozen
+
+A hand step is a fenced shell block in any `RUNBOOK*.md` that reaches a host (`ssh`, `scp`,
+`rsync`) and changes it (writes a file, installs a package, manages a unit, moves files, changes
+a firewall). `hand_runbook_steps.yml` lists how many such blocks each runbook holds, with a reason
+as in `hand_installers.yml`. The test fails on more blocks than listed, on a runbook that is not
+listed, and on fewer blocks than listed, so the count only falls: lower it in the PR that moves a
+step into a role. Read-only checks over `ssh` and blocks fenced as `text` do not count.
+It counts blocks, so rewriting one hand step into another keeps the count; a reviewer reads that.
+The `Ansible` workflow watches `ansible/` and `hetzner/` only, so a change to a runbook under
+`mail/` or at the repository root does not start it; `mail/` is owner-gated by CODEOWNERS.
 
 ## merge_group_proof.py: when a delivery may skip its re-test
 
