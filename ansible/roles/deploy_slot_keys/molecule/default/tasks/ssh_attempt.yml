@@ -3,7 +3,9 @@
 # saw. Inputs: attempt_key, the key pair's name; attempt_expect, one of slot (the key's
 # forced command ran, with attempt_slot as its only argument), denied (the key did not
 # authenticate) or blocked (it authenticated, and the request was refused); attempt_command,
-# the remote command the client asks for, left out when the case asks for none;
+# the remote command the client asks for, left out when the case asks for none, and sent
+# after a double dash so the client does not read a command that starts with a dash as
+# its own option;
 # attempt_options, more ssh options; attempt_input, what is sent on standard input.
 # Nothing the client asks for may run: the marker file below is what every hostile
 # command tries to make.
@@ -39,7 +41,7 @@
       - UserKnownHostsFile=/dev/null
       - -o
       - LogLevel=ERROR
-    attempt_remote: '{{ [attempt_command] if attempt_command is defined else [] }}'
+    attempt_remote: '{{ ["--", attempt_command] if attempt_command is defined else [] }}'
   register: deploy_slot_keys_scenario_attempt_result
   changed_when: false
   failed_when: false
