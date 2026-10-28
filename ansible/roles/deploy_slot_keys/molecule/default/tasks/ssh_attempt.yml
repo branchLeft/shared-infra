@@ -24,8 +24,16 @@
     stdin: '{{ attempt_input | default("EXAMPLE_IMAGE_REFERENCE") }}'
     stdin_add_newline: false
   vars:
+    # The stand-in wrapper reads its input to the end, so a client that waits for it would
+    # wait for ever: timeout turns that into a failure (124, or 137 once killed) that the
+    # assertion below names.
     attempt_base:
+      - timeout
+      - --kill-after=5
+      - '60'
       - ssh
+      - -o
+      - ConnectTimeout=10
       - -i
       - '{{ scenario_key_dir }}/{{ attempt_key }}'
       - -p
@@ -62,6 +70,13 @@
     path: /tmp/EXAMPLE_MARKER
   register: deploy_slot_keys_scenario_attempt_marker
   check_mode: false
+
+- name: Assert the client was not left waiting
+  ansible.builtin.assert:
+    that:
+      - deploy_slot_keys_scenario_attempt_result.rc not in [124, 137]
+    fail_msg: 'The client hung and was killed: {{ attempt_key }} {{ attempt_command | default("") }}'
+    quiet: true
 
 - name: Assert nothing the client asked for ran
   ansible.builtin.assert:

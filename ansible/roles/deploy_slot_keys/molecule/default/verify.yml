@@ -97,12 +97,20 @@
         attempt_options: ['-s']
         attempt_expect: slot
 
+    # The stand-in wrapper reads its input to the end and scp waits for the host to speak
+    # first, so each scp is expected to stall; timeout ends it (124, or 137 once killed)
+    # and the assertion below needs only that nothing was copied and none succeeded.
     - name: Copy a file in with scp, in both of its protocols
       ansible.builtin.command:
         argv: '{{ verify_scp_base + verify_scp_options + verify_scp_files }}'
       vars:
         verify_scp_base:
+          - timeout
+          - --kill-after=5
+          - '20'
           - scp
+          - -o
+          - ConnectTimeout=10
           - -i
           - '{{ scenario_key_dir }}/a'
           - -P
@@ -148,7 +156,13 @@
     - name: Connect with the host-level key and ask for the account's identity
       ansible.builtin.command:
         argv:
+          - timeout
+          - --kill-after=5
+          - '60'
           - ssh
+          - -n
+          - -o
+          - ConnectTimeout=10
           - -i
           - '{{ scenario_key_dir }}/host'
           - -p
@@ -292,7 +306,13 @@
     - name: Connect with the host-level key again
       ansible.builtin.command:
         argv:
+          - timeout
+          - --kill-after=5
+          - '60'
           - ssh
+          - -n
+          - -o
+          - ConnectTimeout=10
           - -i
           - '{{ scenario_key_dir }}/host'
           - -p
