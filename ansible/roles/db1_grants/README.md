@@ -186,9 +186,10 @@ Delivery to a host is the gated workflow only (ANS-17): a plan job in check mode
 the approval of the protected environment, a pull of that exact commit of `main`
 on the host, and a second run that must report zero changes. The playbook is
 [`playbooks/db1.yml`](../../playbooks/db1.yml): it refuses any host but `db1` (or the
-`localhost` the trigger names) through the shared include, refuses an empty signer list,
-applies the two pull roles, then `db1_stack` and this role. The role has not been applied
-to the live host.
+`localhost` the trigger names) through the shared include, refuses an empty signer list
+and applies the two pull roles only. `db1_stack` and this role are not in that playbook
+yet, because nothing on the pull route supplies their inputs. The role has not been
+applied to the live host.
 
 ## How to change it safely
 

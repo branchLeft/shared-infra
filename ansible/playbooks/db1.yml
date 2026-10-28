@@ -1,12 +1,12 @@
 ---
-# db1: the database host under the gated pull. The pull roles come first, in order:
-# the Ansible toolchain this playbook runs with, then the trigger that runs it. Then
-# the two roles this playbook applied before: the host's prerequisites, then the
-# accounts and grants.
+# db1: the database host under the gated pull. Two roles, in order: the Ansible
+# toolchain the host runs this playbook with, then the trigger that runs it. The
+# database roles (db1_stack, db1_grants) return once the owner rules how their
+# private inputs reach a host that pulls; nothing on the pull route supplies them.
 #
-# The trigger runs this file on a signed checkout with the inventory `localhost,`,
-# which loads no group variables, so the pull's values come from vars_files: the
-# shared includes and db1's own trust file. The refusals live in includes/.
+# The host's trigger runs this file on a signed checkout with the inventory
+# `localhost,`, which loads no group variables, so every value the roles read comes
+# from vars_files: the shared includes and db1's own trust file.
 - name: Bring db1 under the pull
   hosts: all
   gather_facts: false
@@ -27,5 +27,3 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
-    - role: ../roles/db1_stack # noqa: role-name[path]
-    - role: ../roles/db1_grants # noqa: role-name[path]

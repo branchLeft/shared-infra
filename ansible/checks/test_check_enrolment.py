@@ -168,7 +168,8 @@ class Sabotage(unittest.TestCase):
     def test_r2_db1_applies_a_role_not_on_its_list(self) -> None:
         self._edit(
             "playbooks/db1.yml",
-            "    - role: ../roles/db1_grants # noqa: role-name[path]\n",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
             "    - role: ../roles/control_plane # noqa: role-name[path]\n",
         )
         self._assert_rule("R2 db1.yml: role control_plane is not on db1's list")
@@ -177,7 +178,8 @@ class Sabotage(unittest.TestCase):
     def test_r2_db1_role_entry_carries_an_input(self) -> None:
         self._edit(
             "playbooks/db1.yml",
-            "    - role: ../roles/db1_stack # noqa: role-name[path]\n",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
             "    - role: ../roles/db1_stack # noqa: role-name[path]\n"
             "      vars:\n"
             "        db1_stack_exporter_password: x\n",

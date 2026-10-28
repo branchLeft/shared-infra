@@ -18,9 +18,6 @@ import yaml  # type: ignore[import-untyped]
 from check_enrolment import HOST_ROLES_FILE, PLAY_KEYS, ROOT, check
 
 ENROLLED = ("edge1", "ops1", "app1", "db1")
-# A playbook on main ends at its last role. db1.yml applies two listed roles after the pull
-# roles, so the cases that append roles start from the file cut after the trigger entry.
-TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 SECOND_PLAY = "- name: Second play\n  hosts: all\n  roles:\n    - role: ../roles/host_baseline\n"
 # Each text is one more key of the play, at the play's indent, appended after `roles`.
 EXTRA_PLAY_KEYS = {
@@ -69,18 +66,11 @@ class HostRoleLists(unittest.TestCase):
         shutil.copytree(ROOT / "ansible", self.root / "ansible", symlinks=True)
         self.ansible = self.root / "ansible"
         self.original = {
-            host: self._pull_roles_only(self.ansible / "playbooks" / f"{host}.yml")
+            host: (self.ansible / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
             for host in ENROLLED
         }
         listed = yaml.safe_load((self.ansible / HOST_ROLES_FILE).read_text(encoding="utf-8"))
         self.listed: dict[str, list[str]] = listed
-
-    @staticmethod
-    def _pull_roles_only(path: Path) -> str:
-        """The playbook cut after the trigger entry, so a case adds roles to a known base."""
-        head, found, _ = path.read_text(encoding="utf-8").partition(TRIGGER_ENTRY)
-        assert found, f"{path.name} has no trigger entry"
-        return head + found
 
     def _playbook(self, host: str, extra: str) -> None:
         """Put every enrolled playbook back as it is on main, then add text to one."""
@@ -112,11 +102,12 @@ class HostRoleLists(unittest.TestCase):
     def test_the_real_tree_passes(self) -> None:
         self.assertEqual(check(ROOT), [])
 
-    # db1 on main applies its two roles after the pull roles, and the real tree is green with them.
-    def test_db1_applies_its_two_roles_after_the_pull_roles(self) -> None:
+    # db1's first enrolment is pull-only: its playbook applies the two pull roles and none of the
+    # database roles on its list, which R9 allows because a playbook may apply a subset.
+    def test_db1_applies_only_the_pull_roles(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "db1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
-        self.assertEqual(names, ["ansible_runtime", "pull_trigger", "db1_stack", "db1_grants"])
+        self.assertEqual(names, ["ansible_runtime", "pull_trigger"])
         self.assertEqual(check(ROOT), [])
 
     # Positive control: every role on a host's list, in the list's order and in reverse, passes.
