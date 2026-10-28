@@ -150,7 +150,9 @@
     - name: Refuse a listener on the drain port that is not on 127.0.0.1 alone
       ansible.builtin.assert:
         that:
-          - demo1_egress_spool_listeners.stdout is defined
+          - >-
+            demo1_egress_spool_listeners.stdout | regex_findall(demo1_egress_spool_listener_pattern)
+            == ['127.0.0.1:' ~ demo1_egress_spool_drain_port]
         quiet: true
         fail_msg: >-
           The listeners on port {{ demo1_egress_spool_drain_port }} are not exactly 127.0.0.1:{{ demo1_egress_spool_drain_port }}.
