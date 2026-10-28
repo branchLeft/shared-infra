@@ -1,6 +1,7 @@
 ---
-# db1: the database host. Two roles, in order: the host's prerequisites, then the
-# accounts and grants. The roles read their private inputs (the tenants' slugs, the
+# db1: the database host. Three roles, in order: the host's prerequisites, the backup
+# timers, then the accounts and grants. The grants role checks for programs the timers
+# role delivers, so the timers apply before the grants. The roles read their private inputs (the tenants' slugs, the
 # address the ops1 backup worker connects from, the exporter's password) from the
 # channel the delivery of this host uses; no file of this repository holds them, so
 # a run without them stops at the role's input check.
@@ -23,4 +24,5 @@
   # per line.
   roles:
     - role: ../roles/db1_stack # noqa: role-name[path]
+    - role: ../roles/db1_backup_timers # noqa: role-name[path]
     - role: ../roles/db1_grants # noqa: role-name[path]
