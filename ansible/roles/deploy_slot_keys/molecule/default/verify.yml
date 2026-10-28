@@ -76,6 +76,8 @@
         attempt_slot: '{{ scenario_stack_a }}'
         attempt_command: /bin/sh
         attempt_options: ['-tt']
+        # ssh -tt with a refused pty does not forward piped stdin; the other cases prove stdin delivery.
+        attempt_expect_stdin: false
         attempt_expect: slot
         attempt_stderr_contains: PTY allocation request failed
 

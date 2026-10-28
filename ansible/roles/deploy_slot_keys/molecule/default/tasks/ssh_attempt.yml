@@ -3,12 +3,11 @@
 # saw. Inputs: attempt_key, the key pair's name; attempt_expect, one of slot (the key's
 # forced command ran, with attempt_slot as its only argument), denied (the key did not
 # authenticate) or blocked (it authenticated, and the request was refused); attempt_command,
-# the remote command the client asks for, left out when the case asks for none, and sent
-# after a double dash so the client does not read a command that starts with a dash as
-# its own option;
-# attempt_options, more ssh options; attempt_input, what is sent on standard input.
-# Nothing the client asks for may run: the marker file below is what every hostile
-# command tries to make.
+# the remote command the client asks for (sent after a double dash, so a leading dash is
+# not read as a client option), left out when the case asks for none; attempt_options,
+# more ssh options; attempt_input, what is sent on standard input; attempt_expect_stdin,
+# true unless a case says false, whether the input must arrive. Nothing the client asks
+# for may run: the marker file below is what every hostile command tries to make.
 - name: Clear what the stand-in wrapper recorded and the marker
   ansible.builtin.file:
     path: '{{ item }}'
@@ -77,7 +76,7 @@
       - deploy_slot_keys_scenario_attempt_record.results | rejectattr('failed') | list | length == 3
       - (deploy_slot_keys_scenario_attempt_record.results[0].content | b64decode | trim) == '2'
       - (deploy_slot_keys_scenario_attempt_record.results[1].content | b64decode).splitlines() == ['--slot', attempt_slot]
-      - (deploy_slot_keys_scenario_attempt_record.results[2].content | b64decode) == (attempt_input | default('EXAMPLE_IMAGE_REFERENCE'))
+      - (not (attempt_expect_stdin | default(true) | bool)) or ((deploy_slot_keys_scenario_attempt_record.results[2].content | b64decode) == (attempt_input | default('EXAMPLE_IMAGE_REFERENCE')))
     fail_msg: >-
       The forced command of {{ attempt_key }} did not run as its slot's alone for
       {{ attempt_command | default('(no command)') }}: it was called with
