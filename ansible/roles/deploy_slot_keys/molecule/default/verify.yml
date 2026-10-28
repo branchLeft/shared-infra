@@ -1,0 +1,377 @@
+---
+# The phases, in this order. Each starts from the state the last one left, so the order is
+# part of the test. The play ends with the host put back as the converge left it, which is
+# what the check-mode run that follows verify needs to find.
+#
+#   1  the converged host: owners, modes, the exact lines, the account's inability to write
+#   2  every slot key, asked for commands it must not run, over a real sshd
+#   3  the requests a restricted key refuses: a pty, a port forward, sftp and scp
+#   4  the host-level key still works and was not touched
+#   5  lists the module must refuse, each leaving the host exactly as it was
+#   6  check mode on a list that would change the host, which changes nothing
+#   7  a rotation and a revocation: the old keys are turned away, the new one works
+#   8  the host put back, and the log of every run read for a stack name or a key
+- name: Verify
+  hosts: all
+  gather_facts: false
+  # The role's own fixed values, so the program path is the one the role installs to.
+  vars_files:
+    - ../../vars/main.yml
+  vars:
+    verify_slot_keys:
+      - { key_name: a, stack: '{{ scenario_stack_a }}' }
+      - { key_name: b, stack: '{{ scenario_stack_b }}' }
+      - { key_name: adopted, stack: '{{ scenario_stack_adopted }}' }
+    # Everything a client can ask for in place of the forced command: another stack's
+    # slot, the wrapper itself, a second command in every shape, a shell, and nothing.
+    # Written with double quotes where the text holds a character YAML reads specially.
+    verify_hostile:
+      - '--slot {{ scenario_stack_b }}'
+      - '--slot {{ scenario_stack_a }}'
+      - '/usr/local/sbin/branchleft-deploy --slot {{ scenario_stack_b }}'
+      - 'sudo -n /usr/local/sbin/branchleft-deploy --slot {{ scenario_stack_a }}'
+      - '; id'
+      - '$(id)'
+      - '`id`'
+      - '&& touch /tmp/EXAMPLE_MARKER'
+      - 'true; touch /tmp/EXAMPLE_MARKER'
+      - "true\ntouch /tmp/EXAMPLE_MARKER"
+      - 'true | touch /tmp/EXAMPLE_MARKER'
+      - 'true > /tmp/EXAMPLE_MARKER'
+      - '/bin/sh'
+      - ''
+  tasks:
+    - name: Assert the host is configured
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+      vars:
+        state_slots: '{{ scenario_slots }}'
+
+    - name: Ask each slot key for commands it must not run
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: '{{ verify_case.0.key_name }}'
+        attempt_slot: '{{ verify_case.0.stack }}'
+        attempt_command: '{{ verify_case.1 }}'
+        attempt_expect: slot
+      loop: '{{ verify_slot_keys | product(verify_hostile) | list }}'
+      loop_control:
+        loop_var: verify_case
+        label: '{{ verify_case.0.key_name }}'
+
+    - name: Connect with each slot key and ask for no command at all
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: '{{ verify_case.key_name }}'
+        attempt_slot: '{{ verify_case.stack }}'
+        attempt_expect: slot
+      loop: '{{ verify_slot_keys }}'
+      loop_control:
+        loop_var: verify_case
+        label: '{{ verify_case.key_name }}'
+
+    - name: Ask for a pty, which a restricted key refuses
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: a
+        attempt_slot: '{{ scenario_stack_a }}'
+        attempt_command: /bin/sh
+        attempt_options: ['-tt']
+        attempt_expect: slot
+        attempt_stderr_contains: PTY allocation request failed
+
+    - name: Ask for a port forward, which a restricted key refuses
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: a
+        attempt_options: ['-W', '127.0.0.1:22']
+        attempt_expect: blocked
+
+    - name: Ask for the sftp subsystem, which runs the forced command and not sftp
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: a
+        attempt_slot: '{{ scenario_stack_a }}'
+        attempt_command: sftp
+        attempt_options: ['-s']
+        attempt_expect: slot
+
+    - name: Copy a file in with scp, in both of its protocols
+      ansible.builtin.command:
+        argv: '{{ verify_scp_base + verify_scp_options + verify_scp_files }}'
+      vars:
+        verify_scp_base:
+          - scp
+          - -i
+          - '{{ scenario_key_dir }}/a'
+          - -P
+          - '{{ scenario_ssh_port }}'
+          - -o
+          - IdentitiesOnly=yes
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - -o
+          - LogLevel=ERROR
+        verify_scp_files:
+          - /etc/hostname
+          - deploy@127.0.0.1:/tmp/EXAMPLE_SCP_TARGET
+      loop:
+        - []
+        - ['-O']
+      loop_control:
+        loop_var: verify_scp_options
+        label: scp {{ verify_scp_options }}
+      register: deploy_slot_keys_scenario_verify_scp
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Look for the file scp tried to put on the host
+      ansible.builtin.stat:
+        path: /tmp/EXAMPLE_SCP_TARGET
+      register: deploy_slot_keys_scenario_verify_scp_target
+
+    - name: Assert scp copied nothing and failed
+      ansible.builtin.assert:
+        that:
+          - not deploy_slot_keys_scenario_verify_scp_target.stat.exists
+          - deploy_slot_keys_scenario_verify_scp.results | map(attribute='rc') | select('equalto', 0) | list | length == 0
+        quiet: true
+
+    # The host-level key has `restrict` and no forced command, so it runs what it asks for.
+    # The role must leave it working and the wrapper uncalled.
+    - name: Connect with the host-level key and ask for the account's identity
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -i
+          - '{{ scenario_key_dir }}/host'
+          - -p
+          - '{{ scenario_ssh_port }}'
+          - -o
+          - IdentitiesOnly=yes
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - -o
+          - LogLevel=ERROR
+          - deploy@127.0.0.1
+          - /usr/bin/id
+      register: deploy_slot_keys_scenario_verify_host_level
+      changed_when: false
+      check_mode: false
+
+    - name: Assert the host-level key still works as the account
+      ansible.builtin.assert:
+        that:
+          - "'(deploy)' in deploy_slot_keys_scenario_verify_host_level.stdout"
+        quiet: true
+
+    # Two keys, one slot each, the stack names in a form no slot may take, and the host-level
+    # key offered to a slot. Each is refused by name of rule and entry, before anything is
+    # written, and the host is exactly as it was.
+    - name: Refuse a stack name that is not a stack name
+      ansible.builtin.include_tasks: tasks/module_refusal.yml
+      vars:
+        refusal_slots:
+          - { stack: Example-Stack, key_name: a }
+        refusal_message: 'slot entry number 1: stack-name-invalid'
+
+    - name: Refuse a stack name that carries a second command
+      ansible.builtin.include_tasks: tasks/module_refusal.yml
+      vars:
+        refusal_slots:
+          - { stack: '{{ scenario_stack_a }}', key_name: a }
+          - { stack: 'example;touch', key_name: b }
+        refusal_message: 'slot entry number 2: stack-name-invalid'
+
+    - name: Refuse one key declared for two stacks
+      ansible.builtin.include_tasks: tasks/module_refusal.yml
+      vars:
+        refusal_slots:
+          - { stack: '{{ scenario_stack_a }}', key_name: a }
+          - { stack: '{{ scenario_stack_b }}', key_name: a }
+        refusal_message: 'slot entry number 2: key-declared-twice'
+
+    - name: Refuse the host-level key as a slot key
+      ansible.builtin.include_tasks: tasks/module_refusal.yml
+      vars:
+        refusal_slots:
+          - { stack: '{{ scenario_stack_a }}', key_name: host }
+        refusal_message: 'slot entry number 1: key-already-installed'
+
+    - name: Refuse a stack the host already runs that the entry does not adopt
+      ansible.builtin.include_tasks: tasks/module_refusal.yml
+      vars:
+        refusal_slots:
+          - { stack: '{{ scenario_stack_unadopted }}', key_name: a2 }
+        refusal_message: 'slot entry number 1: stack-already-on-host-not-adopted'
+
+    - name: Refuse a key swapped between two granted slots
+      ansible.builtin.include_tasks: tasks/module_refusal.yml
+      vars:
+        refusal_slots:
+          - { stack: '{{ scenario_stack_a }}', key_name: b }
+          - { stack: '{{ scenario_stack_b }}', key_name: a }
+        refusal_message: 'slot entry number 1: key-already-installed'
+
+    - name: Declare a list that would rotate one slot and revoke the others
+      ansible.builtin.include_tasks: tasks/declare_slots.yml
+      vars:
+        declare_slots:
+          - { stack: '{{ scenario_stack_a }}', key_name: a2 }
+
+    - name: Look at authorized_keys before the check-mode call
+      ansible.builtin.stat:
+        path: /home/deploy/.ssh/authorized_keys
+      register: deploy_slot_keys_scenario_verify_check_before
+
+    - name: Call the module in check mode with that list
+      ansible.builtin.include_tasks: tasks/check_mode_call.yml
+
+    - name: Look at authorized_keys after the check-mode call
+      ansible.builtin.stat:
+        path: /home/deploy/.ssh/authorized_keys
+      register: deploy_slot_keys_scenario_verify_check_after
+
+    # Four slots are held and one is declared: three are revoked and one is rotated.
+    - name: Assert check mode reported the change and made none
+      ansible.builtin.assert:
+        that:
+          - deploy_slot_keys_scenario_check_result.msg is not defined
+          - deploy_slot_keys_scenario_check_result.changed
+          - deploy_slot_keys_scenario_check_result.rotated == 1
+          - deploy_slot_keys_scenario_check_result.revoked == 3
+          - deploy_slot_keys_scenario_check_result.granted == 0
+          - deploy_slot_keys_scenario_verify_check_after.stat.checksum == deploy_slot_keys_scenario_verify_check_before.stat.checksum
+        quiet: true
+
+    - name: Rotate one slot, revoke another, and keep two
+      ansible.builtin.include_tasks: tasks/apply_role.yml
+      vars:
+        apply_slots:
+          - { stack: '{{ scenario_stack_a }}', key_name: a2 }
+          - { stack: '{{ scenario_stack_adopted }}', key_name: adopted, adopt: true }
+          - { stack: '{{ scenario_stack_canary }}', key_name: canary }
+
+    - name: Assert the host holds exactly the new list
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+      vars:
+        state_slots:
+          - { stack: '{{ scenario_stack_a }}', key_name: a2 }
+          - { stack: '{{ scenario_stack_adopted }}', key_name: adopted }
+          - { stack: '{{ scenario_stack_canary }}', key_name: canary }
+
+    - name: Turn away the key that was rotated out and the key that was revoked
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: '{{ verify_case }}'
+        attempt_expect: denied
+      loop:
+        - a
+        - b
+      loop_control:
+        loop_var: verify_case
+
+    - name: Accept the new key, for its own slot alone
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: a2
+        attempt_slot: '{{ scenario_stack_a }}'
+        attempt_command: '--slot {{ scenario_stack_b }}'
+        attempt_expect: slot
+
+    - name: Connect with the host-level key again
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -i
+          - '{{ scenario_key_dir }}/host'
+          - -p
+          - '{{ scenario_ssh_port }}'
+          - -o
+          - IdentitiesOnly=yes
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - -o
+          - LogLevel=ERROR
+          - deploy@127.0.0.1
+          - /usr/bin/id
+      register: deploy_slot_keys_scenario_verify_host_level_again
+      changed_when: false
+      check_mode: false
+
+    - name: Assert the host-level key still works after the rotation
+      ansible.builtin.assert:
+        that:
+          - "'(deploy)' in deploy_slot_keys_scenario_verify_host_level_again.stdout"
+        quiet: true
+
+    # The last phase leaves the instance applied as the converge did, which is what the
+    # second converge and the check-mode run that follow verify see.
+    - name: Put the host back to the converge's slots
+      ansible.builtin.include_tasks: tasks/apply_role.yml
+      vars:
+        apply_slots: '{{ scenario_slots }}'
+
+    - name: Assert the host is as the converge left it
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+      vars:
+        state_slots: '{{ scenario_slots }}'
+
+    # ANS-16. The scenario sets verbosity 1 and a log path (molecule.yml), so a task that
+    # handles the slots without no_log prints them into this log, in its result or in the
+    # message of a failure. The canary stack and its key were declared to the role and
+    # printed by nothing else, so they stand for every slot. The scan runs last, so it
+    # covers the refused runs above too. The canary and the role's task names show the scan
+    # reads the output of the converge, so that "nothing found" cannot mean "nothing read".
+    - name: Read the log of this scenario's Ansible runs
+      ansible.builtin.set_fact:
+        deploy_slot_keys_scenario_verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+      no_log: true
+
+    - name: Read the public keys that were declared
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - a
+        - a2
+        - b
+        - adopted
+        - canary
+      register: deploy_slot_keys_scenario_verify_declared_keys
+      no_log: true
+
+    # The second word of each public key line is the body; the first is the type and the
+    # third a comment. The doubled backslashes reach the filter as one.
+    - name: Work out the key bodies to look for
+      ansible.builtin.set_fact:
+        deploy_slot_keys_scenario_verify_key_bodies: >-
+          {{ deploy_slot_keys_scenario_verify_declared_keys.results | map(attribute='content') | map('b64decode') | map('trim')
+             | map('regex_replace', '^\\S+ (\\S+).*$', '\\1') | list }}
+      no_log: true
+
+    - name: Assert the log holds the converge output
+      ansible.builtin.assert:
+        that:
+          - "'SCENARIO_LOG_CANARY' in deploy_slot_keys_scenario_verify_log"
+          - "'Install the slot provisioning program' in deploy_slot_keys_scenario_verify_log"
+          - "'Make the deploy slots exactly the declared list' in deploy_slot_keys_scenario_verify_log"
+        quiet: true
+
+    - name: Assert no stack name and no key body reached the log
+      ansible.builtin.assert:
+        that:
+          - scenario_stack_canary not in deploy_slot_keys_scenario_verify_log
+          - deploy_slot_keys_scenario_verify_key_bodies | select('in', deploy_slot_keys_scenario_verify_log) | list | length == 0
+        quiet: true
