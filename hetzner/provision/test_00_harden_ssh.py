@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
-"""Unit tests for 00-harden-ssh.sh.
-
-This is the check that decides whether a freshly created host is considered
-hardened, and a false failure here aborts `run-all.sh` before the three
-scripts that install unattended upgrades, fail2ban, Docker and the deploy
-tooling ever run -- so its pass/fail behaviour is covered directly rather
-than only smoke-tested by a real provisioning run.
-
-The script itself talks to the live `sshd` and `systemctl` and writes into
-`/etc/ssh/sshd_config.d/`, none of which a test process may do. Both are
-substituted: `sshd` and `systemctl` are replaced by fakes earlier on `PATH`,
-and the drop-in path is redirected with the `DROPIN` environment variable
-the script reads as an override.
+"""Unit tests for 00-harden-ssh.sh, the check that decides whether a new host
+is hardened. A false failure aborts run-all.sh before the unattended-upgrades,
+fail2ban, Docker and deploy-tooling scripts run, so it is tested directly, not
+only by a real provisioning run. The script talks to the live sshd and
+systemctl and writes /etc/ssh/sshd_config.d/, so both are faked on PATH and
+the drop-in path is redirected with the DROPIN env var.
 """
 
 import os
