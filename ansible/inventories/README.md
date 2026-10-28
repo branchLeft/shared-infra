@@ -5,8 +5,9 @@ them. It holds two hosts: `edge1`, in the group `edge`, which has no group
 variables now. Its values, and its trusted signer list, are loaded by
 `playbooks/edge1.yml` through `vars_files`, and `db1`, in the group `db`,
 which has no group variables because its inputs are private and reach the host
-through its delivery channel (`roles/db1_grants`). A role applied to a new host
-adds its host and variables in the same pull request. `ops1` and `app1` have
+through its delivery channel (`roles/db1_grants`). `db1` is also under the pull:
+`playbooks/db1.yml` loads its trust file, `trust/db1.yml`, through `vars_files`. A role
+applied to a new host adds its host and variables in the same pull request. `ops1` and `app1` have
 playbooks under the pull but no inventory entry: no host is enrolled by this
 layout, and against this inventory `--limit ops1` and `--limit app1` match nothing.
 Their bootstrap route is the one the refusal include describes: on an inline

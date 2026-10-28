@@ -17,7 +17,10 @@ from pathlib import Path
 import yaml  # type: ignore[import-untyped]
 from check_enrolment import HOST_ROLES_FILE, PLAY_KEYS, ROOT, check
 
-ENROLLED = ("edge1", "ops1", "app1")
+ENROLLED = ("edge1", "ops1", "app1", "db1")
+# A playbook on main ends at its last role. db1.yml applies two listed roles after the pull
+# roles, so the cases that append roles start from the file cut after the trigger entry.
+TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 SECOND_PLAY = "- name: Second play\n  hosts: all\n  roles:\n    - role: ../roles/host_baseline\n"
 # Each text is one more key of the play, at the play's indent, appended after `roles`.
 EXTRA_PLAY_KEYS = {
@@ -66,11 +69,18 @@ class HostRoleLists(unittest.TestCase):
         shutil.copytree(ROOT / "ansible", self.root / "ansible", symlinks=True)
         self.ansible = self.root / "ansible"
         self.original = {
-            host: (self.ansible / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
+            host: self._pull_roles_only(self.ansible / "playbooks" / f"{host}.yml")
             for host in ENROLLED
         }
         listed = yaml.safe_load((self.ansible / HOST_ROLES_FILE).read_text(encoding="utf-8"))
         self.listed: dict[str, list[str]] = listed
+
+    @staticmethod
+    def _pull_roles_only(path: Path) -> str:
+        """The playbook cut after the trigger entry, so a case adds roles to a known base."""
+        head, found, _ = path.read_text(encoding="utf-8").partition(TRIGGER_ENTRY)
+        assert found, f"{path.name} has no trigger entry"
+        return head + found
 
     def _playbook(self, host: str, extra: str) -> None:
         """Put every enrolled playbook back as it is on main, then add text to one."""
@@ -102,6 +112,13 @@ class HostRoleLists(unittest.TestCase):
     def test_the_real_tree_passes(self) -> None:
         self.assertEqual(check(ROOT), [])
 
+    # db1 on main applies its two roles after the pull roles, and the real tree is green with them.
+    def test_db1_applies_its_two_roles_after_the_pull_roles(self) -> None:
+        text = (ROOT / "ansible" / "playbooks" / "db1.yml").read_text(encoding="utf-8")
+        names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
+        self.assertEqual(names, ["ansible_runtime", "pull_trigger", "db1_stack", "db1_grants"])
+        self.assertEqual(check(ROOT), [])
+
     # Positive control: every role on a host's list, in the list's order and in reverse, passes.
     # Most of these roles have no directory on main, so a name with no role behind it passes too.
     def test_every_listed_role_is_accepted_for_its_host(self) -> None:
@@ -114,7 +131,12 @@ class HostRoleLists(unittest.TestCase):
 
     # Rule: a role that is on no list is refused, on each host.
     def test_an_unlisted_role_is_refused(self) -> None:
-        for host, name in (("edge1", "made_up"), ("ops1", "signer_override"), ("app1", "x9")):
+        for host, name in (
+            ("edge1", "made_up"),
+            ("ops1", "signer_override"),
+            ("app1", "x9"),
+            ("db1", "made_up"),
+        ):
             with self.subTest(host=host, role=name):
                 self._playbook(host, _entry(name))
                 self._assert_refused(host, f"role {name} is not on {host}'s list")
@@ -129,6 +151,9 @@ class HostRoleLists(unittest.TestCase):
             ("app1", "website_app1", "      become: false\n"),
             ("app1", "deploy_tooling", "      environment:\n        A: b\n"),
             ("app1", "host_baseline", "      delegate_to: elsewhere\n"),
+            ("db1", "db1_stack", "      vars:\n        db1_stack_exporter_password: x\n"),
+            ("db1", "db1_grants", "      vars:\n        db1_grants_tenants: [x]\n"),
+            ("db1", "db1_grants", "      when: false\n"),
         )
         for host, name, extra in cases:
             with self.subTest(host=host, role=name, extra=extra):
@@ -288,6 +313,9 @@ class HostRoleLists(unittest.TestCase):
             ("ops1", "monitoring_stack"),
             ("app1", "breakglass_mint_host"),
             ("app1", "control_plane"),
+            ("ops1", "db1_stack"),
+            ("db1", "control_plane"),
+            ("db1", "host_baseline"),
         )
         for host, name in cases:
             with self.subTest(host=host, role=name):
