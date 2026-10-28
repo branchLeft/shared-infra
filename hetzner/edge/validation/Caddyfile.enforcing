@@ -21,7 +21,12 @@
 branchleft.co.uk {
 	log {
 		output file /var/log/caddy/access.log
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
 	}
 	tls {
 		protocols tls1.2 tls1.3
@@ -34,8 +39,10 @@ branchleft.co.uk {
 		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
+	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		uri @break_glass_strip query -bl_break_glass
 		request_body {
 			max_size 1MiB
 		}
@@ -63,7 +70,12 @@ branchleft.co.uk {
 www.branchleft.co.uk {
 	log {
 		output file /var/log/caddy/access.log
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
 	}
 	tls {
 		protocols tls1.2 tls1.3
@@ -85,7 +97,12 @@ www.branchleft.co.uk {
 blog.branchleft.co.uk {
 	log {
 		output file /var/log/caddy/access.log
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
 	}
 	tls {
 		protocols tls1.2 tls1.3
@@ -99,8 +116,10 @@ blog.branchleft.co.uk {
 		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
+	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		uri @break_glass_strip query -bl_break_glass
 		request_body {
 			max_size 64MiB
 		}
@@ -128,7 +147,12 @@ blog.branchleft.co.uk {
 cloud.branchleft.co.uk {
 	log {
 		output file /var/log/caddy/access.log
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
 	}
 	tls {
 		protocols tls1.2 tls1.3
@@ -141,8 +165,10 @@ cloud.branchleft.co.uk {
 		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
+	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		uri @break_glass_strip query -bl_break_glass
 		request_body {
 			max_size 100MiB
 		}
@@ -170,7 +196,12 @@ cloud.branchleft.co.uk {
 book.branchleft.co.uk {
 	log {
 		output file /var/log/caddy/access.log
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
 	}
 	tls {
 		protocols tls1.2 tls1.3
@@ -192,7 +223,12 @@ book.branchleft.co.uk {
 portal.publicpress.co.uk {
 	log {
 		output file /var/log/caddy/access.log
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
 	}
 	tls {
 		protocols tls1.2 tls1.3
@@ -205,8 +241,10 @@ portal.publicpress.co.uk {
 		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
+	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		uri @break_glass_strip query -bl_break_glass
 		request_body {
 			max_size 1MiB
 		}
@@ -234,7 +272,12 @@ portal.publicpress.co.uk {
 console.branchleft.co.uk {
 	log {
 		output file /var/log/caddy/access.log
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
 	}
 	tls {
 		protocols tls1.2 tls1.3
@@ -254,8 +297,10 @@ console.branchleft.co.uk {
 		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
+	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		uri @break_glass_strip query -bl_break_glass
 		request_body {
 			max_size 1MiB
 		}
@@ -286,7 +331,12 @@ console.branchleft.co.uk {
 id.publicpress.co.uk {
 	log {
 		output file /var/log/caddy/access.log
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
 	}
 	tls {
 		protocols tls1.2 tls1.3
@@ -299,8 +349,10 @@ id.publicpress.co.uk {
 		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
+	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		uri @break_glass_strip query -bl_break_glass
 		request_body {
 			max_size 1MiB
 		}
@@ -328,7 +380,12 @@ id.publicpress.co.uk {
 ntfy.branchleft.co.uk {
 	log {
 		output file /var/log/caddy/access.log
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
 	}
 	tls {
 		protocols tls1.2 tls1.3
@@ -341,8 +398,10 @@ ntfy.branchleft.co.uk {
 		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
+	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		uri @break_glass_strip query -bl_break_glass
 		request_body {
 			max_size 64KiB
 		}
@@ -370,7 +429,12 @@ ntfy.branchleft.co.uk {
 publicpress.co.uk {
 	log {
 		output file /var/log/caddy/access.log
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
 	}
 	tls {
 		protocols tls1.2 tls1.3
@@ -398,7 +462,12 @@ publicpress.co.uk {
 http://edge-probe.invalid:8080 {
 	log {
 		output file /var/log/caddy/probe.log
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
 	}
 	@members_magic_link {
 		method POST
@@ -408,7 +477,9 @@ http://edge-probe.invalid:8080 {
 		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
+	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
 	route {
+		uri @break_glass_strip query -bl_break_glass
 		rate_limit {
 			zone probe_host_per_ip {
 				key {http.request.remote.host}
@@ -434,7 +505,12 @@ http://edge-probe.invalid:8080 {
 :8080 {
 	log {
 		output file /var/log/caddy/probe.log
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
 	}
 	@members_magic_link {
 		method POST
@@ -444,7 +520,9 @@ http://edge-probe.invalid:8080 {
 		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
+	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
 	route {
+		uri @break_glass_strip query -bl_break_glass
 		rate_limit {
 			zone probe_per_ip {
 				key {http.request.remote.host}
