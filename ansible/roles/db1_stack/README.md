@@ -634,8 +634,8 @@ bot sees it.
   variables redirect the daemon rather than name a compose file. The deploy program
   checks none of these. The owner writes those files; the role reads none of them,
   because `db.env` holds secrets. The one environment file the role reads is
-  `/etc/branchleft/db.image.env`. The tracker item for this vector does not yet
-  record this gap; until it does, this README is the only record of it.
+  `/etc/branchleft/db.image.env`. This gap is tracked as follow-up work; until a
+  check exists, this entry is the record of it.
 - MySQL 8.0 reaches the end of its vendor support at a date this README does not
   state, because it was not checked here; the database's own ticket owns that.
 
