@@ -497,7 +497,7 @@
       tasks_from: _compose_assert.yml
       edits:
         - path: /opt/branchleft/mail-spool/compose.override.yml
-          regexp: '(      image: .*)$'
+          regexp: '(    image: .*)$'
           replace: "\\1\n    ports:\n      - '0.0.0.0:2525:2525'"
       expect: 'is not the file the role writes'
 
