@@ -7,6 +7,7 @@
 #   readonly  whether its root filesystem is read-only (default true)
 #   networks  the networks it is joined to (default: the drain network and the seven slots)
 #   extra_networks  networks it is joined to as well
+#   image     the image the container reports (default: the one it was started with)
 #   port      the line docker port prints (default 8081/tcp -> 127.0.0.1:8095)
 #   bind      the address the endpoint listens on (default 127.0.0.1)
 #   open      whether the endpoint answers the drain path with no token (default false)
@@ -15,6 +16,7 @@
     content: |
       [{"Name": "/mail-spool-mail-spool-1",
         "State": {"Status": "running", "Health": {"Status": "{{ standin_health }}"}},
+        "Config": {"Image": "{{ standin_image }}"},
         "HostConfig": {"ReadonlyRootfs": {{ standin_readonly | bool | to_json }}},
         "NetworkSettings": {"Networks": { {% for network in standin_networks %}"{{ network }}": {}{{ "," if not loop.last else "" }}{% endfor %} }}}]
     dest: /var/lib/standin-docker/inspect.json
@@ -23,6 +25,7 @@
     mode: '0644'
   vars:
     standin_health: "{{ (standin_override | default({})).health | default('healthy') }}"
+    standin_image: "{{ (standin_override | default({})).image | default('@@IMAGE@@') }}"
     standin_readonly: '{{ (standin_override | default({})).readonly | default(true) }}'
     standin_default_networks:
       - branchleft-mail-spool-drain

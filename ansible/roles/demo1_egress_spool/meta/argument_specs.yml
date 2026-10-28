@@ -8,10 +8,11 @@ argument_specs:
       to a pinned sha256. Installs the egress program and unit, enables the
       unit and restarts it only when either file changed, then reads the
       firewall back (both chains in both families, the jump first in
-      DOCKER-USER, the REJECT rules, the INPUT jumps). Then places the Compose
-      file, creates the image pin file once, creates the queue volume and gives
+      DOCKER-USER, the REJECT rules, the INPUT jumps and their position). Then places the Compose
+      file and an override that takes the image from the image pin file, creates the pin file once,
+      orders the spool's unit after the egress unit with a drop-in, creates the queue volume and gives
       it to the spool's account, enables and starts the spool's unit, and reads
-      the running spool back (healthy, read-only, the port on 127.0.0.1 only,
+      the running spool back (healthy, read-only, running the image the pin file names, the port on 127.0.0.1 only,
       the networks, the unauthenticated drain refused). It never writes the
       drain token file, which is a root-only file the owner places once; it
       never writes the shared Compose template unit; it opens no inbound port,

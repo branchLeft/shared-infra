@@ -15,6 +15,24 @@
     demo1_egress_spool_compose_doc: '{{ demo1_egress_spool_compose_raw.content | b64decode | from_yaml }}'
   no_log: true
 
+# The override is merged over the file read above. Lists such as ports and
+# networks add up when merged, so it is held to the exact text the role writes:
+# an override that says anything but where the image comes from is refused.
+- name: Read the Compose override
+  ansible.builtin.slurp:
+    src: '{{ demo1_egress_spool_override_dest }}'
+  register: demo1_egress_spool_override_raw
+  no_log: true
+
+- name: Refuse an override that says anything but where the image comes from
+  ansible.builtin.assert:
+    that:
+      - (demo1_egress_spool_override_raw.content | b64decode) == demo1_egress_spool_override_content
+    quiet: true
+    fail_msg: >-
+      {{ demo1_egress_spool_override_dest }} is not the file the role writes. It must set the image from the
+      pin file and nothing else, because Compose adds its ports and networks to the pinned file's.
+
 - name: Refuse a Compose file without the spool's service
   ansible.builtin.assert:
     that:

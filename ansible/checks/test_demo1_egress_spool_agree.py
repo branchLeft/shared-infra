@@ -32,10 +32,12 @@ OWNED = (
     "demo1_egress_spool_project_dir",
     "demo1_egress_spool_compose_dest",
     "demo1_egress_spool_image_env_path",
+    "demo1_egress_spool_override_dest",
+    "demo1_egress_spool_dropin_dest",
     "demo1_egress_spool_token_path",
 )
 NAT_ROLE = "egress_nat"
-ORDER = (BUILD, "host_baseline", ROLE)
+ORDER = (BUILD, ROLE)
 
 
 class SpoolAgreeError(Exception):
@@ -247,10 +249,10 @@ class SpoolAgreeTest(unittest.TestCase):
     def test_the_roles_in_the_wrong_order_or_missing_are_named(self) -> None:
         base = facts()
         for roles in (
-            [ROLE, "host_baseline", BUILD],
-            [BUILD, ROLE, "host_baseline"],
-            [BUILD, ROLE],
-            [BUILD, "host_baseline", ROLE, ROLE],
+            [ROLE, BUILD],
+            [BUILD],
+            [ROLE],
+            [BUILD, ROLE, ROLE],
         ):
             with self.subTest(roles=roles):
                 found = disagreements(dict(base, playbook_roles=roles))

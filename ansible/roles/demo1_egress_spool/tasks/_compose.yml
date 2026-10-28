@@ -32,6 +32,20 @@
   register: demo1_egress_spool_compose
   when: demo1_egress_spool_project_stat.stat.exists
 
+# Compose merges compose.override.yml over compose.yml when both sit in the
+# project directory. It takes the running image from the pin file, which is the
+# one source of the image, so a bump the deploy wrapper writes there is the image
+# the container runs. Skipped in a plan with no directory yet, like the download.
+- name: Place the override that takes the image from the pin file
+  ansible.builtin.copy:
+    content: '{{ demo1_egress_spool_override_content }}'
+    dest: '{{ demo1_egress_spool_override_dest }}'
+    owner: root
+    group: root
+    mode: '0644'
+  register: demo1_egress_spool_override
+  when: demo1_egress_spool_project_stat.stat.exists
+
 - name: Look at the Compose file on the host
   ansible.builtin.stat:
     path: '{{ demo1_egress_spool_compose_dest }}'

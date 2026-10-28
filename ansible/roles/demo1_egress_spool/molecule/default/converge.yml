@@ -22,6 +22,18 @@
         mode: '0600'
       when: not ansible_check_mode
 
+    # The wrapper then restarts the unit, and the container starts on the new image. The
+    # stand-in docker is told the same, without a call to its compose command, so that the
+    # call log still shows the one start the role made.
+    - name: Start the container on the moved pin, as the wrapper's restart does
+      ansible.builtin.copy:
+        content: '{{ standin_bumped_pin }}'
+        dest: /var/lib/standin-docker/running-image
+        owner: root
+        group: root
+        mode: '0644'
+      when: not ansible_check_mode
+
     - name: Apply the role over the moved pin
       ansible.builtin.include_role:
         name: branchleft.demo1_egress_spool

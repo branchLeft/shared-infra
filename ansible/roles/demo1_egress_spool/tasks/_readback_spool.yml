@@ -31,6 +31,19 @@
           The start said: {{ demo1_egress_spool_start.msg | default('nothing') }}.
           An AssertPathExists failure on the image pin file leaves a unit inactive, not failed.
 
+    # The drop-in makes systemd start the spool only with the egress policy loaded, and
+    # restart it whenever the policy is. systemd reports the effective list, drop-ins included.
+    - name: Refuse a spool unit that is not ordered after, and bound to, the egress unit
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_egress_unit_name in (demo1_egress_spool_spool_state.status.After | default('')).split()
+          - demo1_egress_spool_egress_unit_name in (demo1_egress_spool_spool_state.status.Requires | default('')).split()
+        quiet: true
+        fail_msg: >-
+          {{ demo1_egress_spool_compose_unit }} is not ordered after, and bound to, {{ demo1_egress_spool_egress_unit_name }}.
+          Without that ordering the spool can start before the egress policy is loaded.
+          The role writes the drop-in {{ demo1_egress_spool_dropin_dest }} for it.
+
     - name: Read the image pin file
       ansible.builtin.slurp:
         src: '{{ demo1_egress_spool_image_env_path }}'
@@ -78,9 +91,24 @@
       failed_when: false
       check_mode: false
 
-    - name: Work out what the host reports about the container
+    - name: Work out what the host reports about the container, and the image the pin file names
       ansible.builtin.set_fact:
         demo1_egress_spool_inspected: '{{ (demo1_egress_spool_container_inspect.stdout | from_json)[0] }}'
+        demo1_egress_spool_pinned_image: >-
+          {{ (demo1_egress_spool_image_env_raw.content | b64decode).splitlines() | first | regex_replace('^IMAGE=', '') }}
+
+    # The pin file is the one source of the image. The override makes Compose read it, so a
+    # container that runs another image was started before the pin moved, or without the override.
+    - name: Refuse a container that runs another image than the pin file names
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_inspected.Config.Image == demo1_egress_spool_pinned_image
+        quiet: true
+        fail_msg: >-
+          The container {{ demo1_egress_spool_container }} does not run the image the pin file
+          {{ demo1_egress_spool_image_env_path }} names. It runs
+          {{ (demo1_egress_spool_inspected.Config | default({})).Image | default('no image') }}; the file names
+          {{ demo1_egress_spool_pinned_image }}. Restart {{ demo1_egress_spool_compose_unit }} after a change to the pin file.
 
     - name: Refuse a container that is not healthy
       ansible.builtin.assert:

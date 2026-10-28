@@ -78,15 +78,57 @@
     follow: false
   when: demo1_egress_spool_volume_after.rc == 0
 
-# restarted when the Compose file changed: the unit is a oneshot that stays
-# active, so a started unit would never read a new file. Compose recreates only
-# the service whose configuration changed. Best effort: a failed start is read
-# back below and fails the run there, with this message beside it.
+# The spool is started after the egress policy is loaded, and stopped and
+# restarted with it. The drop-in is read by systemd before the unit is started.
+# The shared template unit itself is never written: a drop-in beside it is the
+# only way to give one instance an ordering the others do not have.
+- name: Create the drop-in directory of the spool's unit
+  ansible.builtin.file:
+    path: '{{ demo1_egress_spool_dropin_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# In check mode the directory is not created, and copy refuses a destination
+# whose directory is missing, so the drop-in is skipped in a plan on a host that
+# has none yet (ANS-10); the plan shows the directory alone.
+- name: Look at the drop-in directory
+  ansible.builtin.stat:
+    path: '{{ demo1_egress_spool_dropin_dir }}'
+    follow: false
+  register: demo1_egress_spool_dropin_dir_stat
+
+- name: Order the spool's unit after the egress policy, and bind it to the policy
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Requires={{ demo1_egress_spool_egress_unit_name }}
+      After={{ demo1_egress_spool_egress_unit_name }}
+    dest: '{{ demo1_egress_spool_dropin_dest }}'
+    owner: root
+    group: root
+    mode: '0644'
+  register: demo1_egress_spool_dropin
+  notify: Reload systemd manager
+  when: demo1_egress_spool_dropin_dir_stat.stat.exists
+
+- name: Make systemd read the drop-in before the spool's unit is started
+  ansible.builtin.meta: flush_handlers
+
+# restarted when the Compose file or its override changed: the unit is a oneshot
+# that stays active, so a started unit would never read a new file. Compose
+# recreates only the service whose configuration changed. Best effort: a failed
+# start is read back below and fails the run there, with this message beside it.
 - name: Enable the spool's unit and start it, or restart it when the Compose file changed
   ansible.builtin.systemd_service:
     name: '{{ demo1_egress_spool_compose_unit }}'
     enabled: true
-    state: "{{ 'restarted' if (demo1_egress_spool_compose.changed | default(false)) else 'started' }}"
+    state: "{{ 'restarted' if demo1_egress_spool_compose_files_changed else 'started' }}"
+  vars:
+    demo1_egress_spool_compose_files_changed: >-
+      {{ (demo1_egress_spool_compose.changed | default(false))
+      or (demo1_egress_spool_override.changed | default(false)) }}
   register: demo1_egress_spool_start
   failed_when: false
   when: demo1_egress_spool_compose_now.stat.exists
@@ -96,6 +138,9 @@
     demo1_egress_spool_spool_pending: >-
       {{ not demo1_egress_spool_compose_now.stat.exists
       or (demo1_egress_spool_compose.changed | default(false))
+      or (demo1_egress_spool_override.changed | default(false))
+      or not demo1_egress_spool_dropin_dir_stat.stat.exists
+      or (demo1_egress_spool_dropin.changed | default(false))
       or (demo1_egress_spool_image_env.changed | default(false))
       or demo1_egress_spool_volume_before.rc != 0
       or (demo1_egress_spool_start.changed | default(false)) }}

@@ -20,13 +20,20 @@ In this order, and it stops at the first refusal:
    exists in both `iptables` and `ip6tables`. `/etc/branchleft`, `/opt/branchleft` and
    `/usr/local/sbin` are real directories owned by root and not writable by group or others. The
    shared Compose template unit is loaded from its one path and is a regular file owned by root.
+   (Debian 13's `base-files` creates `/usr/local/sbin` as `root:root` mode `0755` on a new install,
+   and sets group `staff` with mode `2775` only where an old release left the marker file
+   `/etc/staff-group-for-usr-local`. The test image is `debian:trixie` underneath, so it has the
+   first. A host with the second is refused, because the program in that directory runs as root at
+   every boot: change its group and mode, or remove the group's write bit, and run again.)
 3. **The egress policy.** Downloads the egress program to `/usr/local/sbin/branchleft-demo-egress`
    (mode 0755) and its unit to `/etc/systemd/system/` (0644), each held to its sha256. Enables the
    unit, and runs the program again only when either file changed. Then reads the loaded rules
    back, in both families (the table below says what is asserted).
-4. **The spool.** Checks the drain token file, downloads the Compose file, checks its posture,
-   creates the image pin file once, creates the queue volume and gives it to the spool's account,
-   enables and starts the spool's unit. Then reads the running container back.
+4. **The spool.** Checks the drain token file, downloads the Compose file and places the override
+   that takes the image from the pin file, checks their posture, creates the image pin file once,
+   creates the queue volume and gives it to the spool's account, orders the spool's unit after the
+   egress unit with a drop-in, enables and starts the spool's unit. Then reads the running
+   container back, and its image against the pin file.
 
 What it does **not** do, each on purpose:
 
@@ -38,7 +45,8 @@ What it does **not** do, each on purpose:
   is installed on the host by hand and has no owner in this repository; a second writer is
   refused by `test_deploy_tooling_single_owner.py`. The role asserts it and names it when it is
   missing.
-- It does not install Docker (`host_baseline` does), create `/etc/branchleft` or `/opt/branchleft`,
+- It does not install Docker (`host_baseline` does, and `ansible/playbooks/demo1.yml` does not
+  apply that role: demo1's baseline is its own step), create `/etc/branchleft` or `/opt/branchleft`,
   open a port, add a firewall rule of its own, or reboot the host. The only rules on the host are
   the ones the pinned egress program builds.
 - It does not apply `egress_nat`. The demo containers must not reach the network, and a NAT rule
@@ -58,7 +66,11 @@ The pinned egress program loads two chains (`BRANCHLEFT-DEMO-EGRESS` for forward
 `BRANCHLEFT-DEMO-INPUT` for traffic to the host), puts a jump to the first into `DOCKER-USER`, and
 puts a jump to the second into `INPUT` for `docker0` and every `br-` bridge. The host keeps its
 own egress. Docker evaluates `DOCKER-USER` before its own rules, so the jump has to be the first
-rule there: anything ahead of it that accepts would outrank the policy.
+rule there: anything ahead of it that accepts would outrank the policy. In `INPUT` the jumps are
+read for position too: a rule ahead of them is accepted unless it accepts what a bridge sends (an
+accept with no interface that is not only established traffic, or one that names a bridge), since
+a tool such as `fail2ban` may insert its own rule at the top later. An `ACCEPT` ahead of the jumps
+that would match a container is refused.
 
 The program inserts the jump only when it is absent, and a restart does not move one that is
 already there. So when the read-back reports the jump is present but not first, the repair is an
@@ -101,8 +113,9 @@ checksum with `git show <commit>:<path> | shasum -a 256` in ghost-platform, and 
 - No collections beyond `ansible.builtin`.
 - Target: Debian 13 with Python 3, systemd, `iptables`, `ip6tables`, `ss` and `grep`. The role
   runs as root.
-- Docker running (the `host_baseline` role), the shared Compose template unit, the two root-owned
-  directories, and the owner's token file, all in place before the role runs.
+- Docker running (installed by the `host_baseline` role, applied to the host as a step of its
+  own), the shared Compose template unit, the two root-owned directories, and the owner's token
+  file, all in place before the role runs.
 - Network from the host to `raw.githubusercontent.com` on a real apply.
 
 ## What it changes on a host
@@ -111,23 +124,42 @@ checksum with `git show <commit>:<path> | shasum -a 256` in ghost-platform, and 
   `root:root` `0644`. The unit is enabled for boot, and active.
 - The rules the program builds: the two policy chains in both families, the jump in
   `DOCKER-USER` and the jumps in `INPUT`. The role itself writes no rule.
-- `/opt/branchleft/mail-spool/` (`root:root` `0755`) and the Compose file in it (`0644`).
+- `/opt/branchleft/mail-spool/` (`root:root` `0755`), the Compose file in it (`0644`) and beside
+  it `compose.override.yml` (`0644`), which sets the image from the pin file.
 - `/etc/branchleft/mail-spool.image.env` (`root:root` `0600`), created once with one line,
   `IMAGE=<the image in the Compose file>`. See below for why it is never rewritten.
+- `/etc/systemd/system/branchleft-compose@mail-spool.service.d/10-egress-first.conf` (`0644`), a
+  drop-in that makes the spool's unit `Requires=` and start `After=` the egress unit.
 - The Docker volume `branchleft-mail-spool-data`, created only if absent, and its data directory
   under `/var/lib/docker/volumes/`, given to `31000:31000` (mode 0755) with the `file` module on
   the path `docker volume inspect` reports, after its shape is checked.
 - The unit `branchleft-compose@mail-spool.service`: enabled, started, and restarted only when the
-  Compose file changed.
+  Compose file or its override changed.
 
-### Why the image pin file is created once and never rewritten
+### The image pin file is the one source of the image
 
-The shared Compose template unit refuses to start without `/etc/branchleft/<stack>.image.env`, and
-the deploy wrapper writes that file as one `IMAGE=` line for every image bump. The Compose text of
-this stack carries its image as a literal and does not consume the file, so the unit only needs it
-to exist. If the role rewrote it on each run, a converge would put the golden's image back over a
-bump the wrapper made. So it is created with `force: false`, from the image in the Compose file,
-and the read-back asserts only its shape: exactly one line, `IMAGE=<name>@sha256:<64 hex digits>`.
+The shared Compose template unit refuses to start without `/etc/branchleft/<stack>.image.env`,
+loads it as environment, and the deploy wrapper writes it as one `IMAGE=` line for every image
+bump. The pinned Compose file carries its image as a literal, so left alone it would be a second
+source: a bump written to the pin file would change nothing that runs. The role therefore places
+`compose.override.yml` beside the Compose file, with `image: ${IMAGE:?...}`, which Compose merges
+over the literal. The literal is then only the first value: the role writes it into the pin file
+once, with `force: false`, so a later converge never puts the golden's image back over a bump the
+wrapper made. The read-back holds three things together: the pin file is exactly one line,
+`IMAGE=<name>@sha256:<64 hex digits>`; the override is exactly the text the role writes (lists such
+as `ports` and `networks` add up when Compose merges, so an override that said more could publish a
+port); and the running container's image (`docker inspect`, `Config.Image`) equals the one in the
+pin file. A container left on the old image after a bump, or started without the override, is
+refused, and the message says to restart the unit.
+
+### The spool waits for the egress policy
+
+The drop-in gives the spool's unit `Requires=` and `After=branchleft-demo-egress.service`, so the
+spool cannot start with the policy not loaded, and a restart of the egress unit (a changed file,
+or Docker restarting, which the egress unit follows) restarts the spool's unit with it. That
+re-runs `docker compose up -d`, which recreates only what changed. The read-back asks systemd for
+the unit's effective `After` and `Requires`, which include the drop-in. The shared template unit
+itself is not touched: the drop-in is the way to order one instance.
 
 ## Check mode
 
@@ -165,8 +197,9 @@ and the lint steps of the harness (`ansible-lint` at the production profile and 
 
 ### What `default` proves
 
-`converge.yml` applies the role, moves the image pin file the way the deploy wrapper would, and
-applies the role again. The idempotence step then applies the whole converge once more and fails
+`converge.yml` applies the role, moves the image pin file the way the deploy wrapper would (the
+stand-in docker is told the container now runs that image, as the wrapper's restart would make
+it), and applies the role again. The idempotence step then applies the whole converge once more and fails
 on any change.
 `verify.yml` reads the result with its own commands, not the role's: the jumps with `iptables -C`
 and the first rule with `-L`, each file's owner and mode, the token file unchanged, the bumped
@@ -200,6 +233,18 @@ pass every case. Whatever a case changed is put back in every outcome.
 | The inputs; the host name; the template path               | A branch for the commit; a credential in the URL; a short file list; port 80; another host name; a template elsewhere | The step run with the bad variable       |
 | The downloads are held to their pins                       | A checksum that is not the file's (both steps that download)                                                          | The step run with another checksum       |
 
+Also covered, each with its control on the good value:
+
+- The container's image against the pin file, both ways: a container that reports another image
+  than the file names, and a file that names another image than the container runs.
+- The override beside the Compose file: one that adds a port is refused.
+- The spool's unit ordered after, and bound to, the egress unit: a drop-in with both lines taken
+  out is refused.
+- Where the `INPUT` jumps sit: an accept for the loopback, or for established traffic, ahead of
+  them is accepted; an accept for every source, or for a bridge, ahead of them is refused.
+- `/usr/local/sbin` writable by its group (mode `2775`, as an old Debian leaves it) is refused;
+  the control is the directory as the image has it, `root:root` `0755`.
+
 ## Named limits
 
 - **The stand-ins prove the role's logic, not Docker's.** The refusals cases show that the role
@@ -217,12 +262,19 @@ pass every case. Whatever a case changed is put back in every outcome.
   backend. A host whose Docker uses the nftables backend has no such chain and the role refuses it
   by name.
 - **A restart of the program rebuilds the policy chains but does not move a jump** (above).
+- **The listener check depends on `docker-proxy`.** The role reads the listeners on the drain port
+  with `ss -ltn`, and what it sees on `127.0.0.1` is the listener of Docker's userland proxy. If
+  the Docker daemon runs with the userland proxy off (`"userland-proxy": false`), a published port
+  is a firewall translation with no listener to see, the check finds none, and the role refuses
+  the host instead of guessing. The `docker port` and unauthenticated-call checks do not depend
+  on it.
 
 ## Gaps the role names and does not close
 
 - The shared Compose template unit has no owner in this repository. The role only asserts it.
-- The first run on demo1 is meant to be a plan. It also shows the `host_baseline` diff (sshd,
-  unattended upgrades, fail2ban), which comes with Docker in `ansible/playbooks/demo1.yml`.
+- `ansible/playbooks/demo1.yml` applies `demo1_build` and this role, and not `host_baseline`.
+  Docker must already be running on the host; if it is not, the role refuses by name. The host's
+  baseline (sshd, unattended upgrades, fail2ban) is a separate step under demo1's enrolment.
 
 ## How it is delivered
 

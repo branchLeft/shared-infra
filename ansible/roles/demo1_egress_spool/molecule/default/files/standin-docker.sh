@@ -29,7 +29,10 @@ case $1 in
     ;;
   inspect)
     [ "$2" = mail-spool-mail-spool-1 ] || exit 1
-    cat "$state/inspect.json"
+    # The image the container was started with is filled in where the file holds the
+    # marker; a case that wants another image writes it into the file instead.
+    image=$(cat "$state/running-image" 2>/dev/null || true)
+    sed "s|@@IMAGE@@|$image|" "$state/inspect.json"
     ;;
   port)
     [ "$2" = mail-spool-mail-spool-1 ] || exit 1
@@ -50,6 +53,19 @@ case $1 in
           echo "required variable SHIM_DRAIN_TOKEN is missing a value" >&2
           exit 1
         }
+        # With the override beside the Compose file, Compose runs the image from the
+        # environment the unit loads from the pin file. Without it, it runs the image
+        # the Compose file carries, which is what the role must never leave in place.
+        if [ -f "$project/compose.override.yml" ]; then
+          [ -n "${IMAGE:-}" ] || {
+            echo "required variable IMAGE is missing a value" >&2
+            exit 1
+          }
+          image=$IMAGE
+        else
+          image=$(sed -n "s/^ *image: *'\(.*\)' *$/\1/p" "$project/compose.yml" | head -n 1)
+        fi
+        printf '%s' "$image" > "$state/running-image"
         systemctl start standin-drain-stub.service
         # Compose --wait returns once the service is up.
         tries=0

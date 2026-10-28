@@ -111,3 +111,27 @@
     quiet: true
     fail_msg: INPUT in {{ demo1_egress_spool_tool }} has no jump to {{ demo1_egress_spool_input_chain }} for traffic from {{ item }}.
   loop: '{{ demo1_egress_spool_bridges }}'
+
+# The program inserts the jumps at the top of INPUT, and a tool that inserts a rule
+# later puts it ahead of them. A rule ahead is harmless unless it accepts what a bridge
+# sends: an accept that names another interface (the loopback) or only returns
+# established traffic is left alone, and any other accept would outrank the policy.
+- name: Refuse an INPUT chain with an accept rule ahead of the jumps to the input policy
+  ansible.builtin.assert:
+    that:
+      - >-
+        demo1_egress_spool_input_ahead | select('search', ' -j ACCEPT$') | reject('search', ' -i (?!docker0 |br-)[^ ]+ ')
+        | reject('search', ' --ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j ACCEPT$') | list | length == 0
+    quiet: true
+    fail_msg: >-
+      INPUT in {{ demo1_egress_spool_tool }} has an accept rule ahead of the jumps to {{ demo1_egress_spool_input_chain }},
+      so what a container sends to the host could be accepted before the policy sees it.
+      Delete that rule, or put it after the jumps.
+  vars:
+    demo1_egress_spool_input_rules: '{{ demo1_egress_spool_chain_host_input.stdout_lines | select("match", "^-A INPUT ") | list }}'
+    demo1_egress_spool_input_jumps: >-
+      {{ demo1_egress_spool_bridges | map('regex_replace', '^', '-A INPUT -i ')
+      | map('regex_replace', '$', ' -j ' ~ demo1_egress_spool_input_chain) | list }}
+    demo1_egress_spool_input_first_jump: '{{ demo1_egress_spool_input_rules | select("in", demo1_egress_spool_input_jumps) | first }}'
+    demo1_egress_spool_input_text_ahead: '{{ (demo1_egress_spool_input_rules | join(" ;; ")).split(demo1_egress_spool_input_first_jump)[0] }}'
+    demo1_egress_spool_input_ahead: '{{ demo1_egress_spool_input_text_ahead.split(" ;; ") | select | list }}'

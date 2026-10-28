@@ -129,6 +129,47 @@
           content: "IMAGE=ghcr.io/branchleft/mailgun-shim:latest\n"
       expect: 'is not exactly one IMAGE='
 
+# The pin file is the one source of the image. The control is the accepted case above: the
+# container runs the image the file names. A container on another image is refused whichever
+# of the two moved.
+- name: Refuse a container that runs another image than the pin file names
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the container reports an image other than the pin file's
+      tasks_from: _readback_spool.yml
+      standin:
+        image: ghcr.io/branchleft/mailgun-shim@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      expect: 'does not run the image the pin file'
+
+- name: Refuse a pin file that moved while the container did not
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the pin file names another image than the one the container runs
+      tasks_from: _readback_spool.yml
+      files:
+        - path: /etc/branchleft/mail-spool.image.env
+          content: "IMAGE=ghcr.io/branchleft/mailgun-shim@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+      expect: 'does not run the image the pin file'
+
+# The drop-in is edited in place and systemd told, so the unit it orders is read without it.
+- name: Refuse a spool unit that does not wait for the egress policy
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the drop-in no longer orders the spool after the egress unit
+      tasks_from: _readback_spool.yml
+      edits:
+        - path: /etc/systemd/system/branchleft-compose@mail-spool.service.d/10-egress-first.conf
+          regexp: '^(Requires|After)=.*\n'
+          replace: ''
+      setup:
+        - [systemctl, daemon-reload]
+      restore:
+        - [systemctl, daemon-reload]
+      expect: 'is not ordered after, and bound to'
+
 - name: Refuse a spool unit that is not running
   ansible.builtin.import_playbook: refused_case.yml
   vars:
@@ -234,6 +275,57 @@
       reload_policy: true
       expect: 'has no jump to BRANCHLEFT-DEMO-INPUT for traffic from br-+'
 
+# Where the INPUT jumps sit. A rule ahead of them is accepted when it cannot match what a
+# bridge sends (the loopback, or established traffic), and refused when an accept would
+# outrank the input policy. The two controls are those accepts; the cases are the others.
+- name: Accept an INPUT chain with a loopback accept ahead of the jumps
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: an accept for the loopback sits ahead of the INPUT jumps in iptables
+      tasks_from: _readback_egress.yml
+      setup:
+        - [iptables, -t, filter, -I, INPUT, '1', -i, lo, -j, ACCEPT]
+      restore:
+        - [iptables, -t, filter, -D, INPUT, -i, lo, -j, ACCEPT]
+      accepted: true
+
+- name: Accept an INPUT chain with an established-traffic accept ahead of the jumps
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: an established-traffic accept sits ahead of the INPUT jumps in ip6tables
+      tasks_from: _readback_egress.yml
+      setup:
+        - [ip6tables, -I, INPUT, '1', -m, conntrack, --ctstate, 'RELATED,ESTABLISHED', -j, ACCEPT]
+      restore:
+        - [ip6tables, -D, INPUT, -m, conntrack, --ctstate, 'RELATED,ESTABLISHED', -j, ACCEPT]
+      accepted: true
+
+- name: Refuse an INPUT chain with a blanket accept ahead of the jumps
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: an accept for every source sits ahead of the INPUT jumps in iptables
+      tasks_from: _readback_egress.yml
+      setup:
+        - [iptables, -t, filter, -I, INPUT, '1', -j, ACCEPT]
+      restore:
+        - [iptables, -t, filter, -D, INPUT, -j, ACCEPT]
+      expect: 'accept rule ahead of the jumps'
+
+- name: Refuse an INPUT chain with a bridge accept ahead of the jumps
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: an accept for the user-defined bridges sits ahead of the INPUT jumps in ip6tables
+      tasks_from: _readback_egress.yml
+      setup:
+        - [ip6tables, -t, filter, -I, INPUT, '1', -i, br-+, -j, ACCEPT]
+      restore:
+        - [ip6tables, -t, filter, -D, INPUT, -i, br-+, -j, ACCEPT]
+      expect: 'accept rule ahead of the jumps'
+
 - name: Refuse a family where a policy chain is missing
   ansible.builtin.import_playbook: refused_case.yml
   vars:
@@ -295,6 +387,23 @@
         - [chmod, '0777', /usr/local/sbin]
       restore:
         - [chmod, '0755', /usr/local/sbin]
+      expect: 'is writable by group or others'
+
+# Debian 13 creates /usr/local/sbin as root:root 0755 on a new install (its base-files makes
+# the directory with mkdir and sets group staff, mode 2775, only where an old release left a
+# marker file), so the control above accepts the test image's directory. A group-writable
+# directory is refused: the program in it runs as root at every boot. 00755 clears the setgid
+# bit that 2775 set.
+- name: Refuse a directory writable by its group
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the sbin directory is writable by its group and carries the setgid bit
+      tasks_from: _preconditions.yml
+      setup:
+        - [chmod, '2775', /usr/local/sbin]
+      restore:
+        - [chmod, '00755', /usr/local/sbin]
       expect: 'is writable by group or others'
 
 # Stopping docker.service stops the two units that depend on it; the restore starts all three.
@@ -377,6 +486,20 @@
       name: the Compose file as delivered
       tasks_from: _compose_assert.yml
       accepted: true
+
+# The override is merged over the Compose file, and lists add up when merged, so an override
+# that adds a port would publish it beside the pinned one.
+- name: Refuse an override that adds a port
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the override publishes a second port
+      tasks_from: _compose_assert.yml
+      edits:
+        - path: /opt/branchleft/mail-spool/compose.override.yml
+          regexp: '(      image: .*)$'
+          replace: "\\1\n    ports:\n      - '0.0.0.0:2525:2525'"
+      expect: 'is not the file the role writes'
 
 - name: Refuse a Compose file that publishes on every address
   ansible.builtin.import_playbook: refused_case.yml

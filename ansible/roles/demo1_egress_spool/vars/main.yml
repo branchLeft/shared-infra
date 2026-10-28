@@ -50,6 +50,24 @@ demo1_egress_spool_image_env_path: /etc/branchleft/mail-spool.image.env
 demo1_egress_spool_compose_unit: branchleft-compose@mail-spool.service
 demo1_egress_spool_compose_template_path: /etc/systemd/system/branchleft-compose@.service
 demo1_egress_spool_service: mail-spool
+
+# The image pin file is the one source of the image the spool runs. The rendered
+# Compose file carries an image too, but only as the first value written into the
+# pin file; this override, which Compose merges over it, makes the running
+# container take the image from the pin file (the shared unit loads that file as
+# environment). The read-back holds the file to exactly this text, so the
+# override cannot add a port or a network.
+demo1_egress_spool_override_dest: /opt/branchleft/mail-spool/compose.override.yml
+demo1_egress_spool_override_content: |
+  services:
+    mail-spool:
+      image: ${IMAGE:?the image pin file /etc/branchleft/mail-spool.image.env names no image}
+
+# The spool must not run before the egress policy is loaded and must stop with
+# it, so its unit is ordered after, and bound to, the egress unit by a drop-in
+# beside the shared template unit, which this role never writes.
+demo1_egress_spool_dropin_dir: /etc/systemd/system/branchleft-compose@mail-spool.service.d
+demo1_egress_spool_dropin_dest: /etc/systemd/system/branchleft-compose@mail-spool.service.d/10-egress-first.conf
 demo1_egress_spool_container: mail-spool-mail-spool-1
 demo1_egress_spool_container_port: 8081
 demo1_egress_spool_uid: 31000
