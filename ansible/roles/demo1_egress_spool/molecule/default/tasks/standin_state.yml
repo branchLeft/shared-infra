@@ -1,0 +1,63 @@
+---
+# Test scaffolding, not role tasks. Writes what the stand-in docker reports and how the
+# stand-in drain endpoint listens. With no standin_override it writes the healthy spool
+# the golden Compose file describes; a refusal case passes a dict whose keys replace one
+# value each:
+#   health    the container's health status (default healthy)
+#   readonly  whether its root filesystem is read-only (default true)
+#   networks  the networks it is joined to (default: the drain network and the seven slots)
+#   extra_networks  networks it is joined to as well
+#   port      the line docker port prints (default 8081/tcp -> 127.0.0.1:8095)
+#   bind      the address the endpoint listens on (default 127.0.0.1)
+#   open      whether the endpoint answers the drain path with no token (default false)
+- name: Write what the stand-in docker inspect reports
+  ansible.builtin.copy:
+    content: |
+      [{"Name": "/mail-spool-mail-spool-1",
+        "State": {"Status": "running", "Health": {"Status": "{{ standin_health }}"}},
+        "HostConfig": {"ReadonlyRootfs": {{ standin_readonly | bool | to_json }}},
+        "NetworkSettings": {"Networks": { {% for network in standin_networks %}"{{ network }}": {}{{ "," if not loop.last else "" }}{% endfor %} }}}]
+    dest: /var/lib/standin-docker/inspect.json
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    standin_health: "{{ (standin_override | default({})).health | default('healthy') }}"
+    standin_readonly: '{{ (standin_override | default({})).readonly | default(true) }}'
+    standin_default_networks:
+      - branchleft-mail-spool-drain
+      - branchleft-mail-30001
+      - branchleft-mail-30002
+      - branchleft-mail-30003
+      - branchleft-mail-30004
+      - branchleft-mail-30005
+      - branchleft-mail-30006
+      - branchleft-mail-30007
+    standin_networks: >-
+      {{ ((standin_override | default({})).networks | default(standin_default_networks))
+      + ((standin_override | default({})).extra_networks | default([])) }}
+
+- name: Write what the stand-in docker port prints
+  ansible.builtin.copy:
+    content: "{{ (standin_override | default({})).port | default('8081/tcp -> 127.0.0.1:8095') }}\n"
+    dest: /var/lib/standin-docker/port.txt
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Write how the stand-in drain endpoint listens
+  ansible.builtin.copy:
+    content: |
+      STUB_BIND={{ (standin_override | default({})).bind | default('127.0.0.1') }}
+      STUB_OPEN={{ 1 if ((standin_override | default({})).open | default(false) | bool) else 0 }}
+    dest: /etc/standin-drain-stub.env
+    owner: root
+    group: root
+    mode: '0644'
+
+# Only restarts the endpoint if it is running: before the spool is delivered there is
+# nothing to restart, and the stand-in docker starts it with this file already in place.
+- name: Restart the stand-in drain endpoint if it is running
+  ansible.builtin.command:
+    argv: [systemctl, try-restart, standin-drain-stub.service]
+  changed_when: true

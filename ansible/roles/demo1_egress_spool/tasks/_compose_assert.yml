@@ -1,0 +1,67 @@
+---
+# Internal to the role: reads the Compose file on the host and refuses one that
+# is not safe to run on the demo host. It reads only, so a case can write an
+# edited file and run this alone. Nothing here prints the file: a file that
+# carried a token value must not put it in the log, so the reads have no_log
+# and no message quotes the text.
+- name: Read the Compose file
+  ansible.builtin.slurp:
+    src: '{{ demo1_egress_spool_compose_dest }}'
+  register: demo1_egress_spool_compose_raw
+  no_log: true
+
+- name: Parse the Compose file
+  ansible.builtin.set_fact:
+    demo1_egress_spool_compose_doc: '{{ demo1_egress_spool_compose_raw.content | b64decode | from_yaml }}'
+  no_log: true
+
+- name: Refuse a Compose file without the spool's service
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_compose_doc.services is mapping
+      - demo1_egress_spool_service in demo1_egress_spool_compose_doc.services
+    quiet: true
+    fail_msg: The Compose file does not define the {{ demo1_egress_spool_service }} service.
+
+# A tag can be moved to a different image between two runs; a digest cannot.
+- name: Refuse an image that is not pinned by digest
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_compose_doc.services[demo1_egress_spool_service].image is match(demo1_egress_spool_image_pattern)
+    quiet: true
+    fail_msg: >-
+      The spool's image in the Compose file is not pinned by digest (name@sha256 and 64 hex digits).
+
+# The drain endpoint is the one way queued mail leaves, and its only caller is
+# the ops host over a tunnel it dials, so it listens on this host's loopback
+# and on nothing else. Any second entry, or any other address, is refused.
+- name: Refuse a Compose file that publishes anything but the drain port on 127.0.0.1
+  ansible.builtin.assert:
+    that:
+      - >-
+        demo1_egress_spool_compose_doc.services[demo1_egress_spool_service].ports | default([]) | list
+        == ['127.0.0.1:' ~ demo1_egress_spool_drain_port ~ ':' ~ demo1_egress_spool_container_port]
+    quiet: true
+    fail_msg: >-
+      The Compose file does not publish exactly 127.0.0.1:{{ demo1_egress_spool_drain_port }}:{{ demo1_egress_spool_container_port }}
+      and nothing else. The drain endpoint must listen on the host's loopback only.
+
+- name: Refuse a Compose file that carries the drain token as a value
+  ansible.builtin.assert:
+    that:
+      - >-
+        demo1_egress_spool_compose_doc.services[demo1_egress_spool_service].environment.SHIM_DRAIN_TOKEN | default('')
+        is match(demo1_egress_spool_token_interpolation_pattern)
+    quiet: true
+    fail_msg: >-
+      The Compose file must carry the drain token only as an interpolation of the host's environment
+      file, ${SHIM_DRAIN_TOKEN:?...}, never as a value.
+
+- name: Refuse a Compose file whose networks are not the drain network and the slot networks
+  ansible.builtin.assert:
+    that:
+      - >-
+        demo1_egress_spool_compose_doc.services[demo1_egress_spool_service].networks | default([]) | list | sort
+        == ([demo1_egress_spool_drain_network] + demo1_egress_spool_slot_networks) | sort
+    quiet: true
+    fail_msg: The Compose file's networks for the spool are not the drain network and one network for each demo slot.

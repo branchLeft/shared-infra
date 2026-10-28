@@ -1,0 +1,101 @@
+---
+# Internal to the role. Delivers the mail spool in the order it needs: the
+# drain token the owner placed is checked, the pinned Compose file is placed and
+# held to its posture, the image pin file the shared Compose unit insists on is
+# created once, the queue's volume is made and given to the spool's account, and
+# the unit is enabled and started. The start is best effort: its outcome is read
+# from the running container by _readback_spool.yml, which is what decides.
+- name: Check the drain token the owner placed
+  ansible.builtin.include_tasks: _token.yml
+
+- name: Place the pinned Compose file and hold it to its posture
+  ansible.builtin.include_tasks: _compose.yml
+
+# Created once and never rewritten (force: false). The deploy wrapper owns this
+# file after the first run: it rewrites the line for every image bump, and a
+# converge that put the golden's image back would undo the bump. The Compose
+# text does not consume the file; the shared unit only needs it to exist. In a
+# plan on a host with no Compose file yet there is no image to write (ANS-10).
+- name: Create the image pin file once
+  ansible.builtin.copy:
+    content: "IMAGE={{ demo1_egress_spool_compose_doc.services[demo1_egress_spool_service].image }}\n"
+    dest: '{{ demo1_egress_spool_image_env_path }}'
+    owner: root
+    group: root
+    mode: '0600'
+    force: false
+  register: demo1_egress_spool_image_env
+  when: demo1_egress_spool_compose_now.stat.exists
+
+# The queue lives on a Docker volume the Compose file declares external, so it
+# must exist before the stack starts, and no slot's wipe can reach it. The CLI is
+# used because the Docker modules need a Python library the host does not carry.
+- name: Look for the queue volume
+  ansible.builtin.command:
+    argv: ['{{ demo1_egress_spool_docker }}', volume, inspect, '{{ demo1_egress_spool_volume }}']
+  register: demo1_egress_spool_volume_before
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# Skipped in check mode, where a command does not run (ANS-10); the plan counts
+# a missing volume as a change through the pending fact below.
+- name: Create the queue volume only if it is absent
+  ansible.builtin.command:
+    argv: ['{{ demo1_egress_spool_docker }}', volume, create, '{{ demo1_egress_spool_volume }}']
+  register: demo1_egress_spool_volume_create
+  changed_when: true
+  when: demo1_egress_spool_volume_before.rc != 0
+
+- name: Look for the queue volume again
+  ansible.builtin.command:
+    argv: ['{{ demo1_egress_spool_docker }}', volume, inspect, '{{ demo1_egress_spool_volume }}']
+  register: demo1_egress_spool_volume_after
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Work out where the volume's data directory is
+  ansible.builtin.set_fact:
+    demo1_egress_spool_volume_data: '{{ (demo1_egress_spool_volume_after.stdout | from_json)[0].Mountpoint }}'
+  when: demo1_egress_spool_volume_after.rc == 0
+
+- name: Refuse a volume whose data directory is not where Docker keeps volumes
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_volume_data is match(demo1_egress_spool_volume_path_pattern)
+    quiet: true
+    fail_msg: The queue volume's data directory is not /var/lib/docker/volumes/{{ demo1_egress_spool_volume }}/_data; the role will not give another path away.
+  when: demo1_egress_spool_volume_after.rc == 0
+
+- name: Give the volume's data directory to the spool's account
+  ansible.builtin.file:
+    path: '{{ demo1_egress_spool_volume_data }}'
+    state: directory
+    owner: '{{ demo1_egress_spool_uid }}'
+    group: '{{ demo1_egress_spool_gid }}'
+    mode: '0755'
+    follow: false
+  when: demo1_egress_spool_volume_after.rc == 0
+
+# restarted when the Compose file changed: the unit is a oneshot that stays
+# active, so a started unit would never read a new file. Compose recreates only
+# the service whose configuration changed. Best effort: a failed start is read
+# back below and fails the run there, with this message beside it.
+- name: Enable the spool's unit and start it, or restart it when the Compose file changed
+  ansible.builtin.systemd_service:
+    name: '{{ demo1_egress_spool_compose_unit }}'
+    enabled: true
+    state: "{{ 'restarted' if (demo1_egress_spool_compose.changed | default(false)) else 'started' }}"
+  register: demo1_egress_spool_start
+  failed_when: false
+  when: demo1_egress_spool_compose_now.stat.exists
+
+- name: Work out whether this run changes the spool
+  ansible.builtin.set_fact:
+    demo1_egress_spool_spool_pending: >-
+      {{ not demo1_egress_spool_compose_now.stat.exists
+      or (demo1_egress_spool_compose.changed | default(false))
+      or (demo1_egress_spool_image_env.changed | default(false))
+      or demo1_egress_spool_volume_before.rc != 0
+      or (demo1_egress_spool_start.changed | default(false)) }}

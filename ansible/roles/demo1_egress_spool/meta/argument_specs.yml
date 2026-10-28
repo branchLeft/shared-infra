@@ -1,0 +1,67 @@
+---
+argument_specs:
+  main:
+    short_description: Install the demo host's container egress policy and run its one mail spool, from pinned files, without opening the demo
+    description: >-
+      Downloads the egress program, its unit and the rendered mail-spool
+      Compose file from branchLeft/ghost-platform at a pinned commit, each held
+      to a pinned sha256. Installs the egress program and unit, enables the
+      unit and restarts it only when either file changed, then reads the
+      firewall back (both chains in both families, the jump first in
+      DOCKER-USER, the REJECT rules, the INPUT jumps). Then places the Compose
+      file, creates the image pin file once, creates the queue volume and gives
+      it to the spool's account, enables and starts the spool's unit, and reads
+      the running spool back (healthy, read-only, the port on 127.0.0.1 only,
+      the networks, the unauthenticated drain refused). It never writes the
+      drain token file, which is a root-only file the owner places once; it
+      never writes the shared Compose template unit; it opens no inbound port,
+      adds no firewall rule beyond the pinned egress program, and does not
+      reboot the host.
+    author: branchLeft
+    options:
+      demo1_egress_spool_source_sha:
+        type: str
+        description: >-
+          The full 40-character ghost-platform commit the three files are
+          downloaded from. Bump it together with every checksum in
+          demo1_egress_spool_files.
+        default: 19622ee9c88bf918949f675a85897cfb64c65a24
+      demo1_egress_spool_source_base_url:
+        type: str
+        description: >-
+          The URL prefix each file path is appended to. It must be a plain
+          https URL with no credential and no port. The default is the raw URL
+          at the pinned commit.
+        default: 'https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ demo1_egress_spool_source_sha }}'
+      demo1_egress_spool_files:
+        type: list
+        elements: dict
+        description: >-
+          The three pinned files, each once, with its path from the repository
+          root and its sha256. The download fails unless the file has that
+          sha256. The list must name the egress program, the egress unit and the
+          rendered Compose file, and nothing else.
+        options:
+          path:
+            type: str
+            required: true
+            description: The file's path from the repository root.
+          sha256:
+            type: str
+            required: true
+            description: The 64-character lower-case sha256 of the file at the pinned commit.
+        default:
+          - path: demo-host/provision/branchleft_demo_egress.sh
+            sha256: 6a03d476d2bdc9978f4772e9b6b14f96c1ba4e57215f2abefd974b404ad2235f
+          - path: demo-host/provision/branchleft-demo-egress.service
+            sha256: 7b25d4d7ce17ee65149260368e1271370c00a3860cd1de2f99178467c6185ded
+          - path: render-core/test/golden/mail-spool-compose.demo1.yml
+            sha256: a08170c428eb9ce3cef5fe1a514bfd36053d8f8e3bc1c92ef7ee11b96f5cce4b
+      demo1_egress_spool_drain_port:
+        type: int
+        description: >-
+          The host port the spool's drain endpoint is published on, on
+          127.0.0.1 only. The pinned Compose file must publish exactly this
+          port; the role refuses a file that publishes another, or publishes
+          on any other address. An unprivileged port, 1024 to 65535.
+        default: 8095

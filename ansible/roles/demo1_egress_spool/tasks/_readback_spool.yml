@@ -1,0 +1,140 @@
+---
+# Internal to the role. Reads the running spool back from the host and asserts
+# what the posture depends on. Everything here only reads, so it runs in check
+# mode as well as an apply (ANS-10), except on a plan that would still change
+# the spool: a host that has not been given it has nothing running to read, and
+# the plan says so in a visible line, so a skip does not read as a pass. An
+# apply always reads.
+- name: Say the running spool is not verified in a plan that would still deliver it
+  ansible.builtin.debug:
+    msg: >-
+      Running spool NOT verified: this plan would still deliver or restart the spool,
+      so the container, its port, its networks and its drain endpoint are read only by a run that applies.
+  when: ansible_check_mode and (demo1_egress_spool_spool_pending | bool)
+
+- name: Read the spool back
+  when: not ansible_check_mode or not (demo1_egress_spool_spool_pending | bool)
+  block:
+    - name: Ask systemd for the spool's unit
+      ansible.builtin.systemd_service:
+        name: '{{ demo1_egress_spool_compose_unit }}'
+      register: demo1_egress_spool_spool_state
+
+    - name: Refuse a spool unit that is not active now and enabled for boot
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_spool_state.status.ActiveState == 'active'
+          - demo1_egress_spool_spool_state.status.UnitFileState == 'enabled'
+        quiet: true
+        fail_msg: >-
+          {{ demo1_egress_spool_compose_unit }} is not active, or is not enabled for boot.
+          The start said: {{ demo1_egress_spool_start.msg | default('nothing') }}.
+          An AssertPathExists failure on the image pin file leaves a unit inactive, not failed.
+
+    - name: Read the image pin file
+      ansible.builtin.slurp:
+        src: '{{ demo1_egress_spool_image_env_path }}'
+      register: demo1_egress_spool_image_env_raw
+
+    - name: Refuse an image pin file that is not one IMAGE line holding a digest-pinned image
+      ansible.builtin.assert:
+        that:
+          - (demo1_egress_spool_image_env_raw.content | b64decode).splitlines() | length == 1
+          - (demo1_egress_spool_image_env_raw.content | b64decode).splitlines() | first is match(demo1_egress_spool_image_env_pattern)
+        quiet: true
+        fail_msg: >-
+          {{ demo1_egress_spool_image_env_path }} is not exactly one IMAGE=<name>@sha256:<64 hex digits> line.
+          The shared Compose unit reads it, and the deploy wrapper rewrites it.
+
+    - name: Read the container
+      ansible.builtin.command:
+        argv: ['{{ demo1_egress_spool_docker }}', inspect, '{{ demo1_egress_spool_container }}']
+      register: demo1_egress_spool_container_inspect
+      changed_when: false
+      check_mode: false
+
+    - name: Read the container's published ports
+      ansible.builtin.command:
+        argv: ['{{ demo1_egress_spool_docker }}', port, '{{ demo1_egress_spool_container }}']
+      register: demo1_egress_spool_container_port_read
+      changed_when: false
+      check_mode: false
+
+    - name: Read the listeners on the drain port
+      ansible.builtin.command:
+        argv: [ss, -H, -ltn, 'sport = :{{ demo1_egress_spool_drain_port }}']
+      register: demo1_egress_spool_listeners
+      changed_when: false
+      check_mode: false
+
+    - name: Call the drain endpoint with no token
+      ansible.builtin.uri:
+        url: 'http://127.0.0.1:{{ demo1_egress_spool_drain_port }}/drain'
+        method: GET
+        use_proxy: false
+        follow_redirects: none
+        timeout: 10
+      register: demo1_egress_spool_drain_call
+      failed_when: false
+      check_mode: false
+
+    - name: Work out what the host reports about the container
+      ansible.builtin.set_fact:
+        demo1_egress_spool_inspected: '{{ (demo1_egress_spool_container_inspect.stdout | from_json)[0] }}'
+
+    - name: Refuse a container that is not healthy
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_inspected.State.Health.Status == 'healthy'
+        quiet: true
+        fail_msg: >-
+          The container {{ demo1_egress_spool_container }} is not healthy
+          ({{ demo1_egress_spool_inspected.State.Health.Status | default('no health status') }}).
+
+    - name: Refuse a container whose root filesystem is writable
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_inspected.HostConfig.ReadonlyRootfs is sameas true
+        quiet: true
+        fail_msg: The container {{ demo1_egress_spool_container }} does not have a read-only root filesystem.
+
+    - name: Refuse a container that publishes anything but the drain port on 127.0.0.1
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_container_port_read.stdout_lines | length == 1
+          - >-
+            demo1_egress_spool_container_port_read.stdout_lines | first
+            == demo1_egress_spool_container_port ~ '/tcp -> 127.0.0.1:' ~ demo1_egress_spool_drain_port
+        quiet: true
+        fail_msg: >-
+          docker port for {{ demo1_egress_spool_container }} is not exactly
+          {{ demo1_egress_spool_container_port }}/tcp -> 127.0.0.1:{{ demo1_egress_spool_drain_port }}.
+
+    - name: Refuse a container on any network but the drain network and the slot networks
+      ansible.builtin.assert:
+        that:
+          - >-
+            demo1_egress_spool_inspected.NetworkSettings.Networks | list | sort
+            == ([demo1_egress_spool_drain_network] + demo1_egress_spool_slot_networks) | sort
+        quiet: true
+        fail_msg: The container's networks are not exactly the drain network and one network for each demo slot.
+
+    - name: Refuse a listener on the drain port that is not on 127.0.0.1 alone
+      ansible.builtin.assert:
+        that:
+          - >-
+            demo1_egress_spool_listeners.stdout | regex_findall(demo1_egress_spool_listener_pattern)
+            == ['127.0.0.1:' ~ demo1_egress_spool_drain_port]
+        quiet: true
+        fail_msg: >-
+          The listeners on port {{ demo1_egress_spool_drain_port }} are not exactly 127.0.0.1:{{ demo1_egress_spool_drain_port }}.
+          The drain endpoint must never listen on all addresses.
+
+    - name: Refuse a drain endpoint that answers a call with no token
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_drain_call.status | default(0) == 401
+        quiet: true
+        fail_msg: >-
+          An unauthenticated GET /drain on 127.0.0.1:{{ demo1_egress_spool_drain_port }}
+          did not return 401 (it returned {{ demo1_egress_spool_drain_call.status | default('no response') }}).

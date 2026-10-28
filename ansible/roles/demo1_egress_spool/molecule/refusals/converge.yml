@@ -1,0 +1,468 @@
+---
+# The refusal cases of the role. Each is one bad state on the host the role has already
+# delivered, or one bad input, and the step of the role that reads it must refuse it with its
+# own message. They live in their own scenario so that the default scenario applies the role
+# only a few times (its shard is bound by the time limit); here the role is applied once, by
+# the first play, and every other play runs one internal tasks file of the role alone against
+# a state it made bad and puts right afterwards (refused_case.yml says how). The bad values
+# come from the firewall itself, which is real in the container, from the stand-in docker and
+# drain endpoint of the default scenario's prepare.yml, and from edits of the files on the
+# host. A plan makes no change, so a check run skips every case.
+#
+# Every group of cases starts with a control: the same step on the host as the first play
+# left it must accept. Without it, a step that refused everything would pass every case.
+- name: Apply the role once, so the cases have a delivered host to make bad
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.demo1_egress_spool
+      when: not ansible_check_mode
+
+# The running spool: the facts the role reads back from the container, the published port,
+# the listeners and the drain endpoint. The bad values are the stand-in docker's and drain
+# endpoint's answers.
+- name: Accept the running spool as delivered
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the running spool as delivered
+      tasks_from: _readback_spool.yml
+      accepted: true
+
+- name: Refuse a port published on every address
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: docker port reports 0.0.0.0:8095
+      tasks_from: _readback_spool.yml
+      standin:
+        port: '8081/tcp -> 0.0.0.0:8095'
+      expect: 'docker port for mail-spool-mail-spool-1 is not exactly'
+
+- name: Refuse a second published port
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: docker port reports a second line
+      tasks_from: _readback_spool.yml
+      standin:
+        port: "8081/tcp -> 127.0.0.1:8095\n8082/tcp -> 127.0.0.1:9000"
+      expect: 'docker port for mail-spool-mail-spool-1 is not exactly'
+
+- name: Refuse a container on an extra network
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the container is joined to one network more
+      tasks_from: _readback_spool.yml
+      standin:
+        extra_networks: [bridge]
+      expect: 'networks are not exactly the drain network'
+
+- name: Refuse a container on too few networks
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the container lacks the last slot network
+      tasks_from: _readback_spool.yml
+      standin:
+        networks:
+          - branchleft-mail-spool-drain
+          - branchleft-mail-30001
+          - branchleft-mail-30002
+          - branchleft-mail-30003
+          - branchleft-mail-30004
+          - branchleft-mail-30005
+          - branchleft-mail-30006
+      expect: 'networks are not exactly the drain network'
+
+- name: Refuse a writable root filesystem
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the container's root filesystem is writable
+      tasks_from: _readback_spool.yml
+      standin:
+        readonly: false
+      expect: 'does not have a read-only root filesystem'
+
+- name: Refuse a container that is not healthy
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the container is still starting
+      tasks_from: _readback_spool.yml
+      standin:
+        health: starting
+      expect: 'is not healthy'
+
+- name: Refuse a listener on every address
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the drain endpoint listens on 0.0.0.0
+      tasks_from: _readback_spool.yml
+      standin:
+        bind: 0.0.0.0
+      expect: 'The listeners on port 8095 are not exactly'
+
+- name: Refuse a drain endpoint that answers with no token
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the drain endpoint answers 200 with no token
+      tasks_from: _readback_spool.yml
+      standin:
+        open: true
+      expect: 'did not return 401 (it returned 200)'
+
+- name: Refuse a pin file that is not one digest-pinned image line
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the image pin file names a tag
+      tasks_from: _readback_spool.yml
+      files:
+        - path: /etc/branchleft/mail-spool.image.env
+          content: "IMAGE=ghcr.io/branchleft/mailgun-shim:latest\n"
+      expect: 'is not exactly one IMAGE='
+
+- name: Refuse a spool unit that is not running
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the spool unit is stopped
+      tasks_from: _readback_spool.yml
+      setup:
+        - [systemctl, stop, 'branchleft-compose@mail-spool.service']
+      restore:
+        - [systemctl, start, 'branchleft-compose@mail-spool.service']
+      expect: 'is not active, or is not enabled for boot'
+
+# The loaded egress policy, read from the kernel. The control, then one rule taken away or
+# put out of order at a time. A restart of the egress unit rebuilds both policy chains and
+# puts back a jump that is absent (it does not move one that is present, which is why the
+# misplaced jump is undone by deleting the rule that was put ahead of it).
+- name: Accept the egress policy as delivered
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the egress policy as delivered
+      tasks_from: _readback_egress.yml
+      accepted: true
+
+- name: Refuse a DOCKER-USER chain with no jump, in iptables
+  ansible.builtin.import_playbook: refused_no_jump.yml
+
+- name: Refuse a DOCKER-USER chain without the jump
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the jump to the policy is missing from ip6tables
+      tasks_from: _readback_egress.yml
+      setup:
+        - [ip6tables, -t, filter, -D, DOCKER-USER, -j, BRANCHLEFT-DEMO-EGRESS]
+      reload_policy: true
+      expect: 'as its first rule'
+
+- name: Refuse a DOCKER-USER chain whose first rule is not the jump
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: an accept rule sits ahead of the jump in iptables
+      tasks_from: _readback_egress.yml
+      setup:
+        - [iptables, -t, filter, -I, DOCKER-USER, '1', -j, ACCEPT]
+      restore:
+        - [iptables, -t, filter, -D, DOCKER-USER, -j, ACCEPT]
+      expect: 'as its first rule'
+
+- name: Refuse a forward chain without the established return
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the established-traffic return is missing from ip6tables
+      tasks_from: _readback_egress.yml
+      setup:
+        - [ip6tables, -t, filter, -D, BRANCHLEFT-DEMO-EGRESS, '1']
+      reload_policy: true
+      expect: 'has no return rule for established traffic'
+
+- name: Refuse a forward chain that does not reject a user-defined bridge
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the reject rule for br-+ is missing from iptables
+      tasks_from: _readback_egress.yml
+      setup:
+        - [iptables, -t, filter, -D, BRANCHLEFT-DEMO-EGRESS, '3']
+      reload_policy: true
+      expect: 'has no REJECT rule for connections leaving br-+'
+
+- name: Refuse a forward chain that does not reject the default bridge
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the reject rule for docker0 is missing from ip6tables
+      tasks_from: _readback_egress.yml
+      setup:
+        - [ip6tables, -t, filter, -D, BRANCHLEFT-DEMO-EGRESS, '2']
+      reload_policy: true
+      expect: 'has no REJECT rule for connections leaving docker0'
+
+- name: Refuse an input chain that does not reject
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the final reject is missing from the input policy in iptables
+      tasks_from: _readback_egress.yml
+      setup:
+        - [iptables, -t, filter, -D, BRANCHLEFT-DEMO-INPUT, '2']
+      reload_policy: true
+      expect: 'does not return established traffic and reject the rest'
+
+- name: Refuse an INPUT chain that does not send a bridge to the input policy
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the jump from INPUT for br-+ is missing from ip6tables
+      tasks_from: _readback_egress.yml
+      setup:
+        - [ip6tables, -t, filter, -D, INPUT, -i, br-+, -j, BRANCHLEFT-DEMO-INPUT]
+      reload_policy: true
+      expect: 'has no jump to BRANCHLEFT-DEMO-INPUT for traffic from br-+'
+
+- name: Refuse a family where a policy chain is missing
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the input policy chain is gone from ip6tables
+      tasks_from: _readback_egress.yml
+      setup:
+        - [ip6tables, -t, filter, -D, INPUT, -i, docker0, -j, BRANCHLEFT-DEMO-INPUT]
+        - [ip6tables, -t, filter, -D, INPUT, -i, br-+, -j, BRANCHLEFT-DEMO-INPUT]
+        - [ip6tables, -t, filter, -F, BRANCHLEFT-DEMO-INPUT]
+        - [ip6tables, -t, filter, -X, BRANCHLEFT-DEMO-INPUT]
+      reload_policy: true
+      expect: 'after the egress unit ran, so the policy is not loaded'
+
+- name: Refuse an egress unit that is not enabled for boot
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the egress unit is disabled
+      tasks_from: _readback_egress.yml
+      setup:
+        - [systemctl, disable, 'branchleft-demo-egress.service']
+      restore:
+        - [systemctl, enable, 'branchleft-demo-egress.service']
+      expect: 'is not active, or is not enabled for boot'
+
+# What the role relies on and does not own.
+- name: Accept the host as prepared
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the host as prepared
+      tasks_from: _preconditions.yml
+      accepted: true
+
+- name: Refuse a host with no DOCKER-USER chain in one family
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: ip6tables has no DOCKER-USER chain
+      tasks_from: _preconditions.yml
+      setup:
+        - [ip6tables, -t, filter, -D, DOCKER-USER, -j, BRANCHLEFT-DEMO-EGRESS]
+        - [ip6tables, -t, filter, -F, DOCKER-USER]
+        - [ip6tables, -t, filter, -X, DOCKER-USER]
+      restore:
+        - [ip6tables, -t, filter, -N, DOCKER-USER]
+        - [ip6tables, -t, filter, -A, DOCKER-USER, -j, RETURN]
+      reload_policy: true
+      expect: 'There is no DOCKER-USER chain in ip6tables'
+
+- name: Refuse a directory writable by others
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the sbin directory is writable by every user
+      tasks_from: _preconditions.yml
+      setup:
+        - [chmod, '0777', /usr/local/sbin]
+      restore:
+        - [chmod, '0755', /usr/local/sbin]
+      expect: 'is writable by group or others'
+
+# Stopping docker.service stops the two units that depend on it; the restore starts all three.
+- name: Refuse a host where Docker is not running
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: docker.service is stopped
+      tasks_from: _preconditions.yml
+      setup:
+        - [systemctl, stop, docker.service]
+      restore:
+        - [systemctl, start, docker.service]
+        - [systemctl, start, 'branchleft-compose@mail-spool.service']
+      reload_policy: true
+      expect: 'Docker is not active'
+
+# The owner's drain token file. The role asserts it and never reads its value into Ansible.
+- name: Accept the drain token file as the owner placed it
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the drain token file as placed
+      tasks_from: _token.yml
+      accepted: true
+
+- name: Refuse a drain token file that is not mode 0600
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the drain token file is readable by every user
+      tasks_from: _token.yml
+      setup:
+        - [chmod, '0644', /etc/branchleft/mail-spool.env]
+      restore:
+        - [chmod, '0600', /etc/branchleft/mail-spool.env]
+      expect: 'is not mode 0600'
+
+- name: Refuse a drain token file with a name and no value
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the token line has no value
+      tasks_from: _token.yml
+      files:
+        - path: /etc/branchleft/mail-spool.env
+          content: "SHIM_DRAIN_TOKEN=\n"
+      expect: 'holds no SHIM_DRAIN_TOKEN= line with a value'
+
+- name: Refuse a drain token file with no token line
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the file holds another variable only
+      tasks_from: _token.yml
+      files:
+        - path: /etc/branchleft/mail-spool.env
+          content: "OTHER_VARIABLE=1\n"
+      expect: 'holds no SHIM_DRAIN_TOKEN= line with a value'
+
+- name: Refuse a missing drain token file
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the drain token file is absent
+      tasks_from: _token.yml
+      setup:
+        - [mv, /etc/branchleft/mail-spool.env, /etc/branchleft/mail-spool.env.kept]
+      restore:
+        - [mv, /etc/branchleft/mail-spool.env.kept, /etc/branchleft/mail-spool.env]
+      expect: 'is missing, is not a regular file'
+
+# The Compose file on the host, edited in place. The step reads it and writes nothing, so a
+# case edits the delivered file and runs the step alone (a whole-role run would put the
+# pinned file back first).
+- name: Accept the Compose file as delivered
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the Compose file as delivered
+      tasks_from: _compose_assert.yml
+      accepted: true
+
+- name: Refuse a Compose file that publishes on every address
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the drain port is published on 0.0.0.0
+      tasks_from: _compose_assert.yml
+      edits:
+        - path: /opt/branchleft/mail-spool/compose.yml
+          regexp: "'127\\.0\\.0\\.1:8095:8081'"
+          replace: "'0.0.0.0:8095:8081'"
+      expect: 'does not publish exactly 127.0.0.1:8095:8081'
+
+- name: Refuse a Compose file that publishes a second port
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: a second port is published
+      tasks_from: _compose_assert.yml
+      edits:
+        - path: /opt/branchleft/mail-spool/compose.yml
+          regexp: "(      - '127\\.0\\.0\\.1:8095:8081')"
+          replace: "\\1\n      - '127.0.0.1:2525:2525'"
+      expect: 'does not publish exactly 127.0.0.1:8095:8081'
+
+- name: Refuse a Compose file that carries the token as a value
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the drain token is a literal in the Compose file
+      tasks_from: _compose_assert.yml
+      edits:
+        - path: /opt/branchleft/mail-spool/compose.yml
+          regexp: "SHIM_DRAIN_TOKEN: '.*'"
+          replace: "SHIM_DRAIN_TOKEN: 'a-literal-value'"
+      expect: 'must carry the drain token only as an interpolation'
+
+- name: Refuse a Compose file with an extra network
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the service joins a network more
+      tasks_from: _compose_assert.yml
+      edits:
+        - path: /opt/branchleft/mail-spool/compose.yml
+          regexp: "(      - 'branchleft-mail-30007')"
+          replace: "\\1\n      - 'bridge'"
+      expect: 'networks for the spool are not the drain network'
+
+- name: Refuse a Compose file missing a slot network
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the service lacks the last slot network
+      tasks_from: _compose_assert.yml
+      edits:
+        - path: /opt/branchleft/mail-spool/compose.yml
+          regexp: "      - 'branchleft-mail-30007'\n"
+          replace: ''
+      expect: 'networks for the spool are not the drain network'
+
+- name: Refuse an image pinned by a tag
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the image names a tag
+      tasks_from: _compose_assert.yml
+      edits:
+        - path: /opt/branchleft/mail-spool/compose.yml
+          regexp: "(image: 'ghcr\\.io/branchleft/mailgun-shim)@sha256:[0-9a-f]{64}'"
+          replace: "\\1:latest'"
+      expect: 'is not pinned by digest'
+
+- name: Refuse a Compose file without the spool's service
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the service has another name
+      tasks_from: _compose_assert.yml
+      edits:
+        - path: /opt/branchleft/mail-spool/compose.yml
+          regexp: '^  mail-spool:$'
+          replace: '  another-spool:'
+      expect: 'does not define the mail-spool service'
+
+# Inputs, and the role variables a case has to override, which a play variable cannot do
+# (the role's own variables outrank it): refused_overrides.yml passes them to the step.
+- name: Refuse the inputs and the checksums
+  ansible.builtin.import_playbook: refused_overrides.yml

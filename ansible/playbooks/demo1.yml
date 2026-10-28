@@ -1,16 +1,23 @@
 ---
-# demo1: the demo host's build. One role. The broker's own install (the
-# broker_deploy role) comes first on the host and is not applied from here: its
-# inputs are the owner's built bundle and public key, which have no home in a
-# pulled commit yet, and applying it from this playbook would repoint a broker
-# the owner installed by hand. demo1_build checks, read-only, that broker_deploy
-# has run, and refuses the host when it has not.
-#
-# The role has no secret and no required input, so this playbook loads no
+# demo1: the demo host's build. Three roles, in order: the slots, the baseline
+# that brings Docker, and the host's egress policy with the mail spool. The
+# broker's own install (the broker_deploy role) comes first on the host and is
+# not applied from here: its inputs are the owner's built bundle and public key,
+# which have no home in a pulled commit yet, and applying it from this playbook
+# would repoint a broker the owner installed by hand. demo1_build checks,
+# read-only, that broker_deploy has run, and refuses the host when it has not.
+
+# host_baseline comes before demo1_egress_spool because the egress program needs
+# Docker's DOCKER-USER chain, which Docker creates. host_baseline also converges
+# sshd, unattended upgrades and fail2ban, so the first run of this playbook on the
+# host is a check run, which shows that diff. egress_nat is not applied here: this
+# host's containers must not reach the network, and a NAT rule would give them a way.
+
+# The roles have no secret and no required input, so this playbook loads no
 # variables file. The inventory entry for the host, the trigger that pulls this
 # playbook and the nightly drift check are the host's enrolment, which is not in
 # this file.
-- name: Build demo1's slots
+- name: Build demo1
   hosts: all
   gather_facts: false
   pre_tasks:
@@ -24,3 +31,5 @@
   # playbook finds roles only beside itself unless a path is given. One suppression per line.
   roles:
     - role: ../roles/demo1_build # noqa: role-name[path]
+    - role: ../roles/host_baseline # noqa: role-name[path]
+    - role: ../roles/demo1_egress_spool # noqa: role-name[path]

@@ -1,0 +1,86 @@
+---
+# Constants of the demo host, not inputs: role variables outrank every value a
+# caller passes, so a caller cannot change them. Each is a value the pinned
+# programs and the pinned Compose file hard-code, so the role asserts what it
+# can read back from the host.
+
+# The host's own short name. The egress program refuses any other host, and
+# under the pull the inventory name is localhost on every host, so the role
+# reads the name from the host itself.
+demo1_egress_spool_expected_host: demo1
+
+demo1_egress_spool_config_dir: /etc/branchleft
+demo1_egress_spool_opt_dir: /opt/branchleft
+demo1_egress_spool_sbin_dir: /usr/local/sbin
+
+# What is pinned (paths from the root of the ghost-platform commit).
+demo1_egress_spool_egress_script_src: demo-host/provision/branchleft_demo_egress.sh
+demo1_egress_spool_egress_unit_src: demo-host/provision/branchleft-demo-egress.service
+demo1_egress_spool_compose_src: render-core/test/golden/mail-spool-compose.demo1.yml
+demo1_egress_spool_required_paths:
+  - demo-host/provision/branchleft_demo_egress.sh
+  - demo-host/provision/branchleft-demo-egress.service
+  - render-core/test/golden/mail-spool-compose.demo1.yml
+
+# The sha256 of each pinned file, taken from the input list by path.
+demo1_egress_spool_egress_script_sha: "{{ (demo1_egress_spool_files | selectattr('path', 'equalto', demo1_egress_spool_egress_script_src) | first).sha256 }}"
+demo1_egress_spool_egress_unit_sha: "{{ (demo1_egress_spool_files | selectattr('path', 'equalto', demo1_egress_spool_egress_unit_src) | first).sha256 }}"
+demo1_egress_spool_compose_sha: "{{ (demo1_egress_spool_files | selectattr('path', 'equalto', demo1_egress_spool_compose_src) | first).sha256 }}"
+
+# The egress policy. The program and the unit are the only things the egress
+# half installs; the chains are what the program builds.
+demo1_egress_spool_egress_script_dest: /usr/local/sbin/branchleft-demo-egress
+demo1_egress_spool_egress_unit_dest: /etc/systemd/system/branchleft-demo-egress.service
+demo1_egress_spool_egress_unit_name: branchleft-demo-egress.service
+demo1_egress_spool_forward_chain: BRANCHLEFT-DEMO-EGRESS
+demo1_egress_spool_input_chain: BRANCHLEFT-DEMO-INPUT
+demo1_egress_spool_bridges:
+  - docker0
+  - br-+
+demo1_egress_spool_firewall_tools:
+  - iptables
+  - ip6tables
+
+# The mail spool. One Compose stack named mail-spool, run by the shared
+# Compose template unit, which this role asserts and never writes.
+demo1_egress_spool_project_dir: /opt/branchleft/mail-spool
+demo1_egress_spool_compose_dest: /opt/branchleft/mail-spool/compose.yml
+demo1_egress_spool_token_path: /etc/branchleft/mail-spool.env
+demo1_egress_spool_image_env_path: /etc/branchleft/mail-spool.image.env
+demo1_egress_spool_compose_unit: branchleft-compose@mail-spool.service
+demo1_egress_spool_compose_template_path: /etc/systemd/system/branchleft-compose@.service
+demo1_egress_spool_service: mail-spool
+demo1_egress_spool_container: mail-spool-mail-spool-1
+demo1_egress_spool_container_port: 8081
+demo1_egress_spool_uid: 31000
+demo1_egress_spool_gid: 31000
+demo1_egress_spool_docker: /usr/bin/docker
+
+# The queue's volume. The Compose file declares it external, so it must exist
+# before the stack starts, and the container's account must own it.
+demo1_egress_spool_volume: branchleft-mail-spool-data
+
+# The networks the container may join: the drain network, and one per slot
+# uid. The slot uids are the demo1_build slot table (slots 0 to 6) added to
+# the uid base 30001; ansible/checks/test_demo1_egress_spool_agree.py holds
+# the two together.
+demo1_egress_spool_drain_network: branchleft-mail-spool-drain
+demo1_egress_spool_slot_networks:
+  - branchleft-mail-30001
+  - branchleft-mail-30002
+  - branchleft-mail-30003
+  - branchleft-mail-30004
+  - branchleft-mail-30005
+  - branchleft-mail-30006
+  - branchleft-mail-30007
+
+# Shapes. \Z, not $, so a trailing newline does not pass.
+demo1_egress_spool_sha_pattern: '^[0-9a-f]{40}\Z'
+demo1_egress_spool_checksum_pattern: '^[0-9a-f]{64}\Z'
+demo1_egress_spool_base_url_pattern: '^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?\Z'
+demo1_egress_spool_image_pattern: '^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}\Z'
+demo1_egress_spool_image_env_pattern: '^IMAGE=[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}\Z'
+demo1_egress_spool_volume_path_pattern: '^/var/lib/docker/volumes/branchleft-mail-spool-data/_data\Z'
+demo1_egress_spool_token_line_pattern: '^SHIM_DRAIN_TOKEN=.+'
+demo1_egress_spool_token_interpolation_pattern: '^\$\{SHIM_DRAIN_TOKEN:\?[^}]*\}\Z'
+demo1_egress_spool_listener_pattern: '(?m)^LISTEN\s+\d+\s+\d+\s+(\S+)\s'

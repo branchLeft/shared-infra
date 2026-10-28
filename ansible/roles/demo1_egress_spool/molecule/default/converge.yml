@@ -1,0 +1,28 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml. The include carries no no_log.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.demo1_egress_spool
+
+    # The deploy wrapper owns the image pin file after the role creates it, and rewrites it
+    # for every image bump. The role must leave the bumped pin alone, and must not restart
+    # the spool for it (verify.yml reads both). Written with the same content on every run,
+    # so a second converge changes nothing. A plan makes no change.
+    - name: Move the image pin the way the deploy wrapper does for an image bump
+      ansible.builtin.copy:
+        content: "IMAGE={{ standin_bumped_pin }}\n"
+        dest: /etc/branchleft/mail-spool.image.env
+        owner: root
+        group: root
+        mode: '0600'
+      when: not ansible_check_mode
+
+    - name: Apply the role over the moved pin
+      ansible.builtin.include_role:
+        name: branchleft.demo1_egress_spool
+      when: not ansible_check_mode
