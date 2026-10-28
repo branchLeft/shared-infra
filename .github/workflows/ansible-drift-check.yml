@@ -6,7 +6,7 @@ name: Ansible drift check
 # and opens or comments on one issue. It applies nothing: this caller passes no apply key and
 # names no environment.
 #
-# The tag is an exact vMAJOR.MINOR.PATCH (CI-5, checked by test_drift_caller.py). The three
+# The tag is an exact vMAJOR.MINOR.PATCH (CI-5, checked by test_drift_caller.py). The five
 # secrets are repository secrets, named one by one: `secrets: inherit` would pass all.
 # The job grants actions: read to the drift job and issues: write to the alert job, and
 # contents: read, which the reusable workflow's own top-level permission also carries.
@@ -23,10 +23,12 @@ permissions:
 
 jobs:
   drift-check:
-    uses: branchLeft/github-workflows/.github/workflows/ansible-drift-check.yml@v1.0.13
+    uses: branchLeft/github-workflows/.github/workflows/ansible-drift-check.yml@v1.0.16
     with:
       host-label: ansible-estate
     secrets:
       ssh_hosts: ${{ secrets.ANSIBLE_HOSTS }}
       ssh_known_hosts: ${{ secrets.ANSIBLE_KNOWN_HOSTS }}
       ssh_check_key: ${{ secrets.ANSIBLE_CHECK_KEY }}
+      ssh_jump_host: ${{ secrets.SSH_JUMP_HOST }}
+      ssh_jump_key: ${{ secrets.SSH_JUMP_KEY }}

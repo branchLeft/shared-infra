@@ -16,6 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
+from check_delivery import MIN_RELEASE
 from check_pins import load_yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -28,10 +29,14 @@ SECRETS = {
     "ssh_hosts": "${{ secrets.ANSIBLE_HOSTS }}",
     "ssh_known_hosts": "${{ secrets.ANSIBLE_KNOWN_HOSTS }}",
     "ssh_check_key": "${{ secrets.ANSIBLE_CHECK_KEY }}",
+    # Both or neither: an unset repository secret is empty, and empty means no jump.
+    "ssh_jump_host": "${{ secrets.SSH_JUMP_HOST }}",
+    "ssh_jump_key": "${{ secrets.SSH_JUMP_KEY }}",
 }
 # An exact tag (CI-5, and check_delivery.py), never a branch, a commit id or a major version.
 REUSABLE = re.compile(
-    r"branchLeft/github-workflows/\.github/workflows/ansible-drift-check\.yml@v\d+\.\d+\.\d+",
+    r"branchLeft/github-workflows/\.github/workflows/ansible-drift-check\.yml"
+    r"@v(\d+)\.(\d+)\.(\d+)",
     re.ASCII,
 )
 TOP_KEYS = frozenset({"name", "on", "permissions", "jobs"})
@@ -81,15 +86,21 @@ def caller_findings(workflow: object) -> list[str]:
         if key not in JOB_KEYS
     ]
     uses = job.get("uses")
-    if not isinstance(uses, str) or REUSABLE.fullmatch(uses) is None:
+    pinned = REUSABLE.fullmatch(uses) if isinstance(uses, str) else None
+    if pinned is None:
         findings.append(
             f"job {JOB} must call ansible-drift-check.yml at an exact tag, got {uses!r}"
+        )
+    elif tuple(int(part) for part in pinned.groups()) < MIN_RELEASE:
+        findings.append(
+            f"job {JOB} calls {uses!r}, older than the first release that declares the jump "
+            "secrets, so passing them would fail the call"
         )
     if job.get("with") != {"host-label": HOST_LABEL}:
         findings.append(f"with must be exactly host-label: {HOST_LABEL}, got {job.get('with')!r}")
     if job.get("secrets") != SECRETS:
         findings.append(
-            "secrets must name exactly the three repository secrets and no apply key or inherit, "
+            "secrets must name exactly the five repository secrets and no apply key or inherit, "
             f"got {job.get('secrets')!r}"
         )
     return findings
@@ -164,7 +175,7 @@ class DriftCallerTests(unittest.TestCase):
     def test_reference_is_an_exact_tag_not_a_sha_branch_or_major(self) -> None:
         base = "branchLeft/github-workflows/.github/workflows/ansible-drift-check.yml@"
         sha = "0123456789abcdef0123456789abcdef01234567"
-        self.assertEqual([], self.weakened(lambda doc: self.job(doc).update(uses=base + "v1.0.13")))
+        self.assertEqual([], self.weakened(lambda doc: self.job(doc).update(uses=base + "v1.0.16")))
         for ref in (sha, "main", "v1", "v1.0"):
             with self.subTest(ref=ref):
 
@@ -173,6 +184,51 @@ class DriftCallerTests(unittest.TestCase):
 
                 findings = self.weakened(point_at)
                 self.assertTrue(any("exact tag" in f for f in findings), findings)
+
+    def test_a_pin_below_the_jump_release_is_named(self) -> None:
+        base = "branchLeft/github-workflows/.github/workflows/ansible-drift-check.yml@"
+        for ref in ("v1.0.15", "v1.0.13", "v0.9.99"):
+            with self.subTest(ref=ref):
+
+                def point_at(doc: dict[str, object], uses: str = base + ref) -> None:
+                    self.job(doc).update(uses=uses)
+
+                findings = self.weakened(point_at)
+                self.assertTrue(any("first release that declares" in f for f in findings), findings)
+
+    def test_a_caller_without_a_jump_secret_is_named(self) -> None:
+        for name in ("ssh_jump_host", "ssh_jump_key"):
+            with self.subTest(name=name):
+
+                def drop_secret(doc: dict[str, object], name: str = name) -> None:
+                    secrets = cast("dict[str, object]", self.job(doc)["secrets"])
+                    del secrets[name]
+
+                findings = self.weakened(drop_secret)
+                self.assertTrue(any("secrets must name exactly" in f for f in findings), findings)
+
+    def test_a_wrong_jump_secret_expression_is_named(self) -> None:
+        # The jump key must never be the check key, and a literal is no secret.
+        wrong = (
+            "",
+            "literal-value",
+            "${{ secrets.ANSIBLE_CHECK_KEY }}",
+            "${{ secrets.SSH_APPLY_KEY }}",
+        )
+        for name in ("ssh_jump_host", "ssh_jump_key"):
+            for value in wrong:
+                with self.subTest(name=name, value=value):
+
+                    def set_secret(
+                        doc: dict[str, object], name: str = name, value: str = value
+                    ) -> None:
+                        secrets = cast("dict[str, object]", self.job(doc)["secrets"])
+                        secrets[name] = value
+
+                    findings = self.weakened(set_secret)
+                    self.assertTrue(
+                        any("secrets must name exactly" in f for f in findings), findings
+                    )
 
     def test_triggers_are_schedule_and_manual_only(self) -> None:
         def add_pull_request(doc: dict[str, object]) -> None:
