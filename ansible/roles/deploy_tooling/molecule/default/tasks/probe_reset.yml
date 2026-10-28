@@ -7,7 +7,14 @@
     name: branchleft-compose@Molecule-Probe.service
     state: stopped
 
+# A stopped unit that is not failed is unloaded, and reset-failed refuses a unit
+# that is not loaded. An unloaded unit holds no counters, so that refusal, and
+# only that one, is the unit already being at rest.
 - name: Clear the probe instance's failed state and start counters
   ansible.builtin.command:
     argv: [systemctl, reset-failed, 'branchleft-compose@Molecule-Probe.service']
+  register: deploy_tooling_scenario_probe_reset
   changed_when: false
+  failed_when:
+    - deploy_tooling_scenario_probe_reset.rc != 0
+    - "'not loaded' not in deploy_tooling_scenario_probe_reset.stderr"

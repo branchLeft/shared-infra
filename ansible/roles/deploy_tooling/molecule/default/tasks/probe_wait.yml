@@ -5,7 +5,13 @@
 # timeout: the case reads the state afterwards and its assertion names what it saw.
 - name: Wait for the probe instance to reach the state
   ansible.builtin.command:
-    argv: [systemctl, show, 'branchleft-compose@Molecule-Probe.service', '--property=ActiveState,NRestarts']
+    argv:
+      [
+        systemctl,
+        show,
+        'branchleft-compose@Molecule-Probe.service',
+        '--property=ActiveState,NRestarts',
+      ]
   register: deploy_tooling_scenario_probe_poll
   changed_when: false
   failed_when: false
