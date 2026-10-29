@@ -21,8 +21,8 @@ RELATIVE_BIND_MOUNT = re.compile(r"\A\s*-\s+(?P<source>\./[^:\s]+):")
 # nothing else ties those two files together.
 CROWDSEC_ACQUIS_MOUNT = re.compile(r"\A\s*-\s+\./crowdsec/acquis\.d:(?P<target>[^:\s]+):ro\s*\Z")
 
-# `crowdsec_service:` is the only block this repository's config.yaml.local
-# nests a key under, so a plain `acquisition_dir:` line is unambiguous without
+# `acquisition_dir` is a key name the sibling config.yaml.local uses once, under
+# `crowdsec_service:`, so a plain `acquisition_dir:` line is unambiguous without
 # tracking indentation depth.
 ACQUISITION_DIR = re.compile(r"\A\s*acquisition_dir:\s*(?P<path>\S+)\s*\Z")
 
