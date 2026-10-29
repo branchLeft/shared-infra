@@ -54,6 +54,34 @@ def _option_names(node: object) -> list[str]:
     return names
 
 
+def _sudoers_task_findings(role: Path) -> list[str]:
+    """The sudoers task must show its content in the gated plan and must be checked by visudo.
+
+    A sudoers fragment holds command paths, not secrets, so `no_log` or `diff: false` on this
+    task would let the owner approve a replacement of it without seeing it. The tasks that
+    handle key material keep both; only this one is held to the opposite.
+    """
+    tasks = yaml.safe_load((role / "tasks" / "_sudoers.yml").read_text(encoding="utf-8"))
+    copies = [
+        task
+        for task in (tasks if isinstance(tasks, list) else [])
+        if isinstance(task, dict) and "ansible.builtin.copy" in task
+    ]
+    if len(copies) != 1:
+        return [f"tasks/_sudoers.yml: expected one copy task, found {len(copies)}"]
+    task = copies[0]
+    found: list[str] = []
+    if task.get("no_log") not in (None, False):
+        found.append("tasks/_sudoers.yml: the sudoers task sets no_log (hidden from the plan)")
+    if task.get("diff") is False:
+        found.append("tasks/_sudoers.yml: the sudoers task sets diff: false (hidden from the plan)")
+    arguments = task["ansible.builtin.copy"]
+    validate = arguments.get("validate") if isinstance(arguments, dict) else None
+    if not (isinstance(validate, str) and re.fullmatch(r"/usr/sbin/visudo -c\w*f %s", validate)):
+        found.append("tasks/_sudoers.yml: the sudoers task has no visudo validate")
+    return found
+
+
 def problems(root: Path) -> list[str]:
     """Return one finding per broken pin in the tree under ``root``."""
     found: list[str] = []
@@ -76,6 +104,8 @@ def problems(root: Path) -> list[str]:
         and GRANT_LINE.fullmatch(lines[1])
     ):
         found.append("ci_login_sudoers_lines must be the env_keep line and the two-command grant")
+
+    found.extend(_sudoers_task_findings(role))
 
     for directory in CODE_DIRECTORIES:
         for path in sorted((role / directory).rglob("*")):
@@ -190,6 +220,30 @@ class Sabotage(unittest.TestCase):
             "{{ ci_login_program }} --mode check'",
             "{{ ci_login_program }} --mode check, /bin/sh'",
             "ci_login_sudoers_lines must be",
+        )
+
+    def test_no_log_on_the_sudoers_task_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/_sudoers.yml",
+            "    validate: /usr/sbin/visudo -csf %s\n",
+            "    validate: /usr/sbin/visudo -csf %s\n  no_log: true\n",
+            "the sudoers task sets no_log",
+        )
+
+    def test_diff_false_on_the_sudoers_task_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/_sudoers.yml",
+            "    validate: /usr/sbin/visudo -csf %s\n",
+            "    validate: /usr/sbin/visudo -csf %s\n  diff: false\n",
+            "the sudoers task sets diff: false",
+        )
+
+    def test_a_sudoers_task_without_visudo_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/_sudoers.yml",
+            "    validate: /usr/sbin/visudo -csf %s\n",
+            "",
+            "the sudoers task has no visudo validate",
         )
 
     def test_a_third_sudoers_line_is_red(self) -> None:

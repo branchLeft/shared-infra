@@ -212,8 +212,10 @@
       ansible.builtin.include_tasks: tasks/assert_state.yml
 
     # ANS-16. The scenario sets verbosity 1 and a log path (molecule.yml), so a task that
-    # handles key material or a sudoers line without no_log prints it into this log. The scan
-    # runs last, so it covers the refused runs too. The canary and the task names show the
+    # handles key material without no_log prints it into this log. The sudoers task has no
+    # no_log on purpose: the gated plan shows the owner its diff, so the first check-mode run
+    # of the converge must have put the sudoers lines into this log. The scan runs last, so it
+    # covers the refused runs too. The canary and the task names show the
     # scan reads the output of the converge, so "nothing found" cannot mean "nothing read".
     - name: Read the log of this scenario's Ansible runs
       ansible.builtin.set_fact:
@@ -228,10 +230,15 @@
           - "'Make the authorised keys of the pipeline account exactly the two declared keys' in ci_login_verify_log"
         quiet: true
 
-    - name: Assert no key body, no sudoers line and no password hash reached the log
+    - name: Assert the sudoers lines reached the log through the diff of the sudoers task
+      ansible.builtin.assert:
+        that:
+          - "'NOPASSWD: /usr/local/sbin/pull-trigger --mode apply' in ci_login_verify_log"
+        quiet: true
+
+    - name: Assert no key body and no password hash reached the log
       ansible.builtin.assert:
         that:
           - verify_key_bodies | select('in', ci_login_verify_log) | list | length == 0
-          - "'NOPASSWD' not in ci_login_verify_log"
           - "'EXAMPLEHASH' not in ci_login_verify_log"
         quiet: true

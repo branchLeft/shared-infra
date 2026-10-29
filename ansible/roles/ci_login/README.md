@@ -56,7 +56,9 @@ Where the values come from on edge1: `ansible/owner_vars/edge1.yml`, loaded by
 `ansible/playbooks/edge1.yml`. That file is the owner's alone and is shipped with the flag
 `false` and an empty list, so merging the role changes nothing about the keys until the owner
 fills it. The public keys are not secrets, but every task that handles them sets `no_log: true`
-and `diff: false` (ANS-16), and the test scans the log for them.
+and `diff: false` (ANS-16), and the test scans the log for them. The sudoers task is the
+exception on purpose: a sudoers file holds command paths, not secrets, so it shows its diff in
+the plan, and `test_ci_login_pins.py` fails if `no_log` or `diff: false` returns on it.
 
 ## Requirements
 
@@ -100,8 +102,9 @@ the run. The missing source limit has a red-then-green test in `test_ci_login_pi
 
 Only through the gated workflow (ANS-17): the role is on edge1's list in
 `ansible/checks/host_roles.yml` and applied by `ansible/playbooks/edge1.yml`. The plan job
-shows edge1's check-mode diff first. Because `diff: false` hides the content, the owner reads
-whether each task would change, not what. The first run is the proof that the hand-made
+shows edge1's check-mode diff first. The owner reads the sudoers diff there, line by line; the
+key tasks hide their content (`no_log`, `diff: false`), so for those the owner reads only
+whether each would change. The first run is the proof that the hand-made
 account, sudoers file and (once the flag is on) key lines already match: the role is expected
 to report no change.
 
@@ -110,7 +113,7 @@ to report no change.
 - **The hand state was not read.** It exists on edge1 only. The sudoers text comes from the
   `pull_trigger` README, and the key lines use `restrict`, the form that README documents, where
   the `sudoers_and_keys` pattern writes four separate options. If the first gated plan shows a
-  difference, the owner rules which text wins.
+  difference, the role's text wins over the hand-made file unless the owner says otherwise.
 - **Check mode skips `validate`.** A sudoers file `visudo` would refuse looks like an ordinary
   change in the plan; the container test runs the real check.
 - **Check mode on a host with no account** cannot write keys (the key module needs the
