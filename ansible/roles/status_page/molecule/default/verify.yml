@@ -1,0 +1,277 @@
+---
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_dir: /opt/branchleft/status
+    verify_state: /var/lib/status_page_standin
+    verify_role_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY', default='') }}"
+    verify_digest: '{{ "2" * 64 }}'
+    # The shape of a real up call: the module adds the first flags, the role's
+    # task sets the others. The compose file is always named, so an override
+    # file next to it is never read. The trailing double dash is the module's
+    # own and precedes the names of the services, of which there are none.
+    verify_up_pattern: >-
+      ^--host \S+ compose --ansi never --progress json --project-directory /opt/branchleft/status
+      --project-name status --file compose.yml up --detach --no-color --quiet-pull --force-recreate
+      --no-build --wait --wait-timeout 120( --)?$
+    # Every call the stand-in may ever receive for real. Anything else, such as
+    # down, rm, volume, a different up or another engine, is unexpected.
+    verify_allowed:
+      - '^--host \S+ version --format \{\{ json \. \}\}$'
+      - '^--host \S+ compose version --format json$'
+      - '^--host \S+ compose --ansi never --progress json --project-directory \S+ --project-name \S+ --file compose.yml ps --format json --all --no-trunc$'
+      - '^--host \S+ compose --ansi never --progress json --project-directory \S+ --project-name \S+ --file compose.yml images --format json$'
+      - '^compose --project-directory \S+ --file \S+ config --quiet$'
+  tasks:
+    - name: Read the project directory, the stack directory and the delivered files
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - '{{ verify_dir }}'
+        - '{{ verify_dir }}/stack'
+        - '{{ verify_dir }}/compose.yml'
+        - '{{ verify_dir }}/stack/config.yaml'
+        - '{{ verify_dir }}/stack/target.yaml'
+      register: status_page_verify_files
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert each has its owner, group and mode
+      ansible.builtin.assert:
+        that:
+          - status_page_verify_files.results | ansible.builtin.map(attribute='stat.pw_name') | ansible.builtin.unique | ansible.builtin.list == ['root']
+          - status_page_verify_files.results | ansible.builtin.map(attribute='stat.gr_name') | ansible.builtin.unique | ansible.builtin.list == ['root']
+          - status_page_verify_files.results | ansible.builtin.map(attribute='stat.mode') | ansible.builtin.list == ['0755', '0755', '0644', '0644', '0644']
+        quiet: true
+        fail_msg: A delivered file or directory has the wrong owner, group or mode.
+
+    # rstrip is off: the file lookup strips trailing whitespace by default, and
+    # the delivered file is a byte-for-byte copy.
+    - name: Assert the configuration files are the repository's, byte for byte
+      ansible.builtin.assert:
+        that:
+          - item.stat.checksum == (verify_repository_text | ansible.builtin.hash('sha256'))
+        quiet: true
+        fail_msg: '{{ item.item }} is not the file the repository holds.'
+      loop: '{{ status_page_verify_files.results[3:] }}'
+      loop_control:
+        label: '{{ item.item }}'
+      vars:
+        verify_repository_path: "{{ verify_role_dir ~ '/files/stack/' ~ (item.item | ansible.builtin.basename) }}"
+        verify_repository_text: "{{ lookup('ansible.builtin.file', verify_repository_path, rstrip=false, lstrip=false) }}"
+
+    - name: Read the stamp file
+      ansible.builtin.stat:
+        path: '{{ verify_dir }}/.status_page_stamp'
+      register: status_page_verify_stamp_stat
+
+    - name: Assert the stamp is a regular file owned by root, group root, mode 0600
+      ansible.builtin.assert:
+        that:
+          - status_page_verify_stamp_stat.stat.exists
+          - status_page_verify_stamp_stat.stat.isreg
+          - status_page_verify_stamp_stat.stat.pw_name == 'root'
+          - status_page_verify_stamp_stat.stat.gr_name == 'root'
+          - status_page_verify_stamp_stat.stat.mode == '0600'
+        quiet: true
+        fail_msg: The stamp file is missing, or is not a regular file owned by root, group root, mode 0600.
+
+    - name: Read the compose file
+      ansible.builtin.slurp:
+        src: '{{ verify_dir }}/compose.yml'
+      register: status_page_verify_compose_raw
+
+    - name: Assert the compose file publishes only the page, on loopback
+      ansible.builtin.assert:
+        that:
+          - verify_compose.services.keys() | ansible.builtin.sort | ansible.builtin.list == ['gatus', 'status-test-target']
+          - verify_compose.services.gatus.ports == ['127.0.0.1:8303:8080']
+          - verify_compose.services['status-test-target'].ports is ansible.builtin.undefined
+          - verify_published | ansible.builtin.length == 1
+          - verify_published | ansible.builtin.reject('ansible.builtin.match', '^127\.0\.0\.1:') | ansible.builtin.list | ansible.builtin.length == 0
+        quiet: true
+        fail_msg: 'The compose file must publish 127.0.0.1:8303:8080 and nothing else. Seen: {{ verify_published }}'
+      vars:
+        verify_compose: '{{ status_page_verify_compose_raw.content | ansible.builtin.b64decode | ansible.builtin.from_yaml }}'
+        verify_published: >-
+          {{ verify_compose.services.values() | ansible.builtin.map(attribute='ports', default=[])
+          | ansible.builtin.flatten | ansible.builtin.list }}
+
+    - name: Assert both services are pinned by digest and hardened
+      ansible.builtin.assert:
+        that:
+          - item.value.image is ansible.builtin.match('^[^\s@]+@sha256:[0-9a-f]{64}\Z')
+          - item.value.read_only
+          - item.value.cap_drop == ['ALL']
+          - item.value.security_opt == ['no-new-privileges:true']
+          - item.value.mem_limit is ansible.builtin.defined
+          - item.value.restart == 'unless-stopped'
+          - item.value.volumes | ansible.builtin.select('ansible.builtin.search', 'docker.sock') | ansible.builtin.list | ansible.builtin.length == 0
+          - item.value.privileged is ansible.builtin.undefined
+          - item.value.network_mode is ansible.builtin.undefined
+        quiet: true
+        fail_msg: '{{ item.key }} is not pinned by digest or not hardened.'
+      loop: '{{ verify_compose.services | ansible.builtin.dict2items }}'
+      loop_control:
+        label: '{{ item.key }}'
+      vars:
+        verify_compose: '{{ status_page_verify_compose_raw.content | ansible.builtin.b64decode | ansible.builtin.from_yaml }}'
+
+    - name: Read the calls the stand-in has logged
+      ansible.builtin.command:
+        argv: [cat, '{{ verify_state }}/argv.log']
+      register: status_page_verify_argv
+      changed_when: false
+
+    - name: Assert the stack was brought up once, with the expected arguments
+      ansible.builtin.assert:
+        that:
+          - verify_ups | ansible.builtin.length == 1
+          - verify_ups | ansible.builtin.reject('ansible.builtin.match', verify_up_pattern) | ansible.builtin.list | ansible.builtin.length == 0
+        quiet: true
+        fail_msg: >-
+          The converge and its idempotence run must bring the stack up exactly once, with the compose
+          file named, --force-recreate, --no-build, --wait and nothing that removes data. Seen: {{ verify_ups }}
+      vars:
+        verify_ups: "{{ status_page_verify_argv.stdout_lines | ansible.builtin.select('ansible.builtin.search', ' up --detach') | ansible.builtin.list }}"
+
+    - name: Assert no call removed data or was unexpected
+      ansible.builtin.assert:
+        that:
+          - verify_removing | ansible.builtin.length == 0
+          - verify_unexpected | ansible.builtin.length == 0
+        quiet: true
+        fail_msg: >-
+          A call could remove volumes or was not expected. Removing: {{ verify_removing }}.
+          Unexpected: {{ verify_unexpected }}
+      vars:
+        verify_removing: >-
+          {{ status_page_verify_argv.stdout_lines | ansible.builtin.select('ansible.builtin.search',
+          '(--volumes|--remove-orphans|--renew-anon-volumes|--rmi| down | rm | volume | prune| -V )')
+          | ansible.builtin.list }}
+        verify_unexpected: >-
+          {{ status_page_verify_argv.stdout_lines
+          | ansible.builtin.reject('ansible.builtin.match', '(' ~ (verify_allowed + [verify_up_pattern])
+          | ansible.builtin.join('|') ~ ')') | ansible.builtin.list }}
+
+    - name: Assert the compose file was validated as a temporary copy, before it was installed
+      ansible.builtin.assert:
+        that:
+          - verify_validations | ansible.builtin.length >= 1
+          - >-
+            verify_validations | ansible.builtin.select('ansible.builtin.search', '--file ' ~ verify_dir ~ '/compose.yml ')
+            | ansible.builtin.list | ansible.builtin.length == 0
+        quiet: true
+        fail_msg: >-
+          The compose file must be checked with `compose config --quiet` on the temporary copy
+          Ansible makes, never on the installed file. Seen: {{ verify_validations }}
+      vars:
+        verify_validations: >-
+          {{ status_page_verify_argv.stdout_lines | ansible.builtin.select('ansible.builtin.search', ' config --quiet')
+          | ansible.builtin.list }}
+
+    - name: Ask the page for its health, as the role does
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8303/health
+        status_code: 200
+      changed_when: false
+
+    # The safety-class cases. A listen address that is not loopback is refused
+    # twice: by the argument specification (choices), and, with that validation
+    # switched off, by the role's own assert. Each refusal must leave the
+    # compose file as it was.
+    - name: Refuse a wide listen address at the argument specification
+      ansible.builtin.include_tasks: tasks/refuse_wide_bind.yml
+      vars:
+        refuse_title: Argument specification
+        refuse_validate: true
+        refuse_expect: status_page_listen_address
+
+    - name: Refuse a wide listen address at the role's own assert
+      ansible.builtin.include_tasks: tasks/refuse_wide_bind.yml
+      vars:
+        refuse_title: Role assert with the specification off
+        refuse_validate: false
+        refuse_expect: published on loopback only
+
+    - name: Refuse each image reference that is not pinned by digest
+      ansible.builtin.include_tasks: tasks/refuse_image.yml
+      vars:
+        refuse_title: '{{ item.title }}'
+        refuse_image: '{{ item.image }}'
+      loop:
+        - title: A tag alone
+          image: 'ghcr.io/twin/gatus:v5.37.0'
+        - title: The latest tag
+          image: 'ghcr.io/twin/gatus:latest'
+        - title: No tag and no digest
+          image: 'ghcr.io/twin/gatus'
+        - title: An empty reference
+          image: ''
+        - title: A digest that is too short
+          image: 'ghcr.io/twin/gatus@sha256:abc123'
+        - title: Upper-case hex in the digest
+          image: 'ghcr.io/twin/gatus@sha256:{{ "A" * 64 }}'
+        - title: A valid digest followed by a space
+          image: 'ghcr.io/twin/gatus@sha256:{{ verify_digest }} '
+      loop_control:
+        label: '{{ item.title }}'
+
+    - name: Refuse a compose override file in the project directory
+      ansible.builtin.include_tasks: tasks/refuse_override.yml
+      vars:
+        override_name: '{{ item }}'
+      loop:
+        - compose.override.yaml
+        - compose.override.yml
+        - docker-compose.override.yml
+
+    # A configuration file edited by hand and put back by the role: the
+    # container bind-mounts the file, and the replaced file is a new inode, so
+    # the stack must be brought up although the content is the repository's.
+    - name: Count the real up calls before the hand edit
+      ansible.builtin.command:
+        argv: [grep, --count, --fixed-strings, ' up --detach', '{{ verify_state }}/argv.log']
+      register: status_page_verify_edit_before
+      changed_when: false
+      failed_when: status_page_verify_edit_before.rc > 1
+
+    - name: Change a configuration file by hand
+      ansible.builtin.copy:
+        content: "web:\n  port: 1\n"
+        dest: '{{ verify_dir }}/stack/config.yaml'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Apply the role after the hand edit
+      ansible.builtin.include_role:
+        name: branchleft.status_page
+
+    - name: Count the real up calls after the hand edit
+      ansible.builtin.command:
+        argv: [grep, --count, --fixed-strings, ' up --detach', '{{ verify_state }}/argv.log']
+      register: status_page_verify_edit_after
+      changed_when: false
+      failed_when: status_page_verify_edit_after.rc > 1
+
+    - name: Read the configuration file the role put back
+      ansible.builtin.stat:
+        path: '{{ verify_dir }}/stack/config.yaml'
+        checksum_algorithm: sha256
+      register: status_page_verify_edit_file
+
+    - name: Assert the hand edit was reverted and the stack was brought up once
+      ansible.builtin.assert:
+        that:
+          - (status_page_verify_edit_after.stdout | ansible.builtin.int) - (status_page_verify_edit_before.stdout | ansible.builtin.int) == 1
+          - status_page_verify_edit_file.stat.checksum == status_page_verify_files.results[3].stat.checksum
+        quiet: true
+        fail_msg: >-
+          A configuration file changed by hand must be put back and cost one bring-up. Up calls:
+          {{ status_page_verify_edit_before.stdout }} then {{ status_page_verify_edit_after.stdout }}.
+
+    - name: Fail the health check on a page that does not answer
+      ansible.builtin.include_tasks: tasks/refuse_unhealthy.yml

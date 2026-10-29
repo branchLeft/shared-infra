@@ -586,8 +586,16 @@ class CallerTests(unittest.TestCase):
         def rename(document: dict[str, object]) -> None:
             section(job_of(document), "with")["environment"] = "ansible"
 
+        def drop_role_test(document: dict[str, object]) -> None:
+            del section(job_of(document), "with")["role-test-command"]
+
+        def retarget_role_test(document: dict[str, object]) -> None:
+            section(job_of(document), "with")["role-test-command"] = "harness/other.py"
+
         self.assert_names(self.weakened(narrow), "with.role-directories must be")
         self.assert_names(self.weakened(repoint), "with.python-paths must be")
+        self.assert_names(self.weakened(drop_role_test), "with.role-test-command must be")
+        self.assert_names(self.weakened(retarget_role_test), "with.role-test-command must be")
         self.assert_names(self.weakened(rename), "with.environment must be")
 
     def test_a_second_job_or_a_new_top_level_key_is_named(self) -> None:
