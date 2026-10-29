@@ -50,6 +50,7 @@ LOADERS = {
     "include_tasks": " other.yml\n",
     "import_tasks": " other.yml\n",
 }
+LOADER_ENTRY = "    - role: ../roles/host_inputs # noqa: role-name[path]\n"
 REFUSE_LINE = "      ansible.builtin.include_tasks: includes/refuse_other_hosts.yml\n"
 SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml\n"
 
@@ -57,7 +58,7 @@ SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml
 TRIGGER_LINE = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # The roles a playbook on main applies after the pull roles. The sabotage cases below start from
 # the pull roles alone, so they strip these first; one test holds the real playbook to them.
-APPLIED_ON_MAIN = {"ops1": ["status_page"]}
+APPLIED_ON_MAIN = {"edge1": ["ci_login"], "ops1": ["status_page"], "db1": ["host_inputs"]}
 
 
 def _pull_roles_only(text: str) -> str:
@@ -91,9 +92,12 @@ class HostRoleLists(unittest.TestCase):
         listed = yaml.safe_load((self.ansible / HOST_ROLES_FILE).read_text(encoding="utf-8"))
         self.listed: dict[str, list[str]] = listed
 
-    def _playbook(self, host: str, extra: str) -> None:
-        """Put every enrolled playbook back as it is on main, then add text to one."""
+    def _playbook(self, host: str, extra: str, bare: bool = False) -> None:
+        """Put every enrolled playbook back as it is on main, then add text to one. With bare,
+        that one is first stripped of the loader entry it carries, so its roles can be re-listed."""
         for name, text in self.original.items():
+            if bare and name == host:
+                text = text.replace(LOADER_ENTRY, "")
             added = extra if name == host else ""
             (self.ansible / "playbooks" / f"{name}.yml").write_text(text + added, encoding="utf-8")
 
@@ -143,23 +147,26 @@ class HostRoleLists(unittest.TestCase):
         self._list_file(text.replace("  - status_page\n", "", 1))
         self._assert_refused("ops1", "role status_page is not on ops1's list")
 
-    # db1's first enrolment is pull-only: its playbook applies the two pull roles and none of the
-    # database roles on its list, which R9 allows because a playbook may apply a subset.
-    def test_db1_applies_only_the_pull_roles(self) -> None:
+    # db1 applies the two pull roles, then the loader of its private inputs, and none of the
+    # database roles on its list, which R9 allows because a playbook may apply a subset. The
+    # database roles return once the file the loader reads is on the host.
+    def test_db1_applies_the_pull_roles_then_the_loader(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "db1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
-        self.assertEqual(names, ["ansible_runtime", "pull_trigger"])
+        self.assertEqual(names, ["ansible_runtime", "pull_trigger", "host_inputs"])
         self.assertEqual(check(ROOT), [])
 
     # Positive control: every role on a host's list, in the list's order and in reverse, passes.
     # Most of these roles have no directory on main, so a name with no role behind it passes too.
+    # The loader is the one role whose place is fixed (R11): it goes first in every order.
     def test_every_listed_role_is_accepted_for_its_host(self) -> None:
         for host in ENROLLED:
             applied = _applied_roles(self.original[host])
             roles = [name for name in self.listed[host] if name not in applied]
             for order in (roles, list(reversed(roles)), roles[:1], roles[-1:]):
-                with self.subTest(host=host, roles=order):
-                    self._playbook(host, "".join(_entry(name) for name in order))
+                first = sorted(order, key=lambda name: name != "host_inputs")
+                with self.subTest(host=host, roles=first):
+                    self._playbook(host, "".join(_entry(name) for name in first), bare=True)
                     self.assertEqual(check(self.root), [])
 
     # Rule: a role that is on no list is refused, on each host.
@@ -222,7 +229,7 @@ class HostRoleLists(unittest.TestCase):
         trigger = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
         head = "  roles:\n"
         for host in ENROLLED:
-            text = self.original[host]
+            text = self.original[host].replace(LOADER_ENTRY, "")
             body = text[text.index(head) + len(head) :]
             self.assertTrue(body.startswith(runtime + trigger), "the sabotage matched nothing")
             # The listed roles a host's playbook applies after the pull roles (ci_login on edge1).

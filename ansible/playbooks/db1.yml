@@ -1,8 +1,10 @@
 ---
-# db1: the database host under the gated pull. Two roles, in order: the Ansible
-# toolchain the host runs this playbook with, then the trigger that runs it. The
-# database roles (db1_stack, db1_grants) return once the owner rules how their
-# private inputs reach a host that pulls; nothing on the pull route supplies them.
+# db1: the database host under the gated pull. Three roles, in order: the Ansible
+# toolchain the host runs this playbook with, the trigger that runs it, and the
+# loader of the host's private inputs (host_inputs), which reads the one root-only
+# file the owner places on the host and stops the run if it is missing or unsafe.
+# The database roles (db1_stack, db1_grants) return in a later change, once that
+# file is on db1: they take their inputs from what the loader sets.
 #
 # The host's trigger runs this file on a signed checkout with the inventory
 # `localhost,`, which loads no group variables, so every value the roles read comes
@@ -27,3 +29,4 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_inputs # noqa: role-name[path]

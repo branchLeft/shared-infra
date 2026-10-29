@@ -160,8 +160,7 @@ is not loaded there.
   file is in `ansible/checks/`, which CODEOWNERS gives to the owner, so adding a role to a
   host is the owner's merge. The check reads names, not directories: a role may be listed
   before its directory merges, and until then it runs nothing. Order after the pull roles
-  is free, and a listed role need not be applied.
-
+  is free, except for the loader (R11), and a listed role need not be applied.
 - **R10** `owner_vars/` holds the owner's values for a host's roles. It is flat, and a name
   must be exactly `HOST.yml` for an enrolled host; the name rule above refuses anything
   else, and R6 refuses a protected key in it (its allowed set is empty). Each file holds
@@ -171,6 +170,12 @@ is not loaded there.
   key (a source address list, say) is refused. A host with no allowed keys may have no file.
   The check does not judge a key's text; the `ci_login` role does. The directory is the
   owner's (`/ansible/owner_vars/` in CODEOWNERS), so filling in the keys is the owner's merge.
+- **R11** When a host applies `host_inputs`, the loader of the host's private role inputs
+  (owner ruling, option A, branchLeft/workspace#2739), it is the first role after the two
+  pull roles, so no role runs before the inputs are loaded or refused. A host that does not
+  apply it is unaffected. `test_host_inputs_registry.py` holds the loader's row table, the
+  literal keys of its input task, `host_roles.yml`, the playbook and the role argument specs
+  in agreement, and the structure of the loader's tasks.
 
 The refusal's host test is not a host control. Under the trigger `inventory_hostname` is
 `localhost`, and the root-owned pull config is the control on the host.
