@@ -115,9 +115,9 @@ content hides its result, every check precedes the first input).
 ## How it is delivered
 
 It is applied by the host's pulled playbook (ANS-17), after the two pull roles, and by
-nothing else. Today only db1's playbook applies it. The first db1 apply that includes it
-stops here until the owner has placed the file, which proves the file on the host before
-the database roles depend on it. db1 also needs its signer in `ansible/trust/db1.yml`
+nothing else. Today only db1's playbook applies it, ahead of `db1_stack` and
+`db1_grants`, which read the facts it sets. Every db1 apply stops here until the owner has
+placed the file, so neither database role runs without its inputs. db1 also needs its signer in `ansible/trust/db1.yml`
 before any pull runs.
 
 ## How to change it safely

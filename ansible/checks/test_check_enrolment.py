@@ -195,7 +195,7 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "playbooks/db1.yml",
             LOADER_LINE,
-            LOADER_LINE + "    - role: ../roles/db1_stack # noqa: role-name[path]\n",
+            LOADER_LINE + "    - role: ../roles/db1_backup_timers # noqa: role-name[path]\n",
         )
         self.assertEqual(check(self.root), [])
 
@@ -204,7 +204,7 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "playbooks/db1.yml",
             LOADER_LINE,
-            "    - role: ../roles/db1_stack # noqa: role-name[path]\n" + LOADER_LINE,
+            "    - role: ../roles/db1_backup_timers # noqa: role-name[path]\n" + LOADER_LINE,
         )
         findings = self._assert_rule("R11 db1.yml")
         self.assertTrue(any("must be the first role after the pull roles" in f for f in findings))
@@ -214,8 +214,8 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "playbooks/db1.yml",
             LOADER_LINE,
-            "    - role: ../roles/db1_stack # noqa: role-name[path]\n"
-            "    - role: ../roles/db1_grants # noqa: role-name[path]\n" + LOADER_LINE,
+            "    - role: ../roles/db1_backup_timers # noqa: role-name[path]\n"
+            "    - role: ../roles/tunnel_account # noqa: role-name[path]\n" + LOADER_LINE,
         )
         self._assert_rule("R11 db1.yml")
 

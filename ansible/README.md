@@ -8,8 +8,8 @@ This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
 the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
 `roles/ansible_runtime`, `roles/pull_trigger` and `roles/ci_login`) and `db1` (`playbooks/db1.yml`, which applies
-the same two pull roles and then `roles/host_inputs`, the loader of the host's private inputs;
-`roles/db1_stack` and `roles/db1_grants` are left out of it);
+the same two pull roles, then `roles/host_inputs`, the loader of the host's private inputs,
+then `roles/db1_stack` and `roles/db1_grants`, which take their inputs from it);
 the other trees hold only what those hosts need.
 The break-glass roles `roles/breakglass_mint_host` (for ops1) and
 `roles/breakglass_grant_host` (for app1) are not yet applied by any playbook: they

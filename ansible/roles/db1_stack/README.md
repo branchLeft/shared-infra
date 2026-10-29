@@ -179,11 +179,11 @@ the approval of the protected environment, a pull of that exact commit of `main`
 on the host, and a second run that must report zero changes. Nothing in this
 repository applies the role by hand, and an author's local run is the container
 test. `playbooks/db1.yml` refuses any host but `db1` through the shared include,
-refuses an empty signer list and applies the two pull roles only; this role and
-`db1_grants` are not in that playbook, because nothing on the pull route supplies
-their inputs. The live run is waiting on the owner's signer ruling, the channel for
-this role's inputs and the host's one-time bootstrap; until then this role is tested
-and not delivered.
+refuses an empty signer list, applies the two pull roles, then `host_inputs`, then
+this role and `db1_grants`. This role's input is the fact `host_inputs` sets from the
+owner's root-only file on the host (`roles/host_inputs/README.md`). The live run is
+waiting on the owner's signer, that file and the host's one-time bootstrap; until
+then this role is tested and not delivered.
 
 The first live apply on the database host must not recreate or restart the
 running MySQL. The role does not do either, so the check-mode plan of that run is
