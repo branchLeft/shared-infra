@@ -1,6 +1,6 @@
 ---
-# The one loader of a pulled host's private role inputs (owner ruling, option A,
-# branchLeft/workspace#2739). Every check completes before the first input is set,
+# The one loader of a pulled host's private role inputs (owner ruling, option A).
+# Every check completes before the first input is set,
 # no check can be skipped, and every task that touches the file's content has
 # no_log: true and diff: false (ANS-16). A refusal names a path or a name from this
 # host's row and never a value; each starts with host_inputs[code] so that a test

@@ -1,15 +1,11 @@
 """Tests that the host_inputs loader, its per-host rows and the host role lists agree.
 
-The loader (roles/host_inputs) sets a host's private inputs under the names of the role
-arguments they feed. Three files must say the same thing: the rows in the role's
-vars/main.yml (which names each host's file must hold), the literal keys of the one
-set_fact task that sets them, and the host's list in checks/host_roles.yml. A name in a row
-must be a required argument of a role on that host's list with no default (ANS-16), and
-a host with a row must apply the loader. The structural rules of the role's own tasks are
-held here too: no task can be skipped or ignored, every task that touches content hides
-its result, and every check comes before the first input is set.
-
-Each mutation edits a small copy of the real tree and must produce its own finding.
+The rows in the role's vars/main.yml, the literal keys of its one set_fact task and the
+host's list in checks/host_roles.yml must say the same thing. A name in a row must be a
+required argument, with no default (ANS-16), of a role on that host's list, and a host with
+a row must apply the loader. The role's tasks are held to structure too: nothing skippable,
+content-touching tasks hidden, every check before the first input is set. Each mutation
+edits a small copy of the tree and must produce its own finding.
 """
 
 from __future__ import annotations

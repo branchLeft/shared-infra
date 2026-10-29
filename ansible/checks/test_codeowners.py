@@ -97,7 +97,7 @@ PULL_ROLE_PATHS = [
 ]
 
 # The loader of every pulled host's private role inputs is the owner's alone (owner ruling,
-# option A, branchLeft/workspace#2739): its tasks, its per-host rows, its molecule proof of the
+# option A): its tasks, its per-host rows, its molecule proof of the
 # refusals, and its README all sit under one path.
 HOST_INPUTS_PATHS = [
     "ansible/roles/host_inputs/tasks/main.yml",
