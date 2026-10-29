@@ -13,6 +13,7 @@ edge1:
   - edge_stack
   - host_baseline
   - egress_nat
+  - ci_login
 ops1:
   - control_plane
   - nextcloud_stack

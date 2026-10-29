@@ -1,0 +1,14 @@
+---
+# Written to a temporary file and checked by visudo (-s: strict, so an undefined alias fails)
+# before it replaces anything. Check mode skips the validate step. no_log and diff: false
+# keep the grant out of the plan summary.
+- name: Install the sudoers file of the pipeline account
+  ansible.builtin.copy:
+    content: "{{ ci_login_sudoers_lines | join('\n') }}\n"
+    dest: '/etc/sudoers.d/{{ ci_login_sudoers_name }}'
+    owner: root
+    group: root
+    mode: '0440'
+    validate: /usr/sbin/visudo -csf %s
+  no_log: true
+  diff: false
