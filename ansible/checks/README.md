@@ -58,10 +58,10 @@ exception is a role's or pattern's `molecule/` directory and a role's or pattern
 `meta/argument_specs.yml`, which are fixtures and schema. A file that does not parse is
 refused. A symlink that leads out of `ansible/` under a loaded directory is refused.
 
-Under `playbooks/` and `trust/` the name rule is stricter, and R6 reads all of it. Every
-entry there that is not a directory must be an exact `.yml` (case-sensitive, no other
-suffix), or one of the two README paths named exactly: `playbooks/README.md` and
-`trust/README.md`. A README anywhere else is refused. Each of the two exception READMEs is
+Under `playbooks/`, `trust/` and `owner_vars/` the name rule is stricter, and R6 reads all of
+it. Every entry there that is not a directory must be an exact `.yml` (case-sensitive, no
+other suffix), or one of the two README paths named exactly: `playbooks/README.md` and
+`trust/README.md`. A README anywhere else is refused, `owner_vars/` has none, and it is flat. Each of the two exception READMEs is
 refused if it parses as a YAML list, because `ansible-playbook` would run a list as plays.
 That parse accepts every tag (`!unsafe`, `!vault`), as Ansible's loader does, so a tagged
 list is refused too. A link is refused whatever its name,
@@ -126,7 +126,8 @@ is not loaded there.
   R6 must read every file in the tree. Each enrolled `HOST.yml` has one play, with no key
   but `name`, `hosts`, `gather_facts`, `vars`, `vars_files`, `pre_tasks` and `roles`, on
   `hosts: all`, `vars` exactly `enrolled_host: HOST` and nothing else, `vars_files` exactly the shared
-  include and `../trust/HOST.yml`, `roles` the runtime entry then the bare trigger as the
+  include and `../trust/HOST.yml`, then `../owner_vars/HOST.yml` if and only if that file
+  exists (the playbook and the file must agree both ways), `roles` the runtime entry then the bare trigger as the
   first two entries and nothing attached to either, then only plain entries from that
   host's list in `host_roles.yml` (R9), and `pre_tasks` exactly the refusal include then
   the signer include, each a task of only its name and include. A plain entry is a mapping
@@ -161,8 +162,31 @@ is not loaded there.
   before its directory merges, and until then it runs nothing. Order after the pull roles
   is free, and a listed role need not be applied.
 
+- **R10** `owner_vars/` holds the owner's values for a host's roles. It is flat, and a name
+  must be exactly `HOST.yml` for an enrolled host; the name rule above refuses anything
+  else, and R6 refuses a protected key in it (its allowed set is empty). Each file holds
+  exactly the keys its host is allowed and no other, with values of the right shape. For
+  edge1 those are `ci_login_manage_keys`, a bool, and `ci_login_keys`, a list of
+  `{key, mode}` entries with `mode` one of `apply` and `check`; an entry with any other
+  key (a source address list, say) is refused. A host with no allowed keys may have no file.
+  The check does not judge a key's text; the `ci_login` role does. The directory is the
+  owner's (`/ansible/owner_vars/` in CODEOWNERS), so filling in the keys is the owner's merge.
+
 The refusal's host test is not a host control. Under the trigger `inventory_hostname` is
 `localhost`, and the root-owned pull config is the control on the host.
+
+## test_ci_login_pins.py: the ci_login copies and the missing source limit
+
+The `ci_login` role carries its own copy of the key shapes of the `sudoers_and_keys` pattern
+and of the trigger program's path, because a role may not call a pattern or another role
+(ANS-12). The test fails when either copy differs from its home
+(`sudoers_and_keys_key_shapes`, `pull_trigger_program_path`), when the sudoers lines are
+anything but the `env_keep` line and the two-command grant, and when a source address option
+(`from=`, `from_addresses`, or an interface option with `from` in its name) appears in the
+key template, the tasks, the variables or the argument spec. The owner accepted keys with no
+source limit; this keeps that visible, so a limit is added by an owner ruling that changes
+the test too. Each pin runs red on a sabotaged copy of its files and green once the file is
+put back.
 
 # check_role_imports and check_role_paths
 

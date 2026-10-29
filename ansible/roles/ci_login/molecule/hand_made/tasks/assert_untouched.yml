@@ -1,0 +1,59 @@
+---
+# The hand-made state is still exactly as prepare.yml left it.
+- name: Read the account
+  ansible.builtin.getent:
+    database: passwd
+    key: '{{ scenario_user }}'
+  register: ci_login_untouched_passwd
+
+- name: Read the password field of the account
+  ansible.builtin.getent:
+    database: shadow
+    key: '{{ scenario_user }}'
+  register: ci_login_untouched_shadow
+  no_log: true
+
+- name: Keep only whether the password field is still exactly the single character '*'
+  ansible.builtin.set_fact:
+    ci_login_untouched_still_star: "{{ ci_login_untouched_shadow.ansible_facts.getent_shadow[scenario_user][0] == '*' }}"
+  no_log: true
+
+- name: Assert the account is as it was, with its hand-made '*' password field
+  ansible.builtin.assert:
+    that:
+      - ci_login_untouched_passwd.ansible_facts.getent_passwd[scenario_user][4] == scenario_home
+      - ci_login_untouched_passwd.ansible_facts.getent_passwd[scenario_user][5] == '/bin/bash'
+      - ci_login_untouched_still_star | bool
+    quiet: true
+
+- name: Read the marker, the sudoers file and the key file
+  ansible.builtin.stat:
+    path: '{{ item }}'
+  loop:
+    - /var/tmp/hand-made.marker
+    - '{{ scenario_sudoers_path }}'
+    - '{{ scenario_home }}/.ssh/authorized_keys'
+  register: ci_login_untouched_stat
+
+- name: Assert neither file was written after the marker
+  ansible.builtin.assert:
+    that:
+      - ci_login_untouched_stat.results[1].stat.mtime <= ci_login_untouched_stat.results[0].stat.mtime
+      - ci_login_untouched_stat.results[2].stat.mtime <= ci_login_untouched_stat.results[0].stat.mtime
+    quiet: true
+
+- name: Read the key file
+  ansible.builtin.command:
+    argv:
+      - cat
+      - '{{ scenario_home }}/.ssh/authorized_keys'
+  register: ci_login_untouched_keys
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Assert the key file holds the hand-made lines
+  ansible.builtin.assert:
+    that:
+      - ci_login_untouched_keys.stdout_lines | sort == scenario_key_lines | sort
+    quiet: true

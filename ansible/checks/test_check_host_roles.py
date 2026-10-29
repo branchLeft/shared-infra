@@ -69,6 +69,12 @@ def _entry(name: str, extra: str = "") -> str:
     return f"    - role: ../roles/{name}\n{extra}"
 
 
+def _applied_roles(playbook: str) -> list[str]:
+    """The roles after the two pull roles that a host's playbook on main already applies."""
+    entries = yaml.safe_load(playbook)[0]["roles"][2:]
+    return [Path(entry["role"]).name for entry in entries]
+
+
 class HostRoleLists(unittest.TestCase):
     def setUp(self) -> None:
         temp = tempfile.TemporaryDirectory()
@@ -149,7 +155,8 @@ class HostRoleLists(unittest.TestCase):
     # Most of these roles have no directory on main, so a name with no role behind it passes too.
     def test_every_listed_role_is_accepted_for_its_host(self) -> None:
         for host in ENROLLED:
-            roles = self.listed[host]
+            applied = _applied_roles(self.original[host])
+            roles = [name for name in self.listed[host] if name not in applied]
             for order in (roles, list(reversed(roles)), roles[:1], roles[-1:]):
                 with self.subTest(host=host, roles=order):
                     self._playbook(host, "".join(_entry(name) for name in order))
@@ -217,14 +224,17 @@ class HostRoleLists(unittest.TestCase):
         for host in ENROLLED:
             text = self.original[host]
             body = text[text.index(head) + len(head) :]
-            self.assertEqual(runtime + trigger, body, "the sabotage matched nothing")
+            self.assertTrue(body.startswith(runtime + trigger), "the sabotage matched nothing")
+            # The listed roles a host's playbook applies after the pull roles (ci_login on edge1).
+            tail = body[len(runtime + trigger) :]
             variants = {
-                "swapped": trigger + runtime,
-                "listed role first": _entry("host_baseline") + runtime + trigger,
-                "listed role between": runtime + _entry("host_baseline") + trigger,
-                "runtime missing": trigger + _entry("host_baseline"),
+                "swapped": trigger + runtime + tail,
+                "listed role first": _entry("host_baseline") + runtime + trigger + tail,
+                "listed role between": runtime + _entry("host_baseline") + trigger + tail,
+                "runtime missing": trigger + _entry("host_baseline") + tail,
                 "runtime source changed": runtime.replace("/../requirements.txt", "/x.txt")
-                + trigger,
+                + trigger
+                + tail,
             }
             for name, new_roles in variants.items():
                 with self.subTest(host=host, variant=name):
@@ -235,19 +245,22 @@ class HostRoleLists(unittest.TestCase):
             with self.subTest(host=host, variant="trigger missing"):
                 self._playbook(host, "")
                 path = self.ansible / "playbooks" / f"{host}.yml"
-                path.write_text(text.replace(body, runtime + _entry("host_baseline")), "utf-8")
+                path.write_text(
+                    text.replace(body, runtime + _entry("host_baseline") + tail), "utf-8"
+                )
                 found = self._findings(f"R7 {host}.yml") + self._findings(f"R4 trust/{host}.yml")
                 self.assertTrue(found, check(self.root))
 
     # Rule: the pull roles carry nothing. A trigger with a var, a tag or a when is refused.
     def test_the_trigger_carries_nothing(self) -> None:
+        trigger = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
         for host, extra in (
             ("edge1", "      tags: [never]\n"),
             ("ops1", "      when: false\n"),
             ("app1", "      vars:\n        harmless: 1\n"),
         ):
             with self.subTest(host=host, extra=extra):
-                self._playbook(host, extra)
+                self._replace_in(host, trigger, trigger + extra)
                 self._assert_refused(host, "roles must start with the runtime entry")
 
     # Rule: one play per host. A second play is refused whatever it holds, and so is no play.
