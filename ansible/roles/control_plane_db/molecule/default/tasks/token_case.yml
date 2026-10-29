@@ -28,5 +28,5 @@
   vars:
     ask_name: 'a service account token: {{ case_name }}'
     ask_tags: control_plane_db_identity
-    ask_extra: {control_plane_db_step: identity}
+    ask_extra: { control_plane_db_step: identity }
     refused_text: 'REFUSED: /var/lib/branchleft/control-plane/zitadel-state/reconciler.pat must be a regular file'

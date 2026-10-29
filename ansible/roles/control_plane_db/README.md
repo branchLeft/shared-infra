@@ -18,11 +18,11 @@ or open to others. Nothing else changes, so a second plain apply reports no chan
 On a **step request** it runs one of three steps, each in the applications image, as a
 one-off container on the stack's network (or the host's, for the reconciler):
 
-| Step        | What it does                                                                                           | Inputs the owner places                                   |
-| ----------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| `migrate`   | Applies the pending migrations with the image's `--migrate-only` mode. It creates no role, no password. | `admin-url`                                               |
-| `identity`  | Renders the reconciler's configuration, runs it against the sign-in service, installs its identifiers. | none (the token is the sign-in service's own file)       |
-| `provision` | Creates the database, schema, roles and logins, then writes the two connection URL files.              | `admin-url`, `tenant-password`, `owner-password`, `provisioner-password` |
+| Step        | What it does                                                                                            | Inputs the owner places                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `migrate`   | Applies the pending migrations with the image's `--migrate-only` mode. It creates no role, no password. | `admin-url`                                                              |
+| `identity`  | Renders the reconciler's configuration, runs it against the sign-in service, installs its identifiers.  | none (the token is the sign-in service's own file)                       |
+| `provision` | Creates the database, schema, roles and logins, then writes the two connection URL files.               | `admin-url`, `tenant-password`, `owner-password`, `provisioner-password` |
 
 The grants themselves are not written here. The image's program holds a closed manifest
 of every role, login, grant and default privilege, checks the server against it before
@@ -39,12 +39,12 @@ host's playbook or into the gated pull's step allow-list. Wiring a host is separ
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the inputs and
 [`defaults/main.yml`](defaults/main.yml) holds the same defaults. No input is a secret.
 
-| Variable                              | Default | Meaning                                                                                 |
-| ------------------------------------- | ------- | --------------------------------------------------------------------------------------- |
+| Variable                              | Default | Meaning                                                                                        |
+| ------------------------------------- | ------- | ---------------------------------------------------------------------------------------------- |
 | `control_plane_db_step`               | empty   | The step this run confirms. The gated pull sets it on the command line. Never in an inventory. |
-| `control_plane_db_apps_image`         | empty   | The applications image, `NAME@sha256:` and 64 hex digits. Required by every step.       |
-| `control_plane_db_identity_hostnames` | empty   | `console`, `portal` and `identity` hostnames. Required by `identity`.                   |
-| `control_plane_db_identity_tenants`    | `[]`    | The reconciler's tenant list. Empty. See the limits.                                    |
+| `control_plane_db_apps_image`         | empty   | The applications image, `NAME@sha256:` and 64 hex digits. Required by every step.              |
+| `control_plane_db_identity_hostnames` | empty   | `console`, `portal` and `identity` hostnames. Required by `identity`.                          |
+| `control_plane_db_identity_tenants`   | `[]`    | The reconciler's tenant list. Empty. See the limits.                                           |
 
 The fixed values (every path, the modes, the logins, the patterns an image, a password
 and a hostname must match) are in `vars/main.yml`, not in the interface, so an inventory
@@ -103,28 +103,28 @@ seen red, the edit is reverted, and the test is seen green. C3 (link), C17 (URL 
 and C19 are shown red by the unit tests only; the container scenario stays green for
 those edits.
 
-| Control                                                                                           | Edit that must turn it red                                       | Where it is shown                                   |
-| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------- |
-| C1 a plain apply runs no step                                                                     | drop the `never` tag of a step                                   | unit test, `plain` section                          |
-| C2 the step id must equal the confirmation                                                        | drop the comparison in `_guard.yml`                              | `guard` section                                     |
-| C3 an input file is root's, group 1000, 0640, regular, not empty                                  | accept 0644, or accept a link                                    | `inputs` section, unit test                         |
-| C4 the input directory is root:1000 0750, and a plain apply restores it                           | set 0755 in `main.yml`                                           | `plain` and `inputs` sections                       |
-| C5 the configuration directory is not open to others                                              | drop its assertion                                               | `plain` section                                     |
-| C6 the image is pinned by digest                                                                  | loosen `control_plane_db_image_pattern`                          | `guard` section, unit test                          |
-| C7 the image carries what the step needs                                                          | drop `_image.yml`                                                | `migrate_preconditions`, `provision_failures`       |
-| C8 the stack network must exist                                                                   | drop the network check                                           | `migrate_preconditions`                             |
-| C9 a step ends clean or is refused                                                                | drop the output assertion                                        | `migrate_failures`, `provision_failures`, `identity_failures` |
-| C10 the marker is written after the effect and its checks                                         | write it first                                                   | `migrate_failures`, unit test                       |
-| C11 the administrator URL file is removed on every exit                                           | drop the `always` section                                        | `inputs`, `migrate_failures`                        |
-| C12 a marker is keyed by what the step acts on                                                    | key `migrate` by a constant                                      | `migrate`, `identity`                               |
-| C13 each URL file holds its own login, and no file holds the provisioner's                        | swap the two logins                                              | `provision` section, unit test                      |
-| C14 a password must survive as one URL component                                                  | drop the shape check                                             | `provision_refusals`                                |
-| C15 provision does not rotate the passwords the applications hold                                 | drop the URL file comparison                                     | `provision_refusals`                                |
-| C16 no secret in a container's arguments or environment, and no added privilege                   | add `--privileged`, or a password in an `-e`                     | `migrate`, `provision`, unit test                   |
-| C17 a task that handles a secret has `no_log`                                                     | remove it                                                        | `migrate_failures`, `provision_failures`, unit test |
-| C18 the service account token is the sign-in service's, regular, 0600                             | accept 0644, or a link                                           | `identity_refusals`                                 |
-| C19 a working directory this run did not make is not removed                                      | remove it unconditionally                                        | `identity_refusals`                                 |
-| C20 a check-mode request starts no container and writes no marker                                 | not shown to fail: the container tasks are skipped in check mode | `check_mode` section (asserts the outcome only)     |
+| Control                                                                         | Edit that must turn it red                                       | Where it is shown                                             |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------- |
+| C1 a plain apply runs no step                                                   | drop the `never` tag of a step                                   | unit test, `plain` section                                    |
+| C2 the step id must equal the confirmation                                      | drop the comparison in `_guard.yml`                              | `guard` section                                               |
+| C3 an input file is root's, group 1000, 0640, regular, not empty                | accept 0644, or accept a link                                    | `inputs` section, unit test                                   |
+| C4 the input directory is root:1000 0750, and a plain apply restores it         | set 0755 in `main.yml`                                           | `plain` and `inputs` sections                                 |
+| C5 the configuration directory is not open to others                            | drop its assertion                                               | `plain` section                                               |
+| C6 the image is pinned by digest                                                | loosen `control_plane_db_image_pattern`                          | `guard` section, unit test                                    |
+| C7 the image carries what the step needs                                        | drop `_image.yml`                                                | `migrate_preconditions`, `provision_failures`                 |
+| C8 the stack network must exist                                                 | drop the network check                                           | `migrate_preconditions`                                       |
+| C9 a step ends clean or is refused                                              | drop the output assertion                                        | `migrate_failures`, `provision_failures`, `identity_failures` |
+| C10 the marker is written after the effect and its checks                       | write it first                                                   | `migrate_failures`, unit test                                 |
+| C11 the administrator URL file is removed on every exit                         | drop the `always` section                                        | `inputs`, `migrate_failures`                                  |
+| C12 a marker is keyed by what the step acts on                                  | key `migrate` by a constant                                      | `migrate`, `identity`                                         |
+| C13 each URL file holds its own login, and no file holds the provisioner's      | swap the two logins                                              | `provision` section, unit test                                |
+| C14 a password must survive as one URL component                                | drop the shape check                                             | `provision_refusals`                                          |
+| C15 provision does not rotate the passwords the applications hold               | drop the URL file comparison                                     | `provision_refusals`                                          |
+| C16 no secret in a container's arguments or environment, and no added privilege | add `--privileged`, or a password in an `-e`                     | `migrate`, `provision`, unit test                             |
+| C17 a task that handles a secret has `no_log`                                   | remove it                                                        | `migrate_failures`, `provision_failures`, unit test           |
+| C18 the service account token is the sign-in service's, regular, 0600           | accept 0644, or a link                                           | `identity_refusals`                                           |
+| C19 a working directory this run did not make is not removed                    | remove it unconditionally                                        | `identity_refusals`                                           |
+| C20 a check-mode request starts no container and writes no marker               | not shown to fail: the container tasks are skipped in check mode | `check_mode` section (asserts the outcome only)               |
 
 ## What the owner does
 

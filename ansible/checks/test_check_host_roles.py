@@ -57,7 +57,7 @@ SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml
 TRIGGER_LINE = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # The roles a playbook on main applies after the pull roles. The sabotage cases below start from
 # the pull roles alone, so they strip these first; one test holds the real playbook to them.
-APPLIED_ON_MAIN = {"ops1": ["status_page"]}
+APPLIED_ON_MAIN = {"edge1": ["ci_login"], "ops1": ["status_page"]}
 
 
 def _pull_roles_only(text: str) -> str:

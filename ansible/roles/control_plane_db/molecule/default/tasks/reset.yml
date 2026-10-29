@@ -29,8 +29,16 @@
     group: '{{ item.group }}'
     mode: '{{ item.mode }}'
   loop:
-    - {path: /etc/branchleft/control-plane, state: directory, owner: root, group: root, mode: '0750'}
-    - {path: /etc/branchleft/control-plane/provision, state: directory, owner: root, group: '1000', mode: '0750'}
+    - path: /etc/branchleft/control-plane
+      state: directory
+      owner: root
+      group: root
+      mode: '0750'
+    - path: /etc/branchleft/control-plane/provision
+      state: directory
+      owner: root
+      group: '1000'
+      mode: '0750'
   loop_control:
     label: '{{ item.path }}'
 

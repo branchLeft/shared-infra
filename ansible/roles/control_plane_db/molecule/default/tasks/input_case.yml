@@ -15,7 +15,7 @@
   vars:
     ask_name: 'an administrator URL file: {{ case_name }}'
     ask_tags: control_plane_db_migrate
-    ask_extra: {control_plane_db_step: migrate}
+    ask_extra: { control_plane_db_step: migrate }
     refused_text: 'REFUSED: /etc/branchleft/control-plane/provision/admin-url must be a regular file'
 
 - name: 'Look for the administrator URL file after the refusal: {{ case_name }}'

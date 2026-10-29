@@ -15,11 +15,14 @@
         group: '{{ item.group }}'
         mode: '{{ item.mode }}'
       loop:
-        - {path: /etc/branchleft, owner: root, group: root, mode: '0755'}
-        - {path: /etc/branchleft/control-plane, owner: root, group: root, mode: '0750'}
-        - {path: /var/lib/branchleft, owner: root, group: root, mode: '0755'}
-        - {path: /var/lib/branchleft/control-plane, owner: root, group: root, mode: '0755'}
-        - {path: /var/lib/branchleft/control-plane/zitadel-state, owner: '1000', group: '1000', mode: '0700'}
+        - { path: /etc/branchleft, owner: root, group: root, mode: '0755' }
+        - { path: /etc/branchleft/control-plane, owner: root, group: root, mode: '0750' }
+        - { path: /var/lib/branchleft, owner: root, group: root, mode: '0755' }
+        - { path: /var/lib/branchleft/control-plane, owner: root, group: root, mode: '0755' }
+        - path: /var/lib/branchleft/control-plane/zitadel-state
+          owner: '1000'
+          group: '1000'
+          mode: '0700'
       loop_control:
         label: '{{ item.path }}'
 

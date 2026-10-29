@@ -152,19 +152,19 @@
           vars:
             ask_name: 'the tag of {{ item.tag }} with the id {{ item.id }}'
             ask_tags: 'control_plane_db_{{ item.tag }}'
-            ask_extra: {control_plane_db_step: '{{ item.id }}'}
+            ask_extra: { control_plane_db_step: '{{ item.id }}' }
             refused_text: 'REFUSED: {{ item.tag }} was requested by its tag without control_plane_db_step set to {{ item.tag }}'
           loop:
-            - {tag: migrate, id: identity}
-            - {tag: provision, id: migrate}
-            - {tag: identity, id: provision}
+            - { tag: migrate, id: identity }
+            - { tag: provision, id: migrate }
+            - { tag: identity, id: provision }
 
         - name: Refuse an id outside the closed list, or with a line break
           ansible.builtin.include_tasks: tasks/refuse.yml
           vars:
             ask_name: 'the id {{ item | ansible.builtin.to_json }}'
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: '{{ item }}'}
+            ask_extra: { control_plane_db_step: '{{ item }}' }
             refused_text: control_plane_db_step
           loop: ['break_glass', "migrate\n", 'MIGRATE', 'all']
 
@@ -173,7 +173,7 @@
           vars:
             ask_name: 'the image {{ item | ansible.builtin.to_json }}'
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: migrate, control_plane_db_apps_image: '{{ item }}'}
+            ask_extra: { control_plane_db_step: migrate, control_plane_db_apps_image: '{{ item }}' }
             refused_text: 'REFUSED: control_plane_db_apps_image must be NAME@sha256:'
           loop:
             - example.invalid/example-app:latest
@@ -207,7 +207,7 @@
           vars:
             ask_name: no administrator URL file
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: migrate}
+            ask_extra: { control_plane_db_step: migrate }
             refused_text: 'REFUSED: /etc/branchleft/control-plane/provision/admin-url must be a regular file'
 
         - name: Refuse each administrator URL file that is wider, in another group, owned by another account, or empty
@@ -215,12 +215,32 @@
           vars:
             case_name: '{{ item.name }}'
           loop:
-            - {name: mode 0644, owner: root, group: '1000', mode: '0644', content: '{{ scenario_admin_url }}'}
-            - {name: mode 0660, owner: root, group: '1000', mode: '0660', content: '{{ scenario_admin_url }}'}
-            - {name: mode 0600, owner: root, group: '1000', mode: '0600', content: '{{ scenario_admin_url }}'}
-            - {name: group root, owner: root, group: root, mode: '0640', content: '{{ scenario_admin_url }}'}
-            - {name: owner 1000, owner: '1000', group: '1000', mode: '0640', content: '{{ scenario_admin_url }}'}
-            - {name: empty, owner: root, group: '1000', mode: '0640', content: ''}
+            - name: mode 0644
+              owner: root
+              group: '1000'
+              mode: '0644'
+              content: '{{ scenario_admin_url }}'
+            - name: mode 0660
+              owner: root
+              group: '1000'
+              mode: '0660'
+              content: '{{ scenario_admin_url }}'
+            - name: mode 0600
+              owner: root
+              group: '1000'
+              mode: '0600'
+              content: '{{ scenario_admin_url }}'
+            - name: group root
+              owner: root
+              group: root
+              mode: '0640'
+              content: '{{ scenario_admin_url }}'
+            - name: owner 1000
+              owner: '1000'
+              group: '1000'
+              mode: '0640'
+              content: '{{ scenario_admin_url }}'
+            - { name: empty, owner: root, group: '1000', mode: '0640', content: '' }
           loop_control:
             label: '{{ item.name }}'
 
@@ -244,7 +264,7 @@
           vars:
             ask_name: a link in place of the administrator URL file
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: migrate}
+            ask_extra: { control_plane_db_step: migrate }
             refused_text: 'REFUSED: /etc/branchleft/control-plane/provision/admin-url must be a regular file, not a link'
 
         - name: Look at the link and its target after the refusal
@@ -283,7 +303,7 @@
           vars:
             ask_name: a widened input directory
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: migrate}
+            ask_extra: { control_plane_db_step: migrate }
             refused_text: 'REFUSED: /etc/branchleft/control-plane/provision must be a directory of root'
 
         - name: Put the input directory back
@@ -313,7 +333,7 @@
           vars:
             ask_name: migrate for the first digest
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: migrate}
+            ask_extra: { control_plane_db_step: migrate }
 
         - name: Read the stand-in's calls
           ansible.builtin.import_tasks: tasks/calls.yml
@@ -383,7 +403,7 @@
           vars:
             ask_name: migrate again for the same digest
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: migrate}
+            ask_extra: { control_plane_db_step: migrate }
 
         - name: Read the calls after the second request
           ansible.builtin.import_tasks: tasks/calls.yml
@@ -408,7 +428,7 @@
           vars:
             ask_name: migrate for the same digest with the file placed
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: migrate}
+            ask_extra: { control_plane_db_step: migrate }
 
         - name: Read the calls and the file
           ansible.builtin.import_tasks: tasks/calls.yml
@@ -438,7 +458,11 @@
           vars:
             ask_name: migrate for a second digest
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: migrate, control_plane_db_apps_image: '{{ verify_image_two }}'}
+            ask_extra:
+              {
+                control_plane_db_step: migrate,
+                control_plane_db_apps_image: '{{ verify_image_two }}',
+              }
 
         - name: Read the calls and both markers
           ansible.builtin.import_tasks: tasks/calls.yml
@@ -486,7 +510,7 @@
           vars:
             ask_name: migrate while the program refuses
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: migrate}
+            ask_extra: { control_plane_db_step: migrate }
 
         - name: Look at the marker and the administrator URL file
           ansible.builtin.stat:
@@ -526,7 +550,7 @@
           vars:
             ask_name: migrate while the program prints a secret
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: migrate}
+            ask_extra: { control_plane_db_step: migrate }
 
         - name: Assert the run failed (the secret check is in ask.yml, on the output)
           ansible.builtin.assert:
@@ -555,7 +579,7 @@
           vars:
             ask_name: migrate again after a failure
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: migrate}
+            ask_extra: { control_plane_db_step: migrate }
 
         - name: Look at the marker
           ansible.builtin.stat:
@@ -596,7 +620,7 @@
           vars:
             ask_name: an image without the migrate-only flag
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: migrate}
+            ask_extra: { control_plane_db_step: migrate }
             refused_text: 'REFUSED: the image does not carry --migrate-only'
             refused_calls: 3
 
@@ -622,7 +646,7 @@
           vars:
             ask_name: migrate with no stack network
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: migrate}
+            ask_extra: { control_plane_db_step: migrate }
 
         - name: Read the calls
           ansible.builtin.import_tasks: tasks/calls.yml
@@ -654,7 +678,7 @@
           vars:
             ask_name: migrate in check mode
             ask_tags: control_plane_db_migrate
-            ask_extra: {control_plane_db_step: migrate}
+            ask_extra: { control_plane_db_step: migrate }
             ask_check: true
 
         - name: Read the calls
@@ -691,7 +715,7 @@
           vars:
             ask_name: provision
             ask_tags: control_plane_db_provision
-            ask_extra: {control_plane_db_step: provision}
+            ask_extra: { control_plane_db_step: provision }
 
         - name: Read the calls
           ansible.builtin.import_tasks: tasks/calls.yml
@@ -793,7 +817,7 @@
           vars:
             ask_name: provision again
             ask_tags: control_plane_db_provision
-            ask_extra: {control_plane_db_step: provision}
+            ask_extra: { control_plane_db_step: provision }
 
         - name: Read the calls after the second request
           ansible.builtin.import_tasks: tasks/calls.yml
@@ -821,11 +845,11 @@
           vars:
             case_name: '{{ item.name }}'
           loop:
-            - {name: an at sign, value: 'abcdefghijklmnopqrstuvwx@yz'}
-            - {name: a slash, value: 'abcdefghijklmnopqrstuvwx/yz'}
-            - {name: a colon, value: 'abcdefghijklmnopqrstuvwx:yz'}
-            - {name: a space, value: 'abcdefghijklmnopqrstuvwx yz'}
-            - {name: too short, value: 'abcdefghij'}
+            - { name: an at sign, value: 'abcdefghijklmnopqrstuvwx@yz' }
+            - { name: a slash, value: 'abcdefghijklmnopqrstuvwx/yz' }
+            - { name: a colon, value: 'abcdefghijklmnopqrstuvwx:yz' }
+            - { name: a space, value: 'abcdefghijklmnopqrstuvwx yz' }
+            - { name: too short, value: 'abcdefghij' }
           loop_control:
             label: '{{ item.name }}'
 
@@ -838,8 +862,10 @@
             place_path: '{{ item.path }}'
             place_content: '{{ item.content }}'
           loop:
-            - {path: '{{ verify_config }}/portal-database-url', content: "{{ verify_tenant_url }}\n"}
-            - {path: '{{ verify_config }}/console-database-url', content: "{{ verify_owner_url }}\n"}
+            - path: '{{ verify_config }}/portal-database-url'
+              content: "{{ verify_tenant_url }}\n"
+            - path: '{{ verify_config }}/console-database-url'
+              content: "{{ verify_owner_url }}\n"
           loop_control:
             label: '{{ item.path }}'
 
@@ -853,7 +879,7 @@
           vars:
             ask_name: provision over URL files of other passwords
             ask_tags: control_plane_db_provision
-            ask_extra: {control_plane_db_step: provision}
+            ask_extra: { control_plane_db_step: provision }
             refused_text: 'REFUSED: a connection URL file already exists and is not the one these passwords make'
 
         - name: Read the URL file the refusal had to leave alone
@@ -878,7 +904,7 @@
           vars:
             ask_name: provision retried over its own URL files
             ask_tags: control_plane_db_provision
-            ask_extra: {control_plane_db_step: provision}
+            ask_extra: { control_plane_db_step: provision }
 
         - name: Assert a retry over its own URL files runs
           ansible.builtin.assert:
@@ -909,7 +935,7 @@
           vars:
             ask_name: provision while the program prints a secret
             ask_tags: control_plane_db_provision
-            ask_extra: {control_plane_db_step: provision}
+            ask_extra: { control_plane_db_step: provision }
 
         - name: Look at what a failed provision left
           ansible.builtin.stat:
@@ -954,7 +980,7 @@
           vars:
             ask_name: provision retried after a failure
             ask_tags: control_plane_db_provision
-            ask_extra: {control_plane_db_step: provision}
+            ask_extra: { control_plane_db_step: provision }
 
         - name: Look at the marker
           ansible.builtin.stat:
@@ -988,7 +1014,7 @@
           vars:
             ask_name: an image without the provisioner login
             ask_tags: control_plane_db_provision
-            ask_extra: {control_plane_db_step: provision}
+            ask_extra: { control_plane_db_step: provision }
             refused_text: 'REFUSED: the image does not carry PORTAL_PROVISIONER_PASSWORD_FILE'
             refused_calls: 3
 
@@ -1007,7 +1033,7 @@
           vars:
             ask_name: identity
             ask_tags: control_plane_db_identity
-            ask_extra: {control_plane_db_step: identity}
+            ask_extra: { control_plane_db_step: identity }
 
         - name: Read the calls
           ansible.builtin.import_tasks: tasks/calls.yml
@@ -1068,7 +1094,7 @@
               - "'ZITADEL_URL=http://identity.example.invalid:8300' in control_plane_db_verify_identity_call.argv"
               - "'ZITADEL_TOKEN_FILE=/state/reconciler.pat' in control_plane_db_verify_identity_call.argv"
               - scenario_needles | select('in', control_plane_db_verify_identity_call.argv | join(' ')) | list | length == 0
-              - "control_plane_db_verify_identity_call.config[verify_work] is search('\"identity\": \"identity.example.invalid\"')"
+              - 'control_plane_db_verify_identity_call.config[verify_work] is search(''"identity": "identity.example.invalid"'')'
               - "control_plane_db_verify_identity_call.config[verify_work] is search('\"tenants\": \\[\\]')"
               - control_plane_db_verify_identity_call.mounts[verify_work].mode == '0700'
               - control_plane_db_verify_identity_call.mounts[verify_work].uid == 1000
@@ -1080,7 +1106,7 @@
           vars:
             ask_name: identity again
             ask_tags: control_plane_db_identity
-            ask_extra: {control_plane_db_step: identity}
+            ask_extra: { control_plane_db_step: identity }
 
         - name: Read the calls after the second request
           ansible.builtin.import_tasks: tasks/calls.yml
@@ -1135,7 +1161,12 @@
             ask_tags: control_plane_db_identity
             ask_extra:
               control_plane_db_step: identity
-              control_plane_db_identity_hostnames: {console: console.example.invalid, portal: portal.example.invalid, identity: '{{ item }}'}
+              control_plane_db_identity_hostnames:
+                {
+                  console: console.example.invalid,
+                  portal: portal.example.invalid,
+                  identity: '{{ item }}',
+                }
             refused_text: 'REFUSED: control_plane_db_identity_hostnames.identity must be set to a lower-case hostname'
           loop: ['', 'UPPER.example.invalid', 'a b', 'host:8300', 'a/b']
 
@@ -1144,11 +1175,11 @@
           vars:
             case_name: '{{ item.name }}'
           loop:
-            - {name: absent, setup: absent}
-            - {name: mode 0640, setup: file, owner: '1000', group: '1000', mode: '0640'}
-            - {name: mode 0400, setup: file, owner: '1000', group: '1000', mode: '0400'}
-            - {name: owned by root, setup: file, owner: root, group: root, mode: '0600'}
-            - {name: a link, setup: link}
+            - { name: absent, setup: absent }
+            - { name: mode 0640, setup: file, owner: '1000', group: '1000', mode: '0640' }
+            - { name: mode 0400, setup: file, owner: '1000', group: '1000', mode: '0400' }
+            - { name: owned by root, setup: file, owner: root, group: root, mode: '0600' }
+            - { name: a link, setup: link }
           loop_control:
             label: '{{ item.name }}'
 
@@ -1176,7 +1207,7 @@
           vars:
             ask_name: a working directory an earlier attempt left
             ask_tags: control_plane_db_identity
-            ask_extra: {control_plane_db_step: identity}
+            ask_extra: { control_plane_db_step: identity }
             refused_text: 'REFUSED: /var/lib/branchleft/control-plane/reconciler-work already exists'
 
         - name: Look at what the earlier attempt left
@@ -1210,7 +1241,7 @@
           vars:
             ask_name: identity with drift
             ask_tags: control_plane_db_identity
-            ask_extra: {control_plane_db_step: identity}
+            ask_extra: { control_plane_db_step: identity }
 
         - name: Look at what a drift left
           ansible.builtin.stat:
@@ -1251,7 +1282,7 @@
           vars:
             ask_name: identity while the reconciler fails
             ask_tags: control_plane_db_identity
-            ask_extra: {control_plane_db_step: identity}
+            ask_extra: { control_plane_db_step: identity }
 
         - name: Look at the working directory
           ansible.builtin.stat:
