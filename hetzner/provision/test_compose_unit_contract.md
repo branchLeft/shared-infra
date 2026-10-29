@@ -157,6 +157,41 @@ a reason specific to this instance.
     same limitation `UnitTemplateAssumptionTests` above already carries for
     `ExecStop`.
 
+## UnitRetryContractTests
+
+The template retries a failed start, a bounded number of times, and
+`branchleft-deploy` still sees the failure. Both halves are pinned because each
+undoes the other if it drifts.
+
+    `Restart=on-failure` is the retry. Anything else fails: `always` and
+    `on-success` are refused by systemd for a `Type=oneshot` unit, and `no` is
+    today's behaviour, a unit that stays `failed` until someone looks.
+    `RestartSec=` under 15 seconds retries inside the window a `containerd`
+    restart needs, so every retry fails the same way and the limit is spent
+    for nothing.
+
+    The start limit is what makes the retry stop. `StartLimitIntervalSec=` of
+    `0` or `infinity` switches the limit off, which turns the retry into one
+    that never ends, and `StartLimitBurst=` under 3 leaves one retry, which a
+    deploy's own two explicit starts (the new pin, then the rollback) can
+    spend. Every start counts, the wrapper's included.
+
+    An instance drop-in that sets any of the four directives replaces the
+    template's value for that one stack, so none may. The scan covers every
+    committed `hetzner/*/systemd/*.override.conf`; `snds-collector.service`
+    and its timer are not instance drop-ins and are not read.
+
+    Each fault is fed to `retry_faults` and `drop_in_retry_faults` as unit text,
+    so the refusals are tested and not only the real file's pass. Durations are
+    parsed the way systemd.time(7) reads them (`30`, `30s`, `1min`); a value
+    that is not a duration or a whole number raises `UnparseableUnitValue`
+    rather than passing as a default.
+
+    This pins the unit's shape. That `systemctl restart` exits non-zero on a
+    failed start before the retry timer fires, and that the limit does not
+    refuse a deploy's second restart, are systemd behaviour the Molecule case
+    `case_compose_retry.yml` of the `deploy_tooling` role observes.
+
 ## test_the_scan_still_sees_both_sides_of_the_boundary
 
 Otherwise the assertion above passes over an empty scan.

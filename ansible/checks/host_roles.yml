@@ -13,6 +13,7 @@ edge1:
   - edge_stack
   - host_baseline
   - egress_nat
+  - ci_login
 ops1:
   - control_plane
   - nextcloud_stack
@@ -20,12 +21,15 @@ ops1:
   - backup_restore
   - breakglass_mint_host
   - host_baseline
+  - status_page
 app1:
   - deploy_tooling
+  - deploy_slot_keys
   - website_app1
   - breakglass_grant_host
   - host_baseline
 db1:
+  - host_inputs
   - db1_stack
   - db1_grants
   - db1_backup_timers

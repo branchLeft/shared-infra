@@ -1,0 +1,45 @@
+---
+argument_specs:
+  main:
+    short_description: Make the deploy account's per-stack keys exactly the declared set
+    description: >-
+      Installs the slot provisioning program from the repository checkout and makes the
+      host's deploy slots exactly the declared list. A slot is one SSH public key that
+      may run one stack's deploy command and nothing else. The list holds tenant stack
+      names and public keys, which are private, so it is supplied at run time and never
+      committed. Every task that handles it hides its result and its diff.
+    author: branchLeft
+    options:
+      deploy_slot_keys_slots:
+        type: list
+        elements: dict
+        required: true
+        description: >-
+          The exact set of slots the host holds, with no default. A stack that is on the
+          host and not in the list is revoked. An empty list means the set is not declared:
+          it changes nothing and never revokes every slot. At most one entry per stack and
+          one entry per key; the program refuses a key that is also the host-level key.
+        options:
+          stack:
+            type: str
+            required: true
+            description: >-
+              The stack name, lowercase letters, digits and hyphens, starting with a letter,
+              32 characters at most. It is written into the key's forced command and is
+              checked by the slot program before anything is written.
+          public_key:
+            type: str
+            required: true
+            no_log: true
+            description: >-
+              One OpenSSH public key on one line, the whole contents of an `id_ed25519.pub`.
+              The comment is discarded. The private half is minted by a person, goes to the
+              tenant repository's production environment secret, and is never made by a
+              workflow.
+          adopt_existing:
+            type: bool
+            default: false
+            description: >-
+              Allow the first slot on a stack the host already runs. Without it, a stack
+              directory that already exists on the host is refused, because a slot on a
+              platform stack hands that service to a tenant repository.

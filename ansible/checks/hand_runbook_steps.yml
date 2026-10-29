@@ -1,0 +1,37 @@
+# Every RUNBOOK*.md and the number of its fenced shell blocks that reach a host and change it.
+# More blocks than listed fails test_no_new_hand_runbook_steps.py, and so do fewer: lower the
+# count when a step moves into a role. A runbook with no such block needs no entry.
+# Reasons: stays-as-code, or pending-role naming the role that will replace the steps. A role name
+# is read, not checked against ansible/roles/, so a role may be listed before it merges.
+hetzner/RUNBOOK-edge.md:
+  steps: 5
+  reason: pending-role
+  role: edge_stack
+hetzner/RUNBOOK-monitoring.md:
+  steps: 17
+  reason: pending-role
+  role: monitoring_stack
+hetzner/RUNBOOK-nextcloud.md:
+  steps: 9
+  reason: pending-role
+  role: nextcloud_stack
+hetzner/RUNBOOK-provision-host.md:
+  steps: 10
+  reason: pending-role
+  role: host_baseline
+mail/RUNBOOK-mx1-disaster-recovery.md:
+  steps: 1
+  reason: pending-role
+  role: mail_stalwart
+mail/RUNBOOK-mx1-prometheus-metrics.md:
+  steps: 6
+  reason: pending-role
+  role: mail_stalwart
+mail/RUNBOOK-mx1-provision.md:
+  steps: 3
+  reason: pending-role
+  role: mail_stalwart
+mail/RUNBOOK-mx1-reboot.md:
+  steps: 2
+  reason: pending-role
+  role: mail_stalwart

@@ -452,6 +452,35 @@ recovery that did not happen, or an outage that a failed exit code alone
 does not prove: with no `ExecStop` at all, `docker ps` is what actually
 tells the two states apart, whether or not that restart succeeded.
 
+A failed start is retried before the unit stays `failed`. The template carries
+`Restart=on-failure`, `RestartSec=30s`, `StartLimitIntervalSec=900` and
+`StartLimitBurst=5`: the first start and four retries, 30 seconds apart. A start
+that failed because `containerd` or the Docker daemon was briefly away -- the
+failure is `failed to create task for container: Unavailable: error reading
+from server: EOF` -- is therefore tried again for about two minutes, plus the
+time each attempt takes, before the unit gives up. Without it such a unit
+stayed `failed` until someone looked. The rollback signal does not change:
+`systemctl restart` returns when the start job fails, with the failed start's
+non-zero exit code, before the retry timer fires, so `branchleft-deploy` still
+sees a failure and rolls back. The Molecule case `case_compose_retry.yml` of the
+`deploy_tooling` role records that exit code, and the retry counts, on real
+systemd. The retry follows a failed _start_ only: a stack that started and
+later lost a container is not touched, because its unit is still active.
+
+Every start counts against the limit, `branchleft-deploy`'s explicit ones
+included, and the limit is what makes the retry stop. A stack that has spent
+it is `failed` with result `start-limit-hit`, is listed by `systemctl --failed`,
+and refuses the next `systemctl restart` with `Start request repeated too
+quickly` until 15 minutes have passed. Do not wait: run `systemctl reset-failed
+branchleft-compose@<stack>`, then `systemctl restart branchleft-compose@<stack>`
+(or re-run the deploy job). The same limit refuses a sixth start of one stack
+inside 15 minutes, so a run of deploys to one stack that fast needs the same
+`reset-failed`. A start that fails slowly -- a pull that hangs until the 600
+second `TimeoutStartSec` -- spaces the starts out so that five never fall inside
+15 minutes, and that unit keeps retrying about every ten minutes instead of
+stopping. The new unit applies to a host when the `deploy_tooling` role next runs
+there; until then the host keeps the unit it has.
+
 A restart with no previous pin to roll back to -- a first deploy, always --
 removes the pin file instead of leaving one that failed, because there is
 nothing to fall back to and leaving it would be ambiguous. That state was
@@ -539,6 +568,7 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | `branchleft-compose@state-copy`                            | nowhere: a systemd unit, not a Compose stack                                                             | no                |
 | `branchleft-compose@restore-drill`                         | nowhere: a systemd unit, not a Compose stack                                                             | no                |
 | `branchleft-compose@ntfy-pager`, which is not an instance  | nowhere: the pager's secrets file, `/etc/branchleft/ntfy-pager.env`, written by the `ntfy_pager` role    | no                |
+| `branchleft-compose@status`, which is not an instance      | nowhere: the project directory of the `status_page` role's plain `docker compose` Gatus page             | no                |
 
 **No means unread, not failed.** Nothing in this repository has an opinion
 about whether those stacks declare a health signal, so a service in one that

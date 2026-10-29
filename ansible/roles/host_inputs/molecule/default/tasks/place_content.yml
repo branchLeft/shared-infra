@@ -1,0 +1,10 @@
+---
+- name: Write the case's text with the case's owner, group and mode
+  ansible.builtin.copy:
+    content: '{{ case.content }}'
+    dest: '{{ host_inputs_test_path }}'
+    owner: '{{ case.owner | default("root") }}'
+    group: '{{ case.group | default("root") }}'
+    mode: '{{ case.mode | default("0600") }}'
+  no_log: true
+  diff: false

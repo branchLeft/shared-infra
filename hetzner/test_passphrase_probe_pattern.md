@@ -20,10 +20,10 @@ shell variables) is invisible to a per-line literal scan; the allowlist's
 exact-text keying means reformatting an allowlisted line for any reason --
 punctuation, a typo fix, a rewrap -- fails the check even though nothing
 security-relevant changed, which is an accepted trade against fuzzy matching
-that could hide a real reintroduction; and `scripts/pulumi-stack-inventory.json`
-is deliberately out of scope, since it is a data file recording completed
-operations rather than prose or code a future reader could learn the
-anti-pattern from.
+that could hide a real reintroduction; and a live-looking flag inside a data file is caught like anywhere else:
+`scripts/pulumi-stack-inventory.json` records two completed re-wraps whose
+evidence text names the flag in the past tense, and those two lines are
+allowlisted as data rather than left out of scope.
 
 ## ALLOWLIST
 
@@ -44,11 +44,13 @@ anti-pattern from.
 # change to this line at all.
 #
 # Seeded from the whole corpus as it exists today, across every file this
-# scan inspects (all RUNBOOK-*.md, plus every tracked .py/.sh/.yml/.yaml).
-# Every entry below is prose warning against the anti-pattern -- a `#`
-# comment or backticked inline text in surrounding prose -- never a line a
-# shell would execute. There are currently zero legitimate live uses of the
-# flag anywhere in the scanned tree.
+# scan inspects (every tracked file). Almost every entry is prose warning
+# against the anti-pattern -- a `#` comment or backticked inline text in
+# surrounding prose -- never a line a shell would execute. The exception is
+# the two evidence strings in scripts/pulumi-stack-inventory.json, which
+# record a completed operation in the past tense; they are data, not
+# instructions. There are currently zero legitimate live uses of the flag
+# anywhere in the scanned tree.
 ```
 
 ## SCAN SCOPE
@@ -57,10 +59,14 @@ Why the scan is built this way, moved out of the .py docstrings and comments.
 
 The scan is not scoped to code fences, a preceding `pulumi stack export`, or nearby keywords. The anti-pattern is exactly this flag being used to prove a stack decrypts, and catching every way of writing that needs to key on the one thing every such command has in common: the flag's own name appearing somewhere in the source a human would type, paste, or read as an instruction. A per-line scan also gives a useful failure message (file, line number, exact text) with no surrounding-context machinery needed to produce it.
 
-Runbook discovery is non-recursive per directory, matching this repo's own convention: every RUNBOOK lives directly in one of three places, never nested further. All three are scanned, not just hetzner/ and mail/, because RUNBOOK-edge-state-move.md lives at the repo root, and a scan that skips it never sees it.
+Every tracked file is scanned, whatever its name, extension or depth. An earlier version scanned only `.py/.sh/.yml/.yaml` plus a non-recursive `RUNBOOK-*.md` glob in three directories. That left any other Markdown file, a nested runbook, or a runbook with an unexpected name unscanned: a live instruction placed in one of them passed green. A file-type or name filter is a list someone has to remember to extend; scanning the tracked tree has no such list. A tracked symlink to a directory is skipped because its real files are tracked and scanned under their own paths.
 
 This module's own path is excluded from the tracked-file scan. A guard whose whole job is discussing the flag necessarily mentions it dozens of times, in docstrings, comments and the ALLOWLIST literal itself. None of that is a runbook or script that could teach a reader the anti-pattern is safe, which is the harm this scan exists to catch. Excluding the file by path, rather than trying to allowlist its own literals, keeps the ALLOWLIST meaningful: every entry should describe a real occurrence outside this file, not this file's own vocabulary.
 
 Tracked files come from `git ls-files` rather than a hand-maintained directory list. A fixed glob can leave a whole class of tracked files unscanned: scripts and workflow files outside a runbook-only glob, for instance, while the literal flag still appears in them. This list grows automatically with the tracked tree instead of needing a second edit whenever a new script or workflow is added.
 
 The test has two checks. An occurrence is wrong if it is unlisted entirely, or if it is listed with the wrong count: the file now has more, or fewer, copies of that exact line than the entry says. The test also guards against scanning nothing. If scanned_files() returned zero files, the check would pass by finding zero problems among zero files, the same vacuous pass this file exists to prevent. So a non-zero scanned-file count is asserted directly.
+
+## DECRYPT GATES
+
+The guard also checks that the good gate is still present. The flag scan only proves the bad string is absent, and an edit that swaps a live `pulumi preview --stack` decrypt gate for a command such as `pulumi stack ls` leaves every flag check green. `hetzner/RUNBOOK-existing-stack-migration.md` is therefore pinned to exactly four live gate lines: three in the A.2 per-stack sequence (steps 4, 6 and 7) and one in the B.1 move sequence (step 5). Prose mentions of `pulumi preview` are not counted. The pin is exact, so adding a gate also fails until the pin is raised with it.

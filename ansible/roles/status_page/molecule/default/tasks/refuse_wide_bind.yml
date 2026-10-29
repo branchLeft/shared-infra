@@ -1,0 +1,49 @@
+---
+# Applies the role with a listen address that would expose ops1 and asserts the
+# role refused it, with the message of the check the caller names, and that the
+# compose file on the instance is the one it had before. The caller sets
+# refuse_title, refuse_validate (whether the argument specification runs) and
+# refuse_expect (text that only the expected check puts in its message). If the
+# role accepts the address, the block's last task fails with a message that holds
+# neither the variable's name nor the compose check's text, so the rescue's
+# assertion goes red.
+- name: Read the compose file before the refused application
+  ansible.builtin.stat:
+    path: /opt/branchleft/status/compose.yml
+    checksum_algorithm: sha256
+  register: status_page_refuse_before
+
+- name: Refuse one wide bind
+  block:
+    - name: Apply the role with the address
+      ansible.builtin.include_role:
+        name: branchleft.status_page
+        rolespec_validate: '{{ refuse_validate }}'
+      vars:
+        status_page_listen_address: 0.0.0.0
+
+    - name: Fail because the role accepted the address
+      ansible.builtin.fail:
+        msg: The role accepted a listen address that is not loopback.
+  rescue:
+    - name: Assert the expected check refused the address
+      ansible.builtin.assert:
+        that:
+          - refuse_expect in ansible_failed_result.msg
+        quiet: true
+        fail_msg: >-
+          {{ refuse_title }}: the role did not refuse the address with the expected check.
+          It stopped with: {{ ansible_failed_result.msg }}
+
+- name: Read the compose file after the refused application
+  ansible.builtin.stat:
+    path: /opt/branchleft/status/compose.yml
+    checksum_algorithm: sha256
+  register: status_page_refuse_after
+
+- name: Assert the refused application wrote nothing
+  ansible.builtin.assert:
+    that:
+      - status_page_refuse_after.stat.checksum == status_page_refuse_before.stat.checksum
+    quiet: true
+    fail_msg: '{{ refuse_title }}: the compose file changed although the role refused the address.'

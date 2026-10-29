@@ -1,0 +1,13 @@
+---
+- name: Remove the host inputs file
+  ansible.builtin.file:
+    path: '{{ host_inputs_test_path }}'
+    state: absent
+
+- name: Make the host inputs path a directory
+  ansible.builtin.file:
+    path: '{{ host_inputs_test_path }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'

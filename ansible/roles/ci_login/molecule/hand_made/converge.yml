@@ -1,0 +1,12 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # The flag is off and the list holds other keys: the hand-made key lines must stay.
+    - name: Apply the role with the key half switched off
+      ansible.builtin.include_role:
+        name: branchleft.ci_login
+      vars:
+        ci_login_manage_keys: false
+        ci_login_keys: '{{ scenario_other_keys }}'
