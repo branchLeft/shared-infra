@@ -1,0 +1,50 @@
+---
+# The owner places each input file before a step. Each must be a regular file, not
+# a link, of the declared owner and group, with the declared mode and some content,
+# and the directory holding them must be the declared one. The role never creates
+# one of these files and never reads a value out of it here.
+# The importing file sets control_plane_db_input_files, a list of paths.
+
+- name: Look at the input directory
+  ansible.builtin.stat:
+    path: '{{ control_plane_db_input_dir }}'
+    get_checksum: false
+  register: control_plane_db_input_dir_stat
+
+- name: Refuse an input directory that is not the declared one
+  ansible.builtin.assert:
+    that:
+      - control_plane_db_input_dir_stat.stat.exists
+      - control_plane_db_input_dir_stat.stat.isdir
+      - control_plane_db_input_dir_stat.stat.pw_name == control_plane_db_input_owner
+      - control_plane_db_input_dir_stat.stat.gid == control_plane_db_input_gid
+      - control_plane_db_input_dir_stat.stat.mode == control_plane_db_input_dir_mode
+    quiet: true
+    fail_msg: >-
+      REFUSED: {{ control_plane_db_input_dir }} must be a directory of {{ control_plane_db_input_owner }},
+      group {{ control_plane_db_input_gid }}, mode {{ control_plane_db_input_dir_mode }}. A plain apply makes it.
+
+- name: Look at each input file
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    get_checksum: false
+  loop: '{{ control_plane_db_input_files }}'
+  register: control_plane_db_input_stats
+
+- name: Refuse an input file that is absent, a link, not the declared owner, group and mode, or empty
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.pw_name == control_plane_db_input_owner
+      - item.stat.gid == control_plane_db_input_gid
+      - item.stat.mode == control_plane_db_input_mode
+      - item.stat.size > 0
+    quiet: true
+    fail_msg: >-
+      REFUSED: {{ item.item }} must be a regular file, not a link, of {{ control_plane_db_input_owner }},
+      group {{ control_plane_db_input_gid }}, mode {{ control_plane_db_input_mode }}, and not empty.
+      The owner places it before the step.
+  loop: '{{ control_plane_db_input_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'

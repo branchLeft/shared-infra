@@ -1,0 +1,20 @@
+---
+# Request a step that must be refused, and check the refusal by its name and that the
+# stand-in saw exactly refused_calls calls (none by default).
+# Takes what ask.yml takes, and refused_text.
+- name: Request a step that must be refused
+  ansible.builtin.import_tasks: ask.yml
+
+- name: Read the stand-in's calls after the refusal
+  ansible.builtin.import_tasks: calls.yml
+
+- name: 'Assert the refusal is by name: {{ ask_name }}'
+  ansible.builtin.assert:
+    that:
+      - control_plane_db_ask_result.rc != 0
+      - refused_text in control_plane_db_ask_result.stdout
+      - control_plane_db_verify_calls | length == (refused_calls | default(0))
+    quiet: true
+    fail_msg: >-
+      The request was not refused with the text {{ refused_text }} and exactly
+      {{ refused_calls | default(0) }} calls to the stand-in: {{ ask_name }}.

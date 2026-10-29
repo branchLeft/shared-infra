@@ -1,0 +1,55 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container. Molecule's interpolation
+# has no "required variable" form, so when the variable is unset the name
+# falls back to one the Docker daemon rejects: the run fails at create, loudly,
+# instead of sharing a container name with another run.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party test base with the same Debian release as the production hosts,
+    # trusted by digest. It has Python in it. The scenario starts no service, so it
+    # sets none of the settings that run systemd. No privileged mode and no added
+    # capabilities.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # The image's own command starts systemd, which needs a cgroup mount this
+    # scenario does not grant. A plain sleep keeps the container alive.
+    command: sleep infinity
+    # The image declares /sys/fs/cgroup as a volume; without this every run would
+    # leave an anonymous volume behind.
+    keep_volumes: false
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every Ansible run of this scenario appends its output to one log on the
+    # controller, and verify looks through it for the throwaway secrets.
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '1'
+  inventory:
+    group_vars:
+      all:
+        # A made-up digest; the fake docker in the container pulls nothing.
+        control_plane_db_apps_image: example.invalid/example-app@sha256:2222222222222222222222222222222222222222222222222222222222222222
+        control_plane_db_identity_hostnames:
+          console: console.example.invalid
+          portal: portal.example.invalid
+          identity: identity.example.invalid
+        # Throwaways made from the harness's run id: never committed, and the
+        # verify play looks for them in every run's output.
+        scenario_run: "{{ lookup('ansible.builtin.env', 'ROLE_TEST_RUN_ID') }}"
+        scenario_admin_url: 'postgres://postgres:ADMINSECRET-{{ scenario_run }}@db:5432/postgres'
+        scenario_tenant_password: 'tenantpw-{{ scenario_run }}-0123456789abcdef'
+        scenario_owner_password: 'ownerpw-{{ scenario_run }}-0123456789abcdef'
+        scenario_provisioner_password: 'provisionerpw-{{ scenario_run }}-0123456789abcdef'
+verifier:
+  name: ansible

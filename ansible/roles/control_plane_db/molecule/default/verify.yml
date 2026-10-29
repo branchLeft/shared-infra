@@ -1,0 +1,1301 @@
+---
+# The outcome, asserted in sections, each of which starts from a clean slate and can be
+# run alone with verify_sections. Every request is an ansible-playbook run of request.yml on the
+# controller against the same instance, so each is the run the gated pull makes. A
+# request's output must hold no throwaway secret. Every assertion names its claim.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    # Empty runs every section. A person can run one with -e '{"verify_sections": ["migrate"]}'.
+    verify_sections: []
+    verify_config: /etc/branchleft/control-plane
+    verify_input_dir: /etc/branchleft/control-plane/provision
+    verify_state: /var/lib/branchleft/control-plane-db
+    verify_pat: /var/lib/branchleft/control-plane/zitadel-state/reconciler.pat
+    verify_work: /var/lib/branchleft/control-plane/reconciler-work
+    verify_digest_one: '2222222222222222222222222222222222222222222222222222222222222222'
+    verify_digest_two: '3333333333333333333333333333333333333333333333333333333333333333'
+    verify_digest_three: '4444444444444444444444444444444444444444444444444444444444444444'
+    verify_image_two: 'example.invalid/example-app@sha256:3333333333333333333333333333333333333333333333333333333333333333'
+    verify_image_three: 'example.invalid/example-app@sha256:4444444444444444444444444444444444444444444444444444444444444444'
+    verify_tenant_url: 'postgres://portal_tenant_login:{{ scenario_tenant_password }}@db:5432/portal'
+    verify_owner_url: 'postgres://portal_owner_login:{{ scenario_owner_password }}@db:5432/portal'
+    # Every throwaway, plain and as the base64 a slurp or a diff would carry.
+    scenario_plain_files:
+      - '{{ scenario_admin_url }}'
+      - '{{ scenario_tenant_password }}'
+      - '{{ scenario_owner_password }}'
+      - '{{ scenario_provisioner_password }}'
+      - 'THROWAWAY-TOKEN-{{ scenario_run }}'
+      - '{{ verify_tenant_url }}'
+      - '{{ verify_owner_url }}'
+    scenario_needles: >-
+      {{ ['ADMINSECRET-' ~ scenario_run, scenario_tenant_password, scenario_owner_password,
+          scenario_provisioner_password, 'THROWAWAY-TOKEN-' ~ scenario_run]
+         + (scenario_plain_files | map('ansible.builtin.regex_replace', '$', '\n') | map('ansible.builtin.b64encode') | list) }}
+  tasks:
+    # 1. A plain apply made the input directory and ran nothing.
+    - name: A plain apply
+      when: verify_sections | length == 0 or 'plain' in verify_sections
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Read the input directory and the state directory
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - '{{ verify_input_dir }}'
+            - '{{ verify_state }}'
+          register: control_plane_db_verify_plain_stats
+
+        - name: Assert the input directory is root's, group 1000, mode 0750, and no step ran
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_verify_plain_stats.results[0].stat.isdir
+              - control_plane_db_verify_plain_stats.results[0].stat.pw_name == 'root'
+              - control_plane_db_verify_plain_stats.results[0].stat.gid == 1000
+              - control_plane_db_verify_plain_stats.results[0].stat.mode == '0750'
+              - not control_plane_db_verify_plain_stats.results[1].stat.exists
+            quiet: true
+            fail_msg: A plain apply did not leave the input directory root:1000 0750, or it ran a step (the state directory exists).
+
+        - name: Widen the input directory and hand it to another group
+          ansible.builtin.file:
+            path: '{{ verify_input_dir }}'
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Apply the role plainly again
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - -i
+              - "{{ lookup('ansible.builtin.env', 'MOLECULE_INVENTORY_FILE') }}"
+              - '{{ playbook_dir }}/converge.yml'
+          delegate_to: localhost
+          register: control_plane_db_verify_plain_again
+          changed_when: false
+
+        - name: Read the input directory again
+          ansible.builtin.stat:
+            path: '{{ verify_input_dir }}'
+          register: control_plane_db_verify_plain_dir
+
+        - name: Assert a plain apply puts a widened input directory back to root:1000 0750
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_verify_plain_dir.stat.pw_name == 'root'
+              - control_plane_db_verify_plain_dir.stat.gid == 1000
+              - control_plane_db_verify_plain_dir.stat.mode == '0750'
+            quiet: true
+            fail_msg: A plain apply left the input directory widened, so the input files are exposed to more than the image's group.
+
+        - name: Open the configuration directory to others
+          ansible.builtin.file:
+            path: '{{ verify_config }}'
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Apply the role plainly under the open directory
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - -i
+              - "{{ lookup('ansible.builtin.env', 'MOLECULE_INVENTORY_FILE') }}"
+              - '{{ playbook_dir }}/converge.yml'
+          delegate_to: localhost
+          register: control_plane_db_verify_plain_open
+          failed_when: false
+          changed_when: false
+
+        - name: Assert the role refuses to build under a configuration directory open to others
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_verify_plain_open.rc != 0
+              - "'REFUSED: /etc/branchleft/control-plane must exist' in control_plane_db_verify_plain_open.stdout"
+            quiet: true
+            fail_msg: The role built under a configuration directory open to others.
+
+        - name: Close the configuration directory again
+          ansible.builtin.file:
+            path: '{{ verify_config }}'
+            state: directory
+            owner: root
+            group: root
+            mode: '0750'
+
+    # 2. A step named by its tag without its confirmation, with another step's id, with a
+    # value outside the closed list, or with an image that is not a digest, is refused,
+    # and nothing runs.
+    - name: The guard refuses
+      when: verify_sections | length == 0 or 'guard' in verify_sections
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Refuse each step named by its tag alone
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: 'the tag of {{ item }} alone'
+            ask_tags: 'control_plane_db_{{ item }}'
+            refused_text: 'REFUSED: {{ item }} was requested by its tag without control_plane_db_step set to {{ item }}'
+          loop: [migrate, identity, provision]
+
+        - name: Refuse a step whose tag is named with another step's id
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: 'the tag of {{ item.tag }} with the id {{ item.id }}'
+            ask_tags: 'control_plane_db_{{ item.tag }}'
+            ask_extra: {control_plane_db_step: '{{ item.id }}'}
+            refused_text: 'REFUSED: {{ item.tag }} was requested by its tag without control_plane_db_step set to {{ item.tag }}'
+          loop:
+            - {tag: migrate, id: identity}
+            - {tag: provision, id: migrate}
+            - {tag: identity, id: provision}
+
+        - name: Refuse an id outside the closed list, or with a line break
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: 'the id {{ item | ansible.builtin.to_json }}'
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: '{{ item }}'}
+            refused_text: control_plane_db_step
+          loop: ['break_glass', "migrate\n", 'MIGRATE', 'all']
+
+        - name: Refuse an image that is a tag, and an empty image
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: 'the image {{ item | ansible.builtin.to_json }}'
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: migrate, control_plane_db_apps_image: '{{ item }}'}
+            refused_text: 'REFUSED: control_plane_db_apps_image must be NAME@sha256:'
+          loop:
+            - example.invalid/example-app:latest
+            - ''
+            - 'example.invalid/example-app@sha256:2222'
+            - 'example.invalid/example-app@sha256:2222222222222222222222222222222222222222222222222222222222222222 extra'
+
+        - name: Read what the refusals left
+          ansible.builtin.stat:
+            path: '{{ verify_state }}'
+          register: control_plane_db_verify_guard_state
+
+        - name: Assert the refusals wrote no marker
+          ansible.builtin.assert:
+            that:
+              - not control_plane_db_verify_guard_state.stat.exists
+            quiet: true
+            fail_msg: A refusal reached the state directory, so a check ran after the guard that should have run before it.
+
+    # 3. The permission control: each input file is checked before it is mounted, and a
+    # file that is wider, in another group, a link, empty or absent is refused. The
+    # administrator URL file is removed on every way out.
+    - name: The input files are checked
+      when: verify_sections | length == 0 or 'inputs' in verify_sections
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Refuse migrate with no administrator URL file
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: no administrator URL file
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: migrate}
+            refused_text: 'REFUSED: /etc/branchleft/control-plane/provision/admin-url must be a regular file'
+
+        - name: Refuse each administrator URL file that is wider, in another group, owned by another account, or empty
+          ansible.builtin.include_tasks: tasks/input_case.yml
+          vars:
+            case_name: '{{ item.name }}'
+          loop:
+            - {name: mode 0644, owner: root, group: '1000', mode: '0644', content: '{{ scenario_admin_url }}'}
+            - {name: mode 0660, owner: root, group: '1000', mode: '0660', content: '{{ scenario_admin_url }}'}
+            - {name: mode 0600, owner: root, group: '1000', mode: '0600', content: '{{ scenario_admin_url }}'}
+            - {name: group root, owner: root, group: root, mode: '0640', content: '{{ scenario_admin_url }}'}
+            - {name: owner 1000, owner: '1000', group: '1000', mode: '0640', content: '{{ scenario_admin_url }}'}
+            - {name: empty, owner: root, group: '1000', mode: '0640', content: ''}
+          loop_control:
+            label: '{{ item.name }}'
+
+        - name: Place a file elsewhere and link the administrator URL file to it
+          ansible.builtin.copy:
+            content: '{{ scenario_admin_url }}'
+            dest: /var/tmp/verify-target
+            owner: root
+            group: '1000'
+            mode: '0640'
+          no_log: true
+
+        - name: Link the administrator URL file
+          ansible.builtin.file:
+            src: /var/tmp/verify-target
+            dest: '{{ verify_input_dir }}/admin-url'
+            state: link
+
+        - name: Refuse a link in place of the administrator URL file
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: a link in place of the administrator URL file
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: migrate}
+            refused_text: 'REFUSED: /etc/branchleft/control-plane/provision/admin-url must be a regular file, not a link'
+
+        - name: Look at the link and its target after the refusal
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - '{{ verify_input_dir }}/admin-url'
+            - /var/tmp/verify-target
+          register: control_plane_db_verify_link_stats
+
+        - name: Assert only the link was removed, not what it pointed at
+          ansible.builtin.assert:
+            that:
+              - not control_plane_db_verify_link_stats.results[0].stat.exists
+              - not control_plane_db_verify_link_stats.results[0].stat.islnk | default(false)
+              - control_plane_db_verify_link_stats.results[1].stat.exists
+            quiet: true
+            fail_msg: The removal of the administrator URL file followed a link and removed its target, or left the link.
+
+        - name: Widen the input directory
+          ansible.builtin.file:
+            path: '{{ verify_input_dir }}'
+            state: directory
+            owner: root
+            group: '1000'
+            mode: '0755'
+
+        - name: Place a correct administrator URL file under the widened directory
+          ansible.builtin.import_tasks: tasks/place.yml
+          vars:
+            place_path: '{{ verify_input_dir }}/admin-url'
+            place_content: "{{ scenario_admin_url }}\n"
+
+        - name: Refuse an input directory that is not root:1000 0750
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: a widened input directory
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: migrate}
+            refused_text: 'REFUSED: /etc/branchleft/control-plane/provision must be a directory of root'
+
+        - name: Put the input directory back
+          ansible.builtin.file:
+            path: '{{ verify_input_dir }}'
+            state: directory
+            owner: root
+            group: '1000'
+            mode: '0750'
+
+    # 4. migrate runs once per image digest, with no secret in its arguments, and
+    # leaves a marker only when it ended clean.
+    - name: Section migrate
+      when: verify_sections | length == 0 or 'migrate' in verify_sections
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Place the administrator URL file
+          ansible.builtin.import_tasks: tasks/place.yml
+          vars:
+            place_path: '{{ verify_input_dir }}/admin-url'
+            place_content: "{{ scenario_admin_url }}\n"
+
+        - name: Request migrate
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: migrate for the first digest
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: migrate}
+
+        - name: Read the stand-in's calls
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Read the marker, the state directory and the administrator URL file
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - '{{ verify_state }}/migrate-{{ verify_digest_one }}'
+            - '{{ verify_state }}'
+            - '{{ verify_input_dir }}/admin-url'
+          register: control_plane_db_verify_migrate_stats
+
+        - name: Read the marker's text
+          ansible.builtin.slurp:
+            src: '{{ verify_state }}/migrate-{{ verify_digest_one }}'
+          register: control_plane_db_verify_migrate_marker
+
+        - name: Assert migrate ran, the marker is root's and holds its own name, and the administrator URL file is gone
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_migrate_stats.results[0].stat.pw_name == 'root'
+              - control_plane_db_verify_migrate_stats.results[0].stat.mode == '0644'
+              - control_plane_db_verify_migrate_marker.content | ansible.builtin.b64decode == 'migrate-' ~ verify_digest_one ~ '\n'
+              - control_plane_db_verify_migrate_stats.results[1].stat.pw_name == 'root'
+              - control_plane_db_verify_migrate_stats.results[1].stat.mode == '0755'
+              - not control_plane_db_verify_migrate_stats.results[2].stat.exists
+            quiet: true
+            fail_msg: migrate did not leave a root-owned marker named for its digest, or left the administrator URL file on the disk.
+
+        - name: Name the calls
+          ansible.builtin.set_fact:
+            control_plane_db_verify_kinds: "{{ control_plane_db_verify_calls | map(attribute='argv') | map('first') | list }}"
+            control_plane_db_verify_migrate_call: "{{ (control_plane_db_verify_calls | selectattr('argv', 'contains', '--migrate-only') | list)[-1] }}"
+
+        - name: Assert the calls were the network, the pull, the flag check and the migration, in that order
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_verify_kinds == ['network', 'pull', 'run', 'run']
+              - "'--migrate-only' not in control_plane_db_verify_calls[2].argv"
+              - control_plane_db_verify_calls[2].argv[-1] is search('includes[(].--migrate-only.[)]')
+              - control_plane_db_verify_calls[3].argv[-2:] == ['dist/provision/provisionMain.js', '--migrate-only']
+            quiet: true
+            fail_msg: migrate did not check the network, pull the image and check the flag before it ran the migration.
+
+        - name: Assert the migration container has the least privilege the role gives it and no secret in its arguments
+          ansible.builtin.assert:
+            that:
+              - "'--user' in control_plane_db_verify_migrate_call.argv"
+              - control_plane_db_verify_migrate_call.argv[control_plane_db_verify_migrate_call.argv.index('--user') + 1] == '1000:1000'
+              - control_plane_db_verify_migrate_call.argv[control_plane_db_verify_migrate_call.argv.index('--cap-drop') + 1] == 'ALL'
+              - control_plane_db_verify_migrate_call.argv[control_plane_db_verify_migrate_call.argv.index('--security-opt') + 1] == 'no-new-privileges:true'
+              - control_plane_db_verify_migrate_call.argv[control_plane_db_verify_migrate_call.argv.index('--network') + 1] == 'control-plane_default'
+              - "'--privileged' not in control_plane_db_verify_migrate_call.argv"
+              - "'--cap-add' not in control_plane_db_verify_migrate_call.argv"
+              - control_plane_db_verify_migrate_call.argv | select('equalto', '-v') | list | length == 1
+              - (control_plane_db_verify_migrate_call.argv | select('match', '^PORTAL_') | list) == ['PORTAL_ADMIN_URL_FILE=/provision/admin-url']
+              - scenario_needles | select('in', control_plane_db_verify_migrate_call.argv | join(' ')) | list | length == 0
+              - control_plane_db_verify_migrate_call.mounts['/etc/branchleft/control-plane/provision/admin-url'].mode == '0640'
+              - control_plane_db_verify_migrate_call.mounts['/etc/branchleft/control-plane/provision/admin-url'].gid == 1000
+            quiet: true
+            fail_msg: The migration container was given more than the role means to give it, or a secret was put in its arguments.
+
+        - name: Request migrate again for the same digest, with nothing placed
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: migrate again for the same digest
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: migrate}
+
+        - name: Read the calls after the second request
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Assert the second request changed nothing and started no container
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_ask_result.stdout is search('changed=0 ')
+              - control_plane_db_verify_calls | length == 4
+            quiet: true
+            fail_msg: A second migrate for the same digest changed something or started a container.
+
+        - name: Place the administrator URL file again and request the same digest
+          ansible.builtin.import_tasks: tasks/place.yml
+          vars:
+            place_path: '{{ verify_input_dir }}/admin-url'
+            place_content: "{{ scenario_admin_url }}\n"
+
+        - name: Request migrate for the same digest with the file placed
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: migrate for the same digest with the file placed
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: migrate}
+
+        - name: Read the calls and the file
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Look for the administrator URL file
+          ansible.builtin.stat:
+            path: '{{ verify_input_dir }}/admin-url'
+          register: control_plane_db_verify_migrate_again_file
+
+        - name: Assert a recorded migration started no container and still took the file off the disk
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_calls | length == 4
+              - not control_plane_db_verify_migrate_again_file.stat.exists
+            quiet: true
+            fail_msg: A recorded migration started a container, or left the administrator URL file.
+
+        - name: Place the file and request a new digest
+          ansible.builtin.import_tasks: tasks/place.yml
+          vars:
+            place_path: '{{ verify_input_dir }}/admin-url'
+            place_content: "{{ scenario_admin_url }}\n"
+
+        - name: Request migrate for a second digest
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: migrate for a second digest
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: migrate, control_plane_db_apps_image: '{{ verify_image_two }}'}
+
+        - name: Read the calls and both markers
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Look for both markers
+          ansible.builtin.stat:
+            path: '{{ verify_state }}/migrate-{{ item }}'
+          loop: ['{{ verify_digest_one }}', '{{ verify_digest_two }}']
+          register: control_plane_db_verify_both_markers
+
+        - name: Assert a new digest ran again and the first marker is still there
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_calls | length == 8
+              - control_plane_db_verify_both_markers.results | map(attribute='stat') | map(attribute='exists') | list == [true, true]
+            quiet: true
+            fail_msg: A new image digest was skipped as done, or the first digest's marker was lost.
+
+    # 5. A migration that fails leaves no marker and no administrator URL file, and is
+    # asked for again on the same digest. What the program printed is not repeated
+    # beyond its own refusal lines.
+    - name: Section migrate failures
+      when: verify_sections | length == 0 or 'migrate_failures' in verify_sections
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Make the program refuse
+          ansible.builtin.copy:
+            content: "fail\n"
+            dest: /var/tmp/fake-docker/mode
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Place the administrator URL file
+          ansible.builtin.import_tasks: tasks/place.yml
+          vars:
+            place_path: '{{ verify_input_dir }}/admin-url'
+            place_content: "{{ scenario_admin_url }}\n"
+
+        - name: Request migrate while the program refuses
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: migrate while the program refuses
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: migrate}
+
+        - name: Look at the marker and the administrator URL file
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - '{{ verify_state }}/migrate-{{ verify_digest_one }}'
+            - '{{ verify_input_dir }}/admin-url'
+          register: control_plane_db_verify_failed_stats
+
+        - name: Assert a refused migration is reported with the program's own line, left no marker and no file
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc != 0
+              - "'REFUSED: migrate did not end clean' in control_plane_db_ask_result.stdout"
+              - "'provision failed: refused: 1 difference' in control_plane_db_ask_result.stdout"
+              - not control_plane_db_verify_failed_stats.results[0].stat.exists
+              - not control_plane_db_verify_failed_stats.results[1].stat.exists
+            quiet: true
+            fail_msg: A failed migration left a marker or the administrator URL file, or hid the program's refusal line.
+
+        - name: Make the program print a secret on a line of its own, then refuse
+          ansible.builtin.copy:
+            content: "leak\n"
+            dest: /var/tmp/fake-docker/mode
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Place the administrator URL file again
+          ansible.builtin.import_tasks: tasks/place.yml
+          vars:
+            place_path: '{{ verify_input_dir }}/admin-url'
+            place_content: "{{ scenario_admin_url }}\n"
+
+        - name: Request migrate while the program prints a secret
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: migrate while the program prints a secret
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: migrate}
+
+        - name: Assert the run failed (the secret check is in ask.yml, on the output)
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc != 0
+              - "'REFUSED: migrate did not end clean' in control_plane_db_ask_result.stdout"
+            quiet: true
+            fail_msg: A leaking program did not fail the request.
+
+        - name: Let the program succeed and ask again on the same digest
+          ansible.builtin.copy:
+            content: "ok\n"
+            dest: /var/tmp/fake-docker/mode
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Place the administrator URL file for the retry
+          ansible.builtin.import_tasks: tasks/place.yml
+          vars:
+            place_path: '{{ verify_input_dir }}/admin-url'
+            place_content: "{{ scenario_admin_url }}\n"
+
+        - name: Request migrate again
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: migrate again after a failure
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: migrate}
+
+        - name: Look at the marker
+          ansible.builtin.stat:
+            path: '{{ verify_state }}/migrate-{{ verify_digest_one }}'
+          register: control_plane_db_verify_retry_marker
+
+        - name: Assert a failed migration is tried again on the same digest and then recorded
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_retry_marker.stat.exists
+            quiet: true
+            fail_msg: A migration that failed was not tried again on the same digest.
+
+    # 6. The image and the network are checked before the migration runs.
+    - name: Section migrate preconditions
+      when: verify_sections | length == 0 or 'migrate_preconditions' in verify_sections
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Make the image lack the flag
+          ansible.builtin.copy:
+            content: "no-flag\n"
+            dest: /var/tmp/fake-docker/mode
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Place the administrator URL file
+          ansible.builtin.import_tasks: tasks/place.yml
+          vars:
+            place_path: '{{ verify_input_dir }}/admin-url'
+            place_content: "{{ scenario_admin_url }}\n"
+
+        - name: Refuse an image that lacks the flag
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: an image without the migrate-only flag
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: migrate}
+            refused_text: 'REFUSED: the image does not carry --migrate-only'
+            refused_calls: 3
+
+        - name: Make the network absent
+          ansible.builtin.copy:
+            content: "no-network\n"
+            dest: /var/tmp/fake-docker/mode
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Forget the calls and place the file
+          ansible.builtin.import_tasks: tasks/reset_calls.yml
+
+        - name: Place the administrator URL file again
+          ansible.builtin.import_tasks: tasks/place.yml
+          vars:
+            place_path: '{{ verify_input_dir }}/admin-url'
+            place_content: "{{ scenario_admin_url }}\n"
+
+        - name: Request migrate with no stack network
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: migrate with no stack network
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: migrate}
+
+        - name: Read the calls
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Assert a missing stack network stopped the step before any container ran
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc != 0
+              - control_plane_db_verify_calls | length == 1
+              - control_plane_db_verify_calls[0].argv[0] == 'network'
+            quiet: true
+            fail_msg: A missing stack network did not stop migrate before a container ran.
+
+    # 7. A check-mode request starts no container and writes no marker.
+    - name: Section check mode
+      when: verify_sections | length == 0 or 'check_mode' in verify_sections
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Place the administrator URL file
+          ansible.builtin.import_tasks: tasks/place.yml
+          vars:
+            place_path: '{{ verify_input_dir }}/admin-url'
+            place_content: "{{ scenario_admin_url }}\n"
+
+        - name: Request migrate in check mode
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: migrate in check mode
+            ask_tags: control_plane_db_migrate
+            ask_extra: {control_plane_db_step: migrate}
+            ask_check: true
+
+        - name: Read the calls
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Look at the marker
+          ansible.builtin.stat:
+            path: '{{ verify_state }}/migrate-{{ verify_digest_one }}'
+          register: control_plane_db_verify_check_marker
+
+        - name: Assert a check-mode request started no container and wrote no marker
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_calls | length == 0
+              - not control_plane_db_verify_check_marker.stat.exists
+            quiet: true
+            fail_msg: A check-mode request started a container or wrote a marker.
+
+    # 8. provision: the two connection URL files hold one login each, in the declared
+    # owner, group and mode, the inputs are gone once it is recorded, and it does not
+    # repeat.
+    - name: Section provision
+      when: verify_sections | length == 0 or 'provision' in verify_sections
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Place the four inputs
+          ansible.builtin.import_tasks: tasks/place_inputs.yml
+
+        - name: Request provision
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: provision
+            ask_tags: control_plane_db_provision
+            ask_extra: {control_plane_db_step: provision}
+
+        - name: Read the calls
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Look at the URL files, the marker and every input
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - '{{ verify_config }}/portal-database-url'
+            - '{{ verify_config }}/console-database-url'
+            - '{{ verify_state }}/provision'
+            - '{{ verify_input_dir }}/admin-url'
+            - '{{ verify_input_dir }}/tenant-password'
+            - '{{ verify_input_dir }}/owner-password'
+            - '{{ verify_input_dir }}/provisioner-password'
+          register: control_plane_db_verify_provision_stats
+
+        - name: Read the two URL files
+          ansible.builtin.slurp:
+            src: '{{ item }}'
+          loop:
+            - '{{ verify_config }}/portal-database-url'
+            - '{{ verify_config }}/console-database-url'
+          register: control_plane_db_verify_provision_urls
+          no_log: true
+
+        - name: Assert each URL file is root:1000 0640 and holds its own login and no other
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_provision_stats.results[0].stat.pw_name == 'root'
+              - control_plane_db_verify_provision_stats.results[0].stat.gid == 1000
+              - control_plane_db_verify_provision_stats.results[0].stat.mode == '0640'
+              - control_plane_db_verify_provision_stats.results[1].stat.pw_name == 'root'
+              - control_plane_db_verify_provision_stats.results[1].stat.gid == 1000
+              - control_plane_db_verify_provision_stats.results[1].stat.mode == '0640'
+              - control_plane_db_verify_provision_urls.results[0].content | ansible.builtin.b64decode == verify_tenant_url ~ '\n'
+              - control_plane_db_verify_provision_urls.results[1].content | ansible.builtin.b64decode == verify_owner_url ~ '\n'
+            quiet: true
+            fail_msg: A connection URL file is not root:1000 0640, or holds another login or password than its own.
+          no_log: true
+
+        - name: Assert the marker exists and every input is gone
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_verify_provision_stats.results[2].stat.exists
+              - control_plane_db_verify_provision_stats.results[2].stat.mode == '0644'
+              - control_plane_db_verify_provision_stats.results[3:] | map(attribute='stat') | map(attribute='exists') | select | list | length == 0
+            quiet: true
+            fail_msg: provision left an input on the disk once it was recorded, or wrote no marker.
+
+        - name: Name the provision call
+          ansible.builtin.set_fact:
+            control_plane_db_verify_provision_call: >-
+              {{ (control_plane_db_verify_calls | selectattr('argv', 'contains', 'dist/provision/provisionMain.js') | list)[-1] }}
+
+        - name: Assert the provision container has the least privilege the role gives it and no secret in its arguments
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_verify_provision_call.argv[control_plane_db_verify_provision_call.argv.index('--user') + 1] == '1000:1000'
+              - control_plane_db_verify_provision_call.argv[control_plane_db_verify_provision_call.argv.index('--cap-drop') + 1] == 'ALL'
+              - "'--privileged' not in control_plane_db_verify_provision_call.argv"
+              - control_plane_db_verify_provision_call.argv | select('equalto', '-v') | list | length == 4
+              - control_plane_db_verify_provision_call.argv | select('match', '^/etc/branchleft/control-plane/provision/.*:ro$') | list | length == 4
+              - >-
+                (control_plane_db_verify_provision_call.argv | select('match', '^PORTAL_') | list | sort) == [
+                'PORTAL_ADMIN_URL_FILE=/provision/admin-url',
+                'PORTAL_OWNER_PASSWORD_FILE=/provision/owner-password',
+                'PORTAL_PROVISIONER_PASSWORD_FILE=/provision/provisioner-password',
+                'PORTAL_TENANT_PASSWORD_FILE=/provision/tenant-password']
+              - scenario_needles | select('in', control_plane_db_verify_provision_call.argv | join(' ')) | list | length == 0
+              - control_plane_db_verify_provision_call.mounts.values() | map(attribute='gid') | unique | list == [1000]
+              - control_plane_db_verify_provision_call.mounts.values() | map(attribute='mode') | unique | list == ['0640']
+            quiet: true
+            fail_msg: The provision container was given more than the role means to give it, or a secret was put in its arguments.
+
+        - name: Search every file the role may have written for the provisioner's password
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -rl
+              - '{{ scenario_provisioner_password }}'
+              - /etc/branchleft
+              - /var/lib/branchleft
+          register: control_plane_db_verify_provisioner_grep
+          changed_when: false
+          failed_when: control_plane_db_verify_provisioner_grep.rc not in [0, 1]
+          no_log: true
+
+        - name: Assert no file holds the provisioner's password, which nothing reads
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_verify_provisioner_grep.rc == 1
+            quiet: true
+            fail_msg: A file holds the provisioner login's password, though no application reads it.
+
+        - name: Request provision again, with nothing placed
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: provision again
+            ask_tags: control_plane_db_provision
+            ask_extra: {control_plane_db_step: provision}
+
+        - name: Read the calls after the second request
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Assert the second request changed nothing and started no container
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_ask_result.stdout is search('changed=0 ')
+              - control_plane_db_verify_calls | length == 4
+            quiet: true
+            fail_msg: A second provision changed something or started a container.
+
+    # 9. provision refuses a password that would break a URL, and a provision that would
+    # rotate the passwords the applications already hold, and keeps its inputs when it
+    # fails.
+    - name: Section provision refusals
+      when: verify_sections | length == 0 or 'provision_refusals' in verify_sections
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Refuse each password that is short or holds a character a URL treats specially
+          ansible.builtin.include_tasks: tasks/password_case.yml
+          vars:
+            case_name: '{{ item.name }}'
+          loop:
+            - {name: an at sign, value: 'abcdefghijklmnopqrstuvwx@yz'}
+            - {name: a slash, value: 'abcdefghijklmnopqrstuvwx/yz'}
+            - {name: a colon, value: 'abcdefghijklmnopqrstuvwx:yz'}
+            - {name: a space, value: 'abcdefghijklmnopqrstuvwx yz'}
+            - {name: too short, value: 'abcdefghij'}
+          loop_control:
+            label: '{{ item.name }}'
+
+        - name: Start from a clean slate for the rotation case
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Leave connection URL files from an earlier provision, with no marker
+          ansible.builtin.include_tasks: tasks/place.yml
+          vars:
+            place_path: '{{ item.path }}'
+            place_content: '{{ item.content }}'
+          loop:
+            - {path: '{{ verify_config }}/portal-database-url', content: "{{ verify_tenant_url }}\n"}
+            - {path: '{{ verify_config }}/console-database-url', content: "{{ verify_owner_url }}\n"}
+          loop_control:
+            label: '{{ item.path }}'
+
+        - name: Place the inputs with a different tenant password
+          ansible.builtin.import_tasks: tasks/place_inputs.yml
+          vars:
+            place_tenant_password: 'different-{{ scenario_tenant_password }}'
+
+        - name: Refuse a provision that would give the logins new passwords
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: provision over URL files of other passwords
+            ask_tags: control_plane_db_provision
+            ask_extra: {control_plane_db_step: provision}
+            refused_text: 'REFUSED: a connection URL file already exists and is not the one these passwords make'
+
+        - name: Read the URL file the refusal had to leave alone
+          ansible.builtin.slurp:
+            src: '{{ verify_config }}/portal-database-url'
+          register: control_plane_db_verify_rotation_url
+          no_log: true
+
+        - name: Assert the refusal changed no URL file
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_verify_rotation_url.content | ansible.builtin.b64decode == verify_tenant_url ~ '\n'
+            quiet: true
+            fail_msg: A refused provision changed a connection URL file.
+          no_log: true
+
+        - name: Place the inputs with the passwords the URL files hold
+          ansible.builtin.import_tasks: tasks/place_inputs.yml
+
+        - name: Request the retry that those passwords make
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: provision retried over its own URL files
+            ask_tags: control_plane_db_provision
+            ask_extra: {control_plane_db_step: provision}
+
+        - name: Assert a retry over its own URL files runs
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+            quiet: true
+            fail_msg: A provision retried with the passwords its URL files already hold was refused.
+
+    - name: Section provision failures
+      when: verify_sections | length == 0 or 'provision_failures' in verify_sections
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Make the program print a secret on a line of its own, then refuse
+          ansible.builtin.copy:
+            content: "leak\n"
+            dest: /var/tmp/fake-docker/mode
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Place the four inputs
+          ansible.builtin.import_tasks: tasks/place_inputs.yml
+
+        - name: Request provision while the program prints a secret and refuses
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: provision while the program prints a secret
+            ask_tags: control_plane_db_provision
+            ask_extra: {control_plane_db_step: provision}
+
+        - name: Look at what a failed provision left
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - '{{ verify_state }}/provision'
+            - '{{ verify_input_dir }}/admin-url'
+            - '{{ verify_input_dir }}/tenant-password'
+            - '{{ verify_input_dir }}/owner-password'
+            - '{{ verify_input_dir }}/provisioner-password'
+            - '{{ verify_config }}/portal-database-url'
+          register: control_plane_db_verify_provision_failed
+
+        - name: Assert a failed provision wrote no URL file and no marker, took the administrator URL off, and kept the passwords for a retry
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc != 0
+              - "'REFUSED: provision did not end clean' in control_plane_db_ask_result.stdout"
+              - not control_plane_db_verify_provision_failed.results[0].stat.exists
+              - not control_plane_db_verify_provision_failed.results[1].stat.exists
+              - control_plane_db_verify_provision_failed.results[2:5] | map(attribute='stat') | map(attribute='exists') | min
+              - not control_plane_db_verify_provision_failed.results[5].stat.exists
+            quiet: true
+            fail_msg: A failed provision wrote a URL file or a marker, left the administrator URL file, or removed the passwords a retry needs.
+
+        - name: Let the program succeed, place the administrator URL file and ask again
+          ansible.builtin.copy:
+            content: "ok\n"
+            dest: /var/tmp/fake-docker/mode
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Place the administrator URL file for the retry
+          ansible.builtin.import_tasks: tasks/place.yml
+          vars:
+            place_path: '{{ verify_input_dir }}/admin-url'
+            place_content: "{{ scenario_admin_url }}\n"
+
+        - name: Request provision again
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: provision retried after a failure
+            ask_tags: control_plane_db_provision
+            ask_extra: {control_plane_db_step: provision}
+
+        - name: Look at the marker
+          ansible.builtin.stat:
+            path: '{{ verify_state }}/provision'
+          register: control_plane_db_verify_provision_retry
+
+        - name: Assert the retry succeeded with the passwords a failure kept
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_provision_retry.stat.exists
+            quiet: true
+            fail_msg: provision could not be retried after a failure.
+
+        - name: Start again from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Make the image lack the provisioner login, after the reset
+          ansible.builtin.copy:
+            content: "no-flag\n"
+            dest: /var/tmp/fake-docker/mode
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Place the four inputs again
+          ansible.builtin.import_tasks: tasks/place_inputs.yml
+
+        - name: Refuse an image that predates the provisioner login
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: an image without the provisioner login
+            ask_tags: control_plane_db_provision
+            ask_extra: {control_plane_db_step: provision}
+            refused_text: 'REFUSED: the image does not carry PORTAL_PROVISIONER_PASSWORD_FILE'
+            refused_calls: 3
+
+    # 10. identity: the configuration is rendered from the inputs, the container is given
+    # the token read-only and nothing else of the host's, the identifiers are installed
+    # root:1000 0640, and the working directory is gone. The marker follows the
+    # configuration.
+    - name: Section identity
+      when: verify_sections | length == 0 or 'identity' in verify_sections
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Request identity
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: identity
+            ask_tags: control_plane_db_identity
+            ask_extra: {control_plane_db_step: identity}
+
+        - name: Read the calls
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Look at the identifiers file, the working directory and the markers
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - '{{ verify_config }}/identity-outputs.json'
+            - '{{ verify_work }}'
+          register: control_plane_db_verify_identity_stats
+
+        - name: Find the marker
+          ansible.builtin.find:
+            paths: '{{ verify_state }}'
+            patterns: 'identity-*'
+          register: control_plane_db_verify_identity_markers
+
+        - name: Read the identifiers file
+          ansible.builtin.slurp:
+            src: '{{ verify_config }}/identity-outputs.json'
+          register: control_plane_db_verify_identity_outputs
+
+        - name: Assert identity installed the identifiers root:1000 0640, removed its working directory and recorded itself
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_identity_stats.results[0].stat.pw_name == 'root'
+              - control_plane_db_verify_identity_stats.results[0].stat.gid == 1000
+              - control_plane_db_verify_identity_stats.results[0].stat.mode == '0640'
+              - control_plane_db_verify_identity_outputs.content | ansible.builtin.b64decode == '{"ids":"EXAMPLE_ID"}\n'
+              - not control_plane_db_verify_identity_stats.results[1].stat.exists
+              - control_plane_db_verify_identity_markers.files | length == 1
+              - control_plane_db_verify_identity_markers.files[0].path is match('^/var/lib/branchleft/control-plane-db/identity-[0-9a-f]{64}$')
+            quiet: true
+            fail_msg: >-
+              identity did not install the identifiers with the declared owner, group and mode,
+              left its working directory, or wrote no marker named for a hash.
+
+        - name: Name the reconciler call
+          ansible.builtin.set_fact:
+            control_plane_db_verify_identity_call: "{{ (control_plane_db_verify_calls | selectattr('argv', 'contains', 'dist/cli.js') | list)[-1] }}"
+
+        - name: Assert the reconciler container is given the token read-only, no secret in its arguments and the rendered configuration
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_verify_identity_call.argv[control_plane_db_verify_identity_call.argv.index('--network') + 1] == 'host'
+              - control_plane_db_verify_identity_call.argv[control_plane_db_verify_identity_call.argv.index('--user') + 1] == '1000:1000'
+              - control_plane_db_verify_identity_call.argv[control_plane_db_verify_identity_call.argv.index('--cap-drop') + 1] == 'ALL'
+              - >-
+                control_plane_db_verify_identity_call.argv[control_plane_db_verify_identity_call.argv.index('--add-host') + 1]
+                == 'identity.example.invalid:127.0.0.1'
+              - "'--privileged' not in control_plane_db_verify_identity_call.argv"
+              - >-
+                control_plane_db_verify_identity_call.argv
+                | select('match', '^/var/lib/branchleft/control-plane/zitadel-state/reconciler.pat:/state/reconciler.pat:ro$')
+                | list | length == 1
+              - "'ZITADEL_URL=http://identity.example.invalid:8300' in control_plane_db_verify_identity_call.argv"
+              - "'ZITADEL_TOKEN_FILE=/state/reconciler.pat' in control_plane_db_verify_identity_call.argv"
+              - scenario_needles | select('in', control_plane_db_verify_identity_call.argv | join(' ')) | list | length == 0
+              - "control_plane_db_verify_identity_call.config[verify_work] is search('\"identity\": \"identity.example.invalid\"')"
+              - "control_plane_db_verify_identity_call.config[verify_work] is search('\"tenants\": \\[\\]')"
+              - control_plane_db_verify_identity_call.mounts[verify_work].mode == '0700'
+              - control_plane_db_verify_identity_call.mounts[verify_work].uid == 1000
+            quiet: true
+            fail_msg: The reconciler container was given more than the role means to give it, or the configuration is not the one rendered from the inputs.
+
+        - name: Request identity again
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: identity again
+            ask_tags: control_plane_db_identity
+            ask_extra: {control_plane_db_step: identity}
+
+        - name: Read the calls after the second request
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Assert the second request changed nothing and started no container
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_ask_result.stdout is search('changed=0 ')
+              - control_plane_db_verify_calls | length == 1
+            quiet: true
+            fail_msg: A second identity for the same configuration changed something or started a container.
+
+        - name: Request identity with a tenant added
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: identity with a tenant added
+            ask_tags: control_plane_db_identity
+            ask_extra:
+              control_plane_db_step: identity
+              control_plane_db_identity_tenants:
+                - name: EXAMPLE_TENANT
+
+        - name: Read the calls and the markers
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Find the markers
+          ansible.builtin.find:
+            paths: '{{ verify_state }}'
+            patterns: 'identity-*'
+          register: control_plane_db_verify_identity_markers_two
+
+        - name: Assert a changed configuration is a new request with its own marker
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_calls | length == 2
+              - control_plane_db_verify_identity_markers_two.files | length == 2
+            quiet: true
+            fail_msg: A changed tenant list was skipped as done, or replaced the earlier marker.
+
+    - name: Section identity refusals
+      when: verify_sections | length == 0 or 'identity_refusals' in verify_sections
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Refuse each hostname that is empty or not a hostname
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: 'the identity hostname {{ item | ansible.builtin.to_json }}'
+            ask_tags: control_plane_db_identity
+            ask_extra:
+              control_plane_db_step: identity
+              control_plane_db_identity_hostnames: {console: console.example.invalid, portal: portal.example.invalid, identity: '{{ item }}'}
+            refused_text: 'REFUSED: control_plane_db_identity_hostnames.identity must be set to a lower-case hostname'
+          loop: ['', 'UPPER.example.invalid', 'a b', 'host:8300', 'a/b']
+
+        - name: Refuse each service account token that is absent, wider, a link or another account's
+          ansible.builtin.include_tasks: tasks/token_case.yml
+          vars:
+            case_name: '{{ item.name }}'
+          loop:
+            - {name: absent, setup: absent}
+            - {name: mode 0640, setup: file, owner: '1000', group: '1000', mode: '0640'}
+            - {name: mode 0400, setup: file, owner: '1000', group: '1000', mode: '0400'}
+            - {name: owned by root, setup: file, owner: root, group: root, mode: '0600'}
+            - {name: a link, setup: link}
+          loop_control:
+            label: '{{ item.name }}'
+
+        - name: Start again from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Leave a working directory an earlier attempt made
+          ansible.builtin.file:
+            path: '{{ verify_work }}'
+            state: directory
+            owner: '1000'
+            group: '1000'
+            mode: '0700'
+
+        - name: Leave a file in it
+          ansible.builtin.copy:
+            content: "EXAMPLE_LEFTOVER\n"
+            dest: '{{ verify_work }}/leftover'
+            owner: '1000'
+            group: '1000'
+            mode: '0600'
+
+        - name: Refuse a working directory that already exists
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: a working directory an earlier attempt left
+            ask_tags: control_plane_db_identity
+            ask_extra: {control_plane_db_step: identity}
+            refused_text: 'REFUSED: /var/lib/branchleft/control-plane/reconciler-work already exists'
+
+        - name: Look at what the earlier attempt left
+          ansible.builtin.stat:
+            path: '{{ verify_work }}/leftover'
+          register: control_plane_db_verify_leftover
+
+        - name: Assert the refusal left the earlier attempt's file where it was
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_verify_leftover.stat.exists
+            quiet: true
+            fail_msg: A refused identity removed a working directory it had not made.
+
+    - name: Section identity failures
+      when: verify_sections | length == 0 or 'identity_failures' in verify_sections
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Make the reconciler report drift
+          ansible.builtin.copy:
+            content: "drift\n"
+            dest: /var/tmp/fake-docker/mode
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Request identity while the reconciler reports drift
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: identity with drift
+            ask_tags: control_plane_db_identity
+            ask_extra: {control_plane_db_step: identity}
+
+        - name: Look at what a drift left
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - '{{ verify_work }}'
+            - '{{ verify_config }}/identity-outputs.json'
+          register: control_plane_db_verify_drift
+
+        - name: Find the markers
+          ansible.builtin.find:
+            paths: '{{ verify_state }}'
+            patterns: 'identity-*'
+          register: control_plane_db_verify_drift_markers
+
+        - name: Assert drift is refused, installs nothing, records nothing and leaves no working directory
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc != 0
+              - "'REFUSED: identity did not end clean' in control_plane_db_ask_result.stdout"
+              - "'Drift is a manual change' in control_plane_db_ask_result.stdout"
+              - not control_plane_db_verify_drift.results[0].stat.exists
+              - not control_plane_db_verify_drift.results[1].stat.exists
+              - control_plane_db_verify_drift_markers.files | length == 0
+            quiet: true
+            fail_msg: Drift was overwritten, recorded as done or left a working directory.
+
+        - name: Make the reconciler fail
+          ansible.builtin.copy:
+            content: "fail\n"
+            dest: /var/tmp/fake-docker/mode
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Request identity while the reconciler fails
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: identity while the reconciler fails
+            ask_tags: control_plane_db_identity
+            ask_extra: {control_plane_db_step: identity}
+
+        - name: Look at the working directory
+          ansible.builtin.stat:
+            path: '{{ verify_work }}'
+          register: control_plane_db_verify_fail_work
+
+        - name: Assert a failure is refused and leaves no working directory
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc != 0
+              - not control_plane_db_verify_fail_work.stat.exists
+            quiet: true
+            fail_msg: A failed reconciler run was not refused, or left its working directory.
+
+    # 11. Nothing in the run's log holds a throwaway secret.
+    - name: The log holds no secret
+      when: verify_sections | length == 0 or 'log' in verify_sections
+      block:
+        - name: Search the controller's log of every run for the throwaways
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -c
+              - -F
+              - -e
+              - ADMINSECRET-{{ scenario_run }}
+              - -e
+              - '{{ scenario_tenant_password }}'
+              - -e
+              - '{{ scenario_owner_password }}'
+              - -e
+              - '{{ scenario_provisioner_password }}'
+              - -e
+              - THROWAWAY-TOKEN-{{ scenario_run }}
+              - "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
+          delegate_to: localhost
+          register: control_plane_db_verify_log_scan
+          changed_when: false
+          failed_when: control_plane_db_verify_log_scan.rc not in [0, 1]
+          no_log: true
+
+        - name: Assert no line of the log holds a throwaway
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_verify_log_scan.rc == 1
+            quiet: true
+            fail_msg: A throwaway secret is in the log of the run, so a task that handles it is missing no_log.

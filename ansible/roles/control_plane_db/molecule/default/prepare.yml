@@ -1,0 +1,48 @@
+---
+# What the role expects to find on a host before it runs. The configuration
+# directory is the control_plane role's, made here the way that role makes it; the
+# service account's token is the sign-in service's, made here the way it writes it.
+# The docker command is a stand-in that records its calls (files/fake_docker.py).
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create the directories the control_plane role and the sign-in service make
+      ansible.builtin.file:
+        path: '{{ item.path }}'
+        state: directory
+        owner: '{{ item.owner }}'
+        group: '{{ item.group }}'
+        mode: '{{ item.mode }}'
+      loop:
+        - {path: /etc/branchleft, owner: root, group: root, mode: '0755'}
+        - {path: /etc/branchleft/control-plane, owner: root, group: root, mode: '0750'}
+        - {path: /var/lib/branchleft, owner: root, group: root, mode: '0755'}
+        - {path: /var/lib/branchleft/control-plane, owner: root, group: root, mode: '0755'}
+        - {path: /var/lib/branchleft/control-plane/zitadel-state, owner: '1000', group: '1000', mode: '0700'}
+      loop_control:
+        label: '{{ item.path }}'
+
+    - name: Write the service account token the sign-in service writes
+      ansible.builtin.copy:
+        content: "THROWAWAY-TOKEN-{{ scenario_run }}\n"
+        dest: /var/lib/branchleft/control-plane/zitadel-state/reconciler.pat
+        owner: '1000'
+        group: '1000'
+        mode: '0600'
+
+    - name: Install the stand-in docker command
+      ansible.builtin.copy:
+        src: fake_docker.py
+        dest: /usr/local/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create the stand-in's state directory
+      ansible.builtin.file:
+        path: /var/tmp/fake-docker
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
