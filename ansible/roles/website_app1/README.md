@@ -50,9 +50,10 @@ default, which means no deploy and no smoke test.
 
 ## Where the secrets come from
 
-The role does not decide where the SMTP values come from. That is the owner's decision
-(see `ansible/patterns/secrets_and_no_log/README.md`). Until it is made, no play in this
-repository supplies them, and the role must not be run with invented values.
+The owner has decided on one root-only file on the
+host. `ansible/playbooks/app1.yml` applies `host_inputs` ahead of this role, and it sets the
+four SMTP values from that file (`roles/host_inputs/README.md`). The role must never be run
+with invented values.
 
 ## What is different, and why
 

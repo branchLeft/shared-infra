@@ -1,6 +1,9 @@
 ---
-# app1: the gated pull. Two roles, in order: the Ansible toolchain this
-# playbook runs with, then the trigger that runs it. Only this host's name is set
+# app1: the gated pull. Four roles, in order: the Ansible toolchain this
+# playbook runs with, the trigger that runs it, the loader of the host's private
+# inputs (host_inputs), which stops the run until the owner's root-only file is in
+# place, then the website, which reads its mail settings from what the loader sets.
+# Only this host's name is set
 # here; the remote, the playbook allowlist and the signer list come from the shared
 # includes and the one trust file, all loaded through vars_files.
 #
@@ -26,3 +29,5 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_inputs # noqa: role-name[path]
+    - role: ../roles/website_app1 # noqa: role-name[path]
