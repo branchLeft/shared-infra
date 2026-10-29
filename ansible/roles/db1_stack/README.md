@@ -43,8 +43,8 @@ compose override file or a `.env` file sits beside `compose.yml`. It refuses whe
 but that check runs after the compose file is rendered and before the unit is
 enabled (see "The database image pin" for why, and for the bootstrap order).
 
-The role has not been applied to the host. The live run waits on the database
-host's enrolment, which the owner has not yet decided, and on the gated workflow (see
+The role has not been applied to the host. The live run waits on the owner's signer
+ruling, the channel for the role's inputs and the host's one-time bootstrap (see
 "How it is delivered"). After it is applied, the hand-run prerequisites script
 must not be run again: it would put back the repository entry the role removes
 (see "What it changes on a host").
@@ -178,9 +178,12 @@ Delivery to a host is the gated workflow only (ANS-17): a plan job in check mode
 the approval of the protected environment, a pull of that exact commit of `main`
 on the host, and a second run that must report zero changes. Nothing in this
 repository applies the role by hand, and an author's local run is the container
-test. The live run is waiting on the database host's enrolment and the gated
-workflow being available for this host; until then this role is tested and not
-delivered.
+test. `playbooks/db1.yml` refuses any host but `db1` through the shared include,
+refuses an empty signer list and applies the two pull roles only; this role and
+`db1_grants` are not in that playbook, because nothing on the pull route supplies
+their inputs. The live run is waiting on the owner's signer ruling, the channel for
+this role's inputs and the host's one-time bootstrap; until then this role is tested
+and not delivered.
 
 The first live apply on the database host must not recreate or restart the
 running MySQL. The role does not do either, so the check-mode plan of that run is
@@ -585,7 +588,7 @@ bot sees it.
   healthcheck needs it. On a rebuilt database host the role still converges, but the
   exporter cannot report `mysql_up 1` until section 4 is run by hand, so the stack's
   healthcheck gate fails. Running section 4 is an owner's live step.
-- The role is not applied to db1 until the owner decides enrolment. When it is, the exporter password the role is given must be the
+- The role is not applied to db1 until the owner rules the signer. When it is, the exporter password the role is given must be the
   password of the exporter account in the database; a mismatch makes the exporter's
   healthcheck fail, not the role.
 - The plan limit on a host that was never applied: on a host whose apt index has
@@ -634,8 +637,8 @@ bot sees it.
   variables redirect the daemon rather than name a compose file. The deploy program
   checks none of these. The owner writes those files; the role reads none of them,
   because `db.env` holds secrets. The one environment file the role reads is
-  `/etc/branchleft/db.image.env`. The tracker item for this vector does not yet
-  record this gap; until it does, this README is the only record of it.
+  `/etc/branchleft/db.image.env`. This gap is tracked as follow-up work; until a
+  check exists, this entry is the record of it.
 - MySQL 8.0 reaches the end of its vendor support at a date this README does not
   state, because it was not checked here; the database's own ticket owns that.
 

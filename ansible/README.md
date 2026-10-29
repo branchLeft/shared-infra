@@ -6,12 +6,13 @@ page of the standards repository (clauses ANS-1 to ANS-17).
 
 This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
-the skeleton. Its real hosts are `edge1`, `ops1`, `app1` and `db1`. The first three have
-playbooks enrolled in the gated pull. Each of them applies `roles/ansible_runtime` and
+the skeleton. Its real hosts are `edge1`, `ops1`, `app1` and `db1`. Each has a playbook
+enrolled in the gated pull. `edge1`, `ops1` and `app1` apply `roles/ansible_runtime` and
 `roles/pull_trigger`, then `roles/host_baseline`: `playbooks/edge1.yml` stops there,
 `playbooks/ops1.yml` adds `roles/breakglass_mint_host` and `playbooks/app1.yml` adds
-`roles/breakglass_grant_host`. `playbooks/db1.yml` applies `roles/db1_stack` and
-`roles/db1_grants`. The other trees hold only what those hosts need.
+`roles/breakglass_grant_host`. `playbooks/db1.yml` applies the two pull roles only;
+`roles/db1_stack` and `roles/db1_grants` are left out of it. The other trees hold only
+what those hosts need.
 
 ## Layout
 
@@ -565,7 +566,8 @@ oversight. Each is a decision the standard assigns to later work.
   merge on its own.
 - **Delivery.** Each of edge1, db1, app1 and ops1 has a playbook under `playbooks/`.
   edge1's first apply is the one-time root bootstrap and then the gated pull; db1's
-  waits on the gated pull. ANS-17 describes the only approved path. The trigger is
+  playbook applies the same two pull roles, and its trust file is empty until the owner
+  rules the signer, so db1 refuses every run until then. ANS-17 describes the only approved path. The trigger is
   `roles/pull_trigger`, and its reusable workflow is in `branchLeft/github-workflows`;
   nothing in this repo calls that workflow yet.
 - **Reuse by other repositories.** The harness is code another repository may

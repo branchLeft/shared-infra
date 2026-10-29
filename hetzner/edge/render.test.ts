@@ -1128,11 +1128,21 @@ const PORTAL_HOSTNAMES = [
 const blockOf = (rendered: string, hostname: string): string =>
   rendered.split(`\n${hostname} {`)[1]?.split('\n}')[0] ?? '';
 
+const TOKEN_NAME_PATTERN =
+  '(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)';
+const TOKEN_LOG_FILTER = `regexp "(?i)([?&]${TOKEN_NAME_PATTERN})[^&#]*" "$1=REDACTED"`;
+const TOKEN_STRIP_MATCHER = `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*${TOKEN_NAME_PATTERN}(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`;
+
 /** The blog's site block exactly as it was served before the portal hostnames existed. */
 const BLOG_BLOCK = `
 	log {
 		output file /var/log/caddy/access.log
-		format json
+		format filter {
+			wrap json
+			request>uri ${TOKEN_LOG_FILTER}
+			request>headers>Referer ${TOKEN_LOG_FILTER}
+			resp_headers>Location ${TOKEN_LOG_FILTER}
+		}
 	}
 	tls {
 		protocols tls1.2 tls1.3
@@ -1146,8 +1156,10 @@ const BLOG_BLOCK = `
 		method POST PUT
 		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
 	}
+	@break_glass_strip expression \`${TOKEN_STRIP_MATCHER}\`
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		uri @break_glass_strip query -bl_break_glass
 		request_body {
 			max_size 64MiB
 		}
@@ -1367,5 +1379,140 @@ describe('a site discard route', () => {
         /discardRoute/
       );
     }
+  });
+});
+
+describe('the break-glass token in the rendered Caddyfile', () => {
+  const FILTER_HEAD = ['\tlog {', '\t\toutput file ', '\t\tformat filter {', '\t\t\twrap json'];
+  const FIELDS = ['request>uri', 'request>headers>Referer', 'resp_headers>Location'];
+  const STRIP_MATCHER = '@break_glass_strip expression';
+  const STRIP_RULE = 'uri @break_glass_strip query -bl_break_glass';
+  const PROBES = [':8080', 'http://edge-probe.invalid:8080'];
+  const METRICS = ':9091';
+
+  const rendered = renderCaddyfile(sites, hostRedirects, ENFORCING, staticSites);
+
+  /** The text of the top-level block at `address`, from its address line to its closing brace. */
+  const topBlock = (text: string, address: string): string => {
+    const start = text.indexOf(`\n${address} {`);
+    expect(start, `block ${address} must be rendered`).toBeGreaterThanOrEqual(0);
+    return text.slice(start + 1, text.indexOf('\n}\n', start));
+  };
+
+  /** The `log { }` block of a top-level block: its first line at one tab to the next `\t}`. */
+  const logBlock = (block: string): string => {
+    const start = block.indexOf('\n\tlog {');
+    expect(start, 'the block must carry a log block').toBeGreaterThanOrEqual(0);
+    const end = block.indexOf('\n\t}\n', start);
+    return block.slice(start + 1, end + 3);
+  };
+
+  const siteAddresses = servableSites(sites).map((s) => s.hostnames[0]!);
+  const redirectAddresses = hostRedirects
+    .map((r) => r.from)
+    .filter((from) => rendered.includes(`\n${from} {`));
+  const staticAddresses = staticSites.map((s) => s.hostname);
+
+  const everyLog = [...siteAddresses, ...redirectAddresses, ...staticAddresses, ...PROBES].map(
+    (address) => ({ address, log: logBlock(topBlock(rendered, address)) })
+  );
+
+  it('has several block kinds to check, so the checks below are not vacuous', () => {
+    expect(siteAddresses.length).toBeGreaterThan(1);
+    expect(redirectAddresses.length).toBeGreaterThan(0);
+    expect(staticAddresses.length).toBeGreaterThan(0);
+  });
+
+  it('filters the token out of the uri, Referer and Location in every log block', () => {
+    for (const { address, log } of everyLog) {
+      const lines = log.split('\n');
+      expect(lines.slice(0, 4).map((l, i) => l.slice(0, FILTER_HEAD[i]!.length))).toEqual(
+        FILTER_HEAD
+      );
+      for (const field of FIELDS) {
+        const filterLines = lines.filter((l) => l.trim().startsWith(`${field} regexp `));
+        expect(filterLines, `${address} must filter ${field}`).toHaveLength(1);
+        expect(filterLines[0]).toContain('REDACTED');
+      }
+    }
+  });
+
+  it('writes the same log text in every kind of block but the file name, so there is one source', () => {
+    const shape = (log: string) => log.replace(/output file \S+/, 'output file PATH');
+    const first = shape(everyLog[0]!.log);
+    for (const { address, log } of everyLog) {
+      expect(shape(log), `${address} log block differs`).toBe(first);
+    }
+    const files = new Set(everyLog.map(({ log }) => /output file (\S+)/.exec(log)![1]));
+    expect(files).toEqual(new Set(['/var/log/caddy/access.log', '/var/log/caddy/probe.log']));
+  });
+
+  it('keeps every log pattern free of backslashes and braces that Caddyfile quoting could corrupt', () => {
+    for (const { log } of everyLog) {
+      const filterLines = log.split('\n').filter((l) => l.includes(' regexp '));
+      expect(filterLines).toHaveLength(FIELDS.length);
+      for (const l of filterLines) {
+        const parts = /regexp "([^"]*)" "([^"]*)"$/.exec(l);
+        expect(parts, `unreadable filter line ${l}`).not.toBeNull();
+        expect(parts![1]).not.toMatch(/[\\{}]/);
+      }
+    }
+  });
+
+  it('strips the token in every served site block and both probes, and nowhere else', () => {
+    for (const a of [...siteAddresses, ...PROBES]) {
+      const block = topBlock(rendered, a);
+      expect(block, `${a} must carry the matcher`).toContain(`\t${STRIP_MATCHER} `);
+      expect(block, `${a} must carry the rule`).toContain(`\t\t${STRIP_RULE}\n`);
+    }
+    for (const a of [...redirectAddresses, ...staticAddresses, METRICS]) {
+      expect(topBlock(rendered, a), `${a} must not strip`).not.toContain('break_glass');
+    }
+    expect(rendered.split(`\n\t\t${STRIP_RULE}\n`).length - 1).toBe(
+      siteAddresses.length + PROBES.length
+    );
+  });
+
+  it('is unconditional: no posture switches it off', () => {
+    for (const posture of [DETECT_ONLY, IN_BAND_ONLY, ENFORCING, POSTURE]) {
+      const text = renderCaddyfile([site()], [], posture);
+      expect(topBlock(text, 'example.test')).toContain(`\t\t${STRIP_RULE}\n`);
+      expect(topBlock(text, ':8080')).toContain(`\t\t${STRIP_RULE}\n`);
+    }
+  });
+
+  it('runs first in the route after the HSTS header: before the body cap, the protection chain and the upstream', () => {
+    const route = (a: string) => {
+      const block = topBlock(rendered, a);
+      return block.slice(block.indexOf('\n\troute {'));
+    };
+    for (const a of siteAddresses) {
+      const r = route(a);
+      const at = (needle: string) => r.indexOf(needle);
+      expect(at('Strict-Transport-Security'), a).toBeGreaterThan(-1);
+      expect(at(STRIP_RULE), a).toBeGreaterThan(at('Strict-Transport-Security'));
+      expect(at('request_body {'), a).toBeGreaterThan(at(STRIP_RULE));
+      expect(at('respond @ghost_setup'), a).toBeGreaterThan(at(STRIP_RULE));
+      expect(at('reverse_proxy'), a).toBeGreaterThan(at('respond @ghost_setup'));
+      for (const chain of ['appsec', 'crowdsec', 'rate_limit']) {
+        if (at(chain) >= 0) expect(at(chain), `${a} ${chain}`).toBeGreaterThan(at(STRIP_RULE));
+      }
+    }
+    for (const a of PROBES) {
+      const r = route(a);
+      expect(r.startsWith(`\n\troute {\n\t\t${STRIP_RULE}\n`), `${a} must strip first`).toBe(true);
+    }
+  });
+
+  it('spells the token name in the matcher and the log from one pattern, either hex case accepted', () => {
+    const block = topBlock(rendered, siteAddresses[0]!);
+    const matcher = block.split('\n').find((l) => l.includes(STRIP_MATCHER))!;
+    const logLine = logBlock(block)
+      .split('\n')
+      .find((l) => l.includes('request>uri regexp'))!;
+    const spelled =
+      '(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])';
+    expect(matcher, 'the strip gate must accept either hex case').toContain(spelled);
+    expect(logLine, 'the log filter must accept either hex case').toContain(spelled);
   });
 });

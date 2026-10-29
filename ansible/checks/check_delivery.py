@@ -2,7 +2,7 @@
 
 ``caller`` reads .github/workflows/ansible-delivery.yml and fails on anything that
 would let a pull request, a schedule or a manual run reach a host, float on a moved
-workflow, hand the repository's secrets or the apply key to the call, share an approval
+workflow, hand the call any secret but the six it names, share an approval
 with the Pulumi applies, or widen the token. ``environment`` reads the answers of three
 read-only GitHub calls and fails unless the deployment environment is protected as the
 reusable workflow assumes, because that workflow cannot read the protection itself and a
@@ -28,9 +28,13 @@ ENVIRONMENT = "ansible-hosts"
 # Used with fullmatch and in ASCII mode: only an exact tag (CI-5), never a branch, a
 # commit id or a major version that a later tag could move under the caller.
 REUSABLE = re.compile(
-    r"branchLeft/github-workflows/\.github/workflows/ansible-gated-apply\.yml@v\d+\.\d+\.\d+",
+    r"branchLeft/github-workflows/\.github/workflows/ansible-gated-apply\.yml@v(\d+)\.(\d+)\.(\d+)",
     re.ASCII,
 )
+# The oldest release of the reusable workflows that declares the jump secrets. A call that
+# passes a secret the called workflow does not declare fails on GitHub, so a pin below this
+# is a broken delivery. The drift caller's test imports it: this is its one home.
+MIN_RELEASE = (1, 0, 16)
 ROLE_DIRECTORIES = ["roles/*", "patterns/*"]
 # The one expression C4 reads in an environment name, and it reads this shape alone:
 #   ${{ needs.<job>.outputs.<name> == '<A>' && '<A>' || '<B>' }}
@@ -50,12 +54,16 @@ CHOSEN_ENVIRONMENT = re.compile(
 )
 PYTHON_PATHS = "harness checks"
 PERMISSIONS = {"contents": "read", "actions": "read"}
-# The only secrets the call passes. The apply key is not among them: it is a secret of
-# the environment, which only a job that passed the approval can read.
+# The only secrets the call passes, each named by its expression. The apply key is an
+# environment secret: the call names it too, and only the job in the environment reads it.
 SECRETS = {
     "ssh_hosts": "${{ secrets.ANSIBLE_HOSTS }}",
     "ssh_known_hosts": "${{ secrets.ANSIBLE_KNOWN_HOSTS }}",
     "ssh_check_key": "${{ secrets.ANSIBLE_CHECK_KEY }}",
+    "ssh_apply_key": "${{ secrets.SSH_APPLY_KEY }}",
+    # Both or neither: an unset repository secret is empty, and empty means no jump.
+    "ssh_jump_host": "${{ secrets.SSH_JUMP_HOST }}",
+    "ssh_jump_key": "${{ secrets.SSH_JUMP_KEY }}",
 }
 APPLY_KEY = "ssh_apply_key"
 
@@ -181,24 +189,19 @@ def input_findings(inputs: object, other_environments: frozenset[str]) -> list[s
 
 
 def secret_findings(secrets: object) -> list[str]:
-    """Check the call names its three secrets one by one and never passes the apply key."""
+    """Check the call names its six secrets one by one, the apply key and the jump pair too."""
     if secrets == "inherit":
         return [
-            "secrets: inherit passes every secret of the repository, the apply key "
-            "included, to the call: name the three secrets"
+            "secrets: inherit passes every secret of the repository to the call: name the six "
+            "secrets"
         ]
     given = as_mapping(secrets)
     if given is None:
-        return [f"secrets must be a mapping of the three named secrets, got {secrets!r}"]
+        return [f"secrets must be a mapping of the six named secrets, got {secrets!r}"]
     findings = []
     for key in sorted(given):
-        if key == APPLY_KEY:
-            findings.append(
-                f"secrets passes {APPLY_KEY}: the apply key is a secret of the environment "
-                "and is read only after the approval, so it is never passed"
-            )
-        elif key not in SECRETS:
-            findings.append(f"secrets passes {key}, which is not one of the three named secrets")
+        if key not in SECRETS:
+            findings.append(f"secrets passes {key}, which is not one of the six named secrets")
     findings.extend(
         f"secrets.{key} must be {expected}, got {given.get(key)!r}"
         for key, expected in SECRETS.items()
@@ -275,10 +278,17 @@ def job_findings(jobs: object, other_environments: frozenset[str]) -> list[str]:
             f"{[PROOF_JOB]!r}, so it waits for the proof and for nothing that could skip it"
         )
     uses = job.get("uses")
-    if not isinstance(uses, str) or REUSABLE.fullmatch(uses) is None:
+    pinned = REUSABLE.fullmatch(uses) if isinstance(uses, str) else None
+    if pinned is None:
         findings.append(
             f"job {JOB} must call ansible-gated-apply.yml of branchLeft/github-workflows at an "
             f"exact tag vMAJOR.MINOR.PATCH (CI-5), got {uses!r}"
+        )
+    elif tuple(int(part) for part in pinned.groups()) < MIN_RELEASE:
+        floor = ".".join(str(part) for part in MIN_RELEASE)
+        findings.append(
+            f"job {JOB} calls {uses!r}, older than v{floor}, the first release that declares the "
+            "jump secrets: a call that passes a secret the workflow does not declare fails"
         )
     findings.extend(input_findings(job.get("with"), other_environments))
     findings.extend(secret_findings(job.get("secrets")))
