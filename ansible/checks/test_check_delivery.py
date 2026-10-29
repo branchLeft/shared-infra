@@ -220,12 +220,22 @@ class CallerTests(unittest.TestCase):
                 job_of(document)["uses"] = workflow + ref
 
             self.assert_names(self.weakened(set_uses), "exact tag")
-        for ref in ("@v1.0.12", "@v2.3.4"):
+        for ref in ("@v1.0.16", "@v2.3.4"):
 
             def set_good(document: dict[str, object], ref: str = ref) -> None:
                 job_of(document)["uses"] = workflow + ref
 
             self.assertEqual([], self.weakened(set_good))
+
+    def test_a_pin_below_the_jump_release_is_named(self) -> None:
+        # The call passes the jump secrets, and a release that does not declare them fails it.
+        workflow = "branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml"
+        for ref in ("@v1.0.15", "@v1.0.0", "@v0.9.99"):
+
+            def set_old(document: dict[str, object], ref: str = ref) -> None:
+                job_of(document)["uses"] = workflow + ref
+
+            self.assert_names(self.weakened(set_old), "the first release that declares")
 
     def test_another_workflow_or_repository_is_named(self) -> None:
         for uses in (
@@ -258,6 +268,33 @@ class CallerTests(unittest.TestCase):
                 section(job_of(document), "secrets")["ssh_apply_key"] = value
 
             self.assert_names(self.weakened(set_key), "secrets.ssh_apply_key must be")
+
+    def test_a_caller_without_a_jump_secret_is_named(self) -> None:
+        for name in ("ssh_jump_host", "ssh_jump_key"):
+
+            def drop_secret(document: dict[str, object], name: str = name) -> None:
+                del section(job_of(document), "secrets")[name]
+
+            self.assert_names(self.weakened(drop_secret), f"secrets.{name} must be")
+
+    def test_a_wrong_jump_secret_expression_is_named(self) -> None:
+        # The jump key must never be the check key or the apply key, and a literal is no secret.
+        wrong = (
+            "",
+            "literal-value",
+            "${{ secrets.ANSIBLE_CHECK_KEY }}",
+            "${{ secrets.SSH_APPLY_KEY }}",
+            "${{ secrets.ANSIBLE_HOSTS }}",
+        )
+        for name in ("ssh_jump_host", "ssh_jump_key"):
+            for value in wrong:
+
+                def set_secret(
+                    document: dict[str, object], name: str = name, value: str = value
+                ) -> None:
+                    section(job_of(document), "secrets")[name] = value
+
+                self.assert_names(self.weakened(set_secret), f"secrets.{name} must be")
 
     def test_another_secret_or_a_swapped_secret_is_named(self) -> None:
         def add_secret(document: dict[str, object]) -> None:
@@ -549,8 +586,16 @@ class CallerTests(unittest.TestCase):
         def rename(document: dict[str, object]) -> None:
             section(job_of(document), "with")["environment"] = "ansible"
 
+        def drop_role_test(document: dict[str, object]) -> None:
+            del section(job_of(document), "with")["role-test-command"]
+
+        def retarget_role_test(document: dict[str, object]) -> None:
+            section(job_of(document), "with")["role-test-command"] = "harness/other.py"
+
         self.assert_names(self.weakened(narrow), "with.role-directories must be")
         self.assert_names(self.weakened(repoint), "with.python-paths must be")
+        self.assert_names(self.weakened(drop_role_test), "with.role-test-command must be")
+        self.assert_names(self.weakened(retarget_role_test), "with.role-test-command must be")
         self.assert_names(self.weakened(rename), "with.environment must be")
 
     def test_a_second_job_or_a_new_top_level_key_is_named(self) -> None:

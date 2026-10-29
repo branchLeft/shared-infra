@@ -180,6 +180,16 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "posture the host depends on, so the health signal of the service is "
         "declared in that repository and nothing here reads it."
     ),
+    "status": (
+        "Not an instance of the template: `/opt/branchleft/status` is the project "
+        "directory of the Gatus status page, which the ansible/roles/status_page "
+        "role of branchLeft/shared-infra brings up with plain `docker compose`, "
+        "never through branchleft-compose@ or branchleft-deploy. The role renders "
+        "its Compose file from a template and checks health itself, from the host, "
+        "because the scratch image cannot carry a healthcheck. It is registered "
+        "because the scan reads the path as a stack name. No `*/stack/compose.yml` "
+        "exists for it."
+    ),
 }
 
 # The stack-name rule the deploy wrapper actually applies, reused rather than

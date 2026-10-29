@@ -28,7 +28,7 @@ name: Ansible delivery
 # ansible-hosts, on its /deployment-branch-policies and on its /secrets.
 #
 # The apply key is an environment secret, named here like the others: only the job in the
-# environment reads it, after approval. The three repository secrets are named one by one; `secrets: inherit` passes all.
+# environment reads it, after approval. The five repository secrets (the jump pair: both or neither) are named one by one; `secrets: inherit` passes all.
 
 on:
   push:
@@ -70,13 +70,14 @@ jobs:
 
   delivery:
     needs: [queue-proof]
-    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.15
+    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.17
     with:
       environment: ansible-hosts
       role-directories: |
         roles/*
         patterns/*
       python-paths: harness checks
+      role-test-command: harness/run_harness.py
       skip-rerun-after-merge-group: ${{ needs.queue-proof.outputs.tested == 'true' }}
       merge-group-check-name: Lint and test the Ansible roles
     secrets:
@@ -84,3 +85,5 @@ jobs:
       ssh_known_hosts: ${{ secrets.ANSIBLE_KNOWN_HOSTS }}
       ssh_check_key: ${{ secrets.ANSIBLE_CHECK_KEY }}
       ssh_apply_key: ${{ secrets.SSH_APPLY_KEY }}
+      ssh_jump_host: ${{ secrets.SSH_JUMP_HOST }}
+      ssh_jump_key: ${{ secrets.SSH_JUMP_KEY }}

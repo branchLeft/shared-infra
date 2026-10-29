@@ -1,0 +1,23 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml.
+    - name: Apply the role with the key half switched on
+      ansible.builtin.include_role:
+        name: branchleft.ci_login
+      vars:
+        ci_login_manage_keys: true
+        ci_login_keys: '{{ scenario_keys }}'
+
+    # The control case for the log check in verify.yml: a task with no no_log that is
+    # given a known value. If the log did not show it, an empty scan would mean nothing.
+    - name: Run a harmless command that is given a canary argument
+      ansible.builtin.command:
+        argv:
+          - /bin/true
+          - SCENARIO_LOG_CANARY
+      changed_when: false
+      check_mode: false

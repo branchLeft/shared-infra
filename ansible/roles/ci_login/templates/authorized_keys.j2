@@ -1,0 +1,3 @@
+{% for entry in ci_login_keys %}
+{{ ci_login_key_options }},command="sudo {{ ci_login_program }} --mode {{ entry.mode }}" {{ entry.key }}
+{% endfor %}

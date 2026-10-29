@@ -1,0 +1,172 @@
+---
+# What a host the role has configured, with the key half on and the scenario's two keys,
+# looks like. Included by verify.yml more than once: after the converge, and again after
+# every run that must change nothing. The tasks that read a sudoers file or a key file
+# carry no_log: true, so that the log check in verify.yml sees only the role's own output.
+- name: Read the pipeline account
+  ansible.builtin.getent:
+    database: passwd
+    key: '{{ scenario_user }}'
+  register: ci_login_assert_state_passwd
+
+- name: Read the password field of the pipeline account
+  ansible.builtin.getent:
+    database: shadow
+    key: '{{ scenario_user }}'
+  register: ci_login_assert_state_shadow
+  no_log: true
+
+- name: Keep only the first character of the password field
+  ansible.builtin.set_fact:
+    ci_login_assert_state_lock_character: '{{ ci_login_assert_state_shadow.ansible_facts.getent_shadow[scenario_user][0][:1] }}'
+  no_log: true
+
+- name: Assert the account is a system account with a home, a real shell and a locked password
+  ansible.builtin.assert:
+    that:
+      - ci_login_assert_state_passwd.ansible_facts.getent_passwd[scenario_user][1] | int < 1000
+      - ci_login_assert_state_passwd.ansible_facts.getent_passwd[scenario_user][4] == scenario_home
+      - ci_login_assert_state_passwd.ansible_facts.getent_passwd[scenario_user][5] == '/bin/bash'
+      - ci_login_assert_state_lock_character == '!'
+    quiet: true
+
+- name: Read the sudoers file
+  ansible.builtin.stat:
+    path: '{{ scenario_sudoers_path }}'
+  register: ci_login_assert_state_file
+
+- name: Assert the sudoers file is owned by root, group root, and readable only as sudo wants
+  ansible.builtin.assert:
+    that:
+      - ci_login_assert_state_file.stat.exists
+      - ci_login_assert_state_file.stat.pw_name == 'root'
+      - ci_login_assert_state_file.stat.gr_name == 'root'
+      - ci_login_assert_state_file.stat.mode == '0440'
+    quiet: true
+
+- name: Read the lines of the sudoers file
+  ansible.builtin.command:
+    argv:
+      - cat
+      - '{{ scenario_sudoers_path }}'
+  register: ci_login_assert_state_lines
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Assert the sudoers file holds exactly the two commands and nothing else
+  ansible.builtin.assert:
+    that:
+      - ci_login_assert_state_lines.stdout_lines == scenario_sudoers_lines
+    quiet: true
+
+- name: List the sudoers directory
+  ansible.builtin.find:
+    paths: /etc/sudoers.d
+    file_type: any
+    hidden: true
+  register: ci_login_assert_state_directory
+
+# The image ships a README in the directory. Anything else beside the file, a leftover of a
+# refused write included, is a file sudo may read.
+- name: Assert the sudoers file is the only file in the directory besides the README
+  ansible.builtin.assert:
+    that:
+      - ci_login_assert_state_directory.files | map(attribute='path') | map('basename') | difference(['README', 'ansible-ci']) | length == 0
+    quiet: true
+
+- name: Read the main sudoers file and the copy prepare.yml kept
+  ansible.builtin.stat:
+    path: '{{ item }}'
+  loop:
+    - /etc/sudoers
+    - /var/tmp/sudoers.before
+  register: ci_login_assert_state_main
+
+- name: Assert the main sudoers file is the file the image shipped
+  ansible.builtin.assert:
+    that:
+      - ci_login_assert_state_main.results[0].stat.checksum == ci_login_assert_state_main.results[1].stat.checksum
+    quiet: true
+
+- name: Check the whole sudoers configuration, the file included
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/visudo
+      - -c
+  register: ci_login_assert_state_visudo
+  changed_when: false
+  check_mode: false
+
+- name: Assert sudo reads the file
+  ansible.builtin.assert:
+    that:
+      - "'/etc/sudoers.d/ansible-ci: parsed OK' in ci_login_assert_state_visudo.stdout_lines"
+    quiet: true
+
+- name: Read the account's key directory and key file
+  ansible.builtin.stat:
+    path: '{{ item }}'
+  loop:
+    - '{{ scenario_home }}/.ssh'
+    - '{{ scenario_home }}/.ssh/authorized_keys'
+  register: ci_login_assert_state_ssh
+
+- name: Assert the key directory and the key file belong to the account and are private to it
+  ansible.builtin.assert:
+    that:
+      - ci_login_assert_state_ssh.results[0].stat.mode == '0700'
+      - ci_login_assert_state_ssh.results[0].stat.pw_name == scenario_user
+      - ci_login_assert_state_ssh.results[1].stat.mode == '0600'
+      - ci_login_assert_state_ssh.results[1].stat.pw_name == scenario_user
+    quiet: true
+
+- name: Read the account's authorised keys
+  ansible.builtin.command:
+    argv:
+      - cat
+      - '{{ scenario_home }}/.ssh/authorized_keys'
+  register: ci_login_assert_state_keys
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+# The image has no ssh-keygen, so the file is copied to the controller, which has one.
+# ssh-keygen -l -f prints one line for each line it reads and skips a line it cannot read
+# without failing, so the count of its lines is compared with the count of lines in the file.
+- name: Copy the account's key file to the controller
+  ansible.builtin.fetch:
+    src: '{{ scenario_home }}/.ssh/authorized_keys'
+    dest: '{{ scenario_key_dir }}/written-authorized_keys'
+    flat: true
+  check_mode: false
+  no_log: true
+
+- name: Ask ssh-keygen to read the key file
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -l
+      - -f
+      - '{{ scenario_key_dir }}/written-authorized_keys'
+  delegate_to: localhost
+  register: ci_login_assert_state_fingerprints
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Assert ssh-keygen read every line of the key file as a public key
+  ansible.builtin.assert:
+    that:
+      - ci_login_assert_state_keys.stdout_lines | length == 2
+      - ci_login_assert_state_fingerprints.stdout_lines | length == 2
+    quiet: true
+
+# The expected lines are written out in molecule.yml and not built by the role's template,
+# so dropping an option from the role fails this comparison. There is no from option.
+- name: Assert the keys are exactly the two declared lines
+  ansible.builtin.assert:
+    that:
+      - ci_login_assert_state_keys.stdout_lines | sort == scenario_key_lines | sort
+      - "'from=' not in ci_login_assert_state_keys.stdout"
+    quiet: true
