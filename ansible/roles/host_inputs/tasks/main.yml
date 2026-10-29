@@ -183,6 +183,13 @@
     db1_stack_exporter_password: "{{ host_inputs_doc['db1_stack_exporter_password'] | default(omit) }}"
     db1_grants_tenants: "{{ host_inputs_doc['db1_grants_tenants'] | default(omit) }}"
     db1_grants_ops1_host: "{{ host_inputs_doc['db1_grants_ops1_host'] | default(omit) }}"
+    monitoring_stack_smtp_username: "{{ host_inputs_doc['monitoring_stack_smtp_username'] | default(omit) }}"
+    monitoring_stack_smtp_password: "{{ host_inputs_doc['monitoring_stack_smtp_password'] | default(omit) }}"
+    monitoring_stack_healthchecks_ping_url: "{{ host_inputs_doc['monitoring_stack_healthchecks_ping_url'] | default(omit) }}"
+    monitoring_stack_alert_recipient_email: "{{ host_inputs_doc['monitoring_stack_alert_recipient_email'] | default(omit) }}"
+    monitoring_stack_mailhost_ping_url: "{{ host_inputs_doc['monitoring_stack_mailhost_ping_url'] | default(omit) }}"
+    monitoring_stack_grafana_admin_password: "{{ host_inputs_doc['monitoring_stack_grafana_admin_password'] | default(omit) }}"
+    monitoring_stack_snds_data_url: "{{ host_inputs_doc['monitoring_stack_snds_data_url'] | default(omit) }}"
   no_log: true
   diff: false
 

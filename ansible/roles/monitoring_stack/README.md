@@ -159,11 +159,11 @@ On a fresh host `ntfy_pager` runs first, and `monitoring_stack` second.
   so the unit can start only after `ntfy_pager` has run. The renderer check
   before the restart names this order in its failure.
 
-No playbook in this repository runs either role. `ansible/playbooks/edge1.yml`
-wires neither: a playbook that runs `monitoring_stack` must supply its seven
-secret inputs, and how those inputs reach a run (the secrets pattern, not a file
-in the repository) is settled with that wiring. So the order is written here and
-the fresh-host run across both is open until the wiring exists. The seam between
+`ansible/playbooks/edge1.yml` runs this role after `host_inputs`, which sets its
+seven secret inputs from the owner's root-only file on the host
+(`roles/host_inputs/README.md`). It does not run `ntfy_pager` yet, so the order is
+written here, and the fresh-host run across both is open until that role is wired
+ahead of this one. The live edge1 already has the renderer from its hand install. The seam between
 the two is tested with the real `ntfy_pager` role: the `verify.yml` of this role
 runs it by path (`include_role`), then this role, and rotates a pager token to
 see one restart. A second assertion makes the places that name the two secrets
@@ -569,8 +569,8 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after
 the approval of its protected environment. A plan job shows the host's diff in
 check mode first; after the approval the host pulls that exact commit and applies
 it, and a second run must report zero changes. Nothing is applied from a laptop.
-This role is not applied to any host yet: the live run waits on the enrolment of
-the hosts (the enrolment ticket) and on the gate. The runbook keeps its hand
+The edge1 playbook applies this role. The live run waits on the owner's inputs
+file on edge1 and on the gate. The runbook keeps its hand
 paths for steps 3, 4, 5, 13 and 14 until then; each is marked and listed in
 `hetzner/provision/test_runbook_monitoring_hand_blocks.py`, and they are retired
 together after the first gated converge.

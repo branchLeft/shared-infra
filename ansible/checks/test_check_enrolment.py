@@ -219,15 +219,15 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R11 db1.yml")
 
-    # R2: the loader is on db1's list only, so another host cannot apply it.
+    # R2: a host without the loader on its list cannot apply it.
     def test_r10_the_loader_on_another_host_is_refused(self) -> None:
         self._edit(
-            "playbooks/edge1.yml",
+            "playbooks/app1.yml",
             "    - role: ../roles/pull_trigger # noqa: role-name[path]\n",
             "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
             "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
         )
-        self._assert_rule("R2 edge1.yml: role host_inputs is not on edge1's list")
+        self._assert_rule("R2 app1.yml: role host_inputs is not on app1's list")
 
     # R5: a trust file holds a key other than the signer list.
     def test_r5_trust_file_holds_a_second_key(self) -> None:

@@ -1,7 +1,8 @@
 ---
-# edge1: the first host under the gated pull. Three roles, in order: the
-# Ansible toolchain the host runs this playbook with, the trigger that runs it, then
-# the pipeline account the trigger is reached through.
+# edge1: the first host under the gated pull. Five roles, in order: the Ansible
+# toolchain, the trigger that runs it, the loader of the host's private inputs
+# (host_inputs), which stops the run until the owner's root-only file is in place,
+# the pipeline account, then the monitoring stack, which reads what the loader sets.
 #
 # The host's trigger runs this file on a signed checkout with the inventory
 # `localhost,`, which loads no group variables, so every value the roles read comes
@@ -29,4 +30,6 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/ci_login # noqa: role-name[path]
+    - role: ../roles/monitoring_stack # noqa: role-name[path]
