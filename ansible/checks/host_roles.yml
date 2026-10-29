@@ -7,6 +7,7 @@
 # that directory, so a name may be listed before its role merges. A host with no
 # entry may apply the two pull roles and nothing else. Planned, not listed: control_plane_db.
 edge1:
+  - host_inputs
   - monitoring_stack
   - exporters_and_collectors
   - ntfy_pager

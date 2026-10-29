@@ -183,6 +183,10 @@
     db1_stack_exporter_password: "{{ host_inputs_doc['db1_stack_exporter_password'] | default(omit) }}"
     db1_grants_tenants: "{{ host_inputs_doc['db1_grants_tenants'] | default(omit) }}"
     db1_grants_ops1_host: "{{ host_inputs_doc['db1_grants_ops1_host'] | default(omit) }}"
+    ntfy_pager_pager_token: "{{ host_inputs_doc['ntfy_pager_pager_token'] | default(omit) }}"
+    ntfy_pager_watcher_token: "{{ host_inputs_doc['ntfy_pager_watcher_token'] | default(omit) }}"
+    ntfy_pager_owner_password_hash: "{{ host_inputs_doc['ntfy_pager_owner_password_hash'] | default(omit) }}"
+    ntfy_pager_machine_password_hash: "{{ host_inputs_doc['ntfy_pager_machine_password_hash'] | default(omit) }}"
   no_log: true
   diff: false
 
