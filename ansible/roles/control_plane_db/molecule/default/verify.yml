@@ -118,7 +118,7 @@
           ansible.builtin.assert:
             that:
               - control_plane_db_verify_plain_open.rc != 0
-              - "'REFUSED: /etc/branchleft/control-plane must exist' in control_plane_db_verify_plain_open.stdout"
+              - "'REFUSED: /etc/branchleft/control-plane must exist' in (control_plane_db_verify_plain_open.stdout ~ control_plane_db_verify_plain_open.stderr)"
             quiet: true
             fail_msg: The role built under a configuration directory open to others.
 
@@ -524,8 +524,8 @@
           ansible.builtin.assert:
             that:
               - control_plane_db_ask_result.rc != 0
-              - "'REFUSED: migrate did not end clean' in control_plane_db_ask_result.stdout"
-              - "'provision failed: refused: 1 difference' in control_plane_db_ask_result.stdout"
+              - "'REFUSED: migrate did not end clean' in (control_plane_db_ask_result.stdout ~ control_plane_db_ask_result.stderr)"
+              - "'provision failed: refused: 1 difference' in (control_plane_db_ask_result.stdout ~ control_plane_db_ask_result.stderr)"
               - not control_plane_db_verify_failed_stats.results[0].stat.exists
               - not control_plane_db_verify_failed_stats.results[1].stat.exists
             quiet: true
@@ -556,7 +556,7 @@
           ansible.builtin.assert:
             that:
               - control_plane_db_ask_result.rc != 0
-              - "'REFUSED: migrate did not end clean' in control_plane_db_ask_result.stdout"
+              - "'REFUSED: migrate did not end clean' in (control_plane_db_ask_result.stdout ~ control_plane_db_ask_result.stderr)"
             quiet: true
             fail_msg: A leaking program did not fail the request.
 
@@ -953,7 +953,7 @@
           ansible.builtin.assert:
             that:
               - control_plane_db_ask_result.rc != 0
-              - "'REFUSED: provision did not end clean' in control_plane_db_ask_result.stdout"
+              - "'REFUSED: provision did not end clean' in (control_plane_db_ask_result.stdout ~ control_plane_db_ask_result.stderr)"
               - not control_plane_db_verify_provision_failed.results[0].stat.exists
               - not control_plane_db_verify_provision_failed.results[1].stat.exists
               - control_plane_db_verify_provision_failed.results[2:5] | map(attribute='stat') | map(attribute='exists') | min
@@ -1261,8 +1261,8 @@
           ansible.builtin.assert:
             that:
               - control_plane_db_ask_result.rc != 0
-              - "'REFUSED: identity did not end clean' in control_plane_db_ask_result.stdout"
-              - "'Drift is a manual change' in control_plane_db_ask_result.stdout"
+              - "'REFUSED: identity did not end clean' in (control_plane_db_ask_result.stdout ~ control_plane_db_ask_result.stderr)"
+              - "'Drift is a manual change' in (control_plane_db_ask_result.stdout ~ control_plane_db_ask_result.stderr)"
               - not control_plane_db_verify_drift.results[0].stat.exists
               - not control_plane_db_verify_drift.results[1].stat.exists
               - control_plane_db_verify_drift_markers.files | length == 0

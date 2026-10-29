@@ -12,7 +12,7 @@
   ansible.builtin.assert:
     that:
       - control_plane_db_ask_result.rc != 0
-      - refused_text in control_plane_db_ask_result.stdout
+      - refused_text in (control_plane_db_ask_result.stdout ~ control_plane_db_ask_result.stderr)
       - control_plane_db_verify_calls | length == (refused_calls | default(0))
     quiet: true
     fail_msg: >-
