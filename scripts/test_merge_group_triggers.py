@@ -90,7 +90,7 @@ class MergeGroupTriggerTests(unittest.TestCase):
                 self.assertRegex(block, r"(?m)^  push:")
 
     def test_workflows_that_publish_or_poll_do_not_run_on_merge_group(self):
-        for name in ("publish-hetzner-host.yml", "crowdsec-hub-pin-check.yml"):
+        for name in ("publish-hetzner-host.yml", "publish-edge-caddy.yml", "crowdsec-hub-pin-check.yml"):
             with self.subTest(workflow=name):
                 self.assertNotIn("merge_group", on_block(read(name)))
 

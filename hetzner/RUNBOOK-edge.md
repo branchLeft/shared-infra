@@ -54,26 +54,40 @@ Caddy needs the rate-limit and CrowdSec modules compiled in; neither ships in
 the official binary and Caddy has no runtime plugin loading. `hetzner/edge/Dockerfile`
 is that build.
 
-The workstation is arm64 and `edge1` is amd64, so the platform is named
-explicitly — a native build would push an image the host cannot run, and the
-failure appears as a restart loop rather than as a pull error.
+The `publish-edge-caddy.yml` workflow builds and pushes it. It builds
+`hetzner/edge/Dockerfile` on a native amd64 runner from the commit the run
+names, pushes with the run's own short-lived token, and reads the pushed
+digest back from the image store. Nothing is built or pushed from a
+workstation, and no personal token with `write:packages` is involved. The
+workflow runs from `main` only; started from any other ref it fails before it
+builds anything.
+
+The tag is `caddy-<CADDY_VERSION>-<revision>`. `<CADDY_VERSION>` is read from
+the `ARG CADDY_VERSION=` line in the Dockerfile, so a change there changes the
+tag with it. `<revision>` is a positive integer you choose: the next one not
+yet used for that Caddy version. `caddy-2.11.4-1` is taken, so the first run
+uses `2`. Rebuilding a revision that exists is refused (the run fails at the
+step that checks for the tag and pushes nothing), so a pushed tag is never
+overwritten; dispatch again with the next number. There is no `latest` tag.
+
+Start the run, with `<N>` the revision:
 
 ```bash
-gh auth token | docker login ghcr.io -u Rob-branchLeft --password-stdin
+gh workflow run publish-edge-caddy.yml --repo branchLeft/shared-infra --ref main -f revision=<N>
 ```
 
-If that is rejected, the `gh` token lacks `write:packages`; re-authenticate
-with `gh auth refresh -h github.com -s write:packages` and repeat.
+Wait for it, then read the digest. The job summary names the commit that was
+built, the tag, and the reference to pin on a `Pin this:` line; the same
+reference is in the log of the digest step:
 
 ```bash
-docker buildx build \
-  --platform linux/amd64 \
-  --push \
-  --tag ghcr.io/branchleft/edge-caddy:caddy-2.11.4-1 \
-  hetzner/edge
+run_id="$(gh run list --workflow publish-edge-caddy.yml --repo branchLeft/shared-infra --limit 1 --json databaseId --jq '.[0].databaseId')"
+gh run watch "$run_id" --repo branchLeft/shared-infra --exit-status
+gh run view "$run_id" --repo branchLeft/shared-infra --log | grep -o 'ghcr.io/branchleft/edge-caddy@sha256:[0-9a-f]*' | sort -u
 ```
 
-The build fails rather than succeeding quietly if either module is missing: the
+The workflow builds from `hetzner/edge/Dockerfile` unchanged, so the build
+still fails rather than succeeding quietly if either module is missing: the
 final stage asserts that `rate_limit`, `appsec` and `crowdsec` are all
 registered Caddy modules.
 
@@ -84,21 +98,28 @@ estate deliberately does not carry. Go to
 "Change package visibility", choose Public, confirm. This is a platform-owner
 action; there is no reviewed path to it.
 
-Read the digest the deploy will pin:
+**First run only — let the workflow write the package.** The package was first
+created with a personal token, so the `shared-infra` repository has no access
+to it yet. If the first run is refused with `denied` at the check for the tag
+or at the push, open the same settings page, add the `shared-infra` repository
+under "Manage Actions access" with the Write role, and dispatch again.
+
+Once the package is public, the digest can be cross-checked against the
+registry, with `<N>` the revision that was dispatched:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/branchleft/edge-caddy:caddy-2.11.4-1 \
+docker buildx imagetools inspect ghcr.io/branchleft/edge-caddy:caddy-2.11.4-<N> \
   --format '{{.Manifest.Digest}}' | grep -o 'sha256:[0-9a-f]*' | head -1
 ```
 
-Keep that value. Everywhere below it is written `<DIGEST>`, and it means the
+Keep the digest. Everywhere below it is written `<DIGEST>`, and it means the
 **full** `sha256:<hex>` form: `branchleft-deploy` refuses a bare hex digest
 with `image reference must be digest-pinned`, because `name@<hex>` without
-the algorithm prefix is not a valid OCI reference. The `grep` is not
-decoration: `imagetools inspect` has been observed printing a
-`Name:`/`MediaType:`/`Digest:` block despite the `--format`, and the filter
-yields the bare `sha256:…` value on either output shape. Both traps bit the
-2026-08-22 redeploy.
+the algorithm prefix is not a valid OCI reference. The `grep` in the
+cross-check is not decoration: `imagetools inspect` has been observed printing
+a `Name:`/`MediaType:`/`Digest:` block despite the `--format`, and the filter
+yields the bare `sha256:…` value on either output shape. Both traps have
+caught a redeploy before.
 
 ## 2. Validate the configuration against the image that will run it
 
