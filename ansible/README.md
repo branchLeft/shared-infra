@@ -11,9 +11,9 @@ enrolled in the gated pull. `edge1`, `ops1` and `app1` apply `roles/ansible_runt
 `roles/pull_trigger`, then `roles/host_baseline`: `playbooks/edge1.yml` adds
 `roles/ci_login`, `playbooks/ops1.yml` adds `roles/breakglass_mint_host` and then
 `roles/status_page`, and `playbooks/app1.yml` adds `roles/breakglass_grant_host`.
-`playbooks/db1.yml` applies the two pull roles only;
-`roles/db1_stack` and `roles/db1_grants` are left out of it. The other trees hold only
-what those hosts need.
+`playbooks/db1.yml` applies the two pull roles and then `roles/host_inputs`, the loader of
+the host's private inputs; `roles/db1_stack` and `roles/db1_grants` are left out of it.
+The other trees hold only what those hosts need.
 
 ## Layout
 
@@ -568,8 +568,9 @@ oversight. Each is a decision the standard assigns to later work.
   merge on its own.
 - **Delivery.** Each of edge1, db1, app1 and ops1 has a playbook under `playbooks/`.
   edge1's first apply is the one-time root bootstrap and then the gated pull; db1's
-  playbook applies the same two pull roles, and its trust file is empty until the owner
-  rules the signer, so db1 refuses every run until then. ANS-17 describes the only approved path. The trigger is
+  playbook applies the same two pull roles and then `roles/host_inputs`, which refuses the
+  run until the owner has placed the root-only file `/etc/branchleft/host-inputs.json`, and
+  its trust file is empty until the owner rules the signer, so db1 refuses every run until then. ANS-17 describes the only approved path. The trigger is
   `roles/pull_trigger`, and its reusable workflow is in `branchLeft/github-workflows`;
   nothing in this repo calls that workflow yet.
 - **Reuse by other repositories.** The harness is code another repository may

@@ -1,0 +1,16 @@
+---
+# The good file stays where it is; a directory above it is changed.
+- name: Change the directory above the file
+  ansible.builtin.file:
+    path: '{{ case.path }}'
+    state: '{{ case.state | default("directory") }}'
+    owner: '{{ case.owner | default("root") }}'
+    group: '{{ case.group | default("root") }}'
+    mode: '{{ case.mode | default("0755") }}'
+  when: (case.state | default("directory")) == "directory"
+
+- name: Remove the directory above the file
+  ansible.builtin.file:
+    path: '{{ case.path }}'
+    state: absent
+  when: (case.state | default("directory")) == "absent"

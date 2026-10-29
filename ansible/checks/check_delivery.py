@@ -53,6 +53,9 @@ CHOSEN_ENVIRONMENT = re.compile(
     re.ASCII,
 )
 PYTHON_PATHS = "harness checks"
+# The script, relative to the Ansible directory, that tests one role: the entry point the pull
+# request gate runs (ansible.yml), so a delivery and the gate run one sequence.
+ROLE_TEST_COMMAND = "harness/run_harness.py"
 PERMISSIONS = {"contents": "read", "actions": "read"}
 # The only secrets the call passes, each named by its expression. The apply key is an
 # environment secret: the call names it too, and only the job in the environment reads it.
@@ -72,7 +75,14 @@ JOB_KEYS = frozenset({"uses", "with", "secrets", "needs"})
 SKIP_INPUT = "skip-rerun-after-merge-group"
 CHECK_NAME_INPUT = "merge-group-check-name"
 INPUT_KEYS = frozenset(
-    {"environment", "role-directories", "python-paths", SKIP_INPUT, CHECK_NAME_INPUT}
+    {
+        "environment",
+        "role-directories",
+        "python-paths",
+        "role-test-command",
+        SKIP_INPUT,
+        CHECK_NAME_INPUT,
+    }
 )
 # The delivery may skip its lint and Molecule re-run only on the answer of the proof job, which
 # is true for a successful merge_group run of this exact commit (merge_group_proof.py). A static
@@ -174,6 +184,12 @@ def input_findings(inputs: object, other_environments: frozenset[str]) -> list[s
     if given.get("python-paths") != PYTHON_PATHS:
         findings.append(
             f"with.python-paths must be {PYTHON_PATHS!r}, got {given.get('python-paths')!r}"
+        )
+    if given.get("role-test-command") != ROLE_TEST_COMMAND:
+        findings.append(
+            f"with.role-test-command must be {ROLE_TEST_COMMAND!r}, the entry point the pull "
+            "request gate runs, so a delivery tests a role as the gate does, got "
+            f"{given.get('role-test-command')!r}"
         )
     if given.get(SKIP_INPUT) != SKIP_EXPRESSION:
         findings.append(
