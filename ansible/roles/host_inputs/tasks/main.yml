@@ -88,7 +88,7 @@
       - host_inputs_file_stat.stat.isreg | default(false)
       - host_inputs_file_stat.stat.uid | default(-1) == host_inputs_owner_uid
       - host_inputs_file_stat.stat.gid | default(-1) == host_inputs_group_gid
-      - host_inputs_file_stat.stat.mode | default('') in [host_inputs_file_mode, '0644']
+      - host_inputs_file_stat.stat.mode | default('') == host_inputs_file_mode
     fail_msg: >-
       host_inputs[file-mode]: {{ host_inputs_path }} must be a regular file (not a link or a directory) owned by
       root:root with mode exactly {{ host_inputs_file_mode }}.
